@@ -18,6 +18,7 @@ import Network.HTTP.Types (methodPost)
 import Protolude
 import System.Environment (lookupEnv)
 import System.Process (readProcessWithExitCode)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
@@ -42,14 +43,14 @@ import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export (availableFormats, newExports, oneAtATime, restrictTeX, texEngine, texLimits)
 import Wiki.Server.Export.Document
 
-spec :: Spec
-spec = describe "export with pandoc" $ do
+spec :: Backing -> Spec
+spec backing = describe "export with pandoc" $ do
   reading
   slides
   spaces
-  overHttp
+  overHttp backing
   oneAtATimeEach
-  pdfs
+  pdfs backing
 
 -- | An image attachment, whose bytes are in the media bag.
 tree :: Attachment
@@ -319,9 +320,9 @@ zipped bytes = either (\e -> panic ("not a zip: " <> e)) pure (unzipFiles bytes)
 entryText :: (HasCallStack) => Map Text ByteString -> Text -> IO Text
 entryText files name = maybe (panic ("no " <> name <> " among " <> show (Map.keys files))) (pure . decodeUtf8) (Map.lookup name files)
 
-overHttp :: Spec
-overHttp = describe "over HTTP" $ do
-  it "exports a page as DOCX: a zip with its document, its image in it and its math as Word's" $ withDemoRunning identity $ \r -> do
+overHttp :: Backing -> Spec
+overHttp backing = describe "over HTTP" $ do
+  it "exports a page as DOCX: a zip with its document, its image in it and its math as Word's" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
     let guide = pages Map.! "Markdown guide"
         maths' = pages Map.! "Mathematics"
@@ -334,7 +335,7 @@ overHttp = describe "over HTTP" $ do
     mathsDocument <- (`entryText` "word/document.xml") =<< zipped =<< exported' r maths'.id Docx
     mathsDocument `shouldSatisfy` T.isInfixOf "<m:oMath"
 
-  it "exports a page as one HTML file holding its title, its image and its formulas as MathML, sandboxed" $ withDemoRunning identity $ \r -> do
+  it "exports a page as one HTML file holding its title, its image and its formulas as MathML, sandboxed" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
     reply <- getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Markdown guide").id Html)
     html <- decodeUtf8 <$> exported reply Html
@@ -344,12 +345,12 @@ overHttp = describe "over HTTP" $ do
     maths' <- decodeUtf8 <$> exported' r (pages Map.! "Mathematics").id Html
     maths' `shouldSatisfy` T.isInfixOf "<math"
 
-  it "exports a page as EPUB" $ withDemoRunning identity $ \r -> do
+  it "exports a page as EPUB" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
     files <- zipped =<< exported' r (pages Map.! "Tour").id Epub
     Map.lookup "mimetype" files `shouldBe` Just "application/epub+zip"
 
-  it "exports a deck as PowerPoint, a slide a slide with the speaker's notes, and as Beamer's LaTeX" $ withDemoRunning identity $ \r -> do
+  it "exports a deck as PowerPoint, a slide a slide with the speaker's notes, and as Beamer's LaTeX" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
     let deck = pages Map.! "Presentations"
     files <- zipped =<< exported' r deck.id Pptx
@@ -363,7 +364,7 @@ overHttp = describe "over HTTP" $ do
     tex `shouldSatisfy` T.isInfixOf "\\note{"
     tex `shouldSatisfy` T.isInfixOf "\\int_{-\\infty}^{\\infty}"
 
-  it "exports a deck's steps as Beamer's overlays and PowerPoint's animation, and leaves them out elsewhere" $ withDemoRunning identity $ \r -> do
+  it "exports a deck's steps as Beamer's overlays and PowerPoint's animation, and leaves them out elsewhere" $ withDemoRunning backing identity $ \r -> do
     pid <- newPage r "Steps" stepsDeck
     let export format = getUrl r (r.admin <> "/admin/" <> links.pages.export pid format) >>= (`exported` format)
     tex <- decodeUtf8 <$> export BeamerTex
@@ -384,12 +385,12 @@ overHttp = describe "over HTTP" $ do
     html <- decodeUtf8 <$> export Html
     T.count ". . ." html `shouldBe` 2
 
-  it "offers presentations only of a deck, and refuses a format it cannot make, saying why" $ withDemoRunning identity $ \r -> do
+  it "offers presentations only of a deck, and refuses a format it cannot make, saying why" $ withDemoRunning backing identity $ \r -> do
     (docs, pages) <- docsIds r
     getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pptx) >>= jsonAs 400 >>= (`shouldBe` Invalid "Only a page written as slides exports as a presentation.")
     getUrl r (r.public <> "/" <> links.spaces.export docs.id BeamerTex) >>= jsonAs 400 >>= (`shouldBe` Invalid "A space exports as a document, not a presentation.")
 
-  it "exports a space as one DOCX: a title page, a table of contents and every page in order" $ withDemoRunning identity $ \r -> do
+  it "exports a space as one DOCX: a title page, a table of contents and every page in order" $ withDemoRunning backing identity $ \r -> do
     (docs, pages) <- docsIds r
     reply <- getUrl r (r.public <> "/" <> links.spaces.export docs.id Docx)
     header "Content-Disposition" reply `shouldBe` Just "attachment; filename=\"docs.docx\""
@@ -407,7 +408,7 @@ overHttp = describe "over HTTP" $ do
     ordered `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
     and (zipWith (<) positions (drop 1 positions)) `shouldBe` True
 
-  it "is for whoever may read the page or the space" $ withDemoRunning identity $ \r -> do
+  it "is for whoever may read the page or the space" $ withDemoRunning backing identity $ \r -> do
     team <- spaceAt r "team"
     handbook <- fromMaybe (panic "no handbook") . find (\p -> p.title == "Team handbook") <$> pagesOf r team
     getUrl r (r.public <> "/" <> links.pages.export handbook.id Docx) >>= jsonAs 404 >>= (`shouldBe` NotFound)
@@ -475,14 +476,14 @@ oneAtATimeEach = describe "one export at a time" $ do
     -- Done, it may export again.
     oneAtATime exports "user:ada" (pure (Right ())) `shouldReturn` Right ()
 
-pdfs :: Spec
-pdfs = describe "PDFs, typeset by xelatex" $ do
+pdfs :: Backing -> Spec
+pdfs backing = describe "PDFs, typeset by xelatex" $ do
   it "keep TeX to its working directory, with no programs, through kpathsea's variables" $ do
     restrictTeX
     for_ texLimits $ \(name, value) -> lookupEnv name `shouldReturn` Just value
     texLimits `shouldBe` [("openin_any", "p"), ("openout_any", "p"), ("shell_escape", "f")]
 
-  it "do not let a page's formula read the server's files into the PDF" $ withDemoRunning identity $ \r -> do
+  it "do not let a page's formula read the server's files into the PDF" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: TeX's limits were not tested against it")
     docs <- spaceAt r "docs"
@@ -492,27 +493,27 @@ pdfs = describe "PDFs, typeset by xelatex" $ do
     BSL.toStrict reply.body `shouldSatisfy` (not . ("root:" `BS.isInfixOf`))
     when (reply.status == 200) (BS.take 5 (BSL.toStrict reply.body) `shouldBe` "%PDF-")
 
-  it "are offered exactly where the machine has xelatex" $ withRunning $ \r -> do
+  it "are offered exactly where the machine has xelatex" $ withRunning backing $ \r -> do
     tex <- isJust <$> texEngine
     formats <- availableFormats
     session <- ok200 (getUrl r (r.public <> "/" <> links.session))
     (session :: SessionInfo).exports `shouldBe` formats
     (Pdf `elem` formats, BeamerPdf `elem` formats) `shouldBe` (tex, tex)
 
-  it "are refused, saying why, where it has not" $ withDemoRunning identity $ \r -> do
+  it "are refused, saying why, where it has not" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
     when (isJust tex) (pendingWith "xelatex is on this machine, so the PDFs are made, not refused")
     (_, pages) <- docsIds r
     getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
 
-  it "are made of a page that needs nothing beyond LaTeX where it has" $ withDemoRunning identity $ \r -> do
+  it "are made of a page that needs nothing beyond LaTeX where it has" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: the PDFs were not tested")
     (_, pages) <- docsIds r
     bytes <- exported' r (pages Map.! "Tour").id Pdf
     BS.take 5 bytes `shouldBe` "%PDF-"
 
-  it "are made of a page, a deck and a space where it has, with the packages they load" $ withDemoRunning identity $ \r -> do
+  it "are made of a page, a deck and a space where it has, with the packages they load" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: the PDFs were not tested")
     -- The demo's Mathematics page writes chemistry (mhchem), its guide draws

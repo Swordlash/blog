@@ -13,6 +13,7 @@ import Network.HTTP.Types (methodPost, methodPut)
 import Protolude
 import Servant.API (toUrlPiece)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), ArchiveApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -41,16 +42,16 @@ import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
 
-spec :: Spec
-spec = describe "export and import" $ do
-  intoAnEmptyWiki
-  merging
-  conflicts
-  choices
-  roundTrip
-  profiles
-  discussions
-  refusals
+spec :: Backing -> Spec
+spec backing = describe "export and import" $ do
+  intoAnEmptyWiki backing
+  merging backing
+  conflicts backing
+  choices backing
+  roundTrip backing
+  profiles backing
+  discussions backing
+  refusals backing
 
 -- | The admin listener's address of an endpoint.
 admin :: Running -> Text -> Text
@@ -172,16 +173,16 @@ docs =
     , page "p3" "s2" Nothing "n1" "A note."
     ]
 
-intoAnEmptyWiki :: Spec
-intoAnEmptyWiki = describe "into an empty wiki" $ do
-  it "plans every space and page as new" $ withRunning $ \r -> do
+intoAnEmptyWiki :: Backing -> Spec
+intoAnEmptyWiki backing = describe "into an empty wiki" $ do
+  it "plans every space and page as new" $ withRunning backing $ \r -> do
     plan <- preview r docs
     [(s.path, s.status, [(p.path, p.attachments, p.conflict) | p <- s.pages]) | s <- plan.spaces]
       `shouldBe` [ ([slug "docs"], SpaceNew, [([slug "tour"], 1, Nothing), ([slug "tour", slug "more"], 0, Nothing)])
                  , ([slug "docs", slug "notes"], SpaceNew, [([slug "n1"], 0, Nothing)])
                  ]
 
-  it "imports it all, attachments' bytes kept by their hash, and none of its people" $ withRunning $ \r -> do
+  it "imports it all, attachments' bytes kept by their hash, and none of its people" $ withRunning backing $ \r -> do
     apply r docs importEverything `shouldReturn` summary {spacesCreated = 2, pagesCreated = 3, attachments = 1}
     tour <- pageAt r ["docs"] ["tour"]
     (tour.title, tour.body, tour.createdAt, tour.updatedAt) `shouldBe` ("Title of tour", "# Tour", time, time)
@@ -196,9 +197,9 @@ intoAnEmptyWiki = describe "into an empty wiki" $ do
     s <- ok200 (getUrl r (admin r links.admin.status))
     ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 2, 3, 1)
 
-merging :: Spec
-merging = describe "a space at the same path" $ do
-  it "is merged: its pages added after the server's, its settings the server's but empty math macros" $ withRunning $ \r -> do
+merging :: Backing -> Spec
+merging backing = describe "a space at the same path" $ do
+  it "is merged: its pages added after the server's, its settings the server's but empty math macros" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"
     _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setPublic ours.id)) SpacePublic {public = True})
     _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setOrder ours.id)) SpaceOrder {children = ChildPages, order = ByHand})
@@ -216,14 +217,14 @@ merging = describe "a space at the same path" $ do
     -- The space's home page first, made with it.
     [(p.title, p.position) | (p :: PageSummary) <- pages] `shouldBe` [("Home", 0), ("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
 
-  it "keeps the server's math macros when it has some" $ withRunning $ \r -> do
+  it "keeps the server's math macros when it has some" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"
     _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setMathMacros ours.id)) SpaceMathMacros {mathMacros = "ours"})
     _ <- apply r (archive [spaceWith "s1" Nothing "docs" False "theirs" ByName ByName] []) importEverything
     (.mathMacros) <$> spaceAt r ["docs"] `shouldReturn` "ours"
 
-conflicts :: Spec
-conflicts = describe "a page at the same path" $ do
+conflicts :: Backing -> Spec
+conflicts backing = describe "a page at the same path" $ do
   let theirs =
         archive
           [space "s1" Nothing "docs"]
@@ -233,20 +234,20 @@ conflicts = describe "a page at the same path" $ do
         mine <- makePage r ours "Tour" "Ours."
         pure (ours, mine)
 
-  it "is a conflict, with the server's page beside it" $ withRunning $ \r -> do
+  it "is a conflict, with the server's page beside it" $ withRunning backing $ \r -> do
     (_, mine) <- setUp r
     plan <- preview r theirs
     [map (\p -> p.conflict) s.pages | s <- plan.spaces]
       `shouldBe` [[Just PageConflict {title = "Tour", updatedAt = mine.updatedAt, sameContent = False}, Nothing]]
 
-  it "keeps the server's page unless told otherwise, and brings in the pages under it" $ withRunning $ \r -> do
+  it "keeps the server's page unless told otherwise, and brings in the pages under it" $ withRunning backing $ \r -> do
     (_, mine) <- setUp r
     apply r theirs importEverything `shouldReturn` summary {spacesMerged = 1, pagesKept = 1, pagesCreated = 1}
     pageAt r ["docs"] ["tour"] `shouldReturn` mine
     more <- pageAt r ["docs"] ["tour", "more"]
     more.parent `shouldBe` Just mine.id
 
-  it "takes the imported page when chosen: its title, body and attachments, as a new version in the same place" $ withRunning $ \r -> do
+  it "takes the imported page when chosen: its title, body and attachments, as a new version in the same place" $ withRunning backing $ \r -> do
     (_, mine) <- setUp r
     let taken = importEverything {conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]}
     apply r theirs taken `shouldReturn` summary {spacesMerged = 1, pagesReplaced = 1, pagesCreated = 1, attachments = 1}
@@ -259,29 +260,29 @@ conflicts = describe "a page at the same path" $ do
     stale <- send r methodPut (admin r (links.pages.save mine.id)) [("Content-Type", "application/json"), ("If-Match", encodeUtf8 (toUrlPiece (pageVersion mine)))] (encode PageEdit {title = "Tour", body = "Late."})
     stale.status `shouldBe` 409
 
-  it "is the same content when nothing differs, attachments compared by their bytes" $ withRunning $ \r -> do
+  it "is the same content when nothing differs, attachments compared by their bytes" $ withRunning backing $ \r -> do
     apply r theirs importEverything `shouldReturn` summary {spacesCreated = 1, pagesCreated = 2, attachments = 1}
     plan <- preview r theirs
     [map (\p -> (.sameContent) <$> p.conflict) s.pages | s <- plan.spaces] `shouldBe` [[Just True, Just True]]
     apply r theirs importEverything `shouldReturn` summary {spacesMerged = 1, pagesKept = 2}
 
-choices :: Spec
-choices = describe "what is left unchecked" $ do
-  it "is not imported: a space with its subspaces, a page with the pages under it" $ withRunning $ \r -> do
+choices :: Backing -> Spec
+choices backing = describe "what is left unchecked" $ do
+  it "is not imported: a space with its subspaces, a page with the pages under it" $ withRunning backing $ \r -> do
     let skipped = importEverything {skipSpaces = [[slug "docs", slug "notes"]], skipPages = [PageRef {space = [slug "docs"], page = [slug "tour"]}]}
     apply r docs skipped `shouldReturn` summary {spacesCreated = 1, pagesSkipped = 3}
     (.status) <$> getUrl r (admin r (links.spaces.atPath [slug "docs", slug "notes"])) `shouldReturn` 404
     kept <- spaceAt r ["docs"]
     ok200 (getUrl r (admin r (links.spaces.listPages kept.id))) `shouldReturn` ([] :: [PageSummary])
 
-  it "of a whole archive is nothing" $ withRunning $ \r -> do
+  it "of a whole archive is nothing" $ withRunning backing $ \r -> do
     apply r docs importEverything {skipSpaces = [[slug "docs"]]} `shouldReturn` summary {pagesSkipped = 3}
     ok200 (getUrl r (admin r links.spaces.list)) `shouldReturn` ([] :: [Space])
 
-roundTrip :: Spec
-roundTrip = describe "an export" $ do
+roundTrip :: Backing -> Spec
+roundTrip backing = describe "an export" $ do
   it "is a zip file of the whole wiki, which imports into another server as it was" $
-    withRunning $ \origin -> withRunning $ \copy -> do
+    withRunning backing $ \origin -> withRunning backing $ \copy -> do
       _ <- apply origin docs importEverything
       reply <- getUrl origin (admin origin links.archive.export)
       (reply.status, header "Content-Type" reply) `shouldBe` (200, Just "application/zip")
@@ -309,9 +310,9 @@ profiled =
     , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
     }
 
-profiles :: Spec
-profiles = describe "a space's profile" $ do
-  it "comes in with a new space: its description, its icon's image, and its home page as the page it became" $ withRunning $ \r -> do
+profiles :: Backing -> Spec
+profiles backing = describe "a space's profile" $ do
+  it "comes in with a new space: its description, its icon's image, and its home page as the page it became" $ withRunning backing $ \r -> do
     _ <- apply r profiled importEverything
     made <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]
@@ -326,7 +327,7 @@ profiles = describe "a space's profile" $ do
     back <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict exported.body) >>= readArchive)
     [(s.description, isJust s.homePage, s.blog, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, True, Just "ICON")]
 
-  it "fills in what a merged space has none of, and keeps what it has" $ withRunning $ \r -> do
+  it "fills in what a merged space has none of, and keeps what it has" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"
     _ <- apply r profiled importEverything
     merged <- spaceAt r ["docs"]
@@ -385,8 +386,8 @@ threadsAt r s p = do
   ts <- ok200 (getUrl r (admin r (links.comments found.id).list))
   pure [(t.id, t.resolved, [(c.id, c.author.id, c.author.name, c.body, c.editedAt) | c <- t.comments]) | (t :: Thread) <- ts]
 
-discussions :: Spec
-discussions = describe "a page's comments" $ do
+discussions :: Backing -> Spec
+discussions backing = describe "a page's comments" $ do
   let expected alice =
         [ (CommentThreadId "t1", False, [(CommentId "c1", alice, "Alice Here", "Is this right?", Nothing), (CommentId "c2", UserId "~former:Bob", "Bob (not a user here)", "It is.", Just later)])
         , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
@@ -395,13 +396,13 @@ discussions = describe "a page's comments" $ do
         made :: Account <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "alice", displayName = "Alice Here", password = Password "alice's password", email = Nothing} >>= jsonAs 201
         pure made.user.id
 
-  it "come with a page the import makes: authors matched by login, anyone else kept by name, ids and times kept" $ withRunning $ \r -> do
+  it "come with a page the import makes: authors matched by login, anyone else kept by name, ids and times kept" $ withRunning backing $ \r -> do
     alice <- makeAlice r
     apply r discussed importEverything `shouldReturn` summary {spacesCreated = 2, pagesCreated = 3, attachments = 1}
     threadsAt r ["docs"] ["tour"] `shouldReturn` expected alice
     threadsAt r ["docs"] ["tour", "more"] `shouldReturn` []
 
-  it "are not brought twice, whether the server's page is kept or replaced" $ withRunning $ \r -> do
+  it "are not brought twice, whether the server's page is kept or replaced" $ withRunning backing $ \r -> do
     alice <- makeAlice r
     _ <- apply r discussed importEverything
     _ <- apply r discussed importEverything
@@ -409,7 +410,7 @@ discussions = describe "a page's comments" $ do
     _ <- apply r discussed taken
     threadsAt r ["docs"] ["tour"] `shouldReturn` expected alice
 
-  it "come with a page whose content the import replaces, after the page's own, but not with a page the server keeps" $ withRunning $ \r -> do
+  it "come with a page whose content the import replaces, after the page's own, but not with a page the server keeps" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"
     mine <- makePage r ours "Tour" "Ours."
     _ :: Thread <- sendJson r methodPost (admin r (links.comments mine.id).open) NewThread {anchor = Nothing, body = "Our own."} >>= jsonAs 201
@@ -420,7 +421,7 @@ discussions = describe "a page's comments" $ do
     map (\(_, _, cs) -> map (\(_, _, _, b, _) -> b) cs) <$> threadsAt r ["docs"] ["tour"] `shouldReturn` [["Our own."], ["Is this right?", "It is."], ["Fixed."]]
 
   it "go out with an export, and into another server, kept by name where it has no such user" $
-    withRunning $ \origin -> withRunning $ \copy -> do
+    withRunning backing $ \origin -> withRunning backing $ \copy -> do
       _ <- makeAlice origin
       _ <- apply origin discussed importEverything
       reply <- getUrl origin (admin origin links.archive.export)
@@ -431,13 +432,13 @@ discussions = describe "a page's comments" $ do
                        , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
                        ]
 
-refusals :: Spec
-refusals = describe "export and import" $ do
-  it "are the administrator's only" $ withRunning $ \r -> do
+refusals :: Backing -> Spec
+refusals backing = describe "export and import" $ do
+  it "are the administrator's only" $ withRunning backing $ \r -> do
     getUrl r (r.public <> "/" <> links.archive.export) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
     multipart r (r.public <> "/" <> links.archive.importPreview) [] [("archive", "wiki.zip", "application/zip", zipped docs)] >>= jsonAs 403 >>= (`shouldBe` Forbidden)
 
-  it "refuse a file that is not an archive, or choices that are not JSON" $ withRunning $ \r -> do
+  it "refuse a file that is not an archive, or choices that are not JSON" $ withRunning backing $ \r -> do
     multipart r (admin r links.archive.importPreview) [] [("archive", "wiki.zip", "application/zip", "not a zip")] >>= jsonAs 400 >>= \case
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)

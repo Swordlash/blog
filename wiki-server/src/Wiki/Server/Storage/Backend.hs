@@ -20,6 +20,7 @@
 module Wiki.Server.Storage.Backend
   ( Backend (..)
   , Column
+  , rollBackOnError
   , Capabilities (..)
   , SearchKind (..)
   , Sqlite
@@ -121,6 +122,18 @@ class
   -- the limit given, when the database ranks them; without one, every
   -- page that has all the words, which "Wiki.Core.Search" then ranks.
   searchMatches :: [Text] -> Bool -> [Text] -> Text -> Int -> Db be [(PageNodes Identity, Text, Maybe Double)]
+
+-- | Run an action in a transaction on a connection, and roll the
+-- transaction back if the action throws. The action's exception is the one
+-- that goes on: a rollback that fails too (on a connection the exception
+-- left in the middle of a statement, as an asynchronous exception that
+-- stops a thread does) is ignored, since the connection is then closed
+-- anyway ('Data.Pool.withResource' closes a connection whose action threw).
+-- Were the rollback's exception to go on instead, a thread being stopped
+-- would see an ordinary error in place of the exception that stops it, and
+-- go on running.
+rollBackOnError :: (Backend be) => Connection be -> IO a -> IO a
+rollBackOnError c act = act `onException` try @SomeException (rollbackTransaction c)
 
 instance Backend Sqlite where
   type Db Sqlite = SqliteM

@@ -29,7 +29,7 @@ module Main (main) where
 import Options.Applicative
 import Protolude
 import Wiki.Server (ServerError (..), serve)
-import Wiki.Server.Console (OidcCheck, RestoreCommand, Users, oidcCheckParser, readPassword, restoreParser, runBackup, runOidcCheck, runRestore, runUsers, usersParser)
+import Wiki.Server.Console (BackupOutcome (..), OidcCheck, RestoreCommand, Users, oidcCheckParser, readPassword, restoreParser, runBackup, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (defaultKeep)
 import Wiki.Server.Version (serverVersion)
@@ -78,10 +78,13 @@ main =
         exitWith (ExitFailure 2)
     Backup place keep ->
       runBackup place keep >>= \case
-        Right line -> putText line
-        Left why -> do
+        BackedUp line -> putText line
+        BackupFailed why -> do
           putErrText ("wiki-server: " <> why)
           exitWith (ExitFailure 1)
+        OfEarlierServer why -> do
+          putErrText ("wiki-server: " <> why)
+          exitWith (ExitFailure 3)
     Restore r ->
       runRestore r >>= \case
         Right lines' -> traverse_ putText lines'

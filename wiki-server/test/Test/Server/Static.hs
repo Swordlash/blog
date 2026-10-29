@@ -10,30 +10,30 @@ import Network.HTTP.Types (methodHead, methodPost)
 import Protolude
 import System.Directory (createFileLink)
 import System.FilePath ((</>))
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
-import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.Api.ServerSettings qualified as Settings
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Static (withBaseHref, withPolicyMeta)
 
-spec :: Spec
-spec = describe "the application's files" $ do
-  publicListener
-  adminListener
-  basePath
+spec :: Backing -> Spec
+spec backing = describe "the application's files" $ do
+  publicListener backing
+  adminListener backing
+  basePath backing
   baseHref
   policy
 
 bodyText :: Reply -> Text
 bodyText reply = decodeUtf8 (BSL.toStrict reply.body)
 
-publicListener :: Spec
-publicListener = describe "on the public listener" $ do
-  it "serves a directory's index.html as a page, revalidated by its ETag" $ withRunning $ \r -> do
+publicListener :: Backing -> Spec
+publicListener backing = describe "on the public listener" $ do
+  it "serves a directory's index.html as a page, revalidated by its ETag" $ withRunning backing $ \r -> do
     reply <- getUrl r (r.public <> "/")
     (reply.status, header "Content-Type" reply) `shouldBe` (200, Just "text/html; charset=utf-8")
     bodyText reply `shouldSatisfy` T.isInfixOf "<title>front</title>"
@@ -41,18 +41,18 @@ publicListener = describe "on the public listener" $ do
     again <- getUrlWith r (r.public <> "/") [("If-None-Match", fromMaybe "" (header "ETag" reply))]
     (again.status, again.body) `shouldBe` (304, "")
 
-  it "redirects a directory's address without its slash, and serves a prerendered route" $ withRunning $ \r -> do
+  it "redirects a directory's address without its slash, and serves a prerendered route" $ withRunning backing $ \r -> do
     redirect <- getUrl r (r.public <> "/s/blog?x=1")
     (redirect.status, header "Location" redirect) `shouldBe` (301, Just "/s/blog/?x=1")
     page <- getUrl r (r.public <> "/s/blog/")
     (page.status, bodyText page) `shouldSatisfy` (\(s, b) -> s == 200 && "<title>blog</title>" `T.isInfixOf` b)
 
-  it "serves 404.html with a 404 for an address with no file, as the application's own route" $ withRunning $ \r -> do
+  it "serves 404.html with a 404 for an address with no file, as the application's own route" $ withRunning backing $ \r -> do
     reply <- getUrl r (r.public <> "/s/made-since/p/a-page/")
     (reply.status, header "Content-Type" reply) `shouldBe` (404, Just "text/html; charset=utf-8")
     bodyText reply `shouldSatisfy` T.isInfixOf "<title>missing</title>"
 
-  it "serves app.wasm with its type, brotli'd to a client that takes it" $ withRunning $ \r -> do
+  it "serves app.wasm with its type, brotli'd to a client that takes it" $ withRunning backing $ \r -> do
     compressed <- getUrlWith r (r.public <> "/app.wasm") [("Accept-Encoding", "gzip, br")]
     (compressed.status, header "Content-Type" compressed, header "Content-Encoding" compressed, compressed.body)
       `shouldBe` (200, Just "application/wasm", Just "br", "brotli bytes")
@@ -61,25 +61,25 @@ publicListener = describe "on the public listener" $ do
     gzipped <- getUrlWith r (r.public <> "/index.js") [("Accept-Encoding", "br;q=0, gzip")]
     (header "Content-Type" gzipped, header "Content-Encoding" gzipped, gzipped.body) `shouldBe` (Just "text/javascript; charset=utf-8", Just "gzip", "gzip bytes")
 
-  it "sends a file that is compressed itself as its own bytes, never its sibling" $ withRunning $ \r -> do
+  it "sends a file that is compressed itself as its own bytes, never its sibling" $ withRunning backing $ \r -> do
     reply <- getUrlWith r (r.public <> "/downloads/archive.gz") [("Accept-Encoding", "gzip, br")]
     (header "Content-Type" reply, header "Content-Encoding" reply, reply.body) `shouldBe` (Just "application/gzip", Nothing, "an archive, compressed")
 
   -- TikZJax's compressed files are zlib streams named .bin (web/bundle.sh),
   -- since a corporate proxy may refuse a gzip download: they go out as
   -- opaque bytes, never as gzip.
-  it "sends TikZJax's .bin files as application/octet-stream, as they are" $ withRunning $ \r -> do
+  it "sends TikZJax's .bin files as application/octet-stream, as they are" $ withRunning backing $ \r -> do
     reply <- getUrlWith r (r.public <> "/tikzjax/core.dump.bin") [("Accept-Encoding", "gzip, br")]
     (header "Content-Type" reply, header "Content-Encoding" reply, reply.body) `shouldBe` (Just "application/octet-stream", Nothing, "a dump, as a zlib stream")
 
-  it "answers HEAD without a body, and refuses other methods" $ withRunning $ \r -> do
+  it "answers HEAD without a body, and refuses other methods" $ withRunning backing $ \r -> do
     headed <- send r methodHead (r.public <> "/style.css") [] ""
     (headed.status, headed.body, header "Content-Type" headed) `shouldBe` (200, "", Just "text/css; charset=utf-8")
     (.status) <$> send r methodPost (r.public <> "/style.css") [] "" `shouldReturn` 405
     -- The API's check on writes is the API's: a file refuses the method.
     (.status) <$> sendBare r methodPost (r.public <> "/") [] "" `shouldReturn` 405
 
-  it "serves nothing outside its directory, by .. or by a link" $ withRunning $ \r -> do
+  it "serves nothing outside its directory, by .. or by a link" $ withRunning backing $ \r -> do
     (.status) <$> getUrl r (r.public <> "/%2e%2e/data/wiki.sqlite") `shouldReturn` 403
     (.status) <$> getUrl r (r.public <> "/s/%2e%2e/%2e%2e/index.html") `shouldReturn` 403
     (.status) <$> getRawPath r r.public "/%zz" `shouldReturn` 400
@@ -88,7 +88,7 @@ publicListener = describe "on the public listener" $ do
     leaked.status `shouldBe` 404
     bodyText leaked `shouldSatisfy` T.isInfixOf "<title>missing</title>"
 
-  it "serves the service worker, the manifest and the offline page as files, at the worker's scope" $ withRunning $ \r -> do
+  it "serves the service worker, the manifest and the offline page as files, at the worker's scope" $ withRunning backing $ \r -> do
     worker <- getUrl r (r.public <> "/sw.js")
     (worker.status, header "Content-Type" worker, header "Cache-Control" worker) `shouldBe` (200, Just "text/javascript; charset=utf-8", Just "no-cache")
     -- At the place the site is served at, which is the scope it asks for:
@@ -99,12 +99,12 @@ publicListener = describe "on the public listener" $ do
     offline <- getUrl r (r.public <> "/offline.html")
     (offline.status, bodyText offline) `shouldSatisfy` (\(s, b) -> s == 200 && "<base href=\"/\"><title>offline</title>" `T.isInfixOf` b)
 
-  it "is the API's below api/v1, even where a file would be" $ withRunning $ \r -> do
-    ok200 (getUrl r (r.public <> "/api/v1/info")) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
+  it "is the API's below api/v1, even where a file would be" $ withRunning backing $ \r -> do
+    ok200 (getUrl r (r.public <> "/api/v1/info")) `shouldReturn` serverInfoOn backing
 
-adminListener :: Spec
-adminListener = describe "on the admin listener" $ do
-  it "serves the same application under /admin/, with that base" $ withRunning $ \r -> do
+adminListener :: Backing -> Spec
+adminListener backing = describe "on the admin listener" $ do
+  it "serves the same application under /admin/, with that base" $ withRunning backing $ \r -> do
     page <- getUrl r (r.admin <> "/admin/")
     page.status `shouldBe` 200
     bodyText page `shouldSatisfy` T.isInfixOf "<base href=\"/admin/\"><title>front</title>"
@@ -117,7 +117,7 @@ adminListener = describe "on the admin listener" $ do
     -- The service worker too, whose scope is then /admin/.
     (.status) <$> getUrl r (r.admin <> "/admin/sw.js") `shouldReturn` 200
 
-  it "redirects its root and its place without the slash there, and nothing else" $ withRunning $ \r -> do
+  it "redirects its root and its place without the slash there, and nothing else" $ withRunning backing $ \r -> do
     for_ [("/", "/admin/"), ("/admin", "/admin/")] $ \(asked, target) -> do
       redirect <- getUrl r (r.admin <> asked)
       (redirect.status, header "Location" redirect) `shouldBe` (302, Just target)
@@ -127,13 +127,13 @@ adminListener = describe "on the admin listener" $ do
       (.status) <$> getUrl r (r.admin <> asked) `shouldReturn` 404
     (.status) <$> send r methodPost (r.admin <> "/s/blog/") [] "" `shouldReturn` 404
 
-basePath :: Spec
-basePath = describe "under a base path" $ do
+basePath :: Backing -> Spec
+basePath backing = describe "under a base path" $ do
   it "serves the application and the API below it, and redirects the root to it" $
-    withRunningAs (\o -> o {basePath = "/wiki"}) $ \r -> do
+    withRunningAs backing (\o -> o {basePath = "/wiki"}) $ \r -> do
       page <- getUrl r (r.public <> "/wiki/")
       bodyText page `shouldSatisfy` T.isInfixOf "<base href=\"/wiki/\"><title>front</title>"
-      ok200 (getUrl r (r.public <> "/wiki/api/v1/info")) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
+      ok200 (getUrl r (r.public <> "/wiki/api/v1/info")) `shouldReturn` serverInfoOn backing
       (.status) <$> getUrl r (r.public <> "/wiki/sw.js") `shouldReturn` 200
       for_ [("/", "/wiki/"), ("/wiki", "/wiki/")] $ \(asked, target) -> do
         redirect <- getUrl r (r.public <> asked)
@@ -152,7 +152,7 @@ baseHref = describe "a page's <base href>" $ do
 
 policy :: Spec
 policy = describe "a page's Content Security Policy" $ do
-  it "comes with every page, and with no other file" $ withRunning $ \r -> do
+  it "comes with every page, and with no other file" $ withRunning backing $ \r -> do
     for_ ["/", "/s/blog/", "/s/made-since/", "/offline.html"] $ \page -> do
       reply <- getUrl r (r.public <> page)
       header "Content-Security-Policy" reply `shouldBe` Just (encodeUtf8 (headerPolicy []))
@@ -164,7 +164,7 @@ policy = describe "a page's Content Security Policy" $ do
       header "Content-Security-Policy" reply `shouldBe` Nothing
 
   it "is the same in the header and the page's meta element, the assistant's hosts in both" $
-    withRunningAs (\o -> o {Options.assistantHosts = ["http://localhost:11434"]}) $ \r -> do
+    withRunningAs backing (\o -> o {Options.assistantHosts = ["http://localhost:11434"]}) $ \r -> do
       plain <- getUrl r (r.public <> "/policed/")
       header "Content-Security-Policy" plain `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434"]))
       bodyText plain `shouldSatisfy` T.isInfixOf ("<meta http-equiv=\"Content-Security-Policy\" content=\"" <> pagePolicy ["http://localhost:11434"] <> "\">")

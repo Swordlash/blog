@@ -17,6 +17,7 @@ import System.Directory (findExecutable)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Text.XML qualified as X
@@ -34,12 +35,12 @@ import Wiki.Core.Space (Space (..), SpaceProfile (..), profileOf)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Feed
 
-spec :: Spec
-spec = describe "feeds and the sitemap" $ do
+spec :: Backing -> Spec
+spec backing = describe "feeds and the sitemap" $ do
   writing
   html
-  served
-  heads
+  served backing
+  heads backing
 
 --------------------------------------------------------------------------------
 -- Written
@@ -228,9 +229,9 @@ html = describe "a post's HTML" $
 --------------------------------------------------------------------------------
 -- Served
 
-served :: Spec
-served = describe "served" $ do
-  it "serves a public blog's Atom and RSS feeds, with its posts whole and its addresses the request's" $ withDemoRunning identity $ \r -> do
+served :: Backing -> Spec
+served backing = describe "served" $ do
+  it "serves a public blog's Atom and RSS feeds, with its posts whole and its addresses the request's" $ withDemoRunning backing identity $ \r -> do
     atom <- getUrl r (r.public <> "/s/blog/feed.xml")
     atom.status `shouldBe` 200
     header "Content-Type" atom `shouldBe` Just "application/atom+xml; charset=utf-8"
@@ -248,7 +249,7 @@ served = describe "served" $ do
     header "Content-Type" rss `shouldBe` Just "application/rss+xml; charset=utf-8"
     decodeUtf8 (BSL.toStrict rss.body) `shouldValidate` "test/schemas/rss.rng"
 
-  it "gives its addresses under the public address the panel sets" $ withDemoRunning identity $ \r -> do
+  it "gives its addresses under the public address the panel sets" $ withDemoRunning backing identity $ \r -> do
     _ <- setServer r noServerSettings {publicUrl = Just (Url "https://wiki.example.org/")}
     atom <- getUrl r (r.public <> "/s/blog/feed.xml")
     root <- parsed (decodeUtf8 (BSL.toStrict atom.body))
@@ -256,7 +257,7 @@ served = describe "served" $ do
     mapped <- getUrl r (r.public <> "/sitemap.xml")
     decodeUtf8 (BSL.toStrict mapped.body) `shouldSatisfy` T.isInfixOf "<loc>https://wiki.example.org/s/blog/p/hello-world/</loc>"
 
-  it "has no feed for a space that is not a blog, not public or not there, whoever asks" $ withDemoRunning identity $ \r -> do
+  it "has no feed for a space that is not a blog, not public or not there, whoever asks" $ withDemoRunning backing identity $ \r -> do
     for_ ["/s/docs/feed.xml", "/s/docs/feed.rss", "/s/team/feed.xml", "/s/nowhere/feed.xml", "/s/blog/p/hello-world/feed.xml"] $ \path ->
       ((.status) <$> getUrl r (r.public <> path)) `shouldReturn` 404
     -- Shown as a blog, a private space still has none, even for the
@@ -266,7 +267,7 @@ served = describe "served" $ do
     ((.status) <$> getUrl r (r.admin <> "/admin/s/team/feed.xml")) `shouldReturn` 404
     ((.status) <$> getUrl r (r.public <> "/s/team/feed.xml")) `shouldReturn` 404
 
-  it "lists the public spaces and pages in the sitemap, with when each changed" $ withDemoRunning identity $ \r -> do
+  it "lists the public spaces and pages in the sitemap, with when each changed" $ withDemoRunning backing identity $ \r -> do
     reply <- getUrl r (r.public <> "/sitemap.xml")
     reply.status `shouldBe` 200
     header "Content-Type" reply `shouldBe` Just "application/xml; charset=utf-8"
@@ -279,7 +280,7 @@ served = describe "served" $ do
     locs `shouldSatisfy` all (not . T.isInfixOf "/s/team")
     length (named "lastmod" root) `shouldBe` length locs
 
-  it "has neither in a closed wiki" $ withDemoRunning identity $ \r -> do
+  it "has neither in a closed wiki" $ withDemoRunning backing identity $ \r -> do
     answered :: WikiSettings <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
     answered.access `shouldBe` Closed
     for_ ["/s/blog/feed.xml", "/s/blog/feed.rss", "/sitemap.xml"] $ \path ->
@@ -291,9 +292,9 @@ asBlog p = SpaceProfile {description = p.description, icon = p.icon, homePage = 
 --------------------------------------------------------------------------------
 -- Heads
 
-heads :: Spec
-heads = describe "the head of a page the server renders" $ do
-  it "describes a public post to a link preview, and announces its blog's feeds" $ withDemoRunning identity $ \r -> do
+heads :: Backing -> Spec
+heads backing = describe "the head of a page the server renders" $ do
+  it "describes a public post to a link preview, and announces its blog's feeds" $ withDemoRunning backing identity $ \r -> do
     reply <- getUrl r (r.public <> "/s/blog/p/hello-world/")
     let page = decodeUtf8 (BSL.toStrict reply.body)
         head' = fst (T.breakOn "</head>" page)
@@ -306,7 +307,7 @@ heads = describe "the head of a page the server renders" $ do
     head' `shouldSatisfy` T.isInfixOf "<link rel=\"alternate\" type=\"application/atom+xml\" title=\"Blog (Atom)\" href=\"/s/blog/feed.xml\">"
     head' `shouldSatisfy` T.isInfixOf "<link rel=\"alternate\" type=\"application/rss+xml\" title=\"Blog (RSS)\" href=\"/s/blog/feed.rss\">"
 
-  it "describes the blog's own page, a page of its posts, and a public space without its feeds" $ withDemoRunning identity $ \r -> do
+  it "describes the blog's own page, a page of its posts, and a public space without its feeds" $ withDemoRunning backing identity $ \r -> do
     blogPage <- decodeUtf8 . BSL.toStrict . (.body) <$> getUrl r (r.public <> "/s/blog/?page=2")
     blogPage `shouldSatisfy` T.isInfixOf "<meta property=\"og:type\" content=\"website\">"
     blogPage `shouldSatisfy` T.isInfixOf "<meta property=\"og:description\" content=\"Posts about this wiki and about writing it in Haskell.\">"
@@ -315,7 +316,7 @@ heads = describe "the head of a page the server renders" $ do
     docs `shouldSatisfy` T.isInfixOf "<meta property=\"og:title\" content=\"Tour\">"
     docs `shouldNotSatisfy` T.isInfixOf "feed.xml"
 
-  it "says nothing of a private page, even to its administrator" $ withDemoRunning identity $ \r -> do
+  it "says nothing of a private page, even to its administrator" $ withDemoRunning backing identity $ \r -> do
     handbook <- decodeUtf8 . BSL.toStrict . (.body) <$> getUrl r (r.admin <> "/admin/s/team/p/team-handbook/")
     handbook `shouldSatisfy` T.isInfixOf "<title>Team handbook · Team · Wiki</title>"
     handbook `shouldNotSatisfy` T.isInfixOf "og:"

@@ -81,10 +81,10 @@ import System.IO.Error (isAlreadyInUseError, userError)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsOf (..), DestinationOf (..), Retention (..), Schedule (..), defaultBackupSettings, retained)
 import Wiki.Core.Id (BlobId (..))
 import Wiki.Server.Secret (Secret (..), revealed)
-import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
 import Wiki.Server.Storage.Layout (Database (..), attachmentsDir)
-import Wiki.Server.Storage.Migrate (Migration (..), migrationsFor, schemaVersion)
+import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrationsFor, schemaVersion)
 import Wiki.Server.Storage.Postgres (PgPrograms, checkDump, closePostgres, dumpPostgres, exportSnapshot, openPostgres, restorePostgres)
 import Wiki.Server.Storage.Rows (deleteSettingsLike, referencedBlobs, settingValue, settingsLike, storeSetting)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite, vacuumInto)
@@ -140,7 +140,9 @@ backupInto programs database dir t = do
         -- A read-only transaction whose snapshot the dump reads: the facts
         -- kept beside the dump are read in the same snapshot.
         begin False c
-        flip finally (rollbackTransaction c) $ do
+        -- The transaction only reads: it ends with a rollback, whether
+        -- the dump worked or not.
+        (<* rollbackTransaction c) . rollBackOnError c $ do
           snapshot <- runDb c exportSnapshot
           facts <- DumpFacts <$> schemaVersion c <*> (map (\b -> b.text) . Set.toList <$> runDb c referencedBlobs)
           dumped <- dumpPostgres programs url (Just snapshot) target
@@ -154,12 +156,14 @@ backupInto programs database dir t = do
 -- but the last @keep@ of them (never the one just made): what the deploy
 -- scripts run before they start a new server (@wiki-server backup@). The
 -- result is the new backup's path, 'Nothing' when there is no wiki to back
--- up yet (the first deploy), or why it failed.
+-- up yet (the first deploy), or why it failed. A database of an earlier
+-- wiki-server, whose schema this one does not read, is refused with the
+-- exception 'Wiki.Server.Storage.Migrate.OldSchema'.
 backupNow :: PgPrograms -> Database -> FilePath -> Int -> IO (Either Text (Maybe FilePath))
 backupNow programs database dataDir keep = do
   there <- case database of
-    SqliteFile file -> ifM (doesFileExist file) (bracket (openSqlite ReadOnly file) closeSqlite (fmap (> 0) . schemaVersion)) (pure False)
-    PostgresAt url -> bracket (openPostgres url) closePostgres (fmap (> 0) . schemaVersion)
+    SqliteFile file -> ifM (doesFileExist file) (bracket (openSqlite ReadOnly file) closeSqlite (fmap (> 0) . databaseVersion)) (pure False)
+    PostgresAt url -> bracket (openPostgres url) closePostgres (fmap (> 0) . databaseVersion)
   if not there
     then pure (Right Nothing)
     else do

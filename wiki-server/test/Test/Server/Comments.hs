@@ -26,6 +26,7 @@ import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Web.HttpApiData (toUrlPiece)
@@ -46,10 +47,10 @@ import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Version (Author (..))
 
-spec :: Spec
-spec = describe "comments, over HTTP" $ do
-  rules
-  live
+spec :: Backing -> Spec
+spec backing = describe "comments, over HTTP" $ do
+  rules backing
+  live backing
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -103,28 +104,28 @@ refusedWith code e reply = (reply.status, eitherDecode reply.body) `shouldBe` (c
 quote :: Anchor
 quote = Anchor {exact = "Haskell", prefix = "Notes on ", suffix = ""}
 
-rules :: Spec
-rules = describe "who may" $ do
-  it "lets someone not signed in read a public page's threads, and not comment" $ withDemoRunning identity $ \r -> do
+rules :: Backing -> Spec
+rules backing = describe "who may" $ do
+  it "lets someone not signed in read a public page's threads, and not comment" $ withDemoRunning backing identity $ \r -> do
     p <- notesOf r
     ok200 (getUrl r (onPublic r (links.comments p).list)) `shouldReturn` ([] :: [Thread])
     asWith r Nothing methodPost (links.comments p).open NewThread {anchor = Nothing, body = "Hello."} >>= refusedWith 403 Forbidden
 
-  it "lets someone who may only read the page comment on it, which everyone then reads" $ withDemoRunning identity $ \r -> do
+  it "lets someone who may only read the page comment on it, which everyone then reads" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     t :: Thread <- asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Just quote, body = "Which Haskell?"} >>= jsonAs 201
     map (\c -> (c.author.name, c.body)) t.comments `shouldBe` [("Rita Reader", "Which Haskell?")]
     ok200 (getUrl r (onPublic r (links.comments p).list)) `shouldReturn` [t]
 
-  it "refuses a page one may not read, even its threads, as one that is not there" $ withDemoRunning identity $ \r -> do
+  it "refuses a page one may not read, even its threads, as one that is not there" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     handbook <- pageAt r "team" "team-handbook"
     asWithout r (Just people.reader) "GET" (links.comments handbook).list >>= refusedWith 404 NotFound
     asWith r (Just people.reader) methodPost (links.comments handbook).open NewThread {anchor = Nothing, body = "Hi."} >>= refusedWith 404 NotFound
     asWithout r (Just people.reader) "GET" (links.comments (PageId "no-such-page")).list >>= refusedWith 404 NotFound
 
-  it "lets an author edit their own comment, and nobody else" $ withDemoRunning identity $ \r -> do
+  it "lets an author edit their own comment, and nobody else" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     t :: Thread <- asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Nothing, body = "First."} >>= jsonAs 201
@@ -134,7 +135,7 @@ rules = describe "who may" $ do
     edited :: Comment <- asWith r (Just people.editor) methodPut ((links.comments p).edit t.id c.id) CommentText {body = "Second, edited."} >>= jsonAs 200
     (edited.body, isJust edited.editedAt) `shouldBe` ("Second, edited.", True)
 
-  it "lets the space's administrator delete anyone's comment, and another reader not" $ withDemoRunning identity $ \r -> do
+  it "lets the space's administrator delete anyone's comment, and another reader not" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     t :: Thread <- asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Nothing, body = "First."} >>= jsonAs 201
@@ -146,7 +147,7 @@ rules = describe "who may" $ do
     deleted.status `shouldBe` 204
     ok200 (getUrl r (onPublic r (links.comments p).list)) `shouldReturn` ([] :: [Thread])
 
-  it "lets anyone who may comment resolve an inline thread and reopen it, and nobody signed out" $ withDemoRunning identity $ \r -> do
+  it "lets anyone who may comment resolve an inline thread and reopen it, and nobody signed out" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     t :: Thread <- asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Just quote, body = "Which?"} >>= jsonAs 201
@@ -156,12 +157,12 @@ rules = describe "who may" $ do
     reopened :: Thread <- asWith r (Just people.reader) methodPut ((links.comments p).resolve t.id) ThreadResolution {resolved = False} >>= jsonAs 200
     reopened.resolved `shouldBe` False
 
-  it "lets the operator on the admin listener comment, named as the administrator" $ withDemoRunning identity $ \r -> do
+  it "lets the operator on the admin listener comment, named as the administrator" $ withDemoRunning backing identity $ \r -> do
     p <- notesOf r
     t :: Thread <- sendJson r methodPost (onAdmin r (links.comments p).open) NewThread {anchor = Nothing, body = "From the console."} >>= jsonAs 201
     map (\c -> c.author.name) t.comments `shouldBe` ["Administrator"]
 
-  it "refuses a comment a page of another site sends, without the application's header" $ withDemoRunning identity $ \r -> do
+  it "refuses a comment a page of another site sends, without the application's header" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     reply <- sendBare r methodPost (onPublic r (links.comments p).open) [(hContentType, "application/json"), people.reader] (encode NewThread {anchor = Nothing, body = "Forged."})
@@ -211,9 +212,9 @@ refusedUpgrade r headers =
 created :: (FromJSON a, HasCallStack) => IO Reply -> IO a
 created act = act >>= jsonAs 201
 
-live :: Spec
-live = describe "the live channel" $ do
-  it "tells two tabs on a page, one signed in and one not, of what happens to its comments" $ withDemoRunning identity $ \r -> do
+live :: Backing -> Spec
+live backing = describe "the live channel" $ do
+  it "tells two tabs on a page, one signed in and one not, of what happens to its comments" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     channel r [people.reader] $ \reading -> channel r [] $ \watching -> do
@@ -234,7 +235,7 @@ live = describe "the live channel" $ do
       replicateM_ 3 (void (hear reading))
       hear reading `shouldReturn` Event p (ThreadDeleted t.id)
 
-  it "answers a subscription with the page's threads as the tab's user reads them, and tells only what follows" $ withDemoRunning identity $ \r -> do
+  it "answers a subscription with the page's threads as the tab's user reads them, and tells only what follows" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     -- A thread opened before the tab subscribes, as when it is opened
@@ -253,7 +254,7 @@ live = describe "the live channel" $ do
       hear reading `shouldReturn` Event p (ThreadOpened later)
       hear watching `shouldReturn` Event p (ThreadOpened later)
 
-  it "tells a page's tabs who opens its editor and closes it, and that a lost connection closes it" $ withDemoRunning identity $ \r -> do
+  it "tells a page's tabs who opens its editor and closes it, and that a lost connection closes it" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
@@ -298,7 +299,7 @@ live = describe "the live channel" $ do
       -- The editor's tab is gone without a word: its connection was.
       hear reading `shouldReturn` Event p (Editing [])
 
-  it "takes nobody's word for editing a page they may not edit" $ withDemoRunning identity $ \r -> do
+  it "takes nobody's word for editing a page they may not edit" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     other <- pageAt r "blog" "hello-world"
@@ -311,7 +312,7 @@ live = describe "the live channel" $ do
       -- The next thing heard is the answer to this, not anyone editing.
       subscribe watching other
 
-  it "tells a page's tabs that it was saved, with the time of the version saved" $ withDemoRunning identity $ \r -> do
+  it "tells a page's tabs that it was saved, with the time of the version saved" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     page <- pageNamed r "blog" "notes-on-haskell"
     let p = page.id
@@ -321,7 +322,7 @@ live = describe "the live channel" $ do
       saved :: Page <- jsonAs 200 reply
       hear watching `shouldReturn` Event p (PageChanged saved.updatedAt)
 
-  it "refuses a page one may not read, and tells nothing of it" $ withDemoRunning identity $ \r -> do
+  it "refuses a page one may not read, and tells nothing of it" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     handbook <- pageAt r "team" "team-handbook"
     p <- notesOf r
@@ -334,7 +335,7 @@ live = describe "the live channel" $ do
       -- The next thing heard is the answer to this, not the handbook's.
       subscribe c p
 
-  it "stops telling a tab of a page it unsubscribed from" $ withDemoRunning identity $ \r -> do
+  it "stops telling a tab of a page it unsubscribed from" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
     other <- pageAt r "blog" "hello-world"
@@ -346,18 +347,18 @@ live = describe "the live channel" $ do
       t :: Thread <- created (asWith r (Just people.reader) methodPost (links.comments other).open NewThread {anchor = Nothing, body = "Heard."})
       hear c `shouldReturn` Event other (ThreadOpened t)
 
-  it "is closed to someone not signed in in a closed wiki, before the upgrade, and open to who signed in" $ withDemoRunning identity $ \r -> do
+  it "is closed to someone not signed in in a closed wiki, before the upgrade, and open to who signed in" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
     refusedUpgrade r [] `shouldReturn` Left 401
     p <- notesOf r
     channel r [people.reader] (`subscribe` p)
 
-  it "refuses an upgrade a page of another site asks for, and takes one from this one" $ withDemoRunning identity $ \r -> do
+  it "refuses an upgrade a page of another site asks for, and takes one from this one" $ withDemoRunning backing identity $ \r -> do
     refusedUpgrade r [("Origin", "http://elsewhere.example")] `shouldReturn` Left 403
     refusedUpgrade r [("Origin", encodeUtf8 r.public)] `shouldReturn` Right ()
 
-  it "tells a request that is no WebSocket's that it is one's address" $ withDemoRunning identity $ \r -> do
+  it "tells a request that is no WebSocket's that it is one's address" $ withDemoRunning backing identity $ \r -> do
     reply <- getUrl r (onPublic r eventsPath)
     reply `refusedWith426` Invalid "This address is a WebSocket's."
     -- A connection is logged with the 101 of its upgrade, once it ends.

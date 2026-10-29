@@ -46,10 +46,13 @@ module Wiki.Server.Storage.Postgres
   , dumpPostgres
   , restorePostgres
   , checkDump
+  , splitPassword
   )
 where
 
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BC
+import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Generic, Table (..), TableEntity, all_, customExpr_, defaultDbSettings, desc_, filter_, guard_, in_, limit_, orderBy_, select, val_, (==.))
@@ -58,8 +61,10 @@ import Database.Beam.Postgres (Pg, Postgres, TsQuery, TsVector, (@@))
 import Database.PostgreSQL.Simple (Connection, SqlError (..), close, connectPostgreSQL, execute_)
 import Database.PostgreSQL.Simple.Transaction (IsolationLevel (..), ReadWriteMode (..), TransactionMode (..), beginMode, commit, isSerializationError, rollback)
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Network.HTTP.Types.URI (urlDecode)
 import Protolude hiding (Generic)
 import System.IO (hClose)
+import System.Environment (getEnvironment)
 import System.Process (CreateProcess (..), StdStream (..), proc, waitForProcess, withCreateProcess)
 import Wiki.Server.Storage.Schema (PageNodes (..))
 
@@ -252,7 +257,7 @@ defaultPgPrograms = PgPrograms {dump = "pg_dump", restore = "pg_restore"}
 dumpPostgres :: PgPrograms -> ByteString -> Maybe Text -> FilePath -> IO (Either Text ())
 dumpPostgres programs url snapshot target =
   withFile target WriteMode $ \out ->
-    runProgram programs.dump (["--format=custom", "--no-owner", "--no-privileges", "--dbname=" <> decodeUtf8 url] <> ["--snapshot=" <> s | Just s <- [snapshot]]) Nothing (Just out)
+    runProgram programs.dump url (["--format=custom", "--no-owner", "--no-privileges"] <> ["--snapshot=" <> s | Just s <- [snapshot]]) Nothing (Just out)
 
 -- | Restore a dump into a database, in one transaction: every object of
 -- the wiki is dropped and made again from the dump. The result is why it
@@ -260,24 +265,32 @@ dumpPostgres programs url snapshot target =
 restorePostgres :: PgPrograms -> ByteString -> FilePath -> IO (Either Text ())
 restorePostgres programs url dumpFile =
   withFile dumpFile ReadMode $ \input ->
-    runProgram programs.restore ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--single-transaction", "--exit-on-error", "--dbname=" <> decodeUtf8 url] (Just input) Nothing
+    runProgram programs.restore url ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--single-transaction", "--exit-on-error"] (Just input) Nothing
 
 -- | Whether a file is a dump @pg_restore@ can read: it lists the dump's
 -- contents, and fails for anything else.
 checkDump :: PgPrograms -> FilePath -> IO (Either Text ())
 checkDump programs dumpFile =
   withFile dumpFile ReadMode $ \input ->
-    runProgram programs.restore ["--list"] (Just input) Nothing
+    runProgram programs.restore "" ["--list"] (Just input) Nothing
 
 -- | Run a program with these arguments, its input from a handle and its
 -- output into one when given. Its error output is the reason given when
--- it fails.
-runProgram :: FilePath -> [Text] -> Maybe Handle -> Maybe Handle -> IO (Either Text ())
-runProgram program args input output = do
+-- it fails. A database's URL, when one is given, is added as @--dbname@
+-- without its password, and the password goes to the program in
+-- @PGPASSWORD@: every user of the machine can read a process's arguments,
+-- but not its environment.
+runProgram :: FilePath -> ByteString -> [Text] -> Maybe Handle -> Maybe Handle -> IO (Either Text ())
+runProgram program url args input output = do
+  inherited <- getEnvironment
+  let (bare, password) = splitPassword url
+      dbname = ["--dbname=" <> decodeUtf8 bare | not (BS.null url)]
+      env = [("PGPASSWORD", BC.unpack p) | Just p <- [password]] <> filter ((/= "PGPASSWORD") . fst) inherited
   ran <- try @SomeException $
     withCreateProcess
-      (proc program (map toS args))
+      (proc program (map toS (args <> dbname)))
         { std_in = maybe NoStream UseHandle input
+        , env = Just env
         , std_out = maybe CreatePipe UseHandle output
         , std_err = CreatePipe
         }
@@ -294,3 +307,26 @@ runProgram program args input output = do
     Left e -> Left (T.pack program <> " could not be run: " <> show e)
     Right (ExitSuccess, _) -> Right ()
     Right (ExitFailure n, complaint) -> Left (T.pack program <> " failed (exit code " <> show n <> "): " <> T.strip (decodeUtf8 complaint))
+
+-- | A connection URL without its password, and the password, decoded: the
+-- password of the URL's user part (@postgres:\/\/user:password\@host\/db@)
+-- or of its @password@ parameter (@?password=…@, as "Wiki.Server.Options"
+-- adds one read from a file). A libpq connection string that is no URL is
+-- given back whole.
+splitPassword :: ByteString -> (ByteString, Maybe ByteString)
+splitPassword url = case BC.breakSubstring "://" url of
+  (scheme, rest)
+    | not (BS.null rest) ->
+        let (authority, pathAndQuery) = BC.break (== '/') (BS.drop 3 rest)
+            (fromUser, host) = case BC.breakSubstring "@" authority of
+              (credentials, at) | not (BS.null at) -> case BC.break (== ':') credentials of
+                (user, colon) | not (BS.null colon) -> (Just (urlDecode False (BS.drop 1 colon)), user <> at)
+                _ -> (Nothing, authority)
+              _ -> (Nothing, authority)
+            (path, query) = BC.break (== '?') pathAndQuery
+            parameters = filter (not . BS.null) (BC.split '&' (BS.drop 1 query))
+            (passwords, others) = List.partition ("password=" `BS.isPrefixOf`) parameters
+            fromQuery = urlDecode True . BS.drop (BS.length "password=") <$> head passwords
+            kept = if null others then "" else "?" <> BS.intercalate "&" others
+         in (scheme <> "://" <> host <> path <> kept, fromUser <|> fromQuery)
+  _ -> (url, Nothing)

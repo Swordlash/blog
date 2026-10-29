@@ -210,7 +210,7 @@ import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery 
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
-import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
@@ -403,10 +403,10 @@ writingEither :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> I
 writingEither st action = case st.engine of
   Engine p -> retrying p.writer $ \c -> do
     tracer <- beginTraced st True c
-    result <- runTraced tracer c action `onException` rollbackTransaction c
+    result <- rollBackOnError c (runTraced tracer c action)
     case result of
       Left _ -> rollbackTransaction c
-      Right _ -> commitTransaction c `onException` rollbackTransaction c
+      Right _ -> rollBackOnError c (commitTransaction c)
     pure result
 
 -- | Run statements on a reader, in a transaction that sees one state of
@@ -417,8 +417,8 @@ reading st action = case st.engine of
     tracer <- beginTraced st False c
     -- A reader goes back to the pool after this, so a failed read must
     -- not leave its transaction open.
-    result <- runTraced tracer c action `onException` rollbackTransaction c
-    commitTransaction c `onException` rollbackTransaction c
+    result <- rollBackOnError c (runTraced tracer c action)
+    rollBackOnError c (commitTransaction c)
     pure result
 
 -- | Run a transaction on a connection of a pool, and run it again, up to
@@ -623,12 +623,12 @@ transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO
 transactThenFrom st who address mode (Tx body) committed = case st.engine of
   Engine p -> retrying (if mode == Reads then p.readers else p.writer) $ \c -> do
     tracer <- beginTraced st (mode == Writes) c
-    ctx <- context st (Conn tracer c) who address `onException` rollbackTransaction c
-    result <- runExceptT (runReaderT body ctx) `onException` rollbackTransaction c
+    ctx <- rollBackOnError c (context st (Conn tracer c) who address)
+    result <- rollBackOnError c (runExceptT (runReaderT body ctx))
     case result of
       Left _ -> rollbackTransaction c
       Right a -> do
-        commitTransaction c `onException` rollbackTransaction c
+        rollBackOnError c (commitTransaction c)
         committed a
         made <- readIORef ctx.told
         unless (null made) (st.config.notify (reverse made))
@@ -685,7 +685,7 @@ readWithin st who locate body = case st.engine of
     -- A reader goes back to the pool after this, so a failed read must not
     -- leave its transaction open.
     result <-
-      flip onException (rollbackTransaction c) $
+      rollBackOnError c $
         runTraced tracer c locate >>= \case
           Nothing -> pure (Left NotFound)
           Just (sid, found) -> do
@@ -693,7 +693,7 @@ readWithin st who locate body = case st.engine of
             ctx <- contextWith st (Conn tracer c) who "" spaces =<< runTraced tracer c (loadGrantsOn (Map.keys spaces))
             let Tx tx = body sid found
             runExceptT (runReaderT tx ctx)
-    commitTransaction c `onException` rollbackTransaction c
+    rollBackOnError c (commitTransaction c)
     pure result
 
 -- | Run statements on the transaction's connection.

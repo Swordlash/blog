@@ -55,6 +55,7 @@ module Wiki.Server.Console
   , restoreParser
   , runRestore
   , runBackup
+  , BackupOutcome (..)
   )
 where
 
@@ -76,6 +77,7 @@ import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Storage (Place (..), Storage, Who (..), readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
+import Wiki.Server.Storage.Migrate (OldSchema)
 
 -- | A @wiki-server users@ command, on a data directory.
 data Users = Users
@@ -320,12 +322,30 @@ runRestore :: RestoreCommand -> IO (Either Text [Text])
 runRestore r = (`onPlace` r.place) $ \at ->
   restore Restore {backupFile = r.backupFile, dataDir = at.dataDir, database = at.database, programs = at.programs, attachments = r.attachments}
 
+-- | What @wiki-server backup@ did: the line to show, and how the program
+-- ends.
+data BackupOutcome
+  = -- | A backup was made, or there is no wiki to back up yet.
+    BackedUp Text
+  | -- | No backup could be made, for this reason.
+    BackupFailed Text
+  | -- | The database is an earlier wiki-server's, which this one does not
+    -- read: the deploy scripts tell this apart from a failure (the
+    -- program's exit code 3), and stop.
+    OfEarlierServer Text
+  deriving stock (Eq, Show)
+
 -- | Back up the database, keeping this many backups
--- ('Wiki.Server.Storage.Backup.backupNow'). The result is the line to
--- show, or why it failed.
-runBackup :: PlaceOptions -> Int -> IO (Either Text Text)
-runBackup options keep = (`onPlace` options) $ \at ->
-  fmap (maybe "There is no database to back up yet." (\file -> "Backed up into " <> toS file)) <$> backupNow at.programs at.database at.dataDir keep
+-- ('Wiki.Server.Storage.Backup.backupNow').
+runBackup :: PlaceOptions -> Int -> IO BackupOutcome
+runBackup options keep =
+  try @OldSchema made <&> \case
+    Left old -> OfEarlierServer (toS (displayException old))
+    Right (Left why) -> BackupFailed why
+    Right (Right line) -> BackedUp line
+  where
+    made = (`onPlace` options) $ \at ->
+      fmap (maybe "There is no database to back up yet." (\file -> "Backed up into " <> toS file)) <$> backupNow at.programs at.database at.dataDir keep
 
 -- | Run something where the options say the wiki is; why not, when they
 -- name a password file that cannot be read.

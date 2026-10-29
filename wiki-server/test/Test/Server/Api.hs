@@ -15,13 +15,13 @@ import Data.Text qualified as T
 import Network.HTTP.Types (hContentType, methodDelete, methodPost, methodPut)
 import Protolude
 import Servant.API (toUrlPiece)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
@@ -38,19 +38,19 @@ import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Storage (administratorUser)
 
-spec :: Spec
-spec = describe "the API over HTTP" $ do
-  whoIsAsking
-  spacesAndPages
-  templates
-  versions
-  draftsAndSearch
-  attachments
-  refusals
-  status
-  people
-  permissions
-  profiles
+spec :: Backing -> Spec
+spec backing = describe "the API over HTTP" $ do
+  whoIsAsking backing
+  spacesAndPages backing
+  templates backing
+  versions backing
+  draftsAndSearch backing
+  attachments backing
+  refusals backing
+  status backing
+  people backing
+  permissions backing
+  profiles backing
 
 -- | An address of the API on a listener: the public one's root, or the
 -- admin one's @\/admin\/@.
@@ -61,20 +61,20 @@ onPublic, onAdmin :: Running -> Text -> Text
 onPublic r = at r.public
 onAdmin r = at (r.admin <> "/admin")
 
-whoIsAsking :: Spec
-whoIsAsking = describe "who is asking" $ do
-  it "describes the server on both listeners" $ withRunning $ \r -> do
-    ok200 (getUrl r (onPublic r links.info)) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
-    ok200 (getUrl r (onAdmin r links.info)) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
+whoIsAsking :: Backing -> Spec
+whoIsAsking backing = describe "who is asking" $ do
+  it "describes the server on both listeners" $ withRunning backing $ \r -> do
+    ok200 (getUrl r (onPublic r links.info)) `shouldReturn` serverInfoOn backing
+    ok200 (getUrl r (onAdmin r links.info)) `shouldReturn` serverInfoOn backing
 
-  it "is nobody on the public listener and the administrator on the admin one" $ withRunning $ \r -> do
+  it "is nobody on the public listener and the administrator on the admin one" $ withRunning backing $ \r -> do
     anonymous <- ok200 (getUrl r (onPublic r links.session))
     (anonymous :: SessionInfo).user `shouldBe` Nothing
     operator <- ok200 (getUrl r (onAdmin r links.session))
     (operator :: SessionInfo).user `shouldBe` Just administratorUser
     map (\g -> g.permission) operator.grants.global `shouldBe` [Administer]
 
-  it "logs each request with its listener, principal, route, status and time, but not its query" $ withRunning $ \r -> do
+  it "logs each request with its listener, principal, route, status and time, but not its query" $ withRunning backing $ \r -> do
     _ <- getUrl r (onPublic r (searchUrl (searchQuery "secret words")))
     -- The line is written once the response has been sent, which the client
     -- can see before the server gets to it: wait for it, a little at a time.
@@ -103,9 +103,9 @@ withSpace r public = do
   page <- sendJson r methodPost (onAdmin r (links.spaces.createPage space.id)) NewPage {parent = Nothing, title = "Welcome", body = "# Welcome\n\nThe first page."} >>= jsonAs 201
   pure (space, page)
 
-spacesAndPages :: Spec
-spacesAndPages = describe "spaces and pages" $ do
-  it "are made, changed and read back through the storage" $ withRunning $ \r -> do
+spacesAndPages :: Backing -> Spec
+spacesAndPages backing = describe "spaces and pages" $ do
+  it "are made, changed and read back through the storage" $ withRunning backing $ \r -> do
     (space, page) <- withSpace r False
     ok200 (getUrl r (onAdmin r links.spaces.list)) `shouldReturn` [space]
     ok200 (getUrl r (onAdmin r (links.spaces.atPath [space.slug]))) `shouldReturn` space
@@ -122,7 +122,7 @@ spacesAndPages = describe "spaces and pages" $ do
     (.status) <$> send r methodDelete (onAdmin r (links.pages.delete page.id)) [] "" `shouldReturn` 204
     (.status) <$> getUrl r (onAdmin r (links.spaces.pageAt space.id [page.slug])) `shouldReturn` 404
 
-  it "are hidden from an anonymous reader unless public, and never changed by one" $ withRunning $ \r -> do
+  it "are hidden from an anonymous reader unless public, and never changed by one" $ withRunning backing $ \r -> do
     (private, _) <- withSpace r False
     ok200 (getUrl r (onPublic r links.spaces.list)) `shouldReturn` ([] :: [Space])
     getUrl r (onPublic r (links.spaces.listPages private.id)) >>= jsonAs 404 >>= (`shouldBe` NotFound)
@@ -131,9 +131,9 @@ spacesAndPages = describe "spaces and pages" $ do
     sendJson r methodPost (onPublic r links.spaces.create) NewSpace {parent = Nothing, name = "Mine"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
     sendJson r methodPut (onPublic r (links.spaces.rename private.id)) SpaceName {name = "Ours"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
 
-templates :: Spec
-templates = describe "templates" $ do
-  it "makes a page a template, which a search then finds only when asked to, and an anonymous reader may not" $ withRunning $ \r -> do
+templates :: Backing -> Spec
+templates backing = describe "templates" $ do
+  it "makes a page a template, which a search then finds only when asked to, and an anonymous reader may not" $ withRunning backing $ \r -> do
     (space, page) <- withSpace r True
     let search q = map (\(h :: SearchHit) -> h.page) <$> ok200 (getUrl r (onPublic r (searchUrl q)))
     search (searchQuery "first page") `shouldReturn` [page.id]
@@ -151,7 +151,7 @@ templates = describe "templates" $ do
     (back :: Page).template `shouldBe` False
     search (searchQuery "first page") `shouldReturn` [page.id]
 
-  it "refuses a space's home page, and what is not there" $ withRunning $ \r -> do
+  it "refuses a space's home page, and what is not there" $ withRunning backing $ \r -> do
     (space, _) <- withSpace r False
     home <- maybe (panic "no home page") pure space.homePage
     sendJson r methodPut (onAdmin r (links.pages.template home)) PageTemplate {template = True} >>= jsonAs 400 >>= (`shouldSatisfy` isInvalid)
@@ -161,12 +161,12 @@ templates = describe "templates" $ do
       Invalid _ -> True
       _ -> False
 
-versions :: Spec
-versions = describe "versions" $ do
+versions :: Backing -> Spec
+versions backing = describe "versions" $ do
   let save r page tag = send r methodPut (onAdmin r (links.pages.save page.id)) ([(hContentType, "application/json")] <> [("If-Match", t) | Just t <- [tag]]) (encode PageEdit {title = "Welcome", body = "Saved."})
       etag = encodeUtf8 . toUrlPiece . pageVersion
 
-  it "saves a page against its ETag, answering with the new one" $ withRunning $ \r -> do
+  it "saves a page against its ETag, answering with the new one" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     reply <- save r page (Just (etag page))
     saved <- jsonAs 200 reply
@@ -174,23 +174,23 @@ versions = describe "versions" $ do
     header "ETag" reply `shouldBe` Just (etag saved)
     (saved.updatedAt > page.updatedAt) `shouldBe` True
 
-  it "refuses a save against an older version as a conflict" $ withRunning $ \r -> do
+  it "refuses a save against an older version as a conflict" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     _ :: Page <- save r page (Just (etag page)) >>= jsonAs 200
     save r page (Just (etag page)) >>= jsonAs 409 >>= \case
       Conflict _ -> pass
       other -> expectationFailure ("not a conflict: " <> show other)
 
-  it "refuses a save without If-Match, or with one that is weak or not a version, as invalid" $ withRunning $ \r -> do
+  it "refuses a save without If-Match, or with one that is weak or not a version, as invalid" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     for_ [Nothing, Just ("W/" <> etag page), Just "*", Just "\"yesterday\""] $ \tag ->
       save r page tag >>= jsonAs 400 >>= \case
         Invalid _ -> pass
         other -> expectationFailure ("not invalid: " <> show other)
 
-draftsAndSearch :: Spec
-draftsAndSearch = describe "drafts and search" $ do
-  it "keeps the administrator's draft of a page, and discards it" $ withRunning $ \r -> do
+draftsAndSearch :: Backing -> Spec
+draftsAndSearch backing = describe "drafts and search" $ do
+  it "keeps the administrator's draft of a page, and discards it" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     ok200 (getUrl r (onAdmin r (links.pages.draft page.id))) `shouldReturn` (Nothing :: Maybe Draft)
     draft <- ok200 (sendJson r methodPut (onAdmin r (links.pages.saveDraft page.id)) DraftEdit {base = page.updatedAt, title = "Welcome", body = "Unsaved."})
@@ -199,7 +199,7 @@ draftsAndSearch = describe "drafts and search" $ do
     (.status) <$> send r methodDelete (onAdmin r (links.pages.discardDraft page.id)) [] "" `shouldReturn` 204
     ok200 (getUrl r (onAdmin r (links.pages.draft page.id))) `shouldReturn` (Nothing :: Maybe Draft)
 
-  it "finds the pages the asker may view, and no others" $ withRunning $ \r -> do
+  it "finds the pages the asker may view, and no others" $ withRunning backing $ \r -> do
     (space, page) <- withSpace r False
     hits <- ok200 (getUrl r (onAdmin r (searchUrl (searchQuery "first"))))
     map (\(h :: SearchHit) -> h.page) hits `shouldBe` [page.id]
@@ -207,17 +207,17 @@ draftsAndSearch = describe "drafts and search" $ do
     _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = True})
     map (\(h :: SearchHit) -> h.page) <$> ok200 (getUrl r (onPublic r (searchUrl (searchQuery "first")))) `shouldReturn` [page.id]
 
-  it "answers a limit beyond its own with at most its own" $ withRunning $ \r -> do
+  it "answers a limit beyond its own with at most its own" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     map (\(h :: SearchHit) -> h.page) <$> ok200 (getUrl r (onAdmin r "api/v1/search?q=first&limit=100000")) `shouldReturn` [page.id]
     ok200 (getUrl r (onAdmin r "api/v1/search?q=first&limit=-3")) `shouldReturn` ([] :: [SearchHit])
 
-attachments :: Spec
-attachments = describe "attachments" $ do
+attachments :: Backing -> Spec
+attachments backing = describe "attachments" $ do
   let upload r page name mediaType content = multipart r (onAdmin r (links.pages.upload page.id)) [] [("file", name, mediaType, content)]
       bytes = BSL.pack [0 .. 99]
 
-  it "are uploaded as a form and downloaded from their address, with their type, as data" $ withRunning $ \r -> do
+  it "are uploaded as a form and downloaded from their address, with their type, as data" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     a <- upload r page "chart.png" "image/png" bytes >>= jsonAs 201
     (a :: Attachment).size `shouldBe` 100
@@ -233,7 +233,7 @@ attachments = describe "attachments" $ do
     revalidated <- getUrlWith r (onAdmin r (attachmentUrl a)) [("If-None-Match", fromMaybe "" (header "ETag" reply))]
     revalidated.status `shouldBe` 304
 
-  it "are downloaded, not shown, when they could run as a page" $ withRunning $ \r -> do
+  it "are downloaded, not shown, when they could run as a page" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     for_ [("page.html", "text/html"), ("drawing.svg", "image/svg+xml"), ("notes día.pdf", "application/pdf")] $ \(name, mediaType) -> do
       a <- upload r page name mediaType bytes >>= jsonAs 201
@@ -244,7 +244,7 @@ attachments = describe "attachments" $ do
     reply <- getUrl r (onAdmin r (attachmentUrl a))
     header "Content-Disposition" reply `shouldBe` Just "attachment; filename=\"notes d_a.pdf\"; filename*=UTF-8''notes%20d%C3%ADa.pdf"
 
-  it "answer a range of their bytes, as a video seeking asks" $ withRunning $ \r -> do
+  it "answer a range of their bytes, as a video seeking asks" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     a <- upload r page "clip.mp4" "video/mp4" bytes >>= jsonAs 201
     reply <- getUrlWith r (onAdmin r (attachmentUrl a)) [("Range", "bytes=10-19")]
@@ -252,7 +252,7 @@ attachments = describe "attachments" $ do
     header "Content-Range" reply `shouldBe` Just "bytes 10-19/100"
     header "Content-Type" reply `shouldBe` Just "video/mp4"
 
-  it "are not there under another name, nor for whoever may not view their page" $ withRunning $ \r -> do
+  it "are not there under another name, nor for whoever may not view their page" $ withRunning backing $ \r -> do
     (space, page) <- withSpace r False
     a <- upload r page "chart.png" "image/png" bytes >>= jsonAs 201
     getUrl r (onAdmin r ("api/v1/attachments/" <> (a :: Attachment).id.text <> "/other.png")) >>= jsonAs 404 >>= (`shouldBe` NotFound)
@@ -262,7 +262,7 @@ attachments = describe "attachments" $ do
     (.status) <$> send r methodDelete (onAdmin r (links.attachments.delete a.id)) [] "" `shouldReturn` 204
     (.status) <$> getUrl r (onAdmin r (attachmentUrl a)) `shouldReturn` 404
 
-  it "over 50 MB are refused with a 413, as an ApiError, before the handler" $ withRunning $ \r -> do
+  it "over 50 MB are refused with a 413, as an ApiError, before the handler" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     reply <- upload r page "big.bin" "application/octet-stream" (BSL.replicate (fromIntegral maxAttachmentSize + 1) 0)
     reply.status `shouldBe` 413
@@ -271,9 +271,9 @@ attachments = describe "attachments" $ do
       other -> expectationFailure ("not invalid: " <> show other)
     ok200 (getUrl r (onAdmin r (links.spaces.pageAt page.space [page.slug]))) >>= \(p :: Page) -> p.attachments `shouldBe` []
 
-refusals :: Spec
-refusals = describe "refusals servant makes itself" $ do
-  it "are ApiErrors too: a body that does not parse, an address with no endpoint, a method, a media type" $ withRunning $ \r -> do
+refusals :: Backing -> Spec
+refusals backing = describe "refusals servant makes itself" $ do
+  it "are ApiErrors too: a body that does not parse, an address with no endpoint, a method, a media type" $ withRunning backing $ \r -> do
     malformed <- send r methodPost (onAdmin r links.spaces.create) [(hContentType, "application/json")] "{\"name\": "
     malformed.status `shouldBe` 400
     json malformed >>= \case
@@ -292,16 +292,16 @@ refusals = describe "refusals servant makes itself" $ do
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
 
-status :: Spec
-status = describe "the server's status" $ do
-  it "is given to the administrator, with the server's counts" $ withRunning $ \r -> do
+status :: Backing -> Spec
+status backing = describe "the server's status" $ do
+  it "is given to the administrator, with the server's counts" $ withRunning backing $ \r -> do
     (_, _) <- withSpace r False
     s <- ok200 (getUrl r (onAdmin r links.admin.status))
     -- The space's home page, and the page made in it.
     ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (1, 2, 0, toS r.dataDir)
     s.version `shouldSatisfy` T.isPrefixOf "wiki-server "
 
-  it "is refused to an anonymous reader" $ withRunning $ \r ->
+  it "is refused to an anonymous reader" $ withRunning backing $ \r ->
     getUrl r (onPublic r links.admin.status) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
 
 -- | The administration's users, accounts and groups over HTTP: answered on
@@ -309,9 +309,9 @@ status = describe "the server's status" $ do
 -- administrator's session; refused to an anonymous reader and to a user
 -- signed in who is not an administrator, before anything they name is
 -- looked for.
-people :: Spec
-people = describe "the wiki's people" $ do
-  it "are the operator's on the admin listener, without a session" $ withDemoRunning identity $ \r -> do
+people :: Backing -> Spec
+people backing = describe "the wiki's people" $ do
+  it "are the operator's on the admin listener, without a session" $ withDemoRunning backing identity $ \r -> do
     d <- ok200 (getUrl r (onAdmin r links.admin.directory))
     map (\u -> u.login.text) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
@@ -334,7 +334,7 @@ people = describe "the wiki's people" $ do
     (editor `Set.member` (final :: Directory).administrators) `shouldBe` False
     map (\g -> g.name) final.groups `shouldBe` ["writers"]
 
-  it "are an administrator's on the public listener, through their session" $ withAdminSession identity $ \r session -> do
+  it "are an administrator's on the public listener, through their session" $ withAdminSession backing identity $ \r session -> do
     let get' address = getUrlWith r (onPublic r address) [session]
         put' :: (ToJSON b) => Text -> b -> IO Reply
         put' address body = send r methodPut (onPublic r address) [session, (hContentType, "application/json")] (encode body)
@@ -360,7 +360,7 @@ people = describe "the wiki's people" $ do
     ((changed :: Directory).disabled, changed.creators, bea.user.id `Set.member` changed.withPassword)
       `shouldBe` (Set.singleton bea.user.id, Set.fromList [loginId d "editor", loginId d "reader"], True)
 
-  it "are refused to a user signed in who is not an administrator" $ withAdminSession identity $ \r _ -> do
+  it "are refused to a user signed in who is not an administrator" $ withAdminSession backing identity $ \r _ -> do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     d <- ok200 (getUrl r (onAdmin r links.admin.directory))
@@ -378,7 +378,7 @@ people = describe "the wiki's people" $ do
     send r methodPost (onPublic r links.admin.createGroup) [editor, (hContentType, "application/json")] (encode GroupName {name = "Mine"}) >>= forbidden
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
 
-  it "are refused to an anonymous reader, who learns nothing of what they name" $ withDemoRunning identity $ \r -> do
+  it "are refused to an anonymous reader, who learns nothing of what they name" $ withDemoRunning backing identity $ \r -> do
     d <- ok200 (getUrl r (onAdmin r links.admin.directory))
     let rita = loginId d "reader"
         writers = maybe (panic "no writers") (\g -> g.id) (head (d :: Directory).groups)
@@ -408,9 +408,9 @@ people = describe "the wiki's people" $ do
 -- inherits, until they are revoked. The demo's wiki: the editor may create
 -- spaces; Team is private, its subspace Projects viewable by the reader;
 -- the editor sees neither.
-permissions :: Spec
-permissions = describe "permissions given over HTTP" $ do
-  it "lets whoever holds create-spaces make a top-level space, and nobody else" $ withAdminSession identity $ \r session -> do
+permissions :: Backing -> Spec
+permissions backing = describe "permissions given over HTTP" $ do
+  it "lets whoever holds create-spaces make a top-level space, and nobody else" $ withAdminSession backing identity $ \r session -> do
     givePassword r "user-editor" "editor's password"
     givePassword r "user-reader" "reader's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
@@ -433,7 +433,7 @@ permissions = describe "permissions given over HTTP" $ do
     (.status) <$> create [] "Nobody's" `shouldReturn` 403
     (.status) <$> create [rita] "Rita's again" `shouldReturn` 201
 
-  it "answers a space one may not view, and everything in it, as one that is not there: 404, not 403" $ withAdminSession identity $ \r session -> do
+  it "answers a space one may not view, and everything in it, as one that is not there: 404, not 403" $ withAdminSession backing identity $ \r session -> do
     givePassword r "user-reader" "reader's password"
     rita <- cookie <$> signInAs r "reader" "reader's password"
     let at' hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs
@@ -459,7 +459,7 @@ permissions = describe "permissions given over HTTP" $ do
     wiki :: Page <- pageIn [rita] projects.id "the-wiki" >>= jsonAs 200
     (save [rita] wiki >>= jsonAs 403) `shouldReturn` Forbidden
 
-  it "grants a user a private space, which its subspace inherits, until it is revoked" $ withAdminSession identity $ \r session -> do
+  it "grants a user a private space, which its subspace inherits, until it is revoked" $ withAdminSession backing identity $ \r session -> do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     let at' hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs
@@ -503,8 +503,8 @@ permissions = describe "permissions given over HTTP" $ do
 -- | A space's profile and icon over HTTP: set by whoever administers the
 -- space, its icon served to whoever may view it, and kept across a
 -- restart, which deletes the files nothing refers to.
-profiles :: Spec
-profiles = describe "a space's profile and icon over HTTP" $ do
+profiles :: Backing -> Spec
+profiles backing = describe "a space's profile and icon over HTTP" $ do
   let png = BSL.pack [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]
       spaceNamed r hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs >>= jsonAs 200
       -- Upload icons as the operator, and see them served as images to
@@ -535,7 +535,7 @@ profiles = describe "a space's profile and icon over HTTP" $ do
         pure uploaded
       setProfile r hs sid p = send r methodPut (onPublic r (links.spaces.setProfile sid)) ((hContentType, "application/json") : hs) (encode p)
 
-  it "is set by whoever administers the space, and by nobody else" $ withAdminSession identity $ \r session -> do
+  it "is set by whoever administers the space, and by nobody else" $ withAdminSession backing identity $ \r session -> do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     blog :: Space <- spaceNamed r [session] "blog"
@@ -553,13 +553,13 @@ profiles = describe "a space's profile and icon over HTTP" $ do
       other -> expectationFailure ("not invalid: " <> show other)
 
   it "serves an uploaded icon to whoever may view the space, as an image and nothing else" $
-    withDemoRestarted icons $ \uploaded again -> do
+    withDemoRestarted backing icons $ \uploaded again -> do
       -- The image stays across a restart, which deletes the files that
       -- nothing refers to.
       kept <- getUrl again (onPublic again (spaceIconUrl uploaded))
       (kept.status, kept.body) `shouldBe` (200, png)
 
-  it "counts the pages of the spaces the asker may view" $ withDemoRunning identity $ \r -> do
+  it "counts the pages of the spaces the asker may view" $ withDemoRunning backing identity $ \r -> do
     counts <- getUrl r (onPublic r links.spaces.pageCounts) >>= jsonAs 200
     spaces :: [Space] <- getUrl r (onPublic r links.spaces.list) >>= jsonAs 200
     sort [(s.name, n) | s <- spaces, Just n <- [Map.lookup s.id (counts :: Map SpaceId Int)]] `shouldBe` [("Blog", 2), ("Docs", 5)]

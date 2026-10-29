@@ -34,6 +34,7 @@ module Wiki.Server.Storage.Migrate
   , migrate
   , applyMigrations
   , schemaVersion
+  , databaseVersion
   , SchemaTooNew (..)
   , OldSchema (..)
   )
@@ -45,7 +46,7 @@ import Data.Time (getCurrentTime)
 import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningOne, select)
 import Protolude
 import System.FilePath (dropExtension, takeBaseName, takeExtension)
-import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
 import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
 
 -- | One step of the schema, on one database.
@@ -91,7 +92,7 @@ migrate c = applyMigrations (migrationsFor (schemaSuffix c)) c
 applyMigrations :: (Backend be) => [Migration] -> Connection be -> IO [Int]
 applyMigrations steps c = do
   begin True c
-  flip onException (rollbackTransaction c) $ do
+  rollBackOnError c $ do
     current <- versionOf c
     let known = maybe 0 (\m -> m.version) (lastMay steps)
     when (current > known) $
@@ -144,7 +145,12 @@ schemaVersion c = do
     else pure 0
 
 -- | 'schemaVersion', refusing a database that holds tables but none of
--- this schema's version.
+-- this schema's version with 'OldSchema': what a backup before a deploy
+-- asks, so that a deploy over the database of an earlier wiki-server
+-- stops before anything is changed.
+databaseVersion :: (Backend be) => Connection be -> IO Int
+databaseVersion = versionOf
+
 versionOf :: (Backend be) => Connection be -> IO Int
 versionOf c = do
   tables <- runDb c tableNames

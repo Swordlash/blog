@@ -38,6 +38,7 @@ import System.Directory (doesFileExist, findExecutable, listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
+import System.Posix.Signals (Handler (..), installHandler, sigTERM)
 import System.Posix.User (getEffectiveUserID)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec (pendingWith)
@@ -85,9 +86,18 @@ withBackings act =
     Nothing ->
       findPostgres >>= \case
         Nothing -> act [OnSqlite, PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH"]
-        Just bin -> withCluster bin $ \url -> do
+        Just bin -> stoppedByTerm . withCluster bin $ \url -> do
           made <- newIORef 0
           act [OnSqlite, OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}}]
+
+-- | Run an action that a SIGTERM (what @timeout@ sends) interrupts as a
+-- Ctrl-C would, so that the cluster it started is stopped and deleted
+-- rather than left running.
+stoppedByTerm :: IO a -> IO a
+stoppedByTerm act = do
+  main <- myThreadId
+  previous <- installHandler sigTERM (Catch (throwTo main UserInterrupt)) Nothing
+  act `finally` installHandler sigTERM previous Nothing
 
 -- | The directory of PostgreSQL's programs, if they are installed: where
 -- @pg_ctl@ is on the PATH, or the @bin@ directory of the newest version

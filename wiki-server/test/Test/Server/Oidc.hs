@@ -26,8 +26,9 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
-import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing, placeOptionsOf)
+import Test.Storage.Fixture (withPlaceIn)
 import Test.Hspec
 import Test.Server.FakeProvider
 import Test.Server.Fixture
@@ -50,12 +51,12 @@ import Wiki.Server.Oidc (IdClaims (..), checkClaims, decodeIdToken)
 import Wiki.Server.Storage (Who (..), defaultConfig, runStoredWiki, withStorage)
 import Wiki.Server.Totp (codeAt, secretFromText)
 
-spec :: Spec
-spec = describe "signing in with a provider" $ do
-  overHttp
+spec :: Backing -> Spec
+spec backing = describe "signing in with a provider" $ do
+  overHttp backing
   claims
   logins
-  checking
+  checking backing
 
 -- | Someone at the provider: their subject, address, whether it is
 -- verified, name, username, and whether the ID token says the name.
@@ -84,8 +85,8 @@ signingInWith providers = ServerSettings {publicUrl = Just (Url publicUrl), mail
 
 -- | A server over the demo's wiki, with the fake's providers set by its
 -- operator once it runs.
-withOidc :: (Fake -> Running -> IO a) -> IO a
-withOidc test = withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
+withOidc :: Backing -> (Fake -> Running -> IO a) -> IO a
+withOidc backing test = withFakeProvider $ \fake -> withDemoRunning backing identity $ \r -> do
   _ <- setServer r (signingInWith (fakeProviders fake))
   test fake r
 
@@ -183,10 +184,10 @@ sendJson' r m url hs value = send r m url ((hContentType, "application/json") : 
 says :: Reply -> Text -> Expectation
 says reply words' = decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInfixOf words'
 
-overHttp :: Spec
-overHttp = describe "over HTTP" $ do
+overHttp :: Backing -> Spec
+overHttp backing = describe "over HTTP" $ do
   describe "set at run time" $ do
-    it "signs in with no provider until one is set, and with one as soon as it is" $ withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
+    it "signs in with no provider until one is set, and with one as soon as it is" $ withFakeProvider $ \fake -> withDemoRunning backing identity $ \r -> do
       (\me -> me.providers) <$> sessionOf r [] `shouldReturn` []
       (\x -> x.status) <$> getUrl r (onPublic r "auth/acme/start?next=%2F") `shouldReturn` 404
       _ <- setServer r (signingInWith (take 1 (fakeProviders fake)))
@@ -195,7 +196,7 @@ overHttp = describe "over HTTP" $ do
       c <- signedInWith r "acme" "next=%2F" []
       loginOf <$> sessionOf r [c] `shouldReturn` Just "early"
 
-    it "forgets a provider removed, and asks one changed how to sign in again" $ withOidc $ \fake r -> do
+    it "forgets a provider removed, and asks one changed how to sign in again" $ withOidc backing $ \fake r -> do
       _ <- setServer r (signingInWith (drop 1 (fakeProviders fake)))
       (\x -> x.status) <$> getUrl r (onPublic r "auth/acme/start?next=%2F") `shouldReturn` 404
       -- Its discovery is not the one found before: nothing listens there.
@@ -209,7 +210,7 @@ overHttp = describe "over HTTP" $ do
       c <- signedInWith r "acme" "next=%2F" []
       loginOf <$> sessionOf r [c] `shouldReturn` Just "again"
 
-    it "signs in with the secret as it is now" $ withOidc $ \fake r -> do
+    it "signs in with the secret as it is now" $ withOidc backing $ \fake r -> do
       _ <- setServer r (signingInWith [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url fake.url), secret = Just "not the secret"}])
       writeIORef fake.user (person "wrong")
       (\x -> x.status) <$> roundTrip r "acme" "next=%2F" [] `shouldReturn` 502
@@ -217,11 +218,11 @@ overHttp = describe "over HTTP" $ do
       writeIORef fake.user (person "right")
       void (signedInWith r "acme" "next=%2F" [])
 
-  it "offers the providers in every session, by name and label" $ withOidc $ \_ r -> do
+  it "offers the providers in every session, by name and label" $ withOidc backing $ \_ r -> do
     me <- sessionOf r []
     me.providers `shouldBe` [SignInProvider "acme" "Acme", SignInProvider "hub" "GitHub", SignInProvider "fruit" "Apple"]
 
-  it "makes an account for someone unknown in an open wiki, signs them in, and goes back where they were" $ withOidc $ \fake r -> do
+  it "makes an account for someone unknown in an open wiki, signs them in, and goes back where they were" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (someone "grace" (Just "grace@example.org") True (Just "Grace Hopper") (Just "grace") True)
     reply <- roundTrip r "acme" "next=%2Fs%2Fblog%2F" []
     reply.status `shouldBe` 200
@@ -236,7 +237,7 @@ overHttp = describe "over HTTP" $ do
     (\u -> u.id `elem` toList d.withPassword) <$> grace `shouldBe` Just False
     ((\u -> lookup u.id (toPairs d.identities)) =<< grace) `shouldBe` Just ["acme"]
 
-  it "signs the same person in as the same user next time" $ withOidc $ \fake r -> do
+  it "signs the same person in as the same user next time" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (person "grace")
     first' <- signedInWith r "acme" "next=%2F" []
     countBefore <- length . (\d -> d.users) <$> usersNow r
@@ -247,19 +248,19 @@ overHttp = describe "over HTTP" $ do
     b <- sessionOf r [second']
     ((\u -> u.id) <$> a.user) `shouldBe` ((\u -> u.id) <$> b.user)
 
-  it "makes another login when the one wanted is taken" $ withOidc $ \fake r -> do
+  it "makes another login when the one wanted is taken" $ withOidc backing $ \fake r -> do
     -- The demo has an editor already.
     writeIORef fake.user (person "editor")
     c <- signedInWith r "acme" "next=%2F" []
     loginOf <$> sessionOf r [c] `shouldReturn` Just "editor-2"
 
-  it "sends the client's secret as the provider takes it: in the form to GitHub, as HTTP's Basic where discovery does not say" $ withOidc $ \fake r -> do
+  it "sends the client's secret as the provider takes it: in the form to GitHub, as HTTP's Basic where discovery does not say" $ withOidc backing $ \fake r -> do
     _ <- signedInWith r "acme" "next=%2F" []
     writeIORef fake.user (someone "77" (Just "g@example.org") True (Just "G") (Just "gee") True)
     _ <- signedInWith r "hub" "next=%2F" []
     readIORef fake.secretsBy `shouldReturn` ["form", "basic"]
 
-  it "takes the user's login, name and verified address from GitHub's API" $ withOidc $ \fake r -> do
+  it "takes the user's login, name and verified address from GitHub's API" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (someone "4242" (Just "octo@example.org") True (Just "Octo Cat") (Just "octo-cat") True)
     c <- signedInWith r "hub" "next=%2F" []
     me <- sessionOf r [c]
@@ -267,26 +268,26 @@ overHttp = describe "over HTTP" $ do
     methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
     map (\i -> (i.provider, (\e -> e.text) <$> i.email)) methods.identities `shouldBe` [("hub", Just "octo@example.org")]
 
-  it "keeps no address the provider has not verified" $ withOidc $ \fake r -> do
+  it "keeps no address the provider has not verified" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (someone "una" (Just "una@example.org") False (Just "Una") (Just "una") True)
     c <- signedInWith r "acme" "next=%2F" []
     methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
     map (\i -> (\e -> e.text) <$> i.email) methods.identities `shouldBe` [Nothing]
 
-  it "asks the user info for what the ID token does not say" $ withOidc $ \fake r -> do
+  it "asks the user info for what the ID token does not say" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (someone "ida" (Just "ida@example.org") True (Just "Ida Info") (Just "ida") False)
     c <- signedInWith r "acme" "next=%2F" []
     me <- sessionOf r [c]
     (\u -> u.displayName) <$> me.user `shouldBe` Just "Ida Info"
 
-  it "takes Apple's answer as a form, and the name it sends the first time" $ withOidc $ \fake r -> do
+  it "takes Apple's answer as a form, and the name it sends the first time" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (someone "apple-1" (Just "apple-1@example.org") True Nothing Nothing True)
     c <- signedInWith r "fruit" "next=%2F" []
     me <- sessionOf r [c]
     (\u -> (u.login.text, u.displayName)) <$> me.user `shouldBe` Just ("apple-1", "Fruit Lover")
 
   describe "in a closed wiki" $ do
-    it "lets the round trip through, but makes no account without an invitation" $ withOidc $ \fake r -> do
+    it "lets the round trip through, but makes no account without an invitation" $ withOidc backing $ \fake r -> do
       settleAccess r Closed
       writeIORef fake.user (person "stranger")
       countBefore <- length . (\d -> d.users) <$> usersNow r
@@ -297,7 +298,7 @@ overHttp = describe "over HTTP" $ do
       countAfter <- length . (\d -> d.users) <$> usersNow r
       countAfter `shouldBe` countBefore
 
-    it "makes the account with an invitation, and uses the invitation up" $ withOidc $ \fake r -> do
+    it "makes the account with an invitation, and uses the invitation up" $ withOidc backing $ \fake r -> do
       settleAccess r Closed
       invited :: Invited <- sendJson r methodPost (onAdmin r links.admin.invite) NewInvitation {email = "guest@example.org"} >>= jsonAs 201
       token <- maybe (assertFailure "no secret") pure ((\t -> t.text) <$> invited.token)
@@ -306,7 +307,7 @@ overHttp = describe "over HTTP" $ do
       loginOf <$> sessionOf r [c] `shouldReturn` Just "guest"
       (\x -> x.status) <$> getUrl r (onPublic r (links.invitations.details (InvitationToken token))) `shouldReturn` 404
 
-    it "signs in someone whose identity is known" $ withOidc $ \fake r -> do
+    it "signs in someone whose identity is known" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "member")
       _ <- signedInWith r "acme" "next=%2F" []
       settleAccess r Closed
@@ -314,7 +315,7 @@ overHttp = describe "over HTTP" $ do
       loginOf <$> sessionOf r [c] `shouldReturn` Just "member"
 
   describe "connecting and disconnecting" $ do
-    it "connects a provider's account to the user signed in, who then signs in with it" $ withOidc $ \fake r -> do
+    it "connects a provider's account to the user signed in, who then signs in with it" $ withOidc backing $ \fake r -> do
       givePassword r "user-editor" "editor's password"
       token <- signInAs r "editor" "editor's password"
       writeIORef fake.user (person "ed-at-acme")
@@ -328,7 +329,7 @@ overHttp = describe "over HTTP" $ do
       c <- signedInWith r "acme" "next=%2F" []
       loginOf <$> sessionOf r [c] `shouldReturn` Just "editor"
 
-    it "refuses to connect an account that is another user's" $ withOidc $ \fake r -> do
+    it "refuses to connect an account that is another user's" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "shared")
       _ <- signedInWith r "acme" "next=%2F" []
       givePassword r "user-editor" "editor's password"
@@ -337,11 +338,11 @@ overHttp = describe "over HTTP" $ do
       reply.status `shouldBe` 403
       reply `says` "another user"
 
-    it "asks someone not signed in to sign in before connecting" $ withOidc $ \_ r -> do
+    it "asks someone not signed in to sign in before connecting" $ withOidc backing $ \_ r -> do
       reply <- getUrl r (onPublic r "auth/acme/start?next=%2F&link=1")
       reply.status `shouldBe` 403
 
-    it "disconnects one, but not the last way to sign in" $ withOidc $ \fake r -> do
+    it "disconnects one, but not the last way to sign in" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "solo")
       c <- signedInWith r "acme" "next=%2F" []
       last' <- send r methodDelete (onPublic r (links.account.unlinkIdentity "acme")) [c] ""
@@ -352,7 +353,7 @@ overHttp = describe "over HTTP" $ do
       remaining :: SignInMethods <- send r methodDelete (onPublic r (links.account.unlinkIdentity "acme")) [c] "" >>= jsonAs 200
       map (\i -> i.provider) remaining.identities `shouldBe` ["hub"]
 
-    it "refuses a password to a user who signs in only with a provider, their own and an administrator's alike" $ withOidc $ \fake r -> do
+    it "refuses a password to a user who signs in only with a provider, their own and an administrator's alike" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "solo")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
@@ -371,7 +372,7 @@ overHttp = describe "over HTTP" $ do
       methods.password `shouldBe` False
       (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = Password "solo's own password"} `shouldReturn` 401
 
-    it "lets a user whose provider is removed from the server set a password, without a current one, and then sign in with it" $ withOidc $ \fake r -> do
+    it "lets a user whose provider is removed from the server set a password, without a current one, and then sign in with it" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "solo")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
@@ -391,7 +392,7 @@ overHttp = describe "over HTTP" $ do
       (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = Password "another password"} `shouldReturn` 401
       (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Just (Password "solo's own password"), new = Password "another password"} `shouldReturn` 200
 
-    it "lets an administrator give a password to a user whose last provider they disconnected" $ withOidc $ \fake r -> do
+    it "lets an administrator give a password to a user whose last provider they disconnected" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "ex")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
@@ -402,7 +403,7 @@ overHttp = describe "over HTTP" $ do
       account.hasPassword `shouldBe` True
       (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "ex", password = Password "given by the administrator"} `shouldReturn` 200
 
-    it "lets an administrator disconnect one, which ends the user's sessions" $ withOidc $ \fake r -> do
+    it "lets an administrator disconnect one, which ends the user's sessions" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "ex")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
@@ -414,13 +415,13 @@ overHttp = describe "over HTTP" $ do
       again <- send r methodDelete (onAdmin r (links.admin.unlinkIdentity me.id "acme")) [] ""
       again.status `shouldBe` 404
 
-    it "answers someone not signed in 401 for their identities" $ withOidc $ \_ r -> do
+    it "answers someone not signed in 401 for their identities" $ withOidc backing $ \_ r -> do
       reply <- getUrl r (onPublic r links.account.identities)
       reply.status `shouldBe` 401
 
   describe "with a second factor" $
     it "asks for its code on a page of its own, takes the right one only, and goes on where the user was" $
-      withOidc $ \fake r -> do
+      withOidc backing $ \fake r -> do
         writeIORef fake.user (person "careful")
         c <- signedInWith r "acme" "next=%2F" []
         enrolment :: TotpEnrolment <- sendJson' r methodPost (onPublic r links.account.enrolTotp) [c] CurrentPassword {password = Nothing} >>= jsonAs 200
@@ -448,7 +449,7 @@ overHttp = describe "over HTTP" $ do
         again.status `shouldBe` 400
 
   describe "refusing" $ do
-    it "refuses a disabled user" $ withOidc $ \fake r -> do
+    it "refuses a disabled user" $ withOidc backing $ \fake r -> do
       writeIORef fake.user (person "later-off")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
@@ -458,20 +459,20 @@ overHttp = describe "over HTTP" $ do
       reply `says` "disabled"
       lookup "wiki_session" (cookiesSet reply) `shouldBe` Nothing
 
-    it "refuses an ID token for another client, with another nonce, from another issuer, or expired" $ withOidc $ \fake r ->
+    it "refuses an ID token for another client, with another nonce, from another issuer, or expired" $ withOidc backing $ \fake r ->
       for_ [WrongAudience, WrongNonce, WrongIssuer, Expired] $ \spoiled -> do
         writeIORef fake.spoil spoiled
         reply <- roundTrip r "acme" "next=%2F" []
         (spoiled, reply.status, lookup "wiki_session" (cookiesSet reply)) `shouldBe` (spoiled, 502, Nothing)
         reply `says` "ID token"
 
-    it "says so when the provider says no" $ withOidc $ \fake r -> do
+    it "says so when the provider says no" $ withOidc backing $ \fake r -> do
       writeIORef fake.spoil Refuses
       reply <- roundTrip r "acme" "next=%2F" []
       reply.status `shouldBe` 403
       reply `says` "The user said no"
 
-    it "refuses a state it did not give, and one without the browser's cookie, once each" $ withOidc $ \_ r -> do
+    it "refuses a state it did not give, and one without the browser's cookie, once each" $ withOidc backing $ \_ r -> do
       unknown <- getUrlWith r (onPublic r "auth/acme/callback?code=c&state=nothing") [("Cookie", "wiki_oidc=nothing")]
       unknown.status `shouldBe` 400
       started <- getUrl r (onPublic r "auth/acme/start?next=%2F")
@@ -480,14 +481,14 @@ overHttp = describe "over HTTP" $ do
       noCookie.status `shouldBe` 400
       unknown `says` "start it again"
 
-    it "sends its pages with the application's policy" $ withOidc $ \_ r -> do
+    it "sends its pages with the application's policy" $ withOidc backing $ \_ r -> do
       missing <- getUrl r (onPublic r "auth/nobody/start?next=%2F")
       header "Content-Security-Policy" missing `shouldBe` Just (encodeUtf8 (headerPolicy []))
       unknown <- getUrlWith r (onPublic r "auth/acme/callback?code=c&state=nothing") [("Cookie", "wiki_oidc=nothing")]
       header "Content-Security-Policy" unknown `shouldBe` Just (encodeUtf8 (headerPolicy []))
       (header "Referrer-Policy" unknown, header "Permissions-Policy" unknown) `shouldBe` (Just "no-referrer", Just "camera=(), microphone=(), geolocation=()")
 
-    it "answers a provider it does not have with 404, and nothing on the admin listener" $ withOidc $ \_ r -> do
+    it "answers a provider it does not have with 404, and nothing on the admin listener" $ withOidc backing $ \_ r -> do
       (\x -> x.status) <$> getUrl r (onPublic r "auth/nobody/start?next=%2F") `shouldReturn` 404
       (\x -> x.status) <$> getUrl r (onAdmin r "auth/acme/start?next=%2F") `shouldReturn` 404
 
@@ -501,7 +502,7 @@ overHttp = describe "over HTTP" $ do
       safeNext "/" (Just "") `shouldBe` "/"
       safeNext "/wiki/" (Just "/wiki") `shouldBe` "/wiki"
 
-    it "limits the accounts made from one address" $ withOidc $ \fake r -> do
+    it "limits the accounts made from one address" $ withOidc backing $ \fake r -> do
       for_ [1 .. 5 :: Int] $ \n -> do
         writeIORef fake.user (person ("many-" <> show n))
         void (signedInWith r "acme" "next=%2F" [])
@@ -509,7 +510,7 @@ overHttp = describe "over HTTP" $ do
       reply <- roundTrip r "acme" "next=%2F" []
       reply.status `shouldBe` 429
 
-  it "writes no code, token, state or secret into the log" $ withOidc $ \fake r -> do
+  it "writes no code, token, state or secret into the log" $ withOidc backing $ \fake r -> do
     writeIORef fake.user (person "quiet")
     started <- getUrl r (onPublic r "auth/acme/start?next=%2F")
     let given = fromMaybe "" (lookup "wiki_oidc" (cookiesSet started))
@@ -584,15 +585,15 @@ logins = describe "the logins of accounts made with a provider" $ do
     all (\l -> T.length l <= 40) (take 1 (loginCandidates (claimed (Just (T.replicate 100 "a")) Nothing Nothing))) `shouldBe` True
     take 1 (loginCandidates (claimed (Just "日本") Nothing Nothing)) `shouldBe` ["user"]
 
-checking :: Spec
-checking = describe "wiki-server oidc check" $ do
-  let inData change test = withSystemTempDirectory "wiki-oidc-check" $ \dir -> do
-        withStorage defaultConfig dir (\st -> runStoredWiki st Administrator (setServerSettings change)) >>= either (\e -> assertFailure (show e)) (const pass)
-        test dir
+checking :: Backing -> Spec
+checking backing = describe "wiki-server oidc check" $ do
+  let inData change test = withPlaceIn backing $ \at -> do
+        withStorage defaultConfig at (\st -> runStoredWiki st Administrator (setServerSettings change)) >>= either (\e -> assertFailure (show e)) (const pass)
+        test (placeOptionsOf at)
   it "asks each provider set how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
     let acme = ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url fake.url), secret = Just "x"}
     inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org"), mail = Nothing, providers = [acme], assistantHosts = []} $ \dir -> do
-      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      (fine, lines') <- runOidcCheck OidcCheck {place = dir, only = Nothing}
       fine `shouldBe` True
       lines' `shouldContain` ["  redirect URI to register: https://wiki.example.org/auth/acme/callback"]
       lines' `shouldContain` ["  client secret: set"]
@@ -601,17 +602,17 @@ checking = describe "wiki-server oidc check" $ do
   it "checks only the one named, and says when none is set" $ withFakeProvider $ \fake -> do
     let named n = ProviderSettings {name = n, kind = Generic, clientId = "c", issuer = Just (Url fake.url), secret = Just "x"}
     inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [named n | n <- ["a", "b"]], assistantHosts = []} $ \dir -> do
-      (_, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Just "b"}
+      (_, lines') <- runOidcCheck OidcCheck {place = dir, only = Just "b"}
       filter ("auth/" `T.isInfixOf`) lines' `shouldBe` ["  redirect URI to register: https://wiki.example.org/auth/b/callback"]
-      (fine, nobody) <- runOidcCheck OidcCheck {dataDir = dir, only = Just "c"}
+      (fine, nobody) <- runOidcCheck OidcCheck {place = dir, only = Just "c"}
       (fine, nobody) `shouldBe` (False, ["No provider is named c."])
     inData noServerSettings $ \dir -> do
-      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      (fine, lines') <- runOidcCheck OidcCheck {place = dir, only = Nothing}
       fine `shouldBe` False
       T.unlines lines' `shouldSatisfy` T.isInfixOf "Server section"
   it "fails for a provider that cannot be reached" $ do
     let gone = ProviderSettings {name = "gone", kind = Generic, clientId = "c", issuer = Just (Url "http://127.0.0.1:9"), secret = Just "x"}
     inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [gone], assistantHosts = []} $ \dir -> do
-      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      (fine, lines') <- runOidcCheck OidcCheck {place = dir, only = Nothing}
       fine `shouldBe` False
       T.unlines lines' `shouldSatisfy` T.isInfixOf "cannot be asked how to sign in"

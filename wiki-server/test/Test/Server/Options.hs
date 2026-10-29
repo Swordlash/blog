@@ -9,17 +9,18 @@ import Protolude
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture (withRunningAs)
 import Wiki.Server (Server (..), ServerError (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options
 
-spec :: Spec
-spec = describe "the server's options" $ do
+spec :: Backing -> Spec
+spec backing = describe "the server's options" $ do
   addresses
   rules
-  refusedAtStart
+  refusedAtStart backing
 
 addresses :: Spec
 addresses = describe "an address to listen on" $ do
@@ -74,10 +75,10 @@ rules = describe "a configuration" $ do
         Failure f -> show f `shouldSatisfy` T.isInfixOf "Server section"
         _ -> expectationFailure ("taken: " <> show args)
 
-refusedAtStart :: Spec
-refusedAtStart = describe "a server" $ do
+refusedAtStart :: Backing -> Spec
+refusedAtStart backing = describe "a server" $ do
   let starts :: (ServeOptions -> ServeOptions) -> IO (Maybe [Text])
-      starts change = (withRunningAs change (const pass) $> Nothing) `catch` \(ServerError reasons) -> pure (Just reasons)
+      starts change = (withRunningAs backing change (const pass) $> Nothing) `catch` \(ServerError reasons) -> pure (Just reasons)
 
   it "does not start with an admin listener that is not loopback" $ do
     starts (\o -> o {adminListen = Just (Listen "0.0.0.0" 0)}) >>= (`shouldSatisfy` maybe False (any ("is not a loopback address" `T.isInfixOf`)))

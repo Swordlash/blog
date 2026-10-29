@@ -15,6 +15,7 @@ module Test.Server.Http (spec, apiEnv) where
 
 import Data.Time (getCurrentTime)
 import Protolude
+import Test.Database (Backing)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
 import Test.Storage.Fixture (demoArchive, ok, path, whoFor, withDemo)
 import Wiki.Api.Import
@@ -45,16 +46,16 @@ import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Storage (Storage, Who (..))
 import Wiki.Server.Vault (newCeremonies)
 
-spec :: Spec
-spec = describe "HttpWiki against the server's API" $ do
+spec :: Backing -> Spec
+spec backing = describe "HttpWiki against the server's API" $ do
   Contract.spec (type (HttpWiki IO)) fixture
   Admin.spec (type (HttpWiki IO)) fixture
   Comments.spec (type (HttpWiki IO)) fixture
   Notifications.spec (type (HttpWiki IO)) fixture
-  importing
+  importing backing
   where
     fixture example =
-      withDemo $ \st -> do
+      withDemo backing $ \st -> do
         env <- apiEnv st
         example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
 
@@ -66,10 +67,10 @@ spec = describe "HttpWiki against the server's API" $ do
 -- changed (a conflict) and one space moved to a path the server does not
 -- have (a new space, with its subspace and its pages), into a server that
 -- has the demo already.
-importing :: Spec
-importing = describe "importing an archive" $
+importing :: Backing -> Spec
+importing backing = describe "importing an archive" $
   it "previews it, and imports it as chosen, once, then finds it all there" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       env <- apiEnv st
       http <- newHttpEnv (inProcess env Administrator)
       let run :: HttpWiki IO a -> IO a

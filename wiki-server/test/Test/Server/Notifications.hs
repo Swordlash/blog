@@ -15,15 +15,16 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
-import Database.SQLite.Simple (Only (..), execute, query, query_)
+import Database.Beam (all_, filter_, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
 import Network.HTTP.Types (Header, Method, hContentType, methodGet, methodPost, methodPut)
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
-import Test.Storage.Fixture (ok, path, whoFor, withDemo)
+import Test.Storage.Fixture (countWhere, ok, path, whoFor, withDemo)
 import Web.HttpApiData (toUrlPiece)
 import Wiki.Api (CommentsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Comments (NewThread (..))
@@ -52,15 +53,19 @@ import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Notifier (mailRound, newNotifier, newWake)
-import Wiki.Server.Storage (StoredWiki, Storage, Who (..), runStoredWiki, withDatabase, withStorageAside)
+import Wiki.Server.Storage (StoredWiki, Storage, Who (..), runStoredWiki, withStorageAside, writing)
+import Wiki.Server.Storage qualified as Storage
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema qualified as Schema
 import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
 
-spec :: Spec
-spec = describe "notifications" $ do
-  overHttp
-  overTheChannel
-  byMail
-  inTheStorage
+spec :: Backing -> Spec
+spec backing = describe "notifications" $ do
+  overHttp backing
+  overTheChannel backing
+  byMail backing
+  inTheStorage backing
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -111,9 +116,9 @@ toldOver r who = asWithout r (Just who) methodGet links.notifications.list >>= j
 --------------------------------------------------------------------------------
 -- Over HTTP
 
-overHttp :: Spec
-overHttp = describe "over HTTP" $ do
-  it "tells whom a save and a comment mention, lists it, and marks it read" $ withDemoRunning identity $ \r -> do
+overHttp :: Backing -> Spec
+overHttp backing = describe "over HTTP" $ do
+  it "tells whom a save and a comment mention, lists it, and marks it read" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     notes <- pageNamed r "blog" "notes-on-haskell"
     _ <- saveAs r people.editor notes "Ask @reader."
@@ -128,7 +133,7 @@ overHttp = describe "over HTTP" $ do
     (asWithout r Nothing methodGet links.notifications.list >>= jsonAs 403) `shouldReturn` Forbidden
     (getUrl r (onAdmin r links.notifications.list) >>= jsonAs 403) `shouldReturn` Forbidden
 
-  it "names the users among the logins asked for to someone signed in, and nobody to anyone else" $ withDemoRunning identity $ \r -> do
+  it "names the users among the logins asked for to someone signed in, and nobody to anyone else" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     -- The brackets of servant's list parameter, as a browser's fetch
     -- writes them.
@@ -138,7 +143,7 @@ overHttp = describe "over HTTP" $ do
     nobody :: Map Text Value <- asWithout r Nothing methodGet (encoded (links.notifications.people ["editor"])) >>= jsonAs 200
     Map.keys nobody `shouldBe` []
 
-  it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning identity $ \r -> do
+  it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     notes <- pageNamed r "blog" "notes-on-haskell"
     handbook <- pageNamed r "team" "team-handbook"
@@ -165,10 +170,10 @@ heardWithin micros c =
     Nothing -> pure Nothing
     Just bytes -> either (\e -> assertFailure ("not a message of the server's: " <> e)) (pure . Just) (eitherDecode bytes)
 
-overTheChannel :: Spec
-overTheChannel = describe "over the live channel" $
+overTheChannel :: Backing -> Spec
+overTheChannel backing = describe "over the live channel" $
   it "tells the user's tabs of their notification, subscribed to nothing, and nobody else's" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       people <- signedIn r
       notes <- pageNamed r "blog" "notes-on-haskell"
       channel r [people.reader] $ \reading -> channel r [people.editor] $ \editing -> channel r [] $ \anyone -> do
@@ -198,8 +203,12 @@ mailing r =
 
 -- | Give a user a verified address, beside the running server.
 verified :: Running -> Text -> Text -> IO ()
-verified r user email = withStorageAside r.dataDir $ \st -> withDatabase st $ \c ->
-  execute c "UPDATE users SET email = ?, email_verified_at = '2026-10-01T00:00:00Z' WHERE id = ?" (email, user)
+verified r user email = withStorageAside r.place $ \st -> writing st (verify user email)
+
+-- | Give a user a verified address, as a statement.
+verify :: (Backend be) => Text -> Text -> Db be ()
+verify user email =
+  runUpdate (update wikiDb.users (\u -> (u.email <-. val_ (Just email)) <> (u.email_verified_at <-. val_ (Just (UTCTime (fromGregorian 2026 10 1) 0)))) (\u -> u.id ==. val_ user))
 
 -- | Wait, a little at a time, for something to hold.
 eventually :: (HasCallStack) => IO Bool -> IO ()
@@ -211,10 +220,10 @@ eventually condition = go (100 :: Int)
 mailsTo :: Running -> Text -> IO [Message]
 mailsTo r address = filter (\m -> m.to.text == address) <$> readIORef r.outbox
 
-byMail :: Spec
-byMail = describe "by mail" $
+byMail :: Backing -> Spec
+byMail backing = describe "by mail" $
   it "mails at once to a verified address only, with a link that turns mail off without signing in" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       mailing r
       people <- signedIn r
       verified r "user-reader" "rita@example.org"
@@ -257,14 +266,14 @@ as' st login program = whoFor st (As login) >>= \who -> runStoredWiki st who pro
 at :: Integer -> Int -> UTCTime
 at day hour = addUTCTime (fromIntegral (hour * 3600)) (UTCTime (fromGregorian 2026 11 (fromIntegral day)) 0)
 
-inTheStorage :: Spec
-inTheStorage = describe "in the storage" $ do
-  it "mails a daily digest once a day from its hour, the pages' notifications together" $ withDemo $ \st -> do
+inTheStorage :: Backing -> Spec
+inTheStorage backing = describe "in the storage" $ do
+  it "mails a daily digest once a day from its hour, the pages' notifications together" $ withDemo backing $ \st -> do
     mailOn st
     sent <- newIORef []
     wake <- newWake
     let notifier = newNotifier (silentLogger (const pass)) (\_ _ m -> Right <$> modifyIORef' sent (m :)) wake st
-    withDatabase st $ \c -> execute c "UPDATE users SET email = 'rita@example.org', email_verified_at = '2026-10-01T00:00:00Z' WHERE id = ?" (Only ("user-reader" :: Text))
+    writing st (verify "user-reader" "rita@example.org")
     _ <- as' st "reader" (setNotificationSettings NotificationSettingsChange {mail = MailDaily, watchOwn = True}) >>= ok
     blog <- as' st "admin" (getSpace (path "blog")) >>= ok
     notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
@@ -291,12 +300,12 @@ inTheStorage = describe "in the storage" $ do
     mailRound notifier (at 3 7)
     length <$> readIORef sent `shouldReturn` 1
 
-  it "asks again before mailing, and mails nothing of a page the user may no longer read" $ withDemo $ \st -> do
+  it "asks again before mailing, and mails nothing of a page the user may no longer read" $ withDemo backing $ \st -> do
     mailOn st
     sent <- newIORef []
     wake <- newWake
     let notifier = newNotifier (silentLogger (const pass)) (\_ _ m -> Right <$> modifyIORef' sent (m :)) wake st
-    withDatabase st $ \c -> execute c "UPDATE users SET email = 'rita@example.org', email_verified_at = '2026-10-01T00:00:00Z' WHERE id = ?" (Only ("user-reader" :: Text))
+    writing st (verify "user-reader" "rita@example.org")
     blog <- as' st "admin" (getSpace (path "blog")) >>= ok
     notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
     _ <- as' st "editor" (savePage notes.id notes.updatedAt notes.title "For @reader.") >>= ok
@@ -304,28 +313,29 @@ inTheStorage = describe "in the storage" $ do
     now <- getCurrentTime
     mailRound notifier now
     readIORef sent `shouldReturn` []
-    withDatabase st (\c -> query_ c "SELECT count(*) FROM notifications WHERE mail = 1") `shouldReturn` [Only (0 :: Int)]
+    Storage.reading st (countWhere wikiDb.notifications (\n -> n.mail)) `shouldReturn` 0
 
-  it "signs the unsubscribe link, which turns off only its user's mail" $ withDemo $ \st -> withDatabase st $ \c -> do
-    token <- unsubscribeToken c (UserId "user-reader")
-    unsubscribeToken c (UserId "user-reader") `shouldReturn` token
-    other <- unsubscribeToken c (UserId "user-editor")
+  it "signs the unsubscribe link, which turns off only its user's mail" $ withDemo backing $ \st -> do
+    let mailOf user = Storage.reading st (runSelectReturningOne (select ((\u -> u.notification_mail) <$> filter_ (\u -> u.id ==. val_ user) (all_ wikiDb.users))))
+    token <- writing st (unsubscribeToken (UserId "user-reader"))
+    writing st (unsubscribeToken (UserId "user-reader")) `shouldReturn` token
+    other <- writing st (unsubscribeToken (UserId "user-editor"))
     other `shouldNotBe` token
-    unsubscribeUser c (UnsubscribeToken (T.replace "user-reader" "user-editor" token.text)) `shouldReturn` False
-    unsubscribeUser c (UnsubscribeToken "nothing") `shouldReturn` False
-    unsubscribeUser c token `shouldReturn` True
-    query c "SELECT notification_mail FROM users WHERE id = ?" (Only ("user-reader" :: Text)) `shouldReturn` [Only (Just ("off" :: Text))]
-    query c "SELECT notification_mail FROM users WHERE id = ?" (Only ("user-editor" :: Text)) `shouldReturn` [Only (Nothing :: Maybe Text)]
+    writing st (unsubscribeUser (UnsubscribeToken (T.replace "user-reader" "user-editor" token.text))) `shouldReturn` False
+    writing st (unsubscribeUser (UnsubscribeToken "nothing")) `shouldReturn` False
+    writing st (unsubscribeUser token) `shouldReturn` True
+    mailOf "user-reader" `shouldReturn` Just (Just "off")
+    mailOf "user-editor" `shouldReturn` Just Nothing
 
-  it "deletes what is older than kept with the day's digest" $ withDemo $ \st -> do
+  it "deletes what is older than kept with the day's digest" $ withDemo backing $ \st -> do
     sent <- newIORef []
     wake <- newWake
     let notifier = newNotifier (silentLogger (const pass)) (\_ _ m -> Right <$> modifyIORef' sent (m :)) wake st
     blog <- as' st "admin" (getSpace (path "blog")) >>= ok
     notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
     _ <- as' st "editor" (savePage notes.id notes.updatedAt notes.title "For @reader.") >>= ok
-    withDatabase st (\c -> execute c "UPDATE notifications SET created_at = '2026-01-01T00:00:00Z'" ())
+    writing st (runUpdate (update wikiDb.notifications (\n -> n.created_at <-. val_ (UTCTime (fromGregorian 2026 1 1) 0)) (const (val_ True))))
     mailRound notifier (at 2 8)
-    withDatabase st (\c -> query_ c "SELECT count(*) FROM notifications") `shouldReturn` [Only (0 :: Int)]
+    Storage.reading st (countWhere wikiDb.notifications (const (val_ True))) `shouldReturn` 0
   where
     findIndex' p xs = fromMaybe (-1 :: Int) (head [i | (i, x) <- zip [0 ..] xs, p x])

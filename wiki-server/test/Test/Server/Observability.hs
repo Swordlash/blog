@@ -7,11 +7,13 @@
 module Test.Server.Observability (spec) where
 
 import Data.Text qualified as T
-import Database.SQLite.Simple (Only (..), execute, execute_, query_, withConnection, withTransaction)
+import Database.Beam (all_, insert, insertValues, limit_, runInsert, runSelectReturningOne, select)
 import Network.HTTP.Types (methodPost)
 import Protolude
 import System.Directory (listDirectory, removePathForcibly)
 import System.FilePath ((</>))
+import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), ArchiveApi (..), InvitationsApi (..), SpacesApi (..), WikiApi (..))
@@ -23,16 +25,19 @@ import Wiki.Api.Links (links)
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.User (Group, Login (..))
-import Wiki.Server.Storage.Backup (backup)
-import Wiki.Server.Storage.Layout (attachmentsDir, databaseFile)
-import Wiki.Server.Storage.Migrate (Migration (..), migrations)
+import Wiki.Server.Storage (Place (..), withStorageAside, writing)
+import Wiki.Server.Storage.Rows (chunksOf)
+import Wiki.Server.Storage.Schema (Attachments (..), Pages (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Backup (backupNow)
+import Wiki.Server.Storage.Layout (attachmentsDir)
+import Wiki.Server.Storage.Migrate (Migration (..), migrationsFor)
 
-spec :: Spec
-spec = describe "what the server says of itself, over HTTP" $ do
-  metrics
-  health
-  status
-  activityLog
+spec :: Backing -> Spec
+spec backing = describe "what the server says of itself, over HTTP" $ do
+  metrics backing
+  health backing
+  status backing
+  activityLog backing
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -41,9 +46,9 @@ onAdmin r address = r.admin <> "/admin/" <> address
 bodyText :: Reply -> Text
 bodyText reply = decodeUtf8 (toS reply.body)
 
-metrics :: Spec
-metrics = describe "/metrics" $ do
-  it "answers on the admin listener in the text format, by route pattern and status class, with what the server has" $ withDemoRunning identity $ \r -> do
+metrics :: Backing -> Spec
+metrics backing = describe "/metrics" $ do
+  it "answers on the admin listener in the text format, by route pattern and status class, with what the server has" $ withDemoRunning backing identity $ \r -> do
     _ <- getUrl r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath "docs"))))
     _ <- getUrl r (onPublic r (links.invitations.details (InvitationToken "the-link-s-secret")))
     reply <- getUrl r (r.admin <> "/metrics")
@@ -67,52 +72,51 @@ metrics = describe "/metrics" $ do
     text `shouldNotSatisfy` T.isInfixOf "\"/api/v1/spaces/at/docs\""
     -- No backup yet, so no age; then one, and its age.
     text `shouldNotSatisfy` T.isInfixOf "wiki_backup_age_seconds "
-    _ <- backup r.dataDir 10
+    _ <- backupNow r.place.programs r.place.database r.place.dataDir 10 >>= either (assertFailure . toS) pure
     again <- bodyText <$> getUrl r (r.admin <> "/metrics")
     again `shouldSatisfy` T.isInfixOf "wiki_backup_age_seconds "
     again `shouldSatisfy` T.isInfixOf "wiki_backups_kept 1\n"
     -- The scrape before is counted too.
     again `shouldSatisfy` T.isInfixOf "wiki_http_requests_total{listener=\"admin\",route=\"/metrics\",method=\"GET\",status=\"2xx\"} 1\n"
 
-  it "counts the blobs from the database, without walking the blob directory: 10,000 more of them in one scrape" $ withDemoRunning identity $ \r -> do
+  it "counts the blobs from the database, without walking the blob directory: 10,000 more of them in one scrape" $ withDemoRunning backing identity $ \r -> do
     -- No directory to walk: a scrape that walked it would count nothing.
     removePathForcibly (attachmentsDir r.dataDir)
     let sample name text = fromMaybe (panic ("no " <> name)) (head [v | line <- T.lines text, Just v <- [T.stripPrefix (name <> " ") line]])
     scraped <- bodyText <$> getUrl r (r.admin <> "/metrics")
-    withConnection (databaseFile r.dataDir) $ \c -> do
-      execute_ c "PRAGMA busy_timeout = 10000"
-      page <- maybe (panic "the demo has no pages") fromOnly . head <$> (query_ c "SELECT id FROM pages LIMIT 1" :: IO [Only Text])
-      withTransaction c $
-        for_ [1 .. 10_000 :: Int] $ \i ->
-          execute
-            c
-            "INSERT INTO attachments (id, page_id, name, media_type, size, url, blob, ordinal) VALUES (?, ?, ?, 'text/plain', 1024, NULL, ?, ?)"
-            ("counted-" <> show i :: Text, page :: Text, "counted-" <> show i <> ".txt" :: Text, T.justifyRight 64 '0' (show i) :: Text, 1000 + i)
+    withStorageAside r.place $ \st -> writing st $ do
+      page <- maybe (panic "the demo has no pages") (\p -> p.id) <$> runSelectReturningOne (select (limit_ 1 (all_ wikiDb.pages)))
+      for_ (chunksOf 500 [1 .. 10_000 :: Int]) $ \is ->
+        runInsert . insert wikiDb.attachments $
+          insertValues
+            [ AttachmentRow {id = "counted-" <> show i, page_id = page, name = "counted-" <> show i <> ".txt", media_type = "text/plain", size = 1024, url = Nothing, blob = Just (T.justifyRight 64 '0' (show i)), ordinal = 1000 + fromIntegral i}
+            | i <- is
+            ]
     rescraped <- bodyText <$> getUrl r (r.admin <> "/metrics")
     let grew name = (readMaybe (sample name rescraped) :: Maybe Integer) `shouldBe` ((+) <$> readMaybe (sample name scraped) <*> pure (if name == "wiki_blobs" then 10_000 else 10_000 * 1024))
     grew "wiki_blobs"
     grew "wiki_blob_bytes"
 
-  it "is not served by the public listener" $ withDemoRunning identity $ \r -> do
+  it "is not served by the public listener" $ withDemoRunning backing identity $ \r -> do
     reply <- getUrl r (r.public <> "/metrics")
     reply.status `shouldBe` 404
     bodyText reply `shouldNotSatisfy` T.isInfixOf "wiki_http_requests_total"
 
-health :: Spec
-health = describe "/healthz" $
+health :: Backing -> Spec
+health backing = describe "/healthz" $
   it "answers on both listeners, unauthenticated, with the schema's version and the newest backup's age" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       for_ [r.public, r.admin] $ \root -> do
         h :: Health <- getUrl r (root <> "/healthz") >>= jsonAs 200
         h `shouldBe` Health {status = "ok", schemaVersion = latest, lastBackupAgeSeconds = Nothing}
-      _ <- backup r.dataDir 10
+      _ <- backupNow r.place.programs r.place.database r.place.dataDir 10 >>= either (assertFailure . toS) pure
       h :: Health <- getUrl r (r.public <> "/healthz") >>= jsonAs 200
       h.lastBackupAgeSeconds `shouldSatisfy` maybe False (\age -> age >= 0 && age < 60)
 
-status :: Spec
-status = describe "the status" $
+status :: Backing -> Spec
+status backing = describe "the status" $
   it "has the schema's version, the newest backup and the last errors, by route and never by address" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       initially :: ServerStatus <- getUrl r (onAdmin r links.admin.status) >>= jsonAs 200
       initially.schemaVersion `shouldBe` latest
       initially.errors `shouldBe` []
@@ -127,10 +131,10 @@ status = describe "the status" $
       map (\e -> (e.route, e.message)) failing.errors `shouldBe` [("/api/v1/export", "answered 500")]
       failing.connections `shouldBe` 0
 
-activityLog :: Spec
-activityLog = describe "the activity" $
+activityLog :: Backing -> Spec
+activityLog backing = describe "the activity" $
   it "lists what the operator changed on the admin listener, from where, newest first and by actor" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       _ :: Group <- sendJson r methodPost (onAdmin r links.admin.createGroup) GroupName {name = "Night shift"} >>= jsonAs 201
       page :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
       case page.entries of
@@ -147,6 +151,7 @@ activityLog = describe "the activity" $
       refused <- getUrl r (onPublic r (links.admin.activity Nothing Nothing Nothing))
       refused.status `shouldBe` 403
 
--- | The schema's version this program migrates to.
+-- | The schema's version this program migrates to, the same on both
+-- databases.
 latest :: Int
-latest = maybe 0 (\m -> m.version) (lastMay migrations)
+latest = maybe 0 (\m -> m.version) (lastMay (migrationsFor "sqlite"))

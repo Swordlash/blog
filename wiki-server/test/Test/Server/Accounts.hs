@@ -19,6 +19,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Protolude
+import Test.Database (Backing, placeOptionsOf)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), SpacesApi (..), WikiApi (..))
@@ -37,15 +38,15 @@ import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Options (ServeOptions (..))
 
-spec :: Spec
-spec = describe "accounts over HTTP" $ do
-  signingIn
-  rules
-  administration
-  endings
-  ownPassword
-  pages
-  guards
+spec :: Backing -> Spec
+spec backing = describe "accounts over HTTP" $ do
+  signingIn backing
+  rules backing
+  administration backing
+  endings backing
+  ownPassword backing
+  pages backing
+  guards backing
 
 -- | An address of the API on a listener.
 onPublic, onAdmin :: Running -> Text -> Text
@@ -59,8 +60,8 @@ sessionWith r hs = do
   (,reply) <$> jsonAs 200 reply
 
 -- | The demo with passwords for the editor and the admin.
-withPasswords :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
-withPasswords change test = withDemoRunning change $ \r -> do
+withPasswords :: Backing -> (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
+withPasswords backing change test = withDemoRunning backing change $ \r -> do
   givePassword r "user-editor" "editor's password"
   givePassword r "user-admin" "admin's password"
   test r
@@ -77,9 +78,9 @@ spaceIdAt r hs path = (\(s :: Space) -> s.id) <$> (spaceAt r hs path >>= jsonAs 
 newPage :: Running -> [Header] -> SpaceId -> IO Reply
 newPage r hs sid = send r methodPost (onPublic r (links.spaces.createPage sid)) ((hContentType, "application/json") : hs) (encode NewPage {parent = Nothing, title = "From a session", body = "Hello."})
 
-signingIn :: Spec
-signingIn = describe "signing in" $ do
-  it "answers with the session, and a cookie that is HttpOnly, SameSite=Strict, at the base path, for two weeks" $ withPasswords identity $ \r -> do
+signingIn :: Backing -> Spec
+signingIn backing = describe "signing in" $ do
+  it "answers with the session, and a cookie that is HttpOnly, SameSite=Strict, at the base path, for two weeks" $ withPasswords backing identity $ \r -> do
     reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"}
     info :: SessionInfo <- jsonAs 200 reply
     ((\u -> u.login.text) <$> info.user, info.standing) `shouldBe` (Just "editor", SignedIn)
@@ -89,17 +90,17 @@ signingIn = describe "signing in" $ do
     ((\u -> u.displayName) <$> me.user, me.standing) `shouldBe` (Just "Edgar Editor", SignedIn)
 
   it "marks the cookie Secure under --secure-cookies, and sets it below the base path" $
-    withPasswords (\o -> o {secureCookies = True, basePath = "/wiki/"}) $ \r -> do
+    withPasswords backing (\o -> o {secureCookies = True, basePath = "/wiki/"}) $ \r -> do
       reply <- sendJson r methodPost (r.public <> "/wiki/" <> links.signIn) Credentials {login = "editor", password = Password "editor's password"}
       (snd <$> setCookie reply) `shouldBe` Just ["Path=/wiki/", "Max-Age=1209600", "HttpOnly", "SameSite=Strict", "Secure"]
 
-  it "refuses a wrong password, an unknown login and a login without a password alike, with a 401" $ withPasswords identity $ \r -> do
+  it "refuses a wrong password, an unknown login and a login without a password alike, with a 401" $ withPasswords backing identity $ \r -> do
     for_ [("editor", "wrong"), ("nobody", "editor's password"), ("reader", "")] $ \(login, password) -> do
       reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login, password = Password password}
       jsonAs 401 reply `shouldReturn` Unauthenticated
       setCookie reply `shouldBe` Nothing
 
-  it "refuses a login tried too often from an address with a 429, even with the right password" $ withPasswords identity $ \r -> do
+  it "refuses a login tried too often from an address with a 429, even with the right password" $ withPasswords backing identity $ \r -> do
     replicateM_ 5 $ sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "guess"}
     reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"}
     reply.status `shouldBe` 429
@@ -109,7 +110,7 @@ signingIn = describe "signing in" $ do
     _ <- signInAs r "admin" "admin's password"
     pass
 
-  it "replaces the session the browser had" $ withPasswords identity $ \r -> do
+  it "replaces the session the browser had" $ withPasswords backing identity $ \r -> do
     first' <- signInAs r "editor" "editor's password"
     reply <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), cookie first'] (encode Credentials {login = "admin", password = Password "admin's password"})
     second' <- maybe (panic "no cookie") (pure . fst) (setCookie reply)
@@ -118,9 +119,9 @@ signingIn = describe "signing in" $ do
     (new, _) <- sessionWith r [cookie second']
     (\u -> u.login.text) <$> new.user `shouldBe` Just "admin"
 
-rules :: Spec
-rules = describe "each principal" $ do
-  it "anonymous reads the public spaces and nothing else, and writes nothing" $ withPasswords identity $ \r -> do
+rules :: Backing -> Spec
+rules backing = describe "each principal" $ do
+  it "anonymous reads the public spaces and nothing else, and writes nothing" $ withPasswords backing identity $ \r -> do
     spaces :: [Space] <- getUrl r (onPublic r links.spaces.list) >>= jsonAs 200
     map (\s -> s.name) spaces `shouldBe` ["Blog", "Docs"]
     (.status) <$> spaceAt r [] "team" `shouldReturn` 404
@@ -129,7 +130,7 @@ rules = describe "each principal" $ do
     (me, _) <- sessionWith r []
     (me.user, me.standing) `shouldBe` (Nothing, NotSignedIn)
 
-  it "a user signed in writes where they are granted to, gets 403 elsewhere, and 404 where they may not look" $ withPasswords identity $ \r -> do
+  it "a user signed in writes where they are granted to, gets 403 elsewhere, and 404 where they may not look" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     blog <- spaceIdAt r [cookie token] "blog"
     docs <- spaceIdAt r [cookie token] "docs"
@@ -141,12 +142,12 @@ rules = describe "each principal" $ do
     -- Nor does a cookie make anyone an administrator.
     (.status) <$> getUrlWith r (onPublic r links.admin.status) [cookie token] `shouldReturn` 403
 
-  it "an administrator signed in may do everything, the administration included" $ withPasswords identity $ \r -> do
+  it "an administrator signed in may do everything, the administration included" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "admin" "admin's password"
     (.status) <$> spaceAt r [cookie token] "team" `shouldReturn` 200
     (.status) <$> getUrlWith r (onPublic r links.admin.status) [cookie token] `shouldReturn` 200
 
-  it "an administrator creates spaces without a create-spaces grant of their own" $ withPasswords identity $ \r -> do
+  it "an administrator creates spaces without a create-spaces grant of their own" $ withPasswords backing identity $ \r -> do
     -- The demo's administrator holds the global administer only.
     people :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
     UserId "user-admin" `elem` toList people.creators `shouldBe` False
@@ -154,16 +155,16 @@ rules = describe "each principal" $ do
     made <- send r methodPost (onPublic r links.spaces.create) [(hContentType, "application/json"), cookie token] (encode NewSpace {parent = Nothing, name = "Made by Ada"})
     made.status `shouldBe` 201
 
-administration :: Spec
-administration = describe "the administrator on the admin listener" $ do
-  it "needs no cookie, and takes none: the operator is whoever reaches it" $ withPasswords identity $ \r -> do
+administration :: Backing -> Spec
+administration backing = describe "the administrator on the admin listener" $ do
+  it "needs no cookie, and takes none: the operator is whoever reaches it" $ withPasswords backing identity $ \r -> do
     _ :: ServerStatus <- getUrl r (onAdmin r links.admin.status) >>= jsonAs 200
     editor <- signInAs r "editor" "editor's password"
     me :: SessionInfo <- getUrlWith r (onAdmin r links.session) [cookie editor] >>= jsonAs 200
     ((\u -> u.login.text) <$> me.user, me.standing) `shouldBe` (Just "administrator", Operator)
     (.status) <$> sendJson r methodPost (onAdmin r links.signIn) Credentials {login = "editor", password = Password "editor's password"} `shouldReturn` 400
 
-  it "makes a user with a password, who signs in on the public listener" $ withPasswords identity $ \r -> do
+  it "makes a user with a password, who signs in on the public listener" $ withPasswords backing identity $ \r -> do
     made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
     (made.user.login.text, made.hasPassword, made.disabled) `shouldBe` ("bea", True, False)
     token <- signInAs r "bea" "bea's password"
@@ -178,7 +179,7 @@ administration = describe "the administrator on the admin listener" $ do
   -- the server's console. The setting is kept in the database, so it
   -- holds across a restart, and the console is never refused.
   it "leaves accounts with a password to the console while the wiki's settings say so, across a restart" $
-    withDemoRestarted
+    withDemoRestarted backing
       ( \r -> do
           settings :: WikiSettings <- getUrl r (onAdmin r links.admin.settings) >>= jsonAs 200
           settings.adminCreatesPasswordAccounts `shouldBe` True
@@ -203,7 +204,7 @@ administration = describe "the administrator on the admin listener" $ do
           users.adminCreatesPasswordAccounts `shouldBe` False
           map (\u -> u.login.text) users.users `shouldBe` ["admin", "bea", "editor", "reader"]
           -- The console makes the account, which signs in.
-          made <- runUsers (const (pure (Right (Password "cid's password")))) Users {dataDir = again.dataDir, command = AddUser "cid" Nothing False True}
+          made <- runUsers (const (pure (Right (Password "cid's password")))) Users {place = placeOptionsOf again.place, command = AddUser "cid" Nothing False True}
           made `shouldSatisfy` isRight
           _ <- signInAs again "cid" "cid's password"
           -- Turned on again, the administration makes accounts again.
@@ -212,7 +213,7 @@ administration = describe "the administrator on the admin listener" $ do
           pass
       )
 
-  it "is refused the account operations on the public listener unless an administrator is signed in" $ withPasswords identity $ \r -> do
+  it "is refused the account operations on the public listener unless an administrator is signed in" $ withPasswords backing identity $ \r -> do
     let attempt hs = send r methodPut (onPublic r (links.admin.setDisabled (UserId "user-reader"))) ((hContentType, "application/json") : hs) (encode AccountDisabled {disabled = True})
     (.status) <$> attempt [] `shouldReturn` 403
     editor <- signInAs r "editor" "editor's password"
@@ -229,9 +230,9 @@ newAccount login = NewAccount {login, displayName = "", password = Password (log
 consoleOnly :: WikiSettings
 consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}
 
-endings :: Spec
-endings = describe "a session" $ do
-  it "ends when its user signs out, and the cookie is cleared" $ withPasswords identity $ \r -> do
+endings :: Backing -> Spec
+endings backing = describe "a session" $ do
+  it "ends when its user signs out, and the cookie is cleared" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     reply <- send r methodDelete (onPublic r links.signOut) [cookie token] ""
     info :: SessionInfo <- jsonAs 200 reply
@@ -240,7 +241,7 @@ endings = describe "a session" $ do
     (me, _) <- sessionWith r [cookie token]
     me.user `shouldBe` Nothing
 
-  it "ends when its user is disabled: the next request is nobody's, and clears the cookie" $ withPasswords identity $ \r -> do
+  it "ends when its user is disabled: the next request is nobody's, and clears the cookie" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     blog <- spaceIdAt r [cookie token] "blog"
     _ :: Account <- sendJson r methodPut (onAdmin r (links.admin.setDisabled (UserId "user-editor"))) AccountDisabled {disabled = True} >>= jsonAs 200
@@ -258,7 +259,7 @@ endings = describe "a session" $ do
     _ <- signInAs r "editor" "editor's password"
     pass
 
-  it "ends when its user is given a new password" $ withPasswords identity $ \r -> do
+  it "ends when its user is given a new password" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     givePassword r "user-editor" "a new password"
     (me, _) <- sessionWith r [cookie token]
@@ -267,7 +268,7 @@ endings = describe "a session" $ do
     _ <- signInAs r "editor" "a new password"
     pass
 
-  it "is nobody's when the cookie names none, and that cookie is cleared" $ withPasswords identity $ \r -> do
+  it "is nobody's when the cookie names none, and that cookie is cleared" $ withPasswords backing identity $ \r -> do
     for_ [T.replicate 43 "A", "not-a-session-id"] $ \token -> do
       (me, reply) <- sessionWith r [cookie token]
       me.user `shouldBe` Nothing
@@ -281,9 +282,9 @@ changing :: Running -> Text -> Maybe Text -> Text -> IO Reply
 changing r token current new =
   send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie token] (encode PasswordChange {current = Password <$> current, new = Password new})
 
-ownPassword :: Spec
-ownPassword = describe "one's own password" $ do
-  it "is changed with the current one: the other sessions end, this one stays" $ withPasswords identity $ \r -> do
+ownPassword :: Backing -> Spec
+ownPassword backing = describe "one's own password" $ do
+  it "is changed with the current one: the other sessions end, this one stays" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     elsewhere <- signInAs r "editor" "editor's password"
     methods :: SignInMethods <- changing r here (Just "editor's password") "a longer new password" >>= jsonAs 200
@@ -300,7 +301,7 @@ ownPassword = describe "one's own password" $ do
     (stillAdmin, _) <- sessionWith r [cookie admin]
     (\u -> u.login.text) <$> stillAdmin.user `shouldBe` Just "admin"
 
-  it "is refused without the current one, or with a wrong one, with a 401, and nothing changes" $ withPasswords identity $ \r -> do
+  it "is refused without the current one, or with a wrong one, with a 401, and nothing changes" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     for_ [Nothing, Just "not my password"] $ \current ->
       changing r here current "a longer new password" >>= jsonAs 401 >>= (`shouldBe` Unauthenticated)
@@ -309,7 +310,7 @@ ownPassword = describe "one's own password" $ do
     _ <- signInAs r "editor" "editor's password"
     pass
 
-  it "counts wrong current ones as failed sign-ins of the login from the address" $ withPasswords identity $ \r -> do
+  it "counts wrong current ones as failed sign-ins of the login from the address" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     replicateM_ 5 (changing r here (Just "a guess") "a longer new password")
     held <- changing r here (Just "editor's password") "a longer new password"
@@ -322,14 +323,14 @@ ownPassword = describe "one's own password" $ do
     admin <- signInAs r "admin" "admin's password"
     (.status) <$> changing r admin (Just "admin's password") "a longer new password" `shouldReturn` 200
 
-  it "refuses a new one that cannot be a password, before looking at the current one" $ withPasswords identity $ \r -> do
+  it "refuses a new one that cannot be a password, before looking at the current one" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     changing r here (Just "a guess") "short" >>= jsonAs 400 >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
     -- Not counted as a guess.
     replicateM_ 4 (changing r here (Just "a guess") "a longer new password")
     (.status) <$> changing r here (Just "editor's password") "a longer new password" `shouldReturn` 200
 
-  it "is no one's to change who is not signed in, nor the operator's, nor without the application's header" $ withPasswords identity $ \r -> do
+  it "is no one's to change who is not signed in, nor the operator's, nor without the application's header" $ withPasswords backing identity $ \r -> do
     let body = encode PasswordChange {current = Nothing, new = Password "a longer new password"}
     nobody <- send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json")] body
     jsonAs 401 nobody `shouldReturn` Unauthenticated
@@ -341,9 +342,9 @@ ownPassword = describe "one's own password" $ do
     _ <- signInAs r "editor" "editor's password"
     pass
 
-pages :: Spec
-pages = describe "the pages the server renders" $ do
-  it "show a signed-in user as signed in from the first paint, carry them in the preload, and are private" $ withPasswords identity $ \r -> do
+pages :: Backing -> Spec
+pages backing = describe "the pages the server renders" $ do
+  it "show a signed-in user as signed in from the first paint, carry them in the preload, and are private" $ withPasswords backing identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     reply <- getUrlWith r (r.public <> "/") [cookie token]
     reply.status `shouldBe` 200
@@ -363,19 +364,19 @@ pages = describe "the pages the server renders" $ do
     admin <- signInAs r "admin" "admin's password"
     (.status) <$> getUrlWith r (r.public <> "/s/team/") [cookie admin] `shouldReturn` 200
 
-  it "show nobody the way to sign in" $ withPasswords identity $ \r -> do
+  it "show nobody the way to sign in" $ withPasswords backing identity $ \r -> do
     reply <- getUrl r (r.public <> "/")
     let html = decodeUtf8 (BSL.toStrict reply.body)
     html `shouldSatisfy` T.isInfixOf "class=\"sign-in-toggle\""
     html `shouldSatisfy` T.isInfixOf "\"standing\":\"NotSignedIn\""
 
-  it "answer the API privately too" $ withPasswords identity $ \r -> do
+  it "answer the API privately too" $ withPasswords backing identity $ \r -> do
     reply <- getUrl r (onPublic r links.session)
     (header "Cache-Control" reply, header "Vary" reply) `shouldBe` (Just "private, no-cache", Just "Cookie")
 
-guards :: Spec
-guards = describe "requests from other sites" $ do
-  it "are refused when they change something without the application's header, on both listeners" $ withPasswords identity $ \r -> do
+guards :: Backing -> Spec
+guards backing = describe "requests from other sites" $ do
+  it "are refused when they change something without the application's header, on both listeners" $ withPasswords backing identity $ \r -> do
     let body = encode Credentials {login = "editor", password = Password "editor's password"}
     signIn <- sendBare r methodPost (onPublic r links.signIn) [(hContentType, "application/json")] body
     (signIn.status, setCookie signIn) `shouldBe` (403, Nothing)
@@ -385,7 +386,7 @@ guards = describe "requests from other sites" $ do
     -- Reading needs no header.
     (.status) <$> sendBare r methodGet (onPublic r links.session) [] "" `shouldReturn` 200
 
-  it "are refused when the browser says they come from another site, header or not" $ withPasswords identity $ \r -> do
+  it "are refused when the browser says they come from another site, header or not" $ withPasswords backing identity $ \r -> do
     reply <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), ("Sec-Fetch-Site", "cross-site")] (encode Credentials {login = "editor", password = Password "editor's password"})
     reply.status `shouldBe` 403
     same <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), ("Sec-Fetch-Site", "same-origin")] (encode Credentials {login = "editor", password = Password "editor's password"})

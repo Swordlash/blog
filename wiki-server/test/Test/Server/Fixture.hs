@@ -10,6 +10,7 @@ module Test.Server.Fixture
   , withDemoRestarted
   , site
   , template
+  , serverInfoOn
 
     -- * Requests
   , Reply (..)
@@ -52,10 +53,12 @@ import Protolude
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
+import Test.Database (Backing (..), choiceOf, withPlace)
 import Test.HUnit (assertFailure)
 import Test.Storage.Fixture (demoArchive)
 import Wiki.Api (AdminApi (..), WikiApi (..), requestMarker)
 import Wiki.Api.Account (Account (..), Credentials (..), NewPassword (..))
+import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
@@ -65,7 +68,7 @@ import Wiki.Server (Server (..), withServerUsing)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message, SendMail, Smtp (..), smtpSend)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
-import Wiki.Server.Storage (defaultConfig, importArchive, withStorage)
+import Wiki.Server.Storage (Place (..), defaultConfig, importArchive, withStorage)
 
 -- | A server being driven by a test.
 data Running = Running
@@ -74,6 +77,8 @@ data Running = Running
   , admin :: Text
   -- ^ The admin listener's root.
   , dataDir :: FilePath
+  , place :: Place
+  -- ^ The data directory and the database the server keeps the wiki in.
   , staticDir :: FilePath
   , logged :: IORef [Text]
   -- ^ What it logged, the latest first.
@@ -83,6 +88,16 @@ data Running = Running
   -- mail server mails here instead ('testMail'), and one whose host is
   -- @unreachable.test@ fails to.
   }
+
+-- | What a server of the tests says of itself ("Wiki.Api.Info"), on a
+-- database of this backing: its capabilities name the database, so a test
+-- of a server on PostgreSQL that ran on SQLite fails here.
+serverInfoOn :: Backing -> ServerInfo
+serverInfoOn backing = ServerInfo {name = "Wiki", apiVersion = 1, capabilities}
+  where
+    capabilities = case backing of
+      OnSqlite -> Capabilities {database = "sqlite", search = FoldedText}
+      _ -> Capabilities {database = "postgres", search = FullText}
 
 -- | The files of a small built application, by path: what the tests of
 -- static serving ask for.
@@ -131,67 +146,71 @@ template =
 
 -- | A server whose build is the server's (its files, and 'template'), over
 -- the demo's wiki, with its options changed as given.
-withDemoRunning :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
-withDemoRunning change = withRunningPrepared change demoPrepared
+withDemoRunning :: Backing -> (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
+withDemoRunning backing change = withRunningPrepared backing change demoPrepared
 
 -- | The directories of a server whose build is the server's, over the
 -- demo's wiki.
-demoPrepared :: FilePath -> FilePath -> IO ()
-demoPrepared dataDir staticDir = do
+demoPrepared :: Place -> FilePath -> IO ()
+demoPrepared at staticDir = do
   BS.writeFile (staticDir </> "template.html") template
-  withStorage defaultConfig dataDir (\st -> importArchive st demoArchive) >>= either (\e -> assertFailure ("the demo does not import: " <> toS e)) pure
+  withStorage defaultConfig at (\st -> importArchive st demoArchive) >>= either (\e -> assertFailure ("the demo does not import: " <> toS e)) pure
 
 -- | A server with the default options but for its addresses (free ports
--- of 127.0.0.1) and directories, run while the test runs.
-withRunning :: (Running -> IO a) -> IO a
-withRunning = withRunningAs identity
+-- of 127.0.0.1), its directories and its database, run while the test
+-- runs.
+withRunning :: Backing -> (Running -> IO a) -> IO a
+withRunning backing = withRunningAs backing identity
 
 -- | A server with its options changed as given.
-withRunningAs :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
-withRunningAs change = withRunningPrepared change (\_ _ -> pass)
+withRunningAs :: Backing -> (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
+withRunningAs backing change = withRunningPrepared backing change (\_ _ -> pass)
 
 -- | A server with its options changed as given, and its data and static
 -- directories prepared as given before it starts.
-withRunningPrepared :: (ServeOptions -> ServeOptions) -> (FilePath -> FilePath -> IO ()) -> (Running -> IO a) -> IO a
-withRunningPrepared change prepare test =
-  withSystemTempDirectory "wiki-server-http" $ \dir -> do
-    (dataDir, staticDir) <- prepared dir prepare
-    serveIn change dataDir staticDir test
+withRunningPrepared :: Backing -> (ServeOptions -> ServeOptions) -> (Place -> FilePath -> IO ()) -> (Running -> IO a) -> IO a
+withRunningPrepared backing change prepare test =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> withPlace backing (dir </> "data") $ \at -> do
+    staticDir <- prepared dir at prepare
+    serveIn change at staticDir test
 
 -- | A server over the demo's wiki, stopped once the first action is done,
 -- and started again over the same directories for the second, which is
 -- given what the first gave back: a restart. (Two servers cannot run on
 -- one data directory at once: the second is refused.)
-withDemoRestarted :: (Running -> IO x) -> (x -> Running -> IO a) -> IO a
-withDemoRestarted before after =
-  withSystemTempDirectory "wiki-server-http" $ \dir -> do
-    (dataDir, staticDir) <- prepared dir demoPrepared
-    x <- serveIn identity dataDir staticDir before
-    serveIn identity dataDir staticDir (after x)
+withDemoRestarted :: Backing -> (Running -> IO x) -> (x -> Running -> IO a) -> IO a
+withDemoRestarted backing before after =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> withPlace backing (dir </> "data") $ \at -> do
+    staticDir <- prepared dir at demoPrepared
+    x <- serveIn identity at staticDir before
+    serveIn identity at staticDir (after x)
 
--- | The data and static directories of a test's server in a directory,
--- prepared as given.
-prepared :: FilePath -> (FilePath -> FilePath -> IO ()) -> IO (FilePath, FilePath)
-prepared dir prepare = do
-  let dataDir = dir </> "data"
-      staticDir = dir </> "app"
+-- | The static directory of a test's server in a directory, with the
+-- data directory and the database prepared as given.
+prepared :: FilePath -> Place -> (Place -> FilePath -> IO ()) -> IO FilePath
+prepared dir at prepare = do
+  let staticDir = dir </> "app"
   for_ site $ \(path, bytes) -> do
     createDirectoryIfMissing True (takeDirectory (staticDir </> path))
     BS.writeFile (staticDir </> path) bytes
-  prepare dataDir staticDir
-  pure (dataDir, staticDir)
+  prepare at staticDir
+  pure staticDir
 
--- | A server over these directories, with its options changed as given,
--- while the test runs.
-serveIn :: (ServeOptions -> ServeOptions) -> FilePath -> FilePath -> (Running -> IO a) -> IO a
-serveIn change dataDir staticDir test = do
+-- | A server over this place and static directory, with its options
+-- changed as given, while the test runs. The server's database is the
+-- place's: a test of a server on PostgreSQL is a test of PostgreSQL.
+serveIn :: (ServeOptions -> ServeOptions) -> Place -> FilePath -> (Running -> IO a) -> IO a
+serveIn change at staticDir test = do
+  let dataDir = at.dataDir
   logged <- newIORef []
   outbox <- newIORef []
   manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
   let options =
         change
           (defaultServeOptions dataDir)
-            { listen = Listen "127.0.0.1" 0
+            { database = choiceOf at.database
+            , pgPrograms = at.programs
+            , listen = Listen "127.0.0.1" 0
             , adminListen = Just (Listen "127.0.0.1" 0)
             , staticDir = Just staticDir
             }
@@ -201,6 +220,7 @@ serveIn change dataDir staticDir test = do
         { public = root server.publicAddress
         , admin = maybe "" root server.adminAddress
         , dataDir
+        , place = at
         , staticDir
         , logged
         , manager
@@ -338,8 +358,8 @@ signInAs r login password = do
 -- the cookie of a session of the demo's administrator (@admin@, who holds
 -- the global administer) signed in on the public listener: who the
 -- public listener serves the administration to.
-withAdminSession :: (ServeOptions -> ServeOptions) -> (Running -> Header -> IO a) -> IO a
-withAdminSession change test = withDemoRunning change $ \r -> do
+withAdminSession :: Backing -> (ServeOptions -> ServeOptions) -> (Running -> Header -> IO a) -> IO a
+withAdminSession backing change test = withDemoRunning backing change $ \r -> do
   givePassword r "user-admin" "admin's password"
   token <- signInAs r "admin" "admin's password"
   test r (cookie token)

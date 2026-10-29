@@ -15,10 +15,10 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
-import Database.SQLite.Simple (execute, withConnection)
+import Database.Beam (runUpdate, update, val_, (<-.), (==.))
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), InvitationsApi (..), SpacesApi (..), WikiApi (..))
@@ -35,15 +35,18 @@ import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
-import Wiki.Server.Storage.Layout (databaseFile)
+import Wiki.Server.Storage (withStorageAside, writing)
+import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Schema (WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema qualified as Schema
 
-spec :: Spec
-spec = describe "whom the wiki lets in, over HTTP" $ do
-  open
-  closed
-  switching
-  invitations
-  mailed
+spec :: Backing -> Spec
+spec backing = describe "whom the wiki lets in, over HTTP" $ do
+  open backing
+  closed backing
+  switching backing
+  invitations backing
+  mailed backing
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -91,14 +94,14 @@ accept r token login password =
 details :: Running -> Text -> IO Reply
 details r token = getUrl r (onPublic r (links.invitations.details (InvitationToken token)))
 
-open :: Spec
-open = describe "an open wiki" $ do
-  it "says so to someone not signed in, and shows them the public spaces" $ withDemoRunning identity $ \r -> do
+open :: Backing -> Spec
+open backing = describe "an open wiki" $ do
+  it "says so to someone not signed in, and shows them the public spaces" $ withDemoRunning backing identity $ \r -> do
     me <- sessionOf r []
     (me.user, me.grants.access) `shouldBe` (Nothing, Open)
     spaceNames r [] `shouldReturn` ["Blog", "Docs"]
 
-  it "lets anyone make an account, signed in at once and holding no grant" $ withDemoRunning identity $ \r -> do
+  it "lets anyone make an account, signed in at once and holding no grant" $ withDemoRunning backing identity $ \r -> do
     reply <- register r [] "newcomer" "a long password"
     info :: SessionInfo <- jsonAs 200 reply
     ((\u -> u.login.text) <$> info.user, info.standing, info.grants.global) `shouldBe` (Just "newcomer", SignedIn, [])
@@ -112,7 +115,7 @@ open = describe "an open wiki" $ do
     _ <- signInAs r "newcomer" "a long password"
     pass
 
-  it "gives a new account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
+  it "gives a new account create-spaces when the settings say so" $ withDemoRunning backing identity $ \r -> do
     settle r WikiSettings {access = Open, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     reply <- register r [] "maker" "a long password"
     info :: SessionInfo <- jsonAs 200 reply
@@ -121,27 +124,27 @@ open = describe "an open wiki" $ do
     made <- send r methodPost (onPublic r links.spaces.create) [(hContentType, "application/json"), c] "{\"parent\":null,\"name\":\"Mine\"}"
     made.status `shouldBe` 201
 
-  it "refuses a login that is taken, whatever its case, and a password too short" $ withDemoRunning identity $ \r -> do
+  it "refuses a login that is taken, whatever its case, and a password too short" $ withDemoRunning backing identity $ \r -> do
     (register r [] "EDITOR" "a long password" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
     (register r [] "someone" "short" >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
 
-  it "refuses an account made from another site's page, without the application's header" $ withDemoRunning identity $ \r -> do
+  it "refuses an account made from another site's page, without the application's header" $ withDemoRunning backing identity $ \r -> do
     reply <- sendBare r methodPost (onPublic r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "csrf", displayName = "", password = Password "a long password", email = Nothing})
     reply.status `shouldBe` 403
 
-  it "limits how many accounts are tried from one address" $ withDemoRunning identity $ \r -> do
+  it "limits how many accounts are tried from one address" $ withDemoRunning backing identity $ \r -> do
     for_ [1 :: Int .. 5] $ \n -> register r [] ("guest" <> show n) (if n == 3 then "short" else "a long password")
     reply <- register r [] "guest6" "a long password"
     reply.status `shouldBe` 429
     header "Retry-After" reply `shouldSatisfy` isJust
 
-  it "is refused to the admin listener, where nobody signs in" $ withDemoRunning identity $ \r -> do
+  it "is refused to the admin listener, where nobody signs in" $ withDemoRunning backing identity $ \r -> do
     reply <- send r methodPost (onAdmin r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "x", displayName = "", password = Password "a long password", email = Nothing})
     reply.status `shouldBe` 400
 
-closed :: Spec
-closed = describe "a closed wiki" $ do
-  it "answers someone not signed in 401 on the API, but for what signing in needs" $ withDemoRunning identity $ \r -> do
+closed :: Backing -> Spec
+closed backing = describe "a closed wiki" $ do
+  it "answers someone not signed in 401 on the API, but for what signing in needs" $ withDemoRunning backing identity $ \r -> do
     closeWiki r
     for_ [links.spaces.list, links.spaces.atPath [], links.search (Just "tour") Nothing False Nothing False, links.admin.directory] $ \address ->
       (getUrl r (onPublic r address) >>= jsonAs 401) `shouldReturn` Unauthenticated
@@ -151,7 +154,7 @@ closed = describe "a closed wiki" $ do
     (register r [] "newcomer" "a long password" >>= jsonAs 403) `shouldReturn` Forbidden
     (details r "no-such-invitation" >>= jsonAs 404) `shouldReturn` NotFound
 
-  it "renders the way to sign in at every route, with a 401, and nothing of the wiki" $ withDemoRunning identity $ \r -> do
+  it "renders the way to sign in at every route, with a 401, and nothing of the wiki" $ withDemoRunning backing identity $ \r -> do
     closeWiki r
     for_ ["/", "/s/blog/", "/s/docs/p/tour/", "/search/?q=tour", "/admin/", "/no/such/route/"] $ \path -> do
       reply <- getUrl r (r.public <> path)
@@ -164,7 +167,7 @@ closed = describe "a closed wiki" $ do
     -- signs one in needs them.
     (\x -> x.status) <$> getUrl r (r.public <> "/app.wasm") `shouldReturn` 200
 
-  it "shows a signed-in user the public spaces, as before" $ withDemoRunning identity $ \r -> do
+  it "shows a signed-in user the public spaces, as before" $ withDemoRunning backing identity $ \r -> do
     givePassword r "user-editor" "editor's password"
     closeWiki r
     c <- cookie <$> signInAs r "editor" "editor's password"
@@ -175,13 +178,13 @@ closed = describe "a closed wiki" $ do
     reply.status `shouldBe` 200
     decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInfixOf "Blog"
 
-  it "still serves the operator on the admin listener" $ withDemoRunning identity $ \r -> do
+  it "still serves the operator on the admin listener" $ withDemoRunning backing identity $ \r -> do
     closeWiki r
     names <- map (\s -> s.name) <$> (getUrl r (onAdmin r links.spaces.list) >>= jsonAs 200 :: IO [Space])
     names `shouldBe` ["Blog", "Docs", "Team", "Projects"]
     (\x -> x.status) <$> getUrl r (r.admin <> "/admin/s/team/") `shouldReturn` 200
 
-  it "lets nobody but an administrator change the settings" $ withDemoRunning identity $ \r -> do
+  it "lets nobody but an administrator change the settings" $ withDemoRunning backing identity $ \r -> do
     givePassword r "user-editor" "editor's password"
     c <- cookie <$> signInAs r "editor" "editor's password"
     (sendJson r methodPut (onPublic r links.admin.setSettings) closedSettings >>= jsonAs 403) `shouldReturn` Forbidden
@@ -189,9 +192,9 @@ closed = describe "a closed wiki" $ do
     reply.status `shouldBe` 403
     spaceNames r [] `shouldReturn` ["Blog", "Docs"]
 
-switching :: Spec
-switching = describe "the switch between them" $ do
-  it "is seen by the very next request, either way, and read back as it was set" $ withDemoRunning identity $ \r -> do
+switching :: Backing -> Spec
+switching backing = describe "the switch between them" $ do
+  it "is seen by the very next request, either way, and read back as it was set" $ withDemoRunning backing identity $ \r -> do
     spaceNames r [] `shouldReturn` ["Blog", "Docs"]
     closeWiki r
     (getUrl r (onPublic r links.spaces.list) >>= jsonAs 401) `shouldReturn` Unauthenticated
@@ -201,12 +204,12 @@ switching = describe "the switch between them" $ do
     (\x -> x.status) <$> getUrl r (r.public <> "/") `shouldReturn` 200
 
   it "lasts across a restart of the server" $
-    withDemoRestarted closeWiki $ \() again ->
+    withDemoRestarted backing closeWiki $ \() again ->
       (getUrl again (onPublic again links.spaces.list) >>= jsonAs 401) `shouldReturn` Unauthenticated
 
-invitations :: Spec
-invitations = describe "an invitation, where the server mails nothing" $ do
-  it "is made with its link's secret, makes one account, once, and signs its maker in" $ withDemoRunning identity $ \r -> do
+invitations :: Backing -> Spec
+invitations backing = describe "an invitation, where the server mails nothing" $ do
+  it "is made with its link's secret, makes one account, once, and signs its maker in" $ withDemoRunning backing identity $ \r -> do
     closeWiki r
     made <- inviteAs r "bea@example.org"
     made.invitation.email.text `shouldBe` "bea@example.org"
@@ -236,20 +239,20 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     filter (T.isInfixOf token) logged `shouldBe` []
     logged `shouldSatisfy` any (T.isInfixOf "invitations/…")
 
-  it "leaves the invitation as it was when the login is taken" $ withDemoRunning identity $ \r -> do
+  it "leaves the invitation as it was when the login is taken" $ withDemoRunning backing identity $ \r -> do
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     (accept r token "editor" "a long password" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
     (accept r token "bea" "a long password") >>= jsonAs @SessionInfo 200 >>= \s -> (\u -> u.login.text) <$> s.user `shouldBe` Just "bea"
 
-  it "gives the account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
+  it "gives the account create-spaces when the settings say so" $ withDemoRunning backing identity $ \r -> do
     settle r WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     info :: SessionInfo <- accept r token "bea" "a long password" >>= jsonAs 200
     info.grants.global `shouldSatisfy` any (\g -> g.permission == CreateSpaces)
 
-  it "is refused once revoked, and revoking it again finds nothing" $ withDemoRunning identity $ \r -> do
+  it "is refused once revoked, and revoking it again finds nothing" $ withDemoRunning backing identity $ \r -> do
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     revoked <- send r methodDelete (onAdmin r (links.admin.revokeInvitation made.invitation.id)) [] ""
@@ -258,18 +261,18 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     (accept r token "bea" "a long password" >>= jsonAs 404) `shouldReturn` NotFound
     (send r methodDelete (onAdmin r (links.admin.revokeInvitation made.invitation.id)) [] "" >>= jsonAs 404) `shouldReturn` NotFound
 
-  it "is refused once it has expired, and listed as expired" $ withDemoRunning identity $ \r -> do
+  it "is refused once it has expired, and listed as expired" $ withDemoRunning backing identity $ \r -> do
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     past <- addUTCTime (-60) <$> getCurrentTime
-    withConnection (databaseFile r.dataDir) $ \c ->
-      execute c "UPDATE invitations SET expires_at = ? WHERE id = ?" (T.pack (iso8601Show past), made.invitation.id.text)
+    withStorageAside r.place $ \st ->
+      writing st (runUpdate (update wikiDb.invitations (\i -> i.expires_at <-. val_ (micro past)) (\i -> i.id ==. val_ made.invitation.id.text)))
     (details r token >>= jsonAs 404) `shouldReturn` NotFound
     (accept r token "bea" "a long password" >>= jsonAs 404) `shouldReturn` NotFound
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
     map (\i -> i.expired) listed.invitations `shouldBe` [True]
 
-  it "replaces the invitation an address had, whose link no longer works" $ withDemoRunning identity $ \r -> do
+  it "replaces the invitation an address had, whose link no longer works" $ withDemoRunning backing identity $ \r -> do
     first' <- inviteAs r "bea@example.org"
     second' <- inviteAs r "BEA@example.org"
     old <- maybe (panic "no secret") pure ((\t -> t.text) <$> first'.token)
@@ -279,16 +282,16 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
     length listed.invitations `shouldBe` 1
 
-  it "is refused to an address that is not one, and to anyone not an administrator" $ withDemoRunning identity $ \r -> do
+  it "is refused to an address that is not one, and to anyone not an administrator" $ withDemoRunning backing identity $ \r -> do
     (sendJson r methodPost (onAdmin r links.admin.invite) NewInvitation {email = "not an address"} >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
     (sendJson r methodPost (onPublic r links.admin.invite) NewInvitation {email = "bea@example.org"} >>= jsonAs 403) `shouldReturn` Forbidden
     (getUrl r (onPublic r links.admin.invitations) >>= jsonAs 403) `shouldReturn` Forbidden
     (send r methodDelete (onPublic r (links.admin.revokeInvitation (InvitationId "i"))) [] "" >>= jsonAs 403) `shouldReturn` Forbidden
 
-mailed :: Spec
-mailed = describe "an invitation, where the server mails them" $ do
+mailed :: Backing -> Spec
+mailed backing = describe "an invitation, where the server mails them" $ do
   let mailingThrough host r = setServer r noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host, port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}}
-  it "is mailed with its link, which the panel is not given" $ withDemoRunning identity $ \r -> do
+  it "is mailed with its link, which the panel is not given" $ withDemoRunning backing identity $ \r -> do
     _ <- mailingThrough "mail.test" r
     made <- inviteAs r "bea@example.org"
     (made.token, made.mailError) `shouldBe` (Nothing, Nothing)
@@ -305,7 +308,7 @@ mailed = describe "an invitation, where the server mails them" $ do
     show sent `shouldSatisfy` (not . T.isInfixOf token)
 
   it "gives the panel the link when the mail cannot be sent, and says why" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       _ <- mailingThrough "unreachable.test" r
       made <- inviteAs r "bea@example.org"
       made.mailError `shouldSatisfy` maybe False (T.isInfixOf "did not answer")

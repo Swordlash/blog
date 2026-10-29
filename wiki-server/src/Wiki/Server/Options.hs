@@ -36,6 +36,7 @@ module Wiki.Server.Options
   , pgPrograms
   , resolvePlace
   , databaseUrlVariable
+  , passwordFileVariable
 
     -- * Addresses
   , Listen (..)
@@ -273,10 +274,16 @@ data DatabaseChoice
   deriving stock (Eq, Show)
 
 -- | The environment variable that may hold a PostgreSQL database's URL,
--- password included: @WIKI_DATABASE_URL@. It is read when the command
--- line names no database.
+-- password included or not: @WIKI_DATABASE_URL@. It is read when the
+-- command line names no database.
 databaseUrlVariable :: [Char]
 databaseUrlVariable = "WIKI_DATABASE_URL"
+
+-- | The environment variable that may name the file of the password of the
+-- database 'databaseUrlVariable' names: @WIKI_DATABASE_PASSWORD_FILE@, as
+-- docker-compose.yml gives the server a secret.
+passwordFileVariable :: [Char]
+passwordFileVariable = "WIKI_DATABASE_PASSWORD_FILE"
 
 -- | The options that name the database: @--sqlite FILE@, or @--database
 -- URL@ with @--database-password-file FILE@.
@@ -297,7 +304,9 @@ databaseChoice = sqlite <|> postgres <|> pure InDataDirectory
       (credentials, rest) -> not (T.null rest) && ":" `T.isInfixOf` credentials || "password=" `T.isInfixOf` t
 
 -- | The options that name the programs a PostgreSQL backup and restore
--- run: @--pg-dump@ and @--pg-restore@.
+-- run: @--pg-dump@ and @--pg-restore@, or else @WIKI_PG_DUMP@ and
+-- @WIKI_PG_RESTORE@ when the environment has them ('resolvePlace'), or
+-- else the @pg_dump@ and @pg_restore@ on the PATH.
 pgPrograms :: Parser PgPrograms
 pgPrograms =
   PgPrograms
@@ -329,14 +338,27 @@ resolvePlace :: FilePath -> DatabaseChoice -> PgPrograms -> IO (Either Text Plac
 resolvePlace dataDir choice programs = runExceptT $ do
   database <- case choice of
     SqliteChosen file -> pure (SqliteFile file)
-    PostgresChosen url Nothing -> pure (PostgresAt (encodeUtf8 url))
-    PostgresChosen url (Just file) -> do
-      read' <- liftIO (try @SomeException (readFile file))
-      password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
-      pure (PostgresAt (encodeUtf8 (withPassword url password)))
-    InDataDirectory -> maybe (defaultDatabase dataDir) (PostgresAt . encodeUtf8 . T.pack) <$> liftIO (lookupEnv databaseUrlVariable)
-  pure Place {dataDir, database, programs}
+    PostgresChosen url passwordFile -> postgres url passwordFile
+    InDataDirectory ->
+      liftIO (lookupEnv databaseUrlVariable) >>= \case
+        Nothing -> pure (defaultDatabase dataDir)
+        Just url -> postgres (T.pack url) =<< liftIO (lookupEnv passwordFileVariable)
+  dump <- fromEnvironment "pg_dump" "WIKI_PG_DUMP" programs.dump
+  restore <- fromEnvironment "pg_restore" "WIKI_PG_RESTORE" programs.restore
+  pure Place {dataDir, database, programs = PgPrograms {dump, restore}}
   where
+    -- A program the command line left at its default, from the
+    -- environment when it names one there (as a deployment's console
+    -- wrapper does, toolchain/deploy-local.sh).
+    fromEnvironment default' variable given
+      | given == default' = fromMaybe given <$> liftIO (lookupEnv variable)
+      | otherwise = pure given
+    postgres url = \case
+      Nothing -> pure (PostgresAt (encodeUtf8 url))
+      Just file -> do
+        read' <- liftIO (try @SomeException (readFile file))
+        password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
+        pure (PostgresAt (encodeUtf8 (withPassword url password)))
     -- The password as a parameter of the URL, which libpq reads as it
     -- reads one in the URL's user part, escaped as a URL's query is.
     withPassword url password =

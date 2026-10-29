@@ -13,6 +13,7 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), SockAddr (..), Socket, SocketType (..), accept, bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket)
 import Network.Socket.ByteString (recv, sendAll)
 import Protolude
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture (Running (..), jsonAs, sendJson, setServer, withDemoRunning)
 import Wiki.Api (AdminApi (..), WikiApi (..))
@@ -25,11 +26,11 @@ import Wiki.Core.User (Email (..))
 import Wiki.Server.Log (redactedPath)
 import Wiki.Server.Mail
 
-spec :: Spec
-spec = describe "mail" $ do
+spec :: Backing -> Spec
+spec backing = describe "mail" $ do
   messages
   overSmtp
-  atRunTime
+  atRunTime backing
   logs
 
 expiry :: UTCTime
@@ -82,10 +83,10 @@ overSmtp = describe "over SMTP" $ do
   it "takes implicit TLS on 465, and STARTTLS on any other port" $
     map securityFor [465, 587, 25] `shouldBe` [ImplicitTls, StartTls, StartTls]
 
-atRunTime :: Spec
-atRunTime = describe "through the mail server set while the server runs" $
+atRunTime :: Backing -> Spec
+atRunTime backing = describe "through the mail server set while the server runs" $
   it "mails an invitation with the settings as they are when it is sent, the password included" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       let through port password = MailSettings {host = "127.0.0.1", port, security = Plain, user = Just "wiki", password, from = "Wiki <wiki@example.org>"}
           settings port password = noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just (through port password)}
           invite email = sendJson r "POST" (r.admin <> "/admin/" <> links.admin.invite) NewInvitation {email} >>= jsonAs @Invited 201

@@ -14,9 +14,11 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Protolude
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, getPermissions, listDirectory, setOwnerExecutable, setPermissions)
-import System.FilePath (takeFileName, (</>))
+import System.FilePath (takeExtension, takeFileName, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing)
+import Test.Storage.Fixture (withPlaceIn)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), WikiApi (..))
@@ -25,17 +27,20 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (SecretState (..))
 import Wiki.Server.Options (ServeOptions (..))
-import Wiki.Server.Storage.Backup (Restore (..), backupFiles, integrityProblems, restore)
+import Wiki.Server.Storage (Database (..), Place (..))
+import Wiki.Server.Storage.Backup (Restore (..), backupFiles, restore)
+import Wiki.Server.Storage.Postgres (checkDump)
+import Wiki.Server.Storage.Sqlite (integrityProblems)
 import Wiki.Server.Storage.Blobs (storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
 
-spec :: Spec
-spec = describe "the server's backups, over HTTP" $ do
-  offAtFirst
-  onSchedule
-  byHand
-  offSite
-  lasting
+spec :: Backing -> Spec
+spec backing = describe "the server's backups, over HTTP" $ do
+  offAtFirst backing
+  onSchedule backing
+  byHand backing
+  offSite backing
+  lasting backing
 
 onAdmin :: Running -> Text -> Text
 onAdmin r address = r.admin <> "/admin/" <> address
@@ -76,9 +81,9 @@ everySix keep destination = BackupSettings {enabled = True, schedule = EveryHour
 week :: Retention
 week = Retention {daily = 7, weekly = 4}
 
-offAtFirst :: Spec
-offAtFirst = describe "a fresh server" $ do
-  it "makes no backup until an administrator turns them on, and refuses one by hand meanwhile" $ withDemoRunning identity $ \r -> do
+offAtFirst :: Backing -> Spec
+offAtFirst backing = describe "a fresh server" $ do
+  it "makes no backup until an administrator turns them on, and refuses one by hand meanwhile" $ withDemoRunning backing identity $ \r -> do
     b <- backupsOf r
     (b.available, b.settings.enabled, b.last, b.running, b.next) `shouldBe` (True, False, Nothing, False, Nothing)
     (send r "POST" (onAdmin r links.admin.backUpNow) [] "" >>= jsonAs 400) `shouldReturn` Invalid "Backups are off: turn them on first."
@@ -88,23 +93,25 @@ offAtFirst = describe "a fresh server" $ do
     backupFiles (backupsDir r.dataDir) `shouldReturn` []
     (backupsOf r >>= \x -> pure x.last) `shouldReturn` Nothing
 
-  it "answers the operator and an administrator, and nobody else" $ withAdminSession identity $ \r admin -> do
+  it "answers the operator and an administrator, and nobody else" $ withAdminSession backing identity $ \r admin -> do
     (getUrlWith r (r.public <> "/" <> links.admin.backups) [admin] >>= jsonAs 200) >>= \(b :: Backups) -> b.settings.enabled `shouldBe` False
     (getUrl r (r.public <> "/" <> links.admin.backups) >>= jsonAs 403) `shouldReturn` Forbidden
     (sendJson r "PUT" (r.public <> "/" <> links.admin.setBackups) (everySix week Nothing) >>= jsonAs 403) `shouldReturn` Forbidden
     (send r "POST" (r.public <> "/" <> links.admin.backUpNow) [] "" >>= jsonAs 403) `shouldReturn` Forbidden
     backupFiles (backupsDir r.dataDir) `shouldReturn` []
 
-onSchedule :: Spec
-onSchedule = describe "turned on" $ do
-  it "makes the first at once, checked, and says when the next is due" $ withDemoRunning identity $ \r -> do
+onSchedule :: Backing -> Spec
+onSchedule backing = describe "turned on" $ do
+  it "makes the first at once, checked, and says when the next is due" $ withDemoRunning backing identity $ \r -> do
     _ <- setBackups r (everySix week Nothing)
     (b, made) <- madeAfter r Nothing
     made.trigger `shouldBe` OnSchedule
     made.failure `shouldBe` Nothing
     made.offSite `shouldBe` Nothing
     file <- maybe (assertFailure "no file named") (pure . (backupsDir r.dataDir </>) . toS) made.file
-    integrityProblems file `shouldReturn` []
+    case r.place.database of
+      SqliteFile _ -> integrityProblems file `shouldReturn` []
+      PostgresAt _ -> checkDump r.place.programs file `shouldReturn` Right ()
     (Just <$> getFileSize file) `shouldReturn` made.size
     b.next `shouldBe` Just (addUTCTime (6 * 3600) made.startedAt)
     b.kept `shouldBe` 1
@@ -112,7 +119,7 @@ onSchedule = describe "turned on" $ do
     threadDelay 500_000
     length <$> backupFiles (backupsDir r.dataDir) `shouldReturn` 1
 
-  it "is refused settings that cannot be, and keeps the ones it had" $ withDemoRunning identity $ \r -> do
+  it "is refused settings that cannot be, and keeps the ones it had" $ withDemoRunning backing identity $ \r -> do
     was <- setBackups r (everySix week Nothing) {enabled = False}
     for_ [(everySix week Nothing) {schedule = DailyAt 25 0}, everySix week {daily = 0} Nothing, everySix week (Just (ToDirectory "relative/path"))] $ \bad ->
       sendJson r "PUT" (onAdmin r links.admin.setBackups) bad >>= jsonAs 400 >>= \case
@@ -120,16 +127,19 @@ onSchedule = describe "turned on" $ do
         other -> expectationFailure ("not invalid: " <> show other)
     (backupsOf r >>= \b -> pure b.settings) `shouldReturn` was.settings
 
-byHand :: Spec
-byHand = describe "Back up now" $
+byHand :: Backing -> Spec
+byHand backing = describe "Back up now" $
   it "makes one by hand, and prunes the old ones to the retention" $
-    withDemoRunning identity $ \r -> do
+    withDemoRunning backing identity $ \r -> do
       _ <- setBackups r (everySix Retention {daily = 1, weekly = 1} Nothing)
       (_, first') <- madeAfter r Nothing
       -- Backups of other days, as earlier backups (and the deploy's) left.
       let dir = backupsDir r.dataDir
       made <- maybe (assertFailure "no file") (pure . (dir </>) . toS) first'.file
-      for_ ["20200106T030000.000Z.sqlite", "20200107T030000.000Z.sqlite", "20200108T030000.000Z.sqlite"] $ \n -> copyFile made (dir </> n)
+      let extension = takeExtension made
+      for_ ["20200106T030000.000Z", "20200107T030000.000Z", "20200108T030000.000Z"] $ \n -> do
+        copyFile made (dir </> n <> extension)
+        whenM (doesFileExist (made <> ".json")) (copyFile (made <> ".json") (dir </> n <> extension <> ".json"))
       answered <- backUpNow r
       (b, again) <-
         if answered.running then madeAfter r (Just first') else pure (answered, fromMaybe first' answered.last)
@@ -139,10 +149,10 @@ byHand = describe "Back up now" $
       map takeFileName <$> backupFiles dir `shouldReturn` [toS f | Just f <- [again.file]]
       b.kept `shouldBe` 1
 
-offSite :: Spec
-offSite = describe "copied off the machine" $ do
+offSite :: Backing -> Spec
+offSite backing = describe "copied off the machine" $ do
   it "goes to a directory, laid out as a data directory, with the attachments' files" $
-    withSystemTempDirectory "wiki-offsite" $ \away -> withDemoRunning identity $ \r -> do
+    withSystemTempDirectory "wiki-offsite" $ \away -> withDemoRunning backing identity $ \r -> do
       _ <- setBackups r (everySix week (Just (ToDirectory (toS away))))
       (b, made) <- madeAfter r Nothing
       made.offSite `shouldBe` Just OffSite {to = toS away, problem = Nothing}
@@ -153,11 +163,11 @@ offSite = describe "copied off the machine" $ do
       ours `shouldSatisfy` (not . null)
       storedBlobs (away </> "attachments") `shouldReturn` ours
       -- And restored from there, the drill the README describes.
-      let fresh = away </> "restored"
-      restore Restore {backupFile = away </> "backups" </> name, dataDir = fresh, attachments = Just (away </> "attachments")} >>= either (assertFailure . toS) (const pass)
-      storedBlobs (attachmentsDir fresh) `shouldReturn` ours
+      withPlaceIn backing $ \fresh -> do
+        restore Restore {backupFile = away </> "backups" </> name, dataDir = fresh.dataDir, database = fresh.database, programs = fresh.programs, attachments = Just (away </> "attachments")} >>= either (assertFailure . toS) (const pass)
+        storedBlobs (attachmentsDir fresh.dataDir) `shouldReturn` ours
 
-  it "says so when the directory is not there, and keeps the backup" $ withDemoRunning identity $ \r -> do
+  it "says so when the directory is not there, and keeps the backup" $ withDemoRunning backing identity $ \r -> do
     _ <- setBackups r (everySix week (Just (ToDirectory "/nonexistent/wiki-backups")))
     (_, made) <- madeAfter r Nothing
     made.failure `shouldBe` Nothing
@@ -167,7 +177,7 @@ offSite = describe "copied off the machine" $ do
   it "goes to an rclone remote, with its configuration in a private file deleted after, never given back nor logged" $
     withSystemTempDirectory "wiki-rclone" $ \base -> do
       fake <- fakeRclone base
-      withDemoRunning (\o -> o {rclone = fake}) $ \r -> do
+      withDemoRunning backing (\o -> o {rclone = fake}) $ \r -> do
         let config = "[fake]\ntype = local\nsecret_key = do-not-show-me\n"
         set <- setBackups r (everySix week (Just (ToRclone "fake:wiki" (Just config))))
         set.settings.destination `shouldBe` Just (ToRclone "fake:wiki" Set)
@@ -197,17 +207,17 @@ offSite = describe "copied off the machine" $ do
         cleared.settings.destination `shouldBe` Just (ToRclone "fake:wiki" NotSet)
 
   it "says so when rclone is not there, and keeps the backup" $
-    withDemoRunning (\o -> o {rclone = "/nonexistent/rclone"}) $ \r -> do
+    withDemoRunning backing (\o -> o {rclone = "/nonexistent/rclone"}) $ \r -> do
       _ <- setBackups r (everySix week (Just (ToRclone "b2:wiki" Nothing)))
       (_, made) <- madeAfter r Nothing
       made.failure `shouldBe` Nothing
       ((\o -> o.problem) <$> made.offSite) `shouldSatisfy` maybe False (maybe False (T.isInfixOf "rclone could not be run"))
       length <$> backupFiles (backupsDir r.dataDir) `shouldReturn` 1
 
-lasting :: Spec
-lasting = describe "across a restart" $ do
+lasting :: Backing -> Spec
+lasting backing = describe "across a restart" $ do
   it "keeps the settings and the last backup, and makes none before the next is due" $
-    withDemoRestarted
+    withDemoRestarted backing
       ( \r -> do
           _ <- setBackups r (everySix week Nothing)
           (b, _) <- madeAfter r Nothing
@@ -219,11 +229,11 @@ lasting = describe "across a restart" $ do
           (b.settings, b.last, b.kept) `shouldBe` (was.settings, was.last, 1)
       )
 
-  it "refuses to restore into the data directory of a server that is running" $ withDemoRunning identity $ \r -> do
+  it "refuses to restore into the data directory of a server that is running" $ withDemoRunning backing identity $ \r -> do
     _ <- setBackups r (everySix week Nothing)
     (_, made) <- madeAfter r Nothing
     name <- maybe (assertFailure "no file") (pure . toS) made.file
-    restore Restore {backupFile = backupsDir r.dataDir </> name, dataDir = r.dataDir, attachments = Nothing} >>= \case
+    restore Restore {backupFile = backupsDir r.dataDir </> name, dataDir = r.dataDir, database = r.place.database, programs = r.place.programs, attachments = Nothing} >>= \case
       Left why -> why `shouldSatisfy` T.isInfixOf "A server is running on"
       Right _ -> expectationFailure "restored under a running server"
     doesDirectoryExist (r.dataDir </> "replaced") `shouldReturn` False
