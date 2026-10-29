@@ -1815,6 +1815,17 @@ must be in before it is.
   and workflow comments explain that the runner choice applies only to `wasm`.
   No change to the build, test, artifact or Pages behaviour. The wasm job still
   builds the native prerequisites of its browser suites, prerender and smoke test.
+  Extended by the owner the same day: retain `dist-newstyle` as well as the
+  dependency store, so unchanged wiki modules need not compile on every run.
+  Hosted jobs restore separate incremental build caches for `native` and `wasm`;
+  the wasm cache includes its native prerender and test programs. Cache compatibility
+  includes the runner environment, compiler/toolchain pins and project configuration;
+  source changes can reuse a compatible older snapshot. The owner's runner retains
+  or restores its build directories across checkout without retaining unrelated stale
+  workspace files. Acceptance also requires a real warm-build check: unchanged
+  modules are reused, a source edit still rebuilds its affected modules, and all
+  normal build/test steps continue to run. Do not cache the generated public site as
+  a substitute for rebuilding it. Report measured cache sizes and the verification.
 
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
