@@ -1834,6 +1834,30 @@ must be in before it is.
   the engine or its packages are missing. The test for refusing PDF without an
   engine may still be pending on a machine with XeLaTeX, as designed.
 
+
+- **WP5.33 Own the server's password-reset tasks** (the owner, 2026-10-29,
+  from native test logs: uncaught libpq exceptions after `wiki_test_803` was
+  dropped, although hspec reported passing examples).
+  Goal: keep password-reset work inside the server's lifetime and make an
+  unexpected background failure observable by the test that owns the server.
+  `requestingReset` currently uses an untracked `forkIO`; `withServerUsing`
+  can close storage and the fixture can drop its database while that task
+  still uses it. Use maintained concurrency primitives or a task-scope library
+  rather than building a general concurrency framework. Keep the reset's
+  immediate, identical HTTP answer and asynchronous lookup/mailing, so neither
+  account existence nor timing is revealed.
+  Acceptance: server shutdown stops and joins all reset tasks before storage
+  closes; no reset task can start after its scope closes; unexpected task
+  exceptions cannot merely print on stderr while the owning test passes.
+  Add deterministic regressions for a blocked task during server shutdown and
+  an unexpected task failure, with synchronization rather than sleeps. Run the
+  PostgreSQL reset/rate-limit examples repeatedly and check that no uncaught
+  libpq or missing-database exception remains. SQLite and PostgreSQL tests pass,
+  and the ordinary verification gate is reported with exact results. Do not
+  silence the runtime's exception handler, discard failures in an `Async`, or
+  delay dropping databases to hide the leak. Report the production failure and
+  shutdown policies chosen and any other unowned work found during the audit.
+
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
   najbardziej typowane api. Bez ręcznego sqla, może oprócz migracji. Pod postgresem wszystkie
