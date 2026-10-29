@@ -720,7 +720,10 @@ them; without them the deploy stops before it builds anything and says so.
 
 `--sqlite` keeps the database a file in `data/` instead, `wiki.sqlite`, with no
 container and no second process: the deployment of before, for a small machine.
-The choice is remembered for the next run; `--postgres` goes back. The two hold
+The choice is remembered for the next run. Changing it on a deployment that has a
+wiki starts an empty one, so the deploy asks first, or takes `--fresh`: from
+PostgreSQL to `--sqlite` it stops the container and keeps its volume, and
+`--postgres --fresh` goes back to it (moving `data/wiki.sqlite` aside). The two hold
 the same wiki and do the same, but for the search: on PostgreSQL it is
 PostgreSQL's full-text search, which finds whole words, ranks the pages by how
 well they match, and takes a phrase in quotes, `or` and `-word`; on SQLite it is
@@ -734,7 +737,10 @@ finds such a `data/wiki.sqlite` stops before it changes anything, says the state
 is incompatible, and goes on only with `--fresh` (or `yes` at its question, on a
 terminal), which moves the file aside into `data/replaced/<time>/` (it is never
 deleted) and starts an empty wiki: export the old wiki with the running server
-first, and import the archive into the new one after.
+first, and import the archive into the new one after. The schema's version
+starts again at 1 with this release, on either database: `/healthz` says
+`schemaVersion` 1 where a server of before said 16, and a check that compares
+the number with an earlier one must expect the drop once.
 
 The application it serves is the server's build (`WIKI_BACKEND=server`): the same
 `app.wasm` as the demo's, which reads and writes the wiki through the server's API
@@ -820,11 +826,15 @@ to the demo, keeping `data/`.
   (with the database's options, or `bin/wiki restore …`, which has them) puts a
   backup back as the database of a data directory no server is running on: it
   checks the backup, refuses a directory whose server is running (the server
-  holds `DIR/wiki.lock` while it runs), keeps the database it replaces in
+  holds `DIR/wiki.lock` while it runs), and on PostgreSQL a database that any
+  server or console has open, from whatever directory (each holds an advisory
+  lock on the database), keeps the database it replaces in
   `DIR/replaced/<time>/` (a SQLite file moved there as it is, a PostgreSQL
-  database dumped there first), restores the backup (`pg_restore` into the
-  PostgreSQL database, in one transaction; or the file copied in), and brings from `--attachments`
-  the attachments' files the directory lacks, saying how many it still lacks.
+  database dumped there first with its facts, so that `wiki-server restore`
+  takes it back as it takes a backup), restores the backup (`pg_restore` into
+  the PostgreSQL database, in one transaction; or the file copied in), and
+  brings from `--attachments` the attachments' files the directory lacks,
+  saying how many it still lacks.
   The drill, which the server's tests run too (`wiki-server-test`, "restore"):
 
   ```sh

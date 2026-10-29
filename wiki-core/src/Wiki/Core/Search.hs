@@ -7,9 +7,15 @@
 -- A query is words. A page matches when each word is somewhere in its
 -- title or in the text of its body, compared as 'foldText' folds them:
 -- ignoring case and diacritics, as a slug ignores them, so that @zazolc@
--- finds @Zażółć@ and @strasse@ finds @Straße@. Each word matches as a
--- substring rather than a whole word, so a half-typed word already
--- matches, and every word typed narrows the hits. The text of a body is
+-- finds @Zażółć@ and @strasse@ finds @Straße@. How a word matches
+-- depends on the backend, and the API says which ('Wiki.Api.Info',
+-- @capabilities.search@). In the browser's demo and on a server on SQLite
+-- (@FoldedText@) each word matches as a substring rather than a whole
+-- word, so a half-typed word already matches, and every word typed
+-- narrows the hits. On a server on PostgreSQL (@FullText@) PostgreSQL's
+-- full-text search finds the pages: each word matches whole words only
+-- (@kuber@ does not find @Kubernetes@), without stemming, and a query may
+-- use a phrase in quotes, @or@ and @-word@. The text of a body is
 -- what a reader sees of it ('bodyText'): the Markdown's prose without its
 -- syntax, plus the sources of its code, diagrams and formulas, which
 -- people search for as well.
@@ -22,9 +28,9 @@
 -- rather than once per query. A query runs on every keystroke in the
 -- search box, and reparsing and refolding every page each time was most
 -- of a search's cost. The in-memory backend keeps the prepared text beside
--- its pages. The server stores it in a column kept in step with each save,
--- and passes 'searchPlain' its candidates the same way (decision 16 of the
--- plan), so both give the same hits.
+-- its pages. The server on SQLite stores it in a column kept in step with
+-- each save, and passes 'searchPlain' its candidates the same way
+-- (decision 16 of the plan), so the two give the same hits.
 module Wiki.Core.Search
   ( -- * Queries
     SearchQuery (..)
