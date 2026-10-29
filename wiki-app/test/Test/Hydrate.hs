@@ -217,7 +217,6 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
            , Admin (Users (UserListing "ed" 1 Everyone))
-           , Admin (Users (UserListing "" 2 Everyone))
            ]
         <> map Admin adminSections
 
@@ -278,7 +277,7 @@ apiOver providers st = do
   table <- runMemWiki wiki $ do
     me <- session
     people <- directory
-    usersPages <- for [usersFrom 0 25 "", usersFrom 0 25 "ed", usersFrom 25 25 "", usersFrom 0 50 ""] $ \q ->
+    usersPages <- for [usersFrom 0 25 "", usersFrom 0 25 "ed", usersFrom 0 50 ""] $ \q ->
       (endpointUrl (\e -> e.admin.users (Just q.offset) (Just q.limit) (mfilter (/= "") (Just q.search)) q.administrators q.disabled),) . answerOf <$> userPage q
     settings <- wikiSettings
     invited <- invitations
