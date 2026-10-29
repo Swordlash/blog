@@ -8,6 +8,9 @@
 -- The live channel checks once for each user whether they may read a page
 -- an event is about, however many of their tabs show it.
 --
+-- WP5.25 adds the administration's page of users, filtered to the
+-- administrators however many there are.
+--
 -- WP5.16b adds the reads of an ordinary visit. A search reads the pages
 -- of the spaces it searches, and folds the text of only the pages that
 -- match. The sitemap reads where each page is, not what it says, and a
@@ -48,6 +51,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
+import Wiki.Api.Admin (UserPage (..), UserQuery (..), UserSummary (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
@@ -71,7 +75,7 @@ import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
-import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
 spec backing = describe "the storage, at scale" $ do
@@ -84,6 +88,7 @@ spec backing = describe "the storage, at scale" $ do
   pageView backing
   histories backing
   auditLog backing
+  userPages backing
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -678,3 +683,20 @@ auditLog backing = describe "the audit log" $
       length (filter (\a -> "actor" `T.isPrefixOf` a.login.text) page.actors) `shouldBe` 10
       scans <- Set.fromList . concat <$> traverse (scansOf st) statements
       scans `shouldSatisfy` Set.notMember "audit_log"
+
+-- | The administration's page of users (WP5.25) with the administrators
+-- filter, in a wiki with more grants of the global administer than a
+-- statement takes parameters (32,766 on SQLite, 65,535 on PostgreSQL): the
+-- filter is asked in the query, not with every administrator's id as a
+-- parameter. The grants name ids that are no user's, so the page holds the
+-- demo's one administrator alone.
+userPages :: Backing -> Spec
+userPages backing = describe "the administration's users" $
+  it "filters to the administrators with 70,000 grants of the global administer" $
+    withDemo backing $ \st -> do
+      writing st $
+        for_ (chunksOf 500 [1 .. 70_000 :: Int]) $ \is ->
+          runInsert . insert wikiDb.global_grants $
+            insertExpressions [GlobalGrantRow {seq = default_, subject_kind = val_ "user", subject_id = val_ ("user-ghost-" <> show i), permission = val_ "administer"} | i <- is]
+      page <- runStoredWiki st Administrator (userPage UserQuery {offset = 0, limit = 25, search = "", administrators = True, disabled = False}) >>= ok
+      (map (\u -> u.user.login.text) page.users, page.total) `shouldBe` (["admin"], 1)

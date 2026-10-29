@@ -917,8 +917,8 @@ data ListedUser = ListedUser
 
 -- | One page of the users a query names ('Wiki.Api.Admin.UserQuery', whose
 -- meaning 'Wiki.Api.Admin.pageOfDirectory' gives), and how many users the
--- query matches in all. The administrators filter needs the ids of the
--- users granted the global administer, which the caller passes. The page
+-- query matches in all. The administrators filter reads the global grants
+-- in the same statement. The page
 -- is read in order of the lowered login by its code points ('byCodePoints',
 -- so that both databases and the application agree), with an offset.
 --
@@ -928,10 +928,16 @@ data ListedUser = ListedUser
 -- backslash in PostgreSQL). So a @%@, a @_@ or a backslash in a word is
 -- replaced by @_@, which matches any one character on both: such a word
 -- finds what it names, and perhaps a few more users.
-loadUserPage :: forall be. (Backend be) => [UserId] -> UserQuery -> Db be (Int, [ListedUser])
-loadUserPage administrators q = do
+loadUserPage :: forall be. (Backend be) => UserQuery -> Db be (Int, [ListedUser])
+loadUserPage q = do
   let wild c = if c `elem` ['%', '_', '\\'] then '_' else c
       patterns = ["%" <> T.map wild w <> "%" | w <- T.words (T.toLower q.search)] :: [Text]
+      -- A user granted the global administer themselves, asked in the
+      -- query rather than with their ids as parameters: there may be more
+      -- administrators than a statement takes parameters.
+      administers :: forall s. S.Users (QExpr be s) -> QExpr be s Bool
+      administers u =
+        Beam.exists_ (filter_ (\g -> g.subject_kind ==. val_ "user" &&. g.subject_id ==. u.id &&. g.permission ==. val_ (globalText Administer)) (all_ wikiDb.global_grants))
       matches :: forall s. S.Users (QExpr be s) -> QExpr be s Bool
       matches u =
         foldr
@@ -939,7 +945,7 @@ loadUserPage administrators q = do
           (val_ True)
           ( [lower_ u.login `like_` val_ p ||. lower_ u.display_name `like_` val_ p | p <- patterns]
               <> [u.disabled ==. val_ True | q.disabled]
-              <> [if null administrators then val_ False else u.id `in_` map (\a -> val_ a.text) administrators | q.administrators]
+              <> [administers u | q.administrators]
           )
   counted <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ matches (all_ wikiDb.users))))
   rows <-

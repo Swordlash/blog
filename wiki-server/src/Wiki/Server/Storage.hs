@@ -2131,9 +2131,9 @@ userPageTx q = do
   checked <- either invalid pure (checkUserQuery q)
   global <- db loadGlobalGrants
   let holding p = [u | GlobalGrant (SubjectUser u) p' <- global, p' == p]
-      administrators = holding Administer
+      administrators = Set.fromList (holding Administer)
       creators = Set.fromList (holding CreateSpaces)
-  (total, listed) <- db (loadUserPage administrators checked)
+  (total, listed) <- db (loadUserPage checked)
   details <- db (loadUsersDetails (map (\l -> l.user.id) listed))
   groups <- sortOn (\g -> (T.toCaseFold g.name, g.id)) <$> db loadGroups
   server <- asks (\x -> x.server)
@@ -2143,7 +2143,7 @@ userPageTx q = do
         let providers = Map.findWithDefault [] l.user.id details.identities
          in UserSummary
               { user = l.user
-              , administrator = l.user.id `elem` administrators
+              , administrator = l.user.id `Set.member` administrators
               , createsSpaces = l.user.id `Set.member` creators
               , disabled = l.disabled
               , hasPassword = l.hasPassword
