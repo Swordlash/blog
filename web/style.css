@@ -5957,6 +5957,55 @@ a.mention {
   color: var(--caution);
 }
 
+/* The list that completes a mention (@codemirror/autocomplete, in
+   web/src/editor.js): a menu like the application's others, each user's
+   display name and then their login, dimmed, and the one Enter or Tab
+   would choose on the accent's tint. The rules name .editor-cm .cm-tooltip
+   to outweigh CodeMirror's own theme, which has colours of its own for
+   light and dark. */
+.editor-cm .cm-tooltip.cm-tooltip-autocomplete {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  overflow: hidden;
+}
+
+.editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul {
+  min-width: 15rem;
+  max-height: 22rem;
+  padding: 0.3rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 0.9rem;
+}
+
+.editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  padding: 0.3rem 0.6rem;
+  border-radius: 5px;
+  line-height: 1.4;
+}
+
+.editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul > li:hover {
+  background: var(--surface);
+}
+
+.editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, var(--background));
+}
+
+.editor-cm .cm-tooltip-autocomplete .cm-completionDetail {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  font-style: normal;
+}
+
 /* The assistant's settings page. */
 .assistant-settings {
   max-width: 46rem;

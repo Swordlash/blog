@@ -17,13 +17,13 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (clickButton, slugs, startWith)
+import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
 import Test.Browser.Text (editorSelection, editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.State (MemState (..), insertUser)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Attachment (Attachment (name), FileName (..))
@@ -31,6 +31,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
 import Wiki.Core.Space (Space (id))
+import Wiki.Core.User (Login (..), User (..))
 
 -- The page has no file dialog the harness can answer, so a test hands the
 -- editor a file the way the browser would: test/jsbits/test-files.js.
@@ -598,8 +599,71 @@ spec m = do
     find ui ".page-view .actions a[href$='/edit/']" >>= click
     find ui ".editor-side-by-side input" >>= \box -> getProperty box "checked" `shouldReturn` "true"
     find ui ".editor-preview" >>= shouldBeVisible
+
+  it "completes a mention with the users whose names start with what is typed, but not in code or a link" $ runPage $ do
+    ui <- startChanged m withMentionable (Just "user-editor") helloEditor
+    text <- editorText ui
+    clear text
+    typeText text "Ask @an"
+    -- Anna by her login and Annabel by her display name, display name
+    -- first and the login after it, in the order of their display names.
+    shown <- listShown ui
+    (findAllIn shown ".cm-completionLabel" >>= traverse textContent) `shouldReturn` ["Anna Nowak", "Annabel Smith"]
+    (findAllIn shown ".cm-completionDetail" >>= traverse textContent) `shouldReturn` ["@anna", "@jsmith"]
+    press "Enter"
+    markdown ui `shouldReturn` "Ask @anna "
+    eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
+    -- The arrows choose another, and Tab takes it rather than indenting.
+    typeText text "and @AN"
+    _ <- listShown ui
+    press "ArrowDown"
+    press "Tab"
+    markdown ui `shouldReturn` "Ask @anna and @jsmith "
+    -- Escape closes the list and leaves the text as typed.
+    typeText text "or @an"
+    _ <- find ui ".cm-tooltip-autocomplete"
+    press "Escape"
+    eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
+    markdown ui `shouldReturn` "Ask @anna and @jsmith or @an"
+    -- Not in a code fence, where a mention does not count.
+    clear text
+    typeText text "```\n@an"
+    noCompletionFor ui
+    -- Nor in a link's text: typed between the brackets of one.
+    clear text
+    typeText text "[see ](https://example.org)"
+    press "Home"
+    replicateM_ 5 (press "ArrowRight")
+    traverse_ press ["@", "a", "n"]
+    markdown ui `shouldReturn` "[see @an](https://example.org)"
+    noCompletionFor ui
+    -- After the link, where a mention counts again, it opens.
+    press "End"
+    traverse_ press [" ", "@", "a", "n"]
+    _ <- find ui ".cm-tooltip-autocomplete"
+    pass
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+    -- Two users whose names start with "an", one by login and one by
+    -- display name, and one who does not.
+    withMentionable =
+      insertUser User {id = UserId "user-anna", login = Login "anna", displayName = "Anna Nowak"}
+        . insertUser User {id = UserId "user-jsmith", login = Login "jsmith", displayName = "Annabel Smith"}
+        . insertUser User {id = UserId "user-bob", login = Login "bob", displayName = "Bob Banner"}
+    -- The list, once it can be chosen from: the library takes Enter and
+    -- Tab only after the list has been shown for a moment (75 ms, its
+    -- interactionDelay), so that a key pressed just as it opens is the
+    -- text's.
+    listShown ui = do
+      shown <- find ui ".cm-tooltip-autocomplete"
+      unsafeIOToPageM (threadDelay 200_000)
+      pure shown
+    -- No list opens: CodeMirror asks after a moment (its own wait, about a
+    -- tenth of a second), and the answer is at once in the demo, so a
+    -- list that were to open would be there well within half a second.
+    noCompletionFor ui = do
+      unsafeIOToPageM (threadDelay 500_000)
+      length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
 
 -- | Turn the side by side preview on, so that the preview follows the
 -- typing beside the Markdown.
