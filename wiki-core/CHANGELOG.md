@@ -14,7 +14,8 @@ kinds an administrator gives a label, a colour and an icon (`BoxKind`,
 custom properties a box of such a kind carries (`boxStyle`). The
 renderer's `Options` gain `boxes`; a box of another kind than the five
 is `<div class="alert alert-<name>">`, titled with its name capitalised.
-The search text holds a box's title.
+The search text holds a box's title. The activity log has the actions
+`guide.install` and `guide.update`.
 
 `Wiki.Core.Markdown.Ast` gains `mentionsWhole`: whether a page that says
 `@login` mentions that login and nothing else, which the editor's completion of mentions

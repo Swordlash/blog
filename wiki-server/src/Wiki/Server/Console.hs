@@ -32,6 +32,11 @@
 -- 'Wiki.Server.Storage.Backup.restore'): it restores a backup as a data
 -- directory's database, into a directory no server has open.
 --
+-- @wiki-server guide install@ and @guide update@ are console commands too
+-- ('runGuide', "Wiki.Server.Guide"): the first puts the guide's space back
+-- where it was deleted, and the second gives the guide's pages this
+-- release's text, which the deploy runs after it starts a new server.
+--
 -- @wiki-server oidc check@ is also a console command ('runOidcCheck'): it
 -- asks the providers the administration has set (WP3.6, WP4.4) how to sign
 -- in, before anyone tries, and prints the redirect URI to register with
@@ -51,6 +56,12 @@ module Wiki.Server.Console
   , oidcCheckParser
   , runOidcCheck
 
+    -- * The guide
+  , GuideCommand (..)
+  , GuideAction (..)
+  , guideParser
+  , runGuide
+
     -- * Backing up and restoring
   , RestoreCommand (..)
   , restoreParser
@@ -66,17 +77,19 @@ import Options.Applicative
 import Protolude
 import System.IO (hFlush, hGetEcho, hIsTerminalDevice, hSetEcho)
 import Wiki.Api.Account (Account (..))
+import Wiki.Api.Import (ImportSummary (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor, removeUser))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
+import Wiki.Server.Guide (installGuide, updateGuide, updateLines)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Secret (Kept, revealed)
 import Wiki.Server.Storage (Place (..), Storage, Who (..), readServerSettings, runStoredWikiFrom, withStorageAside)
-import Wiki.Server.Storage.Audit (consoleAddress)
+import Wiki.Server.Storage.Audit (consoleAddress, operator)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 import Wiki.Server.Storage.Migrate (OldSchema)
 
@@ -305,6 +318,40 @@ checkProviders c kept = do
             , [label, redirect, secretLine] <> lines'
             )
         pure (all fst reports, concatMap snd reports)
+
+--------------------------------------------------------------------------------
+-- The guide
+
+-- | @wiki-server guide (install | update) --data DIR@, with the options
+-- that name the database.
+data GuideCommand = GuideCommand
+  { place :: PlaceOptions
+  , action :: GuideAction
+  }
+  deriving stock (Eq, Show)
+
+data GuideAction
+  = -- | Install the guide where the wiki has none.
+    InstallGuide
+  | -- | Give the guide's pages this release's text.
+    UpdateGuide
+  deriving stock (Eq, Show)
+
+-- | The options of @wiki-server guide@.
+guideParser :: Parser GuideCommand
+guideParser =
+  hsubparser
+    ( command "install" (info (GuideCommand <$> placeOptions <*> pure InstallGuide) (progDesc "Put the guide, the public space Guide at /guide, back into a wiki that has none"))
+        <> command "update" (info (GuideCommand <$> placeOptions <*> pure UpdateGuide) (progDesc "Give each page of the guide whose text differs from this version's that text, as a new version; a page renamed or moved is left alone"))
+    )
+
+-- | Run a @guide@ command, as the server's operator. The result is the
+-- lines to show, or why it could not be done.
+runGuide :: GuideCommand -> IO (Either Text [Text])
+runGuide g = (`onPlace` g.place) $ \at -> withStorageAside at $ \st -> case g.action of
+  InstallGuide ->
+    installGuide st operator consoleAddress <&> fmap (\s -> ["Installed the guide at /guide: " <> show s.pagesCreated <> " pages and " <> show s.attachments <> " attachments."])
+  UpdateGuide -> Right . updateLines <$> updateGuide st operator consoleAddress
 
 --------------------------------------------------------------------------------
 -- Restoring a backup

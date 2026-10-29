@@ -8,6 +8,7 @@ import Test.Backend.Persist qualified as Persist
 import Test.Blog qualified as Blog
 import Test.Demo qualified as Demo
 import Test.Export qualified as Export
+import Test.Guide qualified as Guide
 import Test.Hspec (hspec)
 import Test.Hydrate qualified as Hydrate
 import Test.Import qualified as Import
@@ -30,6 +31,7 @@ main = hspec $ do
   Http.spec
   Persist.spec
   Demo.spec
+  Guide.spec
   Export.spec
   Route.spec
   Link.spec

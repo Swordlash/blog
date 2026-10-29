@@ -6,6 +6,7 @@
 -- > wiki-server restore BACKUP --data DIR [DATABASE] [--attachments DIR]
 -- > wiki-server users (list | add | password | admin | disable) --data DIR [DATABASE] …
 -- > wiki-server oidc check --data DIR [DATABASE] [NAME]
+-- > wiki-server guide (install | update) --data DIR [DATABASE]
 -- > wiki-server --version
 --
 -- DATABASE is @--database postgres:\/\/USER\@HOST\/NAME
@@ -23,14 +24,16 @@
 -- users and their passwords ("Wiki.Server.Console"), which is how the first
 -- administrator is created. @oidc check@ asks the providers the
 -- administration has set how to sign in, and prints the redirect URI to
--- register with each.
+-- register with each. @guide install@ puts the guide, the wiki's
+-- documentation as a public space, back into a wiki that has none, and
+-- @guide update@ gives its pages this version's text ("Wiki.Server.Guide").
 module Main (main) where
 
 import Options.Applicative
 import Protolude
 import Sel (secureMain)
 import Wiki.Server (ServerError (..), serve)
-import Wiki.Server.Console (BackupOutcome (..), OidcCheck, RestoreCommand, Users, oidcCheckParser, readPassword, restoreParser, runBackup, runOidcCheck, runRestore, runUsers, usersParser)
+import Wiki.Server.Console (BackupOutcome (..), GuideCommand, OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runGuide, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (defaultKeep)
 import Wiki.Server.Version (serverVersion)
@@ -47,6 +50,8 @@ data Command
     Users Users
   | -- | Check the providers to sign in with.
     Oidc OidcCheck
+  | -- | Install the guide, or bring it up to this version.
+    Guide GuideCommand
 
 commands :: ParserInfo Command
 commands =
@@ -57,6 +62,7 @@ commands =
               <> command "restore" (info (Restore <$> restoreParser) (progDesc "Restore a backup into a data directory no server is running on"))
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
+              <> command "guide" (info (Guide <$> guideParser) (progDesc "Install the guide, the wiki's documentation, or give its pages this version's text"))
           )
           <|> (Serve <$> serveOptions)
       )
@@ -97,6 +103,12 @@ main =
             exitWith (ExitFailure 1)
       Users u ->
         runUsers readPassword u >>= \case
+          Right lines' -> traverse_ putText lines'
+          Left why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      Guide g ->
+        runGuide g >>= \case
           Right lines' -> traverse_ putText lines'
           Left why -> do
             putErrText ("wiki-server: " <> why)

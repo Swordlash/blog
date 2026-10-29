@@ -276,6 +276,7 @@ serverStatus =
     , lastBackup = Just time
     , connections = 2
     , errors = [LoggedError {at = later, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]
+    , guide = True
     }
 
 -- | A page of the audit log, as the administration's Activity reads it.

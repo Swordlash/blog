@@ -84,6 +84,7 @@ library
       Wiki.App.Backend.Notifications
       Wiki.App.Browser
       Wiki.App.Demo
+      Wiki.App.Guide
       Wiki.App.DemoUsers
       Wiki.App.Head
       Wiki.App.Import
@@ -280,6 +281,7 @@ test-suite wiki-app-test
         Test.Blog
         Test.Counting
         Test.Demo
+        Test.Guide
         Test.Export
         Test.Hydrate
         Test.Import

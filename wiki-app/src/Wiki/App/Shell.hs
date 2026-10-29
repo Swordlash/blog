@@ -256,6 +256,7 @@ data ViewSlot
   | ServerSlot
   | UsersSlot
   | GroupsSlot
+  | StatusSlot
   deriving stock (Eq, Ord)
 
 -- | 'PartSlot' is the index of a child under the label "part". The output
@@ -267,7 +268,6 @@ data PartSlot
   | DemoAccountSlot
   | DemoNotificationsSlot
   | ActivitySlot
-  | StatusSlot
   | BackupsSlot
   | VerifyEmailSlot
   | UnsubscribeSlot
@@ -694,7 +694,7 @@ component =
     -- the backups' view and the wiki's data as one file.
     sectionView :: State m -> AdminSection -> H.ComponentHTML Action Slots m
     sectionView st = \case
-      R.Overview -> HH.slot_ "part" StatusSlot StatusView.component StatusView.Input {context = ctx}
+      R.Overview -> HH.slot "view" StatusSlot StatusView.component StatusView.Input {context = ctx} FromView
       R.Users listing -> HH.slot "view" UsersSlot UsersView.component UsersView.Input {context = ctx, listing} FromView
       R.Groups -> HH.slot "view" GroupsSlot GroupsView.component GroupsView.Input {context = ctx} FromView
       R.Permissions -> HH.slot "view" AccessSlot AccessView.component AccessView.Input {context = ctx} FromView

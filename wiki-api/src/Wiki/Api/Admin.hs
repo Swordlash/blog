@@ -89,6 +89,10 @@ data ServerStatus = ServerStatus
   , errors :: [LoggedError]
   -- ^ The last errors the server logged since it started, newest first, at
   -- most twenty (WP4.10 of docs/PLAN.md). They are kept in memory only.
+  , guide :: Bool
+  -- ^ Whether the wiki has its guide, the space at @/guide@ (WP5.29 of
+  -- docs/PLAN.md). Where it has none, the Overview offers to install it
+  -- (@POST \/api\/v1\/admin\/guide@).
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

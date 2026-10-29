@@ -76,6 +76,7 @@ library
         Wiki.Server.Export.Document
         Wiki.Server.Health
         Wiki.Server.Feed
+        Wiki.Server.Guide
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
@@ -283,6 +284,7 @@ test-suite wiki-server-test
         Test.Server.Fixture
         Test.Server.Http
         Test.Server.Hygiene
+        Test.Server.Guide
         Test.Server.Import
         Test.Server.Mail
         Test.Server.Metrics

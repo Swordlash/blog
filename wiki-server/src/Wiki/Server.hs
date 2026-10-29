@@ -31,6 +31,7 @@ import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
 import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
+import Wiki.Api.Import (ImportSummary (..))
 import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Core.Url (Url (..))
@@ -41,6 +42,7 @@ import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Export (newExports)
 import Wiki.Server.Feed (newFeedCache)
+import Wiki.Server.Guide (installOnFirstStart)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, keepingErrors, logWith, newErrorRing, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
@@ -180,6 +182,14 @@ withServerUsing given raw sendMail action = do
         logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
       for_ configured.providers $ \p ->
         logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", (redirectUri u p.name).text) | Just u <- [configured.publicUrl]])
+      -- A first start, with no spaces, installs the guide (WP5.29 of
+      -- docs/PLAN.md), before anyone can ask for a page.
+      when options.guide $
+        installOnFirstStart storage
+          >>= traverse_
+            ( \made ->
+                logWith logger Info [("event", "guide-installed"), ("pages", show made.pagesCreated), ("attachments", show made.attachments)]
+            )
       stopping <- newIORef False
       -- The thread that backs the server up, which does nothing until the
       -- administration turns backups on, and the one that mails

@@ -125,6 +125,8 @@ actionText a = Map.findWithDefault a a actions
         , ("invitation.revoke", "Revoked an invitation")
         , ("invitation.accept", "Accepted an invitation")
         , ("wiki.import", "Imported a wiki")
+        , ("guide.install", "Installed the guide")
+        , ("guide.update", "Updated the guide's pages")
         ]
 
 -- | @{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind",

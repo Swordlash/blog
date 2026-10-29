@@ -123,6 +123,8 @@ import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settin
 import Wiki.Server.Events (Hub, openConnections)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Feed (FeedCache)
+import Wiki.Server.Guide (guideInstalled)
+import Wiki.Server.Guide qualified as Guide
 import Wiki.Server.Import (applyImport, planImport, readUploadFile)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
@@ -540,6 +542,10 @@ handlers env caller =
     , admin =
         AdminApi
           { status = administrator >> liftIO (statusOfServer env)
+          , installGuide = do
+              administrator
+              actor <- liftIO (actorOf env.storage who)
+              liftIO (Guide.installGuide env.storage actor caller.address) >>= either (refuse . ApiError.Conflict) (const (pure NoContent))
           , activity = \actor offset before -> wiki (activity ActivityQuery {actor, offset = fromMaybe 0 offset, before})
           , -- The storage checks who may: these are the administration's
             -- own operations ("Wiki.App.Backend.Admin").
@@ -1155,6 +1161,7 @@ statusOfServer env = do
   schemaVersion <- schemaVersionOf env.storage
   connections <- openConnections env.events
   errors <- recentErrors env.errors
+  guide <- guideInstalled env.storage
   case counts of
     [spaces, pages, attachments, users] ->
       pure
@@ -1171,5 +1178,6 @@ statusOfServer env = do
           , lastBackup = lastMay files >>= backupTime
           , connections
           , errors
+          , guide
           }
     _ -> panic "four counts were asked for"

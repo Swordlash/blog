@@ -191,6 +191,9 @@ data ServeOptions = ServeOptions
   -- ('Wiki.Api.ContentPolicy.parseAssistantHost'). The page's Content
   -- Security Policy allows these and those of the administration's
   -- "Server" section together.
+  , guide :: Bool
+  -- ^ Whether a first start, with no spaces, installs the guide
+  -- ("Wiki.Server.Guide"); @--no-guide@ says not to.
   }
   deriving stock (Eq, Show)
 
@@ -210,6 +213,7 @@ defaultServeOptions dataDir =
     , maxImportSize = defaultMaxImportSize
     , rclone = "rclone"
     , assistantHosts = []
+    , guide = True
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
@@ -233,6 +237,7 @@ serveOptions = do
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
   rclone <- strOption (long "rclone" <> metavar "PATH" <> value "rclone" <> showDefault <> help "The rclone program, for backups the administration copies to an rclone remote")
   assistantHosts <- concat <$> many (option hosts (long "assistant-hosts" <> metavar "ADDRESSES" <> help "Addresses the writing assistant may reach from the browser besides Anthropic's and OpenAI's APIs, separated by commas (https://openrouter.ai,http://localhost:11434); the administration's Server section adds more"))
+  noGuide <- switch (long "no-guide" <> help "Do not install the guide (a public space Guide, the wiki's documentation) when the server first starts with no spaces")
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
   -- The options of earlier versions that the administration's "Server"
   -- section replaced: refused, with where they went, rather than left to
@@ -253,6 +258,7 @@ serveOptions = do
       , maxImportSize = maxImportMb * 1024 * 1024
       , rclone
       , assistantHosts
+      , guide = not noGuide
       }
   where
     address = eitherReader (first toS . parseListen . toS)

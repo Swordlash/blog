@@ -392,7 +392,13 @@ data ArchiveApi form mode = ArchiveApi
 data AdminApi mode = AdminApi
   { status :: mode :- "status" :> Get '[JSON] ServerStatus
   -- ^ The server's version, data directory and counts, its schema
-  -- version, the newest backup, and the last errors it logged.
+  -- version, the newest backup, the last errors it logged, and whether the
+  -- wiki has its guide.
+  , installGuide :: mode :- "guide" :> PostNoContent
+  -- ^ @installGuide@: put the guide, the public space at @/guide@ that
+  -- holds the wiki's documentation, into the wiki ("Wiki.Server.Guide").
+  -- A wiki that has a space at @/guide@ already is
+  -- 'Wiki.Api.Error.Conflict'.
   , activity :: mode :- "activity" :> QueryParam "actor" UserId :> QueryParam "offset" Int :> QueryParam "before" Text :> Get '[JSON] Activity
   -- ^ @activity@: a page of the audit log ("Wiki.Api.Activity"), newest
   -- first, starting after the entry @before@ names, or else at @offset@ (0

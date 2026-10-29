@@ -348,6 +348,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   -- sections say so.
   activity _ = query activityIn
   serverStatus = query serverStatusIn
+  installGuide = query (\st -> serverStatusIn st >> Left (Invalid "The demo's guide is its Docs space."))
 
 -- | A page's comments, on the same wiki, saved like every other write
 -- (each page's threads are a record of "Wiki.App.Backend.Mem.Persist").

@@ -75,6 +75,13 @@ rules = describe "a configuration" $ do
       Success o -> checkOptions o `shouldSatisfy` isRight
       _ -> expectationFailure "--listen 0.0.0.0:8080 was not taken"
 
+  it "installs the guide on a first start unless told --no-guide" $ do
+    let parsed = execParserPure defaultPrefs (info serveOptions mempty)
+    case (parsed ["--data", "data"], parsed ["--data", "data", "--no-guide"]) of
+      (Success with, Success without) -> (with.guide, without.guide) `shouldBe` (True, False)
+      _ -> expectationFailure "--no-guide was not taken"
+    options.guide `shouldBe` True
+
   it "has no options for mail, the public address or providers, which the administration sets, and says so" $ do
     let parsed = execParserPure defaultPrefs (info serveOptions mempty)
     for_ [["--smtp-host", "mail.example.org"], ["--public-url", "https://wiki.example.org/"], ["--oidc", "google=google,id"], ["--smtp-from", "w@example.org"]] $ \args ->

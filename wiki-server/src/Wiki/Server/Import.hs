@@ -63,6 +63,7 @@ module Wiki.Server.Import
     -- * Carrying it out
   , planImport
   , applyImport
+  , mergeArchive
   )
 where
 
@@ -243,13 +244,7 @@ data Progress = Progress
 -- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
 applyImport st actor address a choices = writing st $ do
-  matches <- matchIn a
-  people <- loadUsers
-  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
-      discussions = threadsAmong (administratorUser : people) a
-  done <- foldlM (importSpace (attachmentsDir (storageDataDir st)) a discussions choices) start matches
-  restoreAudit a.audit
-  let s = done.summary
+  (s, comments) <- mergeArchive (attachmentsDir (storageDataDir st)) a choices
   insertAudit
     Recorded
       { actor
@@ -264,12 +259,29 @@ applyImport st actor address a choices = writing st $ do
           , ("pages kept", show s.pagesKept)
           , ("pages skipped", show s.pagesSkipped)
           , ("attachments", show s.attachments)
-          , ("comments", show done.commentsBrought)
+          , ("comments", show comments)
           , ("log entries", show (length a.audit))
           ]
       , address
       }
   pure s
+
+-- | Import an archive with these choices, inside a transaction the caller
+-- holds, with the attachments' bytes stored in this directory. The
+-- archive's audit log is merged into the wiki's; the import itself is not
+-- recorded, which is the caller's to do. The result is what it did, and
+-- how many comments came in. The server's guide ("Wiki.Server.Guide") is
+-- installed this way, in a transaction that first checks the wiki has no
+-- guide.
+mergeArchive :: (Backend be) => FilePath -> Archive -> ImportChoices -> Db be (ImportSummary, Int)
+mergeArchive blobs a choices = do
+  matches <- matchIn a
+  people <- loadUsers
+  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
+      discussions = threadsAmong (administratorUser : people) a
+  done <- foldlM (importSpace blobs a discussions choices) start matches
+  restoreAudit a.audit
+  pure (done.summary, done.commentsBrought)
 
 importSpace :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> Db be Progress
 importSpace blobs a discussions choices progress m

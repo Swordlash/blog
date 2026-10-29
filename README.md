@@ -948,6 +948,19 @@ to the demo, keeping `data/`.
   `wiki-server users add` (above). Invitations, "Create account" in an open wiki,
   sign-in providers, and a password or "Send a password link…" for a user who
   exists already work as before. A change of the setting is in "Activity".
+- **The guide.** A server that starts with no spaces makes one, Guide, at
+  `/guide`: public, so everyone the wiki is open to reads it, and edited by
+  administrators only. It holds the wiki's documentation, the demo's Docs but
+  for its tour: a tour of the server's own (signing in, your spaces, editing,
+  the assistant, where the administration is), the Markdown guide and its pages
+  on diagrams, mathematics and presentations, with their attachments.
+  `--no-guide` starts without it. `wiki-server guide install --data <dir>/data`
+  puts it back once deleted, as the administration's "Overview" does with
+  "Install the guide"; `wiki-server guide update --data <dir>/data` gives each
+  of its pages whose text differs from the running version's that text, as a new
+  version (the page's history keeps what was there), and leaves alone a page an
+  administrator renamed or moved, saying so. `deploy-local.sh --server` runs the
+  update after it starts a new server, so the guide follows the wiki's version.
 - **The server's settings: the public address, mail and providers.** These are
   set in the administration's "Server" section and nowhere else: on the admin
   listener (`http://127.0.0.1:8081/admin/admin/`, below), which serves it before

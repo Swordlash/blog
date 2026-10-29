@@ -54,6 +54,10 @@
 #      it found on PATH; or wiki-server, with --data <dir>/data, --listen on the
 #      address and port, its admin listener on 127.0.0.1, and --secure-cookies
 #      over HTTPS), enable it and (re)start it, and check that it answers.
+#      With --server, then bring the guide's pages up to the new version
+#      (`wiki-server guide update`): a fresh wiki gets the guide, the space
+#      Guide, as the server first starts, and each deploy after gives its
+#      pages the text the new version has.
 #   4. HTTPS (the default): the server listens on 127.0.0.1 only, and
 #      `tailscale serve --bg http://127.0.0.1:<port>` serves it to the tailnet
 #      (never to the internet: no Funnel) at https://<machine>.<tailnet>.ts.net/,
@@ -931,6 +935,19 @@ if [ "$mode" = server ]; then
     say "its admin listener answers on http://127.0.0.1:$admin_port/admin/"
   else
     warn "its admin listener does not answer on http://127.0.0.1:$admin_port/admin/; see journalctl --user -u $name"
+  fi
+  # The guide, the wiki's own documentation as the space Guide, follows the
+  # server's version: each of its pages whose text this version changed gets
+  # the new text as a new version (wiki-server guide update). The server is
+  # running: the console waits for its writes. A failure leaves the wiki as
+  # it was, and the deployment stands.
+  say "bringing the guide's pages up to this version"
+  if [ "$db" = postgres ]; then
+    "$dir/bin/wiki-server" guide update --data "$dir/data" --database "$(db_url)" --database-password-file "$(pg_dir)/db-password" ||
+      warn "the guide's pages could not be updated (see above); the wiki is served as it was"
+  else
+    "$dir/bin/wiki-server" guide update --data "$dir/data" --sqlite "$dir/data/wiki.sqlite" ||
+      warn "the guide's pages could not be updated (see above); the wiki is served as it was"
   fi
 fi
 

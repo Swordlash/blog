@@ -1138,6 +1138,7 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   -- answers for it ("Wiki.Server.Api").
   activity q = run Reads (requireAdministrator >> db (loadActivity q))
   serverStatus = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API says how the server is."))
+  installGuide = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API and its console install the guide (Wiki.Server.Guide)."))
 
 -- | The backups, for an administrator: their settings (with only whether
 -- the configuration is set, not the configuration), the last backup made

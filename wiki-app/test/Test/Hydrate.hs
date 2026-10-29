@@ -348,6 +348,7 @@ apiOver providers st = do
         , lastBackup = Just demoNow
         , connections = 0
         , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
+        , guide = True
         }
     answerOf :: (ToJSON a) => Either WikiError a -> Response
     answerOf = \case
