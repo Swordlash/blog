@@ -5,8 +5,9 @@
 -- brings, and their bytes; CodeMirror, put in place of the textarea; the
 -- text and selection, read and written as an edit the browser can undo;
 -- which of the editor's keys was pressed; the browser's warning before a
--- reload or a close loses unsaved changes; and the writing assistant's
--- edits, as changes the author accepts or rejects. See
+-- reload or a close loses unsaved changes; the writing assistant's
+-- edits, as changes the author accepts or rejects; and the questions
+-- CodeMirror asks to complete a mention, with their answers. See
 -- @jsbits/editor.js@, and @web/src/editor.js@ for CodeMirror.
 --
 -- Natively there is no browser: no event brings a file, no key is one of
@@ -43,6 +44,10 @@ module Wiki.App.Editor.Browser
   , proposeEdit
   , settleChanges
 
+    -- * Mentions
+  , mentionAsked
+  , answerMention
+
     -- * Leaving the page
   , guardUnload
   )
@@ -62,6 +67,7 @@ import Web.Event.Event (Event (..))
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Replacement (..), plan, propose, settle)
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
+import Wiki.Core.User (Login (..), User (..))
 
 -- Reading a file waits for the browser, so that binding is a safe import,
 -- which waits for the promise; the rest return at once. The key, and a
@@ -97,6 +103,8 @@ $( browserJS
      , ("js_changes", "wiki_editor_changes", Unsafe, [t|Element -> IO JSText|])
      , ("js_propose", "wiki_editor_propose", Unsafe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
      , ("js_settle", "wiki_editor_settle", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_mention_asked", "wiki_editor_mention_asked", Unsafe, [t|Event -> JSText|])
+     , ("js_mentioned", "wiki_editor_mentioned", Unsafe, [t|Element -> Int -> JSText -> IO ()|])
      ]
  )
 
@@ -317,6 +325,26 @@ instance FromJSON Tracked where
 
 jsonText :: (ToJSON a) => a -> JSText
 jsonText = toJSText . decodeUtf8 . BSL.toStrict . encode
+
+-- | The question a @wiki-mention@ event asks: its number, and the letters
+-- typed after an \@, which the users a completion offers start with.
+-- CodeMirror asks it a moment after the letters are typed
+-- (@web/src/editor.js@), and waits for 'answerMention'. Pure, since the
+-- event does not change.
+mentionAsked :: Event -> Maybe (Int, Text)
+mentionAsked event = case T.breakOn ":" (fromJSText (js_mention_asked event)) of
+  (i, letters) | Just n <- readMaybe i, n > 0 -> Just (n, T.drop 1 letters)
+  _ -> Nothing
+
+-- | Answer the question with this number: the users a mention that starts
+-- with its letters may name, display name first, or 'Nothing' when they
+-- could not be found. CodeMirror shows them as a list to choose from, and
+-- keeps the answer for the same letters until the editor goes; it does not
+-- keep 'Nothing', and asks again.
+answerMention :: (MonadIO m) => Element -> Int -> Maybe [User] -> m ()
+answerMention host i people =
+  liftIO . js_mentioned host i $
+    maybe (toJSText "") (\us -> jsonText [object ["login" .= u.login.text, "name" .= u.displayName] | u <- us]) people
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.

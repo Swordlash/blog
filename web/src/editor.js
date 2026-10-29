@@ -2,9 +2,9 @@
 // will look while it is typed (emphasis in italics, strong in bold, headings
 // larger, their markers kept but dimmed; code in its own background, fenced
 // code highlighted by highlight.js as the page will be; links, quotes and
-// lists set off), and nothing else of CodeMirror's: no line numbers, no
-// gutter, no completion, no keys of its own but moving, selecting, deleting
-// and undoing.
+// lists set off), and nothing else of CodeMirror's but the completion of
+// mentions: no line numbers, no gutter, no keys of its own but moving,
+// selecting, deleting, undoing and choosing a completion.
 //
 // web/bundle.sh bundles this into islands/editor.js, which islands.js
 // imports the first time the editor asks for it (wikiIslands.attachEditor),
@@ -41,11 +41,18 @@
 //   as it is typed around them. Undoing an edit takes its change away with
 //   it, and redoing it brings both back; accepting is no edit, so an undo
 //   after it undoes the edit itself, as usual.
+// - an @ followed by letters, where a mention counts, opens a list of the
+//   users whose login or display name starts with the letters
+//   (@codemirror/autocomplete, see mentions below). The names come from the
+//   backend through the component: a "wiki-mention" event on the host asks
+//   for them ({id, letters}), and the component answers through
+//   wikiEditor.mentioned(id, people).
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { acceptCompletion, autocompletion, ifNotIn } from "@codemirror/autocomplete";
+import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
 import { LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
@@ -289,6 +296,90 @@ const tracking = (host) => {
   return { field, extensions: [field, inverted] };
 };
 
+// The completion of mentions. Wiki.Core.Markdown.Mention says what a
+// mention is: an @ that starts a word (not after a letter, a digit, a mark
+// or one of . _ - + / @), followed by a login's characters (letters,
+// digits, marks, _ . -). Wiki.Core.Markdown.Ast takes none in code, links,
+// embeds or HTML: the syntax tree's nodes for them are in notMentions, and
+// ifNotIn leaves the completion out where the cursor is inside one.
+const notMentions = [
+  "InlineCode",
+  "FencedCode",
+  "CodeBlock",
+  "Link",
+  "Image",
+  "Autolink",
+  "URL",
+  "LinkReference",
+  "HTMLTag",
+  "HTMLBlock",
+  "Comment",
+  "CommentBlock",
+  "ProcessingInstruction",
+  "ProcessingInstructionBlock",
+];
+const typedMention = /@[\p{L}\p{N}\p{M}_.-]+$/u;
+const inWord = /[\p{L}\p{N}\p{M}._+\/@-]/u;
+
+// Each question to the component has its own number, for every editor of
+// the page, so that an answer meant for an editor that has gone (the page
+// was loaded again) is not taken for an answer to a new one.
+let questions = 0;
+
+// The completion source of one editor, and how the component answers it.
+// The answers are kept by the letters asked about (lowered), for as long as
+// the editor lives, so that typing a letter and deleting it asks nothing
+// again. A question that failed (null: the backend could not be reached)
+// is not kept, and is asked again the next time. The library waits a
+// moment after the last key before it asks the source (its
+// activateOnTypingDelay), so a name typed quickly is asked about once.
+const mentions = (host) => {
+  const answers = new Map();
+  const waiting = new Map();
+  const ask = (letters) => {
+    const key = letters.toLowerCase();
+    let answer = answers.get(key);
+    if (answer === undefined) {
+      const id = ++questions;
+      answer = new Promise((resolve) => waiting.set(id, resolve));
+      answers.set(key, answer);
+      answer.then((people) => {
+        if (people === null) answers.delete(key);
+      });
+      host.dispatchEvent(new CustomEvent("wiki-mention", { detail: { id, letters } }));
+    }
+    return answer;
+  };
+  const source = ifNotIn(notMentions, async (context) => {
+    const typed = context.matchBefore(typedMention);
+    if (typed === null) return null;
+    if (typed.from > 0 && inWord.test(context.state.sliceDoc(typed.from - 1, typed.from))) return null;
+    const people = await ask(typed.text.slice(1));
+    if (people === null || people.length === 0) return null;
+    return {
+      from: typed.from,
+      // The server has chosen and ordered them: the library is not to
+      // filter them again by the display name it shows.
+      filter: false,
+      options: people.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: `@${person.login} ` })),
+    };
+  });
+  return {
+    extension: [
+      autocompletion({ override: [source], icons: false }),
+      // Tab chooses as Enter does. The library prevents the key's default
+      // when it takes it, which tells the component's keydown (indent) to
+      // leave the key alone (wiki-app/jsbits/editor.js).
+      Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
+    ],
+    answer: (id, people) => {
+      const resolve = waiting.get(id);
+      waiting.delete(id);
+      resolve?.(people);
+    },
+  };
+};
+
 // The editors attached, so that one whose host has left the page (the
 // editor closed without its finalizer reaching it) is let go of: a view
 // listens on the window, which would keep it alive.
@@ -314,6 +405,7 @@ export function attach(textarea, host, original, codeTokens) {
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
+  const completion = mentions(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
   let toldSelection = "";
@@ -328,8 +420,11 @@ export function attach(textarea, host, original, codeTokens) {
       EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
       history(),
       changes.extensions,
-      // Enter is a line break and nothing more, as in the textarea; Tab and
-      // the toolbar's shortcuts are the component's (the form's keydown).
+      completion.extension,
+      // Enter is a line break and nothing more, as in the textarea, except
+      // while the completion's list is open, when it chooses (the
+      // completion's keys come first); Tab and the toolbar's shortcuts are
+      // the component's (the form's keydown).
       keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...standardKeymap]),
       EditorView.lineWrapping,
       new LanguageSupport(markdownLanguage),
@@ -402,6 +497,9 @@ export function attach(textarea, host, original, codeTokens) {
       view.focus();
     },
     focus: () => view.focus(),
+    // The component's answer to the question `id` about a mention: the
+    // users, as [{login, name}], or null when they could not be found.
+    mentioned: (id, people) => completion.answer(id, people),
     // The tracked changes, as {id, from, to, removed}, in UTF-16 units.
     changes: () => view.state.field(changes.field).map((change) => ({ ...change })),
     // The assistant's edit: from..to replaced with `insert`, tracked as the

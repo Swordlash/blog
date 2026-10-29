@@ -10,6 +10,10 @@
 // tells of the selection, of how many changes are left and of a decision
 // made on one by events on the host, which these read.
 //
+// So does the completion of mentions: CodeMirror asks which users a
+// mention may name by an event on the host, which these read, and is
+// answered through the host's CodeMirror.
+//
 // The editor's text is the textarea the component renders until CodeMirror
 // has taken its place (web/src/editor.js, through the page's islands.js), in
 // the element just before it, the host, which is what the component holds
@@ -194,9 +198,12 @@ function wiki_editor_write(host, text, start, end) {
 // Saving, the preview and Escape are the form's, wherever the focus is in
 // it; the rest are the text's (the textarea's, or CodeMirror's content). Shift+7 and Shift+8 are read by the key's
 // place (its code), since the character they type differs between layouts,
-// as is P with Alt, which types a character of its own on a Mac.
+// as is P with Alt, which types a character of its own on a Mac. A key
+// CodeMirror has already acted on, and prevented the default of, is none
+// of the form's: Tab, Enter and Escape in the list of a mention's
+// completion choose or close it, and do not indent or close a menu too.
 function wiki_editor_key(event) {
-  if (event.isComposing) return "";
+  if (event.isComposing || event.defaultPrevented) return "";
   const command = event.ctrlKey || event.metaKey;
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (command && !event.altKey && !event.shiftKey && key === "s") return "save";
@@ -320,4 +327,16 @@ function wiki_editor_settle(host, ids, replacements) {
     JSON.parse(ids),
     JSON.parse(replacements).map((r) => ({ from: wikiUnits(text, r.from), to: wikiUnits(text, r.to), insert: r.text })),
   );
+}
+
+// The question a "wiki-mention" event asks, as "<id>:<letters>": which users
+// a mention that starts with the letters may name (web/src/editor.js).
+function wiki_editor_mention_asked(event) {
+  return `${Number(event.detail?.id ?? 0)}:${String(event.detail?.letters ?? "")}`;
+}
+
+// The answer to the question `id`: `people` is JSON, [{login, name}], or ""
+// when the users could not be found (the backend was not reached).
+function wiki_editor_mentioned(host, id, people) {
+  host.wikiEditor?.mentioned(id, people === "" ? null : JSON.parse(people));
 }

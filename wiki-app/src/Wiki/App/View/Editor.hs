@@ -63,6 +63,15 @@
 -- reports each change with an event of its own on its element, carrying
 -- the whole text, as the textarea did with its input event.
 --
+-- CodeMirror also completes mentions (WP5.28 of docs/PLAN.md). An \@
+-- followed by letters, where a mention counts, opens a list of the users
+-- whose login or display name starts with the letters, and choosing one
+-- writes @\@login@ and a space. CodeMirror asks for the users with an event
+-- on its element (@wiki-mention@); the component asks the backend
+-- ('mentionCandidates', for someone signed in only) and answers
+-- ('answerMention'). The textarea before CodeMirror has loaded completes
+-- nothing.
+--
 -- The toolbar's commands are pure functions ("Wiki.Core.Markdown.Edit"). A
 -- button or a shortcut reads the text and the selection, applies the
 -- command, and writes the change back as one edit that undo reverts in one
@@ -207,11 +216,12 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
-import Wiki.App.Backend.Notifications (MonadNotifications)
+import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
   , PickedFile (..)
+  , answerMention
   , applyCommand
   , attachEditor
   , changesLeft
@@ -225,6 +235,7 @@ import Wiki.App.Editor.Browser
   , focusText
   , guardUnload
   , insertAtCursor
+  , mentionAsked
   , pastedFiles
   , pickedFiles
   , readPickedFile
@@ -511,6 +522,7 @@ data Action
   | Selected (Maybe Span)
   | ChangesLeft Int
   | Decide Decision Int
+  | MentionAsked Int Text
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
@@ -1069,6 +1081,7 @@ component =
                 {{ HE.handler' (EventType "wiki-selection") (\ev -> Just $! Selected (selectedSpan ev)) }}
                 {{ HE.handler' (EventType "wiki-changes") (\ev -> Just $! ChangesLeft (changesLeft ev)) }}
                 {{ HE.handler' (EventType "wiki-decide") (\ev -> uncurry Decide <$> decision ev) }}
+                {{ HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev) }}
               ></div>
             |]
           )
@@ -1351,6 +1364,13 @@ component =
       Selected selection -> modify (\st -> st {selection})
       ChangesLeft n -> modify (\st -> st {pendingChanges = n})
       Decide d i -> decide d (Just i)
+      -- CodeMirror asks which users a mention may name, as an @ and
+      -- letters are typed: the backend's answer, or none when the backend
+      -- could not answer, which CodeMirror then asks for again.
+      MentionAsked i letters -> do
+        found <- mentionCandidates letters
+        host <- gets (\st -> st.hostElement)
+        for_ host $ \h -> H.liftEffect (answerMention h i (rightToMaybe found))
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
