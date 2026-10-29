@@ -1772,6 +1772,35 @@ must be in before it is.
   browser checked by hand and said so in the report. `docs/accounts.md` (or where sign-in
   is documented) gains "Passkeys". Queued after WP5.29.
 
+- **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
+  powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
+  public blog spaces). A signed-in user gets an Atom feed of their own notifications at a
+  secret address, `GET /me/notifications.atom?token=<token>`: the latest 50 (the bell's
+  list), newest first, each entry titled as the bell words it ("anna mentioned you in
+  X", "a comment on Y"), with the link the bell follows (the page, the comment's anchor),
+  the actor as the author, `updated` at the notification's time, and **no body**: a feed
+  read by an outside reader is a copy outside the wiki, so an entry carries the title and
+  the link only (decision recorded here; the owner may want excerpts later). The token
+  is a secret of the user's (32 random bytes, base64url) in a new `users.feed_token`
+  column, made on first use, shown once in the account panel's notifications block with
+  the feed's address and "Copy" and "Make a new address" (which replaces the token: the
+  old address stops answering), and never in the API's other answers; a wrong or missing
+  token is 404, not 401, so the address does not confirm a user; the operator account
+  gets none. Served by `Wiki.Server.Feed` as the blog feeds are (the same Atom writer,
+  validated against the same RELAX NG schema in the tests), with `Cache-Control:
+  private, no-store` and outside `FeedCache` (a private answer is never cached by
+  route); nothing about a page the user may no longer read (the same re-check as mail).
+  The bell's "mark read" is not affected: reading the feed marks nothing. API
+  `Wiki.Api.Notifications` gains `feedAddress` (`GET`, the address or none yet) and
+  `renewFeedAddress` (`POST`), through the derived client; `MonadNotifications` the
+  two methods, with the demo answering "no feeds in the demo". Migration `000N` for the
+  column (numbered at rebase time). Tests: server (the feed validates; 50 newest; a page
+  no longer readable left out; a renewed token makes the old address 404; a missing
+  token is 404; the operator gets 404), contract on Mem/SQLite/PostgreSQL/HTTP for the
+  two methods, browser (the block shows the address once made, "Copy", renew). Docs:
+  `docs/api.md` (the endpoint and the feed), the notifications section of the user docs
+  ("Your notifications as a feed"). Queued after WP5.30.
+
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
   najbardziej typowane api. Bez ręcznego sqla, może oprócz migracji. Pod postgresem wszystkie
