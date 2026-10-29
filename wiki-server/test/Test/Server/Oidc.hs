@@ -465,6 +465,11 @@ overHttp backing = describe "over HTTP" $ do
         reply <- roundTrip r "acme" "next=%2F" []
         (spoiled, reply.status, lookup "wiki_session" (cookiesSet reply)) `shouldBe` (spoiled, 502, Nothing)
         reply `says` "ID token"
+        -- A token for another client names both clients, so that an
+        -- operator sees which client id the wiki holds.
+        when (spoiled == WrongAudience) $ do
+          reply `says` "is for the client another-client and not for this wiki"
+          reply `says` "acme-client."
 
     it "says so when the provider says no" $ withOidc backing $ \fake r -> do
       writeIORef fake.spoil Refuses
@@ -556,6 +561,10 @@ claims = describe "an ID token's claims" $ do
     checked (token "https://id.example" ["client"] Nothing soon Nothing) `shouldSatisfy` isLeft
     checked (token "https://id.example" ["client"] Nothing (Just (addUTCTime (-120) now)) (Just "n1")) `shouldSatisfy` isLeft
     checked (token "https://id.example" ["client"] Nothing Nothing (Just "n1")) `shouldSatisfy` isLeft
+  it "names the token's clients and this wiki's when the token is for another client" $ do
+    checked (token "https://id.example" ["someone-else"] Nothing soon (Just "n1")) `shouldBe` Left "is for the client someone-else and not for this wiki's client."
+    checked (token "https://id.example" ["one", "two"] Nothing soon (Just "n1")) `shouldBe` Left "is for the client one, two and not for this wiki's client."
+    checked (token "https://id.example" [] Nothing soon (Just "n1")) `shouldBe` Left "is for no client and not for this wiki's client."
   it "allows a minute of clock skew" $
     checked (token "https://id.example" ["client"] Nothing (Just (addUTCTime (-30) now)) (Just "n1")) `shouldBe` Right ()
   it "takes several audiences only on this client's behalf" $ do

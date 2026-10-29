@@ -560,12 +560,17 @@ clockSkew = 60
 checkClaims :: [Text] -> Text -> Text -> UTCTime -> IdClaims -> Either Text ()
 checkClaims issuers clientId nonce now c
   | c.iss `notElem` issuers = Left ("was issued by " <> c.iss <> ", not by the provider.")
-  | clientId `notElem` c.aud = Left "is for another client than this wiki's."
+  | clientId `notElem` c.aud = Left ("is for " <> audience <> " and not for this wiki's " <> clientId <> ".")
   | length c.aud > 1, c.azp /= Just clientId = Left "is for several clients, and not on this wiki's behalf."
   | maybe True (\e -> addUTCTime clockSkew e <= now) c.expires = Left "has expired."
   | c.nonce /= Just nonce = Left "is not for this sign-in."
   | T.null c.sub = Left "names nobody."
   | otherwise = Right ()
+  where
+    -- The clients the token names, so that an operator sees which client
+    -- id the provider gave the token to beside the one the wiki holds.
+    -- Client ids are no secret: every authorisation URL carries one.
+    audience = if null c.aud then "no client" else "the client " <> T.intercalate ", " c.aud
 
 --------------------------------------------------------------------------------
 -- Pending round trips
