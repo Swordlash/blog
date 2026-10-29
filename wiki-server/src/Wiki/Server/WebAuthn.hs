@@ -62,12 +62,11 @@ import Codec.CBOR.Term (Term (..), decodeTerm, encodeTerm)
 import Codec.CBOR.Write (toStrictByteString)
 import Codec.Serialise (decode, serialise)
 import Crypto.Hash (SHA256 (..), hashWith)
-import Crypto.WebAuthn.AttestationStatementFormat (allSupportedFormats)
 import Crypto.WebAuthn.AttestationStatementFormat.None qualified as None
 import Crypto.WebAuthn.Cose.Internal.Verify qualified as Verify
 import Crypto.WebAuthn.Cose.PublicKeyWithSignAlg qualified as Cose
 import Crypto.WebAuthn.Cose.SignAlg qualified as Cose
-import Crypto.WebAuthn.Encoding.Binary (decodeAttestationObject, decodeAuthenticatorData, decodeCollectedClientData)
+import Crypto.WebAuthn.Encoding.Binary (decodeAuthenticatorData, decodeCollectedClientData)
 import Crypto.WebAuthn.Model.Kinds (CeremonyKind (..))
 import Crypto.WebAuthn.Model.Types qualified as M
 import Crypto.WebAuthn.Operation.Authentication (AuthenticationError (..), AuthenticationResult (..), SignatureCounterResult (..), verifyAuthenticationResponse)
@@ -78,8 +77,7 @@ import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString.Lazy qualified as BSL
-import Data.Hourglass (DateTime (..), Month (..), TimeOfDay (..))
-import Data.Hourglass qualified as Hourglass
+import Data.Hourglass (Elapsed (..), timeConvert)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text qualified as T
 import Data.Validation (Validation (..))
@@ -98,20 +96,21 @@ data Expected = Expected
   }
   deriving stock (Eq, Show)
 
--- | The client data of a ceremony as the package read it, with two checks
--- of the wiki's own first: its type, so that a refusal says which ceremony
--- the passkey answered (the package only says it cannot read it), and that
--- the page that asked was not in a frame of another site, which the
--- package does not check. The package's own words never reach the person:
--- they name its internals.
+-- | The client data of a ceremony as the package read it, with the check
+-- the package does not make: that the page that asked was not in a frame
+-- of another site. When the package cannot read it, the refusal says why
+-- in the wiki's words, never the package's (which name its internals):
+-- the client data's type when it is another ceremony's, read from the JSON
+-- only then.
 clientDataFor :: Text -> ByteString -> Either Text (M.CollectedClientData c 'True) -> Either Text (M.CollectedClientData c 'True)
 clientDataFor wanted raw decoded = do
-  let unreadable = "its client data is not what a browser writes"
-  kind <- maybe (Left unreadable) Right (decodeStrict raw >>= parseMaybe (withObject "client data" (.: "type")))
-  unless (kind == wanted) (Left ("its client data is of type " <> kind <> ", not " <> wanted))
-  given <- first (const unreadable) decoded
+  given <- first (const refusal) decoded
   when (given.ccdCrossOrigin == Just True) (Left "it was made in a frame of another site")
   pure given
+  where
+    refusal = case decodeStrict raw >>= parseMaybe (withObject "client data" (.: "type")) of
+      Just kind | kind /= wanted -> "its client data is of type " <> kind <> ", not " <> wanted
+      _ -> "its client data is not what a browser writes"
 
 -- | The origins the package compares the client data's with.
 originsOf :: Expected -> Either Text (NonEmpty M.Origin)
@@ -142,15 +141,18 @@ data NewCredential = NewCredential
 verifyRegistration :: Expected -> ByteString -> ByteString -> Either Text NewCredential
 verifyRegistration expected clientData attestation = do
   client <- clientDataFor "webauthn.create" clientData (decodeCollectedClientData @'Registration clientData)
-  object <- first (const "its attestation object is not what a browser writes") (decodeAttestationObject allSupportedFormats attestation)
+  -- The wiki asks for no attestation and keeps no verdict on one, so only
+  -- the authenticator data is read from the attestation object, and the
+  -- registration is checked as the format "none": a statement an
+  -- authenticator sends anyway, in whatever format, is never read.
+  authBytes <- case deserialiseFromBytes decodeTerm (BSL.fromStrict attestation) of
+    Right (rest, TMap pairs)
+      | BSL.null rest, Just (TBytes b) <- snd <$> find ((== TString "authData") . fst) pairs -> Right b
+    _ -> Left "its attestation object is not what a browser writes"
+  authData <- first (const "its authenticator data is not what an authenticator writes") (decodeAuthenticatorData @'Registration authBytes)
   origins <- originsOf expected
-  let authData = case object of
-        M.AttestationObject {aoAuthData} -> aoAuthData
-      credentialId = case authData.adAttestedCredentialData of
+  let credentialId = case authData.adAttestedCredentialData of
         M.AttestedCredentialData {acdCredentialId} -> acdCredentialId
-      -- The wiki asks for no attestation and keeps no verdict on one, so
-      -- whatever statement an authenticator sends anyway is left out, as
-      -- the format "none": no certificate is checked, at any time.
       unattested = M.AttestationObject {aoAuthData = authData, aoFmt = None.Format, aoAttStmt = ()}
       credential =
         M.Credential
@@ -159,7 +161,9 @@ verifyRegistration expected clientData attestation = do
           , cAuthenticatorAttachment = Nothing
           , cClientExtensionResults = M.AuthenticationExtensionsClientOutputs {aecoCredProps = Nothing}
           }
-  result <- first (registrationRefusal . NonEmpty.head) (outcome (verifyRegistrationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) mempty attestationTime (creation expected) credential))
+  -- The time is the one the package would check certificates at: as the
+  -- format "none" has none, any time does.
+  result <- first (registrationRefusal . NonEmpty.head) (outcome (verifyRegistrationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) mempty (timeConvert (Elapsed 0)) (creation expected) credential))
   let entry = result.rrEntry
   key <- parseCoseKey (M.unPublicKeyBytes entry.cePublicKeyBytes)
   pure
@@ -188,12 +192,6 @@ creation expected =
     , corAttestation = M.AttestationConveyancePreferenceNone
     , corExtensions = Nothing
     }
-
--- | The time the package would check an attestation's certificates at.
--- Every registration is checked as the format "none" ('verifyRegistration'),
--- which has no certificate, so the time is never used.
-attestationTime :: DateTime
-attestationTime = DateTime {dtDate = Hourglass.Date 2026 October 1, dtTime = TimeOfDay 0 0 0 0}
 
 -- | Why a registration is refused, as a sentence that completes "The
 -- passkey was refused: …".

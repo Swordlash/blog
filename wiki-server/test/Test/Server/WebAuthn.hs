@@ -137,7 +137,7 @@ spec = describe "Wiki.Server.WebAuthn" $ do
       verifyRegistration expected (clientData "webauthn.get" challenge origin) attestation
         `shouldBe` Left "its client data is of type webauthn.get, not webauthn.create"
 
-    it "takes a passkey whose authenticator attests anyway, without checking the statement" $ do
+    it "takes a passkey whose authenticator attests anyway, in any format, without reading the statement" $ do
       let (client, attestation) = registration passkey 0x45 site origin challenge
           packed = case deserialiseFromBytes decodeTerm (BSL.fromStrict attestation) of
             Right (_, TMap pairs) ->
@@ -146,6 +146,14 @@ spec = describe "Wiki.Server.WebAuthn" $ do
                   <> [(TString "fmt", TString "packed"), (TString "attStmt", TMap [(TString "alg", TInt (-7)), (TString "sig", TBytes "not a signature")])]
             _ -> panic "not an attestation object"
       ((\n -> n.credentialId) <$> verifyRegistration expected client packed) `shouldBe` Right "credential-one"
+      -- A format the package does not know, with a statement of no shape.
+      let unknown = case deserialiseFromBytes decodeTerm (BSL.fromStrict attestation) of
+            Right (_, TMap pairs) ->
+              toStrictByteString . encodeTerm . TMap $
+                [(k, v) | (k, v) <- pairs, k /= TString "fmt", k /= TString "attStmt"]
+                  <> [(TString "fmt", TString "a-format-of-its-own"), (TString "attStmt", TString "anything")]
+            _ -> panic "not an attestation object"
+      ((\n -> n.credentialId) <$> verifyRegistration expected client unknown) `shouldBe` Right "credential-one"
 
   describe "an assertion" $ do
     it "is taken with its signature by the passkey, and gives its counter" $ do
