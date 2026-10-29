@@ -178,6 +178,7 @@ import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Mention (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Notification), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, keptNotifications, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
@@ -1813,16 +1814,21 @@ mentionableIn logins st = case currentUserId st of
   Nothing -> mempty
   Just _ -> Map.fromList [(u.login.text, authorOf st u.id) | u <- activeUsers st, u.login.text `elem` logins]
 
--- | The users who may sign in whose login or display name starts with
--- the letters given, ignoring case, for someone signed in: the rule of
+-- | The users who may sign in, and whose login a mention can name, whose
+-- login or display name starts with the letters given, ignoring case, for
+-- someone signed in: the rule of
 -- 'Wiki.App.Backend.Notifications.mentionCandidates', which the server
--- answers with one query.
+-- answers with an indexed query.
 mentionCandidatesIn :: Text -> MemState -> [User]
 mentionCandidatesIn letters st = case currentUserId st of
   Just _
-    | not (T.null folded) ->
+    | N.searchable letters ->
         take N.maxPeopleFound . sortOn (\u -> (u.displayName, u.login.text)) $
-          [u | u <- activeUsers st, any (T.isPrefixOf folded . T.toLower) [u.login.text, u.displayName]]
+          [ u
+          | u <- activeUsers st
+          , mentionsWhole u.login.text
+          , any (T.isPrefixOf folded . T.toLower) [u.login.text, u.displayName]
+          ]
   _ -> []
   where
     folded = T.toLower letters

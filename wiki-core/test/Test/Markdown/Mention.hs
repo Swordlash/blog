@@ -41,6 +41,11 @@ spec = describe "Markdown mentions" $ do
         let pieces = splitMentions t
          in all (either (not . T.null) (not . T.null)) pieces && not (any (\(a, b) -> isLeft a && isLeft b) (zip pieces (drop 1 pieces)))
 
+  describe "mentionsWhole" $ do
+    it "holds for a login a mention reads whole" $
+      map mentionsWhole ["ada", "ada.lovelace", "grace-h", "x_", "zoë", "Łukasz"] `shouldBe` replicate 6 True
+    it "fails for a login a mention reads less of, or not at all" $
+      map mentionsWhole ["anna-", "ada.", "ada lovelace", "ada@example.org", "a+b", "", "@ada"] `shouldBe` replicate 7 False
   describe "the parser" $ do
     it "makes a mention in a paragraph, in emphasis and in a heading" $ do
       "Hi @ada!" `parses` [Para [Str "Hi ", Mention "ada", Str "!"]]

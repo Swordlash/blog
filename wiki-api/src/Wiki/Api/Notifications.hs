@@ -24,10 +24,13 @@ module Wiki.Api.Notifications
   , NotificationSettingsChange (..)
   , Watching (..)
   , maxPeopleFound
+  , minPeopleSearch
+  , searchable
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Text qualified as T
 import Protolude
 import Servant.API
 import Wiki.Core.Id
@@ -54,7 +57,16 @@ data NotificationsApi mode = NotificationsApi
   -- ^ @mentionCandidates@: the users who may sign in whose login or
   -- display name starts with @q@, ignoring case, ordered by display name,
   -- at most 'maxPeopleFound'. The editor offers them when an \@ is typed.
-  -- Empty for an empty @q@, and for a visitor who is not signed in.
+  -- Only users whose login a mention can name are answered: those for
+  -- which "Wiki.Core.Markdown.Mention"'s 'Wiki.Core.Markdown.Mention.mentionsWhole'
+  -- holds, so that writing @\@login@ mentions the user chosen.
+  --
+  -- Empty for a visitor who is not signed in, and for a @q@ shorter than
+  -- 'minPeopleSearch'. A signed-in user is otherwise never given a list of
+  -- the wiki's users (only an administrator, or a space's administrator
+  -- choosing whom to grant to, sees them all). The search does let them
+  -- find users they did not know of, a few letters at a time; the shortest
+  -- @q@ keeps that from being a list of everyone by one letter each.
   , pageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> Get '[JSON] Watch
   -- ^ @watching@ a page.
   , setPageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> ReqBody '[JSON] Watching :> Put '[JSON] Watch
@@ -70,6 +82,16 @@ data NotificationsApi mode = NotificationsApi
 -- many as a completion list shows without scrolling.
 maxPeopleFound :: Int
 maxPeopleFound = 10
+
+-- | 'minPeopleSearch' is the fewest letters 'searchPeople' searches with:
+-- two. One letter answers nobody.
+minPeopleSearch :: Int
+minPeopleSearch = 2
+
+-- | Whether 'searchPeople' searches with these letters, or answers nobody:
+-- they are at least 'minPeopleSearch' long.
+searchable :: Text -> Bool
+searchable letters = T.length letters >= minPeopleSearch
 
 -- | 'Notifications': the user's latest notifications, newest first (at
 -- most 'Wiki.Core.Notification.maxListed'), and the number of unread ones

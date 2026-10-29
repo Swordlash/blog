@@ -110,7 +110,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
-import Wiki.Api.Notifications (NotificationsApi (..), Watching (..))
+import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
@@ -576,8 +576,17 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
           Left _ -> modifyCache (withPeople logins mempty) $> mempty
 
   -- Not cached here: the editor's completion keeps the answers it has
-  -- had for as long as the editor is open (@web/src/editor.js@).
-  mentionCandidates = send . endpoints.notifications.searchPeople
+  -- had for as long as the editor is open (@web/src/editor.js@). Too few
+  -- letters ask nothing. A refusal (a server from before this endpoint)
+  -- is no users, which the editor keeps, so that it does not ask again at
+  -- every key; a server that cannot be reached is asked again later.
+  mentionCandidates letters
+    | not (searchable letters) = pure (Right [])
+    | otherwise =
+        send (endpoints.notifications.searchPeople letters) <&> \case
+          Left e@(Unreachable _) -> Left e
+          Left _ -> Right []
+          Right found -> Right found
   notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices
   markRead m = do
     result <- send (endpoints.notifications.markRead m)

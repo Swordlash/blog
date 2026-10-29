@@ -20,6 +20,7 @@
 module Wiki.Core.Markdown.Mention
   ( splitMentions
   , isLoginChar
+  , mentionsWhole
   )
 where
 
@@ -50,6 +51,16 @@ splitMentions = merge . go Nothing
       Left a : rest | T.null a -> merge rest
       x : rest -> x : merge rest
       [] -> []
+
+-- | Whether @\@login@, written after a space, mentions this login and
+-- nothing less: whether the login can be mentioned at all. A login with a
+-- character a mention stops at (a space, an @\@@ or other punctuation),
+-- or that ends in a @.@ or a @-@, is read as a mention of a shorter login
+-- or of nobody. The editor offers to complete a mention only with logins
+-- for which this holds ("Wiki.App.Backend.Notifications"'
+-- @mentionCandidates@).
+mentionsWhole :: Text -> Bool
+mentionsWhole login = splitMentions ("@" <> login) == [Right login]
 
 -- | Whether an @\@@ after this character ('Nothing': the start of the
 -- text) starts a word.

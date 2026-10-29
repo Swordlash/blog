@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`Wiki.Core.Markdown.Mention` gains `mentionsWhole`: whether `@login` mentions
+that login and nothing shorter, which the editor's completion of mentions
+offers only logins of (WP5.28).
+
 The activity log has the action `user.remove`, "Removed a user's account"
 (WP5.25).
 

@@ -40,6 +40,8 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Database.Beam (all_, default_, desc_, filter_, insert, insertExpressions, insertValues, limit_, offset_, orderBy_, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
+import Database.PostgreSQL.Simple qualified as Pg
+import Database.PostgreSQL.Simple.Types qualified as PgTypes
 import Database.SQLite.Simple qualified as SQLite
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -74,6 +76,7 @@ import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
 import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
@@ -186,6 +189,19 @@ planOf st statement = case (storagePlace st).database of
     | otherwise -> bracket (SQLite.open file) SQLite.close $ \c -> do
         plan <- SQLite.query_ c (SQLite.Query ("EXPLAIN QUERY PLAN " <> sqlOf statement)) :: IO [(Int, Int, Int, Text)]
         pure [detail | (_, _, _, detail) <- plan]
+
+-- | PostgreSQL's plan for a statement with its sequential scans turned
+-- off, from a connection of its own; on SQLite, none. A test's tables are
+-- small enough that PostgreSQL would read them whole whatever their
+-- indexes, so this plan says which indexes can answer the statement, not
+-- which a large wiki's would choose: a statement no index can answer is
+-- still planned as a sequential scan.
+indexPlanOnPostgres :: Storage -> Text -> IO [Text]
+indexPlanOnPostgres st statement = case (storagePlace st).database of
+  SqliteFile _ -> pure []
+  PostgresAt db -> bracket (openPostgres db) closePostgres $ \c -> do
+    _ <- Pg.execute_ c "SET enable_seqscan = off"
+    map Pg.fromOnly <$> Pg.query_ c (PgTypes.Query (encodeUtf8 ("EXPLAIN " <> statement)))
 
 -- | The tables a statement reads whole: the steps of its plan that scan a
 -- table, by the table's name. Beam gives each table of a statement an
@@ -608,6 +624,11 @@ pageView backing = describe "a page view" $ do
     when (onSqlite st) $ do
       plan `shouldSatisfy` any ("INDEX users_name_folded" `T.isInfixOf`)
       plan `shouldSatisfy` any ("INDEX users_login_folded" `T.isInfixOf`)
+    indexes <- indexPlanOnPostgres st statement
+    unless (onSqlite st) $ do
+      indexes `shouldSatisfy` any ("users_name_folded" `T.isInfixOf`)
+      indexes `shouldSatisfy` any ("users_login_prefix" `T.isInfixOf`)
+      indexes `shouldSatisfy` not . any ("Seq Scan on users" `T.isInfixOf`)
     -- By the login: crowd300 and nobody else.
     (byLogin, _) <- candidates "crowd300"
     map (\u -> u.login.text) byLogin `shouldBe` ["crowd300"]

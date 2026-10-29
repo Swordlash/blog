@@ -178,7 +178,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound)
+import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound, searchable)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
@@ -198,6 +198,7 @@ import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAm
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Mention (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -2760,13 +2761,15 @@ mentionableTx logins =
       pure (Map.fromList [(u.login.text, Author {id = u.id, name = u.displayName}) | u <- users])
     _ -> pure mempty
 
--- | The users whose login or display name starts with some letters, for
--- someone signed in ('loadUsersStartingWith'); nobody for anyone else.
+-- | The users whose login or display name starts with some letters, and
+-- whose login a mention can name, for someone signed in
+-- ('loadUsersStartingWith'); nobody for anyone else, or for too few
+-- letters ('searchable').
 mentionCandidatesTx :: Text -> Tx [User]
 mentionCandidatesTx letters =
   asks (\x -> x.user) >>= \case
-    Just _ -> db (loadUsersStartingWith letters maxPeopleFound)
-    Nothing -> pure []
+    Just _ | searchable letters -> db (loadUsersStartingWith (\u -> mentionsWhole u.login.text) letters maxPeopleFound)
+    _ -> pure []
 
 -- | Mentions, watches and notifications, as the class's Haddock describes
 -- them ("Wiki.App.Backend.Notifications"). Each operation is one

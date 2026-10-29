@@ -111,7 +111,9 @@ mentioning = describe "mentions" $ do
     found editor "REA" `shouldReturn` ["reader"]
     found editor "rITa" `shouldReturn` ["reader"]
     found reader "nobody" `shouldReturn` []
-    -- Not everyone for no letters, and nobody to someone not signed in.
+    -- Nobody for fewer than two letters, and nobody to someone not signed
+    -- in.
+    found reader "e" `shouldReturn` []
     found reader "" `shouldReturn` []
     found Anonymous "edi" `shouldReturn` []
     named <- run reader (mentionCandidates "edg") >>= ok

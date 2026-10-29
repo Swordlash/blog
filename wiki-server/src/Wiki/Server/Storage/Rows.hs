@@ -35,6 +35,7 @@ module Wiki.Server.Storage.Rows
   , loadUserByLogin
   , loadActiveUsersByLogin
   , loadUsersStartingWith
+  , prefixEnd
   , loadActiveUser
   , loadUsers
   , loadGroupsOf
@@ -535,10 +536,11 @@ loadActiveUsersByLogin logins = inChunks (ordNub logins) $ \chunk ->
   usersWhere (\r -> r.disabled ==. val_ False &&. r.login `in_` map val_ chunk)
 
 -- | The users who may act whose login or display name starts with some
--- letters, ignoring case, ordered by display name and then login, at most
--- the number given: whom the editor offers to complete a mention with.
--- One statement, which the indexes on the folded login and display name
--- answer (migration @0003-users-by-prefix@): a text starts with the
+-- letters, ignoring case, and whom a test keeps, ordered by display name
+-- and then login, at most the number given: whom the editor offers to
+-- complete a mention with (the test is whether a mention can name the
+-- user's login). The indexes on the folded login and display name answer
+-- the statement (migration @0003-users-by-prefix@): a text starts with the
 -- letters when it is at least the letters and less than the letters with
 -- their last one raised by one code point ('prefixEnd'). @LIKE@ would say
 -- the same, but neither database answers @LIKE@ from an index on an
@@ -546,22 +548,33 @@ loadActiveUsersByLogin logins = inChunks (ordNub logins) $ \chunk ->
 -- ('byCodePoints'), so that both databases agree with the in-memory
 -- backend.
 --
--- The letters are lowered here, and the login and display name by the
--- database's @lower@, which folds every letter on PostgreSQL and only
--- those of ASCII on SQLite.
-loadUsersStartingWith :: forall be. (Backend be) => Text -> Int -> Db be [User]
-loadUsersStartingWith letters most
-  | T.null start = pure []
-  | otherwise =
-      map userOf
-        <$> runSelectReturningList
-          ( select
-              . limit_ (fromIntegral most)
-              . orderBy_ (\u -> (asc_ (byCodePoints u.display_name), asc_ (byCodePoints u.login)))
-              $ filter_ (\u -> u.disabled ==. val_ False &&. (startsWith u.login ||. startsWith u.display_name)) (all_ wikiDb.users)
-          )
+-- The statement reads a page of the number given. Users the test leaves
+-- out are made up for by the next page, read only then, so a wiki whose
+-- logins can all be mentioned reads one page.
+--
+-- The login and display name are lowered by the database's @lower@, and
+-- the letters the same way ('lowered'): every letter on PostgreSQL, only
+-- the letters of ASCII on SQLite.
+loadUsersStartingWith :: forall be. (Backend be) => (User -> Bool) -> Text -> Int -> Db be [User]
+loadUsersStartingWith kept letters most
+  | T.null start || most <= 0 = pure []
+  | otherwise = go 0 []
   where
-    start = T.toLower letters
+    start = lowered (Proxy @be) letters
+    go offset found = do
+      page <-
+        map userOf
+          <$> runSelectReturningList
+            ( select
+                . limit_ (fromIntegral most)
+                . offset_ (fromIntegral offset)
+                . orderBy_ (\u -> (asc_ (byCodePoints u.display_name), asc_ (byCodePoints u.login), asc_ u.id))
+                $ filter_ (\u -> u.disabled ==. val_ False &&. (startsWith u.login ||. startsWith u.display_name)) (all_ wikiDb.users)
+            )
+      let found' = found <> filter kept page
+      if length found' >= most || length page < most
+        then pure (take most found')
+        else go (offset + most) found'
     startsWith :: forall s. QExpr be s Text -> QExpr be s Bool
     startsWith column =
       let folded = byCodePoints (lower_ column)

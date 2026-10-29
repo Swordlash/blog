@@ -20,7 +20,7 @@ import Network.HTTP.Types (Header, Method, hContentType, methodGet, methodPost, 
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
-import Test.Database (Backing)
+import Test.Database (Backing (..))
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
@@ -57,7 +57,7 @@ import Wiki.Server.Storage (Storage, StoredWiki, Who (..), runStoredWiki, withSt
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
-import Wiki.Server.Storage.Rows (insertUsers, updateDisabled)
+import Wiki.Server.Storage.Rows (insertUsers, prefixEnd, updateDisabled)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Schema qualified as Schema
 
@@ -67,6 +67,22 @@ spec backing = describe "notifications" $ do
   overTheChannel backing
   byMail backing
   inTheStorage backing
+  prefixEnds
+
+-- | The end of the range of texts that start with some letters, which the
+-- search for users compares with ('prefixEnd'), at its edges.
+prefixEnds :: Spec
+prefixEnds = describe "the end of the texts that start with some letters" $ do
+  it "raises the last letter by one code point" $ do
+    prefixEnd "an" `shouldBe` Just "ao"
+    prefixEnd "a." `shouldBe` Just "a/"
+  it "drops a last letter that is the last code point, and raises the one before" $
+    prefixEnd (T.pack ['a', maxBound]) `shouldBe` Just "b"
+  it "steps over the surrogates, which a text cannot hold" $
+    prefixEnd (T.pack ['a', '\xD7FF']) `shouldBe` Just (T.pack ['a', '\xE000'])
+  it "is nothing when no text comes after every text that starts so" $ do
+    prefixEnd (T.pack [maxBound, maxBound]) `shouldBe` Nothing
+    prefixEnd "" `shouldBe` Nothing
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -147,23 +163,45 @@ overHttp backing = describe "over HTTP" $ do
   it "finds the users whose login or display name starts with some letters, ten at most, for someone signed in" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     let user login name = User {id = UserId ("user-" <> login), login = Login login, displayName = name}
-        fillers = [user ("fill" <> n) ("Filler " <> n) | i <- [1 .. 12 :: Int], let n = T.justifyRight 2 '0' (show i)]
+        filler i = (if i == 2 then (<> "-") else identity) ("fill" <> number i)
+        number i = T.justifyRight 2 '0' (show (i :: Int))
     withStorageAside r.place $ \st -> writing st $ do
-      insertUsers ([user "anna" "Anna Nowak", user "jsmith" "Annabel Smith", user "annex" "Zed Annex", user "anne" "Anne Gone", user "j.doe" "Jo Dot", user "jdoe" "Jay Doe"] <> fillers)
+      insertUsers
+        ( [ user "anna" "Anna Nowak"
+          , user "jsmith" "Annabel Smith"
+          , user "annex" "Zed Annex"
+          , user "anne" "Anne Gone"
+          , user "annette-" "Annette Dash"
+          , user "j.doe" "Jo Dot"
+          , user "jdoe" "Jay Doe"
+          , user "lukasz" "Łukasz Nowak"
+          ]
+            <> [user (filler i) ("Filler " <> number i) | i <- [1 .. 12]]
+        )
       updateDisabled (UserId "user-anne") True
-    let found who letters = map (\u -> u.login.text) <$> (asWithout r who methodGet (links.notifications.searchPeople letters) >>= jsonAs @[User] 200)
+    let found letters = map (\u -> u.login.text) <$> (asWithout r (Just people.reader) methodGet (links.notifications.searchPeople letters) >>= jsonAs @[User] 200)
     -- By login (anna, annex) and by display name (Annabel Smith), ordered
-    -- by display name, the letters folded; a disabled login left out.
-    found (Just people.reader) "AN" `shouldReturn` ["anna", "jsmith", "annex"]
-    found (Just people.reader) "annA" `shouldReturn` ["anna", "jsmith"]
+    -- by display name, the letters folded; a disabled login left out, and
+    -- a login a mention cannot name (annette-, read as annette).
+    found "AN" `shouldReturn` ["anna", "jsmith", "annex"]
+    found "annA" `shouldReturn` ["anna", "jsmith"]
     -- Punctuation is a character like any other: "j." is not "jd".
-    found (Just people.reader) "j." `shouldReturn` ["j.doe"]
-    found (Just people.reader) "jd" `shouldReturn` ["jdoe"]
-    found (Just people.reader) "fil" `shouldReturn` ["fill" <> T.justifyRight 2 '0' (show i) | i <- [1 .. 10 :: Int]]
-    found (Just people.reader) "" `shouldReturn` []
+    found "j." `shouldReturn` ["j.doe"]
+    found "jd" `shouldReturn` ["jdoe"]
+    -- Ten at most, the one left out of the first ten (fill02-) made up for
+    -- by the eleventh.
+    found "fil" `shouldReturn` [filler i | i <- [1 .. 11], i /= 2]
+    -- A letter beyond ASCII in the case it was typed; folded on
+    -- PostgreSQL only, whose lower folds every letter.
+    found "Łu" `shouldReturn` ["lukasz"]
+    found "łu" `shouldReturn` (case backing of OnSqlite -> []; _ -> ["lukasz"])
+    -- Too few letters, or none, find nobody, and no letters at all is a
+    -- request the API refuses.
+    found "a" `shouldReturn` []
+    found "" `shouldReturn` []
     (.status) <$> asWithout r (Just people.reader) methodGet "api/v1/notifications/people/search" `shouldReturn` 400
     -- Nobody to a visitor, as with the people asked for by login.
-    found Nothing "an" `shouldReturn` []
+    (asWithout r Nothing methodGet (links.notifications.searchPeople "an") >>= jsonAs @[User] 200) `shouldReturn` []
 
   it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
