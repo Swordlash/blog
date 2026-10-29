@@ -351,7 +351,7 @@ resolvePlace dataDir choice programs = runExceptT $ do
     -- environment when it names one there (as a deployment's console
     -- wrapper does, toolchain/deploy-local.sh).
     fromEnvironment default' variable given
-      | given == default' = fromMaybe given <$> liftIO (lookupEnv variable)
+      | given == default' = fromMaybe given . mfilter (not . null) <$> liftIO (lookupEnv variable)
       | otherwise = pure given
     postgres url = \case
       Nothing -> pure (PostgresAt (encodeUtf8 url))

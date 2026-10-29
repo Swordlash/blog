@@ -216,6 +216,13 @@ jobs:
         sh toolchain/bootstrap.sh toolchain
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
+    # libpq's development files, which postgresql-libpq (wiki-server's way
+    # to PostgreSQL) builds against. A self-hosted runner has them from the
+    # bootstrap.
+    - name: Install libpq (hosted)
+      if: runner.environment == 'github-hosted'
+      run: sudo apt-get install --yes --no-install-recommends libpq-dev
+
     - name: Update Cabal package index
       run: cabal update
 
@@ -258,8 +265,31 @@ jobs:
     - name: Build
       run: npm run build-native
 
+    # The server's tests run once on SQLite and once on PostgreSQL
+    # (wiki-server/test/Test/Database.hs). PostgreSQL is postgres:17 in a
+    # container the step starts (toolchain/ci-postgres.sh), with a port of
+    # its own on 127.0.0.1 and the container's own pg_dump; not a `services:`
+    # container, which a self-hosted runner without Docker could not start
+    # at all. A hosted runner has Docker, and the step fails without it.
+    # Without Docker, a self-hosted runner's tests start a PostgreSQL cluster
+    # of their own when initdb and pg_ctl are installed, and otherwise
+    # report the PostgreSQL half as pending, not passed.
+    - name: Start PostgreSQL for the tests
+      run: |
+        if vars=$(sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin"); then
+          printf '%s\n' "$vars" >> "$GITHUB_ENV"
+        elif [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
+          exit 1
+        else
+          echo "::warning::Docker does not answer on this runner: the server's PostgreSQL tests use a cluster of their own if initdb and pg_ctl are installed, and are pending otherwise."
+        fi
+
     - name: Test
       run: npm run test-native
+
+    - name: Stop PostgreSQL
+      if: always()
+      run: sh toolchain/ci-postgres.sh stop
 
     # The deploy scripts against fakes of systemd, ufw, sudo, tailscale (and
     # its serve) and curl, in a temporary home: nothing on the runner is
@@ -502,8 +532,26 @@ jobs:
     - name: Test
       run: npm run test-wasm
 
+    # The smoke test's server runs on SQLite, then again on PostgreSQL in
+    # the container toolchain/ci-postgres.sh starts, as the native job's
+    # tests do; without Docker (a self-hosted runner) only on SQLite, and
+    # it says so.
+    - name: Start PostgreSQL for the smoke test
+      run: |
+        if vars=$(sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin"); then
+          printf '%s\n' "$vars" >> "$GITHUB_ENV"
+        elif [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
+          exit 1
+        else
+          echo "::warning::Docker does not answer on this runner: the smoke test's server runs on SQLite only."
+        fi
+
     - name: Smoke-test the page in a browser
       run: npm run smoke-test
+
+    - name: Stop PostgreSQL
+      if: always()
+      run: sh toolchain/ci-postgres.sh stop
 
     # The built page, kept with the run as the artifact `app`: the deploy job
     # publishes it, from this run or, on a push to main the plan job

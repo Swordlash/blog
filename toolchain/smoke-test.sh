@@ -20,7 +20,14 @@
 # wiki-server.
 #
 # The second needs wiki-server and wiki-app-prerender built natively, which
-# this builds first (quickly, when npm run build-native has).
+# this builds first (quickly, when npm run build-native has). It runs on
+# SQLite, and then again on PostgreSQL when one is at hand:
+# WIKI_TEST_DATABASE_URL names a database of a server on which this may make
+# two databases of its own (postgres://user@host:port/postgres, no query),
+# with psql (WIKI_TEST_PSQL, else the PATH's) to make and drop them, and the
+# pg_dump and pg_restore the server's backups run (WIKI_TEST_PG_DUMP and
+# WIKI_TEST_PG_RESTORE, else the PATH's), as toolchain/ci-postgres.sh gives
+# them in CI. Without it, the PostgreSQL run is reported as not run.
 set -eu
 cd "$(dirname "$0")/.."
 if [ -r "$HOME/.wiki-toolchain/env" ]; then
@@ -32,4 +39,19 @@ node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON toolchain/test-assistant.mjs
 node toolchain/test-tikz-letters.mjs
 node toolchain/smoke-test.mjs "$@"
 node toolchain/smoke-test-server.mjs "$@"
+if [ -n "${WIKI_TEST_DATABASE_URL:-}" ]; then
+  psql=${WIKI_TEST_PSQL:-psql}
+  base=$WIKI_TEST_DATABASE_URL
+  live=wiki_smoke_$$
+  restored=wiki_smoke_$$_restored
+  drop() { "$psql" "$base" -q -c "DROP DATABASE IF EXISTS $live WITH (FORCE)" -c "DROP DATABASE IF EXISTS $restored WITH (FORCE)" || true; }
+  trap drop EXIT
+  "$psql" "$base" -q -c "CREATE DATABASE $live" -c "CREATE DATABASE $restored"
+  printf 'smoke-test: the server again, on PostgreSQL\n'
+  WIKI_DATABASE_URL=${base%/*}/$live WIKI_SMOKE_RESTORE_DATABASE_URL=${base%/*}/$restored \
+    WIKI_PG_DUMP=${WIKI_TEST_PG_DUMP:-} WIKI_PG_RESTORE=${WIKI_TEST_PG_RESTORE:-} \
+    node toolchain/smoke-test-server.mjs "$@"
+else
+  printf 'smoke-test: the server on PostgreSQL: not run (set WIKI_TEST_DATABASE_URL)\n'
+fi
 node toolchain/test-passkeys.mjs "$@"

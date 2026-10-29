@@ -72,6 +72,11 @@
 //    (app.wasm, the API's requests) passes through Playwright's routes,
 //    which a worker's requests and its cache's answers do not.
 //
+// On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
+// the server and the console find their database in WIKI_DATABASE_URL, which
+// wiki-server reads when no option names one, and the restore's fresh data
+// directory takes the database WIKI_SMOKE_RESTORE_DATABASE_URL names.
+//
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
 // Chromium Playwright launches, and no network.
@@ -783,7 +788,12 @@ try {
   const backupFile = join(data, "backups", backedUp.body.last.file);
   assert.equal((await stat(backupFile)).size, backedUp.body.last.size, "the backup's size");
   const restoring = (target) =>
-    execFileSync(wikiServer, ["restore", backupFile, "--data", target, "--attachments", join(data, "attachments")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(wikiServer, ["restore", backupFile, "--data", target, "--attachments", join(data, "attachments")], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      // On PostgreSQL the fresh data directory has a database of its own.
+      env: target === data || !process.env.WIKI_SMOKE_RESTORE_DATABASE_URL ? process.env : { ...process.env, WIKI_DATABASE_URL: process.env.WIKI_SMOKE_RESTORE_DATABASE_URL },
+    });
   assert.throws(() => restoring(data), (error) => /A server is running on/.test(String(error.stderr)), "a restore into the running server's data directory");
   const restored = restoring(join(work, "restored"));
   assert.ok(restored.includes("Restored") && !restored.includes("Warning"), `the restore said: ${restored}`);
