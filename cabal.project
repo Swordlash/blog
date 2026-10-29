@@ -32,6 +32,12 @@ source-repository-package
     th-plugin
     hspec-halogen
 
+-- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
+-- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
+-- compiles with it (an ambiguous occurrence). Until smtp-mail is fixed, the
+-- solver is kept on the network before it.
+constraints: network < 3.2.10
+
 -- As in haskell-halogen's own cabal.project: protolude's upper bounds lag
 -- behind the GHC this builds with. servant's, http-api-data's and
 -- monad-control's (servant-server's) lag behind the QuickCheck, text-iso8601
@@ -56,12 +62,10 @@ source-repository-package
 -- beam-sqlite and beam-postgres need) on containers does too: the server
 -- reaches PostgreSQL through beam-postgres over postgresql-simple
 -- (Wiki.Server.Storage.Postgres).
--- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
--- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
--- compiles with it (an ambiguous occurrence). Until smtp-mail is fixed, the
--- solver is kept on the network before it.
-constraints: network < 3.2.10
-
+-- webauthn 0.12.0.0 (the passkeys' checks, Wiki.Server.WebAuthn) bounds
+-- base, time, crypton and the crypton-x509 packages below GHC 9.14's and
+-- below the crypton 2 and x509 1.10 everything else is built with; it builds
+-- and passes its use here with them.
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -78,7 +82,13 @@ allow-newer:
   pandoc-types:QuickCheck,
   qrcode-core:containers,
   postgresql-simple:*,
-  dependent-map:containers
+  dependent-map:containers,
+  webauthn:base,
+  webauthn:crypton,
+  webauthn:crypton-x509,
+  webauthn:crypton-x509-store,
+  webauthn:crypton-x509-validation,
+  webauthn:time
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

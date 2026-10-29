@@ -1,8 +1,12 @@
+{-# LANGUAGE DataKinds #-}
+
 -- | WebAuthn, the server's side of passkeys (WP5.21 of docs/PLAN.md),
--- written here rather than taken from a package: what the wiki needs is
--- small. A passkey is registered ('verifyRegistration') and then used
--- ('verifyAssertion') to unlock the assistant's vault
--- ("Wiki.Server.Vault"). Neither signs anyone in.
+-- through the @webauthn@ package (WP5.27): the package reads what the
+-- browser sends and checks it, and this module says what the wiki asks of
+-- a passkey and turns the package's errors into sentences. A passkey is
+-- registered ('verifyRegistration') and then used ('verifyAssertion') to
+-- unlock the assistant's vault ("Wiki.Server.Vault"). Neither signs anyone
+-- in.
 --
 -- = Registration
 --
@@ -11,23 +15,24 @@
 -- the client data (JSON the browser writes: the kind of request, the
 -- challenge, the page's origin) and the attestation object (CBOR: the
 -- authenticator data, and an attestation statement). The wiki asks for no
--- attestation, and does not check a statement: it does not care which
--- make of authenticator a user has. It checks the client data, that the
--- authenticator data is for the wiki's relying-party id with the user
--- present and verified, and takes the credential's id and public key (a
--- COSE key, ES256 or RS256) from the authenticator data.
+-- attestation, and keeps no record of which make of authenticator a user
+-- has. The package checks the client data, that the authenticator data is
+-- for the wiki's relying-party id with the user present and verified, and
+-- that the key is ES256 or RS256, the two algorithms the wiki takes. The
+-- wiki keeps the credential's id and its public key, a COSE key, as the
+-- authenticator wrote it.
 --
 -- = Assertion
 --
 -- The browser asks the authenticator to sign a challenge from the server
--- with the passkey. The wiki checks the client data and the authenticator
--- data as for a registration, and the signature, over the authenticator
--- data followed by the SHA-256 of the client data, with the stored public
--- key. It also checks the passkey's signature counter: an authenticator
--- that counts sends a higher number each time, and a number that is not
--- higher than the last suggests a copy of the passkey ('CounterWentBack').
--- A passkey synced across devices counts nothing, and sends 0 each time,
--- which is accepted.
+-- with the passkey. The package checks the client data and the
+-- authenticator data as for a registration, and the signature, over the
+-- authenticator data followed by the SHA-256 of the client data, with the
+-- stored public key. It also compares the passkey's signature counter
+-- with the stored one: an authenticator that counts sends a higher number
+-- each time, and a number that is not higher than the last suggests a
+-- copy of the passkey ('CounterWentBack'). A passkey synced across devices
+-- counts nothing, and sends 0 each time, which is accepted.
 module Wiki.Server.WebAuthn
   ( -- * What is checked
     Expected (..)
@@ -42,13 +47,10 @@ module Wiki.Server.WebAuthn
   , verifyAssertion
 
     -- * The parts
-  , AuthenticatorData (..)
-  , parseAuthenticatorData
-  , CoseKey (..)
+  , CoseKey
   , parseCoseKey
   , coseAlgorithm
   , verifySignature
-  , derSignature
   , rpIdHash
   , toBase64Url
   , fromBase64Url
@@ -56,19 +58,26 @@ module Wiki.Server.WebAuthn
 where
 
 import Codec.CBOR.Read (deserialiseFromBytes)
-import Codec.CBOR.Term (Term (..), decodeTerm)
-import Crypto.ECC (Curve_P256R1)
-import Crypto.Error (CryptoFailable (..))
+import Codec.Serialise (decode)
 import Crypto.Hash (SHA256 (..), hashWith)
-import Crypto.PubKey.ECDSA qualified as ECDSA
-import Crypto.PubKey.RSA.PKCS15 qualified as PKCS15
-import Crypto.PubKey.RSA.Types qualified as RSA
-import Data.Aeson (FromJSON (..), eitherDecodeStrict, withObject, (.!=), (.:), (.:?))
-import Data.ByteArray (constEq, convert)
+import Crypto.WebAuthn.AttestationStatementFormat (allSupportedFormats)
+import Crypto.WebAuthn.Cose.Internal.Verify qualified as Verify
+import Crypto.WebAuthn.Cose.PublicKeyWithSignAlg qualified as Cose
+import Crypto.WebAuthn.Cose.SignAlg qualified as Cose
+import Crypto.WebAuthn.Encoding.Binary (decodeAttestationObject, decodeAuthenticatorData, decodeCollectedClientData)
+import Crypto.WebAuthn.Model.Kinds (CeremonyKind (..))
+import Crypto.WebAuthn.Model.Types qualified as M
+import Crypto.WebAuthn.Operation.Authentication (AuthenticationError (..), AuthenticationResult (..), SignatureCounterResult (..), verifyAuthenticationResponse)
+import Crypto.WebAuthn.Operation.CredentialEntry (CredentialEntry (..))
+import Crypto.WebAuthn.Operation.Registration (RegistrationError (..), RegistrationResult (..), verifyRegistrationResponse)
+import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
+import Data.Hourglass (DateTime (..), Month (..), TimeOfDay (..))
+import Data.Hourglass qualified as Hourglass
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text qualified as T
+import Data.Validation (Validation (..))
 import Protolude
 
 --------------------------------------------------------------------------------
@@ -84,44 +93,23 @@ data Expected = Expected
   }
   deriving stock (Eq, Show)
 
--- | The client data, as the browser writes it.
-data ClientData = ClientData
-  { kind :: Text
-  , challenge :: Text
-  , origin :: Text
-  , crossOrigin :: Bool
-  }
+-- | The client data of a ceremony as the package read it, with the check
+-- the package does not make: that the page that asked was not in a frame
+-- of another site.
+clientDataFor :: Text -> Either Text (M.CollectedClientData c 'True) -> Either Text (M.CollectedClientData c 'True)
+clientDataFor wanted decoded = do
+  given <- first (const ("its client data is not what a browser writes for " <> wanted)) decoded
+  when (given.ccdCrossOrigin == Just True) (Left "it was made in a frame of another site")
+  pure given
 
-instance FromJSON ClientData where
-  parseJSON = withObject "ClientData" $ \o ->
-    ClientData <$> o .: "type" <*> o .: "challenge" <*> o .: "origin" <*> o .:? "crossOrigin" .!= False
-
--- | Check client data of the given type (@webauthn.create@ or
--- @webauthn.get@) against what was expected.
-checkClientData :: Text -> Expected -> ByteString -> Either Text ()
-checkClientData wanted expected raw = do
-  given :: ClientData <- first (const "its client data is not what a browser writes") (eitherDecodeStrict raw)
-  unless (given.kind == wanted) (Left ("its client data is of type " <> given.kind <> ", not " <> wanted))
-  answered <- maybe (Left "its client data's challenge is not in base64url") Right (fromBase64Url given.challenge)
-  unless (answered `constEq` expected.challenge) (Left "it answers another challenge than the one the wiki gave")
-  unless (given.origin `elem` expected.origins) (Left ("it was made on another site, " <> given.origin))
-  when given.crossOrigin (Left "it was made in a frame of another site")
-
--- | Check authenticator data against what was expected: made for the
--- wiki's relying party, with the user present and verified.
-checkAuthenticator :: Expected -> AuthenticatorData -> Either Text ()
-checkAuthenticator expected ad = do
-  unless (ad.rpIdHash `constEq` rpIdHash expected.rpId) (Left "it was made for another site than this wiki")
-  unless (testBit ad.flags 0) (Left "the authenticator does not say the user was present")
-  unless (testBit ad.flags 2) (Left "the authenticator does not say it verified the user")
+-- | The origins the package compares the client data's with.
+originsOf :: Expected -> Either Text (NonEmpty M.Origin)
+originsOf expected = maybe (Left "the wiki has no address to take a passkey on") Right (NonEmpty.nonEmpty (map M.Origin expected.origins))
 
 -- | The SHA-256 of a relying party's id, as the authenticator data
 -- starts with it.
 rpIdHash :: Text -> ByteString
-rpIdHash = sha256 . encodeUtf8
-
-sha256 :: ByteString -> ByteString
-sha256 = convert . hashWith SHA256
+rpIdHash = convert . hashWith SHA256 . encodeUtf8
 
 --------------------------------------------------------------------------------
 -- Registration
@@ -141,16 +129,67 @@ data NewCredential = NewCredential
 -- the new credential, or why it is refused.
 verifyRegistration :: Expected -> ByteString -> ByteString -> Either Text NewCredential
 verifyRegistration expected clientData attestation = do
-  checkClientData "webauthn.create" expected clientData
-  term <- cbor "its attestation object" attestation
-  authBytes <- case term of
-    TMap pairs | Just (TBytes b) <- lookupKey (TString "authData") pairs -> Right b
-    _ -> Left "its attestation object has no authenticator data"
-  ad <- parseAuthenticatorData authBytes
-  checkAuthenticator expected ad
-  (credentialId, publicKey) <- maybe (Left "its authenticator data has no credential") Right ad.attested
+  client <- clientDataFor "webauthn.create" (decodeCollectedClientData @'Registration clientData)
+  object <- first ("its attestation object is not one: " <>) (decodeAttestationObject allSupportedFormats attestation)
+  origins <- originsOf expected
+  let credentialId = case object of
+        M.AttestationObject {aoAuthData} -> case aoAuthData.adAttestedCredentialData of
+          M.AttestedCredentialData {acdCredentialId} -> acdCredentialId
+      credential =
+        M.Credential
+          { cIdentifier = credentialId
+          , cResponse = M.AuthenticatorResponseRegistration {arrClientData = client, arrAttestationObject = object, arrTransports = []}
+          , cAuthenticatorAttachment = Nothing
+          , cClientExtensionResults = M.AuthenticationExtensionsClientOutputs {aecoCredProps = Nothing}
+          }
+  result <- first (registrationRefusal . NonEmpty.head) (outcome (verifyRegistrationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) mempty attestationTime (creation expected) credential))
+  let entry = result.rrEntry
+      publicKey = M.unPublicKeyBytes entry.cePublicKeyBytes
   key <- parseCoseKey publicKey
-  pure NewCredential {credentialId, publicKey, algorithm = coseAlgorithm key, signCount = ad.signCount}
+  pure
+    NewCredential
+      { credentialId = M.unCredentialId entry.ceCredentialId
+      , publicKey
+      , algorithm = coseAlgorithm key
+      , signCount = M.unSignatureCounter entry.ceSignCounter
+      }
+
+-- | The options a registration is checked against: this challenge, the
+-- user verified, an ES256 or RS256 key, and no attestation. The user and
+-- the relying party's name are the browser's business, and the package
+-- does not check them.
+creation :: Expected -> M.CredentialOptions 'Registration
+creation expected =
+  M.CredentialOptionsRegistration
+    { corRp = M.CredentialRpEntity {creId = Just (M.RpId expected.rpId), creName = "wiki"}
+    , corUser = M.CredentialUserEntity {cueId = M.UserHandle "", cueDisplayName = "", cueName = ""}
+    , corChallenge = M.Challenge expected.challenge
+    , corPubKeyCredParams = [M.CredentialParameters {cpTyp = M.CredentialTypePublicKey, cpAlg = alg} | alg <- takenAlgorithms]
+    , corTimeout = Nothing
+    , corExcludeCredentials = []
+    , corAuthenticatorSelection = Just M.AuthenticatorSelectionCriteria {ascAuthenticatorAttachment = Nothing, ascResidentKey = M.ResidentKeyRequirementDiscouraged, ascUserVerification = M.UserVerificationRequirementRequired}
+    , corHints = []
+    , corAttestation = M.AttestationConveyancePreferenceNone
+    , corExtensions = Nothing
+    }
+
+-- | The time the package checks an attestation's certificates at. The wiki
+-- asks for no attestation and keeps no verdict on one, so a fixed time does:
+-- it keeps 'verifyRegistration' a function of what it is given.
+attestationTime :: DateTime
+attestationTime = DateTime {dtDate = Hourglass.Date 2026 October 1, dtTime = TimeOfDay 0 0 0 0}
+
+-- | Why a registration is refused, as a sentence that completes "The
+-- passkey was refused: …".
+registrationRefusal :: RegistrationError -> Text
+registrationRefusal = \case
+  RegistrationChallengeMismatch _ _ -> "it answers another challenge than the one the wiki gave"
+  RegistrationOriginMismatch _ origin -> "it was made on another site, " <> M.unOrigin origin
+  RegistrationRpIdHashMismatch _ _ -> "it was made for another site than this wiki"
+  RegistrationUserNotPresent -> "the authenticator does not say the user was present"
+  RegistrationUserNotVerified -> "the authenticator does not say it verified the user"
+  RegistrationPublicKeyAlgorithmDisallowed _ _ -> notTaken
+  RegistrationAttestationFormatError _ _ -> "its attestation statement does not hold"
 
 --------------------------------------------------------------------------------
 -- Assertion
@@ -177,146 +216,101 @@ data AssertionRefusal
 -- | Check an assertion of a stored passkey, from its client data,
 -- authenticator data and signature; the passkey's new signature counter,
 -- or why it is refused.
+--
+-- The wiki looks a passkey up by its credential id, and a passkey belongs
+-- to the user whose vault it unlocks, so the package is given neither: the
+-- credential id and the user handle it compares are the same empty ones on
+-- both sides.
 verifyAssertion :: Expected -> StoredKey -> ByteString -> ByteString -> ByteString -> Either AssertionRefusal Word32
 verifyAssertion expected stored clientData authBytes signature = do
-  first Refused (checkClientData "webauthn.get" expected clientData)
-  ad <- first Refused (parseAuthenticatorData authBytes)
-  first Refused (checkAuthenticator expected ad)
-  key <- first Refused (parseCoseKey stored.publicKey)
-  unless (verifySignature key (authBytes <> sha256 clientData) signature) (Left (Refused "its signature is not the passkey's"))
-  when ((ad.signCount /= 0 || stored.signCount /= 0) && ad.signCount <= stored.signCount) $
-    Left (CounterWentBack stored.signCount ad.signCount)
-  pure ad.signCount
+  client <- first Refused (clientDataFor "webauthn.get" (decodeCollectedClientData @'Authentication clientData))
+  authData <- first (Refused . ("its authenticator data is not one: " <>)) (decodeAuthenticatorData @'Authentication authBytes)
+  origins <- first Refused (originsOf expected)
+  let nobody = M.UserHandle ""
+      entry =
+        CredentialEntry
+          { ceCredentialId = M.CredentialId ""
+          , ceUserHandle = nobody
+          , cePublicKeyBytes = M.PublicKeyBytes stored.publicKey
+          , ceSignCounter = M.SignatureCounter stored.signCount
+          , ceTransports = []
+          }
+      options =
+        M.CredentialOptionsAuthentication
+          { coaChallenge = M.Challenge expected.challenge
+          , coaTimeout = Nothing
+          , coaRpId = Just (M.RpId expected.rpId)
+          , coaAllowCredentials = []
+          , coaUserVerification = M.UserVerificationRequirementRequired
+          , coaHints = []
+          , coaExtensions = Nothing
+          }
+      credential =
+        M.Credential
+          { cIdentifier = M.CredentialId ""
+          , cResponse = M.AuthenticatorResponseAuthentication {araClientData = client, araAuthenticatorData = authData, araSignature = M.AssertionSignature signature, araUserHandle = Nothing}
+          , cAuthenticatorAttachment = Nothing
+          , cClientExtensionResults = M.AuthenticationExtensionsClientOutputs {aecoCredProps = Nothing}
+          }
+      received = M.unSignatureCounter authData.adSignCount
+  result <- first (Refused . assertionRefusal . NonEmpty.head) (outcome (verifyAuthenticationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) (Just nobody) entry options credential))
+  case result.arSignatureCounterResult of
+    SignatureCounterZero -> Right 0
+    SignatureCounterUpdated counter -> Right (M.unSignatureCounter counter)
+    SignatureCounterPotentiallyCloned -> Left (CounterWentBack stored.signCount received)
+
+-- | Why an assertion is refused, as a sentence.
+assertionRefusal :: AuthenticationError -> Text
+assertionRefusal = \case
+  AuthenticationChallengeMismatch _ _ -> "it answers another challenge than the one the wiki gave"
+  AuthenticationOriginMismatch _ origin -> "it was made on another site, " <> M.unOrigin origin
+  AuthenticationRpIdHashMismatch _ _ -> "it was made for another site than this wiki"
+  AuthenticationUserNotPresent -> "the authenticator does not say the user was present"
+  AuthenticationUserNotVerified -> "the authenticator does not say it verified the user"
+  AuthenticationSignatureDecodingError _ -> "its stored public key is not a COSE key"
+  AuthenticationSignatureInvalid _ -> "its signature is not the passkey's"
+  AuthenticationCredentialDisallowed _ _ -> "it is not a passkey the wiki asked for"
+  AuthenticationIdentifiedUserHandleMismatch _ _ -> "it is another user's passkey"
+  AuthenticationCredentialUserHandleMismatch _ _ -> "it is another user's passkey"
+  AuthenticationCannotVerifyUserHandle -> "it names no user"
 
 --------------------------------------------------------------------------------
 -- The parts
 
--- | 'AuthenticatorData': the authenticator data's parts: the SHA-256 of
--- the relying party's id it was made for, its flags (bit 0: the user was
--- present; bit 2: verified; bit 6: a credential follows), its signature
--- counter, and, in a registration, the new credential's id and public key.
-data AuthenticatorData = AuthenticatorData
-  { rpIdHash :: ByteString
-  , flags :: Word8
-  , signCount :: Word32
-  , attested :: Maybe (ByteString, ByteString)
-  }
-  deriving stock (Eq, Show)
+-- | 'CoseKey': a credential's public key with its signing algorithm, as
+-- the package reads a COSE key.
+type CoseKey = Cose.PublicKeyWithSignAlg
 
--- | Authenticator data read from its bytes: 32 bytes of the relying party's
--- hash, a byte of flags, four of the counter (big-endian), and, when bit 6
--- is set, the attested credential: 16 bytes of the authenticator's model,
--- the credential id's length in two bytes, the id, and the COSE key, whose
--- length is that of its CBOR.
-parseAuthenticatorData :: ByteString -> Either Text AuthenticatorData
-parseAuthenticatorData bytes = do
-  when (BS.length bytes < 37) (Left "its authenticator data is too short")
-  let flags = BS.index bytes 32
-      signCount = bigEndian (BS.take 4 (BS.drop 33 bytes))
-  attested <-
-    if testBit flags 6
-      then do
-        let afterModel = BS.drop (37 + 16) bytes
-        when (BS.length afterModel < 2) (Left "its attested credential is cut short")
-        let idLength = fromIntegral (bigEndian (BS.take 2 afterModel) :: Word16)
-            credentialId = BS.take idLength (BS.drop 2 afterModel)
-            keyAndRest = BS.drop (2 + idLength) afterModel
-        when (BS.length credentialId < idLength || idLength == 0) (Left "its credential id is cut short")
-        case deserialiseFromBytes decodeTerm (BSL.fromStrict keyAndRest) of
-          Left _ -> Left "its credential's public key is not CBOR"
-          Right (rest, _) -> Right (Just (credentialId, BS.take (BS.length keyAndRest - fromIntegral (BSL.length rest)) keyAndRest))
-      else Right Nothing
-  pure AuthenticatorData {rpIdHash = BS.take 32 bytes, flags, signCount, attested}
+-- | The algorithms the wiki takes a passkey's key in: ES256 (ECDSA on
+-- P-256 with SHA-256) and RS256 (RSA PKCS#1 v1.5 with SHA-256), which
+-- every authenticator offers.
+takenAlgorithms :: [Cose.CoseSignAlg]
+takenAlgorithms = [Cose.CoseAlgorithmES256, Cose.CoseAlgorithmRS256]
 
--- | 'CoseKey': a credential's public key: ES256 (ECDSA on P-256 with
--- SHA-256: the point's coordinates, 32 bytes each) or RS256 (RSA PKCS#1
--- v1.5 with SHA-256: the modulus and the exponent).
-data CoseKey
-  = Es256 ByteString ByteString
-  | Rs256 Integer Integer
-  deriving stock (Eq, Show)
+notTaken :: Text
+notTaken = "its public key is of a kind the wiki does not take: it takes ES256 and RS256"
 
--- | A COSE key read from its CBOR: a map whose key 1 is its type (2 for
--- an elliptic curve, 3 for RSA) and key 3 its algorithm (-7 for ES256,
--- -257 for RS256); for ES256, -1 is the curve (1, P-256), -2 and -3 the
--- coordinates; for RSA, -1 is the modulus and -2 the exponent.
+-- | A COSE key read from its CBOR, if it is ES256 or RS256.
 parseCoseKey :: ByteString -> Either Text CoseKey
-parseCoseKey bytes =
-  cbor "its public key" bytes >>= \case
-    TMap pairs -> case (int 1, int 3) of
-      (Just 2, Just (-7))
-        | Just 1 <- int (-1)
-        , Just x <- byteField (-2)
-        , Just y <- byteField (-3)
-        , BS.length x == 32
-        , BS.length y == 32 ->
-            Right (Es256 x y)
-      (Just 3, Just (-257))
-        | Just n <- byteField (-1)
-        , Just e <- byteField (-2) ->
-            Right (Rs256 (unsigned n) (unsigned e))
-      _ -> Left "its public key is of a kind the wiki does not take: it takes ES256 and RS256"
-      where
-        field k = lookupKey (TInt k) pairs <|> lookupKey (TInteger (fromIntegral k)) pairs
-        int k =
-          field k >>= \case
-            TInt i -> Just i
-            TInteger i -> Just (fromIntegral i)
-            _ -> Nothing
-        byteField k =
-          field k >>= \case
-            TBytes b -> Just b
-            _ -> Nothing
-    _ -> Left "its public key is not a COSE key"
+parseCoseKey bytes = case deserialiseFromBytes decode (BSL.fromStrict bytes) of
+  Right (rest, key)
+    | BSL.null rest -> if Cose.signAlg key `elem` takenAlgorithms then Right key else Left notTaken
+  _ -> Left "its public key is not a COSE key"
 
 -- | A key's COSE algorithm: -7 for ES256, -257 for RS256.
 coseAlgorithm :: CoseKey -> Int
-coseAlgorithm = \case
-  Es256 _ _ -> -7
-  Rs256 _ _ -> -257
+coseAlgorithm = Cose.fromCoseSignAlg . Cose.signAlg
 
 -- | Whether a signature of a message is the key's. ES256 signatures come
--- DER-encoded, as WebAuthn sends them ('derSignature').
+-- DER-encoded, as WebAuthn sends them.
 verifySignature :: CoseKey -> ByteString -> ByteString -> Bool
-verifySignature key message signature = case key of
-  Es256 x y -> fromMaybe False $ do
-    point <- passed (ECDSA.decodePublic curve (BS.cons 4 (x <> y)))
-    integers <- derSignature signature
-    sig <- passed (ECDSA.signatureFromIntegers curve integers)
-    pure (ECDSA.verify curve SHA256 point sig message)
-  Rs256 n e ->
-    PKCS15.verifyDigest RSA.PublicKey {RSA.public_size = byteLength n, RSA.public_n = n, RSA.public_e = e} (hashWith SHA256 message) signature
-  where
-    curve = Proxy :: Proxy Curve_P256R1
-    passed = \case
-      CryptoPassed a -> Just a
-      CryptoFailed _ -> Nothing
-    byteLength i = length (takeWhile (> 0) (iterate (`div` 256) i))
+verifySignature key message signature = isRight (Verify.verify key (Verify.Message message) (Verify.Signature signature))
 
--- | The two integers of an ECDSA signature in DER, @SEQUENCE { INTEGER r,
--- INTEGER s }@, as WebAuthn sends an ES256 signature.
-derSignature :: ByteString -> Maybe (Integer, Integer)
-derSignature bytes = do
-  (0x30, body, rest) <- element bytes
-  guard (BS.null rest)
-  (0x02, r, afterR) <- element body
-  (0x02, s, afterS) <- element afterR
-  guard (BS.null afterS)
-  pure (unsigned r, unsigned s)
-  where
-    element b = do
-      (tag, afterTag) <- BS.uncons b
-      (size, afterSize) <- lengthOf afterTag
-      guard (BS.length afterSize >= size)
-      pure (tag, BS.take size afterSize, BS.drop size afterSize)
-    lengthOf b = do
-      (first', afterFirst) <- BS.uncons b
-      if first' < 0x80
-        then pure (fromIntegral first', afterFirst)
-        else do
-          guard (first' == 0x81)
-          (size, afterSize) <- BS.uncons afterFirst
-          pure (fromIntegral size, afterSize)
+-- | The package's verdict as an 'Either'.
+outcome :: Validation e a -> Either e a
+outcome = \case
+  Failure e -> Left e
+  Success a -> Right a
 
 -- | Bytes in base64url without padding, as WebAuthn writes them.
 toBase64Url :: ByteString -> Text
@@ -325,19 +319,3 @@ toBase64Url = decodeUtf8 . convertToBase Base64URLUnpadded
 -- | The bytes of base64url, with or without padding.
 fromBase64Url :: Text -> Maybe ByteString
 fromBase64Url t = rightToMaybe (convertFromBase Base64URLUnpadded (encodeUtf8 (T.dropWhileEnd (== '=') t)) :: Either [Char] ByteString)
-
--- | Bytes as an unsigned big-endian number.
-unsigned :: ByteString -> Integer
-unsigned = BS.foldl' (\n b -> n * 256 + fromIntegral b) 0
-
-bigEndian :: (Num a, Bits a) => ByteString -> a
-bigEndian = BS.foldl' (\n b -> (n `shiftL` 8) .|. fromIntegral b) 0
-
--- | One item of CBOR, the whole of the bytes.
-cbor :: Text -> ByteString -> Either Text Term
-cbor what bytes = case deserialiseFromBytes decodeTerm (BSL.fromStrict bytes) of
-  Right (rest, term) | BSL.null rest -> Right term
-  _ -> Left (what <> " is not CBOR")
-
-lookupKey :: Term -> [(Term, Term)] -> Maybe Term
-lookupKey k pairs = snd <$> find ((== k) . fst) pairs

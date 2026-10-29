@@ -164,9 +164,7 @@ spec = describe "Wiki.Server.WebAuthn" $ do
       verifySignature key "signed" signature `shouldBe` True
       verifySignature key "not signed" signature `shouldBe` False
 
-  describe "the parts" $ do
-    it "reads an ECDSA signature's integers from DER" $
-      derSignature (der 0x80 5) `shouldBe` Just (0x80, 5)
+  describe "the parts" $
     it "writes and reads base64url without padding" $ do
       toBase64Url "\251\255" `shouldBe` "-_8"
       fromBase64Url "-_8" `shouldBe` Just "\251\255"
