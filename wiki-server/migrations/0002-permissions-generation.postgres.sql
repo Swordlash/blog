@@ -12,6 +12,17 @@
 -- users ... in another process, a foreign key's action (a page deleted
 -- clears a space's home page), or a statement typed by hand. So no code has
 -- to remember to.
+--
+-- Every column of a space counts, not only those a permission rule
+-- reads: the copy in memory also answers the reads that show spaces (the
+-- list of spaces, a space by its path), with their names, icons,
+-- descriptions and order, so a change to any of them must reach it.
+--
+-- The row is one row that every such write updates. Two processes that
+-- write at once (the server and the console, on PostgreSQL's serializable
+-- writes) may then conflict on it, and one of them is run again: the
+-- storage runs a write up to three times ('retrying'), which is enough for
+-- writes as rare as these.
 CREATE TABLE permissions_generation (
   id         INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
   generation BIGINT NOT NULL

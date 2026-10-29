@@ -671,10 +671,14 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
 -- is open to, because the permission rules read that from the grants.
 --
 -- A transaction that writes reads its permission context from the
--- database, so that it sees what it wrote itself before, in an earlier
--- attempt that 'retrying' rolled back, or in this transaction. A
--- transaction that only reads takes the permission context from memory
--- when it is still the database's ('keptPermissions').
+-- database. It then decides on the spaces and grants as its own snapshot
+-- holds them, and on PostgreSQL the rows it read join its serializable
+-- check: if another process changes one of them at the same time, one of
+-- the two transactions is run again ('retrying'), rather than a write
+-- going through on a permission already taken away. Writes are few, so
+-- the reads cost little. A transaction that only reads takes the
+-- permission context from memory when it is still the database's
+-- ('keptPermissions').
 context :: Storage -> Bool -> Conn -> Who -> Text -> IO Ctx
 context st writes c who address
   | writes = do
@@ -758,9 +762,11 @@ maxKeptUsers = 500
 
 -- | The permission context of the generation the database has now, in a
 -- read transaction: the one in memory if it is that generation's, else
--- the spaces and grants read from the database, which are then kept. Of
--- two reads that find a new generation at once, each reads it, and the
--- newer generation is kept.
+-- the spaces and grants read from the database, which are then kept. The
+-- copy is the process's, shared by every reader, so a new generation is
+-- read once for the whole process; only reads that find it at the same
+-- moment (at most 'readConnections') each read it, and the newer
+-- generation is kept.
 --
 -- Without the generation's row (deleted by hand) there is no generation to
 -- trust, and a copy kept under any number could be served after the
@@ -815,8 +821,8 @@ readWithin st who locate body = case st.engine of
     runTraced tracer c locate >>= \case
       Nothing -> pure (Left NotFound)
       Just (sid, found) -> do
-        -- Only for something there: a request for nothing costs no
-        -- reading of the permission context.
+        -- The permission context is read only when the attachment
+        -- exists, so a request for a missing one costs no read of it.
         kept <- keptPermissions st conn
         ctx <- contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
         let Tx tx = body sid found

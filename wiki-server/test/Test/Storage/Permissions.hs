@@ -157,6 +157,15 @@ spec backing = describe "the permission context kept in memory" $ do
     _ <- runStoredWiki st Administrator (removeMember crew.id ritaId) >>= ok
     runStoredWiki st rita (spaceHome team.id) `shouldReturn` Left NotFound
 
+  it "shows a space's new description and icon at the next read, since reads show spaces from the copy in memory" $ withDemo backing $ \st -> do
+    docs <- runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok
+    -- Twice, so that the second read is from memory.
+    replicateM_ 2 $ runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> s.description `shouldBe` docs.description
+    _ <- runStoredWiki st Administrator (setSpaceProfile docs.id SpaceProfile {description = "Changed.", icon = Just (IconEmoji "x"), homePage = docs.homePage, blog = docs.blog}) >>= ok
+    runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> (s.description, s.icon) `shouldBe` ("Changed.", Just (IconEmoji "x"))
+    byHand st "UPDATE spaces SET description = 'By hand.' WHERE slug = 'docs'"
+    runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> s.description `shouldBe` "By hand."
+
   it "reads the permission context afresh, keeping nothing, while the generation's row is missing" $ withDemo backing $ \st -> do
     rita <- whoFor st (As "reader")
     ritaId <- userId st "reader"

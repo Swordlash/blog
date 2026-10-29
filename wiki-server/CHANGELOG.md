@@ -12,8 +12,11 @@ takes keys of 32 bytes, and a secret of 20 is given to it padded with zero
 bytes, which HMAC does to any short key, so the codes are the same.
 
 Passkeys are checked by the `webauthn` package (0.12.0.0) instead of code
-of the server's own (WP5.27). What is stored and what the server answers
-are unchanged. `Wiki.Server.WebAuthn` no longer exports
+of the server's own (WP5.27). What the server answers is unchanged. A new
+passkey's public key is stored in the package's canonical encoding of the
+COSE key rather than as the authenticator wrote it. A key stored before is
+read as it is: it is made canonical each time it is read
+(`canonicalCoseKey`), and never rewritten. `Wiki.Server.WebAuthn` no longer exports
 `AuthenticatorData`, `parseAuthenticatorData` or `derSignature`, and its
 `CoseKey` is the package's key with its algorithm. `cabal.project` allows
 webauthn newer `base`, `time`, `crypton`, `crypton-x509`,

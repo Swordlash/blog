@@ -316,10 +316,14 @@ parseCoseKey bytes = case deserialiseFromBytes decode (BSL.fromStrict (canonical
 -- | A COSE key's CBOR in the encoding the package reads: the parameters an
 -- ES256 or RS256 key has (1, the key type; 3, the algorithm; -1, -2 and
 -- -3, the curve and coordinates or the modulus and exponent), in that
--- order, each integer in its shortest form, and nothing else. A key the
--- wiki stored before it used the package is kept as the authenticator
--- wrote it, which may have its parameters in another order or one more
--- (a key id); this reads it all the same. Bytes that are not a CBOR map
+-- order, each integer in its shortest form, and nothing else. It exists
+-- for the keys the wiki stored before it used the package: the
+-- hand-written server kept a key as the authenticator wrote it, and read
+-- it leniently, so a stored key may have its parameters in another order
+-- or one more (a key id). A new key is stored canonical
+-- ('verifyRegistration'), and a registration reads the key the
+-- authenticator sends strictly, as the package does: CTAP2 requires an
+-- authenticator to write canonical CBOR. Bytes that are not a CBOR map
 -- are given back as they are, for the package to refuse.
 canonicalCoseKey :: ByteString -> ByteString
 canonicalCoseKey bytes = case deserialiseFromBytes decodeTerm (BSL.fromStrict bytes) of
