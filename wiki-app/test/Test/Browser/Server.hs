@@ -25,6 +25,7 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.Core.Url (Url (..))
 
 -- How the page lays a form out (test/jsbits/test-layout.js).
@@ -68,7 +69,7 @@ shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isIn
 demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 demo m = describe "over the demo's wiki" $ do
   it "sets the public address and a mail server, whose password it never shows again" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Server)
     find ui ".server-url-value" >>= (`shouldContainText` "Not set")
     setAddress ui "https://wiki.example.org"
     find ui ".server-mail-none" >>= (`shouldContainText` "No mail server")
@@ -103,7 +104,7 @@ demo m = describe "over the demo's wiki" $ do
     unmount ui
 
   it "adds a provider with its secret and redirect URI, keeps the secret through a change, and removes it" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Server)
     find ui ".server-providers .empty" >>= (`shouldContainText` "No provider")
     setAddress ui "https://wiki.example.org/"
     find ui ".server-provider-add" >>= click
@@ -139,7 +140,7 @@ demo m = describe "over the demo's wiki" $ do
     unmount ui
 
   it "explains each field of a provider, and the redirect URI to register as it can be known" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Server)
     let hint field = find ui (".server-provider-form .server-provider-hint-" <> field)
         redirect = find ui ".server-provider-form .server-provider-redirect-to"
     -- No public address yet: no redirect URI either, and the form says so.
@@ -176,13 +177,17 @@ demo m = describe "over the demo's wiki" $ do
     unmount ui
 
   it "lays every form of the administration out in one column" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin (R.Users R.allUsers))
     -- The Users section's new user, and the invitations of a closed wiki.
+    find ui ".user-create-open" >>= click
+    _ <- find ui ".user-create-fields"
     oneColumn ".user-create-fields"
+    find ui ".admin-nav-link[data-section=permissions]" >>= click
     find ui ".access-choice input[value=closed]" >>= click
     _ <- find ui ".invite-form"
     oneColumn ".invite-form"
     find ui ".access-choice input[value=open]" >>= click
+    find ui ".admin-nav-link[data-section=server]" >>= click
     -- The Server section's: the public address, the mail server and its
     -- test, a provider.
     find ui ".server-url-edit" >>= click
@@ -208,7 +213,7 @@ demo m = describe "over the demo's wiki" $ do
     unmount ui
 
   it "says why settings cannot be, and keeps the form open" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Server)
     find ui ".server-provider-add" >>= click
     find ui ".server-provider-form input[name=name]" >>= (`typeText` "google")
     find ui ".server-provider-form input[name=client-id]" >>= (`typeText` "id.apps.googleusercontent.com")
@@ -232,7 +237,7 @@ overHttp m = describe "over HTTP" $
       answerWith "GET" "api/v1/admin/server" 200 set
       answerWith "POST" "api/v1/admin/server/providers/corp/check" 200 ProviderCheck {redirectUri = Just (Url "https://wiki.example.org/auth/corp/callback"), clientSecret = Set, discovered = Just found, problem = Nothing}
       answerWith "PUT" "api/v1/admin/server" 200 set
-      ui <- startServer m Admin
+      ui <- startServer m (Admin R.Server)
       let row = ".server-provider[data-name=corp] "
       eventually (find ui (row <> ".server-provider-check")) >>= click
       find ui (row <> ".server-provider-checked") >>= (`shouldContainText` "It answered: people can sign in with it.")

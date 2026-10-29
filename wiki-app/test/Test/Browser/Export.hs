@@ -23,6 +23,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.Core.Id (UserId (..))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -71,7 +72,7 @@ spec m = do
     serverStarts
     serveDemo
     exporting [Docx, Html, Epub, Pptx, BeamerTex]
-    ui <- startServer m Admin
+    ui <- startServer m (Admin R.Server)
     find ui ".server-export .server-export-tex" >>= (`shouldHaveClass` "server-export-no-tex")
     find ui ".server-export .server-export-tex" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "apt install texlive-xetex")
 
@@ -82,7 +83,7 @@ spec m = do
     find ui ".page-view .actions a.page-present" >>= (`shouldHaveText` "Present")
 
   it "says so in the demo's administration" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Server)
     find ui ".server-export-none" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "exports nothing")
   where
     docs = slugs ["docs"]

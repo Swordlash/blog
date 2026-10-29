@@ -1,16 +1,15 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The "Backups" part of the administration's "Server" section (WP4.9 of
--- docs/PLAN.md, "Wiki.Api.Backups"): whether the server backs itself up,
+-- | The administration's "Backups and data" section (WP4.9 of
+-- docs/PLAN.md, "Wiki.Api.Backups"; a section of its own since WP5.25): whether the server backs itself up,
 -- when, how many backups it keeps, and where it copies them off the
 -- machine; the last backup's time, size and result; and "Back up now".
 -- Backups are off until they are turned on here, which is the only place
 -- they are set.
 --
--- It is a separate component inside the Server section, which mounts it,
--- so that its own state (the settings as typed, a running backup) belongs
--- to it. It reads the backups as the section's other parts read their
--- data: at once where the backend answers at once (the demo, and a page
+-- The shell mounts it alone, above the wiki's export and import, so that
+-- its own state (the settings as typed, a running backup) belongs to it.
+-- It reads the backups as the other sections read their data: at once where the backend answers at once (the demo, and a page
 -- the server prerendered, which carries them), and otherwise in its
 -- initializer.
 --
@@ -132,7 +131,7 @@ component =
     render st =
       [hh|
         <div class="server-part server-backups">
-          <h3>Backups</h3>
+          <h2>Automatic backups</h2>
           {{ body }}
         </div>
       |]
@@ -148,7 +147,7 @@ component =
         <div class="backups">
           {% if not b.available %}
             <p class="admin-note backups-unavailable">
-              The demo makes no backups: its wiki is in this browser, and "Export the wiki" above keeps a copy of it.
+              The demo makes no backups: its wiki is in this browser, and "Export the wiki" below keeps a copy of it.
               A wiki's server backs itself up from here once they are turned on.
             </p>
           {% end %}

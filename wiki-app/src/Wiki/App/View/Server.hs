@@ -9,7 +9,9 @@
 -- before anyone can sign in, and a change takes effect with the next
 -- request, without a restart. It is one component over the
 -- administration's backend ("Wiki.App.Backend.Admin"), which the shell
--- shows beside "Who may come in".
+-- shows as the administration's "Server" section. The server's status and
+-- its backups are sections of their own ("Wiki.App.View.Status",
+-- "Wiki.App.View.Backups").
 --
 -- Everything it shows comes from one read, as in the other sections: at
 -- once where the backend answers at once (the demo, and a page the server
@@ -46,7 +48,7 @@ module Wiki.App.View.Server
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.+), type (.==))
+import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -57,17 +59,12 @@ import Wiki.Api.Export (ExportFormat, formatLabel, needsTeX)
 import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
-import Wiki.App.View.Backups qualified as Backups
 import Wiki.App.View.Common
-import Wiki.App.View.Status qualified as Status
 import Wiki.Core.Url (Url (..))
 
 newtype Input = Input {context :: Context}
 
--- | The parts of the section that are components of their own: the
--- backups ("Wiki.App.View.Backups") and the server's status
--- ("Wiki.App.View.Status").
-type Slots = ("backups" .== H.Slot (Const Void) Void ()) .+ ("status" .== H.Slot (Const Void) Void ())
+type Slots = Empty
 
 data Loaded
   = Loading
@@ -166,7 +163,7 @@ data Action
   | TypedHosts Text
   | SaveHosts
 
-component :: forall query m. (MonadAdmin m, MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -187,15 +184,12 @@ component =
     render st =
       [hh|
         <section class="admin-section admin-server">
-          <h2>Server</h2>
           <p class="admin-intro">
             The wiki's public address, the mail server invitations are sent through, and the
             providers people may sign in with. They are set here and nowhere else, and take effect
             at once. Passwords and client secrets are typed once and never shown again.
           </p>
-          {{ HH.slot_ "status" () Status.component Status.Input {context = st.input.context} }}
           {{ body }}
-          {{ HH.slot_ "backups" () Backups.component Backups.Input {context = st.input.context} }}
         </section>
       |]
       where

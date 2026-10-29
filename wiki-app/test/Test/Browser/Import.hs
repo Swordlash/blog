@@ -34,6 +34,7 @@ import Wiki.App.Browser (unzipFiles)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.Core.Export (Archive (..), readArchive)
 import Wiki.Core.Space qualified as S
 
@@ -87,7 +88,7 @@ fromAFile m = it "imports a zip file chosen as the dialog's boxes and choices sa
   answerWith "POST" "api/v1/import/preview" 200 plan
   answerWith "POST" "api/v1/import/apply" 200 summary
   db <- absent m "file"
-  ui <- startServerWith m db Admin
+  ui <- startServerWith m db (Admin R.Backups)
   find ui ".admin-view .import-sources .import-file" >>= (`shouldHaveText` "Import a zip export…")
   -- No demo here: only the file is offered.
   length <$> findAll ui ".import-demo" `shouldReturn` 0
@@ -142,7 +143,7 @@ unreachable m = it "says when the preview gets no answer, and asks again when to
   serveDemo
   answerWith "POST" "api/v1/import/preview" 200 plan
   db <- absent m "unreachable"
-  ui <- startServerWith m db Admin
+  ui <- startServerWith m db (Admin R.Backups)
   _ <- find ui ".import-sources"
   offline True
   choose "wiki.zip" "PK"
@@ -167,7 +168,7 @@ fromTheDemo m = do
     db <- absent m "demo"
     -- The demo's database, as the demo leaves it on its first visit.
     unsafeIOToPageM (runTest (void (openMemWiki db (demoState demoNow)) :: m ()))
-    ui <- startServerWith m db Admin
+    ui <- startServerWith m db (Admin R.Backups)
     find ui ".import-sources .import-demo" >>= (`shouldHaveText` "Import this browser's demo data…")
     before <- length <$> asked
     find ui ".import-demo" >>= click
@@ -186,7 +187,7 @@ fromTheDemo m = do
     serverStarts
     serveDemo
     db <- absent m "none"
-    ui <- startServerWith m db Admin
+    ui <- startServerWith m db (Admin R.Backups)
     _ <- find ui ".import-sources .import-file"
     length <$> findAll ui ".import-demo" `shouldReturn` 0
     unsafeIOToPageM (memWikiFound db) `shouldReturn` False

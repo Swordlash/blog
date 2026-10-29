@@ -12,6 +12,7 @@ import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -125,10 +126,11 @@ spec m = do
   it "takes an administrator to the administration from the header" $ runPage $ do
     ui <- start m (Just "user-admin") Home
     find ui ".wiki-header a.admin-link" >>= click
-    find ui ".admin-view h1" >>= (`shouldHaveText` "Administration")
-    find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "Wiki data")
-    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Administration")
+    find ui ".admin-view h1" >>= (`shouldHaveText` "Overview")
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Overview")
     _ <- find ui ".wiki-header a.admin-link[aria-current=page]"
+    find ui ".admin-nav-link[data-section=backups]" >>= click
+    find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "The wiki as one file")
     _ <- find ui ".admin-view .demo-export"
     pure ()
 
@@ -137,7 +139,7 @@ spec m = do
     _ <- find ui ".directory h1"
     length <$> findAll ui ".admin-link" `shouldReturn` 0
     unmount ui
-    there <- start m (Just "user-reader") Admin
+    there <- start m (Just "user-reader") (Admin R.Backups)
     find there ".admin-view .error-forbidden" >>= (`shouldSatisfy'` "for the wiki's administrators")
     length <$> findAll there ".admin-view .demo-export" `shouldReturn` 0
     length <$> findAll there ".admin-link" `shouldReturn` 0

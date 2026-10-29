@@ -43,7 +43,7 @@ genRoute =
         <$> oneof [pure Nothing, Just <$> elements ["mermaid", "mermaid flow", "", "a&b=c", "100% ?#/", "zażółć", "+x+"]]
         <*> oneof [pure Nothing, pure (Just []), Just <$> genPath]
         <*> elements [False, True]
-    , pure Admin
+    , Admin <$> genSection
     , PageHistory
         <$> genPath
         <*> genPath
@@ -57,6 +57,19 @@ genRoute =
     , VerifyEmail . VerificationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , Unsubscribe . UnsubscribeToken <$> elements ["u-1.0123abcd", "x"]
     , pure AssistantSettings
+    ]
+
+-- | A section of the administration, the users' with any listing.
+genSection :: Gen AdminSection
+genSection =
+  oneof
+    [ elements [Overview, Groups, Permissions, Server, Backups, Activity]
+    , Users
+        <$> ( UserListing
+                <$> elements ["", "ada", "a b", "100% ?#/", "zażółć"]
+                <*> oneof [pure 1, chooseInt (-3, 40)]
+                <*> elements [minBound .. maxBound]
+            )
     ]
 
 -- | A time with no fraction of a second: the others are made from it.
@@ -80,7 +93,12 @@ spec = describe "Wiki.App.Route" $ do
       print route (NewSpace Nothing) `shouldBe` "/new-space/"
       print route (NewSpace (Just (slugs ["team"]))) `shouldBe` "/new-space/team/"
       print route Unknown `shouldBe` "/not-found/"
-      print route Admin `shouldBe` "/admin/"
+      print route (Admin Overview) `shouldBe` "/admin/overview/"
+      print route (Admin (Users allUsers)) `shouldBe` "/admin/users/"
+      print route (Admin (Users (UserListing "ada lo" 3 OnlyAdministrators))) `shouldBe` "/admin/users/?q=ada%20lo&page=3&show=administrators"
+      print route (Admin (Users (UserListing "" 1 OnlyDisabled))) `shouldBe` "/admin/users/?show=disabled"
+      map (print route . Admin) adminSections
+        `shouldBe` ["/admin/overview/", "/admin/users/", "/admin/groups/", "/admin/permissions/", "/admin/server/", "/admin/backups/", "/admin/activity/"]
       print route (NewPage (slugs ["docs"]) Nothing) `shouldBe` "/s/docs/new-page/"
       print route (NewPage (slugs ["team", "projects"]) (Just (slugs ["the-wiki"]))) `shouldBe` "/s/team/projects/new-page/the-wiki/"
       print route (Search Nothing Nothing True) `shouldBe` "/search/"
@@ -169,12 +187,19 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/new-space" `shouldBe` Right (NewSpace Nothing)
       parse route "/search?q=x" `shouldBe` Right (Search (Just "x") Nothing True)
       parse route "/s/docs/new-page" `shouldBe` Right (NewPage (slugs ["docs"]) Nothing)
-      parse route "/admin" `shouldBe` Right Admin
+      parse route "/admin" `shouldBe` Right (Admin Overview)
+      parse route "/admin/groups" `shouldBe` Right (Admin Groups)
 
     it "keeps a space called admin apart from the administration" $ do
       print route (Space (slugs ["admin"])) `shouldBe` "/s/admin/"
       parse route "/s/admin/" `shouldBe` Right (Space (slugs ["admin"]))
-      parse route "/admin/" `shouldBe` Right Admin
+      parse route "/admin/" `shouldBe` Right (Admin Overview)
+
+    it "reads the administration's sections, and the users' listing in any order" $ do
+      parse route "/admin/users/" `shouldBe` Right (Admin (Users allUsers))
+      parse route "/admin/users/?page=2&q=ed" `shouldBe` Right (Admin (Users (UserListing "ed" 2 Everyone)))
+      parse route "/admin/users/?show=nonsense&page=x" `shouldBe` Right (Admin (Users allUsers))
+      parse route "/admin/no-such-section/" `shouldSatisfy` isLeft
 
     it "reads a search's parameters in any order, and leaves out what is not there" $ do
       parse route "/search/?space=docs&q=a+b" `shouldBe` Right (Search (Just "a+b") (Just (slugs ["docs"])) True)

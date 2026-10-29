@@ -411,6 +411,7 @@ async function migrateTheDemo() {
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), "the demo's program starting");
   await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
   const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
   const demoExport = await readFile(await exported.path());
   await page.unroute(demoAddress, serveTheDemo);
@@ -441,6 +442,7 @@ async function migrateTheDemo() {
   await page.locator("#app .user-name", { hasText: adminName }).waitFor({ timeout });
   await page.locator("#app .sign-out").waitFor({ timeout });
   await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
   await page.locator("#app .admin-view .import-sources .import-demo").waitFor({ timeout });
 
   // The export first: Notes on Haskell left out, and the demo's Hello,
@@ -463,8 +465,9 @@ async function migrateTheDemo() {
   for (const line of ["3 spaces created", "1 space merged with the server's", "9 pages created", "1 page replaced by the imported one", "1 page left out"]) {
     assert.ok(told.includes(line), `the summary does not say "${line}": ${told}`);
   }
-  // The shell has reloaded the tree of spaces, with the demo's in it.
-  await page.locator("#app .wiki-sidebar a", { hasText: "Docs" }).waitFor({ timeout });
+  // The shell has reloaded the tree of spaces, with the demo's in it: the
+  // search box offers Docs (the sidebar is the administration's here).
+  await page.locator("#app .search-space option", { hasText: "Docs" }).waitFor({ state: "attached", timeout });
   const hello = await pageAt("blog", "hello-world");
   assert.ok(hello && !hello.body.includes("Written on the server."), "the server's Hello, world was not replaced");
   // The server's Blog was made with its home page.
@@ -476,6 +479,7 @@ async function migrateTheDemo() {
   // Again, from the demo's data in this browser: everything is merged, and
   // nothing is there twice; the page left out comes in now.
   await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
   await page.locator("#app .admin-view .import-demo").click();
   await dialog.locator("h3", { hasText: "What to migrate" }).waitFor({ timeout });
   assert.match(await dialog.locator(".import-from").textContent(), /^From this browser's demo data: 4 spaces \(4 already here\)/);
@@ -707,20 +711,23 @@ try {
 
   // The export, from the administration.
   await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
   await page.locator("#app .admin-view .import-sources .import-file").waitFor({ timeout });
   const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
   assert.match(exported.suggestedFilename(), /^wiki-\d{4}-\d{2}-\d{2}\.zip$/, "the export's name");
   assert.equal((await readFile(await exported.path())).subarray(0, 2).toString(), "PK", "the export is not a zip file");
   console.log(`ok: the administration downloads the server's export, ${exported.suggestedFilename()}`);
 
-  // A user, made in the administration's people with a password, who signs
+  // A user, made in the administration's users with a password, who signs
   // in; and a group, which the server keeps.
-  await page.locator(`#app .admin-view .user-row[data-login=${adminLogin}] .administrator-self`).waitFor({ timeout });
+  await page.locator("#app .admin-nav-link[data-section=users]").click();
+  await page.locator(`#app .admin-view .user-row[data-login=${adminLogin}] .badge-administrator`).waitFor({ timeout });
+  await page.locator("#app .admin-view .user-create-open").click();
   await page.locator("#app .admin-view .user-create-login").fill("sam");
   await page.locator("#app .admin-view .user-create-name").fill("Sam Smoke");
   await page.locator("#app .admin-view .user-create-password").fill("sam's password");
   await page.locator("#app .admin-view .user-create button.primary").click();
-  await page.locator("#app .admin-view .user-row[data-login=sam] .account-state", { hasText: "Signs in with a password" }).waitFor({ timeout });
+  await page.locator("#app .admin-view .user-row[data-login=sam] .user-sign-in", { hasText: "With a password" }).waitFor({ timeout });
   const sam = await fetch(url("/api/v1/session"), {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
@@ -728,6 +735,7 @@ try {
   });
   assert.equal(sam.status, 200, "the user made in the administration signing in");
   assert.equal((await sam.json()).user.displayName, "Sam Smoke");
+  await page.locator("#app .admin-nav-link[data-section=groups]").click();
   await page.locator("#app .admin-view .group-create-name").fill("Smoke testers");
   await page.locator("#app .admin-view .group-create button.primary").click();
   await page.locator("#app .admin-view .group-name", { hasText: "Smoke testers" }).waitFor({ timeout });
@@ -739,6 +747,7 @@ try {
   // The server's settings, from the administration while the server runs:
   // the wiki's public address, and the fake provider with its secret, typed
   // once, never shown again, and checked against the provider.
+  await page.locator("#app .admin-nav-link[data-section=server]").click();
   const serverSection = "#app .admin-view .admin-server";
   await page.locator(`${serverSection} .server-url-edit`).click();
   await page.locator(`${serverSection} .server-url-form input[name=url]`).fill(`http://127.0.0.1:${wikiPort}/`);
@@ -763,12 +772,13 @@ try {
   assert.ok(!JSON.stringify(settings.body).includes(oidcSecret), "the API gives the provider's secret back");
   console.log("ok: the administration sets the public address and adds a provider, which answers its check, its secret never shown");
 
-  // Backups (WP4.9): none until they are turned on in the Server section's
-  // "Backups"; then the first is made at once, and another by hand, each
+  // Backups (WP4.9): none until they are turned on in the administration's
+  // "Backups and data"; then the first is made at once, and another by hand, each
   // shown with its size. And the console's restore: refused the data
   // directory of the running server, and done into a fresh one, with the
   // attachments' files brought from the data directory's.
-  const backupsPart = `${serverSection} .server-backups`;
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
+  const backupsPart = "#app .admin-view .server-backups";
   await page.locator(`${backupsPart} .backups-state`, { hasText: "Off" }).waitFor({ timeout });
   assert.equal((await api("admin/server/backups")).body.last, null, "a backup before they were turned on");
   await page.locator(`${backupsPart} .backups-edit`).click();
@@ -959,19 +969,24 @@ try {
   const oliveId = landed.user.id;
   assert.ok((await api("admin/directory")).body.providerOnly.includes(oliveId), "the directory says she has no password to set");
   const administration = await newPage();
-  await administration.goto(url("/admin/"));
+  await administration.goto(url("/admin/users/?q=olive"));
   await eventually(async () => assert.ok(await programStarted(administration), "no listener yet"), "the administration's program starting");
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .identity-unlink", { hasText: "Disconnect Fake" }).waitFor({ timeout });
-  assert.equal(await administration.locator("#app .admin-view .user-row[data-login=olive] .password-ask").count(), 0, "a password offered for her by the administration");
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .user-sign-in", { hasText: "With Fake" }).waitFor({ timeout });
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .user-manage").click();
+  const oliveDialog = administration.locator("#app .user-dialog[data-login=olive]");
+  await oliveDialog.locator(".identity-unlink", { hasText: "Disconnect Fake" }).waitFor({ timeout });
+  assert.equal(await oliveDialog.locator(".password-ask").count(), 0, "a password offered for her by the administration");
   // Disconnected there, she has no way in (her session ends with it), and
   // the administration gives her a password, typed since this server sends
-  // no mail, which the button says.
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .identity-unlink").click();
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-hint", { hasText: "The server sends no mail" }).waitFor({ timeout });
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-ask", { hasText: "Set password" }).click();
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-new").fill("olive's own password");
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-form button.primary").click();
-  await administration.locator("#app .admin-view .user-row[data-login=olive] .account-state", { hasText: "Signs in with a password" }).waitFor({ timeout });
+  // no mail, which the dialog says.
+  await oliveDialog.locator(".identity-unlink").click();
+  await oliveDialog.locator(".password-hint", { hasText: "The server sends no mail" }).waitFor({ timeout });
+  await oliveDialog.locator(".password-ask", { hasText: "Set password" }).click();
+  await oliveDialog.locator(".password-new").fill("olive's own password");
+  await oliveDialog.locator(".password-form button.primary").click();
+  await oliveDialog.locator(".account-state", { hasText: "With a password" }).waitFor({ timeout });
+  await administration.keyboard.press("Escape");
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .user-sign-in", { hasText: "With a password" }).waitFor({ timeout });
   await administration.context().close();
   // She signs in with it in her browser, from the header's form.
   await olive.reload();
@@ -1172,7 +1187,9 @@ try {
     ["/s/smoke-space/new-page/", 200, "New page"],
     ["/new-space/", 200, "New space"],
     ["/search/?q=smoke", 200, "First page"],
-    ["/admin/", 200, "Smoke testers"],
+    ["/admin/", 200, "wiki-server"],
+    ["/admin/users/", 200, "Manage"],
+    ["/admin/groups/", 200, "Smoke testers"],
     ["/unsubscribe/not-a-secret/", 200, "Stop the mail"],
     ["/s/smoke-space/p/no-such-page/", 404, "There is nothing here"],
     ["/no/such/address", 404, "Not found"],

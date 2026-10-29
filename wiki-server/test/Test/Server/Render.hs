@@ -169,13 +169,22 @@ administrator backing = describe "for an administrator signed in" $ do
     html `shouldSatisfy` T.isInfixOf "<title>Team handbook · Team · Wiki</title>"
     appIn html `shouldSatisfy` T.isInfixOf "Ada Admin"
     appIn html `shouldSatisfy` T.isInfixOf "Sign out"
-    (adminStatus, admin) <- pageAs r [session] r.public "/admin/"
+    -- The administration's first section at /admin/, and the users at
+    -- their own address, a page of them, with the page carrying them.
+    (overviewStatus, overview) <- pageAs r [session] r.public "/admin/"
+    overviewStatus `shouldBe` 200
+    appIn overview `shouldSatisfy` T.isInfixOf "<h1>Overview</h1>"
+    appIn overview `shouldSatisfy` T.isInfixOf "class=\"admin-nav\""
+    (adminStatus, admin) <- pageAs r [session] r.public "/admin/users/?q=edgar"
     adminStatus `shouldBe` 200
     appIn admin `shouldSatisfy` T.isInfixOf "class=\"user-table\""
     appIn admin `shouldSatisfy` T.isInfixOf "Edgar Editor"
+    appIn admin `shouldNotSatisfy` T.isInfixOf "Rita Reader"
+    preload <- preloadIn admin
+    Map.size preload.userPages `shouldBe` 1
     -- The same address, to nobody: neither the space nor the administration.
     (.status) <$> getUrl r (r.public <> "/s/team/p/team-handbook/") `shouldReturn` 404
-    (_, refused) <- page r r.public "/admin/"
+    (_, refused) <- page r r.public "/admin/users/"
     appIn refused `shouldNotSatisfy` T.isInfixOf "user-table"
 
   it "renders the editor with the page's Markdown in it" $ withAdminSession backing identity $ \r session -> do

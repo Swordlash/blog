@@ -993,7 +993,11 @@ try {
   assert.equal(await page.locator("#app .user-menu .demo-export").count(), 0, "the user menu still exports the wiki");
   await page.locator("#app .user-switcher-toggle").click();
   await page.locator("#app .wiki-header a.admin-link").click();
-  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration");
+  await check({ path: "/admin/overview/", view: "admin-view", crumb: "Overview" }, "the administration");
+  // A page per section, from the administration's navigation; the wiki's
+  // data is under the backups.
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
+  await check({ path: "/admin/backups/", view: "admin-view", crumb: "Backups and data" }, "the administration's backups and data");
   await page.locator("#app .admin-view .demo-kept", { hasText: "kept in this browser" }).waitFor({ timeout });
   // Exporting the wiki downloads a zip file of it, edit and all.
   const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
@@ -1030,7 +1034,8 @@ try {
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit came back after a reset");
   // Importing the export brings it back, after asking.
   await page.locator("#app .wiki-header a.admin-link").click();
-  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration again");
+  await page.locator("#app .admin-nav-link[data-section=backups]").click();
+  await check({ path: "/admin/backups/", view: "admin-view", crumb: "Backups and data" }, "the administration again");
   await page.locator("#app .admin-view .demo-import input").setInputFiles({
     name: exported.suggestedFilename(),
     mimeType: "application/zip",
@@ -1056,13 +1061,19 @@ try {
   await check({ path: "/no/such/address/", view: "not-found" }, "an address the wiki does not have");
   await footerShown(page, "404.html");
   // Nor has the administration's, which the program opens for an
-  // administrator, as the demo starts.
+  // administrator, as the demo starts, at its first section, whose address
+  // it puts in the place of /admin/.
   assert.equal((await fetch(url("/admin/"))).status, 404);
   await load(page, "/admin/");
   await stillPrerendered(page, "the administration's address");
-  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration's address");
+  await check({ path: "/admin/overview/", view: "admin-view", crumb: "Overview" }, "the administration's address");
+  await load(page, "/admin/backups/");
+  await check({ path: "/admin/backups/", view: "admin-view", crumb: "Backups and data" }, "a section's address");
   await page.locator("#app .admin-view .demo-export").waitFor({ timeout });
-  console.log("ok: the administration opens at its own address");
+  await load(page, "/admin/users/?q=rita");
+  await check({ path: "/admin/users/?q=rita", view: "admin-view", crumb: "Users" }, "the users' address");
+  await eventually(async () => assert.equal(await page.locator("#app .user-row").count(), 1, "the users found"), "the users searched for");
+  console.log("ok: the administration opens at its own address, and at each section's");
   // An editor's address has no page of its own either; the program opens it.
   assert.equal((await fetch(url("/s/blog/p/hello-world/edit/"))).status, 404);
   // 404.html is the page of no route, so the program repairs it into the
@@ -1139,20 +1150,41 @@ try {
   assert.ok(await fits(), "a page's source is wider than a phone");
   // The administration's forms are one column at any width (WP5.5): on a
   // phone too, each field under the one before, and none wider than it.
-  await load(phone, "/admin/");
+  // The fields of a form shown, each lower than the one before.
+  const besides = (selectors) =>
+    phone.evaluate(
+      (selectors) =>
+        selectors.flatMap((selector) => {
+          const shown = [...document.querySelector(`#app ${selector}`).children].filter((c) => c.getClientRects().length > 0);
+          return shown.slice(1).flatMap((child, i) =>
+            child.getBoundingClientRect().top < shown[i].getBoundingClientRect().bottom - 0.5 ? [`${selector}: ${child.className}`] : [],
+          );
+        }),
+      selectors,
+    );
+  await load(phone, "/admin/users/");
+  await phone.locator("#app .user-create-open").tap();
   await phone.locator("#app .user-create-fields").waitFor({ timeout });
+  assert.ok(await fits(), "the users are wider than a phone");
+  assert.deepEqual(await besides([".user-create-fields"]), [], "fields of the new user's form side by side on a phone");
+  // The dialog of a user fits the phone too.
+  await phone.locator("#app .user-row[data-login=reader] .user-manage").tap();
+  await phone.locator("#app .user-dialog").waitFor({ timeout });
+  assert.ok(await fits(), "the dialog of a user is wider than a phone");
+  const dialogBox = await phone.locator("#app .user-dialog").boundingBox();
+  const phoneSize = phone.viewportSize();
+  assert.ok(
+    dialogBox.x >= 0 && dialogBox.x + dialogBox.width <= phoneSize.width && dialogBox.height <= phoneSize.height,
+    "the dialog of a user does not fit a phone's screen",
+  );
+  await phone.keyboard.press("Escape");
+  await phone.locator("#app .user-dialog").waitFor({ state: "detached", timeout });
+  // The server's form, in its own section.
+  await load(phone, "/admin/server/");
   await phone.locator("#app .server-provider-add").tap();
   await phone.locator("#app .server-provider-form").waitFor({ timeout });
   assert.ok(await fits(), "the administration is wider than a phone");
-  const besides = await phone.evaluate(() =>
-    [".user-create-fields", ".server-provider-form"].flatMap((selector) => {
-      const shown = [...document.querySelector(`#app ${selector}`).children].filter((c) => c.getClientRects().length > 0);
-      return shown.slice(1).flatMap((child, i) =>
-        child.getBoundingClientRect().top < shown[i].getBoundingClientRect().bottom - 0.5 ? [`${selector}: ${child.className}`] : [],
-      );
-    }),
-  );
-  assert.deepEqual(besides, [], "fields of the administration's forms side by side on a phone");
+  assert.deepEqual(await besides([".server-provider-form"]), [], "fields of the administration's forms side by side on a phone");
   await phone.context().close();
   console.log("ok: a page, the editor, a page's source and the administration's forms fit a phone's width");
 

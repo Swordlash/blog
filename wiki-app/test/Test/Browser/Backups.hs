@@ -24,6 +24,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -45,7 +46,7 @@ demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIsl
 demo m = describe "over the demo's wiki" $
   it "shows the backups disabled, saying that the demo makes none" $
     runPage $ do
-      ui <- start m (Just "user-admin") Admin
+      ui <- start m (Just "user-admin") (Admin R.Backups)
       find ui ".backups-unavailable" >>= (`shouldContainText` "The demo makes no backups")
       find ui ".backups-body" >>= (`getProperty` "disabled") >>= (`shouldBe` "true")
       find ui ".backups-state" >>= (`shouldContainText` "Off: the server makes no backups by itself.")
@@ -67,7 +68,7 @@ overHttp m = describe "over HTTP" $
           made = BackupRecord {startedAt = at 9, finishedAt = at 9, trigger = Manual, file = Just "20261025T090000.000Z.sqlite", size = Just 1253376, failure = Nothing, offSite = Just OffSite {to = "b2:wiki", problem = Nothing}}
       answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 off
       answerWith "PUT" (endpointUrl (\e -> e.admin.setBackups changed)) 200 turnedOn
-      ui <- startServer m Admin
+      ui <- startServer m (Admin R.Backups)
       eventually (find ui ".backups-state") >>= (`shouldContainText` "Off")
       find ui ".backups-now" >>= (`getProperty` "disabled") >>= (`shouldBe` "true")
       -- Turned on, every six hours, to an rclone remote with its
@@ -94,7 +95,7 @@ overHttp m = describe "over HTTP" $
       find ui ".backups-edit" >>= click
       length <$> findAll ui ".backups-form textarea" `shouldReturn` 0
       find ui ".backups-form .server-secret-state" >>= (`shouldHaveText` "Set")
-      find ui ".admin-server" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "do-not-show-me"))
+      find ui ".admin-view" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "do-not-show-me"))
       find ui ".backups-cancel" >>= click
       -- Back up now: the server says it is under way, and the part reads
       -- them again until it is done.

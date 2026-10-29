@@ -91,7 +91,6 @@ component =
     render st =
       [hh|
         <section class="admin-section admin-activity">
-          <h2>Activity</h2>
           <p class="admin-intro">
             Every change to the wiki's administration, the newest first: who gave or took a
             permission, changed a group, an account or a setting, invited someone, deleted a space or

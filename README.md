@@ -173,9 +173,9 @@ GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
 > [!NOTE]
 > Your edits are kept in this browser, so a reload finds them. On the
 > **Administration** page, linked at the top right for an administrator,
-> **Export the wiki** saves all of it as a zip file, **Import a wiki** brings
-> such a file back, and **Reset the demo content** puts back the pages you
-> see now.
+> under **Backups and data**, **Export the wiki** saves all of it as a zip
+> file, **Import a wiki** brings such a file back, and **Reset the demo
+> content** puts back the pages you see now.
 ```
 
 A note, marked as one, at the top of the
@@ -736,7 +736,7 @@ the demo's, which finds a part of a word too. `/api/v1/info` says which
 
 A wiki moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import
-(the administration's "Wiki data"), never by copying the database. A deploy that
+(the administration's "Backups and data"), never by copying the database. A deploy that
 finds such a `data/wiki.sqlite` stops before it changes anything, says the state
 is incompatible, and goes on only with `--fresh` (or `yes` at its question, on a
 terminal), which moves the file aside into `data/replaced/<time>/` (it is never
@@ -759,7 +759,7 @@ route. The page carries the data it was rendered from as JSON
 from, so it adopts the page as it is and asks the server nothing more until the
 reader goes elsewhere. If a page cannot be rendered (the log says why, in a
 `level=error event=render` line), the build's own page is sent instead: the application
-before it has loaded anything, which then loads the route itself. The administration's "Wiki data" section exports the server's wiki and
+before it has loaded anything, which then loads the route itself. The administration's "Backups and data" section exports the server's wiki and
 imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
@@ -805,7 +805,7 @@ to the demo, keeping `data/`.
   time with `~/wiki-demo/bin/wiki backup --data ~/wiki-demo/data`, even with the
   server running; attachments are never deleted while a kept backup names them.
 - **Scheduled backups.** The server backs itself up only once an administrator
-  turns that on, in the administration's Server section, "Backups" (off on a new
+  turns that on, in the administration's "Backups and data" section (off on a new
   server, and no option or environment variable turns it on). There you choose
   how often (every day at a time, in UTC, or every so many hours), how many to
   keep (the newest of each of the last so many days and weeks; the deploy's
@@ -920,7 +920,8 @@ to the demo, keeping `data/`.
   hosts: the "Server" section's "The assistant's hosts", or
   `--assistant-hosts https://openrouter.ai,http://localhost:11434`. The
   assistant's settings say so when an address is not allowed.
-- **Open or closed.** The administration's "Who may come in" says whether the
+- **Open or closed.** The administration's "Permissions" section, "Who may come
+  in", says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"
   beside "Sign in" lets anyone make an account, which holds no grant until given
   one) or closed (anyone not
@@ -929,8 +930,8 @@ to the demo, keeping `data/`.
   account, once, within a week. "Let every new account create spaces", in the
   same section, gives `create-spaces` to every account made from then on by the
   person it is for: by themself, by invitation, or by signing in with a provider
-  for the first time (an administrator may also grant it per user, under
-  "Users"; an administrator creates spaces anyway). The server mails invitations
+  for the first time (an administrator may also grant it per user, in the
+  user's "Manage" dialog under "Users"; an administrator creates spaces anyway). The server mails invitations
   when it has a mail server (below); otherwise the panel shows each invitation's
   link once, as it is made, to pass on.
 - **Accounts with a password only from the console.** "The administration may
@@ -1028,11 +1029,22 @@ to the demo, keeping `data/`.
   ```
 
   `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version
-  runs, where its data is and how much it holds. Its "Administration" page
-  keeps users (passwords, logins disabled, who may
-  create spaces, who administers), groups and their members, the wiki's
-  "Activity" (every change made to the administration) and the Server
-  section's "Status" (the last twenty errors logged); who may read, edit and
+  runs, where its data is and how much it holds. Its "Administration" is a
+  page per section, listed down the left (a row of tabs on a phone), each at
+  its own address (`/admin/users/`, `/admin/server/`, …; `/admin/` opens the
+  first): "Overview" (the server's status: version, data, newest backup, the
+  last twenty errors logged), "Users", "Groups" and their members,
+  "Permissions" (who may come in, and invitations), "Server", "Backups and
+  data", and "Activity" (every change made to the administration). "Users" is
+  a table read from the server a page at a time, 25, 50 or 100 a page (the
+  browser remembers which), searched by login and display name, filtered to
+  the administrators or the disabled accounts, with the words and the page in
+  the address so that a page can be shared; each row has the user's badges
+  and one button, "Manage", which opens a dialog with everything about the
+  user: administrator, creates spaces, how they sign in (a new password or a
+  password link, a provider's account to disconnect), their address, their
+  groups, and, apart and asked once, disabling their login and removing their
+  second factor. Each change is saved as it is made. Who may read, edit and
   administer a space is in that space's "Space settings". `docs/api.md` says
   what each listener serves
   ([The two listeners](docs/api.md#the-two-listeners)).
@@ -1057,7 +1069,7 @@ the server's administration imports it from there, or from the demo's export:
    for `http://…:8080/`, which the HTTPS address does not reach, so deploy the
    server with `--http` for the import, or export the demo first (below).
 2. In the browser you wrote the demo in, open the wiki at that address, sign in,
-   then "Administration" in the header. Under "Wiki data", "Import this browser's demo
+   then "Administration" in the header. Under "Backups and data", "Import this browser's demo
    data…" is offered when the demo left its wiki in this browser at this address.
    Anywhere else (another browser, another address), export the demo first: in the
    demo's own administration, "Export the wiki" downloads a zip file, which the

@@ -201,8 +201,9 @@ administration ui = do
     find ui ".user-menu button[data-login=admin]" >>= click
     find ui ".user-switcher-toggle" >>= (`shouldHaveText` "Ada Admin")
   find ui ".wiki-header a.admin-link" >>= click
-  find ui ".admin-view h1" >>= (`shouldHaveText` "Administration")
-  find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "Wiki data")
+  find ui ".admin-view h1" >>= (`shouldHaveText` "Overview")
+  find ui ".admin-nav-link[data-section=backups]" >>= click
+  find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "The wiki as one file")
 
 -- | Go to Hello, world from the spaces: the blog's card, then its page
 -- tree.

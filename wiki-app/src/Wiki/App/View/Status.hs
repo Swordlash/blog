@@ -1,17 +1,15 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The "Status" part of the administration's "Server" section (WP4.10 of
--- docs/PLAN.md): which program version is running and since when, the
--- version of its database's schema, its newest backup, how many live
--- channels are open, how much the wiki holds, and the last errors the
--- server logged (twenty at most, kept in memory since it started: the
--- message, when, and the route it happened on, never a secret, since the
--- log has none).
+-- | The administration's "Overview" section (WP4.10 of docs/PLAN.md; a
+-- section of its own since WP5.25): which program version is running and
+-- since when, the version of its database's schema, its newest backup, how
+-- many live channels are open, how much the wiki holds, and the last
+-- errors the server logged (twenty at most, kept in memory since it
+-- started: the message, when, and the route it happened on, never a
+-- secret, since the log has none).
 --
--- It is a separate component inside the Server section, like the backups
--- ("Wiki.App.View.Backups"). It reads the status at once where the backend
--- answers at once (a page the server prerendered carries it), and
--- otherwise in its initializer. "Refresh" fetches it again, as does a
+-- It reads the status at once where the backend answers at once (a page
+-- the server prerendered carries it), and otherwise in its initializer. "Refresh" fetches it again, as does a
 -- change of the wiki. The demo has no server: its backend says so, and the
 -- part shows a note.
 module Wiki.App.View.Status
@@ -70,7 +68,6 @@ component =
     render st =
       [hh|
         <div class="server-part server-status">
-          <h3>Status</h3>
           {{ body }}
         </div>
       |]

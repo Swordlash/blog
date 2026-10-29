@@ -1,6 +1,6 @@
 -- | What the views offer for a password (WP5.6 of docs/PLAN.md), as the
--- views decide it: the administration's button in a user's row
--- ("Wiki.App.View.Admin"), which mails a link where it can, types a
+-- views decide it: the password's control in the administration's dialog
+-- for a user ("Wiki.App.View.UserDialog"), which mails a link where it can, types a
 -- password where it cannot and says why, and offers nothing to a user who
 -- signs in with a provider and has no password to set; the button in the
 -- menu under a signed-in user's name ("Wiki.App.View.SignIn"), which
@@ -17,11 +17,11 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.Api.Account (LinkedIdentity (..), SignInMethods (..))
-import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Admin (Directory (..), summaryOf)
 import Wiki.Api.Security (AccountEmail (..), EmailState (..))
-import Wiki.App.View.Admin (NoLink (..), PasswordControl (..), passwordControl)
 import Wiki.App.View.Security (addressText, factorOffText)
 import Wiki.App.View.SignIn (passwordOffer)
+import Wiki.App.View.UserDialog (NoLink (..), PasswordControl (..), passwordControl)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Email (..), Login (..), SignInProvider (..), User (..))
 
@@ -70,28 +70,32 @@ mailingOr mailing =
 uid :: Text -> UserId
 uid login = UserId ("user-" <> login)
 
+-- | What the dialog offers for the password of the user with this id.
+control :: Directory -> UserId -> PasswordControl
+control d u = maybe (panic "no such user") (passwordControl d.mailing . summaryOf d) (find (\x -> x.id == u) d.users)
+
 adminRow :: Spec
-adminRow = describe "the administration's button in a user's row" $ do
+adminRow = describe "the password's control in the administration's dialog for a user" $ do
   it "mails a link to a verified address where the server sends mail" $
-    passwordControl people (uid "ada") `shouldBe` SendLink "ada@example.org"
+    control people (uid "ada") `shouldBe` SendLink "ada@example.org"
 
   it "types a password where there is no verified address, and says so" $ do
-    passwordControl people (uid "bea") `shouldBe` TypePassword NoVerifiedAddress
-    passwordControl people (uid "cy") `shouldBe` TypePassword NoVerifiedAddress
+    control people (uid "bea") `shouldBe` TypePassword NoVerifiedAddress
+    control people (uid "cy") `shouldBe` TypePassword NoVerifiedAddress
 
   it "types one for everyone where the server sends no mail, and says so" $
     for_ ["ada", "bea", "cy", "eve", "fay"] $ \login ->
-      (login, passwordControl (mailingOr False) (uid login)) `shouldBe` (login, TypePassword NoMail)
+      (login, control (mailingOr False) (uid login)) `shouldBe` (login, TypePassword NoMail)
 
   it "offers nothing to a user who signs in with a provider the server has, and has no password" $ do
-    passwordControl people (uid "dee") `shouldBe` NoPasswordControl
-    passwordControl (mailingOr False) (uid "dee") `shouldBe` NoPasswordControl
+    control people (uid "dee") `shouldBe` NoPasswordControl
+    control (mailingOr False) (uid "dee") `shouldBe` NoPasswordControl
 
   it "treats a user whose provider is gone as any other, who has no way in" $
-    passwordControl people (uid "eve") `shouldBe` SendLink "eve@example.org"
+    control people (uid "eve") `shouldBe` SendLink "eve@example.org"
 
   it "types a password for a disabled user, whom a link does not work for" $
-    passwordControl people (uid "fay") `shouldBe` TypePassword LoginDisabled
+    control people (uid "fay") `shouldBe` TypePassword LoginDisabled
 
 ownMenu :: Spec
 ownMenu = describe "the button in the menu under a user's name" $ do

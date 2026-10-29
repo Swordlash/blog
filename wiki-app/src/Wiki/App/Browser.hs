@@ -3,11 +3,12 @@
 -- | The few browser features the shell needs that Halogen does not
 -- provide: the link a click in a rendered page landed on, scrolling to a
 -- heading or a footnote, the document's title, the position in the
--- session history, the clipboard, and a time written in the reader's time
--- zone and language. Also the demo's zip files: making, reading and saving
--- them (see @jsbits/archive.js@). See @jsbits/browser.js@. Natively there
--- is no browser: no click lands on a link, every history entry is the
--- first, nothing is copied, and the rest does nothing.
+-- session history, the clipboard, a modal dialog, and a time written in
+-- the reader's time zone and language. Also the demo's zip files: making,
+-- reading and saving them (see @jsbits/archive.js@). See
+-- @jsbits/browser.js@. Natively there is no browser: no click lands on a
+-- link, every history entry is the first, nothing is copied, no dialog is
+-- shown, and the rest does nothing.
 module Wiki.App.Browser
   ( ArticleLink (..)
   , articleLink
@@ -25,6 +26,8 @@ module Wiki.App.Browser
   , keepHeights
   , keepContents
   , revealFragment
+  , showDialog
+  , closeDialog
   , PageBackend (..)
   , pageBackend
 
@@ -85,6 +88,8 @@ $( browserJS
      , ("js_keep_heights", "wiki_keep_heights", Unsafe, [t|IO ()|])
      , ("js_keep_contents", "wiki_keep_contents", Unsafe, [t|IO ()|])
      , ("js_reveal_fragment", "wiki_reveal_fragment", Unsafe, [t|IO ()|])
+     , ("js_dialog_show", "wiki_dialog_show", Unsafe, [t|Element -> IO ()|])
+     , ("js_dialog_close", "wiki_dialog_close", Unsafe, [t|Element -> IO ()|])
      ]
  )
 
@@ -126,6 +131,17 @@ followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
   ToFragment fragment -> liftIO (js_scroll_to (toJSText fragment))
+
+-- | Show a @\<dialog>@ element as a modal dialog (@showModal@): above the
+-- page, with a backdrop, the rest of the page inert, closed by Escape, and
+-- the focus given back to where it was when the dialog closes. The element
+-- then fires @close@. Natively nothing happens.
+showDialog :: (MonadIO m) => Element -> m ()
+showDialog = liftIO . js_dialog_show
+
+-- | Close a dialog 'showDialog' showed. It fires @close@.
+closeDialog :: (MonadIO m) => Element -> m ()
+closeDialog = liftIO . js_dialog_close
 
 -- | Set the title of the browser's tab and of its history entry.
 setDocumentTitle :: (MonadIO m) => Text -> m ()

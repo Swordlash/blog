@@ -37,7 +37,7 @@ import Test.Scripted (jsonResponse, methodOf)
 import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
-import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
+import Wiki.Api.Admin (LoggedError (..), ServerStatus (..), UserQuery (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (searchQueryOf)
@@ -55,7 +55,7 @@ import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Route (Against (..), Route (..))
+import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections)
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
 import Wiki.App.View.Body qualified as Body
 import Wiki.Core.Access (Access (..))
@@ -131,7 +131,6 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , PageSlides (path "docs") (path "markdown-guide/presentations") 1 1
       , NewSpace Nothing
       , Search (Just "words") Nothing True
-      , Admin
       , Unknown
       , Invite (InvitationToken "valid")
       , ResetPassword (ResetToken "secret")
@@ -139,6 +138,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
       ]
+        <> map Admin adminSections
 
 -- | The pages a server renders, adopted by the program that starts from
 -- what they carry: every route the demo's build has a page for, an editor,
@@ -205,7 +205,6 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Page (path "docs") (path "nowhere")
            , NewPage (path "docs") Nothing
            , NewSpace Nothing
-           , Admin
            , Unknown
            , Invite (InvitationToken "valid")
            , Invite (InvitationToken "used")
@@ -213,7 +212,14 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , VerifyEmail (VerificationToken "secret")
            , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
+           , Admin (Users (UserListing "ed" 1 Everyone))
+           , Admin (Users (UserListing "" 2 Everyone))
            ]
+        <> map Admin adminSections
+
+-- | The users section's query, at the page size it starts with.
+usersFrom :: Int -> Text -> UserQuery
+usersFrom offset search = UserQuery {offset, limit = 25, search, administrators = False, disabled = False}
 
 -- | The demo with its first post saved once by the editor.
 savedOnce :: MemState
@@ -242,6 +248,8 @@ apiOver providers st = do
   table <- runMemWiki wiki $ do
     me <- session
     people <- directory
+    usersPages <- for [usersFrom 0 "", usersFrom 0 "ed", usersFrom 25 ""] $ \q ->
+      (endpointUrl (\e -> e.admin.users (Just q.offset) (Just q.limit) (mfilter (/= "") (Just q.search)) q.administrators q.disabled),) . answerOf <$> userPage q
     settings <- wikiSettings
     invited <- invitations
     server <- serverSettings
@@ -286,7 +294,8 @@ apiOver providers st = do
               : (endpointUrl (\e -> e.admin.status), answerOf (Right status :: Either WikiError ServerStatus))
               : (endpointUrl (\e -> e.notifications.list), answerOf told)
               : (endpointUrl (\e -> e.invitations.details (InvitationToken "valid")), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
-              : concat perSpace
+              : usersPages
+                <> concat perSpace
           )
       )
   pure . Transport $ \r -> case (methodOf r, Map.lookup (requestUrl r) table, searchOf (requestUrl r)) of

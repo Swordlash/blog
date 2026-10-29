@@ -104,3 +104,15 @@ function wiki_console_warn(message) {
 function wiki_absolute_url(path) {
   return new URL(path, document.baseURI).href;
 }
+
+// A dialog element shown as a modal (Wiki.App.View.UserDialog): the browser
+// puts it above the page with a backdrop, makes the rest of the page inert,
+// closes it on Escape, and gives the focus back to where it was when the
+// dialog closes.
+function wiki_dialog_show(dialog) {
+  if (!dialog.open) dialog.showModal();
+}
+
+function wiki_dialog_close(dialog) {
+  if (dialog.open) dialog.close();
+}

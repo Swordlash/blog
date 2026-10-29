@@ -30,13 +30,16 @@
 -- increments its revision so that the views reload their own data too,
 -- and navigates to where the change leads.
 --
--- The administration page ('Admin') belongs to the shell rather than to a
--- view. Its first section (export, import, reset) acts on the whole wiki
--- and on how the demo saves it, which the shell holds and reloads
--- afterwards. So those controls and their state stay here, and the page
--- only shows them. The page has a heading per section, the wiki's data
--- first. The sections on the wiki's users and groups follow, in a view of
--- their own ("Wiki.App.View.Admin").
+-- The administration ('Admin') is a page per section (WP5.25 of
+-- docs/PLAN.md): the sidebar becomes the administration's navigation, an
+-- entry per section with the current one marked, and the content is the
+-- section's heading and its view, mounted alone, with its own loading and
+-- errors. The address @\/admin\/@ names no section: it shows the first,
+-- and the shell puts that section's address in its place. The wiki's data
+-- as one file (export, import, the demo's reset) acts on the whole wiki and
+-- on how the demo saves it, which the shell holds and reloads afterwards.
+-- So those controls and their state stay here, and the "Backups and data"
+-- section shows them under the backups.
 --
 -- When the backend answers at once (the demo's in-memory backend), the
 -- shell loads all of that in its initial state, so that its first render
@@ -138,17 +141,19 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle)
+import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
-import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
+import Wiki.App.View.Backups qualified as BackupsView
 import Wiki.App.View.Bell qualified as BellView
 import Wiki.App.View.Blog qualified as BlogView
 import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
+import Wiki.App.View.Groups qualified as GroupsView
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.Invite qualified as InviteView
@@ -165,7 +170,9 @@ import Wiki.App.View.SignIn qualified as SignInView
 import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
+import Wiki.App.View.Status qualified as StatusView
 import Wiki.App.View.Unsubscribe qualified as UnsubscribeView
+import Wiki.App.View.Users qualified as UsersView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
@@ -246,7 +253,8 @@ data ViewSlot
   | ImporterSlot
   | AccessSlot
   | ServerSlot
-  | PeopleSlot
+  | UsersSlot
+  | GroupsSlot
   deriving stock (Eq, Ord)
 
 -- | 'PartSlot' is the index of a child under the label "part". The output
@@ -258,6 +266,8 @@ data PartSlot
   | DemoAccountSlot
   | DemoNotificationsSlot
   | ActivitySlot
+  | StatusSlot
+  | BackupsSlot
   | VerifyEmailSlot
   | UnsubscribeSlot
   | AssistantSettingsSlot
@@ -564,8 +574,8 @@ component =
         $> [hh|
           <a
             class="admin-link"
-            {{ [attr "aria-current" "page" | st.route == Admin] }}
-            {{ Router.linkProps st.router Followed Admin }}
+            {{ [attr "aria-current" "page" | isAdminRoute st.route] }}
+            {{ Router.linkProps st.router Followed (Admin R.Overview) }}
           >
             Administration
           </a>
@@ -647,24 +657,17 @@ component =
         </div>
       |]
 
-    -- The administration of the wiki, for someone who may administer it.
-    -- Anyone else is told whom it is for, and in the demo how to become
-    -- one.
-    admin :: State m -> H.ComponentHTML Action Slots m
-    admin st
+    -- The administration of the wiki, for someone who may administer it:
+    -- the section's heading and the section, each section's view mounted
+    -- alone. Anyone else is told whom it is for, and in the demo how to
+    -- become one.
+    admin :: State m -> AdminSection -> H.ComponentHTML Action Slots m
+    admin st section
       | isAdministrator st =
           [hh|
-            <section class="admin-view">
-              <h1>Administration</h1>
-              <section class="admin-section admin-data">
-                <h2>Wiki data</h2>
-                <p class="admin-intro">{{ dataIntro }}</p>
-                {{ dataControls st }}
-              </section>
-              {{ HH.slot "view" AccessSlot AccessView.component AccessView.Input {context = context st} FromView }}
-              {{ HH.slot "view" ServerSlot ServerView.component ServerView.Input {context = context st} FromView }}
-              {{ HH.slot "view" PeopleSlot AdminView.component AdminView.Input {context = context st} FromView }}
-              {{ HH.slot_ "part" ActivitySlot ActivityView.component ActivityView.Input {context = context st} }}
+            <section class="admin-view admin-page-{{ sectionName section }}">
+              <h1>{{ sectionTitle section }}</h1>
+              {{ sectionView st section }}
             </section>
           |]
       | otherwise =
@@ -675,10 +678,6 @@ component =
             </section>
           |]
       where
-        dataIntro :: Text
-        dataIntro
-          | isJust st.demo = "The whole wiki as one file: export it to keep a copy or to take it to another browser, or import one to replace everything here."
-          | otherwise = "The whole wiki as one file: export it to keep a copy, or import the pages of another into this one, choosing what to bring in."
         refusal :: Text
         refusal
           | isJust st.demo
@@ -689,6 +688,34 @@ component =
           , isNothing st.session.user =
               "This page is for the wiki's administrators, and you are not signed in. If you are one, sign in at the top right."
           | otherwise = "This page is for the wiki's administrators, which you are not."
+
+    -- A section of the administration: its view, or for "Backups and data"
+    -- the backups' view and the wiki's data as one file.
+    sectionView :: State m -> AdminSection -> H.ComponentHTML Action Slots m
+    sectionView st = \case
+      R.Overview -> HH.slot_ "part" StatusSlot StatusView.component StatusView.Input {context = ctx}
+      R.Users listing -> HH.slot "view" UsersSlot UsersView.component UsersView.Input {context = ctx, listing} FromView
+      R.Groups -> HH.slot "view" GroupsSlot GroupsView.component GroupsView.Input {context = ctx} FromView
+      R.Permissions -> HH.slot "view" AccessSlot AccessView.component AccessView.Input {context = ctx} FromView
+      R.Server -> HH.slot "view" ServerSlot ServerView.component ServerView.Input {context = ctx} FromView
+      R.Backups ->
+        [hh|
+          <div class="admin-backups-and-data">
+            {{ HH.slot_ "part" BackupsSlot BackupsView.component BackupsView.Input {context = ctx} }}
+            <section class="admin-section admin-data">
+              <h2>The wiki as one file</h2>
+              <p class="admin-intro">{{ dataIntro }}</p>
+              {{ dataControls st }}
+            </section>
+          </div>
+        |]
+      R.Activity -> HH.slot_ "part" ActivitySlot ActivityView.component ActivityView.Input {context = ctx}
+      where
+        ctx = context st
+        dataIntro :: Text
+        dataIntro
+          | isJust st.demo = "Export the whole wiki to keep a copy or to take it to another browser, or import one to replace everything here."
+          | otherwise = "Export the whole wiki to keep a copy, or import the pages of another into this one, choosing what to bring in."
 
     -- What can be done with the wiki's data: the demo's, or the server's.
     dataControls :: State m -> H.ComponentHTML Action Slots m
@@ -757,9 +784,35 @@ component =
 
     -- Inside a space, that space alone; elsewhere, the spaces.
     sidebar :: State m -> H.ComponentHTML Action Slots m
-    sidebar st = case st.here of
-      InSpace _ space pages -> spaceSidebar st space pages
+    sidebar st = case (st.route, st.here) of
+      (Admin section, _) | st.world == WorldReady && isAdministrator st -> adminSidebar st section
+      (_, InSpace _ space pages) -> spaceSidebar st space pages
       _ -> spacesSidebar st
+
+    -- The administration's navigation, in the sidebar's place: an entry per
+    -- section, the current one marked. On a narrow screen the stylesheet
+    -- turns it into a row of tabs above the section.
+    adminSidebar :: State m -> AdminSection -> H.ComponentHTML Action Slots m
+    adminSidebar st current =
+      [hh|
+        <nav class="wiki-sidebar admin-sidebar" aria-label="Administration">
+          <h2>Administration</h2>
+          <ul class="admin-nav">
+            {% for s in adminSections %}
+              <li>
+                <a
+                  class="admin-nav-link"
+                  data-section={{ sectionName s }}
+                  {{ [attr "aria-current" "page" | sectionName s == sectionName current] }}
+                  {{ Router.linkProps st.router Followed (Admin s) }}
+                >
+                  {{ sectionTitle s }}
+                </a>
+              </li>
+            {% end %}
+          </ul>
+        </nav>
+      |]
 
     spacesSidebar :: State m -> H.ComponentHTML Action Slots m
     spacesSidebar st =
@@ -892,7 +945,7 @@ component =
     routeContent st = \case
       Home -> HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
       Unknown -> notFound st
-      Admin -> admin st
+      Admin section -> admin st section
       NewSpace parent -> HH.slot "view" NewSpaceSlot NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
       Search text space subspaces ->
         HH.slot "view" SearchResultsSlot SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
@@ -978,6 +1031,7 @@ component =
         handleAction InstallChanged
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
+        canonicalAdmin
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
@@ -1112,6 +1166,16 @@ component =
       FromReset ResetView.SignInWanted -> H.tell "signIn" () (SignInView.Prompt "Sign in with your new password.")
       ToggleDemoAccount -> modify (\st -> st {demoAccountOpen = not st.demoAccountOpen, menuOpen = False})
 
+    -- The address of an administration's route as the router writes it,
+    -- in place of the one the route was read from: @\/admin\/@ becomes the
+    -- first section's address. Where the two are the same, nothing
+    -- happens; the router then announces the route already shown, which
+    -- 'Arrived' ignores.
+    canonicalAdmin :: H.HalogenM (State m) Action Slots output m ()
+    canonicalAdmin = do
+      st <- get
+      when (isAdminRoute st.route) (Router.redirect st.router st.route)
+
     -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
     restartFeed = gets (\st -> st.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.restart))
@@ -1142,6 +1206,7 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      canonicalAdmin
       loadHere False
 
     -- After a change: reload everything, and every view's own data too.
@@ -1270,6 +1335,12 @@ isMailedLink = \case
   Unsubscribe _ -> True
   _ -> False
 
+-- | Whether a route is one of the administration's sections.
+isAdminRoute :: Route -> Bool
+isAdminRoute = \case
+  Admin _ -> True
+  _ -> False
+
 -- | Whether the user may administer the wiki as a whole, and so is shown
 -- the administration.
 isAdministrator :: State m -> Bool
@@ -1368,7 +1439,7 @@ crumbs st = case st.route of
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
   Search {} -> [("Search", Nothing)]
-  Admin -> [("Administration", Nothing)]
+  Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]
   where
     spaceCrumbs path =

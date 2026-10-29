@@ -23,7 +23,11 @@
 -- > /new-space/                    NewSpace Nothing
 -- > /new-space/team/               NewSpace (Just [team])
 -- > /not-found/                    Unknown
--- > /admin/                        Admin
+-- > /admin/                        Admin Overview (written /admin/overview/)
+-- > /admin/overview/               Admin Overview
+-- > /admin/users/?q=ada&page=2&show=administrators
+-- >                                Admin (Users (UserListing "ada" 2 OnlyAdministrators))
+-- > /admin/groups/                 Admin Groups
 -- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
 -- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
 -- > /invite/<secret>/              Invite (InvitationToken <secret>)
@@ -50,6 +54,13 @@ module Wiki.App.Route
   ( -- * Routes
     Route (..)
   , Against (..)
+  , AdminSection (..)
+  , UserListing (..)
+  , UserFilter (..)
+  , allUsers
+  , adminSections
+  , sectionName
+  , sectionTitle
   , route
   , routeOfHref
   , spaceRouteOf
@@ -115,8 +126,10 @@ data Route
     -- search can be kept and shared like any other.
     Search (Maybe Text) (Maybe [Slug]) Bool
   | -- | The administration of the wiki as a whole, for whoever holds the
-    -- global 'Wiki.Core.Permission.Administer'.
-    Admin
+    -- global 'Wiki.Core.Permission.Administer': one of its sections. The
+    -- address @\/admin\/@ names no section and is read as the first,
+    -- 'Overview', whose address the shell then puts in its place.
+    Admin AdminSection
   | -- | A page's history, for anyone who may read the page: its space's
     -- path, its own path there, the version shown (by its time, the
     -- page's @updatedAt@ then; 'Nothing' for the latest), and what that
@@ -148,6 +161,81 @@ data Route
     -- of docs/PLAN.md): their API keys, and the provider and model to use.
     AssistantSettings
   deriving stock (Eq, Show)
+
+-- | 'AdminSection' is a section of the administration: one page of it, with
+-- an entry in the administration's navigation. Each section's address is
+-- its name ('sectionName') under @\/admin\/@.
+data AdminSection
+  = -- | How the server is: its version, its data, the last backup, the
+    -- errors it logged.
+    Overview
+  | -- | The users, a page at a time, as the address asks for them.
+    Users UserListing
+  | Groups
+  | -- | Who may come in, what new accounts may do, and in a closed wiki the
+    -- invitations.
+    Permissions
+  | -- | The server's own settings: its public address, mail, sign-in
+    -- providers, the assistant's hosts.
+    Server
+  | -- | The server's backups, and the wiki's data as one file: its export
+    -- and import.
+    Backups
+  | -- | The audit log.
+    Activity
+  deriving stock (Eq, Show)
+
+-- | 'UserListing' is which users the users section shows: the words
+-- searched for (empty for everyone), the page, counted from 1, and a
+-- filter. They are the address's parameters (@q@, @page@, @show@, each
+-- left out when it has its first value), so that a page of users can be
+-- kept and shared. How many users a page holds is the reader's own
+-- choice, kept in their browser, so it is not in the address.
+data UserListing = UserListing
+  { search :: Text
+  , page :: Int
+  , only :: UserFilter
+  }
+  deriving stock (Eq, Show)
+
+-- | Which users the users section keeps: everyone, or only one kind.
+data UserFilter
+  = Everyone
+  | OnlyAdministrators
+  | OnlyDisabled
+  deriving stock (Eq, Show, Enum, Bounded)
+
+-- | The first page of every user.
+allUsers :: UserListing
+allUsers = UserListing {search = "", page = 1, only = Everyone}
+
+-- | The sections in the order the navigation lists them, each at its first
+-- address.
+adminSections :: [AdminSection]
+adminSections = [Overview, Users allUsers, Groups, Permissions, Server, Backups, Activity]
+
+-- | A section's name, the last segment of its address: stable, lower
+-- case.
+sectionName :: AdminSection -> Text
+sectionName = \case
+  Overview -> "overview"
+  Users _ -> "users"
+  Groups -> "groups"
+  Permissions -> "permissions"
+  Server -> "server"
+  Backups -> "backups"
+  Activity -> "activity"
+
+-- | A section's title, as the navigation and the page's heading show it.
+sectionTitle :: AdminSection -> Text
+sectionTitle = \case
+  Overview -> "Overview"
+  Users _ -> "Users"
+  Groups -> "Groups"
+  Permissions -> "Permissions"
+  Server -> "Server"
+  Backups -> "Backups and data"
+  Activity -> "Activity"
 
 -- | What a version in a history is compared with.
 data Against
@@ -199,7 +287,7 @@ route =
           (\case Search q s subspaces -> Just (q, s, subspaces); _ -> Nothing)
           (\(q, s, subspaces) -> Search q s subspaces)
           (prefix "search" (directory searchParams))
-      , alternative (\case Admin -> Just (); _ -> Nothing) (const Admin) (prefix "admin" (directory noArgs))
+      , alternative (\case Admin s -> Just s; _ -> Nothing) Admin (prefix "admin" adminSection)
       , alternative (\case AssistantSettings -> Just (); _ -> Nothing) (const AssistantSettings) (prefix "assistant" (directory noArgs))
       , alternative
           (\case PageHistory s p v a -> Just ((s, p), (v, a)); _ -> Nothing)
@@ -259,12 +347,6 @@ route =
     -- back into range.
     slideParams :: RouteDuplex' (Int, Int)
     slideParams = (,) <$> Duplex.lmap fst (counted "slide") <*> Duplex.lmap snd (counted "step")
-    counted :: Text -> RouteDuplex' Int
-    counted name =
-      fromMaybe 1
-        <$> Duplex.lmap
-          (\n -> if n == 1 then Nothing else Just n)
-          (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param name)))
     -- A page of posts, counted from 1, always written; a value that is not
     -- a number parses as the first.
     pageParam :: RouteDuplex' Int
@@ -274,6 +356,52 @@ route =
     -- parameter parses as left out, which would search every space instead.
     readPath :: Text -> Either Text [Slug]
     readPath = Right . fromRight [] . parsePath
+
+-- | A number counted from 1, as a parameter left out at 1. A value that is
+-- not a number parses as 1; one past the end of what it counts is for the
+-- view to bring back into range.
+counted :: Text -> RouteDuplex' Int
+counted name =
+  fromMaybe 1
+    <$> Duplex.lmap
+      (\n -> if n == 1 then Nothing else Just n)
+      (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param name)))
+
+-- | The sections of the administration, each a segment under @\/admin\/@.
+-- The address with no segment is the first section's, and is parsed so
+-- that an address kept from before the sections still works.
+adminSection :: RouteDuplex' AdminSection
+adminSection = RouteDuplex named.printer (named.parser <|> (Overview <$ (directory noArgs).parser))
+  where
+    named =
+      alternatives
+        [ section Overview
+        , alternative (\case Users l -> Just l; _ -> Nothing) Users (prefix "users" (directory userListing))
+        , section Groups
+        , section Permissions
+        , section Server
+        , section Backups
+        , section Activity
+        ]
+    section s = alternative (\x -> if x == s then Just () else Nothing) (const s) (prefix (sectionName s) (directory noArgs))
+
+-- | The users section's parameters: @q@, @page@ and @show@, each left out
+-- at its first value. A @show@ that names no filter parses as everyone.
+userListing :: RouteDuplex' UserListing
+userListing =
+  UserListing
+    <$> Duplex.lmap (\l -> l.search) (fromMaybe "" <$> Duplex.lmap (\q -> if T.null q then Nothing else Just q) (Duplex.optional (param "q")))
+    <*> Duplex.lmap (\l -> l.page) (counted "page")
+    <*> Duplex.lmap (\l -> l.only) (readFilter <$> Duplex.lmap writeFilter (Duplex.optional (param "show")))
+  where
+    writeFilter = \case
+      Everyone -> Nothing
+      OnlyAdministrators -> Just "administrators"
+      OnlyDisabled -> Just "disabled"
+    readFilter = \case
+      Just "administrators" -> OnlyAdministrators
+      Just "disabled" -> OnlyDisabled
+      _ -> Everyone
 
 -- | One or more slugs, one per segment.
 slugs :: RouteDuplex' [Slug]
@@ -299,16 +427,16 @@ directory codec = RouteDuplex withSlash.printer (withSlash.parser <|> codec.pars
   where
     withSlash = suffix codec ""
 
--- | One constructor of 'Route': how to take its arguments out of a route
+-- | One constructor of 'Route' (or of 'AdminSection'): how to take its arguments out of a route
 -- (or 'Nothing' for another constructor), how to make the route from them,
 -- and their codec.
-alternative :: (Route -> Maybe a) -> (a -> Route) -> RouteDuplex' a -> RouteDuplex Route Route
+alternative :: (r -> Maybe a) -> (a -> r) -> RouteDuplex' a -> RouteDuplex r r
 alternative match make codec =
   RouteDuplex (maybe mempty codec.printer . match) (make <$> codec.parser)
 
 -- | The routes' alternatives as one codec: printed by the one that matches,
 -- parsed by the first that reads the address.
-alternatives :: [RouteDuplex Route Route] -> RouteDuplex Route Route
+alternatives :: [RouteDuplex r r] -> RouteDuplex r r
 alternatives alts = RouteDuplex (\r -> foldMap (\a -> a.printer r) alts) (asum (map (\a -> a.parser) alts))
 
 -- | The route a link's @href@ leads to, if it is one of the router's own
@@ -354,12 +482,12 @@ data PageLink = PageLink Route Text
 -- A segment that is not a slug is read as a title would be ('slugify'), so
 -- that a wiki link names a page by its title: @[[On-call]]@.
 resolvePageLink
-  :: (TreeNode page, Eq (NodeId page))
+  :: (TreeNode node, Eq (NodeId node))
   => [Space]
   -- ^ Every space the reader can see the path of.
   -> [Slug]
   -- ^ The path of the page's space.
-  -> [page]
+  -> [node]
   -- ^ The pages of that space: their summaries, or the pages themselves.
   -> [Slug]
   -- ^ The page's path.

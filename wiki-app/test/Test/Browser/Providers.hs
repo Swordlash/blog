@@ -18,7 +18,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerUsers, answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (slugs)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -33,7 +33,7 @@ import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (AdminSection (..), Route (..), allUsers)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
@@ -200,12 +200,15 @@ administration m = describe "the administration's accounts" $ do
       (me, people) <- demoPeople
       answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withIdentities d)
+      for_ people (answerUsers . withIdentities)
       answerWith "DELETE" "api/v1/admin/users/user-editor/identities/hub" 204 ()
-      ui <- startServer m Admin
-      find ui ".user-row[data-login=editor] .account-state" >>= (`shouldHaveText` "Signs in with GitHub")
-      find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "No password yet")
-      find ui ".user-row[data-login=editor] .identity-unlink" >>= (`shouldHaveText` "Disconnect GitHub")
-      find ui ".user-row[data-login=editor] .identity-unlink" >>= click
+      ui <- startServer m (Admin (Users allUsers))
+      find ui ".user-row[data-login=editor] .user-sign-in" >>= (`shouldHaveText` "With GitHub")
+      find ui ".user-row[data-login=reader] .user-sign-in" >>= (`shouldHaveText` "No password yet")
+      manage ui "editor"
+      find ui ".user-dialog .account-state" >>= (`shouldHaveText` "With GitHub")
+      find ui ".user-dialog .identity-unlink" >>= (`shouldHaveText` "Disconnect GitHub")
+      find ui ".user-dialog .identity-unlink" >>= click
       eventually $ do
         gone <- filter (\r -> r.method == "DELETE") <$> asked
         map (\r -> r.url) gone `shouldBe` ["api/v1/admin/users/user-editor/identities/hub"]
@@ -219,22 +222,28 @@ administration m = describe "the administration's accounts" $ do
       (me, people) <- demoPeople
       answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo True (withIdentities d))
+      for_ people (answerUsers . mailingTo True . withIdentities)
       answerWith "POST" "api/v1/admin/users/user-reader/password-link" 204 ()
-      ui <- startServer m Admin
+      ui <- startServer m (Admin (Users allUsers))
       -- Edgar signs in with GitHub and has no password: nothing to set.
-      _ <- find ui ".user-row[data-login=editor] .identity-unlink"
-      length <$> findAll ui ".user-row[data-login=editor] .password-ask" `shouldReturn` 0
-      length <$> findAll ui ".user-row[data-login=editor] .password-link-ask" `shouldReturn` 0
+      manage ui "editor"
+      _ <- find ui ".user-dialog .identity-unlink"
+      length <$> findAll ui ".user-dialog .password-ask" `shouldReturn` 0
+      length <$> findAll ui ".user-dialog .password-link-ask" `shouldReturn` 0
+      press "Escape"
       -- The administrator has no verified address: a password is typed.
-      find ui ".user-row[data-login=admin] .password-ask" >>= (`shouldHaveText` "Set password…")
-      find ui ".user-row[data-login=admin] .password-hint" >>= (`shouldHaveText` "No verified address: type a password for them")
+      manage ui "admin"
+      find ui ".user-dialog .password-ask" >>= (`shouldHaveText` "Set password…")
+      find ui ".user-dialog .password-hint" >>= (`shouldHaveText` "No verified address: type a password for them")
+      press "Escape"
       -- Rita has one: a link is mailed there, once asked whether to.
-      length <$> findAll ui ".user-row[data-login=reader] .password-ask" `shouldReturn` 0
-      find ui ".user-row[data-login=reader] .password-link-ask" >>= (`shouldHaveText` "Send a password link…")
-      find ui ".user-row[data-login=reader] .password-link-ask" >>= click
-      find ui ".user-row[data-login=reader] .password-link-confirm" >>= (`shouldContainText` "rita@example.org")
-      find ui ".user-row[data-login=reader] .password-link-send" >>= click
-      find ui ".admin-told" >>= (`shouldContainText` "mailed to Rita Reader, at rita@example.org")
+      manage ui "reader"
+      length <$> findAll ui ".user-dialog .password-ask" `shouldReturn` 0
+      find ui ".user-dialog .password-link-ask" >>= (`shouldHaveText` "Send a password link…")
+      find ui ".user-dialog .password-link-ask" >>= click
+      find ui ".user-dialog .password-link-confirm" >>= (`shouldContainText` "rita@example.org")
+      find ui ".user-dialog .password-link-send" >>= click
+      find ui ".user-dialog-saved" >>= (`shouldContainText` "mailed to rita@example.org")
       sent <- filter (\r -> r.method == "POST") <$> asked
       map (\r -> r.url) sent `shouldBe` ["api/v1/admin/users/user-reader/password-link"]
       length <$> findAll ui ".password-link-confirm" `shouldReturn` 0
@@ -248,13 +257,18 @@ administration m = describe "the administration's accounts" $ do
       (me, people) <- demoPeople
       answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo False (withIdentities d))
-      ui <- startServer m Admin
-      find ui ".user-row[data-login=reader] .password-ask" >>= (`shouldHaveText` "Set password…")
-      find ui ".user-row[data-login=reader] .password-hint" >>= (`shouldHaveText` "The server sends no mail: type a password for them")
+      for_ people (answerUsers . mailingTo False . withIdentities)
+      ui <- startServer m (Admin (Users allUsers))
+      manage ui "reader"
+      find ui ".user-dialog .password-ask" >>= (`shouldHaveText` "Set password…")
+      find ui ".user-dialog .password-hint" >>= (`shouldHaveText` "The server sends no mail: type a password for them")
       length <$> findAll ui ".password-link-ask" `shouldReturn` 0
       unmount ui
       serverStops
   where
+    manage ui login = do
+      find ui (".user-row[data-login=" <> login <> "] .user-manage") >>= click
+      void (find ui (".user-dialog[data-login=" <> login <> "]"))
     demoPeople = unsafeIOToPageM $ do
       wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
       runMemWiki wiki ((,) <$> session <*> directory)

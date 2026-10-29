@@ -16,7 +16,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerRaw, answerUsers, answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -31,7 +31,7 @@ import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (AdminSection (..), Route (..), allUsers)
 import Wiki.App.View.Security (qrRuns)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
@@ -298,20 +298,33 @@ administration m = describe "the administration's accounts" $ do
     (me, listed) <- people
     answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = []}
     for_ listed $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withSecurity d)
+    for_ listed (answerUsers . withSecurity)
     answerRaw "DELETE" "api/v1/admin/users/user-editor/second-factor" 204 ""
-    ui <- startServer m Admin
-    find ui ".user-row[data-login=editor] .account-second-factor" >>= (`shouldHaveText` "With a second factor")
-    find ui ".user-row[data-login=editor] .account-email" >>= (`shouldHaveText` "edgar@example.org (not verified)")
-    length <$> findAll ui ".user-row[data-login=reader] .second-factor-remove" `shouldReturn` 0
-    find ui ".user-row[data-login=editor] .second-factor-remove" >>= click
+    ui <- startServer m (Admin (Users allUsers))
+    find ui ".user-row[data-login=editor] .badge-second-factor" >>= (`shouldHaveText` "Second factor")
+    length <$> findAll ui ".user-row[data-login=reader] .badge-second-factor" `shouldReturn` 0
+    find ui ".user-row[data-login=reader] .user-manage" >>= click
+    _ <- find ui ".user-dialog[data-login=reader]"
+    length <$> findAll ui ".user-dialog .second-factor-remove" `shouldReturn` 0
+    press "Escape"
+    find ui ".user-row[data-login=editor] .user-manage" >>= click
+    find ui ".user-dialog .account-email" >>= (`shouldHaveText` "edgar@example.org (not verified)")
+    -- Removing it asks first.
+    find ui ".user-dialog .second-factor-remove" >>= click
+    find ui ".user-dialog .second-factor-confirm" >>= (`shouldContainText` "Remove Edgar Editor's second factor?")
+    askedWith "DELETE" `shouldReturn` []
+    find ui ".user-dialog .second-factor-confirm-button" >>= click
     eventually (askedWith "DELETE" `shouldReturn` [("api/v1/admin/users/user-editor/second-factor", "")])
+    press "Escape"
+    find ui ".user-create-open" >>= click
     field <- find ui ".user-create-email"
     getAttribute field "disabled" `shouldReturn` Nothing
     unmount ui
     serverStops
 
   it "keep the new user's address field disabled where the server sends no mail, saying why" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin (Users allUsers))
+    find ui ".user-create-open" >>= click
     field <- find ui ".user-create-email"
     getAttribute field "disabled" `shouldReturn` Just ""
     find ui ".user-create-email-note" >>= (`shouldContainText` "sends no mail")

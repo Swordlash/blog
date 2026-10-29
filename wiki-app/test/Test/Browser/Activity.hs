@@ -22,6 +22,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..))
@@ -46,8 +47,9 @@ demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIsl
 demo m = describe "over the demo's wiki" $
   it "says that the demo keeps no log and has no server" $
     runPage $ do
-      ui <- start m (Just "user-admin") Admin
+      ui <- start m (Just "user-admin") (Admin R.Activity)
       find ui ".admin-activity .activity-unavailable" >>= (`shouldContainText` "The demo keeps no activity log")
+      find ui ".admin-nav-link[data-section=overview]" >>= click
       find ui ".server-status .status-unavailable" >>= (`shouldContainText` "The demo has no server")
       unmount ui
 
@@ -75,7 +77,7 @@ overHttp m = describe "over HTTP" $
       answerWith "GET" (endpointUrl (\e -> e.admin.activity Nothing Nothing (Just "e2"))) 200 firstPage {entries = [older], more = False}
       answerWith "GET" (endpointUrl (\e -> e.admin.activity (Just ada.id) Nothing Nothing)) 200 firstPage {entries = [granted], more = False}
       answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer {errors = [LoggedError {at = at 10, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]}
-      ui <- startServer m Admin
+      ui <- startServer m (Admin R.Activity)
       rows <- eventually $ do
         rs <- findAll ui ".activity-row"
         length rs `shouldBe` 2
@@ -104,7 +106,8 @@ overHttp m = describe "over HTTP" $
         rs <- findAll ui ".activity-row"
         length rs `shouldBe` 1
       find ui ".activity-row" >>= (`shouldContainText` "Granted a permission on a space")
-      -- The server's status, with its last error.
+      -- The server's status, with its last error, in the overview.
+      find ui ".admin-nav-link[data-section=overview]" >>= click
       find ui ".server-status .status-schema" >>= (`shouldHaveText` "Version 9")
       find ui ".server-status .status-error-route" >>= (`shouldHaveText` "/api/v1/pages/:page")
       find ui ".server-status .status-error-message" >>= (`shouldHaveText` "SQLite3 returned ErrorIO")

@@ -10,6 +10,21 @@ uploads, of the demo's attachments and of the passkeys and sealed keys
 (those set the floor), and `indexedDB.databases()` alone to find the demo's
 data, without the fallback for Firefox before 126.
 
+The administration is a page per section (WP5.25): `Route.Admin` takes an
+`AdminSection` (`Overview`, `Users UserListing`, `Groups`, `Permissions`,
+`Server`, `Backups`, `Activity`), each at `/admin/<section>/`, and
+`/admin/` opens the first. On these routes the sidebar is the
+administration's navigation. `Wiki.App.View.Admin` is gone: the groups are
+`Wiki.App.View.Groups`, the users `Wiki.App.View.Users` (a table read with
+the new `MonadAdmin.userPage`, paged, searched and filtered from the
+address, the page size kept in local storage) and every operation on one
+user is in `Wiki.App.View.UserDialog`, a modal `<dialog>`
+(`Wiki.App.Browser.showDialog` and `closeDialog`); `passwordControl` moved
+there and takes whether the server mails and a `UserSummary`. The server's
+section no longer mounts the status and the backups, which are sections of
+their own, and the wiki's export and import moved under the backups. The
+HTTP backend's cache gains `userPages`, used once from a prerendered page.
+
 The HTTP backend's client is derived from the API's type with
 servant-client-core (WP5.23). `Wiki.App.Backend.Http.Request` is gone: its
 `Request`, `Body`, `Response`, `multipart` and `multipartForm` are replaced

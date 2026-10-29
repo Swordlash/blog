@@ -29,6 +29,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
@@ -146,7 +147,7 @@ invited m = describe "an invitation's page" $ do
 panel :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 panel m = describe "the administration's section on it" $ do
   it "closes the wiki, invites someone with a link to pass on, revokes it, and opens the wiki again" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Permissions)
     -- Open: no invitations.
     length <$> findAll ui ".admin-invitations" `shouldReturn` 0
     find ui ".access-choice input[value=closed]" >>= click
@@ -173,7 +174,7 @@ panel m = describe "the administration's section on it" $ do
     unmount ui
 
   it "lets new accounts create spaces" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Permissions)
     box <- find ui ".new-accounts-create-spaces input"
     getProperty box "checked" `shouldReturn` "false"
     find ui ".new-accounts-create-spaces" >>= (`shouldContainText` "Let every new account create spaces")
@@ -183,22 +184,34 @@ panel m = describe "the administration's section on it" $ do
     unmount ui
 
   it "leaves accounts with a password to the console, and the users' section says so in place of its form" $ runPage $ do
-    ui <- start m (Just "user-admin") Admin
+    ui <- start m (Just "user-admin") (Admin R.Permissions)
     box <- find ui ".admin-creates-password-accounts input"
     getProperty box "checked" `shouldReturn` "true"
     find ui ".admin-creates-password-accounts" >>= (`shouldContainText` "The administration may create accounts with a password")
     find ui ".admin-creates-password-accounts .check-help" >>= (`shouldContainText` "wiki-server users add")
-    _ <- find ui ".user-create"
+    users ui
+    _ <- find ui ".user-create-open"
     length <$> findAll ui ".user-create-console" `shouldReturn` 0
-    click box
-    eventually (find ui ".admin-creates-password-accounts input" >>= (`getProperty` "checked") >>= (`shouldBe` "false"))
-    find ui ".user-create-console" >>= (`shouldContainText` "on the server's console, with wiki-server users add, as")
-    length <$> findAll ui ".user-create" `shouldReturn` 0
-    -- On again, the form is back.
+    permissions ui
     find ui ".admin-creates-password-accounts input" >>= click
-    _ <- find ui ".user-create"
+    eventually (find ui ".admin-creates-password-accounts input" >>= (`getProperty` "checked") >>= (`shouldBe` "false"))
+    users ui
+    find ui ".user-create-console" >>= (`shouldContainText` "on the server's console, with wiki-server users add, as")
+    length <$> findAll ui ".user-create-open" `shouldReturn` 0
+    -- On again, the form is back.
+    permissions ui
+    find ui ".admin-creates-password-accounts input" >>= click
+    eventually (find ui ".admin-creates-password-accounts input" >>= (`getProperty` "checked") >>= (`shouldBe` "true"))
+    users ui
+    _ <- find ui ".user-create-open"
     length <$> findAll ui ".user-create-console" `shouldReturn` 0
     unmount ui
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
+
+-- | Go to the administration's users, or to its permissions, from its
+-- navigation.
+users, permissions :: Mounted s q o m -> PageM s ()
+users ui = find ui ".admin-nav-link[data-section=users]" >>= click
+permissions ui = find ui ".admin-nav-link[data-section=permissions]" >>= click

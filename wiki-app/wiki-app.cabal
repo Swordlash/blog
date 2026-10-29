@@ -98,7 +98,6 @@ library
       Wiki.App.Editor.Browser
       Wiki.App.View.Access
       Wiki.App.View.Activity
-      Wiki.App.View.Admin
       Wiki.App.View.Assistant
       Wiki.App.View.AssistantSettings
       Wiki.App.View.Backups
@@ -111,6 +110,7 @@ library
       Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
+      Wiki.App.View.Groups
       Wiki.App.View.Export
       Wiki.App.View.Import
       Wiki.App.View.NewPage
@@ -133,6 +133,8 @@ library
       Wiki.App.View.SpaceSettings
       Wiki.App.View.Status
       Wiki.App.View.Unsubscribe
+      Wiki.App.View.UserDialog
+      Wiki.App.View.Users
       Wiki.App.View.VerifyEmail
       Wiki.App.View.Watch
 

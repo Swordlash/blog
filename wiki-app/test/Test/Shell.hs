@@ -14,7 +14,7 @@ import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Route (Against (..), Route (..))
+import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections, allUsers, sectionName, sectionTitle)
 import Wiki.App.Static (Rendered (..), renderRoute)
 import Wiki.App.View.Common (whoIs)
 import Wiki.Core.Draft (Draft (..))
@@ -383,7 +383,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "ends every page with the footer, linking to haskell-halogen" $ do
     let footer = "<footer class=\"wiki-footer\">Built with <a href=\"https://github.com/Swordlash/haskell-halogen\">haskell-halogen</a></footer>"
-    for_ [Home, Unknown, Admin, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"]), PageSource (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
+    for_ [Home, Unknown, Admin Overview, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"]), PageSource (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
       Rendered {html} <- render (as Nothing) r
       html `contains` footer
       -- The frame's last element, after its body.
@@ -438,44 +438,73 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html = team} <- render (as Nothing) (Search (Just "the") (Just (slugs ["team"])) False)
     team `contains` "There is no such space to search in"
 
-  it "links an administrator to the administration, whose first section is the wiki's data" $ do
+  it "links an administrator to the administration, a page per section with the sections in the sidebar" $ do
     Rendered {html = home} <- render (as (Just "user-admin")) Home
-    home `contains` "<a class=\"admin-link\" href=\"/admin/\">Administration</a>"
-    Rendered {html, title} <- render (as (Just "user-admin")) Admin
-    title `shouldBe` "Administration · Wiki"
-    html `contains` "<a aria-current=\"page\" class=\"admin-link\" href=\"/admin/\">Administration</a>"
-    html `contains` "<section class=\"admin-view\"><h1>Administration</h1><section class=\"admin-section admin-data\"><h2>Wiki data</h2>"
-    html `contains` ">Export the wiki</button>"
-    html `contains` "Import a wiki…"
-    html `contains` ">Reset the demo content…</button>"
+    home `contains` "<a class=\"admin-link\" href=\"/admin/overview/\">Administration</a>"
+    Rendered {html, title} <- render (as (Just "user-admin")) (Admin Overview)
+    title `shouldBe` "Overview · Administration · Wiki"
+    html `contains` "<a aria-current=\"page\" class=\"admin-link\" href=\"/admin/overview/\">Administration</a>"
+    html `contains` "<nav aria-label=\"Administration\" class=\"wiki-sidebar admin-sidebar\"><h2>Administration</h2><ul class=\"admin-nav\">"
+    html `contains` "<a aria-current=\"page\" class=\"admin-nav-link\" data-section=\"overview\" href=\"/admin/overview/\">Overview</a>"
+    for_ (drop 1 adminSections) $ \section ->
+      html `contains` ("<a class=\"admin-nav-link\" data-section=\"" <> sectionName section <> "\" href=\"/admin/" <> sectionName section <> "/\">" <> sectionTitle section <> "</a>")
+    html `contains` "<section class=\"admin-view admin-page-overview\"><h1>Overview</h1>"
+    -- The spaces are not in the sidebar here, and no other section is shown.
+    html `lacks` "sidebar-spaces"
+    html `lacks` "admin-users"
     -- In the menu no longer: it only switches users.
     html `lacks` "user-menu"
 
-  it "lists the users and the groups for an administrator, after the wiki's data, but no switch for their own" $ do
-    Rendered {html} <- render (as (Just "user-admin")) Admin
-    html `contains` "</section><div class=\"admin-people\"><section class=\"admin-section admin-users\"><h2>Users</h2>"
-    html `contains` "<section class=\"admin-section admin-groups\"><h2>Groups</h2>"
+  it "shows the wiki's data as one file under the backups" $ do
+    Rendered {html, title} <- render (as (Just "user-admin")) (Admin Backups)
+    title `shouldBe` "Backups and data · Administration · Wiki"
+    html `contains` "<h2>The wiki as one file</h2>"
+    html `contains` ">Export the wiki</button>"
+    html `contains` "Import a wiki…"
+    html `contains` ">Reset the demo content…</button>"
+    html `contains` "<h2>Automatic backups</h2>"
+
+  it "lists a page of the users, each with one Manage button, and the groups in a section of their own" $ do
+    Rendered {html, title} <- render (as (Just "user-admin")) (Admin (Users allUsers))
+    title `shouldBe` "Users · Administration · Wiki"
     html `lacks` "Loading…"
     T.count "<tr class=\"user-row\"" html `shouldBe` 3
-    -- Ada may not demote herself from here; she may anyone else.
-    html `contains` "aria-checked=\"true\" aria-label=\"Ada Admin is an administrator\" class=\"switch administrator-switch\" disabled"
-    html `contains` "That is you"
-    html `contains` "aria-checked=\"false\" aria-label=\"Edgar Editor is an administrator\" class=\"switch administrator-switch\" role=\"switch\""
-    html `contains` "<h3 class=\"group-name\">writers</h3><span class=\"group-count\">1 member</span>"
-    html `contains` "<li class=\"group-member\" data-login=\"editor\">"
+    T.count "class=\"user-manage\"" html `shouldBe` 3
+    html `contains` "aria-label=\"Manage Ada Admin\""
+    html `contains` "<span class=\"badge badge-administrator\">Administrator</span>"
+    html `contains` "1–3 of 3"
+    -- The switches are in the dialog now, not on the rows.
+    html `lacks` "administrator-switch"
+    html `lacks` "group-name"
+    Rendered {html = groups} <- render (as (Just "user-admin")) (Admin Groups)
+    groups `contains` "<h3 class=\"group-name\">writers</h3><span class=\"group-count\">1 member</span>"
+    groups `contains` "<li class=\"group-member\" data-login=\"editor\">"
+    groups `lacks` "user-row"
+
+  it "searches the users, and filters them, as the address says" $ do
+    Rendered {html} <- render (as (Just "user-admin")) (Admin (Users (UserListing "ed" 1 Everyone)))
+    T.count "<tr class=\"user-row\"" html `shouldBe` 1
+    html `contains` "data-login=\"editor\""
+    html `contains` "value=\"ed\""
+    Rendered {html = admins} <- render (as (Just "user-admin")) (Admin (Users (UserListing "" 1 OnlyAdministrators)))
+    T.count "<tr class=\"user-row\"" admins `shouldBe` 1
+    admins `contains` "data-login=\"admin\""
+    Rendered {html = none} <- render (as (Just "user-admin")) (Admin (Users (UserListing "nobody" 1 Everyone)))
+    none `contains` "No user matches."
 
   it "shows nobody else the way to the administration, nor its controls there" $
     for_ [Nothing, Just "user-reader", Just "user-editor"] $ \who -> do
       Rendered {html = home} <- render (as who) Home
       home `lacks` "admin-link"
-      Rendered {html, title} <- render (as who) Admin
-      title `shouldBe` "Administration · Wiki"
-      html `contains` "<section class=\"admin-view\"><h1>Administration</h1><div class=\"error error-forbidden\" role=\"alert\">This page is for the wiki's administrators"
-      html `contains` "at the top right."
-      html `lacks` "admin-link"
-      html `lacks` "Export the wiki"
-      html `lacks` "demo-"
-      html `lacks` "admin-users"
+      for_ adminSections $ \section -> do
+        Rendered {html} <- render (as who) (Admin section)
+        html `contains` "<section class=\"admin-view\"><h1>Administration</h1><div class=\"error error-forbidden\" role=\"alert\">This page is for the wiki's administrators"
+        html `contains` "at the top right."
+        html `lacks` "admin-link"
+        html `lacks` "admin-sidebar"
+        html `lacks` "Export the wiki"
+        html `lacks` "demo-"
+        html `lacks` "admin-users"
 
   describe "who is editing, in words" $ do
     let ada = Author {id = UserId "user-admin", name = "Ada Admin"}

@@ -23,6 +23,7 @@ module Test.Browser.Http
   , serveDemo
   , quietServer
   , answerWith
+  , answerUsers
   , answerRaw
   , asked
   , offline
@@ -52,7 +53,7 @@ import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (ServerStatus (..))
+import Wiki.Api.Admin (Directory, ServerStatus (..), UserQuery (..), firstUsers, pageOfDirectory)
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
@@ -75,7 +76,8 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Against (..), Route (..))
+import Wiki.App.Route (Against (..), Route (..), allUsers)
+import Wiki.App.Route qualified as R
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
@@ -142,6 +144,16 @@ serverStops = unsafeIOToPageM js_server_stop
 answerWith :: (ToJSON a) => Text -> Text -> Int -> a -> PageM s ()
 answerWith method url status value = unsafeIOToPageM (js_server_answer (toJSText method) (toJSText url) status (toJSText (decodeUtf8 (toS (encode value)))))
 
+-- | The first page of users, as the users section asks for it, answered
+-- from a directory of every user.
+answerUsers :: Directory -> PageM s ()
+answerUsers d =
+  answerWith
+    "GET"
+    (endpointUrl (\e -> e.admin.users (Just firstUsers.offset) (Just firstUsers.limit) Nothing False False))
+    200
+    (pageOfDirectory firstUsers d)
+
 -- | An answer whose body is not JSON (a proxy's, a failing server's).
 answerRaw :: Text -> Text -> Int -> Text -> PageM s ()
 answerRaw method url status body = unsafeIOToPageM (js_server_answer (toJSText method) (toJSText url) status (toJSText body))
@@ -199,6 +211,7 @@ serveDemo = do
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
+  for_ people answerUsers
   answerWith "GET" (endpointUrl (\e -> e.admin.server)) 200 (noServerSettings :: ServerSettings)
   answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
   answerWith "GET" (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing)) 200 Activity {available = True, entries = [], more = False, actors = []}
@@ -671,20 +684,20 @@ views m = describe "the application over it" $ do
     unmount ui
     serverStops
 
-  it "loads the administration's people from the server, and marks an administrator with a PUT" $ runPage $ do
+  it "loads a page of the users from the server, and marks an administrator with a PUT" $ runPage $ do
     serverStarts
     serveDemo
     unsafeIOToPageM js_server_hold
-    ui <- startServer m Admin
+    ui <- startServer m (Admin (R.Users allUsers))
     find ui ".wiki-content > .loading" >>= (`shouldHaveText` "Loading…")
     unsafeIOToPageM js_server_release
     eventually (length <$> findAll ui ".admin-users .user-row" `shouldReturn` 3)
-    find ui ".admin-groups .group-name" >>= (`shouldHaveText` "writers")
     answerRaw "PUT" "api/v1/admin/users/user-editor/administrator" 204 ""
-    find ui ".user-row[data-login=editor] .administrator-switch" >>= click
+    find ui ".user-row[data-login=editor] .user-manage" >>= click
+    find ui ".user-dialog .administrator-switch" >>= click
     -- Read again once the change is made, as the shell reloads.
-    eventually (length . filter (\r -> r.url == "api/v1/admin/directory") <$> asked `shouldReturn` 2)
-    _ <- eventually (find ui ".user-row[data-login=editor] .administrator-switch:not([disabled])")
+    eventually (length . filter (\r -> "api/v1/admin/users?" `T.isPrefixOf` r.url) <$> asked `shouldReturn` 2)
+    _ <- eventually (find ui ".user-dialog .administrator-switch:not([disabled])")
     marks <- filter (\r -> r.method == "PUT") <$> asked
     map (\r -> (r.url, r.body)) marks `shouldBe` [("api/v1/admin/users/user-editor/administrator", "{\"administrator\":true}")]
     unmount ui
