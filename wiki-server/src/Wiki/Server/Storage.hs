@@ -203,7 +203,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
-import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath, resolvePathM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
@@ -1891,26 +1891,12 @@ savePageTx pid base title body = do
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
   time <- now
-  -- Later than the version saved over even if the clock says otherwise, so
-  -- that no two versions of a page have the same time.
-  let updatedAt = if time > p.updatedAt then time else addUTCTime 0.000001 p.updatedAt
-      p' =
-        Page
-          { id = p.id
-          , space = p.space
-          , parent = p.parent
-          , title = t
-          , slug = p.slug
-          , body
-          , attachments = p.attachments
-          , createdAt = p.createdAt
-          , updatedAt
-          , position = p.position
-          , template = p.template
-          }
+  -- Later than the version saved over even if the clock says otherwise
+  -- ('savedAs').
+  let p' = savedAs time t body p
   author <- asks (\x -> x.author)
   db $ do
-    updatePageText pid t body updatedAt
+    updatePageText pid t body p'.updatedAt
     insertVersion p' author
     for_ author (deleteDraft pid)
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)

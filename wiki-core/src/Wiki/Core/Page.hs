@@ -10,12 +10,13 @@ module Wiki.Core.Page
   , childPages
   , positionPage
   , pageTreeOrder
+  , savedAs
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Type.Equality (type (~))
 import Protolude
 import Wiki.Core.Attachment (Attachment)
@@ -157,5 +158,27 @@ positionPage position p =
     , createdAt = p.createdAt
     , updatedAt = p.updatedAt
     , position
+    , template = p.template
+    }
+
+-- | A page saved with a new title and text at a time: its new version. The
+-- version is later than the one it replaces even if the clock says
+-- otherwise, so that no two versions of a page have the same time and an
+-- editor open on the page sees that it has changed. A save, an import
+-- that takes the imported page, and the guide's update all make a new
+-- version this way.
+savedAs :: UTCTime -> Text -> Text -> Page -> Page
+savedAs time title body p =
+  Page
+    { id = p.id
+    , space = p.space
+    , parent = p.parent
+    , title
+    , slug = p.slug
+    , body
+    , attachments = p.attachments
+    , createdAt = p.createdAt
+    , updatedAt = if time > p.updatedAt then time else addUTCTime 0.000001 p.updatedAt
+    , position = p.position
     , template = p.template
     }

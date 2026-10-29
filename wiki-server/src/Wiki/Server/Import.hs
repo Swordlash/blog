@@ -71,7 +71,7 @@ where
 import Control.Monad.UUID (generateV4)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
 import Wiki.Api.Import
@@ -82,7 +82,7 @@ import Wiki.Core.Export (Archive (..), readArchive, threadsAmong)
 import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
-import Wiki.Core.Page (Page (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
@@ -359,24 +359,9 @@ importPage blobs a discussions choices spacePath target progress pm
         TakeImported -> do
           time <- micro <$> liftIO getCurrentTime
           -- Later than the version it replaces even if the clock says
-          -- otherwise, as a save makes it, so that an editor open on the
-          -- server's page sees that it has changed.
-          let updatedAt = if time > theirs.updatedAt then time else addUTCTime 0.000001 theirs.updatedAt
-              replaced =
-                Page
-                  { id = theirs.id
-                  , space = theirs.space
-                  , parent = theirs.parent
-                  , title = pm.archived.title
-                  , slug = theirs.slug
-                  , body = pm.archived.body
-                  , attachments = []
-                  , createdAt = theirs.createdAt
-                  , updatedAt
-                  , position = theirs.position
-                  , template = theirs.template
-                  }
-          updatePageText theirs.id replaced.title replaced.body updatedAt
+          -- otherwise, as a save makes it ('savedAs').
+          let replaced = savedAs time pm.archived.title pm.archived.body theirs
+          updatePageText theirs.id replaced.title replaced.body replaced.updatedAt
           insertVersion replaced Nothing
           deleteAttachmentsOf theirs.id
           n <- attach blobs a theirs.id pm.archived.attachments
