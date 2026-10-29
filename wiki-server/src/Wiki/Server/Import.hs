@@ -63,13 +63,15 @@ module Wiki.Server.Import
     -- * Carrying it out
   , planImport
   , applyImport
+  , mergeArchive
+  , attach
   )
 where
 
 import Control.Monad.UUID (generateV4)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
 import Wiki.Api.Import
@@ -80,7 +82,7 @@ import Wiki.Core.Export (Archive (..), readArchive, threadsAmong)
 import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
-import Wiki.Core.Page (Page (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
@@ -243,13 +245,7 @@ data Progress = Progress
 -- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
 applyImport st actor address a choices = writing st $ do
-  matches <- matchIn a
-  people <- loadUsers
-  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
-      discussions = threadsAmong (administratorUser : people) a
-  done <- foldlM (importSpace (attachmentsDir (storageDataDir st)) a discussions choices) start matches
-  restoreAudit a.audit
-  let s = done.summary
+  (s, comments) <- mergeArchive (attachmentsDir (storageDataDir st)) a choices
   insertAudit
     Recorded
       { actor
@@ -264,12 +260,29 @@ applyImport st actor address a choices = writing st $ do
           , ("pages kept", show s.pagesKept)
           , ("pages skipped", show s.pagesSkipped)
           , ("attachments", show s.attachments)
-          , ("comments", show done.commentsBrought)
+          , ("comments", show comments)
           , ("log entries", show (length a.audit))
           ]
       , address
       }
   pure s
+
+-- | Import an archive with these choices, inside a transaction the caller
+-- holds, with the attachments' bytes stored in this directory. The
+-- archive's audit log is merged into the wiki's; the import itself is not
+-- recorded, which is the caller's to do. The result is what it did, and
+-- how many comments came in. The server's guide ("Wiki.Server.Guide") is
+-- installed this way, in a transaction that first checks the wiki has no
+-- guide.
+mergeArchive :: (Backend be) => FilePath -> Archive -> ImportChoices -> Db be (ImportSummary, Int)
+mergeArchive blobs a choices = do
+  matches <- matchIn a
+  people <- loadUsers
+  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
+      discussions = threadsAmong (administratorUser : people) a
+  done <- foldlM (importSpace blobs a discussions choices) start matches
+  restoreAudit a.audit
+  pure (done.summary, done.commentsBrought)
 
 importSpace :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> Db be Progress
 importSpace blobs a discussions choices progress m
@@ -346,24 +359,9 @@ importPage blobs a discussions choices spacePath target progress pm
         TakeImported -> do
           time <- micro <$> liftIO getCurrentTime
           -- Later than the version it replaces even if the clock says
-          -- otherwise, as a save makes it, so that an editor open on the
-          -- server's page sees that it has changed.
-          let updatedAt = if time > theirs.updatedAt then time else addUTCTime 0.000001 theirs.updatedAt
-              replaced =
-                Page
-                  { id = theirs.id
-                  , space = theirs.space
-                  , parent = theirs.parent
-                  , title = pm.archived.title
-                  , slug = theirs.slug
-                  , body = pm.archived.body
-                  , attachments = []
-                  , createdAt = theirs.createdAt
-                  , updatedAt
-                  , position = theirs.position
-                  , template = theirs.template
-                  }
-          updatePageText theirs.id replaced.title replaced.body updatedAt
+          -- otherwise, as a save makes it ('savedAs').
+          let replaced = savedAs time pm.archived.title pm.archived.body theirs
+          updatePageText theirs.id replaced.title replaced.body replaced.updatedAt
           insertVersion replaced Nothing
           deleteAttachmentsOf theirs.id
           n <- attach blobs a theirs.id pm.archived.attachments

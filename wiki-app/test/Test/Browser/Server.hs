@@ -18,7 +18,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
-import Test.Browser.Mount (start)
+import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.ServerSettings
@@ -28,10 +28,13 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
 import Wiki.Core.Url (Url (..))
 
--- How the page lays a form out (test/jsbits/test-layout.js).
+-- How the page lays a form out (test/jsbits/test-layout.js), and how its
+-- style sheet draws an element (test/jsbits/test-style.js).
 $( browserJS
-     ["jsbits/test-layout.js"]
-     [("js_one_column", "wiki_test_one_column", Unsafe, [t|JSText -> IO JSText|])]
+     ["jsbits/test-layout.js", "jsbits/test-style.js"]
+     [ ("js_one_column", "wiki_test_one_column", Unsafe, [t|JSText -> IO JSText|])
+     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
+     ]
  )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -63,11 +66,59 @@ choose ui selector n = do
   press "Home"
   replicateM_ n (press "ArrowDown")
 
+-- | A property of the first element a selector finds, as the style sheet
+-- computes it.
+computed :: Text -> Text -> PageM s Text
+computed selector property = unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText selector) (toJSText property))
+
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
 
 demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 demo m = describe "over the demo's wiki" $ do
+  it "defines kinds of box, each shown as a page shows it, and refuses one of GitHub's five" $ runPage $ do
+    ui <- start m (Just "user-admin") (Admin R.Server)
+    -- The demo's own kind.
+    find ui ".server-box[data-name=exercise] .alert-title" >>= (`shouldHaveText` "Exercise")
+    find ui ".server-box[data-name=exercise] .server-box-written" >>= (`shouldContainText` "teal, pencil icon")
+    find ui ".server-box-add" >>= click
+    find ui ".server-box-form input[name=kind]" >>= (`typeText` "note")
+    find ui ".server-box-form button[type=submit]" >>= click
+    find ui ".admin-server .error" >>= (`shouldContainText` "one of GitHub's five")
+    find ui ".server-box-form input[name=kind]" >>= clear
+    find ui ".server-box-form input[name=kind]" >>= (`typeText` "fun-fact")
+    find ui ".server-box-form input[name=label]" >>= (`typeText` "Did you know?")
+    -- Pink, and the info icon, from the keyboard.
+    choose ui ".server-box-form select[name=colour]" 7
+    choose ui ".server-box-form select[name=icon]" 1
+    find ui ".server-box-form .server-box-preview .alert-title" >>= (`shouldHaveText` "Did you know?")
+    find ui ".server-box-form button[type=submit]" >>= click
+    eventually (find ui ".server-box[data-name=fun-fact] .alert-title" >>= (`shouldHaveText` "Did you know?"))
+    find ui ".server-box[data-name=fun-fact] .server-box-written" >>= (`shouldContainText` "pink, info icon")
+    -- Changed: the name stays, the rest is the form's.
+    find ui ".server-box[data-name=fun-fact] .server-box-edit" >>= click
+    find ui ".server-box-form input[name=label]" >>= clear
+    find ui ".server-box-form button[type=submit]" >>= click
+    eventually (find ui ".server-box[data-name=fun-fact] .alert-title" >>= (`shouldHaveText` "Fun fact"))
+    find ui ".server-box[data-name=fun-fact] .server-box-remove" >>= click
+    eventually (length <$> findAll ui ".server-box[data-name=fun-fact]" `shouldReturn` 0)
+    unmount ui
+
+  it "draws a page's box of a defined kind in its colour with its icon, and one of another kind plain" $ runPage $ do
+    ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    box <- find ui ".page-body .alert.alert-exercise"
+    getAttribute box "style" >>= (`shouldSatisfy` maybe False (T.isInfixOf "--box-colour: var(--c-teal)"))
+    find ui ".page-body .alert-exercise .alert-title" >>= (`shouldHaveText` "Exercise")
+    -- Teal, the editor's palette's, in the light scheme.
+    computed ".page-body .alert.alert-exercise" "border-left-color" `shouldReturn` "rgb(10, 109, 105)"
+    computed ".page-body .alert-exercise .alert-title" "color" `shouldReturn` "rgb(10, 109, 105)"
+    computed ".page-body .alert-exercise .alert-icon" "mask-image" >>= (`shouldSatisfy` T.isInfixOf "data:image/svg+xml")
+    -- The second box of the kind gives its own title.
+    titles <- traverse textContent =<< findAll ui ".page-body .alert-exercise .alert-title"
+    titles `shouldBe` ["Exercise", "Exercise 2"]
+    -- GitHub's five keep their look.
+    computed ".page-body .alert.alert-tip" "border-left-color" `shouldReturn` "rgb(26, 127, 55)"
+    unmount ui
   it "sets the public address and a mail server, whose password it never shows again" $ runPage $ do
     ui <- start m (Just "user-admin") (Admin R.Server)
     find ui ".server-url-value" >>= (`shouldContainText` "Not set")
@@ -232,7 +283,7 @@ overHttp m = describe "over HTTP" $
       serverStarts
       serveDemo
       let corp = ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = Set}
-          set = ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp], assistantHosts = []}
+          set = ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp], assistantHosts = [], boxes = []}
           found = Discovered {issuer = Url "https://id.example.org/realms/corp", authorization = Url "https://id.example.org/auth", token = Url "https://id.example.org/token", userinfo = Nothing}
       answerWith "GET" "api/v1/admin/server" 200 set
       answerWith "POST" "api/v1/admin/server/providers/corp/check" 200 ProviderCheck {redirectUri = Just (Url "https://wiki.example.org/auth/corp/callback"), clientSecret = Set, discovered = Just found, problem = Nothing}

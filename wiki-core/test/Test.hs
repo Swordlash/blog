@@ -12,6 +12,7 @@ import Test.Hspec (hspec)
 import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
+import Test.Markdown.Box qualified as Box
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Mention qualified as Mention
@@ -35,6 +36,7 @@ main :: IO ()
 main = hspec $ do
   Slug.spec
   Ast.spec
+  Box.spec
   Slides.spec
   Edit.spec
   Tikz.spec

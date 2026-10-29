@@ -6,7 +6,9 @@
 -- many live channels are open, how much the wiki holds, and the last
 -- errors the server logged (twenty at most, kept in memory since it
 -- started: the message, when, and the route it happened on, never a
--- secret, since the log has none).
+-- secret, since the log has none). Where the wiki has no guide (the
+-- space at @/guide@, WP5.29 of docs/PLAN.md), it offers "Install the
+-- guide", which puts it in and goes to it.
 --
 -- It reads the status at once where the backend answers at once (a page
 -- the server prerendered carries it), and otherwise in its initializer. "Refresh" fetches it again, as does a
@@ -27,6 +29,8 @@ import Protolude hiding (State)
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
 import Wiki.App.Backend (MonadLoad (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Guide (guideSlug)
+import Wiki.App.Route (Route (Space))
 import Wiki.App.View.Common
 
 newtype Input = Input {context :: Context}
@@ -40,20 +44,23 @@ data State = State
   { input :: Input
   , loaded :: Loaded
   , busy :: Bool
+  , refusal :: Maybe WikiError
+  -- ^ Why the guide could not be installed.
   }
 
 data Action
   = Initialize
   | Receive Input
   | Refresh
+  | InstallGuide
 
-component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input Void m
+component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
           loaded <- maybe Loading (either Failed Ready) <$> atOnce serverStatus
-          pure State {input, loaded, busy = False}
+          pure State {input, loaded, busy = False, refusal = Nothing}
       , render
       , eval =
           H.mkEval
@@ -118,25 +125,45 @@ component =
               {% end %}
             </ol>
           {% end %}
+          {% if s.guideInstallable %}
+            <div class="status-guide">
+              <h4>The guide</h4>
+              <p class="admin-intro">
+                The wiki has no guide: the public space at /guide with a tour and the Markdown guide, which a new server makes
+                for itself. Install it to give everyone who reads this wiki its documentation.
+              </p>
+              {{ errorView <$> st.refusal }}
+              <div class="actions">
+                <button type="button" class="status-install-guide" disabled={{ st.busy }} onClick={{ const InstallGuide }}>Install the guide</button>
+              </div>
+            </div>
+          {% end %}
           <div class="actions">
             <button type="button" class="status-refresh" disabled={{ st.busy }} onClick={{ const Refresh }}>Refresh</button>
           </div>
         </div>
       |]
 
-    handleAction :: Action -> H.HalogenM State Action Empty Void m ()
+    handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
       Initialize ->
         gets (\st -> st.loaded) >>= \case
           Loading -> load
           _ -> pass
       Refresh -> modify (\st -> st {busy = True}) >> load
+      InstallGuide -> do
+        modify (\st -> st {busy = True, refusal = Nothing})
+        lift installGuide >>= \case
+          Left e -> modify (\st -> st {busy = False, refusal = Just e})
+          -- The shell reloads the spaces and goes to the guide; this
+          -- section is then left behind.
+          Right () -> H.raise (Changed (Just (Space [guideSlug])))
       Receive input -> do
         old <- gets (\st -> st.input.context.revision)
         modify (\st -> st {input})
         when (old /= input.context.revision) load
 
-    load :: H.HalogenM State Action Empty Void m ()
+    load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       result <- lift serverStatus
       modify (\st -> st {loaded = either Failed Ready result, busy = False})

@@ -12,6 +12,7 @@ import Halogen.Static (renderToHtmlWith)
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Protolude
 import Test.Hspec
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Contract (As (..), Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
@@ -59,7 +60,10 @@ spec = do
     it "takes someone who is not a user for nobody" $ do
       ref <- newMemWiki (demoState demoNow)
       s <- runMemWiki ref (switchUser (Just (UserId "user-nobody")) >> session)
-      s `shouldBe` anonymous
+      -- Nobody, with the kinds of box the demo defines, which everyone's
+      -- pages are rendered with.
+      (s.user, s.groups, s.grants, s.standing) `shouldBe` (anonymous.user, anonymous.groups, anonymous.grants, anonymous.standing)
+      s.boxes `shouldBe` (demoState demoNow).server.boxes
       names <- runMemWiki ref (map (\sp -> sp.name) <$> listSpaces)
       names `shouldBe` ["Blog", "Docs"]
 

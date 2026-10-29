@@ -229,6 +229,7 @@ stubs =
     , admin =
         AdminApi
           { status = pure Sample.serverStatus
+          , installGuide = pure NoContent
           , activity = \actor offset cursor -> pure Sample.activity {more = actor == Just (UserId "u1") && (offset == Just 50 || cursor == Just "e1")}
           , directory = pure Sample.directory
           , -- The sample directory's page for the query read.

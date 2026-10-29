@@ -23,6 +23,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings
 import Wiki.Api.Types qualified as Types
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Mail (Message (..))
@@ -64,6 +65,18 @@ reading :: Backing -> Spec
 reading backing = describe "reading and writing them" $ do
   it "has nothing set at first: no address, no mail, no provider" $ withDemoRunning backing identity $ \r ->
     serverAs r `shouldReturn` noServerSettings
+
+  it "gives the kinds of box to every reader's session, and the pages the server renders draw them" $ withDemoRunning backing identity $ \r -> do
+    let exercise = BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}
+    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise]}
+    set.boxes `shouldBe` [exercise]
+    session <- getUrl r (onPublic r links.session) >>= jsonAs 200
+    (session :: Types.SessionInfo).boxes `shouldBe` [exercise]
+    -- The demo's Markdown guide shows a box of the kind.
+    page <- getUrl r (r.public <> "/s/docs/p/markdown-guide/")
+    page.status `shouldBe` 200
+    decodeUtf8 (BSL.toStrict page.body)
+      `shouldSatisfy` T.isInfixOf "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\"><p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it</p>"
 
   it "answers the operator and an administrator's session, and nobody else" $ withAdminSession backing identity $ \r admin -> do
     (getUrlWith r (onPublic r links.admin.server) [admin] >>= jsonAs 200) `shouldReturn` (noServerSettings :: ServerSettings)

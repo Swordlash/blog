@@ -1602,13 +1602,14 @@ grantCreateSpaces u = setGlobalGrant True GlobalGrant {subject = SubjectUser u, 
 -- > mail-from       Wiki <wiki@example.org>
 --
 -- > assistant-hosts the writing assistant's hosts (WP5.21), one per line
+-- > boxes           the kinds of box (WP5.29), a JSON array
 --
 -- The providers are rows of @sign_in_providers@, in the order their
 -- buttons show. A provider of a kind this program does not know is left
 -- out, and a mail server without a host counts as none.
 loadServerSettings :: (Backend be) => Db be Kept
 loadServerSettings = do
-  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "mail-"]
+  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "mail-"]
   providerRows <- runSelectReturningList (select (orderBy_ (\p -> (asc_ p.position, asc_ p.name)) (all_ wikiDb.sign_in_providers)))
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
@@ -1631,6 +1632,9 @@ loadServerSettings = do
           , Just kind <- [readKind p.kind]
           ]
       , assistantHosts = maybe [] (filter (not . T.null) . map T.strip . T.lines) (valueOf "assistant-hosts")
+      , -- A value this program cannot read (a newer one's colour or icon)
+        -- reads as no kinds rather than failing every page.
+        boxes = fromMaybe [] (valueOf "boxes" >>= decodeStrict' . encodeUtf8)
       }
 
 -- | Store the server's settings, replacing those stored before.
@@ -1638,10 +1642,12 @@ storeServerSettings :: (Backend be) => Kept -> Db be ()
 storeServerSettings s = do
   deleteSettingsLike "public-url" []
   deleteSettingsLike "assistant-hosts" []
+  deleteSettingsLike "boxes" []
   deleteSettingsLike "mail-" []
   let rows =
         [("public-url", u.text) | Just u <- [s.publicUrl]]
           <> [("assistant-hosts", T.unlines s.assistantHosts) | not (null s.assistantHosts)]
+          <> [("boxes", decodeUtf8 (BSL.toStrict (encode s.boxes))) | not (null s.boxes)]
           <> case s.mail of
             Nothing -> []
             Just m ->

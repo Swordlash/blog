@@ -76,6 +76,7 @@ library
       Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
+      Wiki.Core.Markdown.Box
       Wiki.Core.Markdown.Edit
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
@@ -148,6 +149,7 @@ test-suite wiki-core-test
       Test.Json
       Test.Markdown.Allowlist
       Test.Markdown.Ast
+      Test.Markdown.Box
       Test.Markdown.Edit
       Test.Markdown.Link
       Test.Markdown.Mention

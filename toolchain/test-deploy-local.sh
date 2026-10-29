@@ -147,6 +147,9 @@ case \$command in
     else
       printf 'There is no database to back up yet.\n'
     fi ;;
+  guide)
+    [ -z "\${FAKE_GUIDE_FAIL:-}" ] || { printf 'fake guide failure\n' >&2; exit 1; }
+    printf "The guide's pages have this release's text (5 pages).\n" ;;
   serve)
     mkdir -p "\$data"
     [ -z "\$sqlite" ] || [ -f "\$sqlite" ] || printf 'a database\n' >"\$sqlite"
@@ -711,11 +714,21 @@ assert_contains "$data/backups/1.pgdump" 'pg_dump of wiki-demo: --username=wiki 
   [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
   fail 'the backup was not taken between the old server and the new'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the redeployed server does not answer'
+assert_contains "$EVENTS" "wiki-server guide update --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password"
+{ [ "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server guide update')" ]; } ||
+  fail 'the guide was updated before the new server started'
 out=$case_dir/status
 deploy --status >"$out" 2>&1
 assert_contains "$out" 'its database: PostgreSQL in Docker, the compose project wiki-demo, on 127.0.0.1:5433'
 assert_contains "$out" 'backups: 2 in'
-pass 'a redeploy finds the container, backs the database up with its pg_dump between the old server and the new, and keeps the password'
+pass 'a redeploy finds the container, backs the database up with its pg_dump between the old server and the new, keeps the password, and updates the guide on the new server'
+
+: >"$EVENTS"
+out=$case_dir/guide-fails
+FAKE_GUIDE_FAIL=1 deploy --no-build >"$out" 2>&1 || fail 'a failed update of the guide failed the deploy'
+assert_contains "$out" "the guide's pages could not be updated"
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed update of the guide left the server down'
+pass 'a failed update of the guide is a warning, and the new server stays'
 
 # From PostgreSQL to --sqlite: the wiki would start empty in a file, so the
 # deploy stops before it changes anything, unless --fresh; then the
@@ -865,7 +878,11 @@ assert_lacks "$EVENTS" "port $a1"
 assert_contains "$out" "The wiki has no public address yet: set it to $https_url in the administration's"
 assert_contains "$out" "Server section (http://127.0.0.1:$a1/admin/admin/)"
 assert_contains "$HOME/wiki-demo/bin/wiki" 'unset WIKI_DATABASE_URL'
-pass '--server --sqlite builds wiki-server at -O2, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies'
+assert_contains "$EVENTS" "wiki-server guide update --data $data --sqlite $data/wiki.sqlite"
+{ [ "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server guide update')" ]; } ||
+  fail 'the guide was updated before the new server started'
+assert_contains "$out" "bringing the guide's pages up to this version"
+pass '--server --sqlite builds wiki-server at -O2, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies, then updates the guide'
 
 : >"$EVENTS"
 printf 'precious\n' >>"$data/wiki.sqlite"

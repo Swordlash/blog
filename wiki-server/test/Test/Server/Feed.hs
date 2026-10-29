@@ -216,7 +216,7 @@ html = describe "a post's HTML" $
             )
             [tree]
         other = pageOf "other" "Other" "" []
-    out <- postHtml "https://wiki.example/" [blog] blog [post, other] post
+    out <- postHtml "https://wiki.example/" [] [blog] blog [post, other] post
     out `shouldNotSatisfy` T.isInfixOf "<script"
     out `shouldNotSatisfy` T.isInfixOf "alert"
     out `shouldNotSatisfy` T.isInfixOf "onclick"

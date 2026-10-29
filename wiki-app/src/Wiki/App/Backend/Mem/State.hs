@@ -714,10 +714,11 @@ repage space parent slug position p =
 --------------------------------------------------------------------------------
 -- Reads
 
--- | Who is signed in, with the grants that apply to them.
+-- | Who is signed in, with the grants that apply to them, and the kinds of
+-- box the settings define, which everyone's pages are rendered with.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> anonymousIn st.grants.access
+  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes}
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -734,6 +735,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
         B.providers = []
       , -- Nor does it export: exporting needs pandoc, on the server.
         B.exports = []
+      , B.boxes = st.server.boxes
       }
 
 -- | The spaces the current user may view, with their ancestors.

@@ -524,6 +524,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
     where
       activityOf a = endpoints.admin.activity a.actor (mfilter (> 0) (Just a.offset)) a.before
   serverStatus = fmap Just <$> once (\c -> c.status) forgetStatus endpoints.admin.status withStatus
+  installGuide = write_ endpoints.admin.installGuide
 
 -- | A page's comments, over the API's @pages\/\<page>\/threads@. A page's
 -- threads are cached like any read, so that a page the server prerendered

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The wiki's guide, the demo's Tour, Markdown guide, Diagrams, Mathematics and
+Presentations, moves to `Wiki.App.Guide` (WP5.29), which the demo and the
+server share; the server's guide has a tour of its own. The Markdown guide
+has a section "Notes and boxes", and the demo defines the kind of box
+`exercise`. `Session` gains `boxes`, which pages are rendered with. The
+administration's Server section has "Boxes", to define kinds of box, and
+its Overview offers "Install the guide" where the wiki has none;
+`MonadAdmin` gains `installGuide`.
+
 The editor completes mentions (WP5.28). An `@` followed by two letters or
 more, where a mention counts (not in code, a link, HTML or math; brackets
 that make no link are text), opens a

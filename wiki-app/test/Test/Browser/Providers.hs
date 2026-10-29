@@ -52,14 +52,14 @@ named = [SignInProvider {name = "google", label = "Google"}, SignInProvider {nam
 
 -- | Nobody, in a wiki of this access, offered these providers.
 nobodyWith :: [SignInProvider] -> Access -> SessionInfo
-nobodyWith providers access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers, exports = []}
+nobodyWith providers access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers, exports = [], boxes = []}
 
 -- | One of the demo's users, signed in, offered the providers.
 signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = [], boxes = []}
 
 hrefOf :: Element s -> PageM s Text
 hrefOf e = fromMaybe "" <$> getAttribute e "href"
@@ -179,7 +179,7 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     serverStarts
     serveDemo
     rita <- signedInAs "user-reader"
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = rita.standing, providers = [], exports = []}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = rita.standing, providers = [], exports = [], boxes = []}
     answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
     ui <- startServer m Home
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
@@ -198,7 +198,7 @@ administration m = describe "the administration's accounts" $ do
       serverStarts
       serveDemo
       (me, people) <- demoPeople
-      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = [], boxes = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withIdentities d)
       for_ people (answerUsers . withIdentities)
       answerWith "DELETE" "api/v1/admin/users/user-editor/identities/hub" 204 ()
@@ -220,7 +220,7 @@ administration m = describe "the administration's accounts" $ do
       serverStarts
       serveDemo
       (me, people) <- demoPeople
-      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = [], boxes = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo True (withIdentities d))
       for_ people (answerUsers . mailingTo True . withIdentities)
       answerWith "POST" "api/v1/admin/users/user-reader/password-link" 204 ()
@@ -255,7 +255,7 @@ administration m = describe "the administration's accounts" $ do
       serverStarts
       serveDemo
       (me, people) <- demoPeople
-      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = [], boxes = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo False (withIdentities d))
       for_ people (answerUsers . mailingTo False . withIdentities)
       ui <- startServer m (Admin (Users allUsers))

@@ -74,7 +74,7 @@ universe = concatMap $ \b -> b : universe (children b)
       BlockQuote bs -> bs
       List _ items -> concat [bs | ListItem _ bs <- items]
       Div _ bs -> bs
-      Alert _ bs -> bs
+      Alert _ _ bs -> bs
       Footnotes notes -> concat [bs | Footnote _ _ bs <- notes]
       _ -> []
 

@@ -101,6 +101,8 @@ module Wiki.Server.Storage
   , postgresAt
   , writing
   , writingEither
+  , writingThen
+  , publishing
   , reading
   , readConnections
   , storageDataDir
@@ -201,7 +203,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
-import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath, resolvePathM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
@@ -439,6 +441,23 @@ writingEither st action = case st.engine of
   Engine p -> retrying p.writer $ \c -> withTransactionEither True c $ do
     tracer <- tracedBegin st True
     runTraced tracer c action
+
+-- | 'writing', then, once the transaction is committed and before any
+-- other write may begin, the given action on its result, as a save
+-- publishes its change ('Config' @publish@). The guide's update reports
+-- the pages it rewrote this way ("Wiki.Server.Guide").
+writingThen :: Storage -> (forall be. (Backend be) => Db be a) -> (a -> IO ()) -> IO a
+writingThen st action committed = case st.engine of
+  Engine p -> retrying p.writer $ \c -> do
+    outcome <- withTransactionEither True c $ do
+      tracer <- tracedBegin st True
+      runTraced tracer c (Right <$> action)
+    either absurd (\a -> a <$ committed a) outcome
+
+-- | The callback that reports a change of a page to the server's live
+-- channel ('Config' @publish@), for a write made with 'writingThen'.
+publishing :: Storage -> PageId -> PageEvent -> IO ()
+publishing st = st.config.publish
 
 -- | Run statements on a reader, in a transaction that sees one state of
 -- the database throughout. A write there fails.
@@ -1138,6 +1157,7 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   -- answers for it ("Wiki.Server.Api").
   activity q = run Reads (requireAdministrator >> db (loadActivity q))
   serverStatus = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API says how the server is."))
+  installGuide = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API and its console install the guide (Wiki.Server.Guide)."))
 
 -- | The backups, for an administrator: their settings (with only whether
 -- the configuration is set, not the configuration), the last backup made
@@ -1354,6 +1374,9 @@ sessionTx = do
         , -- Nor the export formats: they depend on pandoc and on the
           -- machine, and the API adds them too.
           exports = []
+        , -- Nor the kinds of box, which are the server's settings: the
+          -- API adds them as well.
+          boxes = []
         }
 
 listSpacesTx :: Tx [Space]
@@ -1868,26 +1891,12 @@ savePageTx pid base title body = do
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
   time <- now
-  -- Later than the version saved over even if the clock says otherwise, so
-  -- that no two versions of a page have the same time.
-  let updatedAt = if time > p.updatedAt then time else addUTCTime 0.000001 p.updatedAt
-      p' =
-        Page
-          { id = p.id
-          , space = p.space
-          , parent = p.parent
-          , title = t
-          , slug = p.slug
-          , body
-          , attachments = p.attachments
-          , createdAt = p.createdAt
-          , updatedAt
-          , position = p.position
-          , template = p.template
-          }
+  -- Later than the version saved over even if the clock says otherwise
+  -- ('savedAs').
+  let p' = savedAs time t body p
   author <- asks (\x -> x.author)
   db $ do
-    updatePageText pid t body updatedAt
+    updatePageText pid t body p'.updatedAt
     insertVersion p' author
     for_ author (deleteDraft pid)
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)

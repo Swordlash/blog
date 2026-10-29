@@ -39,11 +39,12 @@ module Wiki.Api.Types
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON (..), ToJSON, withObject, (.!=), (.:), (.:?))
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (SignInProvider, Standing, User)
@@ -71,9 +72,27 @@ data SessionInfo = SessionInfo
   , exports :: [ExportFormat]
   -- ^ The document formats the server exports pages and spaces in
   -- ("Wiki.Api.Export"): the PDF formats only when it has a TeX engine.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administration defined ("Wiki.Core.Markdown.Box"),
+  -- which every page is rendered with.
   }
   deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (ToJSON)
+
+-- | Read by hand rather than derived, so that a session written before
+-- @boxes@ existed (in a page an offline copy kept, with the responses it
+-- was rendered from) reads as having no kinds of box.
+instance FromJSON SessionInfo where
+  parseJSON = withObject "SessionInfo" $ \o ->
+    SessionInfo
+      <$> o
+      .:? "user"
+      <*> o .: "groups"
+      <*> o .: "grants"
+      <*> o .: "standing"
+      <*> o .: "providers"
+      <*> o .: "exports"
+      <*> o .:? "boxes" .!= []
 
 -- | 'NewSpace': a space to create, @createSpace@.
 data NewSpace = NewSpace

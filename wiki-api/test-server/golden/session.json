@@ -1,4 +1,12 @@
 {
+  "boxes": [
+    {
+      "colour": "teal",
+      "icon": "pencil",
+      "label": "Exercise",
+      "name": "exercise"
+    }
+  ],
   "exports": [
     "Docx",
     "Html",

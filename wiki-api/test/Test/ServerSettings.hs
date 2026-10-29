@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Wiki.Api.ServerSettings
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Url (Url (..))
 
 -- | Settings kept with their secrets as text, as the demo keeps them.
@@ -26,19 +27,24 @@ kept =
     , mail = mailWith (Just "wiki") (Just "pw")
     , providers = [providerWithSecret "google" (Just "g"), providerWithSecret "other" (Just "o")]
     , assistantHosts = ["http://localhost:11434"]
+    , boxes = []
     }
+
+-- | A kind of box, blue with no icon, labelled as given.
+box :: Text -> Text -> BoxKind
+box name label = BoxKind {name, label, colour = Blue, icon = NoIcon}
 
 spec :: Spec
 spec = describe "the server's settings" $ do
   describe "a change" $ do
     it "keeps each secret it leaves out, by the provider's name" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = []}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = []}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just (Just "pw")
       map (\p -> (p.name, p.secret)) changed.providers `shouldBe` [("other", Just "o"), ("google", Just "g")]
 
     it "replaces a secret given, and clears an empty one" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = []}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = []}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just Nothing
       map (\p -> p.secret) changed.providers `shouldBe` [Just "new"]
@@ -52,7 +58,7 @@ spec = describe "the server's settings" $ do
     it "is read with a secret left out as keeping it" $ do
       let json = "{\"publicUrl\":null,\"mail\":{\"host\":\"h\",\"port\":25,\"security\":\"plain\",\"user\":null,\"from\":\"f@example.org\"},\"providers\":[{\"name\":\"g\",\"kind\":\"google\",\"clientId\":\"c\",\"issuer\":null}]}"
       (decode json :: Maybe ServerSettingsChange)
-        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = []}
+        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = []}
 
     it "takes the assistant's hosts as the change gives them" $
       (applyChange identity kept (noServerSettings {assistantHosts = ["https://openrouter.ai"]} :: ServerSettingsChange)).assistantHosts `shouldBe` ["https://openrouter.ai"]
@@ -66,6 +72,18 @@ spec = describe "the server's settings" $ do
       ((\s -> s.assistantHosts) <$> checked kept {assistantHosts = ["https://OpenRouter.ai/api/v1", " ", "https://openrouter.ai", "http://localhost:11434"]})
         `shouldBe` Right ["https://openrouter.ai", "http://localhost:11434"]
       checked kept {assistantHosts = ["https://a.example; script-src *"]} `shouldSatisfy` isLeft
+    it "take kinds of box, named in lower case, an empty label made from the name" $
+      ((\s -> s.boxes) <$> checked kept {boxes = [box " Exercise " "  ", box "fun-fact" " A fun fact "]})
+        `shouldBe` Right [box "exercise" "Exercise", box "fun-fact" "A fun fact"]
+    it "refuse a kind of box whose name is not letters and dashes, is one of the five, or is taken" $ do
+      let refusedBox kinds why = either (why `T.isInfixOf`) (const False) (checked kept {boxes = kinds}) `shouldBe` True
+      for_ ["note", "TIP", "Caution"] $ \n -> refusedBox [box n ""] "one of GitHub's five"
+      for_ ["two words", "exercise2", "-x", "\233tude", "x_y", "title"] $ \n -> refusedBox [box n ""] "letters and dashes"
+      refusedBox [box "" "Label"] "needs its name"
+      refusedBox [box "exercise" "", box "Exercise" ""] "two kinds of box named exercise"
+      refusedBox [box "exercise" (T.replicate 61 "x")] "longer than 60"
+    it "read settings stored before boxes existed as having none" $
+      ((\s -> s.boxes) <$> (decode "{\"publicUrl\":null,\"mail\":null,\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just []
     it "refuse what cannot be, saying why" $ do
       let refused s why = either (why `T.isInfixOf`) (const False) (checked s) `shouldBe` True
       refused kept {publicUrl = Nothing} "The mail needs the wiki's public address"

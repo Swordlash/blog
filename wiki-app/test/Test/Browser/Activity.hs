@@ -11,13 +11,14 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerWith, asked, quietServer, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, quietServer, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Activity (Activity (..))
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
+import Wiki.Api.Error (ApiError (Conflict))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Islands (MonadIslands)
@@ -64,7 +65,27 @@ entry :: Text -> Int -> Actor -> Text -> Subject -> [(Text, Text)] -> Text -> Au
 entry i h actor action subject detail address = AuditEntry {id = i, at = at h, actor, action, subject, detail = Map.fromList detail, address}
 
 overHttp :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
-overHttp m = describe "over HTTP" $
+overHttp m = describe "over HTTP" $ do
+  it "offers to install the guide where the server has none, says why it could not, and goes to it once installed" $
+    runPage $ do
+      serverStarts
+      serveDemo
+      answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer {guideInstallable = True}
+      answerWith "POST" (endpointUrl (\e -> e.admin.installGuide)) 409 (Conflict "The wiki has a space at /guide already.")
+      ui <- startServer m (Admin R.Overview)
+      find ui ".status-guide" >>= (`shouldContainText` "The wiki has no guide")
+      find ui ".status-install-guide" >>= click
+      eventually (find ui ".status-guide .error" >>= (`shouldContainText` "a space at /guide already"))
+      answerRaw "POST" (endpointUrl (\e -> e.admin.installGuide)) 204 ""
+      find ui ".status-install-guide" >>= click
+      eventually $ do
+        posts <- map (\r -> r.url) . filter (\r -> r.method == "POST") <$> asked
+        length (filter (== endpointUrl (\e -> e.admin.installGuide)) posts) `shouldBe` 2
+      -- The shell goes to the guide's space, away from the Overview.
+      eventually (length <$> findAll ui ".server-status" `shouldReturn` 0)
+      unmount ui
+      serverStops
+
   it "lists the log newest first in words, pages through it and filters it by person, and shows the server's last errors" $
     runPage $ do
       serverStarts

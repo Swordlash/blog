@@ -81,7 +81,7 @@ fakeProviders fake =
 
 -- | The server's settings with these providers.
 signingInWith :: [ProviderChange] -> ServerSettingsChange
-signingInWith providers = ServerSettings {publicUrl = Just (Url publicUrl), mail = Nothing, providers, assistantHosts = []}
+signingInWith providers = ServerSettings {publicUrl = Just (Url publicUrl), mail = Nothing, providers, assistantHosts = [], boxes = []}
 
 -- | A server over the demo's wiki, with the fake's providers set by its
 -- operator once it runs.
@@ -601,7 +601,7 @@ checking backing = describe "wiki-server oidc check" $ do
         test (placeOptionsOf at)
   it "asks each provider set how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
     let acme = ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url fake.url), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org"), mail = Nothing, providers = [acme], assistantHosts = []} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org"), mail = Nothing, providers = [acme], assistantHosts = [], boxes = []} $ \dir -> do
       (fine, lines') <- runOidcCheck OidcCheck {place = dir, only = Nothing}
       fine `shouldBe` True
       lines' `shouldContain` ["  redirect URI to register: https://wiki.example.org/auth/acme/callback"]
@@ -610,7 +610,7 @@ checking backing = describe "wiki-server oidc check" $ do
       T.unlines lines' `shouldSatisfy` (not . T.isInfixOf "\"x\"")
   it "checks only the one named, and says when none is set" $ withFakeProvider $ \fake -> do
     let named n = ProviderSettings {name = n, kind = Generic, clientId = "c", issuer = Just (Url fake.url), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [named n | n <- ["a", "b"]], assistantHosts = []} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [named n | n <- ["a", "b"]], assistantHosts = [], boxes = []} $ \dir -> do
       (_, lines') <- runOidcCheck OidcCheck {place = dir, only = Just "b"}
       filter ("auth/" `T.isInfixOf`) lines' `shouldBe` ["  redirect URI to register: https://wiki.example.org/auth/b/callback"]
       (fine, nobody) <- runOidcCheck OidcCheck {place = dir, only = Just "c"}
@@ -621,7 +621,7 @@ checking backing = describe "wiki-server oidc check" $ do
       T.unlines lines' `shouldSatisfy` T.isInfixOf "Server section"
   it "fails for a provider that cannot be reached" $ do
     let gone = ProviderSettings {name = "gone", kind = Generic, clientId = "c", issuer = Just (Url "http://127.0.0.1:9"), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [gone], assistantHosts = []} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [gone], assistantHosts = [], boxes = []} $ \dir -> do
       (fine, lines') <- runOidcCheck OidcCheck {place = dir, only = Nothing}
       fine `shouldBe` False
       T.unlines lines' `shouldSatisfy` T.isInfixOf "cannot be asked how to sign in"

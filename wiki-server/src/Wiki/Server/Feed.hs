@@ -63,6 +63,7 @@ import Network.Wai (Application, Response, responseLBS)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Links (attachmentUrl)
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces), WikiError (NotFound))
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
@@ -71,12 +72,13 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), find
 import Wiki.Core.Blog (excerpt, posts)
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown qualified as Md
+import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id))
 import Wiki.Core.Path (TreeNode (..), pathOf)
 import Wiki.Core.Space (Space (blog, createdAt, description, id, name))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
-import Wiki.Server.Storage (Storage, Who (..), feedPosts, readSettings, runStoredWiki, sitemapPages)
+import Wiki.Server.Storage (Storage, Who (..), feedPosts, readServerSettings, readSettings, runStoredWiki, sitemapPages)
 import Wiki.Server.Storage.Rows (SitemapNode (..))
 
 -- | The two feeds of a blog.
@@ -212,8 +214,9 @@ feed storage cache base kind segments =
     written (space, pages, chosen, spaces) = do
       let spacePath = spacePathOf spaces space.id
           address = addressOf base (Duplex.print route (Space spacePath))
+      settings <- readServerSettings storage
       entries <- for chosen $ \(p, author) -> do
-        html <- postHtml base spaces space pages p
+        html <- postHtml base settings.boxes spaces space pages p
         pure
           FeedEntry
             { title = p.title
@@ -264,9 +267,10 @@ sitemap storage cache base =
 -- the pages use, so through its allowlist, with its links to pages and
 -- attachments under the wiki's public address (a feed is read away from
 -- the wiki), and its formulas, diagrams and code as the plain text the
--- islands start from, since a feed reader runs no script.
-postHtml :: (TreeNode page, NodeId page ~ PageId) => Text -> [Space] -> Space -> [page] -> Page -> IO Text
-postHtml base spaces space pages p = case Md.parseMarkdown p.body of
+-- islands start from, since a feed reader runs no script. Its boxes have
+-- the titles the administration's kinds of box give them.
+postHtml :: (TreeNode page, NodeId page ~ PageId) => Text -> [BoxKind] -> [Space] -> Space -> [page] -> Page -> IO Text
+postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
   Left _ -> pure ("<pre>" <> xmlText p.body <> "</pre>")
   Right blocks -> renderToHtml (H.mkComponent H.ComponentSpec {initialState = \_ -> pure (), render = \_ -> HH.div_ (Md.renderBlocks options blocks), eval = H.mkEval H.defaultEval}) ()
   where
@@ -279,6 +283,7 @@ postHtml base spaces space pages p = case Md.parseMarkdown p.body of
         , Md.pageHref = \(PageLink r fragment) -> addressOf base (Duplex.print route r) <> fragment
         , -- A feed reader has no stylesheet to show them on hover.
           Md.headingAnchors = False
+        , Md.boxes = boxes
         }
     resolve destination = case Md.classifyDestination destination of
       Md.ToAttachment name -> case findAttachment name p.attachments of

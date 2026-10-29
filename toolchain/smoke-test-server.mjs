@@ -183,11 +183,13 @@ const probe = createServer();
 const wikiPort = await listenOn(probe, "127.0.0.1");
 await new Promise((done) => probe.close(done));
 
-// The server, on free ports, its log read for the addresses it took.
+// The server, on free ports, its log read for the addresses it took. It
+// starts without the guide (--no-guide): the test starts from a wiki with no
+// spaces, as the import of the demo's counts what it brings into it.
 const server = spawn(
   wikiServer,
   [
-    "serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${wikiPort}`, "--admin-listen", "127.0.0.1:0",
+    "serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${wikiPort}`, "--admin-listen", "127.0.0.1:0", "--no-guide",
   ],
   { stdio: ["ignore", "pipe", "pipe"] },
 );

@@ -209,7 +209,7 @@ serveDemo = do
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = []}
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
   for_ people answerUsers
   answerWith "GET" (endpointUrl (\e -> e.admin.server)) 200 (noServerSettings :: ServerSettings)
@@ -241,6 +241,7 @@ quietServer =
     , lastBackup = Nothing
     , connections = 1
     , errors = []
+    , guideInstallable = False
     }
 
 -- | The shell over the backend over HTTP, through the page's fetch, at a
@@ -346,10 +347,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = []}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = []}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = []}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = []}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -517,7 +518,7 @@ ownPassword m = describe "one's own password" $ do
     serverStarts
     serveDemo
     rita <- unsafeIOToPageM (signedInAs "user-admin")
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = []}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = []}
     ui <- startServer m Home
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     length <$> findAll ui ".account-toggle" `shouldReturn` 0

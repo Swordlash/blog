@@ -22,18 +22,20 @@ import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
+import Text.Pandoc.Builder qualified as B
 import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Walk (query)
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Export (ExportFormat (..), formatMediaType)
 import Wiki.Api.Links (attachmentUrl, links)
-import Wiki.Api.Types (NewPage (..), SessionInfo (..))
+import Wiki.Api.Types (NewPage (..), SessionInfo (exports))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
@@ -76,6 +78,7 @@ place =
     , inDocument = \_ _ -> Nothing
     , idPrefix = ""
     , macros = Macros []
+    , boxes = []
     }
   where
     docsPages = [p | p <- demoArchive.pages, Just s <- [find (\s -> s.id == p.space) demoArchive.spaces], s.slug == slug "docs"]
@@ -84,7 +87,7 @@ slug :: Text -> Slug
 slug = either (panic . show) identity . mkSlug
 
 blocksOf :: (HasCallStack) => Output -> Place -> Text -> IO [P.Block]
-blocksOf output at source = either (\e -> panic ("pandoc: " <> show e)) pure (pageBlocks output at source)
+blocksOf output at source = either (\e -> panic ("pandoc: " <> show e)) pure (pageBlocks output at (readPage source))
 
 maths :: [P.Block] -> [(P.MathType, Text)]
 maths = query $ \case
@@ -159,6 +162,88 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
   it "makes GitHub's alerts boxes, and leaves the deck's options out" $ do
     bs <- blocksOf ToOther place "> [!WARNING]\n> Careful.\n\n::: {.slides theme=dark}\n:::\n"
     [cls | P.Div (_, cls, _) _ <- bs] `shouldBe` [["warning", "alert"]]
+
+  it "makes a box of any kind a div of its class, titled with the title given, the kind's label or its name" $ do
+    let titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        boxClasses bs = [cls | P.Div (_, cls, _) _ <- bs]
+    noted <- blocksOf ToOther place "> [!NOTE] Read me first\n> Careful.\n"
+    boxClasses noted `shouldBe` [["note", "alert"]]
+    titles noted `shouldBe` [[P.Str "Read", P.Space, P.Str "me", P.Space, P.Str "first"]]
+    query (\case P.Para xs -> [xs]; _ -> []) noted `shouldBe` [[P.Str "Read", P.Space, P.Str "me", P.Space, P.Str "first"], [P.Str "Careful."]]
+    plainBox <- blocksOf ToOther place "> [!FUN-FACT]\n> Owls.\n"
+    boxClasses plainBox `shouldBe` [["alert-fun-fact"]]
+    titles plainBox `shouldBe` [[P.Str "Fun", P.Space, P.Str "fact"]]
+    let defined = place {boxes = [BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}]}
+    exercise <- blocksOf ToOther defined "> [!EXERCISE]\n>\n> - Prove it.\n\n> [!exercise] Exercise 3\n> Again.\n"
+    boxClasses exercise `shouldBe` [["alert-exercise"], ["alert-exercise"]]
+    titles exercise `shouldBe` [[P.Str "Try", P.Space, P.Str "it"], [P.Str "Exercise", P.Space, P.Str "3"]]
+    [() | P.BulletList _ <- query (\case b@P.BulletList {} -> [b]; _ -> []) exercise] `shouldBe` [()]
+    quote <- blocksOf ToOther place "> [!NOTE]s are text\n\n> [!TODO2]\n> x\n"
+    boxClasses quote `shouldBe` []
+    [() | P.BlockQuote _ <- quote] `shouldBe` [(), ()]
+
+  it "finds the boxes the page has and no others, with the title as the page shows it" $ do
+    let titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+    -- No space after the marker: a quotation on the page, so in the
+    -- document too, its text kept.
+    glued <- blocksOf ToOther place "> [!NOTE]**x**\n"
+    boxClasses glued `shouldBe` []
+    [() | P.BlockQuote _ <- glued] `shouldBe` [()]
+    -- An escaped marker is text.
+    escaped <- blocksOf ToOther place "> \\[!NOTE]\n> y\n"
+    boxClasses escaped `shouldBe` []
+    query (\case P.Str t -> [t]; _ -> []) escaped `shouldSatisfy` elem "[!NOTE]"
+    -- In code, a marker is code.
+    fenced <- blocksOf ToOther place "```\n> [!NOTE]\n```\n"
+    boxClasses fenced `shouldBe` []
+    -- The title is the text written, as the page shows it, not Markdown.
+    written <- blocksOf ToOther place "> [!NOTE] Read *this* &amp; that\n> Body.\n"
+    titles written `shouldBe` [B.toList (B.text "Read *this* &amp; that")]
+    -- Nested in a list, and the second of two, each where the page has it.
+    nested <- blocksOf ToOther place "- item\n\n  > [!TIP] One\n  > a\n\n> [!EXERCISE] Two\n> b\n"
+    boxClasses nested `shouldBe` [["tip", "alert"], ["alert-exercise"]]
+    titles nested `shouldBe` [[P.Str "One"], [P.Str "Two"]]
+    show nested `shouldNotSatisfy` T.isInfixOf "wikibox"
+
+  it "starts a box's content where the page does, whatever the first block is" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+        inBox bs = concat [rest | P.Div (_, ["note", "alert"], _) (_ : rest) <- bs]
+    table <- blocksOf ToOther place "> [!NOTE]\n> | a | b |\n> |---|---|\n> | 1 | 2 |\n"
+    [() | P.Table {} <- inBox table] `shouldBe` [()]
+    fencedDiv <- blocksOf ToOther place "> [!NOTE]\n> ::: summary\n> x\n> :::\n"
+    [cls | P.Div (_, cls, _) _ <- inBox fencedDiv] `shouldBe` [["summary"]]
+    html <- blocksOf ToOther place "> [!NOTE]\n> <div>x</div>\n"
+    boxClasses html `shouldBe` [["note", "alert"]]
+    [() | P.Para _ <- inBox html] `shouldBe` []
+    show html `shouldNotSatisfy` T.isInfixOf "div>"
+    -- In a numbered list item, the box stays in the one item.
+    listed <- blocksOf ToOther place "1. > [!NOTE] T\n   > x\n"
+    [length items | P.OrderedList _ items <- listed] `shouldBe` [1]
+    boxClasses listed `shouldBe` [["note", "alert"]]
+
+  it "reads a box whatever the page's line endings" $ do
+    let boxTitles bs = [xs | P.Div (_, ["note", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
+    crlf <- blocksOf ToOther place "> [!NOTE] T\r\n> x\r\n"
+    boxTitles crlf `shouldBe` [[P.Str "T"]]
+    cr <- blocksOf ToOther place "> [!NOTE] T\r> x\r\r> [!NOTE] U\r> y\r"
+    boxTitles cr `shouldBe` [[P.Str "T"], [P.Str "U"]]
+
+  it "shows a marker as written where pandoc does not read a quotation, and no placeholder" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+    -- A tab after the first quotation mark: the wiki reads a box, pandoc
+    -- code; the code shows the marker.
+    tabbed <- blocksOf ToOther place ">\t> [!NOTE] A\n"
+    boxClasses tabbed `shouldBe` []
+    show tabbed `shouldNotSatisfy` T.isInfixOf "wikibox"
+    show tabbed `shouldSatisfy` T.isInfixOf "[!NOTE] A"
+    -- A placeholder spelled with an entity is not one: its digits depend
+    -- on the whole page, so the page cannot hold them, and the box keeps
+    -- its own title.
+    spelled <- blocksOf ToOther place "> [!NOTE] Mine\n> x\n\n> wiki&#98;ox1z\n> y\n"
+    boxClasses spelled `shouldBe` [["note", "alert"]]
+    query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) spelled `shouldBe` [[P.Str "Mine"]]
+    [() | P.BlockQuote _ <- spelled] `shouldBe` [()]
 
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"

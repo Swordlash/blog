@@ -126,7 +126,7 @@ spec m = do
         serveDemo
         unsafeIOToPageM (evaluate =<< js_keep_reads)
         keptKinds `shouldReturn` "answers app pages"
-        answerWith "DELETE" "api/v1/session" 200 SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = []}
+        answerWith "DELETE" "api/v1/session" 200 SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = []}
         ui <- startServer m Home
         find ui ".account .sign-out" >>= click
         _ <- find ui ".sign-in-toggle"

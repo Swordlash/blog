@@ -213,6 +213,9 @@ serveIn change at staticDir test = do
             , listen = Listen "127.0.0.1" 0
             , adminListen = Just (Listen "127.0.0.1" 0)
             , staticDir = Just staticDir
+            , -- Most tests start from a wiki with nothing in it; those of
+              -- the guide turn it on ("Test.Server.Guide").
+              guide = False
             }
   withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (testMail outbox) $ \server ->
     test

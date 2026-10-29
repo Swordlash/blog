@@ -311,7 +311,7 @@ apiOver providers st = do
     told <- notifications
     pure
       ( Map.fromList
-          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
+          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = []} :: Either WikiError SessionInfo))
               : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
               : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (endpointUrl (\e -> e.admin.directory), answerOf people)
@@ -348,6 +348,7 @@ apiOver providers st = do
         , lastBackup = Just demoNow
         , connections = 0
         , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
+        , guideInstallable = False
         }
     answerOf :: (ToJSON a) => Either WikiError a -> Response
     answerOf = \case

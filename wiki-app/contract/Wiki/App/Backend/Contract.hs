@@ -152,7 +152,7 @@ sessions = describe "session" $ do
     s <- run Anonymous session
     -- The export formats are the backend's own, not the user's: a server
     -- makes documents for someone not signed in as for anyone else.
-    s {exports = []} `shouldBe` anonymous
+    s {exports = [], boxes = []} `shouldBe` anonymous
     run Anonymous currentUser `shouldReturn` Nothing
 
   it "names the user who is signed in" $ \(Fixture run) -> do

@@ -9,8 +9,11 @@
 -- with the extensions that match the syntax the wiki reads
 -- ("Wiki.Core.Markdown.Ast", 'wikiExtensions'): pipe tables, footnotes,
 -- fenced divs, @$…$@ and @\\(…\\)@ math, GitHub's task lists,
--- strikethrough, bare links, emoji, alerts and wiki links, and attributes
--- in braces. Raw HTML is read as raw, and goes through the wiki's
+-- strikethrough, bare links, emoji and wiki links, and attributes in
+-- braces. Boxes, @> [!KIND]@, are found by the wiki's own parser, not by
+-- pandoc's, whose reader knows only GitHub's five kinds and no title
+-- after the marker ('withBoxes'), so a document has a box exactly where
+-- the page has one, with the same title. Raw HTML is read as raw, and goes through the wiki's
 -- allowlist ("Wiki.Core.Markdown.Html") before pandoc sees it. A raw block
 -- is reduced to what the allowlist keeps, written out again and read by
 -- pandoc's HTML reader. Tags in the text are read together with the text
@@ -21,6 +24,12 @@
 --
 -- = What the wiki adds
 --
+-- * __Boxes__ ("Wiki.Core.Markdown.Box"): GitHub's five kinds become
+--   pandoc's own alerts, a div with the kind's class and @alert@ that
+--   starts with a @title@ div, and any other kind a div of the same shape
+--   with the class @alert-@ and its name. So HTML, DOCX and a PDF show a
+--   box with its title (the one written after the marker, else the kind's
+--   label) whatever its kind.
 -- * __Math macros__ ("Wiki.Core.Math"): pandoc's writers typeset each
 --   formula on its own, so the macros it uses in the wiki (its space's,
 --   and those defined by the formulas before it on the page) are expanded
@@ -74,6 +83,9 @@ module Wiki.Server.Export.Document
   , DocumentPage (..)
 
     -- * Pieces
+  , PageRead (..)
+  , readPage
+  , normalLines
   , mediaPath
   , tikzPreamble
   , slideBlocks
@@ -86,8 +98,12 @@ module Wiki.Server.Export.Document
   )
 where
 
+import Crypto.Hash.SHA256 qualified as SHA256
+import Data.ByteString.Builder (byteStringHex, toLazyByteString)
+import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
@@ -100,6 +116,8 @@ import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinition
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
+import Wiki.Core.Markdown.Ast (Block, BoxMarker (..), ParseError, parseWithMarkers)
+import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind, alertKindName, boxLabel, definedKind)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
@@ -137,6 +155,8 @@ data Place = Place
   -- document cannot share an identifier.
   , macros :: Macros
   -- ^ The math macros of the page's space and its ancestors.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administrator defined, for their labels.
   }
 
 -- | The kind of document being written, as far as reading a page cares.
@@ -158,11 +178,11 @@ data Output
 -- own reader reads ("Wiki.Core.Markdown.Ast"), and no others: in
 -- particular no raw TeX, no Markdown inside HTML, and no divs or spans
 -- made of HTML, so that every piece of HTML stays raw for the allowlist.
+-- Nor @alerts@: the boxes are the wiki parser's ('withBoxes').
 wikiExtensions :: Extensions
 wikiExtensions =
   extensionsFromList
     [ Ext_all_symbols_escapable
-    , Ext_alerts
     , Ext_autolink_bare_uris
     , Ext_backtick_code_blocks
     , Ext_emoji
@@ -199,9 +219,9 @@ mediaPath a = toS ("attachments/" <> a.id.text <> "/" <> T.map safe a.name.text)
     safe c = if c == '/' || c == '\\' then '_' else c
 
 -- | A page's Markdown as blocks, with everything the wiki adds applied.
-pageBlocks :: Output -> Place -> Text -> Either PandocError [P.Block]
-pageBlocks output place source = do
-  P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} source)
+pageBlocks :: Output -> Place -> PageRead -> Either PandocError [P.Block]
+pageBlocks output place page = do
+  read' <- withBoxesRead place.boxes page
   pure
     . expandMacros place.macros
     . walk (resolveInlines place)
@@ -294,6 +314,142 @@ shiftHeadings :: Int -> [P.Block] -> [P.Block]
 shiftHeadings by = walk $ \case
   P.Header l attr xs -> P.Header (min 6 (l + by)) attr xs
   b -> b
+
+----------------------------------------------------------------------
+-- Boxes
+
+-- | 'PageRead' is a page's Markdown as the export reads it: the source,
+-- with its line endings made @\\n@ ('normalLines'), and what the wiki's
+-- parser makes of it, the blocks and the markers of the boxes
+-- ("Wiki.Core.Markdown.Ast"'s 'parseWithMarkers'). The export parses a
+-- page with the wiki's parser once, and the blocks say whether it is a
+-- deck and how its slides look, the markers where its boxes are.
+data PageRead = PageRead
+  { source :: Text
+  , blocks :: Either ParseError [Block]
+  , markers :: [BoxMarker]
+  }
+
+-- | A page's Markdown, read ('PageRead').
+readPage :: Text -> PageRead
+readPage raw = PageRead {source, blocks = fst <$> parsedPage, markers = either (const []) snd parsedPage}
+  where
+    source = normalLines raw
+    parsedPage = parseWithMarkers source
+
+-- | A text with every line ended by @\\n@: CommonMark ends a line at
+-- @\\r\\n@, at @\\r@ and at @\\n@ alike, so the lines of the result are
+-- those the wiki's parser counts ('BoxMarker').
+normalLines :: Text -> Text
+normalLines = T.replace "\r" "\n" . T.replace "\r\n" "\n"
+
+-- | The page as pandoc reads it, with its boxes where the wiki's parser
+-- finds them ('withBoxes', 'boxesOf'). A marker pandoc does not read as
+-- the start of a quotation (where the two parsers differ, as with a tab
+-- that makes pandoc read code) is not replaced, and the page is read
+-- again without it, so the document shows the marker as written, and no
+-- placeholder.
+withBoxesRead :: [BoxKind] -> PageRead -> Either PandocError [P.Block]
+withBoxesRead defined page = go page.markers
+  where
+    go markers = do
+      let (marked, boxes) = withBoxes page.source markers
+      P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} marked)
+      let boxed = walk (boxesOf defined boxes) read'
+          stray = Set.fromList (concatMap (\t -> [m | (placeholder, (m, _)) <- Map.toList boxes, placeholder `T.isInfixOf` t]) (texts boxed))
+      if Set.null stray then pure boxed else go (filter (`Set.notMember` stray) markers)
+    -- Every text a document holds where a placeholder could end up.
+    texts :: [P.Block] -> [Text]
+    texts bs =
+      query (\case P.Str t -> [t]; P.Code _ t -> [t]; P.Math _ t -> [t]; P.RawInline _ t -> [t]; _ -> []) bs
+        <> query (\case P.CodeBlock _ t -> [t]; P.RawBlock _ t -> [t]; _ -> []) bs
+
+-- | 'Boxes' are the boxes of a page, each by the placeholder its marker
+-- was replaced with ('withBoxes'): its marker as the wiki's parser read
+-- it, and the text the placeholder replaced.
+type Boxes = Map Text (BoxMarker, Text)
+
+-- | A page's source with the marker of each of these boxes (@[!KIND]@ and
+-- the title after it) replaced by a placeholder, and the boxes by their
+-- placeholders. Pandoc reads each such box as a quotation that starts with
+-- its placeholder, which 'boxesOf' makes the box. So pandoc never decides
+-- what is a box: a marker the wiki reads as text (escaped, in code, with
+-- no space before a title) is text in the document too, and a title is the
+-- text the page shows.
+--
+-- The placeholder line is followed by a line of the quotation marks of
+-- its prefix and nothing else, a blank line inside the quotation, so that what follows
+-- (a table, a fenced div, HTML) starts a block of its own, as it does
+-- after the marker on the page; the lines are rewritten by the numbers
+-- the parser gave them, so the added lines move nothing.
+--
+-- A placeholder is @wikibox@, eight hexadecimal digits of the SHA-256 of
+-- the source, a number and @z@, so that no placeholder is the start of
+-- another. Pandoc decodes entities, so a page could spell a placeholder
+-- (@wiki&#98;ox@…) and take a box's title, if it could know the digits:
+-- they depend on the whole page, the spelling included, so it cannot. If
+-- the source holds the family's start already (it may quote this
+-- documentation), more of the digest is taken, and with all 64 digits
+-- there the boxes are left as pandoc reads them.
+withBoxes :: Text -> [BoxMarker] -> (Text, Boxes)
+withBoxes source markers = case family of
+  Nothing -> (source, mempty)
+  Just prefix ->
+    let placed =
+          Map.fromList
+            [ (m.markerLine, (prefix <> show n <> "z", m, start, T.drop start text))
+            | (n, m) <- zip [1 :: Int ..] markers
+            , Just text <- [atMay lines' (m.markerLine - 1)]
+            , Just start <- [markerStart m text]
+            ]
+        rewrite n text = case Map.lookup n placed of
+          Just (placeholder, _, start, _) -> [T.take start text <> placeholder, quoteOnly (T.take start text)]
+          Nothing -> [text]
+     in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
+        , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
+        )
+  where
+    lines' = T.splitOn "\n" source
+    digest = decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (SHA256.hash (encodeUtf8 source)))))
+    family = find (not . (`T.isInfixOf` source)) [prefix | n <- [8, 16, 64], let prefix = "wikibox" <> T.take n digest]
+    -- The prefix of the marker's line with everything but the quotation
+    -- marks (a list item's marker, its number) made spaces, so that the
+    -- line continues the same list item and quotation instead of starting
+    -- another item.
+    quoteOnly = T.stripEnd . T.map (\c -> if c == '>' || c == '\t' then c else ' ')
+    -- The marker starts at its column and runs to the end of the line. A
+    -- tab before it counts to a tab stop, so the column is checked, and
+    -- the line searched where it does not hold the marker.
+    markerStart m text
+      | "[!" `T.isPrefixOf` T.drop (m.markerColumn - 1) text = Just (m.markerColumn - 1)
+      | otherwise = case T.breakOn "[!" text of
+          (_, "") -> Nothing
+          (before, _) -> Just (T.length before)
+
+-- | A quotation that starts with a box's placeholder ('withBoxes') as the
+-- box: GitHub's five kinds as pandoc's alerts are made (a div with the
+-- kind's class and @alert@), any other kind as a div with the class
+-- @alert-@ and its name, each starting with a @title@ div that holds the
+-- box's title (the one written after the marker, else the kind's label).
+-- Any other block is left as it is.
+boxesOf :: [BoxKind] -> Boxes -> P.Block -> P.Block
+boxesOf defined boxes = \case
+  P.BlockQuote (P.Para (P.Str placeholder : after) : rest)
+    | Just (m, _) <- Map.lookup placeholder boxes ->
+        let label = fromMaybe (boxLabel (definedKind defined m.boxKind) m.boxKind) m.boxTitle
+            classes = case m.boxKind of
+              Custom name -> ["alert-" <> name]
+              builtIn -> [alertKindName builtIn, "alert"]
+            firstPara = case after of
+              b : more | lineBreak b -> more
+              more -> more
+         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para (B.toList (B.text label))] : [P.Para firstPara | not (null firstPara)] <> rest)
+  b -> b
+  where
+    lineBreak = \case
+      P.SoftBreak -> True
+      P.LineBreak -> True
+      _ -> False
 
 ----------------------------------------------------------------------
 -- Raw HTML, through the allowlist

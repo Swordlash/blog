@@ -179,7 +179,12 @@ GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
 ```
 
 A note, marked as one, at the top of the
-[Tour](https://swordlash.github.io/blog/s/docs/p/tour/).
+[Tour](https://swordlash.github.io/blog/s/docs/p/tour/). Any other word makes
+a box too, `> [!EXERCISE]`, titled with the word or with what follows it on the
+line (`> [!EXERCISE] Exercise 3`); an administrator gives a kind a title, a
+colour and an icon under "Boxes" in the administration's Server section, and the
+demo defines `exercise` this way: the Markdown guide's
+[Notes and boxes](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#notes-and-boxes).
 
 ### A table of contents
 
@@ -943,6 +948,23 @@ to the demo, keeping `data/`.
   `wiki-server users add` (above). Invitations, "Create account" in an open wiki,
   sign-in providers, and a password or "Send a password link…" for a user who
   exists already work as before. A change of the setting is in "Activity".
+- **The guide.** A server that starts with no spaces makes one, Guide, at
+  `/guide`: public, so everyone the wiki is open to reads it, and edited by
+  administrators only. It holds the wiki's documentation, the demo's Docs but
+  for its tour: a tour of the server's own (signing in, your spaces, editing,
+  the assistant, where the administration is), the Markdown guide and its pages
+  on diagrams, mathematics and presentations, with their attachments.
+  `--no-guide` starts without it. `wiki-server guide install --data <dir>/data`
+  puts it back once deleted, as the administration's "Overview" does with
+  "Install the guide"; `wiki-server guide update --data <dir>/data` gives the
+  running version's title and text to each of its pages that still has the
+  title and text the guide last wrote there, as a new version (the page's
+  history keeps what was there), adds a page a newer version brings, and leaves
+  alone a page an administrator edited, renamed, moved or deleted, saying so. An attachment a newer version adds to a page the guide has already
+  is not brought in, and the update says which. The guide is the space the server
+  installed, recorded by its id: a space of the wiki's own put at `/guide` is
+  never touched, and the update says so. `deploy-local.sh --server` runs the
+  update after it starts a new server, so the guide follows the wiki's version.
 - **The server's settings: the public address, mail and providers.** These are
   set in the administration's "Server" section and nowhere else: on the admin
   listener (`http://127.0.0.1:8081/admin/admin/`, below), which serves it before
@@ -959,7 +981,10 @@ to the demo, keeping `data/`.
     test mail" checks it;
   - *sign-in providers*, added, changed and removed one at a time (below), each with
     the redirect URI to register with it and a "Check" that asks the provider how to
-    sign in.
+    sign in;
+  - *boxes*, the kinds of `> [!KIND]` box the wiki's pages may hold besides GitHub's
+    five, each with the title its boxes show, a colour of the theme and an icon
+    ([docs/markdown.md](docs/markdown.md#notes-and-boxes)).
 
   The mail password and the providers' client secrets are typed once, kept in the
   wiki's database (beside the password and session hashes it holds already, so as

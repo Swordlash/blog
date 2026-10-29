@@ -334,5 +334,13 @@ class (Monad m) => MonadAdmin m where
   default serverStatus :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError (Maybe ServerStatus))
   serverStatus = lift serverStatus
 
+  -- | Install the guide, the public space at @/guide@ that holds the
+  -- wiki's documentation (WP5.29 of docs/PLAN.md), into a wiki that has
+  -- none: 'Conflict' where a space is at @/guide@ already. The demo has its
+  -- guide in Docs, and says so.
+  installGuide :: m (Either WikiError ())
+  default installGuide :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError ())
+  installGuide = lift installGuide
+
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

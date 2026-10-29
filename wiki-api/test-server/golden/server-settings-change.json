@@ -2,6 +2,14 @@
   "assistantHosts": [
     "https://openrouter.ai"
   ],
+  "boxes": [
+    {
+      "colour": "grey",
+      "icon": "none",
+      "label": "By the way",
+      "name": "aside"
+    }
+  ],
   "mail": {
     "from": "wiki@example.org",
     "host": "mail.example.org",

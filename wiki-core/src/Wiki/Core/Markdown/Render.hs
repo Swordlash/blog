@@ -43,8 +43,15 @@
 -- disabled checkbox. Footnote references are @\<sup class=\"footnote-ref\">@
 -- links to @#fn-N@, and the notes are a @\<section class=\"footnotes\">@ at
 -- the end, each ending with a link back to its first reference. Table cells
--- are aligned with a @text-align@ style. Alerts are
--- @\<div class=\"alert alert-note\">@ with a @\<p class=\"alert-title\">@.
+-- are aligned with a @text-align@ style. A box, @> [!KIND]@, is
+-- @\<div class=\"alert alert-note\">@ (its kind's name after @alert-@)
+-- with a @\<p class=\"alert-title\">@ that holds its title: the one
+-- written after the marker, or else its kind's label
+-- ("Wiki.Core.Markdown.Box"). A box of a kind the administrator defined
+-- ('boxes') carries the kind's colour and icon as CSS custom properties in
+-- its @style@, and its title starts with an empty
+-- @\<span class=\"alert-icon\">@ when the kind has an icon, which the
+-- stylesheet draws.
 -- Only @id@ and @class@ attributes from braces reach the HTML (and @width@
 -- and @height@ in pixels on an embed): any other could be an event handler.
 --
@@ -60,6 +67,7 @@ module Wiki.Core.Markdown.Render
   , renderBlocks
   , renderSections
   , renderRawHtml
+  , boxOf
   )
 where
 
@@ -71,6 +79,7 @@ import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
+import Wiki.Core.Markdown.Box (BoxIcon (..), BoxKind (..), alertKindName, boxLabel, boxStyle, definedKind)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
@@ -110,6 +119,9 @@ data Options page w i = Options
   , headingAnchors :: Bool
   -- ^ Whether a heading ends with its link to itself: in a page, but not
   -- where nothing shows it (a feed, read without the stylesheet).
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administrator defined, with their labels,
+  -- colours and icons ("Wiki.Core.Markdown.Box").
   }
 
 -- | The user a mention names, as its link shows them.
@@ -152,6 +164,7 @@ defaultOptions =
     , pageHref = identity
     , resolveMention = const Nothing
     , headingAnchors = True
+    , boxes = []
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -196,10 +209,9 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
-      Alert kind bs -> do
+      Alert kind title bs -> do
         inner <- renderBlocks' bs
-        let (cls, title) = alertName kind
-        pure [HH.div [classesProp ["alert", "alert-" <> cls]] (HH.p [classesProp ["alert-title"]] [HH.text title] : inner)]
+        pure [boxOf (definedKind opts.boxes kind) kind title inner]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -455,16 +467,20 @@ alignment = \case
   AlignCenter -> [HP.styleText "text-align: center"]
   AlignRight -> [HP.styleText "text-align: right"]
 
-alertName :: AlertKind -> (Text, Text)
-alertName = \case
-  Note -> ("note", "Note")
-  Tip -> ("tip", "Tip")
-  Important -> ("important", "Important")
-  Warning -> ("warning", "Warning")
-  Caution -> ("caution", "Caution")
-
 classesProp :: (HasType "class" Text r) => [Text] -> HP.IProp r i
 classesProp = HP.class_ . HH.ClassName . T.unwords
+
+-- | A box, @> [!KIND]@: its kind's definition among the administrator's
+-- ('definedKind'), its kind, the title written after its marker if there
+-- is one, and what it holds. The administration's preview of a kind is
+-- drawn by this too ("Wiki.App.View.Server").
+boxOf :: Maybe BoxKind -> AlertKind -> Maybe Text -> [HH.HTML w i] -> HH.HTML w i
+boxOf defined kind title inner =
+  HH.div
+    (classesProp ["alert", "alert-" <> alertKindName kind] : [HP.styleText (boxStyle k) | Just k <- [defined]])
+    (HH.p [classesProp ["alert-title"]] (icon <> [HH.text (fromMaybe (boxLabel defined kind) title)]) : inner)
+  where
+    icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]
 
 -- | The @id@ and the classes of some attributes, after classes of the
 -- element's own.
