@@ -1412,7 +1412,10 @@ must be in before it is.
   refusal's `ApiError` body into `WikiError` and a 2xx with a wrong body into
   `Unreachable` (`answer`), the 304 answers of the vault, the `cacheOnly` mode and the
   silent transport for a prerendered page. `Wiki.Api.Links` stays for the addresses the
-  application puts into the page (attachments, exports, search) and loses the rest. The
+  application puts into the page (attachments, exports, search) and for the server's tests
+  of the API, which name endpoints with `links` some five hundred times and had to pass
+  unchanged (amended at the merge: the first wording said it "loses the rest"); the
+  application's own requests no longer use it. The
   server's tests of the API keep passing unchanged, which is the check that the wire format
   did not move; the application's native tests of the backend (`Test.Backend.Http`,
   `Test.Server.Http`) and the browser tests (`Test.Browser.Http` with `test-fetch.js`) keep
@@ -4007,6 +4010,41 @@ Amended by the planning session after each work package's report.
   new storage layer; `Env.ceremonies` is per process. Full gate by the agent (`-j1`),
   CI green on the merged head. The owner's review comment on the hand-rolled request
   types became WP5.23.
+
+- **WP5.23 merged** (2026-10-29, PR #109, `main` at `dc5fef6`, five commits). `WikiApi`,
+  `SpacesApi`, `PagesApi` and `ArchiveApi` take the multipart backend as their first
+  parameter: the server serves `ApiWith Tmp`, the client is derived from `ApiWith Mem`
+  (servant-multipart-client reads a `Tmp` upload from a file path, which the browser has
+  not); paths, methods, headers and bodies are the same. `Wiki.App.Backend.Http.Request`
+  is gone; `Http.Transport` holds `HttpRequest` (servant's request with its body collected
+  and its path relative to `<base href>`), `Transport`, the fetch and silent transports and
+  the time limits (multipart gets `uploadTimeout`); `Http.Client` holds `prepare`,
+  `withBoundary`, `endpointUrl` (a call's address worked out in servant's `Free` client
+  without sending it, for the tests; panics on a call that sends no request), `answer`,
+  `fromApiError` and the session conversions. `HttpWiki` has the `RunClient` instance,
+  the one place every request goes through: `NotCached` under `cacheOnly`, the request
+  marker, the transport, the 401/403 session re-check (guarded by `rechecks`, with a test
+  that a refused session endpoint asks exactly once). The client is `clientIn` on
+  `ApiWith Mem`; every method of `MonadWiki`, `MonadAdmin`, `MonadComments`,
+  `MonadNotifications`, `MonadAccount`, `MonadSecurity` and `MonadVault` calls one
+  endpoint through `call`. `Render.inProcess` takes servant's request and returns
+  servant's response; the handlers' type is `WikiApi Tmp AsServer`. Only the declared
+  status is accepted (a 201 answering a `Get` is `Unreachable`; before, any 2xx). The wire
+  moved only in ways the server already read: `application/json;charset=utf-8` and an
+  `Accept` header, `login=a&login=b` for a list, a colon in a path segment unencoded, a
+  form ending with `--boundary--` and a text part with `Content-Type: text/plain`; the
+  server's API tests passed unchanged, the contract over the derived client
+  (`Test.Server.Http`, 203 examples) and the smoke test confirm it. App tests name the
+  client's addresses with `endpointUrl`, not `links` (the native prerender test had been
+  answering its mentions with a 404 unnoticed; fixed). Spike: servant-client-core 0.20.3.0
+  and servant-multipart-client 0.13.0 build for wasm under `allow-newer: *:*`, bringing
+  only `base-compat` and `safe`. Review: Codex found nothing; five findings of a Claude
+  Code review fixed in `dc5fef6` (the re-check test, `endpointUrl` failing loudly, the
+  tests and the `Links` header, two haddocks). Full gate by the agent, CI green on the
+  merged head. For later packages: a new endpoint must declare the status the server
+  answers (`PostCreated` against `Post`), a mismatch shows as `Unreachable`; a test
+  transport's response must carry `Content-Type: application/json` (`jsonResponse` in
+  `Test.Scripted`); new endpoints are called through `endpoints.<record>.<field>`.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
