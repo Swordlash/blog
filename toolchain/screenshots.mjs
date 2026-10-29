@@ -9,7 +9,8 @@
 // It serves the built page as a static host does (as toolchain/smoke-test.mjs
 // does, under the base path the build was made for, read from its
 // <base href>), opens each view at a fixed size, 1280 by 800 at a device
-// scale of 1, in the light scheme, waits until the libraries have drawn what
+// scale of 1, in the light scheme (the administration in the dark one
+// too), waits until the libraries have drawn what
 // the view shows (KaTeX's formulas and fonts, Mermaid's diagrams,
 // highlight.js's colours, CodeMirror), and writes a PNG of the window:
 //
@@ -18,6 +19,11 @@
 //   editor.png   the editor on the Mathematics page, the preview beside it
 //   slides.png   the Presentations deck at its slide of formulas
 //   spaces.png   the front page, the directory of spaces
+//   admin-users.png, admin-users-dark.png
+//                the administration's users, with a few more users made
+//                in it, in the light and the dark scheme
+//   admin-dialog.png, admin-dialog-dark.png
+//                the same with a user's "Manage" dialog open
 //
 // The README shows them, and a test of wiki-app (Test.Readme) checks that
 // each is under 300 KB; so does this script, which fails on one that is not.
@@ -95,11 +101,11 @@ const problems = [];
 // A window of the fixed size, in a context of its own, so that each view
 // starts from the demo as it is published (its content in a fresh IndexedDB,
 // signed in as admin) and nothing one view did shows in another.
-async function newPage() {
+async function newPage(colorScheme = "light") {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
-    colorScheme: "light",
+    colorScheme,
     reducedMotion: "reduce",
     serviceWorkers: "block",
   });
@@ -134,7 +140,7 @@ async function formulasSet(page, within) {
   );
 }
 
-async function shoot(page, name) {
+async function shoot(page, name, { close = true } = {}) {
   await settled(page);
   const file = join(out, name);
   await writeFile(file, await page.screenshot({ type: "png" }));
@@ -142,7 +148,46 @@ async function shoot(page, name) {
   const kb = Math.round(size / 1024);
   if (size >= limit) problems.push(`${name} is ${kb} KB, over ${limit / 1024} KB`);
   console.log(`${name}: ${kb} KB`);
-  await page.context().close();
+  if (close) await page.context().close();
+}
+
+// The users the administration's screenshots add to the demo's three, made
+// with its "New user" form, so that the table looks like a wiki's.
+const moreUsers = [
+  ["bea", "Bea Builder", true],
+  ["carl", "Carl Coder", false],
+  ["dora", "Dora Designer", false],
+  ["eve", "Eve Operations", false],
+];
+
+// The administration's users, and a user's dialog, in a colour scheme.
+async function administration(colorScheme, suffix) {
+  const page = await newPage(colorScheme);
+  await page.goto(url("/admin/users/"));
+  await page.locator("#app .user-row").first().waitFor({ timeout });
+  for (const [login, name, administrator] of moreUsers) {
+    await page.locator("#app .user-create-open").click();
+    await page.locator("#app .user-create-login").fill(login);
+    await page.locator("#app .user-create-name").fill(name);
+    await page.locator("#app .user-create-password").fill(`${login}'s password`);
+    if (administrator) await page.locator("#app .user-create-administrator input").check();
+    await page.locator("#app .user-create button.primary").click();
+    await page.locator(`#app .user-row[data-login=${login}]`).waitFor({ timeout });
+  }
+  // Dora's login disabled, from her dialog, which asks first.
+  await page.locator("#app .user-row[data-login=dora] .user-manage").click();
+  await page.locator("#app .user-dialog .disable-toggle").click();
+  await page.locator("#app .user-dialog .disable-confirm-button").click();
+  await page.locator("#app .user-row[data-login=dora].user-disabled").waitFor({ timeout });
+  await page.keyboard.press("Escape");
+  await page.locator("#app .user-dialog").waitFor({ state: "detached", timeout });
+  await page.mouse.move(1270, 790);
+  await shoot(page, `admin-users${suffix}.png`, { close: false });
+  // Edgar's dialog: in a group, creating spaces, no password yet.
+  await page.locator("#app .user-row[data-login=editor] .user-manage").click();
+  await page.locator("#app .user-dialog[data-login=editor] .user-dialog-groups").waitFor({ timeout });
+  await page.locator("#app .user-dialog").evaluate((dialog) => dialog.querySelector("button")?.blur());
+  await shoot(page, `admin-dialog${suffix}.png`);
 }
 
 try {
@@ -198,6 +243,10 @@ try {
   await front.locator("#app .space-card").first().waitFor({ timeout });
   await front.waitForLoadState("networkidle");
   await shoot(front, "spaces.png");
+
+  // The administration's users and a user's dialog, light and dark.
+  await administration("light", "");
+  await administration("dark", "-dark");
 } catch (error) {
   problems.push(error.stack ?? String(error));
 } finally {

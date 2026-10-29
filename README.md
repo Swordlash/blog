@@ -1048,6 +1048,9 @@ to the demo, keeping `data/`.
   administer a space is in that space's "Space settings". `docs/api.md` says
   what each listener serves
   ([The two listeners](docs/api.md#the-two-listeners)).
+
+  ![The administration's users, and a user's "Manage" dialog](docs/screenshots/admin-dialog.png)
+
 - **Health and metrics.** `/healthz`, on either listener and with no login,
   says whether the server can read its database and how old its last backup is;
   `http://127.0.0.1:8081/metrics`, on the admin listener only, gives Prometheus

@@ -2925,27 +2925,8 @@ body:has(.slides-view) {
   margin: 0.5rem 0;
 }
 
-/* The wiki's people: its users in a table, each with a switch for whether
-   they administer the wiki, and its groups, each with its members. */
-.user-table {
-  border-collapse: collapse;
-  margin: 0.5rem 0 1rem;
-}
-
-.user-table th,
-.user-table td {
-  padding: 0.35rem 1rem 0.35rem 0;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.user-table th {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--muted);
-}
-
+/* The wiki's people: switches for what a user may do (in the users'
+   dialog), and the groups, each with its members. */
 .user-login,
 .group-member-login {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2987,11 +2968,6 @@ body:has(.slides-view) {
 .switch:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.administrator-self {
-  margin-left: 0.5rem;
-  font-size: 0.85rem;
 }
 
 .group-list {
@@ -3199,77 +3175,29 @@ body:has(.slides-view) {
 
 /* ---- Accounts and permissions -------------------------------------------- */
 
-/* A table can scroll sideways on a narrow screen rather than push the page
-   wider: the users' table has five columns now. */
-.admin-users-list {
-  overflow-x: auto;
-}
-
-.user-disabled .user-display-name,
-.user-disabled .user-login {
-  text-decoration: line-through;
-  color: var(--muted);
-}
-
-.user-account {
-  white-space: nowrap;
-}
-
-.account-state {
-  margin-right: 0.5rem;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.user-account .password-form {
-  display: inline-flex;
-  margin: 0;
-  white-space: normal;
-}
-
-/* "Set password…" with why no link is mailed instead, under the button;
-   and the question before a link is mailed (WP5.6). */
-.user-account .password-control {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.2rem;
-  max-width: 16rem;
-  margin-right: 0.3rem;
-  vertical-align: top;
-  white-space: normal;
-}
-
-.user-account .password-hint {
-  font-size: 0.85rem;
-}
-
-.user-account .password-link-confirm {
-  display: inline-flex;
-  margin: 0;
-  white-space: normal;
-}
-
-.disable-self {
-  margin-left: 0.5rem;
-  font-size: 0.85rem;
-}
-
 .admin-told {
   margin: 0.5rem 0;
 }
 
-/* The form for a new user, under the table. */
-.user-create,
-.user-create-console {
-  margin: 1rem 0;
-  padding: 0.6rem 1rem 0.8rem;
+/* The form for a new user, opened above the table by "New user". */
+.user-create {
+  margin: 0 0 1rem;
+  padding: 0.8rem 1rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 8px;
+  background: var(--surface);
 }
 
-.user-create h3,
-.user-create-console h3 {
+.user-create .actions {
+  margin-bottom: 0.4rem;
+}
+
+.user-create-console {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.user-create h2 {
   margin: 0 0 0.5rem;
   font-size: 1rem;
 }
@@ -3294,6 +3222,646 @@ body:has(.slides-view) {
   align-items: center;
   gap: 0.35rem;
   padding-bottom: 0.4rem;
+}
+
+/* ---- The administration's pages ------------------------------------------ */
+
+/* A page per section (Wiki.App.Shell): the sidebar holds the sections, and
+   the content is one section, wider than a page of text, since the users'
+   table has four columns. */
+.wiki:has(.admin-view) .wiki-content {
+  max-width: 64rem;
+}
+
+.admin-view > h1 {
+  margin: 0 0 0.25rem;
+}
+
+.admin-view .admin-intro {
+  max-width: 46rem;
+}
+
+/* The first part of a section sits under its heading, not under a rule. */
+.admin-view > .admin-section,
+.admin-view > div > .admin-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.admin-view > .admin-section > h2:first-child {
+  margin-top: 0.75rem;
+}
+
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-nav-link {
+  display: block;
+  padding: 0.35rem 0.65rem;
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.admin-nav-link:hover {
+  text-decoration: none;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.admin-nav-link[aria-current="page"] {
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.admin-nav-link:focus-visible,
+.admin-view :is(a, button, input, select):focus-visible,
+.user-dialog :is(button, input, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.admin-nav-link:focus-visible {
+  outline-offset: -2px;
+}
+
+.admin-view button:disabled,
+.user-dialog button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.admin-view button:disabled:hover,
+.user-dialog button:disabled:hover {
+  border-color: var(--border);
+}
+
+/* On a narrow screen the sections are a row of tabs above the section,
+   scrolled sideways when they do not fit. */
+@media (max-width: 760px) {
+  .admin-sidebar {
+    padding: 0.4rem 0.5rem 0;
+  }
+
+  .admin-sidebar h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .admin-nav {
+    flex-direction: row;
+    gap: 0.1rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .admin-nav-link {
+    padding: 0.45rem 0.7rem 0.55rem;
+    border-radius: 6px 6px 0 0;
+    white-space: nowrap;
+  }
+
+  .admin-nav-link[aria-current="page"] {
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+}
+
+/* The users (Wiki.App.View.Users): the search, the filter and "New user"
+   in one row of controls of one height; the table; the count, the pages
+   and the page size under it. */
+.users-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.users-toolbar :is(input, select, button) {
+  height: 2.2rem;
+  padding: 0 0.7rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.users-search {
+  display: flex;
+  flex: 1 1 14rem;
+  margin: 0;
+}
+
+.users-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-create-open {
+  margin-left: auto;
+}
+
+/* The page shown stays while the next is fetched, dimmed, and the list
+   keeps a height while it loads, so that nothing under it jumps. */
+.users-list {
+  min-height: 14rem;
+  transition: opacity 0.15s;
+}
+
+.users-fetching {
+  opacity: 0.6;
+}
+
+.users-loading {
+  padding: 0.75rem 0;
+}
+
+.users-empty {
+  margin: 0;
+  padding: 2.5rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  /* The columns keep their widths from one page to the next, whatever the
+     names and badges on each. */
+  table-layout: fixed;
+}
+
+.user-table th:nth-child(1) {
+  width: 36%;
+}
+
+.user-table th:nth-child(2) {
+  width: 24%;
+}
+
+.user-table th:nth-child(4) {
+  width: 7.5rem;
+}
+
+.user-who {
+  overflow-wrap: anywhere;
+}
+
+.user-table th,
+.user-table td {
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.user-table th {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.user-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.user-table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.user-who .user-display-name,
+.user-who .user-login {
+  display: block;
+}
+
+.user-display-name {
+  font-weight: 600;
+}
+
+.user-sign-in {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.user-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.user-manage {
+  padding: 0.25rem 0.75rem;
+}
+
+.user-disabled .user-display-name {
+  color: var(--muted);
+}
+
+.user-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.user-badges .badge {
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+.badge-administrator {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badge-creator {
+  color: var(--important);
+  border-color: var(--important);
+}
+
+.badge-second-factor {
+  color: var(--tip);
+  border-color: var(--tip);
+}
+
+.badge-disabled {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.users-paging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.users-count {
+  margin: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager li {
+  display: flex;
+}
+
+.pager ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pager :is(a, .pager-step),
+.pager-gap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager a:hover {
+  text-decoration: none;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.pager a[aria-current="page"] {
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.pager [aria-disabled="true"],
+.pager-gap {
+  color: var(--muted);
+}
+
+.pager [aria-disabled="true"] {
+  opacity: 0.5;
+}
+
+.users-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+}
+
+.users-page-size select {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+}
+
+/* On a phone the table keeps who and what: how they sign in is in the
+   dialog. */
+@media (max-width: 600px) {
+  .user-table :is(th, td):nth-child(2) {
+    display: none;
+  }
+
+  .user-table th,
+  .user-table td {
+    padding: 0.5rem 0.6rem;
+  }
+
+  .user-table th:nth-child(1) {
+    width: auto;
+  }
+
+  .user-table th:nth-child(3) {
+    width: 38%;
+  }
+
+  .user-table th:nth-child(4) {
+    width: 6.5rem;
+  }
+
+  .users-paging {
+    flex-direction: column;
+  }
+}
+
+/* The "Manage" dialog (Wiki.App.View.UserDialog): a modal in the middle of
+   the window, over a dimmed page, as wide as its switches and forms need
+   and never taller than the window; its header and its "Done" stay in
+   view while its parts scroll. */
+.user-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
+}
+
+.user-dialog::backdrop {
+  background: var(--dialog-backdrop);
+}
+
+/* A dialog stands above the page: as white as the page in the light
+   scheme, and a step lighter than it in the dark one. */
+:root {
+  --dialog: var(--background);
+  --dialog-backdrop: rgb(13 17 23 / 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dialog: var(--surface);
+    --dialog-backdrop: rgb(1 4 9 / 0.7);
+  }
+}
+
+.user-dialog-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-dialog-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--dialog);
+}
+
+.user-dialog-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.user-dialog-login {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0;
+}
+
+.user-dialog-close {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+}
+
+.user-dialog-close:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.user-dialog-status {
+  padding: 0 1.25rem;
+}
+
+.user-dialog-status > * {
+  margin: 0.75rem 0 0;
+}
+
+.user-dialog-saved {
+  font-size: 0.9rem;
+  color: var(--tip);
+}
+
+.user-dialog-saved::before {
+  content: "✓ ";
+}
+
+.user-dialog-part {
+  padding: 0.9rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.user-dialog-part h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.user-dialog-part > :last-child,
+.user-dialog-part .actions {
+  margin-bottom: 0;
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+}
+
+.setting + .setting {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.setting-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.setting-name {
+  font-weight: 600;
+}
+
+.setting-help {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.setting .switch {
+  flex-shrink: 0;
+}
+
+.user-dialog-facts {
+  font-size: 0.95rem;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.3rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.user-dialog-facts dt {
+  color: var(--muted);
+}
+
+.user-dialog-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.user-dialog .password-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.user-dialog .password-hint {
+  font-size: 0.85rem;
+}
+
+.user-dialog :is(.confirm, .inline-form) {
+  margin: 0.5rem 0 0;
+}
+
+.user-dialog :is(.confirm, .inline-form) .actions {
+  margin: 0;
+}
+
+.user-dialog-identities,
+.user-dialog-group-list {
+  margin: 0.5rem 0 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.user-dialog-identity,
+.user-dialog-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+}
+
+.user-dialog-group + .user-dialog-group,
+.user-dialog-identity + .user-dialog-identity {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.user-dialog-groups .empty {
+  margin: 0 0 0.6rem;
+}
+
+.user-dialog-group-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.user-dialog-group-add select {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+/* What ends a user's sessions or takes a way in away: apart, last, and in
+   the danger colour. */
+.user-dialog-account {
+  background: color-mix(in srgb, var(--danger) 4%, transparent);
+}
+
+.user-dialog-account h3 {
+  color: var(--danger);
+}
+
+.user-dialog-dangers {
+  margin: 0;
+}
+
+button.danger-outline {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: var(--dialog);
+}
+
+button.danger-outline:hover {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--dialog));
+}
+
+.user-dialog-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.25rem;
+  background: var(--dialog);
 }
 
 /* A space's permissions, opened from its actions. */
@@ -4003,10 +4571,6 @@ div.server-secret > span:first-child {
   display: block;
   color: var(--muted);
   font-size: 0.85rem;
-}
-
-.user-account .second-factor-remove {
-  margin-left: 0.3rem;
 }
 
 /* The help under a checkbox's label, on its own line. */
