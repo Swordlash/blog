@@ -24,6 +24,9 @@
 //                in it, in the light and the dark scheme
 //   admin-dialog.png, admin-dialog-dark.png
 //                the same with a user's "Manage" dialog open
+//   admin-remove.png, admin-remove-dark.png
+//                a disabled user's dialog, asking to remove the account,
+//                the login typed
 //
 // The README shows them, and a test of wiki-app (Test.Readme) checks that
 // each is under 300 KB; so does this script, which fails on one that is not.
@@ -183,6 +186,17 @@ async function administration(colorScheme, suffix) {
   await page.locator("#app .user-dialog").waitFor({ state: "detached", timeout });
   await page.mouse.move(1270, 790);
   await shoot(page, `admin-users${suffix}.png`, { close: false });
+  // Dora's dialog again, asking to remove her account, her login typed.
+  await page.locator("#app .user-row[data-login=dora] .user-manage").click();
+  await page.locator("#app .user-dialog .user-remove").click();
+  await page.locator("#app .user-dialog .remove-confirm-login").fill("dora");
+  await page.locator("#app .user-dialog .remove-confirm-button:not([disabled])").waitFor({ timeout });
+  await page.locator("#app .user-dialog").evaluate((dialog) => {
+    for (const e of [dialog, dialog.querySelector(".user-dialog-body")]) e.scrollTop = e.scrollHeight;
+  });
+  await shoot(page, `admin-remove${suffix}.png`, { close: false });
+  await page.keyboard.press("Escape");
+  await page.locator("#app .user-dialog").waitFor({ state: "detached", timeout });
   // Edgar's dialog: in a group, creating spaces, no password yet.
   await page.locator("#app .user-row[data-login=editor] .user-manage").click();
   await page.locator("#app .user-dialog[data-login=editor] .user-dialog-groups").waitFor({ timeout });

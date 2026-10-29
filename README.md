@@ -1056,6 +1056,8 @@ to the demo, keeping `data/`.
 
   ![The administration's users, and a user's "Manage" dialog](docs/screenshots/admin-dialog.png)
 
+  ![A disabled user's "Manage" dialog, asking to remove the account](docs/screenshots/admin-remove.png)
+
 - **Health and metrics.** `/healthz`, on either listener and with no login,
   says whether the server can read its database and how old its last backup is;
   `http://127.0.0.1:8081/metrics`, on the admin listener only, gives Prometheus

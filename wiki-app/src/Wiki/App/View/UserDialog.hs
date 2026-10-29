@@ -480,7 +480,9 @@ component =
           [hh|
             <form class="confirm remove-confirm" role="alertdialog" aria-labelledby="user-remove-question" {{ HE.preventingDefault (HE.onSubmit (const RemoveAccount)) }}>
               <p id="user-remove-question"><strong>{{ "Remove " <> u.user.displayName <> "'s account?" }}</strong>{{ " This cannot be undone." :: Text }}</p>
-              <p>{{ "Their sessions end, and their groups, permissions, passkeys, drafts, watches and notifications are deleted. The pages, versions and comments they wrote stay, under the login " <> login <> ", which a new account may then take." }}</p>
+              <p>
+                {{ "Their sessions end, and their groups, permissions, passkeys, drafts, watches and notifications are deleted. The pages, versions and comments they wrote stay, under the login " :: Text }}<span class="user-login">{{ login }}</span>{{ ", which a new account may then take." :: Text }}
+              </p>
               <label class="field">
                 <span>{{ "Type " :: Text }}<span class="user-login">{{ login }}</span>{{ " to confirm" :: Text }}</span>
                 <input type="text" class="remove-confirm-login" autocomplete="off" autocapitalize="none" spellcheck="false" value={{ typedLogin }} onValueInput={{ TypedRemoval }} required {{ HP.ref st.removeField }}>

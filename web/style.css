@@ -3855,9 +3855,16 @@ body:has(.slides-view) {
   flex-basis: 100%;
 }
 
-.user-dialog .remove-confirm .field .user-login {
+.user-dialog .remove-confirm .user-login {
   color: var(--text);
   font-weight: 600;
+}
+
+/* The field takes the focus when the question appears. The margin makes
+   the browser scroll the button under it into view too, above the
+   dialog's sticky footer. */
+.user-dialog .remove-confirm-login {
+  scroll-margin-bottom: 7rem;
 }
 
 .user-remove-hint {
