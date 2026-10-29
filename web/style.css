@@ -1303,7 +1303,13 @@ select {
   text-decoration: none;
 }
 
+/* A box of a kind the administration defined sets --box-colour (and
+   --box-icon, when the kind has an icon) in its style attribute, which
+   wins over this rule. Any other box starts from no colour and no icon,
+   so a box nested in a defined one does not take the outer box's. */
 .page-body .alert {
+  --box-colour: initial;
+  --box-icon: initial;
   margin: 1rem 0;
   padding: 0.5rem 1rem;
   border-left: 4px solid var(--box-colour, var(--border));
