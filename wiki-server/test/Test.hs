@@ -36,6 +36,7 @@ import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
 import Test.Storage.Contract qualified as Contract
 import Test.Storage.Migrate qualified as Migrate
+import Test.Storage.Permissions qualified as Permissions
 import Test.Storage.Scale qualified as Scale
 import Test.Storage.Transactions qualified as Transactions
 
@@ -51,6 +52,7 @@ main = withBackings $ \backings -> hspec $ do
     Storage.spec b
     Migrate.spec b
     Transactions.spec b
+    Permissions.spec b
     Scale.spec b
     Backup.spec b
     StorageAccounts.spec b

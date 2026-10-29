@@ -57,6 +57,7 @@ import Wiki.Server.Storage (Storage, StoredWiki, Who (..), runStoredWiki, withSt
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
+import Wiki.Server.Storage.Rows (updateDisabled)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Schema qualified as Schema
 
@@ -324,13 +325,13 @@ inTheStorage backing = describe "in the storage" $ do
     blog <- as' st "admin" (getSpace (path "blog")) >>= ok
     notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
     _ <- as' st "editor" (savePage notes.id notes.updatedAt notes.title "For @reader.") >>= ok
-    writing st (runUpdate (update wikiDb.users (\u -> u.disabled <-. val_ True) (\u -> u.id ==. val_ "user-reader")))
+    writing st (updateDisabled (UserId "user-reader") True)
     now <- getCurrentTime
     mailRound notifier now
     readIORef sent `shouldReturn` []
     Storage.reading st (countWhere wikiDb.notifications (\n -> n.mail)) `shouldReturn` 0
     -- Enabled again, they are not mailed what was queued while they were not.
-    writing st (runUpdate (update wikiDb.users (\u -> u.disabled <-. val_ False) (\u -> u.id ==. val_ "user-reader")))
+    writing st (updateDisabled (UserId "user-reader") False)
     mailRound notifier now
     readIORef sent `shouldReturn` []
 

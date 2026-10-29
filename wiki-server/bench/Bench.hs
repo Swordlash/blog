@@ -77,7 +77,7 @@ import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapAp
 import Wiki.Server.Storage (Config (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, postgresAt, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
-import Wiki.Server.Storage.Rows (chunksOf, insertPage, insertVersion, micro)
+import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, insertVersion, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
 users, pages, watches, kept, watchers, tabs, tabUsers :: Int
@@ -206,6 +206,8 @@ grow st space = do
   now <- micro <$> getCurrentTime
   writing st $ do
     runUpdate (update wikiDb.spaces (\x -> x.blog <-. val_ True) (\x -> x.id ==. val_ space.text))
+    -- A space changed: the readers' permission context is read again.
+    bumpPermissions
     for_ (zip [0 :: Int ..] others) $ \(k, s) ->
       for_ [0 .. 999] $ \j -> insertPage (pageOf s.id now (pages + k * 1000 + j))
     for_ (chunksOf 500 [(i, v) | i <- [0 .. pages - 1], v <- [1 .. 19 :: Int]]) $ \chunk ->

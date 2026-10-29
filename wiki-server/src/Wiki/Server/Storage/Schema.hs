@@ -62,6 +62,7 @@ module Wiki.Server.Storage.Schema
   , Settings (..)
   , SignInProviders (..)
   , AuditLog (..)
+  , PermissionsGeneration (..)
 
     -- * Bookkeeping
   , WikiSchema (..)
@@ -608,6 +609,25 @@ instance Table AuditLog where
     deriving anyclass (Beamable)
   primaryKey r = AuditKey r.id
 
+-- | 'PermissionsGeneration' is the generation of the permission context
+-- (@permissions_generation@): one row, with @id@ 1. Its number goes up in
+-- every write transaction that changes what a permission check reads, so
+-- that a server that keeps the permission context in memory can tell
+-- whether the copy in memory is still the database's
+-- ("Wiki.Server.Storage", WP5.24 of docs/PLAN.md).
+data PermissionsGeneration f = GenerationRow
+  { id :: Columnar f Int32
+  , generation :: Columnar f Int64
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table PermissionsGeneration where
+  newtype PrimaryKey PermissionsGeneration f = GenerationKey (Columnar f Int32)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = GenerationKey r.id
+
 --------------------------------------------------------------------------------
 -- Rows as values
 
@@ -752,6 +772,7 @@ data WikiDb f = WikiDb
   , settings :: f (TableEntity Settings)
   , sign_in_providers :: f (TableEntity SignInProviders)
   , audit_log :: f (TableEntity AuditLog)
+  , permissions_generation :: f (TableEntity PermissionsGeneration)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)

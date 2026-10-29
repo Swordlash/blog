@@ -37,6 +37,7 @@ wikiTables =
   , "page_versions"
   , "pages"
   , "passkeys"
+  , "permissions_generation"
   , "recovery_codes"
   , "reset_tokens"
   , "sessions"

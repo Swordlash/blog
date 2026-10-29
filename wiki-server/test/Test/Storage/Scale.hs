@@ -69,7 +69,7 @@ import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (chunksOf, insertPage, micro)
+import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
@@ -110,9 +110,11 @@ holding st toWrite statement act = do
 countPages :: (Backend be) => Db be ()
 countPages = void (runSelectReturningList (select (all_ wikiDb.pages)))
 
--- | A statement that renames the blog, for a long write to hold.
+-- | A statement that renames the blog, for a long write to hold, and
+-- bumps the permission context's generation as the storage's own writes
+-- of a space do.
 renameBlog :: (Backend be) => Db be ()
-renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (\x -> x.slug ==. val_ "blog"))
+renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (\x -> x.slug ==. val_ "blog")) >> bumpPermissions
 
 readers :: Backing -> Spec
 readers backing = describe "reads" $ do
@@ -205,11 +207,13 @@ whereOf statement = foldr (\clause -> fst . T.breakOn clause) (snd (T.breakOnEnd
 readsTable :: Text -> Text -> Bool
 readsTable table statement = any (`T.isInfixOf` statement) ["FROM \"" <> table <> "\"", "JOIN \"" <> table <> "\""]
 
--- | The tables a whole operation may still scan: every transaction reads
--- every space and every grant ("Known already" in
--- docs/scalability-audit.md, left to a later package).
+-- | The tables a whole operation may still scan: a transaction that writes,
+-- and the first read of a generation of the permission context, read every
+-- space and every grant ("Known already" in docs/scalability-audit.md),
+-- and every read transaction reads the one row of
+-- @permissions_generation@ (WP5.24).
 everyTransactionScans :: Set Text
-everyTransactionScans = Set.fromList ["spaces", "global_grants", "space_grants"]
+everyTransactionScans = Set.fromList ["spaces", "global_grants", "space_grants", "permissions_generation"]
 
 -- | Add people to the demo's wiki who are told of nothing on the blog's
 -- notes page: some users, and some watches of other pages of the blog,
@@ -499,19 +503,32 @@ pageView backing = describe "a page view" $ do
   -- What a page view of the docs' diagrams page reads, as the reader: the
   -- page by its path, whether the reader watches it, and which of three
   -- logins its mentions name.
-  let viewed st = do
+  let viewOf st = do
         rita <- whoFor st (As "reader")
         docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
-        ((page, watch, people), statements) <- statementsOf st . runStoredWiki st rita $ do
+        pure . runStoredWiki st rita $ do
           page <- getPage docs.id (path "markdown-guide/diagrams")
           watch <- either (pure . Left) (\p -> watching (WatchPage p.id)) page
           people <- mentionable ["admin", "editor", "nobody"]
           pure (page, watch, people)
+      -- The statements of a view, as it runs with the permission context
+      -- of the generation in memory or not.
+      counted st view = do
+        ((page, watch, people), statements) <- statementsOf st view
         p <- ok page
         p.title `shouldBe` "Diagrams"
         void (ok watch)
         Map.keys people `shouldBe` ["admin", "editor"]
         pure statements
+      -- A view counted after a view of the same generation, so that its
+      -- permission context comes from memory.
+      viewed st = do
+        view <- viewOf st
+        _ <- view
+        counted st view
+      -- A statement that reads what the permission context holds: the
+      -- spaces, the grants, and a user's groups.
+      readsContext statement = any (`readsTable` statement) ["spaces", "global_grants", "space_grants", "group_members"]
       -- A read of every page of a space: by the space alone, not by a
       -- parent and a slug in it as well.
       isNodesOfSpace statement = readsTable "pages" statement && "\"space_id\"" `T.isInfixOf` whereOf statement && not (" AND " `T.isInfixOf` whereOf statement)
@@ -527,17 +544,42 @@ pageView backing = describe "a page view" $ do
     filter isNodesOfSpace big `shouldBe` []
     length big `shouldBe` length small
 
+  it "reads every space, grant and the reader's groups once per generation of the permission context, not in each transaction" $ withDemo backing $ \st -> do
+    view <- viewOf st
+    -- A new generation: the first view reads the permission context, and
+    -- keeps it.
+    writing st bumpPermissions
+    cold <- counted st view
+    warm <- counted st view
+    filter readsContext warm `shouldBe` []
+    length (filter readsContext cold) `shouldBe` 4
+    -- The view's first transaction read the spaces, the global grants,
+    -- the grants on spaces, the reader, and the reader's groups: five
+    -- statements, which the transactions after it, and the next view,
+    -- take from memory.
+    length cold - length warm `shouldBe` 5
+    -- Each transaction reads the generation: one statement each.
+    length (filter (readsTable "permissions_generation") warm) `shouldBe` length (filter (== "BEGIN") warm)
+
   it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo backing $ \st -> do
     rita <- whoFor st (As "reader")
     docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
     page <- runStoredWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
     a <- runStoredWiki st Administrator (uploadAttachment page.id "chart.png" "image/png" "png bytes") >>= ok
+    -- A new generation, which the attachment's read does not read whole.
+    writing st bumpPermissions
     ((found, _), statements) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
     found `shouldBe` a
     scans <- Set.fromList . concat <$> traverse (scansOf st) statements
     -- The global grants, a handful, and the recursive query's own steps:
-    -- its first row, a constant, and the rows it has found so far.
-    scans `shouldSatisfy` (`Set.isSubsetOf` Set.fromList ["global_grants", "CONSTANT", "chain"])
+    -- its first row, a constant, and the rows it has found so far; and the
+    -- one row of the generation.
+    scans `shouldSatisfy` (`Set.isSubsetOf` Set.fromList ["global_grants", "CONSTANT", "chain", "permissions_generation"])
+    -- Once a read has kept the generation's permission context, the
+    -- attachment's read reads no space and no grant at all.
+    _ <- runStoredWiki st rita (getSpace (path "docs")) >>= ok
+    (_, kept) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
+    filter readsContext kept `shouldBe` []
     -- Someone who may not read the page may not have it either.
     team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
     handbook <- runStoredWiki st Administrator (getPage team.id (path "team-handbook")) >>= ok

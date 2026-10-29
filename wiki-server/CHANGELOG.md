@@ -10,6 +10,21 @@ commit, with asynchronous exceptions masked between the steps (WP5.24). A
 connection goes back to its pool with no transaction open, whatever
 happened. `rollBackOnError` is gone.
 
+A read transaction no longer reads every space, every grant, the user and
+their groups (WP5.24). The storage keeps that permission context in
+memory for one generation, and the database keeps the generation in a new
+table, `permissions_generation` (migration `0002-permissions-generation`
+on both databases): every write to `spaces`, `global_grants`,
+`space_grants`, `users` (added, disabled or enabled) or `group_members`
+bumps it in the same transaction, through the writes of
+`Wiki.Server.Storage.Rows` (`bumpPermissions`). A read transaction reads
+the generation with one statement and uses the copy in memory when it
+matches, so a change by another process (the console) is seen at the next
+read. A write still reads the permission context from the database. Code
+that writes those tables with its own Beam statements must call
+`bumpPermissions` in the same transaction. A page view goes from 29
+statements to 17 on both databases.
+
 `Wiki.Server.Render.inProcess`, the transport that hands the application's
 requests to the API in the same process, takes servant's request and
 returns servant's response, as the application's client is now derived

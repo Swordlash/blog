@@ -23,6 +23,10 @@ Sizes assume a "big" wiki of 20,000 pages of 20 KB in 50 spaces (one space of 2,
   floor of every request at 10,000 spaces (≈10–30 ms each, and `listSpacesTx` at line 922
   then also computes `chainOf` for every space). Smallest fix: keep the decoded spaces + grants
   in an `IORef` in `Storage`, invalidated by the transactions that write to those tables.
+  Done by WP5.24: a read transaction reads the generation of the permission context
+  (`permissions_generation`, one row, bumped by every write to those tables, in this process
+  or another) and takes the spaces, grants and user from memory when it is unchanged; a write
+  still reads them from the database.
 
 ## Findings, ranked by impact
 

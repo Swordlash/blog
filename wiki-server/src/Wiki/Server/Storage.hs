@@ -33,7 +33,24 @@
 -- ancestors, and the pages the operation is about. It then checks what the
 -- class's Haddock says it checks, in that order, and only then writes. An
 -- operation that fails writes nothing, and one that throws (on a full
--- disk, say) is rolled back.
+-- disk, say) is rolled back. Every transaction runs in one bracket,
+-- 'Wiki.Server.Storage.Backend.withTransaction', so that a connection goes
+-- back to its pool with no transaction open, whatever happened.
+--
+-- = The permission context
+--
+-- The permission context is what a permission check reads: every space,
+-- every grant, and the user asking with their groups. It is the same on
+-- every read until a write changes it, so the storage keeps it in memory
+-- ('Permissions'), for one generation at a time. Every write that changes
+-- a space, a grant, a user or a group's members bumps the generation in
+-- the database (@permissions_generation@), in the same transaction. A read
+-- transaction reads the generation first, and takes the permission
+-- context from memory when the generation there is the same, and from
+-- the database otherwise. A write always reads the permission context
+-- from the database. Since the generation is a row of the database, a
+-- change made by another process (the console's @wiki-server users …@)
+-- is seen at the next read too.
 --
 -- The storage has two kinds of database connection. The writer is one
 -- connection, used by one operation at a time. Every write runs on it, so
@@ -145,7 +162,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
@@ -241,6 +258,9 @@ data Storage = Storage
   , tracer :: IORef (Maybe (Text -> IO ()))
   -- ^ The function each statement's SQL is given to before it runs, while
   -- 'traceStatements' runs; none otherwise.
+  , permissions :: IORef (Maybe Permissions)
+  -- ^ The permission context of the last generation a read transaction
+  -- read from the database ('keptPermissions'); none until the first read.
   , lock :: Maybe DataLock
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
@@ -365,7 +385,8 @@ openWith collect config place = do
             -- writes the in-memory copy.
             (,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings)
         tracer <- newIORef Nothing
-        pure Storage {engine, place, config, settings, serverKept, tracer, lock, release}
+        permissions <- newIORef Nothing
+        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, lock, release}
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -635,7 +656,7 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
   Engine p -> retrying (if mode == Reads then p.readers else p.writer) $ \c -> do
     outcome <- withTransactionEither (mode == Writes) c $ do
       tracer <- tracedBegin st (mode == Writes)
-      ctx <- context st (Conn tracer c) who address
+      ctx <- context st (mode == Writes) (Conn tracer c) who address
       fmap (ctx,) <$> runExceptT (runReaderT body ctx)
     -- Committed: the action and the notifications come after the commit,
     -- still on the connection, so before any other write may begin.
@@ -647,16 +668,27 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
 
 -- | The context an operation starts from. Its grants include whom the wiki
 -- is open to, because the permission rules read that from the grants.
-context :: Storage -> Conn -> Who -> Text -> IO Ctx
-context st c who address = do
-  spaces <- viaConn c loadSpaces
-  rows <- viaConn c loadGrants
-  contextWith st c who address spaces rows
+--
+-- A transaction that writes reads its permission context from the
+-- database, so that it sees what it wrote itself before, in an earlier
+-- attempt that 'retrying' rolled back, or in this transaction. A
+-- transaction that only reads takes the permission context from memory
+-- when it is still the database's ('keptPermissions').
+context :: Storage -> Bool -> Conn -> Who -> Text -> IO Ctx
+context st writes c who address
+  | writes = do
+      spaces <- viaConn c loadSpaces
+      rows <- viaConn c loadGrants
+      contextWith st c who address spaces rows (activeUser c)
+  | otherwise = do
+      kept <- keptPermissions st c
+      contextWith st c who address kept.spaces kept.grants (keptUser st c kept)
 
--- | 'context', with the spaces and the grants it holds given: every one,
--- or only those some rules need ('readWithin').
-contextWith :: Storage -> Conn -> Who -> Text -> Map SpaceId Space -> Grants -> IO Ctx
-contextWith st c who address spaces rows = do
+-- | 'context', with the spaces and the grants it holds given (every one,
+-- or only those some rules need: 'readWithin'), and the function that
+-- finds a user who may act, with their groups.
+contextWith :: Storage -> Conn -> Who -> Text -> Map SpaceId Space -> Grants -> (UserId -> IO (Maybe (User, Set GroupId))) -> IO Ctx
+contextWith st c who address spaces rows activeAs = do
   -- The settings come from memory. The database is read only when memory
   -- has none, which does not happen once 'openWith' has filled it.
   wiki <- readIORef st.settings >>= maybe (viaConn c loadSettings) pure
@@ -667,11 +699,9 @@ contextWith st c who address spaces rows = do
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
-      viaConn c (loadActiveUser u) >>= \case
+      activeAs u >>= \case
         Nothing -> pure (ctx stored Nothing Nothing Nothing Nothing)
-        Just found -> do
-          groups <- viaConn c (loadGroupsOf u)
-          pure (ctx stored (Just Principal {user = u, groups}) (Just found) (Just u) (Just u))
+        Just (found, groups) -> pure (ctx stored (Just Principal {user = u, groups}) (Just found) (Just u) (Just u))
     Administrator ->
       pure
         ( ctx
@@ -682,22 +712,105 @@ contextWith st c who address spaces rows = do
             Nothing
         )
 
+-- | A user who may act (not one whose login is disabled), with their
+-- groups, from the database; 'Nothing' for a user who may not, or who does
+-- not exist.
+activeUser :: Conn -> UserId -> IO (Maybe (User, Set GroupId))
+activeUser c u = viaConn c (loadActiveUser u) >>= traverse (\found -> (found,) <$> viaConn c (loadGroupsOf u))
+
+--------------------------------------------------------------------------------
+-- The permission context in memory
+
+-- | 'Permissions' is the permission context of one generation, as the
+-- storage keeps it in memory: every space and grant, and the users that
+-- read transactions of that generation asked as, each with their groups
+-- ('Nothing' for a user who may not act). The generation is the number in
+-- the database's @permissions_generation@ ('permissionsGeneration'), which
+-- every write that changes the permission context bumps in the same
+-- transaction ("Wiki.Server.Storage.Rows" does it, in each such write).
+--
+-- So a read transaction reads the generation, one statement, and when it
+-- is the one kept here, the spaces, the grants and the user come from
+-- memory: the database holds the same, in the state the transaction reads.
+-- A page view that read every space, every grant, the user and their
+-- groups in each of its transactions reads them once per generation. A
+-- change made by another process (the console) bumps the generation in
+-- the database too, so the next read sees it.
+data Permissions = Permissions
+  { generation :: Int64
+  , spaces :: Map SpaceId Space
+  , grants :: Grants
+  -- ^ The grants as the database has them, without whom the wiki is open
+  -- to, which comes from the settings ('contextWith').
+  , users :: Map UserId (Maybe (User, Set GroupId))
+  -- ^ At most 'maxKeptUsers' users.
+  }
+
+-- | The most users whose permission context the storage keeps in memory
+-- for one generation. A user beyond them is read from the database in each
+-- read transaction, as every user was before WP5.24. A new generation
+-- starts with none kept.
+maxKeptUsers :: Int
+maxKeptUsers = 500
+
+-- | The permission context of the generation the database has now, in a
+-- read transaction: the one in memory if it is that generation's, else
+-- the spaces and grants read from the database, which are then kept. Of
+-- two reads that find a new generation at once, each reads it, and the
+-- newer generation is kept.
+keptPermissions :: Storage -> Conn -> IO Permissions
+keptPermissions st c = do
+  generation <- viaConn c permissionsGeneration
+  readIORef st.permissions >>= \case
+    Just kept | kept.generation == generation -> pure kept
+    _ -> do
+      spaces <- viaConn c loadSpaces
+      grants <- viaConn c loadGrants
+      let fresh = Permissions {generation, spaces, grants, users = mempty}
+      atomicModifyIORef' st.permissions $ \case
+        Just kept | kept.generation >= generation -> (Just kept, ())
+        _ -> (Just fresh, ())
+      pure fresh
+
+-- | A user who may act, with their groups, in a read transaction of the
+-- generation of the permission context given: from memory if a read of
+-- that generation found them, else from the database, and then kept.
+keptUser :: Storage -> Conn -> Permissions -> UserId -> IO (Maybe (User, Set GroupId))
+keptUser st c kept u = case Map.lookup u kept.users of
+  Just found -> pure found
+  Nothing -> do
+    found <- activeUser c u
+    let remember held
+          | held.generation == kept.generation && Map.size held.users < maxKeptUsers = Permissions {generation = held.generation, spaces = held.spaces, grants = held.grants, users = Map.insert u found held.users}
+          | otherwise = held
+    atomicModifyIORef' st.permissions (\held -> (remember <$> held, ()))
+    pure found
+
 -- | A read about one thing in one space, on a reader: an attachment's
 -- bytes, which every image of a page asks for. @locate@ finds the space
 -- the thing is in, and whatever the read needs of it; 'Nothing' is
--- 'NotFound'. The context then holds only that space's chain and the
--- grants on the chain ('loadChain', 'loadGrantsOn'), which is all a rule
--- about the space looks at, instead of every space and grant of the
--- wiki. The operation must not look at any other space.
+-- 'NotFound'. When the permission context in memory is the database's
+-- ('keptPermissions'), the context is that one. Otherwise the context
+-- holds only that space's chain and the grants on the chain ('loadChain',
+-- 'loadGrantsOn'), which is all a rule about the space looks at, instead
+-- of every space and grant of the wiki, and nothing is kept. The operation
+-- must not look at any other space.
 readWithin :: Storage -> Who -> (forall be. (Backend be) => Db be (Maybe (SpaceId, b))) -> (SpaceId -> b -> Tx a) -> IO (Either WikiError a)
 readWithin st who locate body = case st.engine of
   Engine p -> withResource p.readers $ \c -> withTransaction False c $ do
     tracer <- tracedBegin st False
+    let conn = Conn tracer c
+    generation <- viaConn conn permissionsGeneration
+    current <- mfilter (\kept -> kept.generation == generation) <$> readIORef st.permissions
     runTraced tracer c locate >>= \case
       Nothing -> pure (Left NotFound)
       Just (sid, found) -> do
-        spaces <- runTraced tracer c (loadChain sid)
-        ctx <- contextWith st (Conn tracer c) who "" spaces =<< runTraced tracer c (loadGrantsOn (Map.keys spaces))
+        ctx <- case current of
+          Just kept -> contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
+          Nothing -> do
+            spaces <- runTraced tracer c (loadChain sid)
+            rows <- runTraced tracer c (loadGrantsOn (Map.keys spaces))
+            contextWith st conn who "" spaces rows (activeUser conn)
         let Tx tx = body sid found
         runExceptT (runReaderT tx ctx)
 
@@ -1788,8 +1901,12 @@ movePageTx pid destination parent = do
     placePage pid destination parent slug position
     setPageSpace destination (Set.toList (Set.delete pid subtree))
     -- A page that leaves its space is no longer its home page.
-    when (destination /= p.space) $ clearHomePage (Set.toList subtree)
+    when (destination /= p.space) $ clearHomePage (homePagesAmong ctx subtree)
   findPage pid
+
+-- | The pages among these that are a space's home page.
+homePagesAmong :: Ctx -> Set PageId -> [PageId]
+homePagesAmong ctx pages = [h | sp <- Map.elems ctx.spaces, Just h <- [sp.homePage], Set.member h pages]
 
 -- | Make a page one of its space's templates, or not. Not a save: nothing
 -- else of the page changes, and no version is kept.
@@ -1810,10 +1927,15 @@ deletePageTx pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireEdit c
-  under <- subtract 1 . Set.size <$> db (subtreeIds pid)
+  subtree <- db (subtreeIds pid)
+  let under = Set.size subtree - 1
   above <- lineageOf pid
   let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
-  db (deletePageRow pid)
+  ctx <- ask
+  -- The schema would clear a deleted home page from its space by itself
+  -- (ON DELETE SET NULL). The storage clears it first, so that the
+  -- permission context's generation is bumped, since a space changes.
+  db (clearHomePage (homePagesAmong ctx subtree) >> deletePageRow pid)
   record
     "page.delete"
     Audit.Subject {kind = "page", id = Just pid.text, name = p.title}
