@@ -800,10 +800,12 @@ readWithin st who locate body = case st.engine of
   Engine p -> withResource p.readers $ \c -> withTransaction False c $ do
     tracer <- tracedBegin st False
     let conn = Conn tracer c
-    kept <- keptPermissions st conn
     runTraced tracer c locate >>= \case
       Nothing -> pure (Left NotFound)
       Just (sid, found) -> do
+        -- Only for something there: a request for nothing costs no
+        -- reading of the permission context.
+        kept <- keptPermissions st conn
         ctx <- contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
         let Tx tx = body sid found
         runExceptT (runReaderT tx ctx)
