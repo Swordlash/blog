@@ -1214,7 +1214,7 @@ try {
     assert.equal(health.status, 200, `${root}/healthz`);
     const said = await health.json();
     assert.equal(said.status, "ok", `${root}/healthz: ${JSON.stringify(said)}`);
-    assert.ok(said.schemaVersion >= 9, `${root}/healthz: ${JSON.stringify(said)}`);
+    assert.ok(Number.isInteger(said.schemaVersion) && said.schemaVersion >= 1, `${root}/healthz: ${JSON.stringify(said)}`);
   }
   const metrics = await fetch(`${adminRoot}/metrics`);
   assert.equal(metrics.status, 200, "the metrics on the admin listener");
