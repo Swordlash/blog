@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-The editor completes mentions (WP5.28). An `@` followed by letters, where a
-mention counts (not in code, a link or HTML), opens a list of the users
-whose login or display name starts with the letters, from
+The editor completes mentions (WP5.28). An `@` followed by two letters or
+more, where a mention counts (not in code, a link, HTML or math), opens a
+list of the users whose login or display name starts with the letters, from
 `@codemirror/autocomplete`, a new npm dependency of the bundle; Enter or Tab
-writes `@login` and a space. `MonadNotifications` gains `mentionCandidates`,
-which every backend implements: the demo over its users, the HTTP backend
-through the new `notifications/people/search` endpoint. A backend of your
-own needs it too. In the editor's keydown, a key CodeMirror has already
-prevented the default of (the list's Tab, Enter and Escape) is no longer
-one of the editor's keys.
+writes `@login` and a space. Only users whose login a mention can name are
+offered. `MonadNotifications` gains `mentionCandidates`, which every
+backend implements: the demo over its users, the HTTP backend through the
+new `notifications/people/search` endpoint. A backend of your own needs it
+too. The editor's syntax tree knows the wiki's TeX math (`$…$`, `$$…$$`,
+`\(…\)`, `\[…\]`) as a node of its own. On a Mac, Ctrl+B, Ctrl+E and Ctrl+K
+in the text are bold, code and link only, no longer also CodeMirror's Emacs
+moves.
 
 The application needs a browser released within the last year: Chrome and
 Edge 140 or later, Firefox 133 or later, Safari 18.2 or later (WP5.27). The

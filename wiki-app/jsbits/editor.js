@@ -199,11 +199,10 @@ function wiki_editor_write(host, text, start, end) {
 // it; the rest are the text's (the textarea's, or CodeMirror's content). Shift+7 and Shift+8 are read by the key's
 // place (its code), since the character they type differs between layouts,
 // as is P with Alt, which types a character of its own on a Mac. A key
-// CodeMirror has already acted on, and prevented the default of, is none
-// of the form's: Tab, Enter and Escape in the list of a mention's
-// completion choose or close it, and do not indent or close a menu too.
+// the list of a mention's completion acts on (Tab, Enter, Escape) never
+// reaches the form: CodeMirror stops it (web/src/editor.js).
 function wiki_editor_key(event) {
-  if (event.isComposing || event.defaultPrevented) return "";
+  if (event.isComposing) return "";
   const command = event.ctrlKey || event.metaKey;
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (command && !event.altKey && !event.shiftKey && key === "s") return "save";

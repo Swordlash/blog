@@ -18,7 +18,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
-import Test.Browser.Text (editorSelection, editorText, markdown)
+import Test.Browser.Text (completing, editorSelection, editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -600,13 +600,14 @@ spec m = do
     find ui ".editor-side-by-side input" >>= \box -> getProperty box "checked" `shouldReturn` "true"
     find ui ".editor-preview" >>= shouldBeVisible
 
-  it "completes a mention with the users whose names start with what is typed, but not in code or a link" $ runPage $ do
+  it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor
     text <- editorText ui
     clear text
     typeText text "Ask @an"
     -- Anna by her login and Annabel by her display name, display name
-    -- first and the login after it, in the order of their display names.
+    -- first and the login after it, in the order of their display names;
+    -- not Annex, whose login a mention cannot name.
     shown <- listShown ui
     (findAllIn shown ".cm-completionLabel" >>= traverse textContent) `shouldReturn` ["Anna Nowak", "Annabel Smith"]
     (findAllIn shown ".cm-completionDetail" >>= traverse textContent) `shouldReturn` ["@anna", "@jsmith"]
@@ -621,48 +622,66 @@ spec m = do
     markdown ui `shouldReturn` "Ask @anna and @jsmith "
     -- Escape closes the list and leaves the text as typed.
     typeText text "or @an"
-    _ <- find ui ".cm-tooltip-autocomplete"
+    _ <- listShown ui
     press "Escape"
     eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
     markdown ui `shouldReturn` "Ask @anna and @jsmith or @an"
     -- Not in a code fence, where a mention does not count.
     clear text
     typeText text "```\n@an"
-    noCompletionFor ui
+    noCompletion ui
     -- Nor in a link's text: typed between the brackets of one.
     clear text
     typeText text "[see ](https://example.org)"
-    press "Home"
-    replicateM_ 5 (press "ArrowRight")
-    traverse_ press ["@", "a", "n"]
+    typeAfter 5 ["@", "a", "n"]
     markdown ui `shouldReturn` "[see @an](https://example.org)"
-    noCompletionFor ui
-    -- After the link, where a mention counts again, it opens.
+    noCompletion ui
+    -- Nor in math, between dollars or TeX's own delimiters.
+    clear text
+    typeText text "$x y$"
+    typeAfter 2 [" ", "@", "a", "n"]
+    markdown ui `shouldReturn` "$x @an y$"
+    noCompletion ui
+    clear text
+    typeText text "\\(\\)"
+    typeAfter 2 ["@", "a", "n"]
+    markdown ui `shouldReturn` "\\(@an\\)"
+    noCompletion ui
+    -- After the formula, where a mention counts again, it opens.
     press "End"
     traverse_ press [" ", "@", "a", "n"]
-    _ <- find ui ".cm-tooltip-autocomplete"
+    _ <- listShown ui
     pass
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
     -- Two users whose names start with "an", one by login and one by
-    -- display name, and one who does not.
+    -- display name, one whose login a mention cannot name, and one who
+    -- does not start so.
     withMentionable =
       insertUser User {id = UserId "user-anna", login = Login "anna", displayName = "Anna Nowak"}
         . insertUser User {id = UserId "user-jsmith", login = Login "jsmith", displayName = "Annabel Smith"}
+        . insertUser User {id = UserId "user-annex", login = Login "annex@example.org", displayName = "Annex Corp"}
         . insertUser User {id = UserId "user-bob", login = Login "bob", displayName = "Bob Banner"}
-    -- The list, once it can be chosen from: the library takes Enter and
-    -- Tab only after the list has been shown for a moment (75 ms, its
+    -- Type keys after the first n characters of the line.
+    typeAfter n keys = do
+      press "Home"
+      replicateM_ n (press "ArrowRight")
+      traverse_ press keys
+    -- The list, open and ready to choose from. The library takes Enter
+    -- and Tab only once the list has been open for 75 ms (its
     -- interactionDelay), so that a key pressed just as it opens is the
-    -- text's.
+    -- text's. The list opened before it was seen here, so a wait of more
+    -- than that after seeing it is always enough, however slow the page.
     listShown ui = do
+      eventually (completing ui `shouldReturn` "active")
       shown <- find ui ".cm-tooltip-autocomplete"
-      unsafeIOToPageM (threadDelay 200_000)
+      unsafeIOToPageM (threadDelay 100_000)
       pure shown
-    -- No list opens: CodeMirror asks after a moment (its own wait, about a
-    -- tenth of a second), and the answer is at once in the demo, so a
-    -- list that were to open would be there well within half a second.
-    noCompletionFor ui = do
-      unsafeIOToPageM (threadDelay 500_000)
+    -- No list opens. The keys just typed have made CodeMirror ask its
+    -- source ("pending"); once it has had the answer and opened nothing,
+    -- its completion is idle again (""), with no list.
+    noCompletion ui = do
+      eventually (completing ui `shouldReturn` "")
       length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
 
 -- | Turn the side by side preview on, so that the preview follows the

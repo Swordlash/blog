@@ -93,16 +93,17 @@ cannot be mentioned. Nothing in code, `` `@ada` ``, or in a link's text is
 a mention; to write an `@` before a word without mentioning anyone, put it
 in code.
 
-The editor completes mentions. Typing `@` and a letter or more, where a
+The editor completes mentions. Typing `@` and two letters or more, where a
 mention counts, opens a list of the users whose login or display name
 starts with those letters, whatever their case: at most ten, by display
-name, each with their login after it. The arrows move in the list, Enter or
-Tab writes `@login` and a space, and Escape closes it. In code, in a link
-and in HTML nothing opens. The list is offered to someone signed in; the
-demo offers its own users. On a server that keeps the wiki in SQLite, a
-display name is matched without regard to case only in its ASCII letters,
-so a user whose display name starts with another capital letter (Łukasz)
-is found there by their login.
+name, each with their login after it. A user whose login a mention cannot
+name (one with a space or an `@` in it, or ending in `.` or `-`) is not
+offered. The arrows move in the list, Enter or Tab writes `@login` and a
+space, and Escape closes it. In code, in a link, in HTML and in math
+nothing opens. The list is offered to someone signed in; the demo offers
+its own users. On a server that keeps the wiki in SQLite, only the letters
+of ASCII are matched without regard to case: another letter is matched in
+the case it was typed in, so `@Łu` finds Łukasz there and `@łu` does not.
 
 ## Images, video and attachments
 

@@ -51,11 +51,11 @@
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { acceptCompletion, autocompletion, ifNotIn } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, completionKeymap, completionStatus, ifNotIn } from "@codemirror/autocomplete";
 import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
-import { LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { Language, LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 // The language alone, not markdown(): that brings HTML's, CSS's and
 // JavaScript's parsers for HTML in a page, list continuation on Enter and
 // tag completion, none of which the editor wants.
@@ -296,12 +296,85 @@ const tracking = (host) => {
   return { field, extensions: [field, inverted] };
 };
 
+// TeX math, as the wiki reads it (Wiki.Core.Markdown.Ast: commonmark's
+// $...$ and $$...$$, and Wiki.Core.Markdown.TexMath's \(...\) and \[...\]),
+// as a node of the syntax tree, TeXMath, which the Markdown language of
+// CodeMirror has none of. No package on npm adds math to @lezer/markdown,
+// so this is the smallest extension that does: two inline parsers, which
+// follow the Haskell parsers' rules, so that the completion of mentions
+// knows where a mention does not count.
+const isBlank = (c) => c === 32 || c === 9 || c === 10 || c === 13;
+const isDigit = (c) => c >= 48 && c <= 57;
+
+// $...$ and $$...$$ (commonmark-extensions' parseMath): inline math does
+// not start with a blank, end with one, or end before a digit ($5); a
+// backslash takes the character after it; braces nest, and a $ inside
+// braces does not close. In display math a single $ is content.
+const dollarMath = (cx, next, start) => {
+  if (next !== 36) return -1;
+  let at = start + 1;
+  const display = cx.char(at) === 36;
+  if (display) at++;
+  else if (at >= cx.end || isBlank(cx.char(at))) return -1;
+  const from = at;
+  for (let depth = 0; at < cx.end; at++) {
+    const c = cx.char(at);
+    if (c === 92) at++;
+    else if (c === 123) depth++;
+    else if (c === 125) {
+      if (depth === 0) return -1;
+      depth--;
+    } else if (c === 36 && depth === 0) {
+      if (display) {
+        if (cx.char(at + 1) === 36) return cx.addElement(cx.elt("TeXMath", start, at + 2));
+      } else {
+        if (at === from || isBlank(cx.char(at - 1)) || isDigit(cx.char(at + 1))) return -1;
+        return cx.addElement(cx.elt("TeXMath", start, at + 1));
+      }
+    }
+  }
+  return -1;
+};
+
+// \(...\) and \[...\] (TexMath's texMath): up to the first closer, a
+// backslash taking the character after it, and not only blanks between.
+const backslashMath = (cx, next, start) => {
+  if (next !== 92) return -1;
+  const open = cx.char(start + 1);
+  const close = open === 40 ? 41 : open === 91 ? 93 : -1;
+  if (close < 0) return -1;
+  let blank = true;
+  for (let at = start + 2; at < cx.end; at++) {
+    const c = cx.char(at);
+    if (c === 92) {
+      if (cx.char(at + 1) === close) return blank ? -1 : cx.addElement(cx.elt("TeXMath", start, at + 2));
+      blank = false;
+      at++;
+    } else if (!isBlank(c)) blank = false;
+  }
+  return -1;
+};
+
+const texMath = {
+  defineNodes: ["TeXMath"],
+  // Before Escape, which would otherwise read \( and \[ as escaped
+  // brackets, as the Haskell spec comes before commonmark's own.
+  parseInline: [
+    { name: "TeXMathBackslash", parse: backslashMath, before: "Escape" },
+    { name: "TeXMathDollar", parse: dollarMath, before: "Escape" },
+  ],
+};
+
+// The wiki's Markdown: CodeMirror's (GFM) with the math above.
+const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure(texMath), [], "markdown");
+
 // The completion of mentions. Wiki.Core.Markdown.Mention says what a
 // mention is: an @ that starts a word (not after a letter, a digit, a mark
 // or one of . _ - + / @), followed by a login's characters (letters,
 // digits, marks, _ . -). Wiki.Core.Markdown.Ast takes none in code, links,
-// embeds or HTML: the syntax tree's nodes for them are in notMentions, and
-// ifNotIn leaves the completion out where the cursor is inside one.
+// embeds, HTML or math: the syntax tree's nodes for them are in
+// notMentions, and ifNotIn leaves the completion out where the cursor is
+// inside one.
 const notMentions = [
   "InlineCode",
   "FencedCode",
@@ -317,9 +390,17 @@ const notMentions = [
   "CommentBlock",
   "ProcessingInstruction",
   "ProcessingInstructionBlock",
+  "TeXMath",
 ];
 const typedMention = /@[\p{L}\p{N}\p{M}_.-]+$/u;
-const inWord = /[\p{L}\p{N}\p{M}._+\/@-]/u;
+// The character before the @, read as a whole code point: the two units
+// of a character beyond the Basic Multilingual Plane are one letter.
+const wordBefore = /[\p{L}\p{N}\p{M}._+\/@-]$/u;
+
+// How long an answer from the component is waited for. One that has not
+// come by then (the component went away, or failed before answering) is
+// given up, and the letters are asked about again the next time.
+const answerTime = 10_000;
 
 // Each question to the component has its own number, for every editor of
 // the page, so that an answer meant for an editor that has gone (the page
@@ -327,34 +408,52 @@ const inWord = /[\p{L}\p{N}\p{M}._+\/@-]/u;
 let questions = 0;
 
 // The completion source of one editor, and how the component answers it.
-// The answers are kept by the letters asked about (lowered), for as long as
-// the editor lives, so that typing a letter and deleting it asks nothing
-// again. A question that failed (null: the backend could not be reached)
-// is not kept, and is asked again the next time. The library waits a
+// `answers` keeps the users the component answered, by the letters asked
+// about (lowered), for as long as the editor lives, so that typing a letter
+// and deleting it asks nothing again. An answer of null (the backend could
+// not be reached) is not kept. `asking` holds the questions not yet
+// answered, by the same letters, so that the same letters typed again
+// while the first question is out wait for it rather than ask again; a
+// question leaves it when it is answered or given up. The library waits a
 // moment after the last key before it asks the source (its
 // activateOnTypingDelay), so a name typed quickly is asked about once.
 const mentions = (host) => {
   const answers = new Map();
+  const asking = new Map();
   const waiting = new Map();
   const ask = (letters) => {
     const key = letters.toLowerCase();
-    let answer = answers.get(key);
-    if (answer === undefined) {
+    if (answers.has(key)) return Promise.resolve(answers.get(key));
+    let question = asking.get(key);
+    if (question === undefined) {
       const id = ++questions;
-      answer = new Promise((resolve) => waiting.set(id, resolve));
-      answers.set(key, answer);
-      answer.then((people) => {
-        if (people === null) answers.delete(key);
+      question = new Promise((resolve) => {
+        const timer = setTimeout(() => settle(null), answerTime);
+        const settle = (people) => {
+          clearTimeout(timer);
+          waiting.delete(id);
+          asking.delete(key);
+          if (people !== null) answers.set(key, people);
+          resolve(people);
+        };
+        waiting.set(id, settle);
       });
+      asking.set(key, question);
       host.dispatchEvent(new CustomEvent("wiki-mention", { detail: { id, letters } }));
     }
-    return answer;
+    return question;
   };
   const source = ifNotIn(notMentions, async (context) => {
     const typed = context.matchBefore(typedMention);
     if (typed === null) return null;
-    if (typed.from > 0 && inWord.test(context.state.sliceDoc(typed.from - 1, typed.from))) return null;
-    const people = await ask(typed.text.slice(1));
+    if (wordBefore.test(context.state.sliceDoc(Math.max(0, typed.from - 2), typed.from))) return null;
+    // The question stays out for the next time these letters are typed;
+    // a completion the library has given up on (more was typed) does not
+    // wait for it.
+    const people = await Promise.race([
+      ask(typed.text.slice(1)),
+      new Promise((resolve) => context.addEventListener("abort", () => resolve(null))),
+    ]);
     if (people === null || people.length === 0) return null;
     return {
       from: typed.from,
@@ -364,21 +463,25 @@ const mentions = (host) => {
       options: people.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: `@${person.login} ` })),
     };
   });
+  // The list's keys: the library's, and Tab, which chooses as Enter does.
+  // A key the list acts on goes no further, so that the form's keydown
+  // (wiki-app/jsbits/editor.js) does not act on it too: Tab does not
+  // indent and Escape does not close a menu. A key the list does not act
+  // on (no list is open) goes on as before.
+  const keys = [...completionKeymap, { key: "Tab", run: acceptCompletion }].map((binding) => ({ ...binding, stopPropagation: true }));
   return {
-    extension: [
-      autocompletion({ override: [source], icons: false }),
-      // Tab chooses as Enter does. The library prevents the key's default
-      // when it takes it, which tells the component's keydown (indent) to
-      // leave the key alone (wiki-app/jsbits/editor.js).
-      Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
-    ],
-    answer: (id, people) => {
-      const resolve = waiting.get(id);
-      waiting.delete(id);
-      resolve?.(people);
-    },
+    extension: [autocompletion({ override: [source], icons: false, defaultKeymap: false }), Prec.highest(keymap.of(keys))],
+    answer: (id, people) => waiting.get(id)?.(people),
+    status: (state) => completionStatus(state) ?? "",
   };
 };
+
+// CodeMirror's standard keys, but for the Emacs keys a Mac has that are
+// the toolbar's shortcuts there too: Ctrl+B, Ctrl+E and Ctrl+K are bold,
+// code and link (wiki-app/jsbits/editor.js, which takes Ctrl or Cmd), not
+// a move left, to the line's end, or a deletion to it.
+const toolbarKeys = new Set(["Ctrl-b", "Ctrl-e", "Ctrl-k"]);
+const textKeys = standardKeymap.filter((binding) => !toolbarKeys.has(binding.mac));
 
 // The editors attached, so that one whose host has left the page (the
 // editor closed without its finalizer reaching it) is let go of: a view
@@ -425,9 +528,9 @@ export function attach(textarea, host, original, codeTokens) {
       // while the completion's list is open, when it chooses (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
       // the component's (the form's keydown).
-      keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...standardKeymap]),
+      keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...textKeys]),
       EditorView.lineWrapping,
-      new LanguageSupport(markdownLanguage),
+      new LanguageSupport(wikiMarkdown),
       syntaxHighlighting(highlighter),
       decorations(codeTokens),
       EditorView.contentAttributes.of({
@@ -500,6 +603,9 @@ export function attach(textarea, host, original, codeTokens) {
     // The component's answer to the question `id` about a mention: the
     // users, as [{login, name}], or null when they could not be found.
     mentioned: (id, people) => completion.answer(id, people),
+    // Whether the list of a mention's completion is open ("active"), being
+    // asked for ("pending"), or neither (""), for the browser tests.
+    completing: () => completion.status(view.state),
     // The tracked changes, as {id, from, to, removed}, in UTF-16 units.
     changes: () => view.state.field(changes.field).map((change) => ({ ...change })),
     // The assistant's edit: from..to replaced with `insert`, tracked as the

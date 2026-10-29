@@ -41,3 +41,10 @@ function wiki_test_editor_jump() {
   textarea.style.display = "";
   return editor.every((n, i) => Math.abs(n - plain[i]) <= 1) ? "" : `CodeMirror at ${editor}, the textarea at ${plain}`;
 }
+
+// Where the open editor's completion of mentions is: "active" with a list
+// open, "pending" while it is asked for (from the key that asks until the
+// answer), or "" (web/src/editor.js).
+function wiki_test_editor_completing() {
+  return wikiTestEditor()?.completing() ?? "";
+}

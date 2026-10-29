@@ -11,6 +11,7 @@ module Test.Browser.Text
   , markdown
   , editorSelection
   , movedBy
+  , completing
   )
 where
 
@@ -24,6 +25,7 @@ $( browserJS
      , ("js_selection_start", "wiki_test_editor_selection_start", Unsafe, [t|IO Int|])
      , ("js_selection_end", "wiki_test_editor_selection_end", Unsafe, [t|IO Int|])
      , ("js_jump", "wiki_test_editor_jump", Unsafe, [t|IO JSText|])
+     , ("js_completing", "wiki_test_editor_completing", Unsafe, [t|IO JSText|])
      ]
  )
 
@@ -51,3 +53,11 @@ movedBy :: Mounted s q o m -> PageM s Text
 movedBy ui = do
   _ <- editorText ui
   unsafeIOToPageM (fromJSText <$> js_jump)
+
+-- | Where the editor's completion of mentions is: @"active"@ with its list
+-- open, @"pending"@ from a key that asks for one until CodeMirror has the
+-- answer, or @""@ for neither.
+completing :: Mounted s q o m -> PageM s Text
+completing ui = do
+  _ <- editorText ui
+  unsafeIOToPageM (fromJSText <$> js_completing)
