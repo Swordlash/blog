@@ -22,7 +22,8 @@ import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
 -- | The tables of the wiki's schema, the same on both databases.
 wikiTables :: [Text]
 wikiTables =
-  [ "attachments"
+  [ "assistant_vaults"
+  , "attachments"
   , "audit_log"
   , "comments"
   , "drafts"
@@ -35,6 +36,7 @@ wikiTables =
   , "notifications"
   , "page_versions"
   , "pages"
+  , "passkeys"
   , "recovery_codes"
   , "reset_tokens"
   , "sessions"

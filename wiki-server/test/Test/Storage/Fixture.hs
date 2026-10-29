@@ -89,6 +89,8 @@ tableRows st = reading st rows
         , dump "recovery_codes" wikiDb.recovery_codes
         , dump "reset_tokens" wikiDb.reset_tokens
         , dump "email_verifications" wikiDb.email_verifications
+        , dump "passkeys" wikiDb.passkeys
+        , dump "assistant_vaults" wikiDb.assistant_vaults
         , dump "spaces" wikiDb.spaces
         , dump "pages" wikiDb.pages
         , dump "page_versions" wikiDb.page_versions

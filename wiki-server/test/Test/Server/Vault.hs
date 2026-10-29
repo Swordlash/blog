@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Header, methodDelete, methodGet, methodPost, methodPut)
 import Network.Wai (Request (..), defaultRequest)
 import Protolude
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Server.WebAuthn (Authenticator (..), assertion, authenticator, registration)
@@ -26,9 +27,9 @@ import Wiki.Core.Url (Url (..))
 import Wiki.Server.Vault (Site (..), siteFor)
 import Wiki.Server.WebAuthn (fromBase64Url, toBase64Url)
 
-spec :: Spec
-spec = describe "the assistant's vault and passkeys, over HTTP" $ do
-  it "makes a passkey for the signed-in user, and checks its use" $ withSignedIn $ \r editor _ -> do
+spec :: Backing -> Spec
+spec backing = describe "the assistant's vault and passkeys, over HTTP" $ do
+  it "makes a passkey for the signed-in user, and checks its use" $ withSignedIn backing $ \r editor _ -> do
     options :: RegistrationOptions <- call r editor methodPost links.assistant.beginRegistration none >>= jsonAs 200
     (options.rpId, options.userName, options.rpName) `shouldBe` ("127.0.0.1", "editor", "Wiki")
     info :: PasskeyInfo <- register r editor options passkey r.public >>= jsonAs 200
@@ -41,7 +42,7 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     again.exclude `shouldBe` [info.id]
     (register r editor again passkey r.public >>= jsonAs 409) `shouldReturn` Conflict "This passkey is registered already."
 
-  it "refuses a passkey made on another site, or for another challenge, and a challenge used twice" $ withSignedIn $ \r editor _ -> do
+  it "refuses a passkey made on another site, or for another challenge, and a challenge used twice" $ withSignedIn backing $ \r editor _ -> do
     options :: RegistrationOptions <- call r editor methodPost links.assistant.beginRegistration none >>= jsonAs 200
     refused :: ApiError <- register r editor options passkey "https://evil.example" >>= jsonAs 400
     refused `shouldSatisfy` says "made on another site"
@@ -53,7 +54,7 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     other `shouldSatisfy` says "another challenge"
     (call r editor methodGet links.assistant.passkeys none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
 
-  it "reports a passkey whose counter does not go up, and keeps its counter" $ withSignedIn $ \r editor _ -> do
+  it "reports a passkey whose counter does not go up, and keeps its counter" $ withSignedIn backing $ \r editor _ -> do
     _ :: PasskeyInfo <- registerNew r editor passkey
     _ :: PasskeyInfo <- use r editor passkey 5 r.public >>= jsonAs 200
     replayed :: ApiError <- use r editor passkey 5 r.public >>= jsonAs 409
@@ -61,7 +62,7 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     _ :: PasskeyInfo <- use r editor passkey 6 r.public >>= jsonAs 200
     pass
 
-  it "keeps another user's passkey and vault out of reach" $ withSignedIn $ \r editor theReader -> do
+  it "keeps another user's passkey and vault out of reach" $ withSignedIn backing $ \r editor theReader -> do
     info <- registerNew r editor passkey
     _ <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [])) >>= jsonAs @StoredVault 200
     -- The reader's own assertion, answered with the editor's passkey.
@@ -72,11 +73,11 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     refused `shouldSatisfy` says "not one of yours"
     (call r editor methodGet links.assistant.passkeys none >>= jsonAs 200) `shouldReturn` [info]
 
-  it "is refused to someone not signed in" $ withSignedIn $ \r _ _ ->
+  it "is refused to someone not signed in" $ withSignedIn backing $ \r _ _ ->
     for_ [(methodGet, links.assistant.vault), (methodGet, links.assistant.passkeys), (methodPost, links.assistant.beginRegistration)] $ \(m, address) ->
       (\x -> x.status) <$> send r m (r.public <> "/" <> address) [] "" `shouldReturn` 401
 
-  it "stores the vault over the version read, fetches it by its tag, and deletes it" $ withSignedIn $ \r editor _ -> do
+  it "stores the vault over the version read, fetches it by its tag, and deletes it" $ withSignedIn backing $ \r editor _ -> do
     info <- registerNew r editor passkey
     first' :: StoredVault <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [])) >>= jsonAs 200
     -- A first vault where there is one already is a conflict.
@@ -105,7 +106,7 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     (call r editor methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
     (call r editor methodGet links.assistant.passkeys none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
 
-  it "refuses a wrapped key, a passkey's answer or a passkey longer than any is" $ withSignedIn $ \r editor _ -> do
+  it "refuses a wrapped key, a passkey's answer or a passkey longer than any is" $ withSignedIn backing $ \r editor _ -> do
     info <- registerNew r editor passkey
     let tooLong = T.replicate (256 * 1024 + 1) "a"
     wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" tooLong)])) >>= jsonAs 400
@@ -140,8 +141,8 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
 
 -- | A server over the demo's wiki with the editor and the reader signed
 -- in on the public listener: each one's cookie.
-withSignedIn :: (Running -> [Header] -> [Header] -> IO a) -> IO a
-withSignedIn test = withDemoRunning identity $ \r -> do
+withSignedIn :: Backing -> (Running -> [Header] -> [Header] -> IO a) -> IO a
+withSignedIn backing test = withDemoRunning backing identity $ \r -> do
   givePassword r "user-editor" "editor's password"
   givePassword r "user-reader" "reader's password"
   editor <- signInAs r "editor" "editor's password"

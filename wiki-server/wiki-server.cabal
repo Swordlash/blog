@@ -203,11 +203,11 @@ executable wiki-server-bench
     build-depends:
         aeson,
         base,
+        beam-core,
         bytestring,
         directory,
         filepath,
         protolude,
-        sqlite-simple,
         temporary,
         text,
         time,
@@ -287,6 +287,8 @@ test-suite wiki-server-test
         Test.Server.Settings
         Test.Server.Static
         Test.Server.Totp
+        Test.Server.Vault
+        Test.Server.WebAuthn
         Test.Storage
         Test.Storage.Accounts
         Test.Storage.Audit

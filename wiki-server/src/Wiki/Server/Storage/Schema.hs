@@ -42,6 +42,8 @@ module Wiki.Server.Storage.Schema
   , RecoveryCodes (..)
   , ResetTokens (..)
   , EmailVerifications (..)
+  , Passkeys (..)
+  , AssistantVaults (..)
 
     -- * The wiki
   , Spaces (..)
@@ -279,6 +281,50 @@ instance Table EmailVerifications where
     deriving stock (Generic)
     deriving anyclass (Beamable)
   primaryKey r = EmailVerificationKey r.token_hash
+
+-- | A user's passkey (@passkeys@), by its credential's id in base64url,
+-- with its public key (base64url too) and the vault key wrapped for it
+-- ("Wiki.Server.Vault").
+data Passkeys f = PasskeyRow
+  { credential_id :: Columnar f Text
+  , user_id :: Columnar f Text
+  , public_key :: Columnar f Text
+  , algorithm :: Columnar f Int32
+  , sign_count :: Columnar f Int64
+  , name :: Columnar f Text
+  , created_at :: Columnar f UTCTime
+  , last_used_at :: Columnar f (Maybe UTCTime)
+  , wrapped_nonce :: Columnar f (Maybe Text)
+  , wrapped_key :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table Passkeys where
+  newtype PrimaryKey Passkeys f = PasskeyKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = PasskeyKey r.credential_id
+
+-- | A user's vault of the writing assistant's settings
+-- (@assistant_vaults@), sealed by their browser.
+data AssistantVaults f = VaultRow
+  { user_id :: Columnar f Text
+  , format :: Columnar f Int32
+  , salt :: Columnar f Text
+  , nonce :: Columnar f Text
+  , ciphertext :: Columnar f Text
+  , revision :: Columnar f Int64
+  , updated_at :: Columnar f UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table AssistantVaults where
+  newtype PrimaryKey AssistantVaults f = VaultKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = VaultKey r.user_id
 
 --------------------------------------------------------------------------------
 -- The wiki
@@ -612,6 +658,14 @@ deriving stock instance Eq (ResetTokens Identity)
 
 deriving stock instance Show (ResetTokens Identity)
 
+deriving stock instance Eq (Passkeys Identity)
+
+deriving stock instance Show (Passkeys Identity)
+
+deriving stock instance Eq (AssistantVaults Identity)
+
+deriving stock instance Show (AssistantVaults Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -685,6 +739,8 @@ data WikiDb f = WikiDb
   , recovery_codes :: f (TableEntity RecoveryCodes)
   , reset_tokens :: f (TableEntity ResetTokens)
   , email_verifications :: f (TableEntity EmailVerifications)
+  , passkeys :: f (TableEntity Passkeys)
+  , assistant_vaults :: f (TableEntity AssistantVaults)
   , spaces :: f (TableEntity Spaces)
   , pages :: f (TableEntity Pages)
   , page_versions :: f (TableEntity PageVersions)

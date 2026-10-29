@@ -26,7 +26,7 @@ spec backing = describe "the application's files" $ do
   adminListener backing
   basePath backing
   baseHref
-  policy
+  policy backing
 
 bodyText :: Reply -> Text
 bodyText reply = decodeUtf8 (BSL.toStrict reply.body)
@@ -150,8 +150,8 @@ baseHref = describe "a page's <base href>" $ do
   it "is added first in the head of a page without one" $
     withBaseHref "/a&b/" "<html><head><title>x</title></head>" `shouldBe` "<html><head>\n    <base href=\"/a&amp;b/\"><title>x</title></head>"
 
-policy :: Spec
-policy = describe "a page's Content Security Policy" $ do
+policy :: Backing -> Spec
+policy backing = describe "a page's Content Security Policy" $ do
   it "comes with every page, and with no other file" $ withRunning backing $ \r -> do
     for_ ["/", "/s/blog/", "/s/made-since/", "/offline.html"] $ \page -> do
       reply <- getUrl r (r.public <> page)

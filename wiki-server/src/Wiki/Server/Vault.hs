@@ -54,7 +54,7 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
-import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
+import Database.Beam (all_, asc_, current_, delete, filter_, insert, insertValues, isJust_, orderBy_, runDelete, runInsert, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Network.Wai (Request)
 import Protolude
 import Wiki.Api.ContentPolicy (originOf)
@@ -63,11 +63,12 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), Vault (..), VaultTag (..), WrappedKey (..), vaultFormat)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Address (requestOrigin)
-import Wiki.Server.Storage (Storage, withDatabase)
-import Wiki.Server.Storage.Rows (Stamp (..))
-import Wiki.Server.WebAuthn (AssertionRefusal (..), NewCredential (..), StoredKey (..), toBase64Url)
+import Wiki.Server.Storage (Storage, reading, writing, writingEither)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Schema (AssistantVaults (..), Passkeys (..), WikiDb (..), wikiDb)
+import Wiki.Server.WebAuthn (AssertionRefusal (..), NewCredential (..), StoredKey (..), fromBase64Url, toBase64Url)
 
 --------------------------------------------------------------------------------
 -- The site
@@ -105,20 +106,30 @@ tagOf revision = VaultTag ("\"" <> show revision <> "\"")
 
 -- | A user's vault and its tag, if they have one.
 storedVault :: Storage -> UserId -> IO (Maybe StoredVault)
-storedVault st u = withDatabase st (`vaultIn` u)
+storedVault st u = reading st (vaultIn u)
 
-vaultIn :: Connection -> UserId -> IO (Maybe StoredVault)
-vaultIn c u =
-  query c "SELECT format, salt, nonce, ciphertext, revision FROM assistant_vaults WHERE user_id = ?" (Only u.text) >>= \case
-    [(format, salt, nonce, ciphertext, revision)] -> do
-      wrapped <- query c "SELECT credential_id, wrapped_nonce, wrapped_key FROM passkeys WHERE user_id = ? AND wrapped_key IS NOT NULL" (Only u.text)
+vaultIn :: (Backend be) => UserId -> Db be (Maybe StoredVault)
+vaultIn u =
+  runSelectReturningList (select (filter_ (\x -> x.user_id ==. val_ u.text) (all_ wikiDb.assistant_vaults))) >>= \case
+    [x] -> do
+      wrapped <- runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text &&. isJust_ p.wrapped_key) (all_ wikiDb.passkeys)))
       pure $
         Just
           StoredVault
-            { tag = tagOf revision
-            , vault = Vault {format, salt, sealed = Sealed {nonce, ciphertext}, wrapped = Map.fromList [(CredentialId i, WrappedKey n k) | (i, n, k) <- wrapped]}
+            { tag = tagOf x.revision
+            , vault =
+                Vault
+                  { format = fromIntegral x.format
+                  , salt = x.salt
+                  , sealed = Sealed {nonce = x.nonce, ciphertext = x.ciphertext}
+                  , wrapped = Map.fromList [(CredentialId p.credential_id, WrappedKey n k) | p <- wrapped, Just n <- [p.wrapped_nonce], Just k <- [p.wrapped_key]]
+                  }
             }
     _ -> pure Nothing
+
+-- | The rows of a user's passkeys.
+passkeysWhere :: (Backend be) => UserId -> Db be [Passkeys Identity]
+passkeysWhere u = runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text) (all_ wikiDb.passkeys)))
 
 -- | The longest text of a vault's that is stored: its ciphertext holds a
 -- few keys and settings, a few kilobytes; nothing much longer is one.
@@ -134,41 +145,49 @@ storeVault :: Storage -> UTCTime -> UserId -> Maybe VaultTag -> Vault -> IO (Eit
 storeVault st now u base v
   | v.format /= vaultFormat = pure (Left (Invalid ("A vault of format " <> show v.format <> ": this wiki writes format " <> show vaultFormat <> ".")))
   | any (\t -> T.null t || T.length t > maxVaultText) ([v.salt, v.sealed.nonce, v.sealed.ciphertext] <> concat [[w.nonce, w.key] | w <- Map.elems v.wrapped]) = pure (Left (Invalid "This is not a vault this wiki keeps: a part of it is empty or too long."))
-  | otherwise = withDatabase st $ \c -> immediately c $ do
-      mine <- map fromOnly <$> query c "SELECT credential_id FROM passkeys WHERE user_id = ?" (Only u.text)
-      revision <- map fromOnly <$> query c "SELECT revision FROM assistant_vaults WHERE user_id = ?" (Only u.text)
+  | otherwise = writingEither st $ do
+      mine <- map (\p -> p.credential_id) <$> passkeysWhere u
+      revision <- map (\x -> x.revision) <$> runSelectReturningList (select (filter_ (\x -> x.user_id ==. val_ u.text) (all_ wikiDb.assistant_vaults)))
       case (revision, base) of
         _ | any (\i -> i.text `notElem` mine) (Map.keys v.wrapped) -> pure (Left (Invalid "The vault names a passkey that is not one of yours."))
         ([], Nothing) -> do
-          execute
-            c
-            "INSERT INTO assistant_vaults (user_id, format, salt, nonce, ciphertext, revision, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?)"
-            (u.text, v.format, v.salt, v.sealed.nonce, v.sealed.ciphertext, Stamp now)
-          stored c
-        ([r :: Int64], Just t)
+          runInsert . insert wikiDb.assistant_vaults $
+            insertValues [VaultRow {user_id = u.text, format = fromIntegral v.format, salt = v.salt, nonce = v.sealed.nonce, ciphertext = v.sealed.ciphertext, revision = 1, updated_at = micro now}]
+          stored
+        ([r], Just t)
           | tagOf r == t -> do
-              execute
-                c
-                "UPDATE assistant_vaults SET format = ?, salt = ?, nonce = ?, ciphertext = ?, revision = revision + 1, updated_at = ? WHERE user_id = ?"
-                (v.format, v.salt, v.sealed.nonce, v.sealed.ciphertext, Stamp now, u.text)
-              stored c
+              runUpdate $
+                update
+                  wikiDb.assistant_vaults
+                  ( \x ->
+                      mconcat
+                        [ x.format <-. val_ (fromIntegral v.format)
+                        , x.salt <-. val_ v.salt
+                        , x.nonce <-. val_ v.sealed.nonce
+                        , x.ciphertext <-. val_ v.sealed.ciphertext
+                        , x.revision <-. current_ x.revision + 1
+                        , x.updated_at <-. val_ (micro now)
+                        ]
+                  )
+                  (\x -> x.user_id ==. val_ u.text)
+              stored
         ([], Just _) -> pure (Left (Conflict "There is no vault any more: synchronisation was turned off on another device."))
         ([_], Nothing) -> pure (Left (Conflict "There is a vault already: unlock it with a passkey instead."))
         _ -> pure (Left (Conflict "The vault was changed on another device meanwhile."))
   where
-    stored c = do
+    stored :: (Backend be) => Db be (Either WikiError StoredVault)
+    stored = do
       for_ (Map.toList v.wrapped) $ \(i, w) ->
-        execute c "UPDATE passkeys SET wrapped_nonce = ?, wrapped_key = ? WHERE credential_id = ? AND user_id = ?" (w.nonce, w.key, i.text, u.text)
-      maybe (Left NotFound) Right <$> vaultIn c u
+        runUpdate (update wikiDb.passkeys (\p -> (p.wrapped_nonce <-. val_ (Just w.nonce)) <> (p.wrapped_key <-. val_ (Just w.key))) (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
+      maybe (Left NotFound) Right <$> vaultIn u
 
 -- | Turn synchronisation off for a user: their vault and their passkeys
 -- go. Nothing else is needed: a user who has lost every passkey starts
 -- again this way. Nothing to delete is no error.
 deleteVault :: Storage -> UserId -> IO ()
-deleteVault st u = withDatabase st $ \c -> void . immediately c $ do
-  execute c "DELETE FROM assistant_vaults WHERE user_id = ?" (Only u.text)
-  execute c "DELETE FROM passkeys WHERE user_id = ?" (Only u.text)
-  pure (Right () :: Either () ())
+deleteVault st u = writing st $ do
+  runDelete (delete wikiDb.assistant_vaults (\x -> x.user_id ==. val_ u.text))
+  runDelete (delete wikiDb.passkeys (\p -> p.user_id ==. val_ u.text))
 
 --------------------------------------------------------------------------------
 -- Passkeys
@@ -180,12 +199,12 @@ maxPasskeys = 20
 
 -- | A user's passkeys, the oldest first.
 passkeysOf :: Storage -> UserId -> IO [PasskeyInfo]
-passkeysOf st u = withDatabase st (`passkeysIn` u)
+passkeysOf st u = reading st (passkeysIn u)
 
-passkeysIn :: Connection -> UserId -> IO [PasskeyInfo]
-passkeysIn c u =
-  map (\(i, name, Stamp createdAt, lastUsed, unlocks) -> PasskeyInfo {id = CredentialId i, name, createdAt, lastUsedAt = (\(Stamp t) -> t) <$> lastUsed, unlocks})
-    <$> query c "SELECT credential_id, name, created_at, last_used_at, wrapped_key IS NOT NULL FROM passkeys WHERE user_id = ? ORDER BY created_at, credential_id" (Only u.text)
+passkeysIn :: (Backend be) => UserId -> Db be [PasskeyInfo]
+passkeysIn u =
+  map (\p -> PasskeyInfo {id = CredentialId p.credential_id, name = p.name, createdAt = p.created_at, lastUsedAt = p.last_used_at, unlocks = isJust p.wrapped_key})
+    <$> runSelectReturningList (select (orderBy_ (\p -> (asc_ p.created_at, asc_ p.credential_id)) (filter_ (\p -> p.user_id ==. val_ u.text) (all_ wikiDb.passkeys))))
 
 -- | The longest public key of a passkey that is stored, in bytes: an
 -- RS256 key of 4096 bits takes some 550, so nothing much longer is one.
@@ -204,19 +223,30 @@ registerPasskey :: Storage -> UTCTime -> UserId -> NewCredential -> IO (Either W
 registerPasskey _ _ _ new
   | BS.length new.publicKey > maxPublicKey || BS.null new.credentialId || BS.length new.credentialId > maxCredentialId =
       pure (Left (Invalid "This passkey's id or public key is longer than a passkey's."))
-registerPasskey st now u new = withDatabase st $ \c -> immediately c $ do
+registerPasskey st now u new = writingEither st $ do
   let i = toBase64Url new.credentialId
-  taken <- query c "SELECT count(*) FROM passkeys WHERE credential_id = ?" (Only i)
-  count' <- query c "SELECT count(*) FROM passkeys WHERE user_id = ?" (Only u.text)
+  taken <- runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i) (all_ wikiDb.passkeys)))
+  count' <- length <$> passkeysWhere u
   if
-    | any ((> (0 :: Int)) . fromOnly) taken -> pure (Left (Conflict "This passkey is registered already."))
-    | any ((>= maxPasskeys) . fromOnly) count' -> pure (Left (Invalid ("You have " <> show maxPasskeys <> " passkeys already: remove one first.")))
+    | not (null taken) -> pure (Left (Conflict "This passkey is registered already."))
+    | count' >= maxPasskeys -> pure (Left (Invalid ("You have " <> show maxPasskeys <> " passkeys already: remove one first.")))
     | otherwise -> do
-        execute
-          c
-          "INSERT INTO passkeys (credential_id, user_id, public_key, algorithm, sign_count, name, created_at, last_used_at, wrapped_nonce, wrapped_key) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)"
-          (i, u.text, new.publicKey, new.algorithm, fromIntegral new.signCount :: Int64, "Added on " <> toS (formatTime defaultTimeLocale "%Y-%m-%d at %H:%M UTC" now) :: Text, Stamp now)
-        maybe (Left NotFound) Right . find (\p -> p.id == CredentialId i) <$> passkeysIn c u
+        runInsert . insert wikiDb.passkeys $
+          insertValues
+            [ PasskeyRow
+                { credential_id = i
+                , user_id = u.text
+                , public_key = toBase64Url new.publicKey
+                , algorithm = fromIntegral new.algorithm
+                , sign_count = fromIntegral new.signCount
+                , name = "Added on " <> toS (formatTime defaultTimeLocale "%Y-%m-%d at %H:%M UTC" now)
+                , created_at = micro now
+                , last_used_at = Nothing
+                , wrapped_nonce = Nothing
+                , wrapped_key = Nothing
+                }
+            ]
+        maybe (Left NotFound) Right . find (\p -> p.id == CredentialId i) <$> passkeysIn u
 
 -- | Check an assertion of one of a user's passkeys with the given check
 -- (which 'Wiki.Server.WebAuthn.verifyAssertion' makes), and keep its new
@@ -224,30 +254,30 @@ registerPasskey st now u new = withDatabase st $ \c -> immediately c $ do
 -- answer that is not the passkey's is 'Invalid'; a counter that went back
 -- is a 'Conflict', with the counter kept as it was.
 assertPasskey :: Storage -> UTCTime -> UserId -> CredentialId -> (StoredKey -> Either AssertionRefusal Word32) -> IO (Either WikiError PasskeyInfo)
-assertPasskey st now u i verify = withDatabase st $ \c ->
-  immediately c $
-    query c "SELECT public_key, sign_count FROM passkeys WHERE credential_id = ? AND user_id = ?" (i.text, u.text) >>= \case
-      [(publicKey, count')] -> case verify StoredKey {publicKey, signCount = fromIntegral (count' :: Int64)} of
+assertPasskey st now u i verify = writingEither st $
+  runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text) (all_ wikiDb.passkeys))) >>= \case
+    [found] | Just publicKey <- fromBase64Url found.public_key ->
+      case verify StoredKey {publicKey, signCount = fromIntegral found.sign_count} of
         Left (Refused why) -> pure (Left (Invalid ("The passkey's answer was refused: " <> why <> ".")))
         Left (CounterWentBack was now') ->
           pure (Left (Conflict ("The passkey's counter went back, from " <> show was <> " to " <> show now' <> ": it may have been copied. If you trust it, remove it and add it again.")))
         Right counted -> do
-          execute c "UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE credential_id = ? AND user_id = ?" (fromIntegral counted :: Int64, Stamp now, i.text, u.text)
-          maybe (Left NotFound) Right . find (\p -> p.id == i) <$> passkeysIn c u
-      _ -> pure (Left NotFound)
+          runUpdate (update wikiDb.passkeys (\p -> (p.sign_count <-. val_ (fromIntegral counted)) <> (p.last_used_at <-. val_ (Just (micro now)))) (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
+          maybe (Left NotFound) Right . find (\p -> p.id == i) <$> passkeysIn u
+    _ -> pure (Left NotFound)
 
 -- | Remove one of a user's passkeys, with its wrapped copy of the vault
 -- key, which changes the vault's version. The result is their passkeys
 -- left; another user's passkey, or none, is 'NotFound'.
 removePasskey :: Storage -> UTCTime -> UserId -> CredentialId -> IO (Either WikiError [PasskeyInfo])
-removePasskey st now u i = withDatabase st $ \c -> immediately c $ do
-  execute c "DELETE FROM passkeys WHERE credential_id = ? AND user_id = ?" (i.text, u.text)
-  removed <- changes c
-  if removed == 0
+removePasskey st now u i = writingEither st $ do
+  there <- runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text) (all_ wikiDb.passkeys)))
+  if null there
     then pure (Left NotFound)
     else do
-      execute c "UPDATE assistant_vaults SET revision = revision + 1, updated_at = ? WHERE user_id = ?" (Stamp now, u.text)
-      Right <$> passkeysIn c u
+      runDelete (delete wikiDb.passkeys (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
+      runUpdate (update wikiDb.assistant_vaults (\x -> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now))) (\x -> x.user_id ==. val_ u.text))
+      Right <$> passkeysIn u
 
 --------------------------------------------------------------------------------
 -- Ceremonies

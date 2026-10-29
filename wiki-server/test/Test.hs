@@ -28,6 +28,8 @@ import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
 import Test.Server.Totp qualified as Totp
+import Test.Server.Vault qualified as Vault
+import Test.Server.WebAuthn qualified as WebAuthn
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Audit qualified as Audit
@@ -40,6 +42,7 @@ main :: IO ()
 main = withBackings $ \backings -> hspec $ do
   Presence.spec
   Totp.spec
+  WebAuthn.spec
   Metrics.spec
   for_ backings $ \b -> describe (backingName b) $ do
     Contract.spec b
@@ -63,6 +66,7 @@ main = withBackings $ \backings -> hspec $ do
     Backups.spec b
     Oidc.spec b
     Export.spec b
+    Vault.spec b
     Hygiene.spec b
     Audit.spec b
     Observability.spec b
