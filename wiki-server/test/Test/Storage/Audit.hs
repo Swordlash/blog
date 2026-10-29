@@ -11,8 +11,8 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningList, select)
 import Protolude
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Account (NewAccount (..))

@@ -25,8 +25,8 @@ import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodGet
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Web.HttpApiData (toUrlPiece)

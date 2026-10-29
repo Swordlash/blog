@@ -57,8 +57,8 @@ import Network.Socket (HostAddress6, hostAddressToTuple)
 import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
-import Wiki.Api.ContentPolicy (parseAssistantHost)
 import System.Environment (lookupEnv)
+import Wiki.Api.ContentPolicy (parseAssistantHost)
 import Wiki.Server.Storage (Database (..), Place (..))
 import Wiki.Server.Storage.Layout (defaultDatabase)
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)

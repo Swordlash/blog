@@ -608,7 +608,6 @@ instance Table AuditLog where
     deriving anyclass (Beamable)
   primaryKey r = AuditKey r.id
 
-
 --------------------------------------------------------------------------------
 -- Rows as values
 

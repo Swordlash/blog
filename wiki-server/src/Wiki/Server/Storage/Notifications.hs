@@ -124,8 +124,9 @@ loadAudience a = do
   let candidates = ordNub (onPage <> onSpaces <> map (\u -> u.text) a.named <> mentioned)
   users <- fmap concat . for (chunksOf 500 candidates) $ \chunk ->
     runSelectReturningList (select (filter_ (\u -> u.disabled ==. val_ False &&. u.id `in_` map val_ chunk) (all_ wikiDb.users)))
-  marks <- runSelectReturningList . select $
-    filter_ (\w -> w.page_id `holds` val_ a.page.text ||. w.space_id `in_` map (\s -> just_ (val_ s.text)) a.spaces) (all_ wikiDb.watches)
+  marks <-
+    runSelectReturningList . select $
+      filter_ (\w -> w.page_id `holds` val_ a.page.text ||. w.space_id `in_` map (\s -> just_ (val_ s.text)) a.spaces) (all_ wikiDb.watches)
   let active = map (\u -> u.id) users
   members <- fmap concat . for (chunksOf 500 active) $ \chunk ->
     runSelectReturningList (select (filter_ (\m -> m.user_id `in_` map val_ chunk) (all_ wikiDb.group_members)))

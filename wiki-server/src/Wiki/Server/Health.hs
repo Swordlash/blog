@@ -29,10 +29,10 @@ import Wiki.Server.Events (openConnections)
 import Wiki.Server.Log (errorCount)
 import Wiki.Server.Metrics (Kind (..), Sample (..), contentType, renderMetrics, snapshot)
 import Wiki.Server.Storage (databaseBytes, reading, schemaVersionOf, storageDataDir)
-import Wiki.Server.Storage.Rows (blobAttached, blobSizes, countRows, loadIcons)
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Blobs (blobFile)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
+import Wiki.Server.Storage.Rows (blobAttached, blobSizes, countRows, loadIcons)
 
 -- | @GET \/healthz@: 'Health' as JSON, a 200 while the database answers
 -- and a 503 when it does not.

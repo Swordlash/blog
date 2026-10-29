@@ -16,8 +16,8 @@ import Protolude
 import System.Directory (findExecutable)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Text.XML qualified as X

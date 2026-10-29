@@ -42,8 +42,8 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing, withConnectionTo)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)

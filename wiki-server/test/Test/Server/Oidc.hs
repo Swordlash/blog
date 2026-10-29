@@ -26,12 +26,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
-import Test.HUnit (assertFailure)
 import Test.Database (Backing, placeOptionsOf)
-import Test.Storage.Fixture (withPlaceIn)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.FakeProvider
 import Test.Server.Fixture
+import Test.Storage.Fixture (withPlaceIn)
 import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), NewPassword (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))

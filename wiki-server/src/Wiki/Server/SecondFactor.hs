@@ -151,15 +151,16 @@ confirm st now u typed = do
 -- | Turn a user's second factor off, with one of their codes. The result
 -- is their second factor's state afterwards (off).
 remove :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal SecondFactorState)
-remove st now u typed = writingEither st $
-  totpEnabled u >>= \case
-    False -> pure (Left (CodeRefused NotFound))
-    True ->
-      codeOf now u typed >>= \case
-        False -> pure (Left WrongCode)
-        True -> do
-          void (deleteSecondFactor u)
-          Right <$> stateOf u
+remove st now u typed =
+  writingEither st $
+    totpEnabled u >>= \case
+      False -> pure (Left (CodeRefused NotFound))
+      True ->
+        codeOf now u typed >>= \case
+          False -> pure (Left WrongCode)
+          True -> do
+            void (deleteSecondFactor u)
+            Right <$> stateOf u
 
 --------------------------------------------------------------------------------
 -- Codes

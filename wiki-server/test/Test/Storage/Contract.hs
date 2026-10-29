@@ -5,8 +5,8 @@
 module Test.Storage.Contract (spec) where
 
 import Protolude
-import Test.Hspec (Spec, describe)
 import Test.Database (Backing)
+import Test.Hspec (Spec, describe)
 import Test.Storage.Fixture (whoFor, withDemo)
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract

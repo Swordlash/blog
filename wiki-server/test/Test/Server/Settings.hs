@@ -145,7 +145,8 @@ lasting :: Backing -> Spec
 lasting backing = describe "a change" $
   it "is seen by the very next request, and lasts across a restart" $
     withFakeProvider $ \fake ->
-      withDemoRestarted backing
+      withDemoRestarted
+        backing
         ( \r -> do
             set <- setServer r withAddress {providers = [provider "acme" fake.url (Just clientSecret)]}
             session :: Types.SessionInfo <- getUrl r (onPublic r links.session) >>= jsonAs 200

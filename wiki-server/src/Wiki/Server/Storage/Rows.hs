@@ -811,7 +811,8 @@ loadAccount u = fmap accountOf <$> runSelectReturningOne (select (filter_ (\r ->
 -- databases' @lower@ agree on them.
 loadAccountByLogin :: (Backend be) => Text -> Db be (Maybe (Account, Maybe Text))
 loadAccountByLogin login =
-  fmap (\r -> (accountOf r, r.password_hash)) . head
+  fmap (\r -> (accountOf r, r.password_hash))
+    . head
     <$> runSelectReturningList (select (orderBy_ (\r -> asc_ r.login) (filter_ (\r -> lower_ r.login ==. lower_ (val_ login)) (all_ wikiDb.users))))
 
 -- | Every user's account, by login ignoring case, with whether they are an
@@ -1249,7 +1250,8 @@ replaceAttachment pid a = do
   ordinal <- case replaced of
     Just (old, at) -> deleteAttachmentRow (AttachmentId old) $> fromIntegral at
     Nothing ->
-      maybe 0 ((+ 1) . fromIntegral) . join
+      maybe 0 ((+ 1) . fromIntegral)
+        . join
         <$> runSelectReturningOne (select (aggregate_ (\x -> max_ x.ordinal) (filter_ (\x -> x.page_id ==. val_ pid.text) (all_ wikiDb.attachments))))
   insertAttachment pid ordinal a
 

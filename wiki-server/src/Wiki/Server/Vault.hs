@@ -254,17 +254,18 @@ registerPasskey st now u new = writingEither st $ do
 -- answer that is not the passkey's is 'Invalid'; a counter that went back
 -- is a 'Conflict', with the counter kept as it was.
 assertPasskey :: Storage -> UTCTime -> UserId -> CredentialId -> (StoredKey -> Either AssertionRefusal Word32) -> IO (Either WikiError PasskeyInfo)
-assertPasskey st now u i verify = writingEither st $
-  runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text) (all_ wikiDb.passkeys))) >>= \case
-    [found] | Just publicKey <- fromBase64Url found.public_key ->
-      case verify StoredKey {publicKey, signCount = fromIntegral found.sign_count} of
-        Left (Refused why) -> pure (Left (Invalid ("The passkey's answer was refused: " <> why <> ".")))
-        Left (CounterWentBack was now') ->
-          pure (Left (Conflict ("The passkey's counter went back, from " <> show was <> " to " <> show now' <> ": it may have been copied. If you trust it, remove it and add it again.")))
-        Right counted -> do
-          runUpdate (update wikiDb.passkeys (\p -> (p.sign_count <-. val_ (fromIntegral counted)) <> (p.last_used_at <-. val_ (Just (micro now)))) (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
-          maybe (Left NotFound) Right . find (\p -> p.id == i) <$> passkeysIn u
-    _ -> pure (Left NotFound)
+assertPasskey st now u i verify =
+  writingEither st $
+    runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text) (all_ wikiDb.passkeys))) >>= \case
+      [found] | Just publicKey <- fromBase64Url found.public_key ->
+        case verify StoredKey {publicKey, signCount = fromIntegral found.sign_count} of
+          Left (Refused why) -> pure (Left (Invalid ("The passkey's answer was refused: " <> why <> ".")))
+          Left (CounterWentBack was now') ->
+            pure (Left (Conflict ("The passkey's counter went back, from " <> show was <> " to " <> show now' <> ": it may have been copied. If you trust it, remove it and add it again.")))
+          Right counted -> do
+            runUpdate (update wikiDb.passkeys (\p -> (p.sign_count <-. val_ (fromIntegral counted)) <> (p.last_used_at <-. val_ (Just (micro now)))) (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
+            maybe (Left NotFound) Right . find (\p -> p.id == i) <$> passkeysIn u
+      _ -> pure (Left NotFound)
 
 -- | Remove one of a user's passkeys, with its wrapped copy of the vault
 -- key, which changes the vault's version. The result is their passkeys

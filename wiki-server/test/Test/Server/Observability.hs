@@ -26,11 +26,11 @@ import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.User (Group, Login (..))
 import Wiki.Server.Storage (Place (..), withStorageAside, writing)
-import Wiki.Server.Storage.Rows (chunksOf)
-import Wiki.Server.Storage.Schema (Attachments (..), Pages (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Backup (backupNow)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Migrate (Migration (..), migrationsFor)
+import Wiki.Server.Storage.Rows (chunksOf)
+import Wiki.Server.Storage.Schema (Attachments (..), Pages (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
 spec backing = describe "what the server says of itself, over HTTP" $ do

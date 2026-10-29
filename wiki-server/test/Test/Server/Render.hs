@@ -18,8 +18,8 @@ import Data.Text qualified as T
 import Network.HTTP.Types (Header)
 import Protolude
 import System.FilePath ((</>))
-import Test.HUnit (assertFailure)
 import Test.Database (Backing, withConnectionTo)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))

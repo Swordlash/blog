@@ -47,8 +47,8 @@ where
 
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
-import Database.Beam qualified as Beam
 import Database.Beam (all_, delete, filter_, insert, insertValues, isJust_, isNothing_, join_, lower_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (<=.), (==.), (>.), (||.))
+import Database.Beam qualified as Beam
 import Protolude
 import Wiki.Api.Security (ResetToken (..), VerificationToken (..), resetLifetime, verificationLifetime)
 import Wiki.App.Backend (WikiError (..))
@@ -81,13 +81,14 @@ addressOf u =
 -- it is not verified.
 setEmail :: Storage -> UTCTime -> UserId -> Text -> IO (Either WikiError (Maybe (Email, VerificationToken)))
 setEmail st now u raw
-  | T.null (T.strip raw) = writingEither st $
-      addressOf u >>= \case
-        Nothing -> pure (Left NotFound)
-        Just _ -> do
-          runUpdate (update wikiDb.users (\r -> (r.email <-. val_ Nothing) <> (r.email_verified_at <-. val_ Nothing)) (\r -> r.id ==. val_ u.text))
-          runDelete (delete wikiDb.email_verifications (\r -> r.user_id ==. val_ u.text))
-          pure (Right Nothing)
+  | T.null (T.strip raw) =
+      writingEither st $
+        addressOf u >>= \case
+          Nothing -> pure (Left NotFound)
+          Just _ -> do
+            runUpdate (update wikiDb.users (\r -> (r.email <-. val_ Nothing) <> (r.email_verified_at <-. val_ Nothing)) (\r -> r.id ==. val_ u.text))
+            runDelete (delete wikiDb.email_verifications (\r -> r.user_id ==. val_ u.text))
+            pure (Right Nothing)
   | otherwise = case parseEmail raw of
       Left why -> pure (Left (Invalid why))
       Right address -> do
@@ -178,7 +179,8 @@ requestReset st now raw = do
           (\r -> (r.id, r.email))
             <$> filter_
               ( \r ->
-                  r.disabled ==. val_ False
+                  r.disabled
+                    ==. val_ False
                     &&. isJust_ r.email_verified_at
                     &&. (lower_ r.login ==. lower_ (val_ named) ||. lower_ (Beam.coalesce_ [r.email] (val_ "")) ==. lower_ (val_ named))
               )

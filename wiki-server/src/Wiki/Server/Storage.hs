@@ -2730,4 +2730,3 @@ uploadSpaceIconFile :: (MonadIO m) => SpaceId -> Text -> FilePath -> StoredWiki 
 uploadSpaceIconFile sid mediaType file = do
   size <- liftIO (getFileSize file)
   run Writes (uploadSpaceIconTx sid mediaType size (\dir -> fst <$> storeBlobFile dir file))
-

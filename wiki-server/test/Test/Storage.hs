@@ -18,6 +18,7 @@ import Test.Database (Backing)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Info (Capabilities (..), SearchKind (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -30,7 +31,6 @@ import Wiki.Core.Export.Zip (ZipSource (..), unzipFile, writeZipFile, zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
-import Wiki.Api.Info (Capabilities (..), SearchKind (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))

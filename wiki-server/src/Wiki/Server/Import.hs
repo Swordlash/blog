@@ -85,8 +85,8 @@ import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.Storage (Storage, administratorUser, reading, storageDataDir, writing)
-import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
 import Wiki.Server.Storage.Comments (commentExists, restoreThread, threadPage)
 import Wiki.Server.Storage.Layout (attachmentsDir)
@@ -243,33 +243,33 @@ data Progress = Progress
 -- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
 applyImport st actor address a choices = writing st $ do
-    matches <- matchIn a
-    people <- loadUsers
-    let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
-        discussions = threadsAmong (administratorUser : people) a
-    done <- foldlM (importSpace (attachmentsDir (storageDataDir st)) a discussions choices) start matches
-    restoreAudit a.audit
-    let s = done.summary
-    insertAudit
-      Recorded
-        { actor
-        , action = "wiki.import"
-        , subject = Subject {kind = "wiki", id = Nothing, name = a.app}
-        , detail =
-            [ ("written", show a.createdAt)
-            , ("spaces made", show s.spacesCreated)
-            , ("spaces merged", show s.spacesMerged)
-            , ("pages made", show s.pagesCreated)
-            , ("pages replaced", show s.pagesReplaced)
-            , ("pages kept", show s.pagesKept)
-            , ("pages skipped", show s.pagesSkipped)
-            , ("attachments", show s.attachments)
-            , ("comments", show done.commentsBrought)
-            , ("log entries", show (length a.audit))
-            ]
-        , address
-        }
-    pure s
+  matches <- matchIn a
+  people <- loadUsers
+  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
+      discussions = threadsAmong (administratorUser : people) a
+  done <- foldlM (importSpace (attachmentsDir (storageDataDir st)) a discussions choices) start matches
+  restoreAudit a.audit
+  let s = done.summary
+  insertAudit
+    Recorded
+      { actor
+      , action = "wiki.import"
+      , subject = Subject {kind = "wiki", id = Nothing, name = a.app}
+      , detail =
+          [ ("written", show a.createdAt)
+          , ("spaces made", show s.spacesCreated)
+          , ("spaces merged", show s.spacesMerged)
+          , ("pages made", show s.pagesCreated)
+          , ("pages replaced", show s.pagesReplaced)
+          , ("pages kept", show s.pagesKept)
+          , ("pages skipped", show s.pagesSkipped)
+          , ("attachments", show s.attachments)
+          , ("comments", show done.commentsBrought)
+          , ("log entries", show (length a.audit))
+          ]
+      , address
+      }
+  pure s
 
 importSpace :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> Db be Progress
 importSpace blobs a discussions choices progress m

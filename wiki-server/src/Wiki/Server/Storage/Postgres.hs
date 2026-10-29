@@ -63,8 +63,8 @@ import Database.PostgreSQL.Simple.Transaction (IsolationLevel (..), ReadWriteMod
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Network.HTTP.Types.URI (urlDecode)
 import Protolude hiding (Generic)
-import System.IO (hClose)
 import System.Environment (getEnvironment)
+import System.IO (hClose)
 import System.Process (CreateProcess (..), StdStream (..), proc, waitForProcess, withCreateProcess)
 import Wiki.Server.Storage.Schema (PageNodes (..))
 
@@ -286,23 +286,23 @@ runProgram program url args input output = do
   let (bare, password) = splitPassword url
       dbname = ["--dbname=" <> decodeUtf8 bare | not (BS.null url)]
       env = [("PGPASSWORD", BC.unpack p) | Just p <- [password]] <> filter ((/= "PGPASSWORD") . fst) inherited
-  ran <- try @SomeException $
-    withCreateProcess
+  ran <- try @SomeException
+    $ withCreateProcess
       (proc program (map toS (args <> dbname)))
         { std_in = maybe NoStream UseHandle input
         , env = Just env
         , std_out = maybe CreatePipe UseHandle output
         , std_err = CreatePipe
         }
-      $ \_ out err process -> do
-        -- What the program writes when no handle takes it is not wanted
-        -- (pg_restore --list), but must be read for it to finish.
-        drained <- async (traverse_ BS.hGetContents out)
-        complaint <- maybe (pure "") BS.hGetContents err
-        traverse_ hClose err
-        code <- waitForProcess process
-        wait drained
-        pure (code, complaint)
+    $ \_ out err process -> do
+      -- What the program writes when no handle takes it is not wanted
+      -- (pg_restore --list), but must be read for it to finish.
+      drained <- async (traverse_ BS.hGetContents out)
+      complaint <- maybe (pure "") BS.hGetContents err
+      traverse_ hClose err
+      code <- waitForProcess process
+      wait drained
+      pure (code, complaint)
   pure $ case ran of
     Left e -> Left (T.pack program <> " could not be run: " <> show e)
     Right (ExitSuccess, _) -> Right ()

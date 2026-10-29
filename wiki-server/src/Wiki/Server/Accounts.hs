@@ -120,7 +120,6 @@ module Wiki.Server.Accounts
   , listSessions
   , endSessionOf
   , endOtherSessions
-
   )
 where
 
@@ -176,12 +175,13 @@ createAccount st rawLogin rawName password = runExceptT $ do
   let name = case T.strip rawName of
         "" -> login.text
         n -> n
-  ExceptT $ writingEither st $
-    insertAccount (UserId uid) login name phc >>= \case
-      Left t -> pure (Left (taken t))
-      Right account -> do
-        fromConsole "user.create" account.user [("login", login.text), ("name", name)]
-        pure (Right account)
+  ExceptT $
+    writingEither st $
+      insertAccount (UserId uid) login name phc >>= \case
+        Left t -> pure (Left (taken t))
+        Right account -> do
+          fromConsole "user.create" account.user [("login", login.text), ("name", name)]
+          pure (Right account)
   where
     taken login = Conflict ("There is a user with the login " <> login.text <> " already.")
 
@@ -258,15 +258,16 @@ acceptInvitation st now address token new = runExceptT $ do
   pending <- liftIO (reading st (pendingInvitation now secret))
   when (isNothing pending) (throwError NotFound)
   made <- prepared new
-  ExceptT $ writingEither st $
-    pendingInvitation now secret >>= \case
-      -- Used or revoked meanwhile.
-      Nothing -> pure (Left NotFound)
-      Just (i, _) -> do
-        settings <- liftIO (readSettings st)
-        made' <- makeAccount now address settings made
-        when (isRight made') (void (deleteInvitation i))
-        recordMade address "invitation.accept" [("invitation", i.text)] made'
+  ExceptT $
+    writingEither st $
+      pendingInvitation now secret >>= \case
+        -- Used or revoked meanwhile.
+        Nothing -> pure (Left NotFound)
+        Just (i, _) -> do
+          settings <- liftIO (readSettings st)
+          made' <- makeAccount now address settings made
+          when (isRight made') (void (deleteInvitation i))
+          recordMade address "invitation.accept" [("invitation", i.text)] made'
 
 -- | Record in the audit log that someone created their own account, as
 -- done by them, from their address, in the transaction that created it.
@@ -574,11 +575,12 @@ signIn st now address login password
       found <- reading st (loadAccountByLogin (T.strip login))
       let matches = verifyPassword (fromMaybe unknownHash (found >>= snd)) password
       case found of
-        Just (a, Just _) | matches && not a.disabled ->
-          writing st $
-            totpEnabled a.user.id >>= \case
-              True -> pure (Left (SecondFactorWanted a.user))
-              False -> Right . (a.user,) <$> startSession now a.user.id address
+        Just (a, Just _)
+          | matches && not a.disabled ->
+              writing st $
+                totpEnabled a.user.id >>= \case
+                  True -> pure (Left (SecondFactorWanted a.user))
+                  False -> Right . (a.user,) <$> startSession now a.user.id address
         _ -> pure (Left NoSuchAccount)
 
 -- | Create a new session for a user, from now and from a network address,

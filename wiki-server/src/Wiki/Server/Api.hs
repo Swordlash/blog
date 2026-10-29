@@ -138,8 +138,8 @@ import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
-import Wiki.Server.Storage.Rows (countRows)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
+import Wiki.Server.Storage.Rows (countRows)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, passkeysOf, registerPasskey, storedVault, takeCeremony)
 import Wiki.Server.Vault qualified as Vault

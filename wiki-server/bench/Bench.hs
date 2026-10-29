@@ -53,6 +53,7 @@ import Network.Wai.Internal (ResponseReceived (..))
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Directory (doesFileExist, removeFile)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering)
 import System.IO.Temp (withSystemTempDirectory)
@@ -72,7 +73,6 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapApplication)
-import System.Environment (lookupEnv)
 import Wiki.Server.Storage (Config (..), Database (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)

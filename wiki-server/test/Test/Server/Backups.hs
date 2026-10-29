@@ -16,11 +16,11 @@ import Protolude
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, getPermissions, listDirectory, setOwnerExecutable, setPermissions)
 import System.FilePath (takeExtension, takeFileName, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
-import Test.Storage.Fixture (withPlaceIn)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
+import Test.Storage.Fixture (withPlaceIn)
 import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Backups
 import Wiki.Api.Error (ApiError (..))
@@ -29,10 +29,10 @@ import Wiki.Api.ServerSettings (SecretState (..))
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Storage (Database (..), Place (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupFiles, restore)
-import Wiki.Server.Storage.Postgres (checkDump)
-import Wiki.Server.Storage.Sqlite (integrityProblems)
 import Wiki.Server.Storage.Blobs (storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
+import Wiki.Server.Storage.Postgres (checkDump)
+import Wiki.Server.Storage.Sqlite (integrityProblems)
 
 spec :: Backing -> Spec
 spec backing = describe "the server's backups, over HTTP" $ do
@@ -217,7 +217,8 @@ offSite backing = describe "copied off the machine" $ do
 lasting :: Backing -> Spec
 lasting backing = describe "across a restart" $ do
   it "keeps the settings and the last backup, and makes none before the next is due" $
-    withDemoRestarted backing
+    withDemoRestarted
+      backing
       ( \r -> do
           _ <- setBackups r (everySix week Nothing)
           (b, _) <- madeAfter r Nothing

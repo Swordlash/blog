@@ -179,7 +179,8 @@ administration backing = describe "the administrator on the admin listener" $ do
   -- the server's console. The setting is kept in the database, so it
   -- holds across a restart, and the console is never refused.
   it "leaves accounts with a password to the console while the wiki's settings say so, across a restart" $
-    withDemoRestarted backing
+    withDemoRestarted
+      backing
       ( \r -> do
           settings :: WikiSettings <- getUrl r (onAdmin r links.admin.settings) >>= jsonAs 200
           settings.adminCreatesPasswordAccounts `shouldBe` True

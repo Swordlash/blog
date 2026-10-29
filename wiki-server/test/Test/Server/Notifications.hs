@@ -20,8 +20,8 @@ import Network.HTTP.Types (Header, Method, hContentType, methodGet, methodPost, 
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (countWhere, ok, path, whoFor, withDemo)
@@ -53,12 +53,12 @@ import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Notifier (mailRound, newNotifier, newWake)
-import Wiki.Server.Storage (StoredWiki, Storage, Who (..), runStoredWiki, withStorageAside, writing)
+import Wiki.Server.Storage (Storage, StoredWiki, Who (..), runStoredWiki, withStorageAside, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Schema qualified as Schema
-import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
 
 spec :: Backing -> Spec
 spec backing = describe "notifications" $ do

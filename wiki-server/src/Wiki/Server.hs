@@ -51,10 +51,10 @@ import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, render
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, withStorage)
 import Wiki.Server.Storage.Layout (withoutPassword)
 import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
+import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -132,89 +132,89 @@ withServerUsing given raw sendMail action = do
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
     $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
     $ \storage -> do
-    backups <- newBackupService logger options.rclone storage
-    let notifier = newNotifier logger sendMail wake storage
-    let env =
-          Env
-            { storage
-            , version = serverVersion
-            , startedAt
-            , dataDir = options.dataDir
-            , maxImportSize = options.maxImportSize
-            , limiter
-            , registrations
-            , sendMail
-            , providerCache
-            , flows
-            , events
-            , exports
-            , backups
-            , resets
-            , pending
-            , logger
-            , errors
-            , metrics
-            , feeds
-            , assistantHosts = options.assistantHosts
-            , ceremonies
-            }
-        public =
-          Listener
-            { name = "public"
-            , mount = options.basePath
-            , finding = BySession CookieSettings {path = options.basePath, secure = options.secureCookies}
-            }
-        admin =
-          Listener
-            { name = "admin"
-            , mount = "/admin/"
-            , finding = EveryoneAdministers
-            }
-        listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
-    logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
-    -- The administration's settings as the server starts with them
-    -- (secrets left out); a change is seen by the next request, unlogged.
-    configured <- readServerSettings storage
-    logWith logger Info [("event", "server-settings"), ("public-url", maybe "none" (\u -> u.text) configured.publicUrl)]
-    for_ configured.mail $ \m ->
-      logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
-    for_ configured.providers $ \p ->
-      logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", (redirectUri u p.name).text) | Just u <- [configured.publicUrl]])
-    stopping <- newIORef False
-    -- The thread that backs the server up, which does nothing until the
-    -- administration turns backups on, and the one that mails
-    -- notifications; both are stopped with the server.
-    Async.withAsync (runScheduler backups) $ \_ -> Async.withAsync (runNotifier notifier) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
-      let settings l =
-            setGracefulShutdownTimeout (Just 10)
-              . setOnException
-                ( \_ e -> do
-                    -- Closing the listening socket is how Warp is stopped,
-                    -- so its accept failing then is expected.
-                    stopped <- readIORef stopping
-                    when (defaultShouldDisplayException e && not stopped) $
-                      logWith logger Warning [("event", "connection"), ("listener", l.name), ("error", show e)]
-                )
-              $ defaultSettings
-      addresses <- for bound $ \(socket, (_, l)) -> do
-        address <- getSocketName socket
-        logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]
-        pure address
-      threads <- for bound $ \(socket, (_, l)) -> Async.async (runSettingsSocket (settings l) socket (listenerApp logger env site l))
-      -- Warp stops accepting when its listening socket is closed, then
-      -- waits up to ten seconds for its open connections to finish. The
-      -- sockets belong to this function, so they are closed here rather
-      -- than through Warp's shutdown handler, which a listener installs
-      -- only once its thread has started.
-      let stopAll = writeIORef stopping True >> closeAll events >> traverse_ (close . fst) bound
-          waitAll = case threads of
-            [only] -> Async.wait only
-            [x, y] -> void (Async.waitBoth x y)
-            _ -> pass
-      flip finally (traverse_ Async.uninterruptibleCancel threads) $
-        case addresses of
-          publicAddress : rest -> action Server {publicAddress, adminAddress = head rest, stop = stopAll, wait = waitAll}
-          [] -> throwIO (ServerError ["no listener"])
+      backups <- newBackupService logger options.rclone storage
+      let notifier = newNotifier logger sendMail wake storage
+      let env =
+            Env
+              { storage
+              , version = serverVersion
+              , startedAt
+              , dataDir = options.dataDir
+              , maxImportSize = options.maxImportSize
+              , limiter
+              , registrations
+              , sendMail
+              , providerCache
+              , flows
+              , events
+              , exports
+              , backups
+              , resets
+              , pending
+              , logger
+              , errors
+              , metrics
+              , feeds
+              , assistantHosts = options.assistantHosts
+              , ceremonies
+              }
+          public =
+            Listener
+              { name = "public"
+              , mount = options.basePath
+              , finding = BySession CookieSettings {path = options.basePath, secure = options.secureCookies}
+              }
+          admin =
+            Listener
+              { name = "admin"
+              , mount = "/admin/"
+              , finding = EveryoneAdministers
+              }
+          listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
+      logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
+      -- The administration's settings as the server starts with them
+      -- (secrets left out); a change is seen by the next request, unlogged.
+      configured <- readServerSettings storage
+      logWith logger Info [("event", "server-settings"), ("public-url", maybe "none" (\u -> u.text) configured.publicUrl)]
+      for_ configured.mail $ \m ->
+        logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
+      for_ configured.providers $ \p ->
+        logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", (redirectUri u p.name).text) | Just u <- [configured.publicUrl]])
+      stopping <- newIORef False
+      -- The thread that backs the server up, which does nothing until the
+      -- administration turns backups on, and the one that mails
+      -- notifications; both are stopped with the server.
+      Async.withAsync (runScheduler backups) $ \_ -> Async.withAsync (runNotifier notifier) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
+        let settings l =
+              setGracefulShutdownTimeout (Just 10)
+                . setOnException
+                  ( \_ e -> do
+                      -- Closing the listening socket is how Warp is stopped,
+                      -- so its accept failing then is expected.
+                      stopped <- readIORef stopping
+                      when (defaultShouldDisplayException e && not stopped) $
+                        logWith logger Warning [("event", "connection"), ("listener", l.name), ("error", show e)]
+                  )
+                $ defaultSettings
+        addresses <- for bound $ \(socket, (_, l)) -> do
+          address <- getSocketName socket
+          logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]
+          pure address
+        threads <- for bound $ \(socket, (_, l)) -> Async.async (runSettingsSocket (settings l) socket (listenerApp logger env site l))
+        -- Warp stops accepting when its listening socket is closed, then
+        -- waits up to ten seconds for its open connections to finish. The
+        -- sockets belong to this function, so they are closed here rather
+        -- than through Warp's shutdown handler, which a listener installs
+        -- only once its thread has started.
+        let stopAll = writeIORef stopping True >> closeAll events >> traverse_ (close . fst) bound
+            waitAll = case threads of
+              [only] -> Async.wait only
+              [x, y] -> void (Async.waitBoth x y)
+              _ -> pass
+        flip finally (traverse_ Async.uninterruptibleCancel threads) $
+          case addresses of
+            publicAddress : rest -> action Server {publicAddress, adminAddress = head rest, stop = stopAll, wait = waitAll}
+            [] -> throwIO (ServerError ["no listener"])
 
 -- | Bind every listener's socket, or none: if one fails, those bound
 -- before it are closed, and the error names its address.

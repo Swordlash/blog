@@ -12,8 +12,8 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Network.HTTP.Types (methodPost, methodPut)
 import Protolude
 import Servant.API (toUrlPiece)
-import Test.HUnit (assertFailure)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), ArchiveApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
