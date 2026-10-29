@@ -1426,6 +1426,57 @@ must be in before it is.
   their coverage on the derived client. Not in scope: changing any endpoint, or the
   server's side of the API.
 
+- **WP5.24 Transactions: a bracket, and the permission context loaded once** (the owner,
+  2026-10-29, reading the storage: "Nie widzę żebyśmy używali bracketingu używając bazy
+  danych", and "Tak" to the fix; the second part is what WP5.22's bench left for later).
+  Two parts, one pull request.
+
+  **A. `withTransaction`.** Connections are bracketed (`Data.Pool.withResource`, `bracket`
+  around a backup's own connection, `withStorage`), transactions are not: the four
+  wrappers (`writingEither`, `reading`, `transactThenFrom`, `readWithin` in
+  `Wiki.Server.Storage`) call `begin` outside any handler and wrap the body and the commit
+  in `rollBackOnError` by hand, so the invariant "a connection goes back to the pool with
+  no transaction open" holds only because every exception also reaches `withResource`,
+  which closes the connection. One function in `Wiki.Server.Storage.Backend`:
+  `withTransaction :: Backend be => Bool -> Connection be -> IO a -> IO a`, `mask`-based
+  (begin; the body under `restore` with a rollback on exception; the commit with a rollback
+  on exception), and a variant for a body that returns `Either` (rollback on `Left`, as
+  `writingEither` and `transactThenFrom` do); the four wrappers on it; `rollBackOnError`
+  gone; `retrying` unchanged (a retryable failure is rolled back inside the bracket and the
+  connection kept). Behaviour otherwise unchanged. Test: an exception in the body and an
+  exception in the commit each leave the connection with no transaction open (a `BEGIN`
+  right after succeeds; on PostgreSQL `pg_stat_activity` shows the connection idle, not
+  "idle in transaction"), on both backends.
+
+  **B. The permission context loaded once per generation.** Every transaction begins with
+  `context`: every space, every grant, the active user and their groups (settings and
+  server settings are already kept in `IORef`s). That is 15 of the 29 statements of a
+  page view on PostgreSQL (WP5.22's bench) and is the same data on every read until a
+  write changes it. The storage keeps a generation (`IORef Int`) that every committed
+  write transaction bumps when it changed spaces, grants, users or groups (the operations
+  that do are known: the storage records on the `Ctx` that the transaction touched a
+  permission table, and the commit path bumps; a test enumerates the operations that must
+  bump, so a new one cannot be forgotten), and a cache: the spaces and grants of the
+  current generation, and the active user with their groups per (generation, user),
+  bounded (an LRU of a few hundred users, or cleared on a bump). `context` reads the cache
+  when its generation is current and loads from the database otherwise, inside the
+  transaction, so a reader still sees one state. Writes always read fresh (the writer is
+  one connection and the cache is bumped by it; the writer's own transaction loads the
+  context from the database to see its own earlier writes within a `retrying` attempt).
+  `readWithin` (a chain of spaces) is covered the same way or left as it is if it loads
+  less than the cache would give; reported. One process only: a second server instance
+  would need the generation shared (`LISTEN/NOTIFY`, noted for the multi-instance package);
+  the console (`wiki-server users …`) writes in another process against the same database,
+  so a running server must notice: the generation is also a row in the database
+  (`permissions_generation`, bumped in the same write transaction), read with one cheap
+  statement at the start of each read transaction and compared with the cached one. That
+  statement is the price: a page view goes from 29 to about 14 statements on PostgreSQL,
+  measured with `wiki-server-bench` on both backends before and after, numbers in the
+  report and in the Progress entry. Tests: the cache is used (statement counts in the
+  Scale suite drop as computed), a grant change on the writer is seen by the next read, a
+  change by another process (a second `Storage` on the same database in the test) is seen
+  by the next read, a user's group change is seen, a disabled user is refused at once.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
