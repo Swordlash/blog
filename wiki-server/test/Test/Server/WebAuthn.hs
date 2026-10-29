@@ -16,7 +16,8 @@ module Test.Server.WebAuthn
   )
 where
 
-import Codec.CBOR.Term (Term (..), encodeTerm)
+import Codec.CBOR.Read (deserialiseFromBytes)
+import Codec.CBOR.Term (Term (..), decodeTerm, encodeTerm)
 import Codec.CBOR.Write (toStrictByteString)
 import Crypto.ECC (Curve_P256R1)
 import Crypto.Error (CryptoFailable (..))
@@ -130,6 +131,22 @@ spec = describe "Wiki.Server.WebAuthn" $ do
       let (_, attestation) = registration passkey 0x45 site origin challenge
       verifyRegistration expected (clientData "webauthn.get" challenge origin) attestation `shouldSatisfy` isLeft
 
+  describe "a registration, further" $ do
+    it "says which ceremony client data of the other type was for" $ do
+      let (_, attestation) = registration passkey 0x45 site origin challenge
+      verifyRegistration expected (clientData "webauthn.get" challenge origin) attestation
+        `shouldBe` Left "its client data is of type webauthn.get, not webauthn.create"
+
+    it "takes a passkey whose authenticator attests anyway, without checking the statement" $ do
+      let (client, attestation) = registration passkey 0x45 site origin challenge
+          packed = case deserialiseFromBytes decodeTerm (BSL.fromStrict attestation) of
+            Right (_, TMap pairs) ->
+              toStrictByteString . encodeTerm . TMap $
+                [(k, v) | (k, v) <- pairs, k /= TString "fmt", k /= TString "attStmt"]
+                  <> [(TString "fmt", TString "packed"), (TString "attStmt", TMap [(TString "alg", TInt (-7)), (TString "sig", TBytes "not a signature")])]
+            _ -> panic "not an attestation object"
+      ((\n -> n.credentialId) <$> verifyRegistration expected client packed) `shouldBe` Right "credential-one"
+
   describe "an assertion" $ do
     it "is taken with its signature by the passkey, and gives its counter" $ do
       new <- registered
@@ -153,6 +170,15 @@ spec = describe "Wiki.Server.WebAuthn" $ do
       verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 9} client authData signature `shouldBe` Left (CounterWentBack 9 5)
       (synced, syncedData, syncedSignature) <- assertion passkey 0 site origin challenge
       verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 0} synced syncedData syncedSignature `shouldBe` Right 0
+
+  describe "a key stored before the wiki used the webauthn package" $
+    it "is read in another order and with a key id, and checks an assertion" $ do
+      new <- registered
+      stored <- case deserialiseFromBytes decodeTerm (BSL.fromStrict new.publicKey) of
+        Right (_, TMap pairs) -> pure (toStrictByteString (encodeTerm (TMap ((TInt 2, TBytes "a key id") : reverse pairs))))
+        _ -> panic "not a COSE key"
+      (client, authData, signature) <- assertion passkey 2 site origin challenge
+      verifyAssertion expected StoredKey {publicKey = stored, signCount = 1} client authData signature `shouldBe` Right 2
 
   describe "an RS256 key" $
     it "checks its signatures" $ do

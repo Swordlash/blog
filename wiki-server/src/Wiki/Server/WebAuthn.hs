@@ -58,9 +58,12 @@ module Wiki.Server.WebAuthn
 where
 
 import Codec.CBOR.Read (deserialiseFromBytes)
-import Codec.Serialise (decode)
+import Codec.CBOR.Term (Term (..), decodeTerm, encodeTerm)
+import Codec.CBOR.Write (toStrictByteString)
+import Codec.Serialise (decode, serialise)
 import Crypto.Hash (SHA256 (..), hashWith)
 import Crypto.WebAuthn.AttestationStatementFormat (allSupportedFormats)
+import Crypto.WebAuthn.AttestationStatementFormat.None qualified as None
 import Crypto.WebAuthn.Cose.Internal.Verify qualified as Verify
 import Crypto.WebAuthn.Cose.PublicKeyWithSignAlg qualified as Cose
 import Crypto.WebAuthn.Cose.SignAlg qualified as Cose
@@ -70,6 +73,8 @@ import Crypto.WebAuthn.Model.Types qualified as M
 import Crypto.WebAuthn.Operation.Authentication (AuthenticationError (..), AuthenticationResult (..), SignatureCounterResult (..), verifyAuthenticationResponse)
 import Crypto.WebAuthn.Operation.CredentialEntry (CredentialEntry (..))
 import Crypto.WebAuthn.Operation.Registration (RegistrationError (..), RegistrationResult (..), verifyRegistrationResponse)
+import Data.Aeson (decodeStrict, withObject, (.:))
+import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString.Lazy qualified as BSL
@@ -93,12 +98,18 @@ data Expected = Expected
   }
   deriving stock (Eq, Show)
 
--- | The client data of a ceremony as the package read it, with the check
--- the package does not make: that the page that asked was not in a frame
--- of another site.
-clientDataFor :: Text -> Either Text (M.CollectedClientData c 'True) -> Either Text (M.CollectedClientData c 'True)
-clientDataFor wanted decoded = do
-  given <- first (const ("its client data is not what a browser writes for " <> wanted)) decoded
+-- | The client data of a ceremony as the package read it, with two checks
+-- of the wiki's own first: its type, so that a refusal says which ceremony
+-- the passkey answered (the package only says it cannot read it), and that
+-- the page that asked was not in a frame of another site, which the
+-- package does not check. The package's own words never reach the person:
+-- they name its internals.
+clientDataFor :: Text -> ByteString -> Either Text (M.CollectedClientData c 'True) -> Either Text (M.CollectedClientData c 'True)
+clientDataFor wanted raw decoded = do
+  let unreadable = "its client data is not what a browser writes"
+  kind <- maybe (Left unreadable) Right (decodeStrict raw >>= parseMaybe (withObject "client data" (.: "type")))
+  unless (kind == wanted) (Left ("its client data is of type " <> kind <> ", not " <> wanted))
+  given <- first (const unreadable) decoded
   when (given.ccdCrossOrigin == Just True) (Left "it was made in a frame of another site")
   pure given
 
@@ -115,8 +126,9 @@ rpIdHash = convert . hashWith SHA256 . encodeUtf8
 -- Registration
 
 -- | 'NewCredential': a passkey just registered: its credential id, its
--- public key as the authenticator wrote it (a COSE key, 'parseCoseKey'),
--- the key's algorithm, and the authenticator's signature counter.
+-- public key (a COSE key, 'parseCoseKey', in the package's canonical
+-- encoding, which is how it reads a key back), the key's algorithm, and
+-- the authenticator's signature counter.
 data NewCredential = NewCredential
   { credentialId :: ByteString
   , publicKey :: ByteString
@@ -129,27 +141,31 @@ data NewCredential = NewCredential
 -- the new credential, or why it is refused.
 verifyRegistration :: Expected -> ByteString -> ByteString -> Either Text NewCredential
 verifyRegistration expected clientData attestation = do
-  client <- clientDataFor "webauthn.create" (decodeCollectedClientData @'Registration clientData)
-  object <- first ("its attestation object is not one: " <>) (decodeAttestationObject allSupportedFormats attestation)
+  client <- clientDataFor "webauthn.create" clientData (decodeCollectedClientData @'Registration clientData)
+  object <- first (const "its attestation object is not what a browser writes") (decodeAttestationObject allSupportedFormats attestation)
   origins <- originsOf expected
-  let credentialId = case object of
-        M.AttestationObject {aoAuthData} -> case aoAuthData.adAttestedCredentialData of
-          M.AttestedCredentialData {acdCredentialId} -> acdCredentialId
+  let authData = case object of
+        M.AttestationObject {aoAuthData} -> aoAuthData
+      credentialId = case authData.adAttestedCredentialData of
+        M.AttestedCredentialData {acdCredentialId} -> acdCredentialId
+      -- The wiki asks for no attestation and keeps no verdict on one, so
+      -- whatever statement an authenticator sends anyway is left out, as
+      -- the format "none": no certificate is checked, at any time.
+      unattested = M.AttestationObject {aoAuthData = authData, aoFmt = None.Format, aoAttStmt = ()}
       credential =
         M.Credential
           { cIdentifier = credentialId
-          , cResponse = M.AuthenticatorResponseRegistration {arrClientData = client, arrAttestationObject = object, arrTransports = []}
+          , cResponse = M.AuthenticatorResponseRegistration {arrClientData = client, arrAttestationObject = unattested, arrTransports = []}
           , cAuthenticatorAttachment = Nothing
           , cClientExtensionResults = M.AuthenticationExtensionsClientOutputs {aecoCredProps = Nothing}
           }
   result <- first (registrationRefusal . NonEmpty.head) (outcome (verifyRegistrationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) mempty attestationTime (creation expected) credential))
   let entry = result.rrEntry
-      publicKey = M.unPublicKeyBytes entry.cePublicKeyBytes
-  key <- parseCoseKey publicKey
+  key <- parseCoseKey (M.unPublicKeyBytes entry.cePublicKeyBytes)
   pure
     NewCredential
       { credentialId = M.unCredentialId entry.ceCredentialId
-      , publicKey
+      , publicKey = BSL.toStrict (serialise key)
       , algorithm = coseAlgorithm key
       , signCount = M.unSignatureCounter entry.ceSignCounter
       }
@@ -173,9 +189,9 @@ creation expected =
     , corExtensions = Nothing
     }
 
--- | The time the package checks an attestation's certificates at. The wiki
--- asks for no attestation and keeps no verdict on one, so a fixed time does:
--- it keeps 'verifyRegistration' a function of what it is given.
+-- | The time the package would check an attestation's certificates at.
+-- Every registration is checked as the format "none" ('verifyRegistration'),
+-- which has no certificate, so the time is never used.
 attestationTime :: DateTime
 attestationTime = DateTime {dtDate = Hourglass.Date 2026 October 1, dtTime = TimeOfDay 0 0 0 0}
 
@@ -223,15 +239,15 @@ data AssertionRefusal
 -- both sides.
 verifyAssertion :: Expected -> StoredKey -> ByteString -> ByteString -> ByteString -> Either AssertionRefusal Word32
 verifyAssertion expected stored clientData authBytes signature = do
-  client <- first Refused (clientDataFor "webauthn.get" (decodeCollectedClientData @'Authentication clientData))
-  authData <- first (Refused . ("its authenticator data is not one: " <>)) (decodeAuthenticatorData @'Authentication authBytes)
+  client <- first Refused (clientDataFor "webauthn.get" clientData (decodeCollectedClientData @'Authentication clientData))
+  authData <- first (const (Refused "its authenticator data is not what an authenticator writes")) (decodeAuthenticatorData @'Authentication authBytes)
   origins <- first Refused (originsOf expected)
   let nobody = M.UserHandle ""
       entry =
         CredentialEntry
           { ceCredentialId = M.CredentialId ""
           , ceUserHandle = nobody
-          , cePublicKeyBytes = M.PublicKeyBytes stored.publicKey
+          , cePublicKeyBytes = M.PublicKeyBytes (canonicalCoseKey stored.publicKey)
           , ceSignCounter = M.SignatureCounter stored.signCount
           , ceTransports = []
           }
@@ -290,12 +306,35 @@ takenAlgorithms = [Cose.CoseAlgorithmES256, Cose.CoseAlgorithmRS256]
 notTaken :: Text
 notTaken = "its public key is of a kind the wiki does not take: it takes ES256 and RS256"
 
--- | A COSE key read from its CBOR, if it is ES256 or RS256.
+-- | A COSE key read from its CBOR, if it is ES256 or RS256. The bytes are
+-- made canonical first ('canonicalCoseKey'), since the package reads only
+-- that encoding.
 parseCoseKey :: ByteString -> Either Text CoseKey
-parseCoseKey bytes = case deserialiseFromBytes decode (BSL.fromStrict bytes) of
+parseCoseKey bytes = case deserialiseFromBytes decode (BSL.fromStrict (canonicalCoseKey bytes)) of
   Right (rest, key)
     | BSL.null rest -> if Cose.signAlg key `elem` takenAlgorithms then Right key else Left notTaken
   _ -> Left "its public key is not a COSE key"
+
+-- | A COSE key's CBOR in the encoding the package reads: the parameters an
+-- ES256 or RS256 key has (1, the key type; 3, the algorithm; -1, -2 and
+-- -3, the curve and coordinates or the modulus and exponent), in that
+-- order, each integer in its shortest form, and nothing else. A key the
+-- wiki stored before it used the package is kept as the authenticator
+-- wrote it, which may have its parameters in another order or one more
+-- (a key id); this reads it all the same. Bytes that are not a CBOR map
+-- are given back as they are, for the package to refuse.
+canonicalCoseKey :: ByteString -> ByteString
+canonicalCoseKey bytes = case deserialiseFromBytes decodeTerm (BSL.fromStrict bytes) of
+  Right (rest, TMap pairs)
+    | BSL.null rest ->
+        toStrictByteString (encodeTerm (TMap [(TInt k, shortest v) | k <- [1, 3, -1, -2, -3], Just v <- [snd <$> find ((== Just k) . intOf . fst) pairs]]))
+  _ -> bytes
+  where
+    intOf = \case
+      TInt i -> Just i
+      TInteger i | i >= fromIntegral (minBound :: Int) && i <= fromIntegral (maxBound :: Int) -> Just (fromIntegral i)
+      _ -> Nothing
+    shortest t = maybe t TInt (intOf t)
 
 -- | A key's COSE algorithm: -7 for ES256, -257 for RS256.
 coseAlgorithm :: CoseKey -> Int
