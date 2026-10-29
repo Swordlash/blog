@@ -91,7 +91,7 @@ import Servant.API hiding (Vault)
 import Servant.Multipart.API (MultipartForm, Tmp)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
+import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
@@ -400,6 +400,13 @@ data AdminApi mode = AdminApi
   , directory :: mode :- "directory" :> Get '[JSON] Directory
   -- ^ @directory@: the users, which of them are administrators, the groups
   -- and their members.
+  , users :: mode :- "users" :> QueryParam "offset" Int :> QueryParam "limit" Int :> QueryParam "q" Text :> QueryFlag "administrators" :> QueryFlag "disabled" :> Get '[JSON] UserPage
+  -- ^ @userPage@: one page of the users ("Wiki.Api.Admin"'s 'UserQuery'),
+  -- from @offset@ (0 if missing), at most @limit@ of them (25 if missing,
+  -- 100 at most), those whose login or display name holds every word of
+  -- @q@, only the administrators with @administrators@, only the disabled
+  -- with @disabled@. An offset below 0 or a limit outside 1 to 100 is
+  -- 'Wiki.Api.Error.Invalid'.
   , setAdministrator :: mode :- "users" :> Capture "user" UserId :> "administrator" :> ReqBody '[JSON] AdministratorFlag :> PutNoContent
   -- ^ @setAdministrator@: grant a user the global administer permission,
   -- or remove it, including the caller's own.

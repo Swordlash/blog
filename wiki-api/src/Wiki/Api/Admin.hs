@@ -26,6 +26,20 @@ module Wiki.Api.Admin
   , CreateSpacesFlag (..)
   , GroupName (..)
 
+    -- * The users, a page at a time
+  , UserQuery (..)
+  , firstUsers
+  , userQueryOf
+  , userPageSizes
+  , maxUserPageSize
+  , checkUserQuery
+  , UserSummary (..)
+  , UserPage (..)
+  , userMatches
+  , userOrder
+  , summaryOf
+  , pageOfDirectory
+
     -- * Whom the wiki lets in
   , WikiSettings (..)
   , defaultSettings
@@ -38,13 +52,16 @@ module Wiki.Api.Admin
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Id (InvitationId, UserId)
-import Wiki.Core.User (Email, Group, Membership, User)
+import Wiki.Core.Id (GroupId, InvitationId, UserId)
+import Wiki.Core.User (Email, Group (..), Login (..), Membership, User (..))
 
 -- | 'ServerStatus': the response to @GET \/api\/v1\/admin\/status@.
 data ServerStatus = ServerStatus
@@ -166,6 +183,172 @@ newtype CreateSpacesFlag = CreateSpacesFlag {createSpaces :: Bool}
 newtype GroupName = GroupName {name :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | 'UserQuery' is one page of the wiki's users, as the administration
+-- asks for it: @GET \/api\/v1\/admin\/users@ with the parameters
+-- @offset@, @limit@, @q@, @administrators@ and @disabled@. The users are in
+-- the order 'userOrder' gives, and the page starts at 'offset' in that
+-- order. A user is on it when they match every part of the query that is
+-- set: 'search' (see 'userMatches'), being an administrator, being
+-- disabled.
+data UserQuery = UserQuery
+  { offset :: Int
+  -- ^ How many matching users come before the page, from 0.
+  , limit :: Int
+  -- ^ How many users the page holds at most, from 1 to 'maxUserPageSize'.
+  , search :: Text
+  -- ^ Words to find in the login or the display name; empty for everyone.
+  , administrators :: Bool
+  -- ^ Only the users granted the global administer directly.
+  , disabled :: Bool
+  -- ^ Only the users whose account is disabled.
+  }
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The first page of every user, at the page size the server answers
+-- when none is asked for (25).
+firstUsers :: UserQuery
+firstUsers = UserQuery {offset = 0, limit = 25, search = "", administrators = False, disabled = False}
+
+-- | The query @GET \/api\/v1\/admin\/users@ names with its parameters:
+-- @offset@ (0 if missing), @limit@ (25 if missing), @q@ (everyone if
+-- missing), and the flags @administrators@ and @disabled@.
+userQueryOf :: Maybe Int -> Maybe Int -> Maybe Text -> Bool -> Bool -> UserQuery
+userQueryOf offset limit q administrators disabled =
+  UserQuery
+    { offset = fromMaybe firstUsers.offset offset
+    , limit = fromMaybe firstUsers.limit limit
+    , search = fromMaybe "" q
+    , administrators
+    , disabled
+    }
+
+-- | The page sizes the administration offers. The first is the default,
+-- and the last is 'maxUserPageSize'.
+userPageSizes :: [Int]
+userPageSizes = [25, 50, 100]
+
+-- | The largest page of users a backend answers, so that one request
+-- never reads a whole large wiki's users.
+maxUserPageSize :: Int
+maxUserPageSize = 100
+
+-- | 'checkUserQuery' refuses a query no backend answers: an offset below
+-- 0, or a limit outside 1 to 'maxUserPageSize'. The reason is a sentence
+-- for the person who asked.
+checkUserQuery :: UserQuery -> Either Text UserQuery
+checkUserQuery q
+  | q.offset < 0 = Left "The offset of a page of users is 0 or more."
+  | q.limit < 1 || q.limit > maxUserPageSize = Left ("A page of users holds from 1 to " <> show maxUserPageSize <> " users.")
+  | otherwise = Right q
+
+-- | 'userMatches' says whether a user matches the words searched for:
+-- every word is found, ignoring case, in their login or in their display
+-- name. No words match everyone.
+--
+-- The server's storage matches in SQL, with @LIKE@. There a @%@, a @_@ or a
+-- backslash in a word matches any one character, so the server may find a
+-- few more users than this function for such words. SQLite ignores the
+-- case of ASCII letters only, so a display name with other letters is
+-- matched there only in the case typed.
+userMatches :: Text -> User -> Bool
+userMatches search u = all found (T.words (T.toLower search))
+  where
+    found w = w `T.isInfixOf` T.toLower u.login.text || w `T.isInfixOf` T.toLower u.displayName
+
+-- | 'userOrder' is the order of the users in a page: by login ignoring
+-- case, then by login, then by id. Logins are unique ignoring case, so the
+-- first key is enough in practice; the others make the order total. The
+-- server's storage lowers the login in SQL, which on SQLite lowers ASCII
+-- letters only: there a login with other capital letters may sort apart
+-- from where this function puts it.
+userOrder :: User -> (Text, Text, UserId)
+userOrder u = (T.toLower u.login.text, u.login.text, u.id)
+
+-- | 'UserSummary' is one user as the administration's table of users and
+-- its "Manage" dialog show them: the user, their direct global grants, how
+-- they sign in, their address, and their groups.
+data UserSummary = UserSummary
+  { user :: User
+  , administrator :: Bool
+  -- ^ Granted the global administer directly.
+  , createsSpaces :: Bool
+  -- ^ Granted the global create-spaces directly.
+  , disabled :: Bool
+  , hasPassword :: Bool
+  , identities :: [Text]
+  -- ^ The sign-in providers they may sign in with, by name.
+  , providerOnly :: Bool
+  -- ^ They cannot have a password ('Directory.providerOnly').
+  , secondFactor :: Bool
+  , email :: Maybe AccountEmail
+  , groups :: [GroupId]
+  -- ^ The groups they are in.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'UserPage': the response to @GET \/api\/v1\/admin\/users@. It holds
+-- the users of the page, how many users match the query in all, and what
+-- the dialog of one user needs besides the user: every group (to add the
+-- user to one), whether the server sends mail (for a password link), and
+-- whether the administration may create accounts with a password (for the
+-- form for a new user).
+data UserPage = UserPage
+  { users :: [UserSummary]
+  , total :: Int
+  -- ^ How many users match the query, on every page.
+  , offset :: Int
+  -- ^ The query's offset: the place of the page's first user, from 0.
+  , groups :: [Group]
+  -- ^ Every group, by name.
+  , mailing :: Bool
+  , adminCreatesPasswordAccounts :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'summaryOf' is one user's summary, from the directory of every user.
+summaryOf :: Directory -> User -> UserSummary
+summaryOf d u =
+  UserSummary
+    { user = u
+    , administrator = u.id `Set.member` d.administrators
+    , createsSpaces = u.id `Set.member` d.creators
+    , disabled = u.id `Set.member` d.disabled
+    , hasPassword = u.id `Set.member` d.withPassword
+    , identities = Map.findWithDefault [] u.id d.identities
+    , providerOnly = u.id `Set.member` d.providerOnly
+    , secondFactor = u.id `Set.member` d.secondFactor
+    , email = Map.lookup u.id d.emails
+    , groups = [g.id | g <- d.groups, u.id `Set.member` Map.findWithDefault mempty g.id d.membership]
+    }
+
+-- | 'pageOfDirectory' answers a query from the directory of every user.
+-- It is the meaning of 'UserQuery': the demo's backend answers with it,
+-- and the server's storage, which reads one page from the database, must
+-- answer the same.
+pageOfDirectory :: UserQuery -> Directory -> UserPage
+pageOfDirectory q d =
+  UserPage
+    { users = map (summaryOf d) (take q.limit (drop q.offset matching))
+    , total = length matching
+    , offset = q.offset
+    , groups = d.groups
+    , mailing = d.mailing
+    , adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts
+    }
+  where
+    matching =
+      sortOn
+        userOrder
+        [ u
+        | u <- d.users
+        , userMatches q.search u
+        , not q.administrators || u.id `Set.member` d.administrators
+        , not q.disabled || u.id `Set.member` d.disabled
+        ]
 
 -- | 'WikiSettings': the wiki's own settings, @GET@ and @PUT \/api\/v1\/admin\/settings@.
 data WikiSettings = WikiSettings

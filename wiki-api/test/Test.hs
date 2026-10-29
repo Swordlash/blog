@@ -15,6 +15,7 @@ import Test.Links qualified as Links
 import Test.ServerSettings qualified as ServerSettings
 import Test.Upload qualified as Upload
 import Test.Url qualified as Url
+import Test.Users qualified as Users
 import Test.Version qualified as Version
 
 main :: IO ()
@@ -30,3 +31,4 @@ main = hspec $ do
   Events.spec
   Backups.spec
   ContentPolicy.spec
+  Users.spec

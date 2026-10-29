@@ -11,6 +11,15 @@ Google id cannot save any other change to the server settings (the mail,
 the public address) until the provider's id is fixed: the message names
 the provider. Sign-in with it did not work before either.
 
+The administration reads the users a page at a time (WP5.25):
+`AdminApi.users` is `GET api/v1/admin/users` with the parameters `offset`,
+`limit` (25 when missing, at most 100), `q` and the flags `administrators`
+and `disabled`, answering a `UserPage` of `UserSummary`s with the total that
+match. `Wiki.Api.Admin` gains `UserQuery` (`firstUsers`, `userQueryOf`,
+`checkUserQuery`, `userPageSizes`, `maxUserPageSize`) and `pageOfDirectory`,
+the meaning every backend's answer must have (`userMatches`, `userOrder`,
+`summaryOf`). The directory endpoint stays.
+
 The records of the API with an upload (`WikiApi`, `SpacesApi`, `PagesApi`,
 `ArchiveApi`) take the multipart backend of their forms as their first
 parameter (WP5.23): `Api` is `ApiWith Tmp`, what the server serves, and the

@@ -27,7 +27,7 @@ import Test.Sample qualified as Sample
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), UserQuery (..), defaultSettings, pageOfDirectory, userQueryOf)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
@@ -231,6 +231,9 @@ stubs =
           { status = pure Sample.serverStatus
           , activity = \actor offset cursor -> pure Sample.activity {more = actor == Just (UserId "u1") && (offset == Just 50 || cursor == Just "e1")}
           , directory = pure Sample.directory
+          , -- The sample directory's page for the query read.
+            users = \offset limit q administrators disabled ->
+              pure (pageOfDirectory (userQueryOf offset limit q administrators disabled) Sample.directory)
           , setAdministrator = \u flag -> if u == UserId "u2" && flag.administrator then pure NoContent else refuse NotFound
           , setCreateSpaces = \u flag -> if u == UserId "u2" && not flag.createSpaces then pure NoContent else refuse NotFound
           , createGroup = \body -> pure Group {id = GroupId "new", name = body.name}
@@ -785,6 +788,13 @@ spec = describe "a server of the API's type" $ do
   describe "the wiki's people" $ do
     it "lists them in one answer" $
       answers (getAt links.admin.directory) 200 Sample.directory
+
+    it "lists a page of the users, with the query read as sent" $ do
+      links.admin.users Nothing Nothing Nothing False False `shouldBe` "api/v1/admin/users"
+      links.admin.users (Just 25) (Just 50) (Just "ed") True True `shouldBe` "api/v1/admin/users?offset=25&limit=50&q=ed&administrators&disabled"
+      answers (getAt (links.admin.users Nothing Nothing (Just "ED") False False)) 200 (pageOfDirectory UserQuery {offset = 0, limit = 25, search = "ED", administrators = False, disabled = False} Sample.directory)
+      answers (getAt (links.admin.users (Just 1) (Just 1) Nothing False False)) 200 (pageOfDirectory UserQuery {offset = 1, limit = 1, search = "", administrators = False, disabled = False} Sample.directory)
+      answers (getAt (links.admin.users Nothing Nothing Nothing True False)) 200 (pageOfDirectory UserQuery {offset = 0, limit = 25, search = "", administrators = True, disabled = False} Sample.directory)
 
     it "marks a user as an administrator, by id, with a flag" $ do
       (status <$> sendJson methodPut (links.admin.setAdministrator (UserId "u2")) AdministratorFlag {administrator = True}) `shouldReturn` 204
