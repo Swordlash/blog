@@ -1531,7 +1531,16 @@ must be in before it is.
   creates spaces, disable, set a password, send a password link, remove the second
   factor, unlink an identity, the e-mail address, group membership (add to a group, remove
   from one), each change saved at once with a short "Saved" and the row refreshed, and
-  the account's dangerous actions (disable, remove the second factor) asked once. The
+  the account's dangerous actions (disable, remove the second factor) asked once, and,
+  after disabling, **Remove the account** (the owner, 2026-10-29: "after 'disable' can we
+  add an option to 'remove'?"): offered only for a disabled login, never for one's own
+  account, confirmed by typing the login; `DELETE admin/users/:id` ends the sessions and
+  deletes the account row with what belongs to it (grants, memberships, passkeys and the
+  vault, watches, notifications, invitations it sent), while the pages, versions and
+  comments the person wrote stay, attributed to the login as text and shown as a former
+  user (the schema's author references become nullable with the login kept beside them,
+  or the equivalent the storage already has); the login is free to be taken again; the
+  activity log records the removal; the console gets `users remove LOGIN`. The
   dialog is one component with its own state, reusable for the per-user settings a later
   package adds (the assistant's access, WP5.26). Design: the owner asked for it to be
   nice, so care is part of the work: consistent spacing and type with the rest of the
