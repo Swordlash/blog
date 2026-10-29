@@ -1770,7 +1770,8 @@ must be in before it is.
   WP5.21: the button signs in, the second-factor alternative, the Security panel's add,
   list, remove, hidden on plain HTTP), the smoke test unchanged; a real passkey in a real
   browser checked by hand and said so in the report. `docs/accounts.md` (or where sign-in
-  is documented) gains "Passkeys". Queued after WP5.29.
+  is documented) gains "Passkeys". Queued after WP5.29; not started until the owner says so (2026-10-29, "zatrzymaj się po
+  29 bo nam się kończy usage").
 
 - **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
   powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
@@ -1799,7 +1800,7 @@ must be in before it is.
   token is 404; the operator gets 404), contract on Mem/SQLite/PostgreSQL/HTTP for the
   two methods, browser (the block shows the address once made, "Copy", renew). Docs:
   `docs/api.md` (the endpoint and the feed), the notifications section of the user docs
-  ("Your notifications as a feed"). Queued after WP5.30.
+  ("Your notifications as a feed"). Queued after WP5.30; not started until the owner says so (the same note).
 
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
