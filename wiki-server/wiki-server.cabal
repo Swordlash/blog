@@ -139,6 +139,7 @@ library
         http-types,
         mime-mail,
         network,
+        one-time-password ==3.0.1.0,
         optparse-applicative,
         pandoc,
         pandoc-types,
@@ -149,6 +150,7 @@ library
         ram,
         resource-pool,
         row-types,
+        sel,
         serialise,
         servant-client-core,
         servant-multipart,
@@ -158,6 +160,7 @@ library
         stm,
         texmath,
         text,
+        text-display,
         time,
         time-hourglass,
         unix,
@@ -190,6 +193,7 @@ executable wiki-server
     build-depends:
         optparse-applicative,
         protolude,
+        sel,
         wiki-server
 
 -- The storage timed at the size of a big wiki (WP5.16a of docs/PLAN.md):
@@ -327,6 +331,7 @@ test-suite wiki-server-test
         pandoc-types,
         process,
         protolude,
+        sel,
         ram,
         servant,
         sqlite-simple,

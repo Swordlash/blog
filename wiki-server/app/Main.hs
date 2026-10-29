@@ -28,6 +28,7 @@ module Main (main) where
 
 import Options.Applicative
 import Protolude
+import Sel (secureMain)
 import Wiki.Server (ServerError (..), serve)
 import Wiki.Server.Console (BackupOutcome (..), OidcCheck, RestoreCommand, Users, oidcCheckParser, readPassword, restoreParser, runBackup, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
@@ -71,33 +72,36 @@ commands =
 
 main :: IO ()
 main =
-  execParser commands >>= \case
-    Serve options ->
-      serve options `catch` \(ServerError reasons) -> do
-        for_ reasons $ \r -> putErrText ("wiki-server: " <> r)
-        exitWith (ExitFailure 2)
-    Backup place keep ->
-      runBackup place keep >>= \case
-        BackedUp line -> putText line
-        BackupFailed why -> do
-          putErrText ("wiki-server: " <> why)
-          exitWith (ExitFailure 1)
-        OfEarlierServer why -> do
-          putErrText ("wiki-server: " <> why)
-          exitWith (ExitFailure 3)
-    Restore r ->
-      runRestore r >>= \case
-        Right lines' -> traverse_ putText lines'
-        Left why -> do
-          putErrText ("wiki-server: " <> why)
-          exitWith (ExitFailure 1)
-    Users u ->
-      runUsers readPassword u >>= \case
-        Right lines' -> traverse_ putText lines'
-        Left why -> do
-          putErrText ("wiki-server: " <> why)
-          exitWith (ExitFailure 1)
-    Oidc c -> do
-      (fine, lines') <- runOidcCheck c
-      traverse_ putText lines'
-      unless fine (exitWith (ExitFailure 1))
+  -- libsodium is initialised first: the second factor's codes need it
+  -- (Wiki.Server.Totp, over one-time-password and sel).
+  secureMain $
+    execParser commands >>= \case
+      Serve options ->
+        serve options `catch` \(ServerError reasons) -> do
+          for_ reasons $ \r -> putErrText ("wiki-server: " <> r)
+          exitWith (ExitFailure 2)
+      Backup place keep ->
+        runBackup place keep >>= \case
+          BackedUp line -> putText line
+          BackupFailed why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+          OfEarlierServer why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 3)
+      Restore r ->
+        runRestore r >>= \case
+          Right lines' -> traverse_ putText lines'
+          Left why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      Users u ->
+        runUsers readPassword u >>= \case
+          Right lines' -> traverse_ putText lines'
+          Left why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      Oidc c -> do
+        (fine, lines') <- runOidcCheck c
+        traverse_ putText lines'
+        unless fine (exitWith (ExitFailure 1))

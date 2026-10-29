@@ -44,7 +44,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8
 # bash for pipefail: the build pipes find into the compressor.
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
-# The bootstrap installs the Debian packages it needs itself, but downloads
+# The bootstrap installs the Debian packages it needs itself (the C
+# toolchain, and GMP's, libpq's and libsodium's development files), but downloads
 # them with curl over HTTPS first, which needs the CA certificates; and git,
 # for cabal to fetch haskell-halogen at the commit cabal.project pins.
 # hadolint ignore=DL3008
@@ -109,8 +110,9 @@ FROM scratch AS release
 COPY --from=build /out/ /
 
 FROM ${DEBIAN} AS runtime
-# libgmp and libpq (PostgreSQL's client library) are the libraries the
-# binary links beyond glibc (SQLite is compiled into it); PostgreSQL's
+# libgmp, libpq (PostgreSQL's client library) and libsodium (the second
+# factor's codes) are the libraries the binary links beyond glibc (SQLite
+# is compiled into it); PostgreSQL's
 # client programs, of the major version of docker-compose.yml's postgres:17,
 # are what a backup and a restore of a PostgreSQL database run (pg_dump
 # refuses a server newer than itself); curl is for the health check and for
@@ -121,7 +123,7 @@ FROM ${DEBIAN} AS runtime
 # docker-compose.yml).
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 postgresql-client-17 \
+ && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 libsodium23 postgresql-client-17 \
  && rm -rf /var/lib/apt/lists/*
 # The PDF exports, optionally: the server makes every other document with the
 # pandoc linked into it, and a PDF with xelatex where it finds one, which

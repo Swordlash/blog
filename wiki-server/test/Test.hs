@@ -5,6 +5,7 @@
 module Main (main) where
 
 import Protolude
+import Sel (secureMain)
 import Test.Database (backingName, withBackings)
 import Test.Hspec (describe, hspec)
 import Test.Server.Access qualified as Access
@@ -41,7 +42,7 @@ import Test.Storage.Scale qualified as Scale
 import Test.Storage.Transactions qualified as Transactions
 
 main :: IO ()
-main = withBackings $ \backings -> hspec $ do
+main = secureMain . withBackings $ \backings -> hspec $ do
   Presence.spec
   Totp.spec
   WebAuthn.spec

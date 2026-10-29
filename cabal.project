@@ -66,6 +66,12 @@ constraints: network < 3.2.10
 -- base, time, crypton and the crypton-x509 packages below GHC 9.14's and
 -- below the crypton 2 and x509 1.10 everything else is built with; it builds
 -- and passes its use here with them.
+-- one-time-password 3.0.1.0 (the second factor's codes, Wiki.Server.Totp)
+-- comes with chronos, whose aeson bound stops below the aeson the rest is
+-- built with, and bytebuild, whose base bound stops below GHC 9.14's; and
+-- its executable, which the solver plans too, bounds optparse-applicative
+-- below ours. Kept to them, the solver would rebuild aeson, lens and pandoc
+-- with older versions for its sake alone. Its library builds with them.
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -88,7 +94,10 @@ allow-newer:
   webauthn:crypton-x509,
   webauthn:crypton-x509-store,
   webauthn:crypton-x509-validation,
-  webauthn:time
+  webauthn:time,
+  bytebuild:base,
+  chronos:aeson,
+  one-time-password:optparse-applicative
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

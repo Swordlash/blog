@@ -217,11 +217,12 @@ jobs:
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
     # libpq's development files, which postgresql-libpq (wiki-server's way
-    # to PostgreSQL) builds against. A self-hosted runner has them from the
-    # bootstrap.
-    - name: Install libpq (hosted)
+    # to PostgreSQL) builds against, and libsodium's, which sel (under the
+    # second factor's codes) builds against. A self-hosted runner has them
+    # from the bootstrap.
+    - name: Install libpq and libsodium (hosted)
       if: runner.environment == 'github-hosted'
-      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
 
     - name: Update Cabal package index
       run: cabal update

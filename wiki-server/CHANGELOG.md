@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The second factor's codes are one-time-password's (3.0.1.0, WP5.27), over
+sel's bindings to libsodium: building the server needs libsodium's
+development files (`libsodium-dev`), and running it the library
+(`libsodium23`), which the bootstrap, the image and CI install. Every
+program that uses `Wiki.Server.Totp` starts with `Sel.secureMain`. Stored
+secrets, the otpauth URI and the recovery codes are unchanged: the package
+takes keys of 32 bytes, and a secret of 20 is given to it padded with zero
+bytes, which HMAC does to any short key, so the codes are the same.
+
 Passkeys are checked by the `webauthn` package (0.12.0.0) instead of code
 of the server's own (WP5.27). What is stored and what the server answers
 are unchanged. `Wiki.Server.WebAuthn` no longer exports
