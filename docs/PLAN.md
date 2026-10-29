@@ -1446,7 +1446,8 @@ must be in before it is.
   their coverage on the derived client. Not in scope: changing any endpoint, or the
   server's side of the API.
 
-- **WP5.24 Transactions: a bracket, and the permission context loaded once** (the owner,
+- **WP5.24 Transactions: a bracket, and the permission context loaded once** (merged
+  2026-10-29, PR #111; see Progress) (the owner,
   2026-10-29, reading the storage: "Nie widzę żebyśmy używali bracketingu używając bazy
   danych", and "Tak" to the fix; the second part is what WP5.22's bench left for later).
   Two parts, one pull request.
@@ -1619,7 +1620,8 @@ must be in before it is.
   the setting kept across a reload; the mode and the timeout are part of the vault's
   settings (WP5.21) so they follow the user across devices.
 
-- **WP5.27 Libraries over hand-rolled code: the review** (decision 25, the owner,
+- **WP5.27 Libraries over hand-rolled code: the review** (merged 2026-10-29 with WP5.24,
+  PR #111; see Progress) (decision 25, the owner,
   2026-10-29; folded into WP5.24's branch and pull request the same day, "cleanup może być
   szybciej, dodaj nawet do 24 bo to taki refactor": the WP5.24 agent does it after its two
   parts, one replacement per commit). The code written by hand before the rule, each judged against a maintained
@@ -4390,6 +4392,70 @@ Amended by the planning session after each work package's report.
   decision; the lock-holder connection dies silently if PostgreSQL restarts under a
   running server, so until the server restarts a restore is not refused; `Env.ceremonies`
   stays per process; `LISTEN/NOTIFY` and `SKIP LOCKED` unused.
+
+- **WP5.24 and WP5.27 merged** (2026-10-29, PR #111, `main` at `e1b436f`, twenty-six commits,
+  four review rounds: Claude Code at high effort each time and Codex `gpt-6.1-sol` at high
+  twice, the first two reviews of the two-review rule). **A.** Every transaction runs in
+  `Wiki.Server.Storage.Backend.withTransaction` (and `withTransactionEither`, rolled back on
+  a `Left`), mask-based: begin, the body under `restore`, the commit, a rollback on an
+  exception in either, an asynchronous exception arriving during the rollback rethrown;
+  the four wrappers, `Migrate.applyMigrations` and `Backup.dumpWithFacts` use it,
+  `rollBackOnError` is gone, `retrying` unchanged. Tests on both backends: a body that
+  throws, a statement that fails, a `Left`, a failing commit, each leaving no transaction
+  open. **B.** The permission context is kept in memory for one generation. The generation
+  is a row (`permissions_generation`, migration `0002-permissions-generation` on both
+  backends) bumped by database triggers, not by code: on every change to `spaces` (every
+  column, because the copy also answers the list of spaces and a space by path, with names,
+  icons, descriptions and order), `global_grants`, `space_grants` and `group_members`, and on
+  a user added or deleted or whose `id`, `login`, `display_name` or `disabled` changed (the
+  other columns do not bump); whoever writes: the server, the console in another process, a
+  foreign-key action, a statement by hand. SQLite fires per row, PostgreSQL once per
+  statement and only when it changed a row (transition tables). A read transaction reads the
+  generation with one statement and uses the process-wide copy when it matches, else loads
+  the context (one scan per generation for the process; at most the four readers that see
+  the new generation at once); a write always reads from the database, because it decides
+  on its own snapshot and on PostgreSQL the rows it read join its serializable check. A
+  missing generation row bypasses the cache. Two processes writing permissions at once
+  conflict on the one row at SERIALIZABLE and one is retried (three attempts; rare writes).
+  `readWithin` loads the context only when the attachment exists and keeps what it loads.
+  List writes (`insertSpaces`, `insertMembers`) go 500 rows per statement like
+  `insertUsers`; `updateSpaces`/`setSpacePositions` removed (Beam has no batched update).
+  Page view: 29 statements → 17 on both backends; PostgreSQL 14.35 → 2.89 ms median in this
+  container. **WP5.27, the libraries review**, one replacement per commit: `Wiki.Server.WebAuthn`
+  (343 lines) → `webauthn` 0.12.0.0 (parsing and verification; the wiki keeps its options,
+  sentences, the `crossOrigin` check; attestation is forced to "none" and only the
+  `authData` is taken from the attestation object, so a statement in any format is never
+  decoded; a new key's public key is stored in the package's canonical COSE encoding, a key
+  stored before is made canonical on each read by `canonicalCoseKey` and never rewritten;
+  registration stays strict as CTAP2 mandates canonical CBOR; `allow-newer` for webauthn's
+  `base`, `time`, `crypton`, `crypton-x509*`). `Wiki.Server.Totp` (171 lines) →
+  `one-time-password` 3.0.1.0 over `sel`/libsodium (`hotpSHA1`; a 20-byte secret padded with
+  zeros to the package's 32, which HMAC does to any short key, so stored secrets, the
+  otpauth URI, recovery codes and every code are unchanged; `Secret` builds its HMAC key
+  once; `hotp` returns `Maybe` for a key over 32 bytes or under six digits; every program
+  using it starts with `Sel.secureMain`; `allow-newer` for `chronos`/`bytebuild` bounds;
+  building needs `libsodium-dev` and `pkg-config`, running `libsodium23`: the bootstrap,
+  the image, both CI jobs and the README say so). `pwa.mjs` icons → `@resvg/resvg-wasm`;
+  jsbits base64 → `Uint8Array.prototype.toBase64`/`fromBase64`; `databases.js` →
+  `indexedDB.databases()` alone (these set decision 26's floor: Chrome/Edge 140, Firefox
+  133, Safari 18.2). Kept, with the reason: the ID token reading in `Wiki.Server.Oidc` (6
+  hand-written lines; `jose` checks claims only with a signature and would refuse the test
+  provider's unsigned tokens, the token is read unsigned on purpose as it comes from the
+  token endpoint over TLS, OIDC Core 3.1.3.7; `openid-connect` is bounded below our aeson;
+  `oidc-client` covers neither GitHub's plain OAuth nor Apple's `form_post`);
+  `Wiki.Server.Limiter` (the packages limit requests, the wiki counts failed sign-ins per
+  login and per address, clears on success and reports the wait); `Wiki.Server.Address`
+  (`wai-extra`'s `guessApproot`/`appearsSecure` ignore `X-Forwarded-Host` and trust other
+  headers, which would change the passkeys' relying party); `sw.js` (Workbox would replace
+  ~40 lines of fetch-then-cache, the rest is the wiki's offline behaviour, and its precache
+  and expiration change the stored layout; the owner confirmed). Also in this PR: an ID
+  token for another client is refused naming both client ids, and a Google client id
+  without `.apps.googleusercontent.com` is refused on save (the owner's sign-in error of
+  2026-10-29); `cabal.project` pins `network < 3.2.10` until `smtp-mail` 0.5.0.1 compiles
+  with it. Gate: native and wasm builds without warnings, 1753 server examples, wasm
+  100/886/282, the smoke test on SQLite and PostgreSQL (round two; nothing in the browser
+  changed after). For later: a second server instance needs the generation shared
+  (`LISTEN/NOTIFY`); `Env.ceremonies` stays per process.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
