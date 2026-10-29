@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`Wiki.Core.Search.searchRanked` makes hits of the candidates a database's
+own search found and ranked (WP5.22: PostgreSQL's full-text search), the
+query's words marked in each, but for a word to leave out, `or` and the
+quotes of a phrase.
+
 `Wiki.Core.Assistant.Vault` is the format of the assistant's vault
 (WP5.21): `Vault` (format, salt, sealed settings, the vault key wrapped per
 passkey by `CredentialId`), `VaultTag`, `Sealed`, `WrappedKey`, what is

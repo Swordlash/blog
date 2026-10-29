@@ -12,6 +12,11 @@ memory. A handler record is now `WikiApi Tmp AsServer`, and `links` is
 parameters for a query (what `searchUrl` and the client's call are written
 from), and `archiveExportUrl`.
 
+`ServerInfo` gains `capabilities` (WP5.22, `Wiki.Api.Info`): `Capabilities`
+`{database, search}`, the database the server keeps the wiki in and how its
+search finds pages, `SearchKind` `FullText` (PostgreSQL) or `FoldedText`
+(SQLite, and the demo).
+
 `WikiApi` gains `assistant`, the `AssistantApi` of the vault and its
 passkeys (WP5.21, `Wiki.Api.Vault`): `GET`, `PUT` and `DELETE
 assistant/vault` (with `If-None-Match` and `If-Match` by the vault's tag),

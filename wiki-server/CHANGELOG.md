@@ -8,6 +8,31 @@ returns servant's response, as the application's client is now derived
 from the API's type (WP5.23). The handlers' record is `WikiApi Tmp
 AsServer`. Nothing the server answers changes.
 
+The storage runs on PostgreSQL or SQLite (WP5.22), written once on Beam:
+`Wiki.Server.Storage.Schema` declares the tables, `Wiki.Server.Storage.Rows`
+and the other storage modules are Beam statements of type
+`Backend be => … -> Db be a`, and `Wiki.Server.Storage.Backend` is the class
+of the two databases, with what only one of them does as its methods
+(`Wiki.Server.Storage.Sqlite`, `Wiki.Server.Storage.Postgres`). `sqlite-simple`
+is no longer the storage's interface: `withDatabase` is gone, `writing` and
+`reading` take a Beam statement, and `traceStatements` gives a test each
+statement's SQL. `openStorage` and its kin take a `Place` (the data
+directory, the `Database`, the `PgPrograms` that back PostgreSQL up), and
+`inDataDir` is the old layout. The fifteen migrations are one initial
+schema per database, `0001-initial.sqlite.sql` and
+`0001-initial.postgres.sql` (the vault's tables of WP5.21 among them); a
+database of the earlier schema is refused at start (`OldSchema`), saying to
+move the wiki by export and import. The search on PostgreSQL is its
+full-text search (a generated `tsvector` column with a GIN index,
+`websearch_to_tsquery`, `ts_rank`), and `Wiki.Api.Info.capabilities` says
+which search answers. Options: `--database URL` (with
+`--database-password-file`, or the whole URL in `WIKI_DATABASE_URL`, and
+`WIKI_DATABASE_PASSWORD_FILE`), `--sqlite FILE`, `--pg-dump` and
+`--pg-restore` (or `WIKI_PG_DUMP` and `WIKI_PG_RESTORE`). `backup` makes a
+`pg_dump` on PostgreSQL, with the facts it cannot hold beside it
+(`<time>.pgdump.json`), and exits with 3 for a database of an earlier
+wiki-server; `restore` restores one with `pg_restore`.
+
 The assistant's vault and passkeys (WP5.21): migration
 `0016-assistant-vault.sql` (`passkeys`, `assistant_vaults`),
 `Wiki.Server.Vault` (storage, and the challenges waiting for an answer,

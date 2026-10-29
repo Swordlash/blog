@@ -12,7 +12,7 @@ public space makes the same wiki a blog. The browser application is
 compiled to WebAssembly, and it renders the Markdown itself, so the preview never
 waits for a server. It runs as a serverless demo that keeps its wiki in the
 browser, served as static files, or over its own server, `wiki-server`, which
-keeps the wiki in SQLite.
+keeps the wiki in PostgreSQL, or in SQLite where a second process is too much.
 
 **The demo: <https://swordlash.github.io/blog/>.** It opens at a tour that says
 what to try, and nothing written there leaves your browser.
@@ -517,7 +517,7 @@ them.
 There are two ways to run it, from the same `app.wasm`: the serverless demo,
 the whole reading and writing experience over a wiki seeded with demo content
 and kept in the browser, deployable as static files; and the wiki's server,
-`wiki-server` (servant and SQLite), which keeps the wiki and serves the
+`wiki-server` (servant over PostgreSQL or SQLite), which keeps the wiki and serves the
 application, which then reads and writes the wiki over HTTP. The page says which
 (`<meta name="wiki-backend" content="demo">` or `"server"`), so the build decides
 by the pages it writes: `npm run build-wasm` writes the demo's (what GitHub Pages
@@ -700,9 +700,41 @@ store, which takes a while (twenty minutes or more), once.
 
 ```
 ~/wiki-demo/bin/wiki-server   the server
+~/wiki-demo/bin/wiki          its console: wiki-server with the deployment's database
 ~/wiki-demo/app/              the application it serves
-~/wiki-demo/data/             the wiki: wiki.sqlite, attachments/, backups/
+~/wiki-demo/data/             the wiki's files: attachments/, backups/ (and wiki.sqlite with --sqlite)
 ```
+
+**The database is PostgreSQL by default**, in Docker beside the server: the
+`postgres` service of `docker-compose.yml` (`postgres:17`), run as the compose
+project `wiki-demo` (the deployment's `--name`), its data in the named volume
+`wiki-demo_wiki-db`, its port published on `127.0.0.1` only (`--db-port`, default
+5433). The first deploy makes the container, with a password of its own in
+`~/.config/wiki-demo/wiki-demo.postgres/db-password` (readable by you alone), and
+waits for its health check before it goes on; a later deploy finds it and starts it
+if it was stopped. The server is given the database's URL without the password and
+the password's file (`--database postgres://wiki@127.0.0.1:5433/wiki
+--database-password-file …`), so that the password is never on a command line.
+Docker and its compose plugin must be installed, and your user allowed to use
+them; without them the deploy stops before it builds anything and says so.
+
+`--sqlite` keeps the database a file in `data/` instead, `wiki.sqlite`, with no
+container and no second process: the deployment of before, for a small machine.
+The choice is remembered for the next run; `--postgres` goes back. The two hold
+the same wiki and do the same, but for the search: on PostgreSQL it is
+PostgreSQL's full-text search, which finds whole words, ranks the pages by how
+well they match, and takes a phrase in quotes, `or` and `-word`; on SQLite it is
+the demo's, which finds a part of a word too. `/api/v1/info` says which
+(`capabilities`).
+
+A wiki moves between the two, and from a server of before PostgreSQL (whose
+`wiki.sqlite` has a schema this one does not read), by an export and an import
+(the administration's "Wiki data"), never by copying the database. A deploy that
+finds such a `data/wiki.sqlite` stops before it changes anything, says the state
+is incompatible, and goes on only with `--fresh` (or `yes` at its question, on a
+terminal), which moves the file aside into `data/replaced/<time>/` (it is never
+deleted) and starts an empty wiki: export the old wiki with the running server
+first, and import the archive into the new one after.
 
 The application it serves is the server's build (`WIKI_BACKEND=server`): the same
 `app.wasm` as the demo's, which reads and writes the wiki through the server's API
@@ -721,7 +753,8 @@ before it has loaded anything, which then loads the route itself. The administra
 imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
---listen 127.0.0.1:8080 --admin-listen 127.0.0.1:8081 --secure-cookies` behind
+--listen 127.0.0.1:8080 --admin-listen 127.0.0.1:8081 --secure-cookies` and the
+database's options (above) behind
 `tailscale serve` (with `--http`, `--listen <tailscale address>:8080` and no
 `--secure-cookies`), and checks that both listeners and the HTTPS address answer.
 The admin listener is not served: it stays on this machine. When the
@@ -740,19 +773,26 @@ to the demo, keeping `data/`.
   text, which pandoc sets with `soul`; a missing package is named in the
   export's error). The administration's "Server" section says whether it was
   found.
-- **Where the data lives.** `data/` is the whole wiki: the SQLite database and the
-  attachments under their content hash. No deploy ever deletes it: a redeploy
+- **Where the data lives.** The database (in the volume `wiki-demo_wiki-db`, or
+  `data/wiki.sqlite` with `--sqlite`) and `data/`: the attachments under their
+  content hash, and the backups. No deploy ever deletes either: a redeploy
   replaces everything else in the directory, and so does going back to the demo.
-  `sh toolchain/undeploy-local.sh --purge` deletes the deployment but keeps
-  `data/`, for a later deploy into the same directory; only `--purge-data` deletes
-  it. To move a deployment, move `data/` yourself with the service stopped; the
+  `sh toolchain/undeploy-local.sh` stops the PostgreSQL container with the
+  service, keeping its volume; `--purge` deletes the deployment but keeps
+  `data/` and the volume, for a later deploy into the same directory; only
+  `--purge-data` deletes them. To move a deployment, move `data/` yourself with the service stopped; the
   script refuses to leave it behind.
-- **Backups.** Before each deploy starts the new server (which migrates the
-  database if its schema is newer), it stops the old one and runs `wiki-server
-  backup`, which copies the database with SQLite's own `VACUUM INTO` into
-  `data/backups/<time>.sqlite` and keeps the last ten. If the backup fails, the old
-  server is started again and nothing changes. Take one at any time with
-  `~/wiki-demo/bin/wiki-server backup --data ~/wiki-demo/data`, even with the
+- **Backups.** Before each deploy starts the new server (which brings the
+  database's schema up to its own as it starts: the schema's steps are the
+  numbered files of `wiki-server/migrations/`, applied in order, all of a step
+  or none), it stops the old one and runs `wiki-server backup`, which copies the
+  database with its own means and keeps the last ten: on PostgreSQL with
+  `pg_dump`, the container's own (a `pg_dump` older than the server refuses it),
+  into `data/backups/<time>.pgdump`, with `<time>.pgdump.json` beside it (the
+  schema's version and the attachments it names, read in the dump's snapshot);
+  on SQLite with `VACUUM INTO`, into `data/backups/<time>.sqlite`. If the backup
+  fails, the old server is started again and nothing changes. Take one at any
+  time with `~/wiki-demo/bin/wiki backup --data ~/wiki-demo/data`, even with the
   server running; attachments are never deleted while a kept backup names them.
 - **Scheduled backups.** The server backs itself up only once an administrator
   turns that on, in the administration's Server section, "Backups" (off on a new
@@ -766,9 +806,10 @@ to the demo, keeping `data/`.
   `b2:my-bucket/wiki`, with the remote's section of `rclone.conf` pasted in once
   (it is never shown again; left empty, rclone uses the server user's own
   configuration; the `rclone` program must be installed, or named with
-  `--rclone PATH`). Each backup is checked with SQLite's `PRAGMA
-  integrity_check` (one that fails is deleted), and the destination receives it
-  as `backups/<time>.sqlite` and the attachments' files under `attachments/`,
+  `--rclone PATH`). Each backup is checked (a dump by listing it with
+  `pg_restore --list`, a SQLite copy with `PRAGMA integrity_check`; one that
+  fails is deleted), and the destination receives it as `backups/<time>.pgdump`
+  with its `.json`, or `backups/<time>.sqlite`, and the attachments' files under `attachments/`,
   the files it already has skipped; nothing is ever deleted there. The section
   shows the last backup's time, size and result, when the next is due, and has
   "Back up now". Both prune the same directory, each by its own rule: a
@@ -776,16 +817,19 @@ to the demo, keeping `data/`.
   keep, and the deploy's `--keep` counts every file in `data/backups`, so a
   deploy keeps only the ten newest even when the panel asks for weeks more.
 - **Restoring.** `wiki-server restore BACKUP --data DIR [--attachments DIR]`
-  puts a backup back into a data directory no server is running on: it checks
-  the backup, refuses a directory whose server is running (the server holds
-  `DIR/wiki.lock` while it runs), moves the database it replaces into
-  `DIR/replaced/<time>/`, copies the backup in, and brings from `--attachments`
+  (with the database's options, or `bin/wiki restore …`, which has them) puts a
+  backup back as the database of a data directory no server is running on: it
+  checks the backup, refuses a directory whose server is running (the server
+  holds `DIR/wiki.lock` while it runs), keeps the database it replaces in
+  `DIR/replaced/<time>/` (a SQLite file moved there as it is, a PostgreSQL
+  database dumped there first), restores the backup (`pg_restore` into the
+  PostgreSQL database, in one transaction; or the file copied in), and brings from `--attachments`
   the attachments' files the directory lacks, saying how many it still lacks.
   The drill, which the server's tests run too (`wiki-server-test`, "restore"):
 
   ```sh
   systemctl --user stop wiki-demo
-  ~/wiki-demo/bin/wiki-server restore ~/wiki-demo/data/backups/<time>.sqlite --data ~/wiki-demo/data
+  ~/wiki-demo/bin/wiki restore ~/wiki-demo/data/backups/<time>.pgdump --data ~/wiki-demo/data
   systemctl --user start wiki-demo
   ```
 
@@ -796,6 +840,12 @@ to the demo, keeping `data/`.
   wiki-server restore /mnt/backup/wiki/backups/<time>.sqlite \
     --data /tmp/wiki-check --attachments /mnt/backup/wiki/attachments
   wiki-server serve --data /tmp/wiki-check --listen 127.0.0.1:8090 --admin-listen 127.0.0.1:8091
+
+  # A PostgreSQL backup goes into a PostgreSQL database (an empty one, here),
+  # which needs pg_restore of the server's major version or newer:
+  WIKI_DATABASE_URL=postgres://wiki@127.0.0.1:5433/wiki_check \
+    wiki-server restore /mnt/backup/wiki/backups/<time>.pgdump \
+    --data /tmp/wiki-check --attachments /mnt/backup/wiki/attachments
   ```
 
   (For an rclone remote, `rclone copy <remote>/backups/<time>.sqlite .` and
@@ -1011,8 +1061,9 @@ the server's administration imports it from there, or from the demo's export:
 ### Testing the scripts
 
 The regression tests run both scripts against fakes of systemctl, loginctl, ufw,
-sudo, tailscale (with `tailscale serve`), curl and cabal (whose `wiki-server` is a
-script) in a temporary home,
+sudo, tailscale (with `tailscale serve`), curl, docker (whose PostgreSQL
+container is a file saying whether it was made and runs) and cabal (whose
+`wiki-server` is a script) in a temporary home,
 start the installed server as the unit would, test the static server over HTTP,
 and run the same cases against the real `wiki-server` (`npm run build-native`
 first, or name one with `WIKI_SERVER`):
@@ -1030,10 +1081,14 @@ its application come as one image: `Dockerfile` builds both as the deploy script
 does (`wiki-server` natively at `-O2`, the application for the browser at `-O2`
 in its server mode, with the `template.html` the server renders pages into), on
 the pinned toolchain that `toolchain/bootstrap.sh build` installs in the builder,
-and copies them into a Debian slim image with nothing else but `curl`.
-`docker-compose.yml` runs it.
+and copies them into a Debian slim image with nothing else but `curl` and
+PostgreSQL's client programs. `docker-compose.yml` runs it beside PostgreSQL
+(`postgres:17`, its data in the volume `wiki_wiki-db`), which the wiki waits for
+(a health check). The database's password is a file, `secrets/db-password`,
+given to both containers as a compose secret; make it once:
 
 ```sh
+mkdir -p secrets && openssl rand -hex 24 >secrets/db-password
 docker compose up -d --build        # build the image and start the server on :8080
 docker compose logs -f wiki         # the server's log
 docker compose down                 # stop it; the data stays in its volume
@@ -1052,14 +1107,17 @@ On a small VPS, build the image elsewhere and carry it over:
 `docker save wiki-server | ssh you@vps docker load`, then `docker compose up -d`
 there with the compose file beside it.
 
-- **Where the data lives.** In the named volume `wiki_wiki-data`, mounted at
-  `/data`: `wiki.sqlite`, `attachments/`, `backups/`, as in a deployment's
-  `data/`. It outlives the container and every image; only `docker compose down
-  --volumes` (or `docker volume rm`) deletes it. The server runs as uid 10001,
+- **Where the data lives.** The database in the named volume `wiki_wiki-db`,
+  PostgreSQL's; the attachments and the backups in `wiki_wiki-data`, mounted at
+  `/data`, as in a deployment's `data/`. They outlive the containers and every
+  image; only `docker compose down --volumes` (or `docker volume rm`) deletes
+  them. Without PostgreSQL, `docker compose run --service-ports wiki serve
+  --sqlite /data/wiki.sqlite --listen 0.0.0.0:8080 --admin-listen
+  127.0.0.1:8081` keeps the database a file in `wiki_wiki-data` instead. The server runs as uid 10001,
   which owns the volume; to keep the data in a directory of the host's instead,
   bind it to `/data` and `chown 10001:10001` it first.
-- **Backups.** Each start of the container copies the database aside into
-  `/data/backups/` before the server opens it, as a deploy does before it starts a
+- **Backups.** Each start of the container backs the database up into
+  `/data/backups/` (with `pg_dump`) before the server opens it, as a deploy does before it starts a
   new server, and the last ten are kept; if the copy fails, the server is not
   started. (A restart is a start too, so a container that keeps failing to start
   makes a backup each time; they are all the same database.) Another, whenever you
@@ -1077,7 +1135,7 @@ there with the compose file beside it.
 
   ```sh
   docker compose stop
-  docker compose run --rm wiki restore /data/backups/<time>.sqlite --data /data
+  docker compose run --rm wiki restore /data/backups/<time>.pgdump --data /data
   docker compose start
   ```
 - **Who is asking.** The published port serves whoever signs in there, and
@@ -1354,7 +1412,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-core/](wiki-core/) | `wiki-core` | The domain: types, Markdown rendering, permission rules. Native and wasm. |
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
-| [wiki-server/](wiki-server/) | `wiki-server` | The server, native only: servant over SQLite, rendering each page per request, with pandoc for the exports. |
+| [wiki-server/](wiki-server/) | `wiki-server` | The server, native only: servant over PostgreSQL or SQLite (Beam), rendering each page per request, with pandoc for the exports. |
 | [docs/](docs/) | | The authors' Markdown reference (`markdown.md`), the HTTP API (`api.md`), the export format (`export.md`), the plan of work (`PLAN.md`), and the README's screenshots. |
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`; `licenses/`, the texts of TikZJax's licence and its fonts', which the bundle serves beside them. |
 | [toolchain/](toolchain/) | | Build, test and deploy scripts, adapted from haskell-halogen's, and `screenshots.mjs`, which takes the README's screenshots. |
@@ -1385,6 +1443,19 @@ npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
 npm run clean                   # remove dist-newstyle/wasm/public
 ```
+
+The server's tests (`wiki-server-test`) run once on SQLite and once on
+PostgreSQL. For PostgreSQL they take the server `WIKI_TEST_DATABASE_URL` names
+(a database of a server on which they may make and drop databases of their
+own, as CI's container, `toolchain/ci-postgres.sh`), with the `pg_dump` and
+`pg_restore` `WIKI_TEST_PG_DUMP` and `WIKI_TEST_PG_RESTORE` name; without it
+they start a cluster of their own in a temporary directory when `initdb` and
+`pg_ctl` are installed (on the `PATH`, or under `/usr/lib/postgresql/*/bin`,
+as Debian's `postgresql` package puts them), and stop it at the end; without
+either, the PostgreSQL half is reported as pending, not passed. The smoke test
+runs its server on PostgreSQL too when `WIKI_TEST_DATABASE_URL` is set
+(`toolchain/smoke-test.sh`). `wiki-server-bench` times the storage on SQLite,
+or with `postgres URL` on an empty PostgreSQL database.
 
 `npm run screenshots` (`toolchain/screenshots.mjs`) takes the four screenshots at
 the top of this README from the page `npm run build-wasm` built, in headless

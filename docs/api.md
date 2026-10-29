@@ -102,7 +102,7 @@ of the server, not a refusal.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion"}` | | |
+| GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion", "capabilities"}`: `capabilities` is `Capabilities` `{"database", "search"}`, the database the server keeps the wiki in (`"postgres"` or `"sqlite"`) and how its search finds pages (`"FullText"` or `"FoldedText"`, see [Search](#search)) | | |
 | GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), and the formats pages and spaces export as (see [Documents](#documents)) | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
@@ -440,6 +440,17 @@ that is not there and one the user may not view all give `[]`.
 `Wiki.Api.Links.searchUrl` writes the address of a query, and
 `searchQueryOf` reads the query back, so both sides fill in the defaults
 alike.
+
+How a search finds pages depends on the server's database, and
+`api/v1/info`'s `capabilities.search` says which; the answer's shape is the
+same. `"FoldedText"` (SQLite, and the demo): every word of the query anywhere
+in a page's title or text, folded (no case, no diacritics), a part of a word
+too, a hit in the title first. `"FullText"` (PostgreSQL): PostgreSQL's
+full-text search over the same folded text, whole words only, the query read
+as a web search engine reads it (`"a phrase"`, `or`, `-word` to leave out),
+the pages ranked by how well they match (`ts_rank`, a hit in the title above
+one in the text alone). Either way each hit has its title and a snippet with
+the query's words marked.
 
 ### Documents
 
@@ -975,7 +986,8 @@ wiki at, and answered before a closed wiki's rule:
   counted but not timed), and gauges read at each scrape: `wiki_build_info
   {version}`, `wiki_start_time_seconds`, `wiki_schema_version`,
   `wiki_websockets_open`, `wiki_spaces`, `wiki_pages`, `wiki_attachments`,
-  `wiki_users`, `wiki_database_bytes` (with the write-ahead log),
+  `wiki_users`, `wiki_database_bytes` (on SQLite its files, with the
+write-ahead log; on PostgreSQL what `pg_database_size` says),
   `wiki_blobs`, `wiki_blob_bytes` (the blobs the attachments and the
   spaces' icons name, counted once each, and their sizes, from the database:
   a scrape reads no directory), `wiki_backups_kept`,
