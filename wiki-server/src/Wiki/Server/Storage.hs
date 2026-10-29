@@ -789,28 +789,21 @@ keptUser st c kept u = case Map.lookup u kept.users of
 -- | A read about one thing in one space, on a reader: an attachment's
 -- bytes, which every image of a page asks for. @locate@ finds the space
 -- the thing is in, and whatever the read needs of it; 'Nothing' is
--- 'NotFound'. When the permission context in memory is the database's
--- ('keptPermissions'), the context is that one. Otherwise the context
--- holds only that space's chain and the grants on the chain ('loadChain',
--- 'loadGrantsOn'), which is all a rule about the space looks at, instead
--- of every space and grant of the wiki, and nothing is kept. The operation
--- must not look at any other space.
+-- 'NotFound'. The permission context is the one in memory
+-- ('keptPermissions'), read from the database and kept when the
+-- generation has changed, so that the images of a page after a change
+-- read it once between them. The operation must not look at any other
+-- space than the one found.
 readWithin :: Storage -> Who -> (forall be. (Backend be) => Db be (Maybe (SpaceId, b))) -> (SpaceId -> b -> Tx a) -> IO (Either WikiError a)
 readWithin st who locate body = case st.engine of
   Engine p -> withResource p.readers $ \c -> withTransaction False c $ do
     tracer <- tracedBegin st False
     let conn = Conn tracer c
-    generation <- viaConn conn permissionsGeneration
-    current <- mfilter (\kept -> kept.generation == generation) <$> readIORef st.permissions
+    kept <- keptPermissions st conn
     runTraced tracer c locate >>= \case
       Nothing -> pure (Left NotFound)
       Just (sid, found) -> do
-        ctx <- case current of
-          Just kept -> contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
-          Nothing -> do
-            spaces <- runTraced tracer c (loadChain sid)
-            rows <- runTraced tracer c (loadGrantsOn (Map.keys spaces))
-            contextWith st conn who "" spaces rows (activeUser conn)
+        ctx <- contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
         let Tx tx = body sid found
         runExceptT (runReaderT tx ctx)
 
@@ -1766,9 +1759,7 @@ placeAsShown s = \case
 
 -- | Number these spaces 0, 1, 2, … in the order given.
 placeSpaces :: [Space] -> Tx ()
-placeSpaces siblings = db $
-  for_ (Map.toList (renumber (\x -> x.id) siblings)) $ \(sid, n) ->
-    setSpacePosition sid n
+placeSpaces siblings = db (setSpacePositions (Map.toList (renumber (\x -> x.id) siblings)))
 
 -- | Number these pages 0, 1, 2, … in the order given.
 placePages :: [PageNode] -> Tx ()
@@ -2728,9 +2719,9 @@ importArchive st a = writingEither st $ do
     (_, x : _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
     (_, _, sp : _) -> pure (Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> "."))
     (True, [], []) -> do
-      traverse_ insertUser a.users
+      insertUsers a.users
       traverse_ insertGroup a.groups
-      for_ (Map.toList a.membership) $ \(g, members) -> traverse_ (insertMember g) (Set.toList members)
+      insertMembers [(g, u) | (g, members) <- Map.toList a.membership, u <- Set.toList members]
       hashes <- liftIO (traverse (storeBlob (attachmentsDir st.place.dataDir)) a.blobs)
       -- An archive gives spaces and pages in any order, a child before its
       -- parent too, and a space names its home page before the page is
@@ -2743,7 +2734,7 @@ importArchive st a = writingEither st $ do
                 _ -> sp
             | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
             ]
-      for_ spaces $ \sp -> insertSpace (withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp)
+      insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp | sp <- spaces]
       -- A grant on a space names the space, so the grants come after.
       insertGrants a.grants
       for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do
@@ -2754,7 +2745,7 @@ importArchive st a = writingEither st $ do
                 SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
                 url -> url
            in insertAttachment p.id ordinal x {source}
-      traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
+      updateSpaces [sp | sp <- spaces, isJust sp.homePage]
       traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
       restoreAudit a.audit
       pure (Right ())

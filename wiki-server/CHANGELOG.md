@@ -19,9 +19,11 @@ their groups (WP5.24). The storage keeps that permission context in
 memory for one generation, and the database keeps the generation in a new
 table, `permissions_generation` (migration `0002-permissions-generation`
 on both databases): every write to `spaces`, `global_grants`,
-`space_grants`, `users` (added, disabled or enabled) or `group_members`
-bumps it in the same transaction, through the writes of
-`Wiki.Server.Storage.Rows` (`bumpPermissions`). A read transaction reads
+`space_grants` or `group_members`, and every write that adds or deletes a
+user or changes their `login`, `display_name` or `disabled`, bumps it in
+the same transaction, once per write however many rows it touches, through
+the writes of `Wiki.Server.Storage.Rows` (`bumpPermissions`, whose
+Haddock lists the columns). A write to a user's other columns does not. A read transaction reads
 the generation with one statement and uses the copy in memory when it
 matches, so a change by another process (the console) is seen at the next
 read. A write still reads the permission context from the database. Code

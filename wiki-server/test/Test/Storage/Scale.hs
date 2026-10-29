@@ -14,7 +14,8 @@
 -- feed reads the posts it carries; both are written once a minute. A
 -- page view finds its page one slug at a time, its watch button reads the
 -- viewer's watches of the page and its spaces, the mentions read the
--- logins mentioned, and an attachment reads its space's chain alone. A
+-- logins mentioned, and an attachment reads the permission context once
+-- per generation (WP5.24). A
 -- blog's list reads the first version of each page, and a history is read
 -- a page of versions at a time. The audit log's Activity reads one page of
 -- entries, however far back, and its list of actors a few rows per actor.
@@ -561,25 +562,22 @@ pageView backing = describe "a page view" $ do
     -- Each transaction reads the generation: one statement each.
     length (filter (readsTable "permissions_generation") warm) `shouldBe` length (filter (== "BEGIN") warm)
 
-  it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo backing $ \st -> do
+  it "serves the images of a page after a change reading the permission context once between them" $ withDemo backing $ \st -> do
     rita <- whoFor st (As "reader")
     docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
     page <- runStoredWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
     a <- runStoredWiki st Administrator (uploadAttachment page.id "chart.png" "image/png" "png bytes") >>= ok
-    -- A new generation, which the attachment's read does not read whole.
+    -- A new generation: the first image reads the permission context
+    -- whole, the scans every transaction may make, and keeps it.
     writing st bumpPermissions
-    ((found, _), statements) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
+    ((found, _), first') <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
     found `shouldBe` a
-    scans <- Set.fromList . concat <$> traverse (scansOf st) statements
-    -- The global grants, a handful, and the recursive query's own steps:
-    -- its first row, a constant, and the rows it has found so far; and the
-    -- one row of the generation.
-    scans `shouldSatisfy` (`Set.isSubsetOf` Set.fromList ["global_grants", "CONSTANT", "chain", "permissions_generation"])
-    -- Once a read has kept the generation's permission context, the
-    -- attachment's read reads no space and no grant at all.
-    _ <- runStoredWiki st rita (getSpace (path "docs")) >>= ok
-    (_, kept) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
-    filter readsContext kept `shouldBe` []
+    scans <- Set.fromList . concat <$> traverse (scansOf st) first'
+    scans `shouldSatisfy` (`Set.isSubsetOf` everyTransactionScans)
+    -- The next images read no space, no grant and no group at all.
+    for_ [1 .. 3 :: Int] $ \_ -> do
+      (_, kept) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
+      filter readsContext kept `shouldBe` []
     -- Someone who may not read the page may not have it either.
     team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
     handbook <- runStoredWiki st Administrator (getPage team.id (path "team-handbook")) >>= ok

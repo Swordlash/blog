@@ -6,7 +6,12 @@
 -- database otherwise.
 --
 -- The generation goes up with every write that changes the permission
--- context. The first test runs every write the storage has once, in turn,
+-- context: a change to @spaces@, @global_grants@, @space_grants@ or
+-- @group_members@, a user added or deleted, or a change to a user's
+-- @login@, @display_name@ or @disabled@ (the columns the permission context
+-- reads; 'Wiki.Server.Storage.Rows.bumpPermissions' lists them). A change
+-- to a user's other columns (password, e-mail, notification settings) does
+-- not move it. The first test runs every write the storage has once, in turn,
 -- and checks two things after each: the generation went up exactly for the
 -- writes listed as changing the permission context, and the permission
 -- context read afresh from the database did not change without the
