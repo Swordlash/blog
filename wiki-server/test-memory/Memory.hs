@@ -27,7 +27,7 @@ import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Import (readUploadFile)
-import Wiki.Server.Storage (Storage, Who (..), defaultConfig, exportArchive, importArchive, runStoredWiki, uploadAttachmentFile, withStorage, writeExport)
+import Wiki.Server.Storage (Storage, Who (..), defaultConfig, exportArchive, importArchive, inDataDir, runStoredWiki, uploadAttachmentFile, withStorage, writeExport)
 
 -- | The most the live heap may reach: 30 MiB.
 bound :: Int
@@ -37,7 +37,7 @@ main :: IO ()
 main = hspec . describe "the server's memory with large attachments" $
   it "stays under the bound for an export of 100 MiB of attachments and an upload of 50 MB, and the export imports back as the same wiki" $
     withSystemTempDirectory "wiki-memory" $ \dir ->
-      withStorage defaultConfig (dir </> "wiki") $ \st -> do
+      withStorage defaultConfig (inDataDir (dir </> "wiki")) $ \st -> do
         page <- newPage st "Attachments"
         for_ [1 .. 100 :: Int] $ \i -> do
           randomFile (dir </> "upload") (1024 * 1024)
@@ -45,7 +45,7 @@ main = hspec . describe "the server's memory with large attachments" $
         settled <- liveMax
         at <- writeExport st "wiki-server-memory-test" (dir </> "wiki.zip") >>= ok
         exported <- liveMax
-        withStorage defaultConfig (dir </> "other") $ \other -> do
+        withStorage defaultConfig (inDataDir (dir </> "other")) $ \other -> do
           target <- newPage other "Upload"
           randomFile (dir </> "big") 50_000_000
           uploaded <- runStoredWiki other Administrator (uploadAttachmentFile target.id "big.bin" "application/octet-stream" (dir </> "big")) >>= ok
@@ -57,7 +57,7 @@ main = hspec . describe "the server's memory with large attachments" $
         -- storage.
         archive <- readUploadFile (dir </> "wiki.zip") >>= ok
         archive.createdAt `shouldBe` at
-        withStorage defaultConfig (dir </> "imported") $ \fresh -> do
+        withStorage defaultConfig (inDataDir (dir </> "imported")) $ \fresh -> do
           importArchive fresh archive >>= ok
           original <- exportArchive st "test" >>= ok
           again <- exportArchive fresh "test" >>= ok

@@ -5,9 +5,13 @@
 -- storage:
 --
 -- > cabal run wiki-server-bench --builddir=dist-newstyle/native
+-- > cabal run wiki-server-bench --builddir=dist-newstyle/native -- postgres URL
 --
--- The wiki is made in a temporary directory with SQL of its own rather
--- than through the storage, which would take far longer: 1,000 users, one
+-- The first runs on SQLite, in a temporary directory; the second on the
+-- PostgreSQL database the URL names, which must be empty (its backups run
+-- the pg_dump on the PATH, or the one WIKI_PG_DUMP names). The wiki is made
+-- with rows of its own rather than through the storage's operations, which
+-- would take far longer: 1,000 users, one
 -- public space of 2,000 pages (bodies of about 1 KB, since nothing timed
 -- here reads every body), 10,000 watches, and 200,000 notifications, 500
 -- of them the viewer's. The page timed is watched by 50 users. The bench
@@ -40,8 +44,8 @@ import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup, (!!))
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Database.SQLite.Simple (Only (..), execute, execute_, query)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Database.Beam (all_, default_, desc_, insert, insertExpressions, insertValues, limit_, offset_, orderBy_, runInsert, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
 import GHC.Clock (getMonotonicTime)
 import Network.Wai (Application, defaultRequest, requestHeaders, responseToStream)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -68,8 +72,12 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapApplication)
-import Wiki.Server.Storage (Config (..), Storage, Who (..), copyDatabase, defaultConfig, runStoredWiki, withDatabase, withStorage)
-import Wiki.Server.Storage.Rows (Stamp (..), insertPage, insertVersion)
+import System.Environment (lookupEnv)
+import Wiki.Server.Storage (Config (..), Database (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, runStoredWiki, withStorage, writing)
+import Wiki.Server.Storage qualified as Storage
+import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
+import Wiki.Server.Storage.Rows (chunksOf, insertPage, insertVersion, micro)
+import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
 users, pages, watches, kept, watchers, tabs, tabUsers :: Int
 users = 1_000
@@ -86,8 +94,9 @@ main = do
   getArgs >>= \case
     ["attachments", dir, n, mb] -> seedAttachments dir (readNumber n) (readNumber mb)
     ["blobs", dir, n] -> seedBlobs dir (readNumber n)
-    [] -> timings
-    _ -> die "usage: wiki-server-bench [attachments DIR PAGES MB | blobs DIR N]"
+    [] -> timings Nothing
+    ["postgres", url] -> timings (Just (encodeUtf8 (T.pack url)))
+    _ -> die "usage: wiki-server-bench [postgres URL | attachments DIR PAGES MB | blobs DIR N]"
   where
     readNumber t = fromMaybe (panic ("not a number: " <> toS t)) (readMaybe t)
 
@@ -96,16 +105,14 @@ main = do
 -- first pages.
 seedAttachments :: FilePath -> Int -> Int -> IO ()
 seedAttachments dir n mb =
-  withStorage defaultConfig dir $ \st -> do
+  withStorage defaultConfig (inDataDir dir) $ \st -> do
     space <- runStoredWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
-    now <- getCurrentTime
-    withDatabase st $ \c -> do
-      execute_ c "BEGIN"
+    now <- micro <$> getCurrentTime
+    writing st $
       for_ [0 .. n - 1] $ \i -> do
         let p = pageOf space.id now i
-        insertPage c p
-        insertVersion c p Nothing
-      execute_ c "COMMIT"
+        insertPage p
+        insertVersion p Nothing
     withFile "/dev/urandom" ReadMode $ \random ->
       for_ [0 .. mb - 1] $ \i -> do
         bytes <- BS.hGet random (1024 * 1024)
@@ -116,19 +123,25 @@ seedAttachments dir n mb =
 -- attachments of 1 KiB, each with a blob of its own.
 seedBlobs :: FilePath -> Int -> IO ()
 seedBlobs dir n =
-  withStorage defaultConfig dir $ \st -> do
+  withStorage defaultConfig (inDataDir dir) $ \st -> do
     space <- runStoredWiki st Administrator (createSpace Nothing "Blobs") >>= either (panic . show) pure
     p <- runStoredWiki st Administrator (createPage space.id Nothing "Attachments" "Many.") >>= either (panic . show) pure
     for_ [0 .. n - 1] $ \i ->
       runStoredWiki st Administrator (uploadAttachment p.id ("file-" <> show i <> ".txt") "text/plain" (encodeUtf8 (T.justifyLeft 1024 '.' (show i)))) >>= either (panic . show) (const pass)
     printf "seeded %s: %d attachments\n" dir n
 
--- | The timings of WP5.16a and WP5.16b.
-timings :: IO ()
-timings = do
+-- | The timings of WP5.16a and WP5.16b, on SQLite or on the PostgreSQL
+-- database given.
+timings :: Maybe ByteString -> IO ()
+timings postgres = do
   hub <- Events.newHub
-  withSystemTempDirectory "wiki-bench" $ \dir ->
-    withStorage defaultConfig {publish = Events.publish hub, notify = Events.notify hub} (dir </> "data") $ \st -> do
+  dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_PG_DUMP"
+  withSystemTempDirectory "wiki-bench" $ \dir -> do
+    let at = case postgres of
+          Nothing -> inDataDir (dir </> "data")
+          Just url -> Place {dataDir = dir </> "data", database = PostgresAt url, programs = defaultPgPrograms {dump}}
+    printf "on %s\n" (maybe "SQLite" (const "PostgreSQL") postgres :: Text)
+    withStorage defaultConfig {publish = Events.publish hub, notify = Events.notify hub} at $ \st -> do
       seeded <- timed (seed st)
       printf "seeded in %.1f s\n" (snd seeded)
       let (space, target) = fst seeded
@@ -142,8 +155,8 @@ timings = do
       report "save of a page 50 users watch" 10 $ do
         p <- runStoredWiki st saver (getPage space [slugOf target]) >>= either (panic . show) pure
         runStoredWiki st saver (savePage p.id p.updatedAt p.title (p.body <> "\n\nMore.")) >>= either (panic . show) (const pass)
-      report "backup" 3 (copyDatabase st (dir </> "backup.sqlite") `finally` removeIfThere (dir </> "backup.sqlite"))
-      readsDuringBackup st viewer space target (dir </> "during.sqlite")
+      report "backup" 3 (backedUp st)
+      readsDuringBackup st viewer space target
       commentWithTabs st hub viewer target
       grown <- timed (grow st space)
       printf "grown in %.1f s\n" (snd grown)
@@ -170,9 +183,8 @@ pageHundred cursor = ActivityQuery {actor = Nothing, offset = 0, before = Just c
 -- | The oldest entry of page 99 of the audit log.
 activityCursor :: Storage -> IO Text
 activityCursor st =
-  withDatabase st (\c -> query c "SELECT id FROM audit_log ORDER BY at DESC, id DESC LIMIT 1 OFFSET ?" (Only (99 * activityPageSize - 1))) >>= \case
-    [Only i] -> pure i
-    _ -> panic "no entry ends page 99"
+  Storage.reading st (runSelectReturningOne (select (limit_ 1 (offset_ (fromIntegral (99 * activityPageSize - 1)) (orderBy_ (\e -> (desc_ e.at, desc_ e.id)) (all_ wikiDb.audit_log))))))
+    >>= maybe (panic "no entry ends page 99") (\e -> pure e.id)
 
 -- | Ask an application for its root as a reader would, and read the
 -- whole answer.
@@ -188,24 +200,23 @@ asked app = void . app defaultRequest $ \response -> do
 grow :: Storage -> SpaceId -> IO ()
 grow st space = do
   others <- for [1 .. 18 :: Int] $ \i -> runStoredWiki st Administrator (createSpace Nothing ("Other " <> show i)) >>= either (panic . show) pure
-  now <- getCurrentTime
-  withDatabase st $ \c -> do
-    execute_ c "BEGIN"
-    execute c "UPDATE spaces SET blog = 1 WHERE id = ?" (Only space.text)
+  now <- micro <$> getCurrentTime
+  writing st $ do
+    runUpdate (update wikiDb.spaces (\x -> x.blog <-. val_ True) (\x -> x.id ==. val_ space.text))
     for_ (zip [0 :: Int ..] others) $ \(k, s) ->
-      for_ [0 .. 999] $ \j -> insertPage c (pageOf s.id now (pages + k * 1000 + j))
-    for_ [0 .. pages - 1] $ \i ->
-      for_ [1 .. 19 :: Int] $ \v ->
-        execute
-          c
-          "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, ?, '', ?)"
-          (pageText i, Stamp (addUTCTime (fromIntegral i + fromIntegral v / 100) now), "Page " <> show i :: Text, userId (v `mod` users))
-    for_ [1 .. 100_000 :: Int] $ \i ->
-      execute
-        c
-        "INSERT INTO audit_log (id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name) VALUES (?, ?, ?, ?, 'group.create', 'group', NULL, 'A group')"
-        ("bench-entry-" <> show i :: Text, toS (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S.000000Z" (addUTCTime (fromIntegral i) now)) :: Text, userId (i `mod` 20), loginOf (i `mod` 20))
-    execute_ c "COMMIT"
+      for_ [0 .. 999] $ \j -> insertPage (pageOf s.id now (pages + k * 1000 + j))
+    for_ (chunksOf 500 [(i, v) | i <- [0 .. pages - 1], v <- [1 .. 19 :: Int]]) $ \chunk ->
+      runInsert . insert wikiDb.page_versions $
+        insertValues
+          [ VersionRow {page_id = pageText i, updated_at = addUTCTime (fromIntegral i + fromIntegral v / 100) now, title = "Page " <> show i, body = "", author = Just (userId (v `mod` users))}
+          | (i, v) <- chunk
+          ]
+    for_ (chunksOf 500 [1 .. 100_000 :: Int]) $ \chunk ->
+      runInsert . insert wikiDb.audit_log $
+        insertValues
+          [ AuditRow {id = "bench-entry-" <> show i, at = addUTCTime (fromIntegral i) now, actor_id = userId (i `mod` 20), actor_login = loginOf (i `mod` 20), action = "group.create", subject_kind = "group", subject_id = Nothing, subject_name = "A group", detail = "{}", address = ""}
+          | i <- chunk
+          ]
 
 -- | Seed the wiki: the space and its pages through the storage's own rows,
 -- and the rest as rows of SQL. The space's id, and the index of the page
@@ -214,31 +225,45 @@ seed :: Storage -> IO (SpaceId, Int)
 seed st = do
   space <- runStoredWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
   _ <- runStoredWiki st Administrator (setSpacePublic space.id True) >>= either (panic . show) pure
-  now <- getCurrentTime
-  withDatabase st $ \c -> do
-    execute_ c "BEGIN"
-    for_ [0 .. users - 1] $ \i ->
-      execute c "INSERT INTO users (id, login, display_name) VALUES (?, ?, ?)" (userId i, loginOf i, "User " <> show i :: Text)
+  now <- micro <$> getCurrentTime
+  writing st $ do
+    for_ (chunksOf 500 [0 .. users - 1]) $ \chunk ->
+      runInsert . insert wikiDb.users $
+        insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True} | i <- chunk]
     for_ [0 .. pages - 1] $ \i -> do
       let p = pageOf space.id now i
-      insertPage c p
-      insertVersion c p (Just (UserId (userId (i `mod` users))))
+      insertPage p
+      insertVersion p (Just (UserId (userId (i `mod` users))))
     -- The page timed is page 0: watched by users 1 to 50 (user 1 saves it,
     -- and is not told of their own save). The other watches are spread
     -- over the other pages.
-    for_ [1 .. watchers] $ \u ->
-      execute c "INSERT INTO watches (user_id, page_id, watching) VALUES (?, ?, 1)" (userId u, pageText 0)
-    for_ [0 .. watches - watchers - 1] $ \i ->
-      execute c "INSERT INTO watches (user_id, page_id, watching) VALUES (?, ?, 1)" (userId (i `mod` users), pageText (1 + i `div` users))
+    let watchRow u p = WatchRow {user_id = userId u, page_id = Just (pageText p), space_id = Nothing, watching = True}
+    runInsert (insert wikiDb.watches (insertValues [watchRow u 0 | u <- [1 .. watchers]]))
+    for_ (chunksOf 500 [0 .. watches - watchers - 1]) $ \chunk ->
+      runInsert (insert wikiDb.watches (insertValues [watchRow (i `mod` users) (1 + i `div` users) | i <- chunk]))
     -- 500 notifications for the viewer (user 0), the rest for the others,
-    -- each about one of the space's pages.
-    for_ [0 .. kept - 1] $ \i -> do
-      let u = if i < 500 then 0 else 1 + i `mod` (users - 1)
-      execute
-        c
-        "INSERT INTO notifications (id, user_id, kind, page_id, thread_id, actor, actor_name, title, excerpt, created_at, seq, read_at, mail) VALUES (?, ?, 'changed', ?, NULL, ?, 'Someone', 'A page', '', ?, ?, NULL, 0)"
-        (("n" <> show i) :: Text, userId u, pageText (i `mod` pages), userId 2, Stamp now, i)
-    execute_ c "COMMIT"
+    -- each about one of the space's pages, numbered by the database in
+    -- this order.
+    for_ (chunksOf 500 [0 .. kept - 1]) $ \chunk ->
+      runInsert . insert wikiDb.notifications $
+        insertExpressions
+          [ NotificationRow
+              { seq = default_
+              , id = val_ ("n" <> show i)
+              , user_id = val_ (userId (if i < 500 then 0 else 1 + i `mod` (users - 1)))
+              , kind = val_ "changed"
+              , page_id = val_ (pageText (i `mod` pages))
+              , thread_id = val_ Nothing
+              , actor = val_ (userId 2)
+              , actor_name = val_ "Someone"
+              , title = val_ "A page"
+              , excerpt = val_ ""
+              , created_at = val_ now
+              , read_at = val_ Nothing
+              , mail = val_ False
+              }
+          | i <- chunk
+          ]
   -- The user who saves may edit the space; everyone may read it.
   _ <- runStoredWiki st Administrator (setSpaceGrant space.id (SubjectUser (UserId (userId 1))) Edit True) >>= either (panic . show) pure
   pure (space.id, 0)
@@ -289,15 +314,19 @@ report what n act = do
   ts <- sort <$> replicateM n (snd <$> timed act)
   printf "%-45s median %8.2f ms, slowest %8.2f ms (%d runs)\n" what (1000 * (ts !! (n `div` 2))) (1000 * foldr max 0 ts) n
 
--- | Delete a file if it is there: a backup is written only into a new file.
-removeIfThere :: FilePath -> IO ()
-removeIfThere f = doesFileExist f >>= \there -> when there (removeFile f)
+-- | Make a backup into the data directory's backups, and delete it (and
+-- what is kept beside it) again.
+backedUp :: Storage -> IO ()
+backedUp st =
+  getCurrentTime >>= backUp st >>= \case
+    Left why -> panic why
+    Right (file, _) -> for_ [file, file <> ".json"] $ \f -> doesFileExist f >>= \there -> when there (removeFile f)
 
 -- | How long reads of a page take while a backup runs: the slowest of the
 -- reads made from the start of the backup to its end.
-readsDuringBackup :: Storage -> Who -> SpaceId -> Int -> FilePath -> IO ()
-readsDuringBackup st who space target file = do
-  backup <- async (timed (copyDatabase st file))
+readsDuringBackup :: Storage -> Who -> SpaceId -> Int -> IO ()
+readsDuringBackup st who space target = do
+  backup <- async (timed (backedUp st))
   let loop acc = do
         (_, t) <- timed (runStoredWiki st who (getPage space [slugOf target]))
         poll backup >>= \case
