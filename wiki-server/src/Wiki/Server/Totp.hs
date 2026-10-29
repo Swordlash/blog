@@ -67,7 +67,13 @@ import Text.Show (Show (showsPrec))
 -- bytes. A key longer than 32 bytes cannot be given to it; the wiki makes
 -- none ('secretFromText' refuses one).
 hotp :: Int -> ByteString -> Word64 -> Text
-hotp digits key counter = display (hotpSHA1 (paddedKey key) counter (fromMaybe (panic "a one-time password has six digits or more") (mkDigits (fromIntegral digits))))
+hotp digits key = hotpWith digits (paddedKey key)
+
+-- | 'hotp' with the key as the package takes it, made once ('paddedKey'):
+-- each key the package makes is a buffer of libsodium's own, with guard
+-- pages around it, so a 'Secret' carries its key made already.
+hotpWith :: Int -> HMAC.AuthenticationKey -> Word64 -> Text
+hotpWith digits key counter = display (hotpSHA1 key counter (fromMaybe (panic "a one-time password has six digits or more") (mkDigits (fromIntegral digits))))
 
 -- | A key of at most 32 bytes as the package takes it: padded with zero
 -- bytes to 32.
@@ -83,7 +89,7 @@ counterAt t = floor (utcTimeToPOSIXSeconds t / 30)
 
 -- | The six-digit code of a secret at a moment, as an application shows it.
 codeAt :: Secret -> UTCTime -> Text
-codeAt (Secret key) t = hotp 6 key (counterAt t)
+codeAt secret t = hotpWith 6 secret.key (counterAt t)
 
 -- | How many steps either side of now a code is accepted from: one, so
 -- that a clock thirty seconds off, or a code typed as it changed, still
@@ -96,9 +102,9 @@ window = 1
 -- code someone saw being typed cannot be used again). Spaces typed in it
 -- are ignored.
 matchingCounter :: Secret -> UTCTime -> Maybe Word64 -> Text -> Maybe Word64
-matchingCounter (Secret key) t lastUsed typed =
+matchingCounter secret t lastUsed typed =
   find
-    (\c -> maybe True (c >) lastUsed && encodeUtf8 (hotp 6 key c) `BA.constEq` encodeUtf8 code)
+    (\c -> maybe True (c >) lastUsed && encodeUtf8 (hotpWith 6 secret.key c) `BA.constEq` encodeUtf8 code)
     [now - window .. now + window]
   where
     now = max window (counterAt t)
@@ -108,9 +114,20 @@ matchingCounter (Secret key) t lastUsed typed =
 -- Secrets
 
 -- | A shared secret: the key both the server and the application compute
--- the codes with. 'Show' never shows it, since it is all a code needs.
-newtype Secret = Secret ByteString
-  deriving stock (Eq)
+-- the codes with, as its bytes and as the package's key made from them
+-- ('paddedKey', once). 'Show' never shows it, since it is all a code
+-- needs.
+data Secret = Secret
+  { bytes :: ByteString
+  , key :: HMAC.AuthenticationKey
+  }
+
+instance Eq Secret where
+  a == b = a.bytes == b.bytes
+
+-- | A secret of these bytes, at most 32 of them.
+secretOf :: ByteString -> Secret
+secretOf bytes = Secret {bytes, key = paddedKey bytes}
 
 instance Show Secret where
   showsPrec _ _ rest = "Secret <hidden>" <> rest
@@ -118,12 +135,12 @@ instance Show Secret where
 -- | A new secret: 20 random bytes, the length of SHA-1's output, as RFC 4226
 -- recommends.
 newSecret :: IO Secret
-newSecret = Secret <$> getRandomBytes 20
+newSecret = secretOf <$> getRandomBytes 20
 
 -- | A secret as people type it into an application and as it is stored:
 -- in base32 without padding (32 letters and digits for 20 bytes).
 secretText :: Secret -> Text
-secretText (Secret key) = T.dropWhileEnd (== '=') (decodeUtf8 (convertToBase @ByteString Base32 key))
+secretText secret = T.dropWhileEnd (== '=') (decodeUtf8 (convertToBase @ByteString Base32 secret.bytes))
 
 -- | A secret from its text, ignoring case and spaces; 'Nothing' for one of
 -- more than 32 bytes, which the wiki never makes and 'hotp' cannot use.
@@ -131,7 +148,7 @@ secretFromText :: Text -> Maybe Secret
 secretFromText t =
   let cleaned = T.toUpper (T.filter (\c -> not (isSpace c) && c /= '=') t)
       padded = cleaned <> T.replicate ((8 - T.length cleaned `mod` 8) `mod` 8) "="
-   in either (const Nothing) (\key -> if BS.length key <= 32 then Just (Secret key) else Nothing) (convertFromBase Base32 (encodeUtf8 padded))
+   in either (const Nothing) (\key -> if BS.length key <= 32 then Just (secretOf key) else Nothing) (convertFromBase Base32 (encodeUtf8 padded))
 
 -- | The URI that gives an application a secret (the "Key Uri Format" that
 -- Google Authenticator defined and every application reads): who it is
