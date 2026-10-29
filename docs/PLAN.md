@@ -1729,6 +1729,49 @@ must be in before it is.
   independent of how one signs in) and browsers with PRF (Chrome 116+, Safari 18+,
   recent Firefox).
 
+- **WP5.30 Sign in with a passkey** (the owner, 2026-10-29: "skoro mamy passkeys (wydaje
+  się że działa) to może też dodajmy do password-based logowania"; WP5.21 left it as "a
+  passkey sign-in is a later package on the same table"). The passkeys WP5.21 registers for
+  the vault are already discoverable and user-verified (`residentKey: required`,
+  `userVerification: required`), so the same credentials sign in: one list of passkeys per
+  account, each signs its owner in, and "unlocks the vault" stays a property of those the
+  vault has a wrapped key for. **Registration** moves to where sign-in lives: the account's
+  Security panel gets a "Passkeys" section (add one with a name, the list with when it was
+  added and last used, remove one), the same two-step registration under
+  `account/passkeys/registration` with the same options (discoverable, user verification
+  required, attestation none); the assistant's settings keep their "Turn on with a passkey"
+  and "Add passkey", which now register into the same list and then wrap the vault key.
+  **Sign-in**: the sign-in form gets "Sign in with a passkey" and conditional mediation
+  (`mediation: "conditional"` on the login field, so the browser offers a saved passkey as
+  the field is focused); `POST session/passkey` answers the assertion options with an empty
+  `allow` (discoverable credentials; the challenge is kept server-side for five minutes,
+  keyed by itself, no session yet); `PUT session/passkey` takes the browser's answer, finds
+  the passkey by credential id, checks the user handle is its owner's id, the origin and
+  relying-party id, the challenge, user presence **and user verification** (a passkey
+  without the UV flag is refused: the sign-in rests on it), the sign count, and signs the
+  user in as `signIn` does (the same `SessionInfo` and cookie, the same audit entry with
+  the method `passkey`, the same refusals for a disabled user and a closed wiki). **A
+  user-verified passkey is both factors** (possession and the authenticator's own
+  verification), so a passkey sign-in skips the TOTP step; decision recorded here. The
+  TOTP step of a password sign-in gets "Use a passkey instead": `POST`/`PUT
+  session/second-factor/passkey` with `allow` = the pending user's passkeys, completing
+  the sign-in like a code. Failed passkey sign-ins count against the address in
+  `Wiki.Server.Limiter` (no login is known before the answer), and against the login
+  once the credential names one. Provider sign-ins are unchanged. On plain HTTP (not
+  localhost) the button and the section are hidden with the sentence WP5.21 uses. The
+  demo has no sign-in, so nothing there; `MemWiki` implements the new `MonadSecurity`
+  methods as it does the vault's (its test stub). `Wiki.Server.WebAuthn` gains nothing
+  hand-written: the `webauthn` package verifies the assertion with the UV requirement set
+  in its options. Tests: server (a fixed ES256 pair signing as an authenticator: a
+  sign-in succeeds and sets the cookie; refused for a wrong origin, a wrong or expired
+  challenge, an unknown credential, a user handle that is not the owner's, no UV flag, a
+  replayed sign count, a disabled user, a closed wiki; the rate limit; the second-factor
+  step by passkey), browser (hspec-halogen with the `navigator.credentials` stub of
+  WP5.21: the button signs in, the second-factor alternative, the Security panel's add,
+  list, remove, hidden on plain HTTP), the smoke test unchanged; a real passkey in a real
+  browser checked by hand and said so in the report. `docs/accounts.md` (or where sign-in
+  is documented) gains "Passkeys". Queued after WP5.29.
+
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
   najbardziej typowane api. Bez ręcznego sqla, może oprócz migracji. Pod postgresem wszystkie
