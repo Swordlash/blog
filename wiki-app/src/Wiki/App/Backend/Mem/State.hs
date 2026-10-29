@@ -126,6 +126,7 @@ module Wiki.App.Backend.Mem.State
   , Choices (..)
   , defaultChoices
   , mentionableIn
+  , mentionCandidatesIn
   , notificationsIn
   , markReadIn
   , watchingIn
@@ -1811,6 +1812,20 @@ mentionableIn :: [Text] -> MemState -> Map Text Author
 mentionableIn logins st = case currentUserId st of
   Nothing -> mempty
   Just _ -> Map.fromList [(u.login.text, authorOf st u.id) | u <- activeUsers st, u.login.text `elem` logins]
+
+-- | The users who may sign in whose login or display name starts with
+-- the letters given, ignoring case, for someone signed in: the rule of
+-- 'Wiki.App.Backend.Notifications.mentionCandidates', which the server
+-- answers with one query.
+mentionCandidatesIn :: Text -> MemState -> [User]
+mentionCandidatesIn letters st = case currentUserId st of
+  Just _
+    | not (T.null folded) ->
+        take N.maxPeopleFound . sortOn (\u -> (u.displayName, u.login.text)) $
+          [u | u <- activeUsers st, any (T.isPrefixOf folded . T.toLower) [u.login.text, u.displayName]]
+  _ -> []
+  where
+    folded = T.toLower letters
 
 -- | The id of the signed-in user, or 'Forbidden' for nobody.
 signedIn :: MemState -> Either WikiError UserId

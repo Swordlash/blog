@@ -589,6 +589,29 @@ pageView backing = describe "a page view" $ do
     runStoredWiki st rita (attachmentFile hidden.id) >>= (`shouldSatisfy` isLeft)
     runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldSatisfy` isRight)
 
+  it "finds the users a mention starts with in one statement, through the indexes on the folded login and display name" $ withDemo backing $ \st -> do
+    rita <- whoFor st (As "reader")
+    crowd st 300 0
+    let candidates letters = statementsOf st (runStoredWiki st rita (mentionCandidates letters) >>= ok)
+    -- Once first, so that the permission context, which reads the reader
+    -- from the users, is in memory.
+    _ <- candidates "nobody"
+    -- Crowd 1, Crowd 10 to Crowd 19, and Crowd 100 to Crowd 199: ten of
+    -- them, in the order of their display names.
+    (found, statements) <- candidates "CROWD 1"
+    map (\u -> u.displayName) found `shouldBe` ["Crowd 1", "Crowd 10", "Crowd 100", "Crowd 101", "Crowd 102", "Crowd 103", "Crowd 104", "Crowd 105", "Crowd 106", "Crowd 107"]
+    statement <- maybe (assertFailure "no read of the users") pure (find (readsTable "users") statements)
+    length (filter (readsTable "users") statements) `shouldBe` 1
+    scans <- Set.fromList . concat <$> traverse (scansOf st) statements
+    scans `shouldSatisfy` (`Set.isSubsetOf` everyTransactionScans)
+    plan <- planOf st statement
+    when (onSqlite st) $ do
+      plan `shouldSatisfy` any ("INDEX users_name_folded" `T.isInfixOf`)
+      plan `shouldSatisfy` any ("INDEX users_login_folded" `T.isInfixOf`)
+    -- By the login: crowd300 and nobody else.
+    (byLogin, _) <- candidates "crowd300"
+    map (\u -> u.login.text) byLogin `shouldBe` ["crowd300"]
+
   it "counts each space's pages from an index alone, not from the pages' rows" $ withDemo backing $ \st -> do
     (_, statements) <- statementsOf st (runStoredWiki st Anonymous pageCounts)
     counting <- maybe (assertFailure "no count of pages") pure (find (\t -> readsTable "pages" t && "COUNT(*)" `T.isInfixOf` T.toUpper t) statements)

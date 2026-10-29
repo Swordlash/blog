@@ -178,7 +178,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark)
+import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
@@ -2760,11 +2760,20 @@ mentionableTx logins =
       pure (Map.fromList [(u.login.text, Author {id = u.id, name = u.displayName}) | u <- users])
     _ -> pure mempty
 
+-- | The users whose login or display name starts with some letters, for
+-- someone signed in ('loadUsersStartingWith'); nobody for anyone else.
+mentionCandidatesTx :: Text -> Tx [User]
+mentionCandidatesTx letters =
+  asks (\x -> x.user) >>= \case
+    Just _ -> db (loadUsersStartingWith letters maxPeopleFound)
+    Nothing -> pure []
+
 -- | Mentions, watches and notifications, as the class's Haddock describes
 -- them ("Wiki.App.Backend.Notifications"). Each operation is one
 -- transaction.
 instance (MonadIO m) => MonadNotifications (StoredWiki m) where
   mentionable = answer mempty . mentionableTx
+  mentionCandidates = run Reads . mentionCandidatesTx
   notifications = run Reads notificationsTx
   markRead = run Writes . markReadTx
   watching = run Reads . watchingTx

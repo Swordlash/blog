@@ -34,6 +34,7 @@ module Wiki.Server.Storage.Rows
   , loadUser
   , loadUserByLogin
   , loadActiveUsersByLogin
+  , loadUsersStartingWith
   , loadActiveUser
   , loadUsers
   , loadGroupsOf
@@ -202,6 +203,7 @@ import Database.Beam
   , (==.)
   , (==?.)
   , (>.)
+  , (>=.)
   , (||.)
   )
 import Database.Beam qualified as Beam
@@ -531,6 +533,52 @@ loadUserByLogin login = head <$> usersWhere (\r -> r.login ==. val_ login)
 loadActiveUsersByLogin :: (Backend be) => [Text] -> Db be [User]
 loadActiveUsersByLogin logins = inChunks (ordNub logins) $ \chunk ->
   usersWhere (\r -> r.disabled ==. val_ False &&. r.login `in_` map val_ chunk)
+
+-- | The users who may act whose login or display name starts with some
+-- letters, ignoring case, ordered by display name and then login, at most
+-- the number given: whom the editor offers to complete a mention with.
+-- One statement, which the indexes on the folded login and display name
+-- answer (migration @0003-users-by-prefix@): a text starts with the
+-- letters when it is at least the letters and less than the letters with
+-- their last one raised by one code point ('prefixEnd'). @LIKE@ would say
+-- the same, but neither database answers @LIKE@ from an index on an
+-- expression. The comparisons and the order are by code points
+-- ('byCodePoints'), so that both databases agree with the in-memory
+-- backend.
+--
+-- The letters are lowered here, and the login and display name by the
+-- database's @lower@, which folds every letter on PostgreSQL and only
+-- those of ASCII on SQLite.
+loadUsersStartingWith :: forall be. (Backend be) => Text -> Int -> Db be [User]
+loadUsersStartingWith letters most
+  | T.null start = pure []
+  | otherwise =
+      map userOf
+        <$> runSelectReturningList
+          ( select
+              . limit_ (fromIntegral most)
+              . orderBy_ (\u -> (asc_ (byCodePoints u.display_name), asc_ (byCodePoints u.login)))
+              $ filter_ (\u -> u.disabled ==. val_ False &&. (startsWith u.login ||. startsWith u.display_name)) (all_ wikiDb.users)
+          )
+  where
+    start = T.toLower letters
+    startsWith :: forall s. QExpr be s Text -> QExpr be s Bool
+    startsWith column =
+      let folded = byCodePoints (lower_ column)
+       in (folded >=. val_ start) &&. maybe (val_ True) (\end -> folded <. val_ end) (prefixEnd start)
+
+-- | The first text after every text that starts with these letters, in the
+-- order of code points: the letters with their last one raised by one.
+-- A last letter that cannot be raised (the last code point) is dropped and
+-- the one before it raised. 'Nothing' when no text comes after them all.
+prefixEnd :: Text -> Maybe Text
+prefixEnd letters = case T.unsnoc letters of
+  Nothing -> Nothing
+  Just (rest, c)
+    | c == maxBound -> prefixEnd rest
+    -- Text cannot hold a surrogate code point: the next one after them.
+    | c == '\xD7FF' -> Just (T.snoc rest '\xE000')
+    | otherwise -> Just (T.snoc rest (succ c))
 
 -- | Every user, by id.
 loadUsers :: (Backend be) => Db be [User]

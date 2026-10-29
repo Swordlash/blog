@@ -368,6 +368,7 @@ instance (MonadIO m) => MonadComments (MemWiki m) where
 -- notified of, switch to that user.
 instance (MonadIO m) => MonadNotifications (MemWiki m) where
   mentionable = query . mentionableIn
+  mentionCandidates letters = Right <$> query (mentionCandidatesIn letters)
   notifications = query notificationsIn
   markRead = write . markReadIn
   watching target = needWatched target >> query (watchingIn target)

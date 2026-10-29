@@ -574,6 +574,10 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
           -- Refused (by a server from before mentions existed): as far as
           -- this page can tell, no login belongs to anyone.
           Left _ -> modifyCache (withPeople logins mempty) $> mempty
+
+  -- Not cached here: the editor's completion keeps the answers it has
+  -- had for as long as the editor is open (@web/src/editor.js@).
+  mentionCandidates = send . endpoints.notifications.searchPeople
   notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices
   markRead m = do
     result <- send (endpoints.notifications.markRead m)

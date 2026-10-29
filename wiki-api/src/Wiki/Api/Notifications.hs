@@ -7,10 +7,13 @@
 -- bodies. The rules are in "Wiki.Core.Notification".
 --
 -- Everything here belongs to the signed-in user. A visitor who is not
--- signed in is refused ('Wiki.Api.Error.Forbidden'), except for two
+-- signed in is refused ('Wiki.Api.Error.Forbidden'), except for three
 -- endpoints. The first resolves the logins a document mentions
 -- ('NotificationsApi' @people@), and tells such a visitor nothing. The
--- second is the link in a notification mail that turns the mail off
+-- second finds the users whose names start with some letters
+-- ('NotificationsApi' @searchPeople@), for the editor's completion of
+-- mentions, and finds nobody for such a visitor. The third is the link in
+-- a notification mail that turns the mail off
 -- (@unsubscribe@, at the API's top level, since it works without signing
 -- in, even in a closed wiki).
 module Wiki.Api.Notifications
@@ -20,6 +23,7 @@ module Wiki.Api.Notifications
   , NotificationSettings (..)
   , NotificationSettingsChange (..)
   , Watching (..)
+  , maxPeopleFound
   )
 where
 
@@ -28,6 +32,7 @@ import Protolude
 import Servant.API
 import Wiki.Core.Id
 import Wiki.Core.Notification (MailMode, Notification, Watch)
+import Wiki.Core.User (User)
 import Wiki.Core.Version (Author)
 
 -- | 'NotificationsApi': the endpoints under @notifications@.
@@ -45,6 +50,11 @@ data NotificationsApi mode = NotificationsApi
   -- ^ @mentionable@: the given logins that belong to the wiki's users,
   -- each named like a comment's author; empty for a visitor who is not
   -- signed in.
+  , searchPeople :: mode :- "people" :> "search" :> QueryParam' '[Required, Strict] "q" Text :> Get '[JSON] [User]
+  -- ^ @mentionCandidates@: the users who may sign in whose login or
+  -- display name starts with @q@, ignoring case, ordered by display name,
+  -- at most 'maxPeopleFound'. The editor offers them when an \@ is typed.
+  -- Empty for an empty @q@, and for a visitor who is not signed in.
   , pageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> Get '[JSON] Watch
   -- ^ @watching@ a page.
   , setPageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> ReqBody '[JSON] Watching :> Put '[JSON] Watch
@@ -55,6 +65,11 @@ data NotificationsApi mode = NotificationsApi
   -- ^ @setWatching@ a space.
   }
   deriving stock (Generic)
+
+-- | 'maxPeopleFound' is the most users 'searchPeople' answers with: as
+-- many as a completion list shows without scrolling.
+maxPeopleFound :: Int
+maxPeopleFound = 10
 
 -- | 'Notifications': the user's latest notifications, newest first (at
 -- most 'Wiki.Core.Notification.maxListed'), and the number of unread ones

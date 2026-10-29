@@ -292,6 +292,7 @@ stubs =
           , settings = pure Sample.notificationSettings
           , setSettings = \c -> pure NotificationSettings {mail = c.mail, watchOwn = c.watchOwn, verifiedEmail = True, mailing = True}
           , people = \logins -> pure (Map.fromList [(l, Sample.author) | l <- logins, l == "bea"])
+          , searchPeople = \q -> pure [ada | q == "ad"]
           , pageWatch = \p -> if p == Sample.page.id then pure (Watch True OwnPage) else refuse NotFound
           , setPageWatch = \_ w -> pure (Watch w.watching Chosen)
           , spaceWatch = \_ -> pure (Watch False Unchosen)
@@ -478,6 +479,10 @@ spec = describe "a server of the API's type" $ do
     it "names the users among the logins asked for, each a parameter of its own" $ do
       n.people ["bea", "nobody"] `shouldBe` "api/v1/notifications/people?login[]=bea&login[]=nobody"
       answers (getAt (n.people ["bea", "nobody"])) 200 (Map.fromList [("bea" :: Text, Sample.author)])
+    it "finds the users whose names start with some letters, the letters in the query" $ do
+      n.searchPeople "ad" `shouldBe` "api/v1/notifications/people/search?q=ad"
+      answers (getAt (n.searchPeople "ad")) 200 [ada]
+      answers (getAt (n.searchPeople "bo")) 200 ([] :: [User])
     it "reads and sets a page's and a space's watch" $ do
       answers (getAt (n.pageWatch p)) 200 (Watch True OwnPage)
       answers (sendJson methodPut (n.setPageWatch p) Watching {watching = False}) 200 (Watch False Chosen)
@@ -831,3 +836,7 @@ spec = describe "a server of the API's type" $ do
 
   it "keeps the slug rules in a path: one that is not a slug is refused" $
     (status <$> getAt "api/v1/spaces/at/Not%20A%20Slug") `shouldReturn` 400
+
+-- | The user the stub of the people's search finds.
+ada :: User
+ada = User {id = UserId "u1", login = Login "ada", displayName = "Ada"}

@@ -28,7 +28,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
 admin, editor, reader :: As
@@ -101,6 +101,22 @@ mentioning = describe "mentions" $ do
     editorName <- nameOf run editor
     (\a -> a.name) <$> Map.lookup "editor" named `shouldBe` Just editorName
     run Anonymous (mentionable ["editor"]) `shouldReturn` mempty
+
+  it "finds the users whose login or display name starts with some letters, ignoring case, for someone signed in" $ \(Fixture run) -> do
+    let found who letters = map (\u -> u.login.text) <$> (run who (mentionCandidates letters) >>= ok)
+    -- By the login (editor), by the display name (Edgar Editor), and
+    -- either folded.
+    found reader "edi" `shouldReturn` ["editor"]
+    found reader "Edg" `shouldReturn` ["editor"]
+    found editor "REA" `shouldReturn` ["reader"]
+    found editor "rITa" `shouldReturn` ["reader"]
+    found reader "nobody" `shouldReturn` []
+    -- Not everyone for no letters, and nobody to someone not signed in.
+    found reader "" `shouldReturn` []
+    found Anonymous "edi" `shouldReturn` []
+    named <- run reader (mentionCandidates "edg") >>= ok
+    editorName <- nameOf run editor
+    map (\u -> u.displayName) named `shouldBe` [editorName]
 
   it "tells whom a save mentions, once, and where the page is" $ \(Fixture run) -> do
     notes <- pageAt run "blog" "notes-on-haskell"

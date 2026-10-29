@@ -48,7 +48,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..))
+import Wiki.Core.User (Email (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
@@ -57,7 +57,7 @@ import Wiki.Server.Storage (Storage, StoredWiki, Who (..), runStoredWiki, withSt
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
-import Wiki.Server.Storage.Rows (updateDisabled)
+import Wiki.Server.Storage.Rows (insertUsers, updateDisabled)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Schema qualified as Schema
 
@@ -143,6 +143,26 @@ overHttp backing = describe "over HTTP" $ do
     Map.keys named `shouldBe` ["editor"]
     nobody :: Map Text Value <- asWithout r Nothing methodGet (encoded (links.notifications.people ["editor"])) >>= jsonAs 200
     Map.keys nobody `shouldBe` []
+
+  it "finds the users whose login or display name starts with some letters, ten at most, for someone signed in" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    let user login name = User {id = UserId ("user-" <> login), login = Login login, displayName = name}
+        fillers = [user ("fill" <> n) ("Filler " <> n) | i <- [1 .. 12 :: Int], let n = T.justifyRight 2 '0' (show i)]
+    withStorageAside r.place $ \st -> writing st $ do
+      insertUsers ([user "anna" "Anna Nowak", user "jsmith" "Annabel Smith", user "annex" "Zed Annex", user "anne" "Anne Gone", user "j.doe" "Jo Dot", user "jdoe" "Jay Doe"] <> fillers)
+      updateDisabled (UserId "user-anne") True
+    let found who letters = map (\u -> u.login.text) <$> (asWithout r who methodGet (links.notifications.searchPeople letters) >>= jsonAs @[User] 200)
+    -- By login (anna, annex) and by display name (Annabel Smith), ordered
+    -- by display name, the letters folded; a disabled login left out.
+    found (Just people.reader) "AN" `shouldReturn` ["anna", "jsmith", "annex"]
+    found (Just people.reader) "annA" `shouldReturn` ["anna", "jsmith"]
+    -- Punctuation is a character like any other: "j." is not "jd".
+    found (Just people.reader) "j." `shouldReturn` ["j.doe"]
+    found (Just people.reader) "jd" `shouldReturn` ["jdoe"]
+    found (Just people.reader) "fil" `shouldReturn` ["fill" <> T.justifyRight 2 '0' (show i) | i <- [1 .. 10 :: Int]]
+    found (Just people.reader) "" `shouldReturn` []
+    -- Nobody to a visitor, as with the people asked for by login.
+    found Nothing "an" `shouldReturn` []
 
   it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r

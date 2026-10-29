@@ -19,8 +19,8 @@
 -- = Who may
 --
 -- Everything belongs to the signed-in user. Someone not signed in is
--- refused with 'Forbidden' everywhere except 'mentionable' (which names
--- nobody to them) and 'unsubscribe'. Watching a page or a space needs
+-- refused with 'Forbidden' everywhere except 'mentionable' and
+-- 'mentionCandidates' (which name nobody to them) and 'unsubscribe'. Watching a page or a space needs
 -- permission to view it, checked first, as everywhere: a page or a space
 -- that is not there, or that the user may not view, is 'NotFound', even
 -- to someone not signed in. A notification about a page the user may no
@@ -38,6 +38,7 @@ import Wiki.Api.Notifications (NotificationSettings, NotificationSettingsChange,
 import Wiki.Api.Security (UnsubscribeToken)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Notification (Watch, WatchTarget)
+import Wiki.Core.User (User)
 import Wiki.Core.Version (Author)
 
 -- | 'MonadNotifications' is the backend interface for the signed-in
@@ -55,6 +56,23 @@ class (Monad m) => MonadNotifications m where
   mentionable :: [Text] -> m (Map Text Author)
   default mentionable :: (MonadTrans t, m ~ t n, MonadNotifications n) => [Text] -> m (Map Text Author)
   mentionable = lift . mentionable
+
+  -- | The users who may sign in whose login or display name starts with
+  -- these letters, ignoring case: what the editor offers to complete a
+  -- mention with, while an \@login is typed. They are ordered by display
+  -- name, then login, and there are at most
+  -- 'Wiki.Api.Notifications.maxPeopleFound'. Someone not signed in gets
+  -- nobody, as from 'mentionable', and so does the empty text, which
+  -- would otherwise list everyone.
+  --
+  -- On the server a display name is folded by the database's @lower@:
+  -- PostgreSQL folds every letter, SQLite only the letters of ASCII. A
+  -- login is ASCII, so this matters only for a display name that starts
+  -- with another capital letter, such as \"Łukasz\": SQLite finds that
+  -- user by their login only.
+  mentionCandidates :: Text -> m (Either WikiError [User])
+  default mentionCandidates :: (MonadTrans t, m ~ t n, MonadNotifications n) => Text -> m (Either WikiError [User])
+  mentionCandidates = lift . mentionCandidates
 
   -- | The latest notifications about pages the user may read, the newest
   -- first, each with where its page is now, and how many are unread.

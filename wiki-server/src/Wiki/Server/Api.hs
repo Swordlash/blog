@@ -617,6 +617,7 @@ handlers env caller =
           , settings = wiki notificationSettings
           , setSettings = wiki . setNotificationSettings
           , people = \logins -> runStoredWiki env.storage who (mentionable logins)
+          , searchPeople = wiki . mentionCandidates
           , pageWatch = wiki . watching . WatchPage
           , setPageWatch = \p w -> wiki (setWatching (WatchPage p) w.watching)
           , spaceWatch = wiki . watching . WatchSpace
