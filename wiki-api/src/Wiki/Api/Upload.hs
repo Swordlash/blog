@@ -3,21 +3,24 @@
 --
 -- Each form type takes servant-multipart's backend as a parameter: 'Tmp',
 -- where the file part is a temporary file on disk, or 'Mem', where it is
--- bytes in memory. The API serves 'Tmp' forms, so that the server writes
--- an upload to disk as it arrives rather than holding it in memory: an
+-- bytes in memory. The server serves 'Tmp' forms, so that it writes an
+-- upload to disk as it arrives rather than holding it in memory: an
 -- attachment of up to 50 MB (decision 17 of the plan, @maxAttachmentSize@
--- in @wiki-app@), or an archive of a whole wiki to import. 'Mem' forms are
--- what the tests build and read. The largest form the server accepts is
--- the server's own setting (servant-multipart's @MultipartOptions@), not
--- part of the API's type. Each instance says that the form's backend is
--- the type's (@tag ~ form@) rather than requiring them to be one variable,
--- so that the backend of a form is inferred from either.
+-- in @wiki-app@), or an archive of a whole wiki to import. The browser
+-- sends 'Mem' forms, since the bytes it uploads are in memory, and the
+-- tests build and read 'Mem' forms too ("Wiki.Api", @ApiWith@). The
+-- largest form the server accepts is the server's own setting
+-- (servant-multipart's @MultipartOptions@), not part of the API's type.
+-- Each instance says that the form's backend is the type's (@tag ~ form@)
+-- rather than requiring them to be one variable, so that the backend of a
+-- form is inferred from either.
 --
--- A browser sends either form with @fetch@ and a @FormData@: for an
--- attachment, @form.append(\"file\", blob, name)@, which gives the part the
--- file's name and the blob's media type; for an archive,
--- @form.append(\"archive\", zip)@, plus, for an import's choices,
--- @form.append(\"choices\", JSON.stringify(choices))@.
+-- The browser's client (servant-multipart-client) writes a form from the
+-- 'ToMultipart' instances below, and the server reads it with the
+-- 'FromMultipart' instances, so the parts sent are the parts read: for an attachment, one file part named 'attachmentPart'
+-- with the file's name and media type; for an archive, one file part named
+-- 'archivePart', plus, for an import's choices, a text part named
+-- 'choicesPart' with the choices as JSON.
 module Wiki.Api.Upload
   ( -- * Attachments
     AttachmentUpload (..)

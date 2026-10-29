@@ -349,7 +349,7 @@ refusal :: ApiError -> Response
 refusal e = responseLBS (toEnum (errorStatus e)) [jsonHeader] (encode e)
 
 -- | The handlers, answering as the given 'Caller'.
-handlers :: Env -> Caller -> WikiApi AsServer
+handlers :: Env -> Caller -> WikiApi Tmp AsServer
 handlers env caller =
   WikiApi
     { info = pure ServerInfo {name = "Wiki", apiVersion}

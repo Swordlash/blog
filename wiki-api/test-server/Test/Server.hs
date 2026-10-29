@@ -19,7 +19,7 @@ import Network.Wai (Application, defaultRequest, requestHeaders, requestMethod, 
 import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, srequest)
 import Protolude hiding (Handler)
 import Servant.API (NoContent (..), addHeader, toUrlPiece)
-import Servant.Multipart ()
+import Servant.Multipart (Tmp)
 import Servant.Server (Handler, ServerError (..), err304, serve)
 import Servant.Server.Generic (AsServer)
 import Test.Hspec
@@ -74,7 +74,7 @@ refuse e =
       }
 
 -- | The stub server: what it answers with is what it was asked.
-stubs :: WikiApi AsServer
+stubs :: WikiApi Tmp AsServer
 stubs =
   WikiApi
     { info = pure ServerInfo {name = "Stub", apiVersion = 1}

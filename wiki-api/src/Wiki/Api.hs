@@ -3,11 +3,13 @@
 -- only the server has (export, import, the server's description).
 --
 -- The server serves this type (@wiki-server@), and the HTTP backend in the
--- browser builds its request URLs from it ("Wiki.Api.Links"), so the two
--- cannot disagree about a path, a parameter or a header. The type compiles
--- for every target, including WebAssembly in the browser: servant's core
--- and servant-multipart's API types are pure Haskell, and only their
--- server side (servant-server, servant-multipart) is native.
+-- browser derives its client from it with servant-client-core
+-- (@Wiki.App.Backend.Http.Client@ in @wiki-app@), so the two cannot
+-- disagree about a path, a parameter, a header or a body. The type
+-- compiles for every target, including WebAssembly in the browser:
+-- servant's core and client core and servant-multipart's API and client
+-- are pure Haskell, and only their server side (servant-server,
+-- servant-multipart) is native.
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
 -- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', a page's 'CommentsApi', and
@@ -15,6 +17,15 @@
 -- the @MonadWiki@ method it implements. 'WikiApi' collects them, together
 -- with signing in and out and reading the session. docs/api.md lists every
 -- endpoint with its method, path, body, response and errors.
+--
+-- The records with an upload ('WikiApi', 'SpacesApi', 'PagesApi',
+-- 'ArchiveApi') take the multipart backend of their forms as a parameter
+-- (@form@, "Wiki.Api.Upload"). The server serves 'Api', whose forms are
+-- 'Tmp': an upload is written to a temporary file as it arrives. The
+-- browser's client is derived from @'ApiWith' Mem@ (servant-multipart's in-memory backend): there is no disk in
+-- the browser, and the bytes it sends are in memory. The two types have
+-- the same paths, methods, headers and bodies; only where an upload's
+-- bytes are kept differs.
 --
 -- = Conventions
 --
@@ -45,6 +56,7 @@
 module Wiki.Api
   ( -- * The API
     Api
+  , ApiWith
   , api
   , WikiApi (..)
   , SpacesApi (..)
@@ -105,14 +117,20 @@ import Wiki.Core.Space (Space, SpaceProfile)
 import Wiki.Core.User (Group)
 import Wiki.Core.Version (Version, VersionInfo)
 
--- | The whole API, at @\/api\/v1@.
-type Api = "api" :> "v1" :> NamedRoutes WikiApi
+-- | The whole API, at @\/api\/v1@, as the server serves it: uploads are
+-- kept in temporary files ('Tmp').
+type Api = ApiWith Tmp
+
+-- | The whole API, with the multipart backend @form@ for its uploads. The
+-- browser's client uses @Mem@, since its uploads are bytes in memory.
+type ApiWith form = "api" :> "v1" :> NamedRoutes (WikiApi form)
 
 api :: Proxy Api
 api = Proxy
 
--- | 'WikiApi': the API's resources.
-data WikiApi mode = WikiApi
+-- | 'WikiApi': the API's resources. @form@ is the multipart backend of its
+-- uploads (see the module's header).
+data WikiApi form mode = WikiApi
   { info :: mode :- "info" :> Get '[JSON] ServerInfo
   -- ^ The server's description of itself.
   , session :: mode :- "session" :> Get '[JSON] SessionInfo
@@ -148,8 +166,8 @@ data WikiApi mode = WikiApi
   -- 'Wiki.Api.Error.TooManyRequests'.
   , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
   , account :: mode :- "account" :> NamedRoutes AccountApi
-  , spaces :: mode :- "spaces" :> NamedRoutes SpacesApi
-  , pages :: mode :- "pages" :> NamedRoutes PagesApi
+  , spaces :: mode :- "spaces" :> NamedRoutes (SpacesApi form)
+  , pages :: mode :- "pages" :> NamedRoutes (PagesApi form)
   , attachments :: mode :- "attachments" :> NamedRoutes AttachmentsApi
   , search
       :: mode
@@ -167,7 +185,7 @@ data WikiApi mode = WikiApi
   -- id. "Wiki.Api.Links" builds the address from a query, and
   -- 'Wiki.Api.Links.searchQueryOf' builds the query from the parameters,
   -- so that both sides fill in missing parameters the same way.
-  , archive :: mode :- NamedRoutes ArchiveApi
+  , archive :: mode :- NamedRoutes (ArchiveApi form)
   , admin :: mode :- "admin" :> NamedRoutes AdminApi
   , comments :: mode :- "pages" :> Capture "page" PageId :> "threads" :> NamedRoutes CommentsApi
   -- ^ A page's comments ("Wiki.Api.Comments"), with the operations of
@@ -227,7 +245,7 @@ data AssistantApi mode = AssistantApi
   deriving stock (Generic)
 
 -- | 'SpacesApi': spaces, and the pages of each.
-data SpacesApi mode = SpacesApi
+data SpacesApi form mode = SpacesApi
   { list :: mode :- Get '[JSON] [Space]
   -- ^ @listSpaces@.
   , pageCounts :: mode :- "page-counts" :> Get '[JSON] (Map SpaceId Int)
@@ -245,7 +263,7 @@ data SpacesApi mode = SpacesApi
   -- ^ @setSpaceMathMacros@.
   , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
   -- ^ @setSpaceProfile@: its description, icon and home page.
-  , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm Tmp (AttachmentUpload Tmp) :> Post '[JSON] Space
+  , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm form (AttachmentUpload form) :> Post '[JSON] Space
   -- ^ @uploadSpaceIcon@: an image for the space's icon, as a form's file
   -- part, as for an attachment ("Wiki.Api.Upload"). The part's file name
   -- is ignored.
@@ -290,7 +308,7 @@ data SpacesApi mode = SpacesApi
 
 -- | 'PagesApi': pages, by id, with their attachment uploads, their drafts
 -- and their histories.
-data PagesApi mode = PagesApi
+data PagesApi form mode = PagesApi
   { save :: mode :- Capture "page" PageId :> IfMatch :> ReqBody '[JSON] PageEdit :> Put '[JSON] (Versioned Page)
   -- ^ @savePage@, against the version in @If-Match@.
   , move :: mode :- Capture "page" PageId :> "move" :> ReqBody '[JSON] PageMove :> Post '[JSON] Page
@@ -301,7 +319,7 @@ data PagesApi mode = PagesApi
   -- ^ @setPageTemplate@: whether the page is one of its space's templates.
   , delete :: mode :- Capture "page" PageId :> DeleteNoContent
   -- ^ @deletePage@.
-  , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm Tmp (AttachmentUpload Tmp) :> PostCreated '[JSON] Attachment
+  , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm form (AttachmentUpload form) :> PostCreated '[JSON] Attachment
   -- ^ @uploadAttachment@.
   , draft :: mode :- Capture "page" PageId :> "draft" :> Get '[JSON] (Maybe Draft)
   -- ^ @getDraft@: the signed-in user's draft of the page, @null@ if they
@@ -352,16 +370,16 @@ data AttachmentsApi mode = AttachmentsApi
   deriving stock (Generic)
 
 -- | 'ArchiveApi': a whole wiki as an archive ("Wiki.Core.Export"), exported and imported.
-data ArchiveApi mode = ArchiveApi
+data ArchiveApi form mode = ArchiveApi
   { export :: mode :- "export" :> RawM
   -- ^ The wiki as a zip file (@application\/zip@), as a download
   -- ('exportDisposition'). Raw rather than a typed response, because the
   -- server writes the zip file to disk first and sends it from there, so
   -- that an export never holds the whole wiki in memory. The server
   -- responds to @GET@ and @HEAD@.
-  , importPreview :: mode :- "import" :> "preview" :> MultipartForm Tmp (ArchiveUpload Tmp) :> Post '[JSON] ImportPlan
+  , importPreview :: mode :- "import" :> "preview" :> MultipartForm form (ArchiveUpload form) :> Post '[JSON] ImportPlan
   -- ^ A preview of what importing an archive would do ("Wiki.Api.Import").
-  , importApply :: mode :- "import" :> "apply" :> MultipartForm Tmp (ImportApply Tmp) :> Post '[JSON] ImportSummary
+  , importApply :: mode :- "import" :> "apply" :> MultipartForm form (ImportApply form) :> Post '[JSON] ImportSummary
   -- ^ Import an archive, with the choices made after the preview.
   }
   deriving stock (Generic)
