@@ -486,9 +486,11 @@ openMemWiki db seed = withRunInIO $ \run -> do
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
       Right held -> case restore held of
         -- Signed in as the demo's content says, as the prerendered page
-        -- shows it.
+        -- shows it, and with the demo's server settings (its kinds of box
+        -- among them), which the store does not keep: they last for the
+        -- tab's life.
         Stored restored ->
-          let start = restored {current = seed.current}
+          let start = restored {current = seed.current, server = seed.server}
            in (start,) . (,Restored) . Just <$> storeHolding start held
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
@@ -545,7 +547,8 @@ readWholly = do
   pure (versionsRead history st) {blobs = st.blobs <> Map.fromList [(b, bytes) | (b, Just bytes) <- blobs], unreadBlobs = Set.fromList [b | (b, Nothing) <- blobs]}
 
 -- | Replace the whole wiki with an archive's content, staying signed in as
--- the same user if the archive has them. If the wiki is saved, the
+-- the same user if the archive has them, and keeping the server's settings
+-- (an archive has none: they are the demo's own). If the wiki is saved, the
 -- database gets the archive's records in one transaction first. If that
 -- fails, nothing changes, in the database or in memory, and the result is
 -- the reason.
@@ -553,8 +556,8 @@ importMemWiki :: (MonadIO m) => Archive -> MemWiki m (Either Text ())
 importMemWiki archive = MemWiki $ do
   env <- ask
   liftIO . serially env $ do
-    current <- (\st -> st.current) <$> readIORef env.wiki
-    let new = (fromArchive archive) {current}
+    (current, server) <- (\st -> (st.current, st.server)) <$> readIORef env.wiki
+    let new = (fromArchive archive) {current, server}
     written <- case env.store of
       Nothing -> pure (Right ())
       Just store -> do

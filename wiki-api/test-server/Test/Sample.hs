@@ -80,6 +80,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
@@ -205,6 +206,7 @@ sessionInfo =
     , standing = SignedIn
     , providers = [SignInProvider {name = "github", label = "GitHub"}]
     , exports = [Docx, Html, Pdf]
+    , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     }
 
 -- | A user's account, as the administration sees it.
@@ -413,6 +415,7 @@ serverSettings =
         , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = NotSet}
         ]
     , assistantHosts = ["http://localhost:11434"]
+    , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     }
 
 -- | A change of them: the mail's password kept (left out), one provider's
@@ -427,6 +430,7 @@ serverChange =
         , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
         ]
     , assistantHosts = ["https://openrouter.ai"]
+    , boxes = [BoxKind {name = "aside", label = "By the way", colour = Grey, icon = NoIcon}]
     }
 
 -- | The backups of a server that makes them every six hours, keeping a

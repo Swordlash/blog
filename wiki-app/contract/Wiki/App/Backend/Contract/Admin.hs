@@ -31,6 +31,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
@@ -593,16 +594,27 @@ serverWith user password secret =
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
     , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing, secret}]
     , assistantHosts = []
+    , boxes = []
     }
+
+-- | Settings as they are, with no kinds of box.
+withoutBoxes :: ServerSettingsOf s -> ServerSettingsOf s
+withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = []}
+
+-- | Settings with nothing set but these kinds of box.
+boxesOnly :: [BoxKind] -> ServerSettingsChange
+boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes}
 
 serverSide :: (MonadAdmin m) => SpecWith (Fixture m)
 serverSide = describe "serverSettings and setServerSettings" $ do
-  it "have nothing set at first, and are refused to whoever does not administer the wiki" $ \(Fixture run) -> do
-    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+  -- The demo defines a kind of box, which the Markdown guide shows; a
+  -- server has none until its administrator defines one.
+  it "have nothing set at first but kinds of box, and are refused to whoever does not administer the wiki" $ \(Fixture run) -> do
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings) . withoutBoxes
     for_ [Anonymous, editor, reader] $ \who -> do
       run who serverSettings >>= (`shouldFailWith` Forbidden)
       run who (setServerSettings (serverWith Nothing Nothing (Just "s"))) >>= (`shouldFailWith` Forbidden)
-    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings) . withoutBoxes
 
   it "keep what is written, and say of each secret only whether it is set" $ \(Fixture run) -> do
     set <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
@@ -622,7 +634,15 @@ serverSide = describe "serverSettings and setServerSettings" $ do
     run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Nothing}) >>= shouldBeInvalid
     run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Just (Url "wiki.example.org")}) >>= shouldBeInvalid
     run admin (setServerSettings (serverWith (Just "wiki") Nothing (Just "s"))) >>= shouldBeInvalid
-    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings) . withoutBoxes
+
+  it "keep the kinds of box written, named in lower case, and refuse one of GitHub's five" $ \(Fixture run) -> do
+    set <- run admin (setServerSettings (boxesOnly [BoxKind {name = " Aside ", label = "", colour = Grey, icon = Star}])) >>= ok
+    set.boxes `shouldBe` [BoxKind {name = "aside", label = "Aside", colour = Grey, icon = Star}]
+    run admin serverSettings >>= ok >>= (`shouldBe` set.boxes) . (\s -> s.boxes)
+    run admin (setServerSettings (boxesOnly [BoxKind {name = "note", label = "", colour = Red, icon = NoIcon}])) >>= shouldBeInvalid
+    run admin (setServerSettings (boxesOnly [BoxKind {name = "fun fact", label = "", colour = Red, icon = NoIcon}])) >>= shouldBeInvalid
+    run admin serverSettings >>= ok >>= (`shouldBe` set.boxes) . (\s -> s.boxes)
 
 -- | The backups (WP4.9 of docs/PLAN.md): off until an administrator turns
 -- them on, and visible to administrators only. Their stored and checked

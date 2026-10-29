@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 -- | Server settings (WP4.4 of docs/PLAN.md): the wiki's public address,
--- the mail server that sends invitations and other mail, and the sign-in
--- providers. They are set in the administration's "Server" section and
+-- the mail server that sends invitations and other mail, the sign-in
+-- providers, and the kinds of box pages may hold. They are set in the administration's "Server" section and
 -- nowhere else (the owner's decision of 2026-10-25). Before anyone can
 -- sign in, the first settings are set through the loopback admin listener
 -- of decision 11, so the server needs no command-line option for them.
@@ -83,6 +83,7 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Auth (callbackPath)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import Wiki.Core.Markdown.Box (BoxKind, checkBoxKinds)
 import Wiki.Core.Url (Url (..))
 
 --------------------------------------------------------------------------------
@@ -108,6 +109,11 @@ data ServerSettingsOf s = ServerSettings
   -- Ollama or LM Studio, or a proxy. The page's Content Security Policy
   -- allows them ("Wiki.Api.ContentPolicy"), and refuses every other
   -- address. Each is an origin, as 'parseAssistantHost' writes it.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box, @> [!KIND]@, the administrator defined, with the
+  -- label, colour and icon of each (WP5.29 of docs/PLAN.md;
+  -- "Wiki.Core.Markdown.Box"). Every reader's session carries them, so
+  -- that every page renders its boxes the same way.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
@@ -120,8 +126,8 @@ type ServerSettingsChange = ServerSettingsOf (Maybe Text)
 instance (ToJSON s) => ToJSON (ServerSettingsOf s)
 
 -- | Read by hand rather than derived, so that settings without
--- @assistantHosts@, from before the field existed (in a demo's stored
--- state, or from an older client), read as having none.
+-- @assistantHosts@ or @boxes@, from before the fields existed (in a
+-- demo's stored state, or from an older client), read as having none.
 instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
   parseJSON = withObject "ServerSettings" $ \o ->
     ServerSettings
@@ -130,6 +136,7 @@ instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
       <*> o .:? "mail"
       <*> o .: "providers"
       <*> o .:? "assistantHosts" .!= []
+      <*> o .:? "boxes" .!= []
 
 -- | 'MailSettingsOf': a mail server, reached over SMTP.
 data MailSettingsOf s = MailSettings
@@ -182,7 +189,7 @@ instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 -- server, no provider. A wiki created before these settings existed keeps
 -- working as before.
 noServerSettings :: ServerSettingsOf s
-noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = []}
+noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = []}
 
 --------------------------------------------------------------------------------
 -- Secrets
@@ -217,6 +224,7 @@ applyChange keep old new =
     , mail = (\m -> withPassword (resolve (old.mail >>= \o -> o.password) m.password) m) <$> new.mail
     , providers = [withSecret (resolve (previous p.name) p.secret) p | p <- new.providers]
     , assistantHosts = new.assistantHosts
+    , boxes = new.boxes
     }
   where
     previous name = find (\o -> o.name == name) old.providers >>= \o -> o.secret
@@ -347,7 +355,8 @@ checkServerSettings isSet s = do
   when (isNothing publicUrl && not (null providers)) $
     Left "The providers need the wiki's public address: they send people back below it."
   assistantHosts <- ordNub <$> traverse parseAssistantHost (filter (not . T.null . T.strip) s.assistantHosts)
-  pure ServerSettings {publicUrl, mail, providers, assistantHosts}
+  boxes <- checkBoxKinds s.boxes
+  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes}
   where
     checkMail m = do
       let host = T.strip m.host

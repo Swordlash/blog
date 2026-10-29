@@ -44,6 +44,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (SignInProvider, Standing, User)
@@ -71,6 +72,9 @@ data SessionInfo = SessionInfo
   , exports :: [ExportFormat]
   -- ^ The document formats the server exports pages and spaces in
   -- ("Wiki.Api.Export"): the PDF formats only when it has a TeX engine.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administration defined ("Wiki.Core.Markdown.Box"),
+  -- which every page is rendered with.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

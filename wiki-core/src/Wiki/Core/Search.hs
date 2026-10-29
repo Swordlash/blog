@@ -256,7 +256,7 @@ bodyText source =
       List _ items -> T.intercalate "\n" [blocks bs | ListItem _ bs <- items]
       Table _ header rows -> T.intercalate "\n" (map (T.unwords . map plainText) (header : rows))
       Div _ bs -> blocks bs
-      Alert _ bs -> blocks bs
+      Alert _ title bs -> foldMap (<> "\n") title <> blocks bs
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
       -- The list it stands for is the headings' text, already included.

@@ -14,8 +14,11 @@
 -- 'parseMarkdown' reads CommonMark with these extensions:
 --
 -- * GitHub's: pipe tables, task lists, footnotes, strikethrough, autolinks
---   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@), alerts
---   (@> [!NOTE]@);
+--   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@);
+-- * boxes, @> [!KIND]@: GitHub's alerts (@> [!NOTE]@ and its four
+--   others), and any other kind (@> [!EXERCISE]@), with an optional title
+--   after the marker (@> [!TIP] Before you start@), read by the wiki's own
+--   block syntax ('alertSpec');
 -- * heading identifiers made from the heading's text ('headingSlug'),
 --   unique in the document: a heading with an @id@ of its own keeps it,
 --   and the others get theirs in document order (the second @Intro@ gets
@@ -67,12 +70,18 @@ module Wiki.Core.Markdown.Ast
 where
 
 import Commonmark qualified as CM
+import Commonmark.Blocks qualified as CM
 import Commonmark.Entity qualified as CM
 import Commonmark.Extensions qualified as CME
+import Commonmark.TokParsers qualified as CM
+import Data.Dynamic (fromDynamic, toDyn)
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Protolude
+import Data.Tree (Tree (..))
+import Protolude hiding (try)
+import Text.Parsec (getPosition, many1, option, try)
+import Wiki.Core.Markdown.Box (AlertKind (..), readAlertKind)
 import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
 import Wiki.Core.Slug (freshName, headingSlug)
@@ -121,8 +130,11 @@ data Block
   | -- | A fenced div, with its attributes (@::: warning@ gives the class
     -- @warning@).
     Div Attributes [Block]
-  | -- | A GitHub alert, @> [!NOTE]@ and friends.
-    Alert AlertKind [Block]
+  | -- | A box, @> [!KIND]@: its kind, the title written after the marker
+    -- if there is one, and its blocks. GitHub's five kinds are its alerts
+    -- (@> [!NOTE]@ and friends); "Wiki.Core.Markdown.Box" says what any
+    -- other kind is.
+    Alert AlertKind (Maybe Text) [Block]
   | -- | The footnotes, in the order they were defined. Comes once, last in
     -- the document, when it has any.
     Footnotes [Footnote]
@@ -191,9 +203,6 @@ data Footnote = Footnote Int Text [Block]
 data Alignment = AlignDefault | AlignLeft | AlignCenter | AlignRight
   deriving stock (Eq, Show)
 
-data AlertKind = Note | Tip | Important | Warning | Caution
-  deriving stock (Eq, Show)
-
 -- | Why a text is not Markdown. CommonMark gives every text a meaning, so
 -- this is rare; it is kept rather than discarded so that a failure shows.
 newtype ParseError = ParseError Text
@@ -216,7 +225,7 @@ parseMarkdown source =
 -- | GitHub's extensions (those of @gfmExtensions@) and the wiki's own,
 -- then the core syntax, then pipe tables. An extension that changes what a
 -- core construct means (a list item that is a task, a block quote that is
--- an alert) must be tried before the core. Pipe tables, which take a
+-- a box) must be tried before the core. Pipe tables, which take a
 -- paragraph's line as their header, come after the core's blocks, as
 -- commonmark-extensions requires, so that a line with a pipe in it that is
 -- something else stays that.
@@ -227,7 +236,7 @@ syntax =
     <> CME.autolinkSpec
     <> CME.taskListSpec
     <> CME.footnoteSpec
-    <> CME.alertSpec
+    <> alertSpec
     <> CME.mathSpec
     <> texMathSpec
     <> CME.wikilinksSpec CME.TitleAfterPipe
@@ -289,7 +298,7 @@ mentions = foldMap block'
       List _ items -> foldMap (\(ListItem _ bs) -> mentions bs) items
       Table _ header rows -> foldMap inlines' header <> foldMap (foldMap inlines') rows
       Div _ bs -> mentions bs
-      Alert _ bs -> mentions bs
+      Alert _ _ bs -> mentions bs
       Footnotes notes -> foldMap (\(Footnote _ _ bs) -> mentions bs) notes
       _ -> mempty
     inlines' = foldMap $ \case
@@ -322,7 +331,7 @@ withHeadingIds doc = evalState (traverse assign doc) written
       CodeBlock attrs _ _ -> ownId attrs
       BlockQuote bs -> concatMap explicit bs
       List _ items -> concat [concatMap explicit bs | ListItem _ bs <- items]
-      Alert _ bs -> concatMap explicit bs
+      Alert _ _ bs -> concatMap explicit bs
       Footnotes notes -> concat [concatMap explicit bs | Footnote _ _ bs <- notes]
       _ -> []
     ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
@@ -337,7 +346,7 @@ withHeadingIds doc = evalState (traverse assign doc) written
       BlockQuote bs -> BlockQuote <$> traverse assign bs
       List kind items -> List kind <$> traverse (\(ListItem task bs) -> ListItem task <$> traverse assign bs) items
       Div attrs bs -> Div attrs <$> traverse assign bs
-      Alert kind bs -> Alert kind <$> traverse assign bs
+      Alert kind title bs -> Alert kind title <$> traverse assign bs
       Footnotes notes -> Footnotes <$> traverse (\(Footnote n label bs) -> Footnote n label <$> traverse assign bs) notes
       other -> pure other
 
@@ -359,7 +368,7 @@ withPauses :: Block -> Block
 withPauses = \case
   Para [Str t] | T.words t == [".", ".", "."] -> Pause
   Div attrs bs -> Div attrs (map withPauses bs)
-  Alert kind bs -> Alert kind (map withPauses bs)
+  Alert kind title bs -> Alert kind title (map withPauses bs)
   List kind items -> List kind [ListItem task (map withPauses bs) | ListItem task bs <- items]
   other -> other
 
@@ -378,7 +387,7 @@ withMentions = \case
   List kind items -> List kind [ListItem task (map withMentions bs) | ListItem task bs <- items]
   Table aligns header rows -> Table aligns (map mentioning header) (map (map mentioning) rows)
   Div attrs bs -> Div attrs (map withMentions bs)
-  Alert kind bs -> Alert kind (map withMentions bs)
+  Alert kind title bs -> Alert kind title (map withMentions bs)
   Footnotes notes -> Footnotes [Footnote n label (map withMentions bs) | Footnote n label bs <- notes]
   other -> other
   where
@@ -513,18 +522,58 @@ instance CME.HasFootnote Inlines Blocks where
   -- is referenced; here they are shown once, in 'Footnotes'.
   footnoteRef number label _ = inline (FootnoteRef (fromMaybe 0 (readMaybe number)) label)
 
-instance CME.HasAlerts Inlines Blocks where
-  alert kind = block . Alert (alertKind kind) . blocks
-    where
-      alertKind = \case
-        CME.NoteAlert -> Note
-        CME.TipAlert -> Tip
-        CME.ImportantAlert -> Important
-        CME.WarningAlert -> Warning
-        CME.CautionAlert -> Caution
-
 instance CME.HasDiv Blocks where
   div_ = block . Div [] . blocks
+
+-- | Boxes, @> [!KIND]@ with an optional title after the marker: GitHub's
+-- alerts and the wiki's own kinds ("Wiki.Core.Markdown.Box").
+--
+-- commonmark-extensions reads GitHub's alerts (@alertSpec@), but only its
+-- five kinds, and only with nothing after the marker: its kinds are a
+-- closed type, and so is pandoc's reader's. So the wiki has its own block
+-- syntax, the library's with those two differences. The marker is @[!@,
+-- a name of letters and dashes in any case, and @]@ ('readAlertKind'); a
+-- marker with any other name leaves the block an ordinary quotation. What
+-- follows it on the line, after a space, is the box's title, as written.
+alertSpec :: CM.SyntaxSpec Identity Inlines Blocks
+alertSpec = mempty {CM.syntaxBlockSpecs = [alertBlockSpec]}
+
+alertBlockSpec :: CM.BlockSpec Identity Inlines Blocks
+alertBlockSpec =
+  CM.BlockSpec
+    { CM.blockType = "Alert"
+    , CM.blockStart = do
+        CM.nonindentSpaces
+        pos <- getPosition
+        _ <- CM.symbol '>'
+        _ <- option 0 (CM.gobbleSpaces 1)
+        _ <- CM.symbol '['
+        _ <- CM.symbol '!'
+        name <- many1 (CM.satisfyTok (\t -> CM.hasType CM.WordChars t || CM.hasType (CM.Symbol '-') t))
+        kind <- maybe mzero pure (readAlertKind (CM.untokenize name))
+        _ <- CM.symbol ']'
+        rest <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
+        -- A title is set off from the marker by a space: @[!NOTE]s@ is
+        -- not a box.
+        guard (maybe True (CM.hasType CM.Spaces) (head rest))
+        let title = mfilter (not . T.null) (Just (T.strip (CM.untokenize rest)))
+        CM.addNodeToStack $
+          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn (kind, title), CM.blockStartPos = [pos]} []
+        pure CM.BlockStartMatch
+    , CM.blockCanContain = const True
+    , CM.blockContainsLines = False
+    , CM.blockParagraph = False
+    , CM.blockContinue = \n -> try $ do
+        CM.nonindentSpaces
+        pos <- getPosition
+        _ <- CM.symbol '>'
+        _ <- CM.gobbleUpToSpaces 1
+        pure (pos, n)
+    , CM.blockConstructor = \node -> do
+        let (kind, title) = fromMaybe (Note, Nothing) (fromDynamic (CM.blockData (rootLabel node)))
+        block . Alert kind title . blocks . mconcat <$> CM.renderChildren node
+    , CM.blockFinalize = CM.defaultFinalizer
+    }
 
 listKind :: CM.ListType -> ListKind
 listKind = \case

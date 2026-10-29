@@ -97,6 +97,7 @@ import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), MediaKind (..), MimeType (..), Source (..), attachmentKind)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf, isDeck)
@@ -169,7 +170,7 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
       let deck = either (const False) isDeck (parseMarkdown page.body)
           looks = either (const (deckOf [])) deckOf (parseMarkdown page.body)
           output = outputOf format
-          place = placeOf settings.publicUrl spaces pages page (\_ _ -> Nothing) ""
+          place = placeOf settings.publicUrl settings.boxes spaces pages page (\_ _ -> Nothing) ""
       if forDecks format && not deck
         then pure (Left (ApiError.Invalid "Only a page written as slides exports as a presentation."))
         else do
@@ -210,7 +211,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
           let pageOf p =
                 let anchor = Map.findWithDefault "" p.id anchors
                  in DocumentPage p (length (pagePathOf pages p.id) - 1) anchor
-                      <$> pageBlocks output (placeOf settings.publicUrl spaces pages p inDocument (anchor <> "-") stored) p.body
+                      <$> pageBlocks output (placeOf settings.publicUrl settings.boxes spaces pages p inDocument (anchor <> "-") stored) p.body
           case traverse pageOf ordered of
             Left e -> pure (Left (ApiError.Invalid ("A page could not be read: " <> renderError e)))
             Right documentPages -> do
@@ -261,8 +262,8 @@ refusalOf = \case
   Unreachable t -> ApiError.Invalid t
 
 -- | Where a page is, for reading it.
-placeOf :: Maybe Url -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
-placeOf publicUrl spaces pages page inDocument idPrefix stored =
+placeOf :: Maybe Url -> [BoxKind] -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
+placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
   Place
     { spaces
     , spacePath = spacePathOf spaces page.space
@@ -275,6 +276,7 @@ placeOf publicUrl spaces pages page inDocument idPrefix stored =
     , inDocument
     , idPrefix
     , macros = Macros [katexOwn, builtinMacros] <> spaceMacros spaces page.space
+    , boxes
     }
 
 -- | The macros every page has, before its space's: the wiki's built-in

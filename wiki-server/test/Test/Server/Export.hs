@@ -28,12 +28,13 @@ import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Export (ExportFormat (..), formatMediaType)
 import Wiki.Api.Links (attachmentUrl, links)
-import Wiki.Api.Types (NewPage (..), SessionInfo (..))
+import Wiki.Api.Types (NewPage (..), SessionInfo (exports))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
@@ -76,6 +77,7 @@ place =
     , inDocument = \_ _ -> Nothing
     , idPrefix = ""
     , macros = Macros []
+    , boxes = []
     }
   where
     docsPages = [p | p <- demoArchive.pages, Just s <- [find (\s -> s.id == p.space) demoArchive.spaces], s.slug == slug "docs"]
@@ -159,6 +161,25 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
   it "makes GitHub's alerts boxes, and leaves the deck's options out" $ do
     bs <- blocksOf ToOther place "> [!WARNING]\n> Careful.\n\n::: {.slides theme=dark}\n:::\n"
     [cls | P.Div (_, cls, _) _ <- bs] `shouldBe` [["warning", "alert"]]
+
+  it "makes a box of any kind a div of its class, titled with the title given, the kind's label or its name" $ do
+    let titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        boxClasses bs = [cls | P.Div (_, cls, _) _ <- bs]
+    noted <- blocksOf ToOther place "> [!NOTE] Read me first\n> Careful.\n"
+    boxClasses noted `shouldBe` [["note", "alert"]]
+    titles noted `shouldBe` [[P.Str "Read", P.Space, P.Str "me", P.Space, P.Str "first"]]
+    query (\case P.Para xs -> [xs]; _ -> []) noted `shouldBe` [[P.Str "Read", P.Space, P.Str "me", P.Space, P.Str "first"], [P.Str "Careful."]]
+    plainBox <- blocksOf ToOther place "> [!FUN-FACT]\n> Owls.\n"
+    boxClasses plainBox `shouldBe` [["alert-fun-fact"]]
+    titles plainBox `shouldBe` [[P.Str "Fun", P.Space, P.Str "fact"]]
+    let defined = place {boxes = [BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}]}
+    exercise <- blocksOf ToOther defined "> [!EXERCISE]\n>\n> - Prove it.\n\n> [!exercise] Exercise 3\n> Again.\n"
+    boxClasses exercise `shouldBe` [["alert-exercise"], ["alert-exercise"]]
+    titles exercise `shouldBe` [[P.Str "Try", P.Space, P.Str "it"], [P.Str "Exercise", P.Space, P.Str "3"]]
+    [() | P.BulletList _ <- query (\case b@P.BulletList {} -> [b]; _ -> []) exercise] `shouldBe` [()]
+    quote <- blocksOf ToOther place "> [!NOTE]s are text\n\n> [!TODO2]\n> x\n"
+    boxClasses quote `shouldBe` []
+    [() | P.BlockQuote _ <- quote] `shouldBe` [(), ()]
 
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"

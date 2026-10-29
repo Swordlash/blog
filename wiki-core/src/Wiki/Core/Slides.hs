@@ -269,7 +269,7 @@ footnoteRefs = concatMap ofBlock
       List _ items -> concat [footnoteRefs bs | ListItem _ bs <- items]
       Table _ header rows -> concatMap ofInlines header <> concatMap (concatMap ofInlines) rows
       Div _ bs -> footnoteRefs bs
-      Alert _ bs -> footnoteRefs bs
+      Alert _ _ bs -> footnoteRefs bs
       _ -> []
     ofInlines = concatMap $ \case
       FootnoteRef n _ -> [n]
@@ -330,7 +330,7 @@ piecesOf incremental shownFrom bs = do
 blockSteps :: Bool -> Int -> Block -> State Counter Block
 blockSteps incremental at = \case
   Div attrs bs -> Div attrs <$> piecesOf (incrementalIn attrs) at bs
-  Alert kind bs -> Alert kind <$> piecesOf incremental at bs
+  Alert kind title bs -> Alert kind title <$> piecesOf incremental at bs
   List kind items -> List kind <$> traverse item items
   other -> pure other
   where
@@ -385,7 +385,7 @@ atStep k s = blocks s.body
     blocks = concatMap $ \case
       Div attrs bs | Just (item, at) <- markOf attrs -> if item || at > k then [] else blocks bs
       Div attrs bs -> [Div attrs (blocks bs)]
-      Alert kind bs -> [Alert kind (blocks bs)]
+      Alert kind title bs -> [Alert kind title (blocks bs)]
       List kind items -> case [ListItem task (blocks bs) | ListItem task bs <- items, shown bs] of
         [] -> []
         shownItems -> [List kind shownItems]
@@ -402,7 +402,7 @@ showingStep k s = Slide {title = s.title, body = map block s.body, notes = s.not
     block = \case
       Div attrs bs | Just (item, at) <- markOf attrs -> Div [("class", T.unwords ((if item then "slide-step-item" else "slide-step") : ["slide-step-later" | at > k])), ("data-step", show at)] (map block bs)
       Div attrs bs -> Div attrs (map block bs)
-      Alert kind bs -> Alert kind (map block bs)
+      Alert kind title bs -> Alert kind title (map block bs)
       List kind items -> List kind [ListItem task (map block bs) | ListItem task bs <- items]
       other -> other
 

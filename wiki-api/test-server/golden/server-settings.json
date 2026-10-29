@@ -2,6 +2,14 @@
   "assistantHosts": [
     "http://localhost:11434"
   ],
+  "boxes": [
+    {
+      "colour": "teal",
+      "icon": "pencil",
+      "label": "Exercise",
+      "name": "exercise"
+    }
+  ],
   "mail": {
     "from": "Wiki <wiki@example.org>",
     "host": "mail.example.org",

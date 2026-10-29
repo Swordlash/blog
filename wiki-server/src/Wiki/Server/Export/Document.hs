@@ -9,8 +9,10 @@
 -- with the extensions that match the syntax the wiki reads
 -- ("Wiki.Core.Markdown.Ast", 'wikiExtensions'): pipe tables, footnotes,
 -- fenced divs, @$…$@ and @\\(…\\)@ math, GitHub's task lists,
--- strikethrough, bare links, emoji, alerts and wiki links, and attributes
--- in braces. Raw HTML is read as raw, and goes through the wiki's
+-- strikethrough, bare links, emoji and wiki links, and attributes in
+-- braces. Boxes, @> [!KIND]@, are read from the quotations pandoc makes
+-- of them ('boxesOf'), since pandoc's reader knows only GitHub's five
+-- kinds and no title after the marker. Raw HTML is read as raw, and goes through the wiki's
 -- allowlist ("Wiki.Core.Markdown.Html") before pandoc sees it. A raw block
 -- is reduced to what the allowlist keeps, written out again and read by
 -- pandoc's HTML reader. Tags in the text are read together with the text
@@ -21,6 +23,12 @@
 --
 -- = What the wiki adds
 --
+-- * __Boxes__ ("Wiki.Core.Markdown.Box"): GitHub's five kinds become
+--   pandoc's own alerts, a div with the kind's class and @alert@ that
+--   starts with a @title@ div, and any other kind a div of the same shape
+--   with the class @alert-@ and its name. So HTML, DOCX and a PDF show a
+--   box with its title (the one written after the marker, else the kind's
+--   label) whatever its kind.
 -- * __Math macros__ ("Wiki.Core.Math"): pandoc's writers typeset each
 --   formula on its own, so the macros it uses in the wiki (its space's,
 --   and those defined by the formulas before it on the page) are expanded
@@ -100,6 +108,7 @@ import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinition
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
+import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind, alertKindName, boxLabel, readAlertKind)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
@@ -137,6 +146,8 @@ data Place = Place
   -- document cannot share an identifier.
   , macros :: Macros
   -- ^ The math macros of the page's space and its ancestors.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administrator defined, for their labels.
   }
 
 -- | The kind of document being written, as far as reading a page cares.
@@ -158,11 +169,11 @@ data Output
 -- own reader reads ("Wiki.Core.Markdown.Ast"), and no others: in
 -- particular no raw TeX, no Markdown inside HTML, and no divs or spans
 -- made of HTML, so that every piece of HTML stays raw for the allowlist.
+-- Nor @alerts@: a box is read by 'boxesOf', every kind the same way.
 wikiExtensions :: Extensions
 wikiExtensions =
   extensionsFromList
     [ Ext_all_symbols_escapable
-    , Ext_alerts
     , Ext_autolink_bare_uris
     , Ext_backtick_code_blocks
     , Ext_emoji
@@ -211,6 +222,7 @@ pageBlocks output place source = do
     . walk htmlInlines
     . walk (concatMap htmlBlock)
     . steps
+    . walk (boxesOf place.boxes)
     $ filter (not . contentsMarker) read'
   where
     steps = case output of
@@ -294,6 +306,43 @@ shiftHeadings :: Int -> [P.Block] -> [P.Block]
 shiftHeadings by = walk $ \case
   P.Header l attr xs -> P.Header (min 6 (l + by)) attr xs
   b -> b
+
+----------------------------------------------------------------------
+-- Boxes
+
+-- | A quotation that starts with a box's marker, @[!KIND]@ alone or with a
+-- title after it on its first line, as the box it is ('Wiki.Core.Markdown.Ast'
+-- reads the same marker): GitHub's five kinds as pandoc's alerts are made
+-- (a div with the kind's class and @alert@), any other kind as a div with
+-- the class @alert-@ and its name, each starting with a @title@ div that
+-- holds the box's title. Any other block is left as it is.
+boxesOf :: [BoxKind] -> P.Block -> P.Block
+boxesOf defined = \case
+  P.BlockQuote (P.Para xs : rest)
+    | Just (kind, title, after) <- marker xs ->
+        let label = fromMaybe (boxLabel defined kind) title
+            classes = case kind of
+              Custom name -> ["alert-" <> name]
+              builtIn -> [alertKindName builtIn, "alert"]
+         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para (B.toList (B.text label))] : [P.Para after | not (null after)] <> rest)
+  b -> b
+  where
+    -- The marker is the first word of the quotation's first line, which
+    -- pandoc reads as one piece of text (@[!EXERCISE]@); the rest of that
+    -- line is the title, and the lines after it the box's first
+    -- paragraph.
+    marker xs = do
+      let (line, after) = break lineBreak xs
+      (written, rest) <- case line of
+        P.Str t : more -> Just (t, more)
+        _ -> Nothing
+      kind <- readAlertKind =<< T.stripSuffix "]" =<< T.stripPrefix "[!" written
+      let title = T.strip (plain rest)
+      pure (kind, if T.null title then Nothing else Just title, drop 1 after)
+    lineBreak = \case
+      P.SoftBreak -> True
+      P.LineBreak -> True
+      _ -> False
 
 ----------------------------------------------------------------------
 -- Raw HTML, through the allowlist

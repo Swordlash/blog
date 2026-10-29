@@ -311,7 +311,7 @@ apiOver providers st = do
     told <- notifications
     pure
       ( Map.fromList
-          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
+          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = []} :: Either WikiError SessionInfo))
               : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
               : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (endpointUrl (\e -> e.admin.directory), answerOf people)

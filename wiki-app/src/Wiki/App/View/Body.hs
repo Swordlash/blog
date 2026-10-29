@@ -65,7 +65,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
 import Web.Event.Event (EventType (..))
-import Wiki.App.Backend (MonadWiki (..), Session (user))
+import Wiki.App.Backend (MonadWiki (..), Session (boxes, user))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -253,6 +253,7 @@ options place =
     , Md.resolveMention = \login ->
         (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
           <$> Map.lookup login place.people
+    , Md.boxes = place.context.session.boxes
     }
   where
     island key = HH.slot_ "island" key Islands.component

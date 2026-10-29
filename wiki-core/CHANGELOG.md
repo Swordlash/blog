@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+A box, `> [!KIND]`, takes any kind and an optional title after the marker
+(WP5.29). `Alert` is `Alert AlertKind (Maybe Text) [Block]`, with the title
+written after the marker; `AlertKind` gains `Custom Text`, the name in
+lower case, and moves to the new module `Wiki.Core.Markdown.Box`
+(`Wiki.Core.Markdown.Ast` still exports it). The parser is the wiki's own
+block syntax in place of commonmark-extensions' `alertSpec`, which takes
+only GitHub's five kinds with nothing after the marker. `Box` defines the
+kinds an administrator gives a label, a colour and an icon (`BoxKind`,
+`BoxColour`, `BoxIcon`), checks them (`checkBoxKinds`), and makes the CSS
+custom properties a box of such a kind carries (`boxStyle`). The
+renderer's `Options` gain `boxes`; a box of another kind than the five
+is `<div class="alert alert-<name>">`, titled with its name capitalised.
+The search text holds a box's title.
+
 `Wiki.Core.Markdown.Ast` gains `mentionsWhole`: whether a page that says
 `@login` mentions that login and nothing else, which the editor's completion of mentions
 offers only logins of (WP5.28).

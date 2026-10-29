@@ -1354,6 +1354,9 @@ sessionTx = do
         , -- Nor the export formats: they depend on pandoc and on the
           -- machine, and the API adds them too.
           exports = []
+        , -- Nor the kinds of box, which are the server's settings: the
+          -- API adds them as well.
+          boxes = []
         }
 
 listSpacesTx :: Tx [Space]

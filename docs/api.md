@@ -103,7 +103,7 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion", "capabilities"}`: `capabilities` is `Capabilities` `{"database", "search"}`, the database the server keeps the wiki in (`"postgres"` or `"sqlite"`) and how its search finds pages (`"FullText"` or `"FoldedText"`, see [Search](#search)) | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), and the formats pages and spaces export as (see [Documents](#documents)) | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports", "boxes"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), the formats pages and spaces export as (see [Documents](#documents)), and the kinds of box the administration defined, as in the server's settings below, which every page is rendered with | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 | POST | `api/v1/session/second-factor` | `OneTimeCode` `{"code"}`, with the `wiki_pending` cookie | as `POST session` | 401 (a wrong code, counted as a failed sign-in), 429, 400 (no sign-in waiting in this browser, or it expired) | (`confirmSecondFactor`) |
@@ -918,7 +918,7 @@ console: `wiki-server users …` (see the README).
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts", "boxes"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
 | PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
 | POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
 | POST | `api/v1/admin/server/mail/test` | `MailTest` `{"to"}` | `MailTestResult` `{"failure"}`, `null` when sent | 403, 400 (no mail server or public address, or not an address) | `sendTestMail` |
@@ -941,9 +941,22 @@ it, and a wiki made before them goes on with no mail and passwords only.
            "user": "wiki", "password": "set", "from": "Wiki <wiki@example.org>"},
   "providers": [{"name": "google", "kind": "google", "clientId": "1234-abc.apps.googleusercontent.com",
                  "issuer": null, "secret": "set"}],
-  "assistantHosts": ["http://localhost:11434"]
+  "assistantHosts": ["http://localhost:11434"],
+  "boxes": [{"name": "exercise", "label": "Exercise", "colour": "teal", "icon": "pencil"}]
 }
 ```
+
+`boxes` (WP5.29) are the kinds of box, `> [!KIND]`, the administration
+defined (`Wiki.Core.Markdown.Box`): each with its `name` (lower-case letters
+and dashes, starting with a letter, at most 32 characters, neither one of
+GitHub's five kinds nor `title`), the `label` its boxes are titled with (at
+most 60 characters; an empty one is made from the name), a `colour` of the
+theme (`blue`, `green`, `purple`, `amber`, `red`, `teal`, `orange`, `pink`,
+`grey`) and an `icon` (`none`, `info`, `lightbulb`, `pencil`, `question`,
+`check`, `star`, `book`, `flag`). Two kinds with one name, or a name that
+cannot be one, are refused (400). They are stored as JSON in the setting
+`boxes`, and every session carries them. Settings without the field read
+as having none.
 
 `assistantHosts` (WP5.21) are the addresses the writing assistant may reach
 from the browser besides Anthropic's and OpenAI's APIs, as origins: every

@@ -76,6 +76,7 @@ library
       Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
+      Wiki.Core.Markdown.Box
       Wiki.Core.Markdown.Edit
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link

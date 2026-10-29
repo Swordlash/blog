@@ -16,8 +16,9 @@
 --
 -- The spaces are a public @Blog@, a private @Team@ with a subspace
 -- @Team / Projects@, and a public @Docs@ whose @Tour@ page explains all of
--- this to whoever opens the demo. Each has a description, an icon and a
--- home page, the page it opens at. The image and the video on the pages
+-- this to whoever opens the demo. The settings define one kind of box,
+-- @exercise@, which the Markdown guide shows. Each space has a
+-- description, an icon and a home page, the page it opens at. The image and the video on the pages
 -- are public-domain NASA media on Wikimedia Commons, linked by URL. The
 -- image attached to two of the pages is a 32×32 PNG stored as bytes, as a
 -- file uploaded into the demo is.
@@ -26,6 +27,7 @@ module Wiki.App.Demo
   , demoNow
   , demoDatabase
   , tourPath
+  , exerciseBox
   )
 where
 
@@ -35,12 +37,14 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
 import Web.Storage.IndexedDB (Database)
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -115,6 +119,9 @@ demoState now = flip execState emptyState $ do
       . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False}
       . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki, blog = False}
       . setProfile docs SpaceProfile {description = "How to use this wiki: a guided tour, and everything its Markdown can do.", icon = Just (IconEmoji "📘"), homePage = Just tourPage, blog = False}
+  -- The kind of box the Markdown guide shows, as an administrator would
+  -- define it.
+  modify (\st -> st {server = st.server {boxes = [exerciseBox]}})
   modify (\st -> st {current = Just adminId})
   where
     adminId = UserId "user-admin"
@@ -195,6 +202,11 @@ docsMacros =
   , "\\newcommand{\\Hom}{\\operatorname{Hom}}"
   , "\\newcommand{\\eps}{\\epsilon}"
   ]
+
+-- | The kind of box the demo defines, which the Markdown guide shows: an
+-- exercise, in teal with a pencil.
+exerciseBox :: BoxKind
+exerciseBox = BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}
 
 -- | Where the tour is: the path of its space, and its own path there. The
 -- shell's front page points a newcomer to it.
@@ -530,6 +542,39 @@ markdownGuide =
   , "\\draw[thick, blue] (0,0.5) .. controls (1,2.5) and (2,-0.5) .. (3,1.5);"
   , "\\fill (1.5,1) circle (2pt) node[above right] {a point};"
   , "```"
+  , ""
+  , "## Notes and boxes"
+  , ""
+  , "A quotation whose first line is a kind in brackets is a box. GitHub's five"
+  , "kinds each have a look of their own:"
+  , ""
+  , "> [!NOTE]"
+  , "> `> [!NOTE]`: something to know, even when skimming."
+  , ""
+  , "> [!TIP]"
+  , "> `> [!TIP]`: a better way to do something."
+  , ""
+  , "> [!IMPORTANT]"
+  , "> `> [!IMPORTANT]`: something needed to succeed."
+  , ""
+  , "> [!WARNING]"
+  , "> `> [!WARNING]`: something that needs attention at once."
+  , ""
+  , "> [!CAUTION]"
+  , "> `> [!CAUTION]`: what could go wrong if done."
+  , ""
+  , "Any other word makes a box too, titled with the word: `> [!EXERCISE]`"
+  , "below. An administrator can give a kind a title, a colour and an icon,"
+  , "under **Boxes** in the administration's **Server** section; the demo"
+  , "defines `exercise` this way. A kind nobody defined is a plain box."
+  , ""
+  , "> [!EXERCISE]"
+  , "> Write a box of your own kind, such as `> [!FUN-FACT]`."
+  , ""
+  , "Text after the kind, on the same line, is that box's title, for any kind:"
+  , ""
+  , "> [!EXERCISE] Exercise 2"
+  , "> `> [!EXERCISE] Exercise 2` titles this box *Exercise 2*."
   , ""
   , "## Images, video and attachments"
   , ""

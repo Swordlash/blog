@@ -186,7 +186,7 @@ firstImage = head . concatMap inBlock
       List _ items -> [d | ListItem _ bs <- items, d <- concatMap inBlock bs]
       Table _ header rows -> concatMap (concatMap inInline) (header <> concat rows)
       Div _ bs -> concatMap inBlock bs
-      Alert _ bs -> concatMap inBlock bs
+      Alert _ _ bs -> concatMap inBlock bs
       _ -> []
     inInline = \case
       Image _ destination _ _ -> [destination]

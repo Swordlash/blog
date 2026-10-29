@@ -713,7 +713,8 @@ handlers env caller =
     sessionInfo s = do
       providers <- liftIO (currentProviders env)
       exports <- liftIO availableFormats
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports}
+      settings <- liftIO (readServerSettings env.storage)
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.

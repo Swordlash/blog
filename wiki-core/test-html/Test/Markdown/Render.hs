@@ -11,6 +11,7 @@ import Protolude
 import Test.Hspec
 import Test.Markdown.Html
 import Wiki.Core.Markdown
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Math (Macros (..))
 
 shows' :: Text -> Text -> Expectation
@@ -248,6 +249,24 @@ spec = describe "Markdown.Render" $ do
   describe "boxes" $ do
     it "writes an alert with its title" $
       "> [!WARNING]\n> Hot." `shows'` "<div class=\"alert alert-warning\"><p class=\"alert-title\">Warning</p><p>Hot.</p></div>"
+    it "writes a box of a kind nobody defined with its name as its title, and no style" $
+      "> [!FUN-FACT]\n> Owls." `shows'` "<div class=\"alert alert-fun-fact\"><p class=\"alert-title\">Fun fact</p><p>Owls.</p></div>"
+    it "writes the title given after the marker, for the five kinds too" $ do
+      "> [!EXERCISE] Exercise 3\n> Prove it." `shows'` "<div class=\"alert alert-exercise\"><p class=\"alert-title\">Exercise 3</p><p>Prove it.</p></div>"
+      "> [!TIP] Before you start\n> Read." `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">Before you start</p><p>Read.</p></div>"
+    it "writes a defined kind's label, colour and icon" $ do
+      let defined = defaultOptions {boxes = [BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}, BoxKind {name = "aside", label = "Aside", colour = Grey, icon = NoIcon}]}
+      showsWith defined "> [!EXERCISE]\n> Prove it." $
+        "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
+          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it</p><p>Prove it.</p></div>"
+      showsWith defined "> [!EXERCISE] Exercise 3\n> Prove it." $
+        "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
+          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Exercise 3</p><p>Prove it.</p></div>"
+      showsWith defined "> [!ASIDE]\n> By the way." $
+        "<div class=\"alert alert-aside\" style=\"--box-colour: var(--muted)\"><p class=\"alert-title\">Aside</p><p>By the way.</p></div>"
+    it "keeps the five kinds' own look whatever is defined"
+      $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
+      $ "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>x</p></div>"
     it "writes a fenced div with its class" $
       "::: summary\nShort.\n:::" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
 

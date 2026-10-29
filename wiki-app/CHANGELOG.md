@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The Markdown guide has a section "Notes and boxes" (WP5.29), and the demo
+defines the kind of box `exercise`, which it keeps across a reload and an
+import. `Session` gains `boxes`, which pages are rendered with. The
+administration's Server section has "Boxes", to define kinds of box.
+
 The editor completes mentions (WP5.28). An `@` followed by two letters or
 more, where a mention counts (not in code, a link, HTML or math; brackets
 that make no link are text), opens a

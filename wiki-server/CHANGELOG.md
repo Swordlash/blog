@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The kinds of box (WP5.29) are kept as JSON in the setting `boxes`, so no
+migration, and every session carries them. Exports read a box of any kind,
+`> [!KIND]` with an optional title, from the quotation pandoc makes of it:
+GitHub's five as pandoc's alerts, any other as a div with the class
+`alert-<name>`, each with a title.
+
 Migration `0003-users-by-prefix` adds indexes on the folded display name
 (both databases) and, on PostgreSQL, on the folded login and display name
 in the collation "C", for `GET api/v1/notifications/people/search` (WP5.28),

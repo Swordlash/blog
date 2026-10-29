@@ -82,7 +82,7 @@ spec = describe "Markdown.Ast" $ do
     it "reads a pause, three dots alone in a paragraph, where a slide can have one" $ do
       "a\n\n. . .\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
       "::: incremental\n. . .\n:::" `parses` [Div [("class", "incremental")] [Pause]]
-      "> [!TIP]\n> . . ." `parses` [Alert Tip [Pause]]
+      "> [!TIP]\n> . . ." `parses` [Alert Tip Nothing [Pause]]
       "- a\n\n  . . .\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
     it "leaves three dots text in a quotation, after other text, or written closer" $ do
       "> . . ." `parses` [BlockQuote (para [Str ". . ."])]
@@ -92,7 +92,19 @@ spec = describe "Markdown.Ast" $ do
     it "reads a fenced div with its class" $
       "::: warning\nCareful.\n:::" `parses` [Div [("class", "warning")] (para [Str "Careful."])]
     it "reads a GitHub alert" $
-      "> [!NOTE]\n> Read this." `parses` [Alert Note (para [Str "Read this."])]
+      "> [!NOTE]\n> Read this." `parses` [Alert Note Nothing (para [Str "Read this."])]
+    it "reads a box of any kind, in any case, as that kind in lower case" $ do
+      "> [!EXERCISE]\n> Prove it." `parses` [Alert (Custom "exercise") Nothing (para [Str "Prove it."])]
+      "> [!fun-fact]\n> Owls." `parses` [Alert (Custom "fun-fact") Nothing (para [Str "Owls."])]
+      "> [!Tip]\n> Here." `parses` [Alert Tip Nothing (para [Str "Here."])]
+    it "reads the title written after a box's marker" $ do
+      "> [!EXERCISE] Exercise 3\n> Prove it." `parses` [Alert (Custom "exercise") (Just "Exercise 3") (para [Str "Prove it."])]
+      "> [!WARNING]   Mind the gap  \n> Here." `parses` [Alert Warning (Just "Mind the gap") (para [Str "Here."])]
+    it "leaves a quotation whose marker is not a kind's name a quotation" $ do
+      "> [!NOTE]s\n> x" `parses` [BlockQuote (para [Str "[!NOTE]s", SoftBreak, Str "x"])]
+      "> [!TODO2]\n> x" `parses` [BlockQuote (para [Str "[!TODO2]", SoftBreak, Str "x"])]
+      "> [!TITLE]\n> x" `parses` [BlockQuote (para [Str "[!TITLE]", SoftBreak, Str "x"])]
+      "> [!-x]\n> x" `parses` [BlockQuote (para [Str "[!-x]", SoftBreak, Str "x"])]
     it "keeps raw HTML as raw HTML, not as markup" $
       "<div onclick=\"x()\">hi</div>\n\ntext <b>bold</b>"
         `parses` [ RawHtmlBlock "<div onclick=\"x()\">hi</div>\n"

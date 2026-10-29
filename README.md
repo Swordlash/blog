@@ -179,7 +179,12 @@ GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
 ```
 
 A note, marked as one, at the top of the
-[Tour](https://swordlash.github.io/blog/s/docs/p/tour/).
+[Tour](https://swordlash.github.io/blog/s/docs/p/tour/). Any other word makes
+a box too, `> [!EXERCISE]`, titled with the word or with what follows it on the
+line (`> [!EXERCISE] Exercise 3`); an administrator gives a kind a title, a
+colour and an icon under "Boxes" in the administration's Server section, and the
+demo defines `exercise` this way: the Markdown guide's
+[Notes and boxes](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#notes-and-boxes).
 
 ### A table of contents
 
@@ -959,7 +964,10 @@ to the demo, keeping `data/`.
     test mail" checks it;
   - *sign-in providers*, added, changed and removed one at a time (below), each with
     the redirect URI to register with it and a "Check" that asks the provider how to
-    sign in.
+    sign in;
+  - *boxes*, the kinds of `> [!KIND]` box the wiki's pages may hold besides GitHub's
+    five, each with the title its boxes show, a colour of the theme and an icon
+    ([docs/markdown.md](docs/markdown.md#notes-and-boxes)).
 
   The mail password and the providers' client secrets are typed once, kept in the
   wiki's database (beside the password and session hashes it holds already, so as

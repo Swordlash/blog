@@ -18,6 +18,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem
@@ -113,8 +114,9 @@ ordered = do
 
 -- | The wiki with each page's history as an import starts it (the page as
 -- it is, saved by nobody known), with nobody notified of anything or
--- watching anything, and each comment's author named as the users name
--- them. An archive has no history and no notifications, and an import
+-- watching anything, no server settings, and each comment's author named
+-- as the users name them. An archive has no history, no notifications and
+-- no settings, and an import
 -- names the authors from the users, so this is the wiki an archive of it
 -- reads back as. (The demo's own comments keep an author's id as their
 -- name, which nothing shows: the comments are listed with the users'
@@ -130,6 +132,7 @@ withoutHistory st = imported {counter = nextCounter imported}
           , notices = mempty
           , watches = mempty
           , choices = mempty
+          , server = noServerSettings
           , threads = map (map (\t -> t {comments = map named t.comments})) st.threads
           }
     named c =
@@ -429,10 +432,11 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       archive <- either (panic . toS) pure (readBack (zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))))
       runMemWikiWith opened.store opened.wiki (importMemWiki archive) `shouldReturn` Right ()
       now <- readIORef opened.wiki
-      normal now `shouldBe` normal st {current = (demoState demoNow).current}
+      -- The demo's server settings stay the demo's own.
+      normal now `shouldBe` normal st {current = (demoState demoNow).current, server = (demoState demoNow).server}
       reopened <- runMemDOM (openMemWiki db (demoState demoNow))
       -- Loaded again, with the attachments' bytes and the versions read.
-      normal <$> runMemWikiWith reopened.store reopened.wiki readWholly `shouldReturn` normal st {current = (demoState demoNow).current}
+      normal <$> runMemWikiWith reopened.store reopened.wiki readWholly `shouldReturn` normal st {current = (demoState demoNow).current, server = (demoState demoNow).server}
 
     it "changes nothing when the database will not take it" $ do
       st <- edited

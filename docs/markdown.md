@@ -415,7 +415,8 @@ which is shown at the end of the page[^why].
 
 ## Notes and boxes
 
-GitHub's alerts make a highlighted box:
+A quotation whose first line is a kind in brackets, `> [!KIND]`, is a box.
+GitHub's five kinds each have a look of their own:
 
 > [!NOTE]
 > Something worth knowing.
@@ -423,9 +424,33 @@ GitHub's alerts make a highlighted box:
 > [!WARNING]
 > Something that may go wrong.
 
-The kinds are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`. A box of
-any other kind is a fenced div with a class, which the wiki's style sheet
-may give a look:
+The five are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`. Any other
+word of letters and dashes makes a box too, titled with the word,
+capitalised, with spaces for its dashes: `> [!EXERCISE]` is a box titled
+"Exercise", `> [!FUN-FACT]` one titled "Fun fact". The kind is read in any
+case, so `[!exercise]` is the same kind.
+
+> [!EXERCISE]
+> Prove that the sum of two even numbers is even.
+
+An administrator can define a kind, in the administration's Server section,
+under "Boxes": the title its boxes show, a colour of the theme (blue,
+green, purple, amber, red, teal, orange, pink or grey) and an icon (info,
+lightbulb, pencil, question, check, star, book, flag, or none). A kind
+nobody defined is a plain box. The five keep their own look and cannot be
+defined.
+
+Text after the kind, on the same line, is that box's title, for any kind,
+the five too:
+
+> [!TIP] Before you start
+> Read the whole page once.
+
+Exported, the five are pandoc's own alerts, and any other kind a box with
+its title, so a Word document, a web page or a PDF shows it as a box.
+
+A box of any other sort is a fenced div with a class, which the wiki's style
+sheet may give a look:
 
 ::: summary
 Three colons, a class, the content, three colons.

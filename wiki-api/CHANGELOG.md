@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The server's settings gain `boxes`, the kinds of box the administration
+defined (WP5.29), which `SessionInfo` carries too, so that every reader
+renders them. Settings and sessions without `boxes` read as having none.
+
 `NotificationsApi` gains `searchPeople`, `GET
 notifications/people/search?q=<letters>` (WP5.28): the users who may sign in
 whose login or display name starts with the letters, ignoring case, at most

@@ -190,6 +190,7 @@ import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
@@ -256,6 +257,12 @@ data Session = Session
   -- none, because it has no pandoc. A server offers the PDF formats only if
   -- it found a TeX engine. Part of the session for the same reason as
   -- 'providers'.
+  , boxes :: [BoxKind]
+  -- ^ The kinds of box the administration defined, with their labels,
+  -- colours and icons ("Wiki.Core.Markdown.Box"), which every page is
+  -- rendered with. Part of the session for the same reason as 'providers':
+  -- the prerendered page and the program's first render draw the same
+  -- boxes.
   }
   deriving stock (Eq, Show)
 
@@ -268,7 +275,7 @@ anonymous = anonymousIn Open
 -- wiki is open to ("Wiki.Core.Access"), so that the application knows
 -- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = []}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = []}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.

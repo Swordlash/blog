@@ -55,6 +55,7 @@ import Wiki.Api.Import
 import Wiki.Api.Types
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxKind (..))
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
@@ -128,7 +129,8 @@ genSessionInfo = do
   standing <- elements [NotSignedIn, SignedIn, Operator]
   providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
   exports <- sublistOf [minBound .. maxBound]
-  pure SessionInfo {user, groups, grants, standing, providers, exports}
+  boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements [minBound .. maxBound] <*> elements [minBound .. maxBound]))
+  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> (Password <$> genText)
