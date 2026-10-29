@@ -96,6 +96,14 @@ spec m = do
       kept <- unsafeIOToPageM (runTest (Storage.getItem LocalStorage "admin-users-page-size" :: m (Maybe (Either Text Int))))
       kept `shouldBe` Just (Right 50)
 
+    it "puts a page number below the first, or past the last, back in range in the address" $ runPage $ do
+      ui <- start m (Just "user-admin") (Admin (Users UserListing {search = "", page = 0, only = Everyone}))
+      eventually (locationHash `shouldReturn` "#/admin/users/")
+      find ui ".users-count" >>= (`shouldHaveText` "1–3 of 3")
+      ui2 <- startChanged m (withUsers 60) (Just "user-admin") (Admin (Users UserListing {search = "", page = 9, only = Everyone}))
+      eventually (locationHash `shouldReturn` "#/admin/users/?page=3")
+      eventually (find ui2 ".users-count" >>= (`shouldHaveText` "51–63 of 63"))
+
     it "keeps what is typed in the search box when a pause writes it into the address" $ runPage $ do
       ui <- start m (Just "user-admin") (Admin (Users allUsers))
       box <- find ui ".users-search-input"

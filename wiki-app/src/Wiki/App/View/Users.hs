@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The administration's section on the wiki's users (WP5.25 of
@@ -91,11 +92,14 @@ noNewUser = NewUser {typedLogin = "", typedName = "", typedPassword = "", typedE
 data State = State
   { input :: Input
   , size :: Int
-  -- ^ How many users a page holds: the page shown, or the page asked for.
+  -- ^ How many users the page shown holds at most: the pager and its links
+  -- count pages of this size. It is set from each answer.
   , kept :: Int
-  -- ^ The page size the reader chose, kept in the browser. It differs from
-  -- 'size' only on a page the server prerendered, at the size it
-  -- prerendered (25), until the page at this size has been fetched.
+  -- ^ The page size the reader chose, kept in the browser: what pages are
+  -- asked for at, and what the select shows. It differs from 'size' while
+  -- a page of another size is shown: a page the server prerendered at the
+  -- first size (25), or the page shown when the reader chose another size,
+  -- until the page at this size arrives.
   , asked :: Int
   -- ^ How many pages have been asked for. An answer is shown only if no
   -- page has been asked for after it: answers can arrive out of order.
@@ -103,6 +107,10 @@ data State = State
   -- ^ The number of the request whose answer is shown, as 'asked' counted
   -- it: the dialog waits for a number past the one current when it saved.
   , loaded :: Loaded
+  , lastPage :: Maybe UserPage
+  -- ^ The last page received. The dialog takes the groups and whether the
+  -- server mails from it, so that it stays open, as it was, while another
+  -- page is fetched or a fetch fails.
   , fetching :: Bool
   -- ^ Another page is being fetched while 'loaded' is shown.
   , typed :: Text
@@ -168,6 +176,9 @@ component =
               , asked = 0
               , shown = 0
               , loaded
+              , lastPage = case loaded of
+                  Ready p -> Just p
+                  _ -> Nothing
               , fetching = False
               , typed = input.listing.search
               , pending = Nothing
@@ -241,8 +252,8 @@ component =
           Loading -> [hh|<div class="users-list users-loading"><p class="loading">Loading…</p></div>|]
           Failed e -> failureView e Retry
           Ready p -> pageView st p
-        dialog = case (st.managing, st.loaded) of
-          (Just u, Ready p) ->
+        dialog = case (st.managing, st.lastPage) of
+          (Just u, Just p) ->
             Just (HH.slot "dialog" u.user.id UserDialog.component UserDialog.Input {context = st.input.context, user = u, groups = p.groups, mailing = p.mailing, asked = st.asked, shown = st.shown} FromDialog)
           _ -> Nothing
 
@@ -278,7 +289,7 @@ component =
               <span>Per page</span>
               <select class="users-page-size-select" onSelectedIndexChange={{ ChoseSize }}>
                 {% for n in userPageSizes %}
-                  <option selected={{ n == st.size }}>{{ show n :: Text }}</option>
+                  <option selected={{ n == st.kept }}>{{ show n :: Text }}</option>
                 {% end %}
               </select>
             </label>
@@ -416,7 +427,7 @@ component =
         case st.loaded of
           Loading -> load
           Ready p
-            | st.size /= st.kept -> modify (\s -> s {size = s.kept}) >> load
+            | st.size /= st.kept -> load
             | otherwise -> checkInRange p
           _ -> pass
       Retry -> do
@@ -464,7 +475,7 @@ component =
           Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only}))
       ChoseSize n -> for_ (atMay userPageSizes n) $ \size -> do
         H.liftEffect (writePageSize size)
-        modify (\st -> st {size, kept = size})
+        modify (\st -> st {kept = size})
         st <- get
         if st.input.listing.page /= 1
           then Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only = st.input.listing.only}))
@@ -510,34 +521,39 @@ component =
                 }
             H.raise (Changed Nothing)
 
-    -- Fetch the page the address asks for. The page shown stays, dimmed,
-    -- until the new one arrives. An answer to a request made before
-    -- another is dropped: the reader has gone on to another page. The open
-    -- dialog gets its user as they are now, from the page, or fetched by
-    -- themself when they are no longer on it.
+    -- Fetch the page the address asks for, at the page size the reader
+    -- chose. The page shown stays, dimmed, until the new one arrives. An
+    -- answer to a request made before another is dropped: the reader has
+    -- gone on to another page. The open dialog gets its user as they are
+    -- now, from the page, or fetched by themself when they are no longer on
+    -- it. That second fetch is another wait, during which a later request
+    -- can be made and answered, so the check is made again after it.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       modify (\s -> s {fetching = True, asked = s.asked + 1})
       st <- get
-      result <- userPage (queryOf st.size st.input.listing)
-      latest <- gets (\s -> s.asked == st.asked)
-      when latest $ do
+      result <- userPage (queryOf st.kept st.input.listing)
+      let latest = gets (\s -> s.asked == st.asked)
+      whenM latest $ do
         managing <- case (result, st.managing) of
           (Right p, Just m) -> Just <$> maybe (alone m) pure (find (\u -> u.user.id == m.user.id) p.users)
           _ -> pure st.managing
-        modify $ \s ->
-          s
-            { loaded = either Failed Ready result
-            , fetching = False
-            , busy = False
-            , -- Unless the dialog was closed, or opened for someone else,
-              -- meanwhile.
-              managing = case (s.managing, managing) of
-                (Just now, Just fresh) | now.user.id == fresh.user.id -> Just fresh
-                _ -> s.managing
-            , shown = st.asked
-            }
-        either (const pass) checkInRange result
+        whenM latest $ do
+          modify $ \s ->
+            s
+              { loaded = either Failed Ready result
+              , lastPage = either (const s.lastPage) Just result
+              , size = st.kept
+              , fetching = False
+              , busy = False
+              , -- Unless the dialog was closed, or opened for someone else,
+                -- meanwhile.
+                managing = case (s.managing, managing) of
+                  (Just now, Just fresh) | now.user.id == fresh.user.id -> Just fresh
+                  _ -> s.managing
+              , shown = st.asked
+              }
+          either (const pass) checkInRange result
       where
         -- A user by themself: among the users whose login has theirs in
         -- it, with no filter. The summary held is kept if they are not
@@ -547,13 +563,19 @@ component =
             <$> userPage UserQuery {offset = 0, limit = maxUserPageSize, search = m.user.login.text, administrators = False, disabled = False}
 
     -- A page past the last (the users were fewer when the address was
-    -- written) is replaced by the last page.
+    -- written) is replaced by the last page, and a page number below 1
+    -- (served as the first page) by 1, so that the address and the links
+    -- name the page shown.
     checkInRange :: UserPage -> H.HalogenM State Action Slots ViewOutput m ()
     checkInRange p = do
       st <- get
-      let pages = max 1 ((p.total + st.size - 1) `div` st.size)
-      when (null p.users && p.total > 0 && st.input.listing.page > pages) $
-        Router.redirect st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = pages, only = st.input.listing.only}))
+      let listing = st.input.listing
+          pages = max 1 ((p.total + st.size - 1) `div` st.size)
+          go page = Router.redirect st.input.context.router (Admin (Users UserListing {search = listing.search, page, only = listing.only}))
+      if
+        | listing.page < 1 -> go 1
+        | null p.users && p.total > 0 && listing.page > pages -> go pages
+        | otherwise -> pass
 
 -- | The query for a listing, at a page size.
 queryOf :: Int -> UserListing -> UserQuery
