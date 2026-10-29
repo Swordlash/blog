@@ -497,7 +497,11 @@ across devices**:
   your browsers.
 
 Passkeys need HTTPS (or the machine's own address), so over plain HTTP the
-page says so instead. They need a browser with the PRF extension: Chrome and
+page says so instead. A browser offers no encryption to such a page either:
+there the keys are kept in the browser as text, as the settings page warns. Behind a proxy that serves the wiki over HTTPS, set the
+wiki's public address in the administration, or have the proxy send
+`X-Forwarded-Proto: https`: the server checks that a passkey was used on the
+wiki's own origin. They need a browser with the PRF extension: Chrome and
 Edge 116 or later, Safari 18 or later, a recent Firefox. A passkey here does
 not sign you in; it only unlocks the assistant's keys.
 

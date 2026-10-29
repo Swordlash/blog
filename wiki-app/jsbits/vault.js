@@ -29,7 +29,22 @@ let wikiVaultNextKey = 0;
 // by emptying it.
 function wikiVaultPageKeys() {
   if (!(globalThis.wikiVaultPageKeys instanceof Map)) globalThis.wikiVaultPageKeys = new Map();
+  wikiVaultListen();
   return globalThis.wikiVaultPageKeys;
+}
+
+// The wiki's other tabs, told when this one lets go of a user's key, so
+// that they let go of theirs too: a tab that sealed settings under a key
+// no longer stored would lose them at its next reload. (A key kept is
+// read from IndexedDB before the page's own, so it needs no message.)
+let wikiVaultChannel = null;
+
+function wikiVaultListen() {
+  if (wikiVaultChannel !== null || typeof BroadcastChannel !== "function") return;
+  wikiVaultChannel = new BroadcastChannel("wiki-assistant-keys");
+  wikiVaultChannel.onmessage = (event) => {
+    if (typeof event.data?.dropped === "string") globalThis.wikiVaultPageKeys?.delete(event.data.dropped);
+  };
 }
 
 function wikiVaultHandle(key) {
@@ -70,12 +85,20 @@ function wikiVaultFailure(error) {
 
 // A new vault key: AES-GCM, 256 bits, which can be exported (to be
 // wrapped for a passkey) only when asked.
+// The handle, or 0 where the browser makes no key (no WebCrypto).
 async function wiki_vault_new_key(exportable) {
-  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, Boolean(exportable), [
-    "encrypt",
-    "decrypt",
-  ]);
-  return wikiVaultHandle(key);
+  try {
+    const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, Boolean(exportable), ["encrypt", "decrypt"]);
+    return wikiVaultHandle(key);
+  } catch {
+    return 0;
+  }
+}
+
+// Whether WebCrypto is here to seal with: a browser offers it only to a
+// secure page (HTTPS, or the machine's own address).
+function wiki_vault_sealing_here() {
+  return typeof globalThis.crypto?.subtle?.encrypt === "function";
 }
 
 // Seal text with a vault key, the given additional data authenticated
@@ -155,6 +178,9 @@ async function wiki_vault_keep_key(user, handle, onDisk) {
       const raw = await crypto.subtle.exportKey("raw", key);
       key = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
       new Uint8Array(raw).fill(0);
+      // The handle holds the copy that cannot be exported from now on, so
+      // that the exportable one is not left in the page.
+      wikiVaultKeys.set(handle, key);
     }
     wikiVaultPageKeys().set(String(user), key);
     if (onDisk) await wikiVaultStore("readwrite", (store) => store.put(key, String(user)));
@@ -165,11 +191,11 @@ async function wiki_vault_keep_key(user, handle, onDisk) {
   }
 }
 
-// The vault key this device holds for a user: the page's, else the one in
-// IndexedDB; its handle, or 0 for none.
+// The vault key this device holds for a user: the one in IndexedDB, else
+// the page's (asked for each time); its handle, or 0 for none. The stored
+// key comes first because another tab may have stored a new one (syncing
+// turned on or unlocked there), and the page's would then be out of date.
 async function wiki_vault_device_key(user) {
-  const held = wikiVaultPageKeys().get(String(user));
-  if (held !== undefined) return wikiVaultHandle(held);
   try {
     const stored = await wikiVaultStore("readonly", (store) => store.get(String(user)));
     if (stored instanceof CryptoKey) {
@@ -177,14 +203,16 @@ async function wiki_vault_device_key(user) {
       return wikiVaultHandle(stored);
     }
   } catch {
-    // No database, as in some private windows: no key.
+    // No database, as in some private windows: the page's key, if any.
   }
-  return 0;
+  const held = wikiVaultPageKeys().get(String(user));
+  return held === undefined ? 0 : wikiVaultHandle(held);
 }
 
 // Let go of a user's vault key on this device: the page's and the stored.
 async function wiki_vault_drop_key(user) {
   wikiVaultPageKeys().delete(String(user));
+  wikiVaultChannel?.postMessage({ dropped: String(user) });
   try {
     await wikiVaultStore("readwrite", (store) => store.delete(String(user)));
   } catch {

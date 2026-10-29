@@ -5,8 +5,11 @@
 -- passkey, the vault unlocked on a second device with one touch, a key
 -- changed there picked up by the first without a touch, "ask for the
 -- passkey each time", a passkey added and removed, a passkey without the
--- PRF extension refused, and syncing turned off; and the settings stored
--- as text before the vault sealed.
+-- PRF extension refused, and syncing turned off (keeping the vault's
+-- latest settings); only passkeys that can unlock offered; a vault made
+-- elsewhere followed; another tab's key taken or let go of; no exportable
+-- key left behind by a step that fails; and the settings stored as text
+-- before the vault sealed.
 --
 -- Over the backend over HTTP, with the test's server in fetch's place
 -- ("Test.Browser.Http") and the vault's server played beside it, and
@@ -58,6 +61,14 @@ $( browserJS
      , ("js_stores_key", "wiki_test_device_stores_key", Safe, [t|JSText -> IO Bool|])
      , ("js_record", "wiki_test_device_record", Safe, [t|JSText -> IO JSText|])
      , ("js_scripted", "wiki_test_passkeys_scripted", Unsafe, [t|IO ()|])
+     , ("js_cancel_after", "wiki_test_passkeys_cancel_after", Unsafe, [t|Int -> IO ()|])
+     , ("js_stash", "wiki_test_vault_server_stash", Unsafe, [t|IO ()|])
+     , ("js_unstash", "wiki_test_vault_server_unstash", Unsafe, [t|IO ()|])
+     , ("js_add_unwrapped", "wiki_test_vault_server_add_unwrapped", Unsafe, [t|IO ()|])
+     , ("js_save_page_keys", "wiki_test_page_keys_save", Unsafe, [t|IO ()|])
+     , ("js_restore_page_keys", "wiki_test_page_keys_restore", Unsafe, [t|IO ()|])
+     , ("js_other_tab_drops", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO ()|])
+     , ("js_exportable", "wiki_test_exportable_keys_left", Safe, [t|IO Int|])
      ]
  )
 
@@ -119,11 +130,7 @@ spec m = do
     other <- reopened m
     eventually (find other ".assistant-unlock") >>= click
     _ <- eventually $ find other ".assistant-sync-on"
-    anthropic <- find other ".assistant-provider-settings[data-provider='anthropic']"
-    findIn anthropic ".assistant-forget" >>= click
-    eventually $ findIn anthropic ".assistant-key" >>= (`typeText` "test-key-anthropic-changed")
-    findIn anthropic ".assistant-key-form button" >>= click
-    eventually $ findIn anthropic ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    replaceKey other "test-key-anthropic-changed"
     unmount other
     leave "second"
     back "first"
@@ -201,6 +208,100 @@ spec m = do
     unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
     closed ui
 
+  it "keeps the vault's latest settings when syncing is turned off on a device that did not change them" $ runPage $ do
+    first' <- opened m True True
+    turnOn first'
+    unmount first'
+    leave "first"
+    other <- reopened m
+    eventually (find other ".assistant-unlock") >>= click
+    _ <- eventually $ find other ".assistant-sync-on"
+    replaceKey other "test-key-anthropic-changed"
+    unmount other
+    leave "second"
+    back "first"
+    ui <- reopened m
+    _ <- eventually $ find ui ".assistant-sync-on"
+    find ui ".assistant-sync-off" >>= click
+    _ <- eventually $ find ui ".assistant-sync-off-state"
+    (\s -> (settingsOf Anthropic s).key) <$> settingsHere m `shouldReturn` Just (ApiKey "test-key-anthropic-changed")
+    -- And so after a reload, with the key this device keeps.
+    unmount ui
+    unsafeIOToPageM js_reload
+    (\s -> (settingsOf Anthropic s).key) <$> settingsHere m `shouldReturn` Just (ApiKey "test-key-anthropic-changed")
+    unsafeIOToPageM js_uninstall
+    serverStops
+
+  it "offers for unlocking only the passkeys that hold a copy of the vault's key" $ runPage $ do
+    first' <- opened m True True
+    turnOn first'
+    unmount first'
+    leave "first"
+    unsafeIOToPageM js_add_unwrapped
+    ui <- reopened m
+    before <- touches
+    eventually (find ui ".assistant-unlock") >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    touches `shouldReturn` (before + 1)
+    closed ui
+
+  it "follows the vault another device made meanwhile, when asked to turn syncing on" $ runPage $ do
+    first' <- opened m True True
+    turnOn first'
+    unmount first'
+    leave "first"
+    -- This device opens the page before the other device's vault exists.
+    unsafeIOToPageM js_stash
+    ui <- reopened m
+    _ <- eventually $ find ui ".assistant-sync-off-state"
+    unsafeIOToPageM js_unstash
+    before <- touches
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "another device of yours syncs them")
+    _ <- eventually $ find ui ".assistant-unlock"
+    find ui ".assistant-sync-locked" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "locked in this browser")
+    touches `shouldReturn` before
+    closed ui
+
+  it "takes the key another tab stored, and lets go of the one another tab let go of" $ runPage $ do
+    ui <- opened m True True
+    -- This tab, as another one, holds the key from before syncing.
+    unsafeIOToPageM js_save_page_keys
+    turnOn ui
+    unsafeIOToPageM js_restore_page_keys
+    keys <- unsafeIOToPageM (runTest (readKeys (UserId "user-editor") :: m (Either Text Keys)))
+    ((\k -> k.locked) <$> keys, (\k -> (settingsOf Anthropic k.settings).key) <$> keys) `shouldBe` (Right False, Right (Just (ApiKey secretKey)))
+    closed ui
+    -- Another tab lets go of the key: this one seals what is typed next
+    -- under a key it stores, not under the one let go of.
+    again <- opened m True True
+    unsafeIOToPageM (evaluate =<< js_other_tab_drops (toJSText "user-editor"))
+    openai <- find again ".assistant-provider-settings[data-provider='openai']"
+    findIn openai ".assistant-key" >>= (`typeText` "test-key-openai-typed-here")
+    findIn openai ".assistant-key-form button" >>= click
+    eventually $ findIn openai ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
+    closed again
+
+  it "leaves no key that can be exported in the page when a step fails" $ runPage $ do
+    ui <- opened m True True
+    turnOn ui
+    exportable `shouldReturn` 0
+    -- Adding a passkey: the vault's key is unwrapped, and the new
+    -- passkey's dialog closed.
+    unsafeIOToPageM (js_cancel_after 1)
+    find ui ".assistant-add-passkey" >>= click
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
+    exportable `shouldReturn` 0
+    -- Turning on: a new vault key made, and the passkey's dialog closed.
+    find ui ".assistant-sync-off" >>= click
+    _ <- eventually $ find ui ".assistant-sync-off-state"
+    unsafeIOToPageM (js_cancel_after 0)
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
+    exportable `shouldReturn` 0
+    closed ui
+
   it "seals the settings stored as text before the vault, and keeps no key as text" $ runPage $ do
     unsafeIOToPageM (evaluate =<< js_new_device)
     let old = withModel Anthropic "claude-test" (withKey Anthropic (Just secretKey) defaultSettings)
@@ -215,6 +316,8 @@ spec m = do
     secretKey = "test-key-anthropic-one"
     touches :: PageM s Int
     touches = unsafeIOToPageM js_touches
+    exportable :: PageM s Int
+    exportable = unsafeIOToPageM (evaluate =<< js_exportable)
     vaultState :: PageM s Value
     vaultState = unsafeIOToPageM (fromMaybe Aeson.Null . decodeStrict . encodeUtf8 . fromJSText <$> js_vault_state)
     leave, back :: Text -> PageM s ()
@@ -253,6 +356,15 @@ opened m prf atCreate = do
 -- | The settings page again, as when the wiki opens on this device.
 reopened :: forall m -> (Specs m) => PageM s (Mounted s Shell.Query Void m)
 reopened m = startServer m AssistantSettings
+
+-- | Forget the key kept for Anthropic, and keep another.
+replaceKey :: Mounted s q o n -> Text -> PageM s ()
+replaceKey ui key = do
+  anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+  findIn anthropic ".assistant-forget" >>= click
+  eventually $ findIn anthropic ".assistant-key" >>= (`typeText` key)
+  findIn anthropic ".assistant-key-form button" >>= click
+  eventually $ findIn anthropic ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
 
 -- | Turn syncing on, and wait until it is.
 turnOn :: Mounted s q o n -> PageM s ()

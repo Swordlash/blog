@@ -51,7 +51,6 @@ module Wiki.Api.ContentPolicy
     basePolicy
   , pagePolicy
   , headerPolicy
-  , signInPolicy
 
     -- * The assistant's hosts
   , providerHosts
@@ -115,14 +114,6 @@ pagePolicy hosts = renderPolicy (withSources "connect-src" hosts (directives bas
 headerPolicy :: [Text] -> Text
 headerPolicy hosts = renderPolicy (directives (pagePolicy hosts) <> [("frame-ancestors", ["'none'"])])
 
--- | The policy of the pages the server writes itself for signing in with a
--- provider ("Wiki.Server.Auth"): 'headerPolicy' with @form-action@ also
--- allowing the given addresses, the provider's authorisation address. Its
--- form posts to the wiki, which may send the browser on to the provider,
--- and a browser checks @form-action@ on such a redirect too.
-signInPolicy :: [Text] -> Text
-signInPolicy targets = renderPolicy (withSources "form-action" targets (directives (headerPolicy [])))
-
 -- | The providers' API addresses: Anthropic's and OpenAI's, which the
 -- page's @connect-src@ allows in every wiki. They are the sources of the
 -- base policy's @connect-src@ other than @'self'@.
@@ -153,7 +144,7 @@ allowsConnect pageOrigin policy address = case parts <$> originOf address of
   Just target -> any (allows target) (connectSources policy)
   where
     allows target@(scheme, host, port) source
-      | source == "'self'" = Just target == (parts <$> originOf pageOrigin)
+      | source == "'self'" = maybe False (sameOrigin target . parts) (originOf pageOrigin)
       | source == "*" = True
       | Just onlyScheme <- T.stripSuffix ":" source, not ("/" `T.isInfixOf` onlyScheme) = schemeAllows onlyScheme scheme
       | Just (s, h, p) <- parts <$> originOf source =
@@ -161,6 +152,8 @@ allowsConnect pageOrigin policy address = case parts <$> originOf address of
             && hostAllows h host
             && (p == "*" || portOf s p == portOf scheme port)
       | otherwise = False
+    -- The same origin, a port left off being the scheme's own.
+    sameOrigin (scheme, host, port) (s, h, p) = s == scheme && h == host && portOf s p == portOf scheme port
     schemeAllows source scheme = source == scheme || (source == "http" && scheme == "https")
     hostAllows source host = case T.stripPrefix "*." source of
       Just domain -> ("." <> domain) `T.isSuffixOf` host

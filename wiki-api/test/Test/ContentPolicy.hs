@@ -42,10 +42,6 @@ spec = describe "Wiki.Api.ContentPolicy" $ do
     directive "frame-ancestors" (headerPolicy []) `shouldBe` Just ["'none'"]
     connectSources (headerPolicy ["https://openrouter.ai"]) `shouldContain` ["https://openrouter.ai"]
 
-  it "lets a sign-in page's form lead to the provider" $ do
-    directive "form-action" (signInPolicy ["https://accounts.example.com"]) `shouldBe` Just ["'self'", "https://accounts.example.com"]
-    directive "frame-ancestors" (signInPolicy []) `shouldBe` Just ["'none'"]
-
   it "reads the policy back from its text" $
     renderPolicy (directives (headerPolicy ["https://a.example"])) `shouldBe` headerPolicy ["https://a.example"]
 
@@ -58,6 +54,10 @@ spec = describe "Wiki.Api.ContentPolicy" $ do
     it "refuses every other address" $
       for_ ["https://openrouter.ai/api/v1", "http://localhost:1234/v1", "https://example.net", "http://api.openai.com", "https://api.openai.com:8443", "https://wiki.example.org:444", "ftp://api.openai.com", "nonsense"] $ \address ->
         (address, allowsConnect page policy address) `shouldBe` (address, False)
+    it "takes the page's own origin with its default port written out, or left off" $ do
+      allowsConnect page policy "https://wiki.example.org:443/v1" `shouldBe` True
+      allowsConnect "http://localhost:80" policy "http://localhost/v1" `shouldBe` True
+      allowsConnect "http://localhost" policy "http://localhost:8080/v1" `shouldBe` False
     it "lets an http: source allow its host over https: too" $
       allowsConnect page policy "https://localhost:11434/v1" `shouldBe` True
 

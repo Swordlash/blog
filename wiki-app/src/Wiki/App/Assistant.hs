@@ -125,6 +125,7 @@ $( browserJS
      , ("js_device_key", "wiki_vault_device_key", Safe, [t|JSText -> IO Int|])
      , ("js_drop_key", "wiki_vault_drop_key", Safe, [t|JSText -> IO ()|])
      , ("js_passkeys_here", "wiki_vault_passkeys_here", Unsafe, [t|IO Bool|])
+     , ("js_sealing_here", "wiki_vault_sealing_here", Unsafe, [t|IO Bool|])
      , ("js_create", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      , ("js_get", "wiki_vault_get", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      , ("js_wrap", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO JSText|])
@@ -326,6 +327,14 @@ class (Monad m) => MonadAssistant m where
   default passkeysHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
   passkeysHere = lift passkeysHere
 
+  -- | Whether settings can be sealed here: the browser offers WebCrypto,
+  -- which it does only to a secure page (HTTPS, or the machine's own
+  -- address). Where it does not, the settings are stored as text, as
+  -- before the vault ("Wiki.App.Assistant.Keys").
+  sealingHere :: m Bool
+  default sealingHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
+  sealingHere = lift sealingHere
+
   -- | Make a passkey with the server's options, asking for its PRF on the
   -- salt, whose output gives the wrapping key with this HKDF info.
   createPasskey :: RegistrationOptions -> Text -> Text -> m (Either PasskeyRefusal Made)
@@ -441,6 +450,7 @@ instance MonadAssistant BrowserDOM where
     pure (if k == 0 then Nothing else Just (KeyRef k))
   dropDeviceKey user = liftIO (evaluate =<< js_drop_key (toJSText user.text))
   passkeysHere = liftIO js_passkeys_here
+  sealingHere = liftIO js_sealing_here
   createPasskey options salt info = liftIO $ do
     answer <- evaluate . fromJSText =<< js_create (toJSText (json (toJSON options))) (toJSText salt) (toJSText info)
     pure . passkeyAnswer answer $ \o -> Made <$> o .: "response" <*> o .: "prf" <*> (keyRefOf <$> o .: "wrapping")
@@ -506,6 +516,7 @@ instance MonadAssistant MemDOM where
   deviceKey _ = pure Nothing
   dropDeviceKey _ = pass
   passkeysHere = pure False
+  sealingHere = pure False
   createPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
   usePasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
   wrapWith _ _ _ = pure (Left noBrowser)

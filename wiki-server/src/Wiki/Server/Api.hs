@@ -697,8 +697,12 @@ handlers env caller =
       liftIO (takeCeremony env.ceremonies now key u purpose)
         >>= maybe (refuse (ApiError.Invalid "No passkey is being made or used in this session, or it took more than five minutes: start again.")) pure
     expectedOf s challenge = Expected {challenge, origins = s.site.origins, rpId = s.site.rpId}
-    -- Bytes the browser sent in base64url.
-    bytesOf text = maybe (refuse (ApiError.Invalid "Something the browser sent is not in base64url.")) pure (fromBase64Url text)
+    -- Bytes the browser sent in base64url. An authenticator's answer,
+    -- its attestation object included, takes a few kilobytes; one much
+    -- longer is refused before it is decoded.
+    bytesOf text
+      | T.length text > 64 * 1024 = refuse (ApiError.Invalid "Something the browser sent is longer than a passkey's answer.")
+      | otherwise = maybe (refuse (ApiError.Invalid "Something the browser sent is not in base64url.")) pure (fromBase64Url text)
     who = caller.who
     -- The session as the API answers it: with the providers the server
     -- signs in with, which the storage does not know.

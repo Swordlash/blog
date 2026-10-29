@@ -8,9 +8,11 @@
 module Test.Server.Vault (spec) where
 
 import Data.Aeson (ToJSON, encode)
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (Header, methodDelete, methodGet, methodPost, methodPut)
+import Network.Wai (Request (..), defaultRequest)
 import Protolude
 import Test.Hspec
 import Test.Server.Fixture
@@ -20,6 +22,8 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Vault
 import Wiki.Core.Assistant.Vault
+import Wiki.Core.Url (Url (..))
+import Wiki.Server.Vault (Site (..), siteFor)
 import Wiki.Server.WebAuthn (fromBase64Url, toBase64Url)
 
 spec :: Spec
@@ -100,6 +104,32 @@ spec = describe "the assistant's vault and passkeys, over HTTP" $ do
     (\x -> x.status) <$> call r editor methodDelete links.assistant.deleteVault none `shouldReturn` 204
     (call r editor methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
     (call r editor methodGet links.assistant.passkeys none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
+
+  it "refuses a wrapped key, a passkey's answer or a passkey longer than any is" $ withSignedIn $ \r editor _ -> do
+    info <- registerNew r editor passkey
+    let tooLong = T.replicate (256 * 1024 + 1) "a"
+    wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" tooLong)])) >>= jsonAs 400
+    wrapped `shouldSatisfy` says "too long"
+    _ :: RegistrationOptions <- call r editor methodPost links.assistant.beginRegistration none >>= jsonAs 200
+    let other = authenticator "another passkey"
+        answer = RegistrationResponse {id = CredentialId (toBase64Url other.credentialId), clientDataJSON = "e30", attestationObject = T.replicate (64 * 1024 + 1) "a"}
+    long :: ApiError <- call r editor methodPut links.assistant.finishRegistration (Just answer) >>= jsonAs 400
+    long `shouldSatisfy` says "longer than a passkey's answer"
+    -- A credential id longer than WebAuthn allows, which the server would
+    -- otherwise store.
+    fresh :: RegistrationOptions <- call r editor methodPost links.assistant.beginRegistration none >>= jsonAs 200
+    longId :: ApiError <- register r editor fresh (authenticator (BS.replicate 1024 7)) r.public >>= jsonAs 400
+    longId `shouldSatisfy` says "longer than a passkey's"
+    map (\p -> p.id) <$> (call r editor methodGet links.assistant.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [info.id]
+
+  describe "the site a passkey is made for" $ do
+    let request headers = defaultRequest {requestHeaders = headers, requestHeaderHost = Just "wiki.example.org:8080"}
+    it "is the public address, when one is set" $
+      siteFor (Just (Url "https://Wiki.Example.ORG/base/")) (request []) `shouldBe` Site {rpId = "wiki.example.org", origins = ["https://wiki.example.org"]}
+    it "is the request's host otherwise, over the scheme a proxy reports, else plain HTTP" $ do
+      siteFor Nothing (request []) `shouldBe` Site {rpId = "wiki.example.org", origins = ["http://wiki.example.org:8080"]}
+      siteFor Nothing (request [("X-Forwarded-Host", "Docs.Example.net, inner"), ("X-Forwarded-Proto", "https")])
+        `shouldBe` Site {rpId = "docs.example.net", origins = ["https://docs.example.net"]}
   where
     passkey = authenticator "the editor's passkey"
     vaultWith wrapped = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.fromList wrapped}

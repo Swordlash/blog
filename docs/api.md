@@ -805,7 +805,8 @@ A passkey is registered and used in two requests each: the first gives a
 challenge, kept for the session that asked (by its secret's hash), for five
 minutes, used once; the second sends the browser's answer, which the server
 checks (`Wiki.Server.WebAuthn`): the client data's type, challenge and
-origin (the public address's, or the request's host over HTTPS or HTTP), the
+origin (the public address's, or the request's host over the scheme
+`X-Forwarded-Proto` names, else HTTP), the
 relying party's hash (the host without its port), the user present and
 verified, and for a use the signature (ES256 or RS256) over the
 authenticator data and the client data's SHA-256, and a counter that goes

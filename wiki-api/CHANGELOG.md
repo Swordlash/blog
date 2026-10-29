@@ -11,8 +11,7 @@ and `DELETE assistant/passkeys/<id>`.
 `Wiki.Api.ContentPolicy` is the application page's Content Security
 Policy (WP5.21): `basePolicy`, read from `web/index.html` when the package
 is compiled, `pagePolicy` and `headerPolicy` with an administrator's
-assistant hosts in `connect-src`, `signInPolicy` for the server's own
-sign-in pages, `parseAssistantHost`, `originOf` and `allowsConnect`.
+assistant hosts in `connect-src`, `parseAssistantHost`, `originOf` and `allowsConnect`.
 `ServerSettings` gains `assistantHosts`, the addresses the assistant may
 reach besides the providers' APIs; settings without the field read as
 having none.

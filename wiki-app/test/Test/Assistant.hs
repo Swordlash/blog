@@ -2,10 +2,11 @@
 -- ("Wiki.App.Assistant", "Wiki.App.Assistant.Keys"), over the in-memory
 -- document the native tests have. Its IndexedDB behaves as the browser's:
 -- each user's record apart, under their id, in a database of the
--- assistant's own, deleted on request. It has no WebCrypto, so it cannot
--- seal the settings: a change fails there rather than store a key as
--- text. The settings sealed, per user, forgotten, synced and unlocked are
--- the browser tests' (Test.Browser.Assistant, Test.Browser.Vault).
+-- assistant's own, deleted on request. It has no WebCrypto, as a page
+-- served over plain HTTP has none: there the settings are stored as text,
+-- as before the vault, and sealed ones cannot be opened. The settings
+-- sealed, per user, forgotten, synced and unlocked are the browser tests'
+-- (Test.Browser.Assistant, Test.Browser.Vault).
 module Test.Assistant (spec) where
 
 import Data.Aeson (encode)
@@ -25,6 +26,7 @@ import Wiki.Core.Assistant
   , readyFor
   , withKey
   )
+import Wiki.Core.Assistant.Vault (emptyRecord)
 import Wiki.Core.Id (UserId (..))
 
 spec :: Spec
@@ -50,19 +52,23 @@ spec = describe "Wiki.App.Assistant's settings" $ do
     assistantDatabase.name `shouldBe` "wiki-assistant"
     fmap (\k -> (k.settings, k.locked, k.synced)) <$> run (readKeys alice) `shouldReturn` Right (defaultSettings, False, False)
 
-  it "stores no key as text where it cannot seal it" $ do
+  it "keeps the settings as text where it cannot seal them, as before the vault" $ do
     run (IDB.deleteDatabase assistantDatabase.name)
-    run (changeKeys alice (const withKeys)) >>= (`shouldSatisfy` isLeft)
-    run (IDB.keys assistantDatabase "settings") `shouldReturn` []
+    run (sealingHere) `shouldReturn` False
+    fmap (\k -> (k.settings, k.locked, k.synced)) <$> run (changeKeys alice (const withKeys)) `shouldReturn` Right (withKeys, False, False)
+    run (deviceRecord alice) `shouldReturn` Right (Just (BSL.toStrict (encode withKeys)))
+    fmap (\k -> k.settings) <$> run (readKeys alice) `shouldReturn` Right withKeys
+    -- Nothing set: nothing kept.
+    _ <- run (changeKeys alice (const defaultSettings))
+    run (deviceRecord alice) `shouldReturn` Right Nothing
 
-  it "leaves the settings stored as text before the vault for a browser to seal" $ do
-    -- The in-memory document cannot seal them, so it refuses to read
-    -- them, and leaves them as they were for a browser to seal.
+  it "cannot open settings a browser sealed, and leaves them as they are" $ do
     run (IDB.deleteDatabase assistantDatabase.name)
-    let old = BSL.toStrict (encode withKeys)
-    run (keepDeviceRecord alice (Just old)) `shouldReturn` Right ()
+    let sealed = BSL.toStrict (encode emptyRecord)
+    run (keepDeviceRecord alice (Just sealed)) `shouldReturn` Right ()
     run (readKeys alice) >>= (`shouldSatisfy` isLeft)
-    run (deviceRecord alice) `shouldReturn` Right (Just old)
+    run (changeKeys alice (const withKeys)) >>= (`shouldSatisfy` isLeft)
+    run (deviceRecord alice) `shouldReturn` Right (Just sealed)
 
   it "reaches no provider in the in-memory document" $
     case readyFor Anthropic withKeys of

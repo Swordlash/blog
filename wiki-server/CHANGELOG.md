@@ -8,7 +8,8 @@ The assistant's vault and passkeys (WP5.21): migration
 `Ceremonies`, a new field of `Env`) and `Wiki.Server.WebAuthn`
 (registration with attestation `none` and assertion, ES256 and RS256, with
 `cborg` and `crypton`). `Signing` gains `site`, the relying party and
-origins a passkey is made for.
+the origin a passkey is made for: the public address's, or the request's
+over the scheme `X-Forwarded-Proto` names (`Wiki.Server.Address.requestOrigin`).
 
 Every page is sent with the application's Content Security Policy
 (WP5.21), with `Referrer-Policy: same-origin` and a `Permissions-Policy`
@@ -16,8 +17,7 @@ that turns off the camera, the microphone and the location; the page's
 own meta element is rewritten to the same text. `serveStatic` takes the
 assistant's hosts, which `--assistant-hosts` and the administration's
 server settings give (`currentAssistantHosts`). The sign-in pages of
-`Wiki.Server.Auth` carry the policy with the provider's authorisation
-address in `form-action` (`Wiki.Server.Oidc.knownAuthorization`).
+`Wiki.Server.Auth` carry the same policy as the header.
 
 A session's secret is a `SessionToken` (WP5.15, in `Wiki.Server.Password`)
 and a waiting sign-in's a `PendingToken` (in `Wiki.Server.SecondFactor`),

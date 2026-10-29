@@ -14,6 +14,11 @@ gains WebCrypto and WebAuthn (`sealWith`, `openWith`, `deviceKey`,
 `MonadVault` (`Wiki.App.Assistant.Sync`) is the server's half, with
 instances for `HttpWiki` and, keeping nothing, `MemWiki`, `BrowserDOM` and
 `MemDOM`; the shell, the editor and the assistant's settings page need it.
+`sealingHere` says whether the browser offers WebCrypto: a page served over
+plain HTTP from another machine gets none, and there the settings are
+stored as text, as before, with a warning on the settings page. The editor
+loads the keys with `loadFollowedKeys`, which asks the server only when the
+device already syncs.
 
 The assistant checks another service's base URL against the page's
 Content Security Policy before it sends anything (WP5.21): an address the

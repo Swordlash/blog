@@ -23,6 +23,7 @@ const wikiTestPasskeys = {
   prf: true,
   prfAtCreate: true,
   cancelNext: false,
+  cancelAt: null,
   touches: 0,
 };
 
@@ -46,8 +47,9 @@ async function wikiTestPrf(id, salt) {
 
 function wikiTestTouch() {
   wikiTestPasskeys.touches++;
-  if (wikiTestPasskeys.cancelNext) {
+  if (wikiTestPasskeys.cancelNext || wikiTestPasskeys.cancelAt === wikiTestPasskeys.touches) {
     wikiTestPasskeys.cancelNext = false;
+    wikiTestPasskeys.cancelAt = null;
     throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
   }
 }
@@ -96,7 +98,7 @@ const wikiTestCredentials = {
 function wiki_test_passkeys_install(prf, prfAtCreate) {
   if (wikiTestPasskeys.original === null) wikiTestPasskeys.original = Object.getOwnPropertyDescriptor(navigator, "credentials") ?? false;
   Object.defineProperty(navigator, "credentials", { value: wikiTestCredentials, configurable: true });
-  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, touches: 0 });
+  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0 });
 }
 
 function wiki_test_passkeys_uninstall() {
@@ -113,6 +115,11 @@ function wiki_test_passkeys_touches() {
 // The person closes the next dialog.
 function wiki_test_passkeys_cancel_next() {
   wikiTestPasskeys.cancelNext = true;
+}
+
+// The person closes a later dialog: the one after this many touches.
+function wiki_test_passkeys_cancel_after(touches) {
+  wikiTestPasskeys.cancelAt = wikiTestPasskeys.touches + touches + 1;
 }
 
 // The vault's server: one user's vault and passkeys.
@@ -322,4 +329,101 @@ async function wiki_test_device_record(user) {
 // reaches no provider from the test page.
 function wiki_test_passkeys_scripted() {
   globalThis.wikiAssistantScript = { turns: [] };
+}
+
+// Another device turned syncing on meanwhile: the vault's server is
+// emptied, its vault and passkeys stashed, and put back when asked.
+let wikiTestStashed = null;
+
+function wiki_test_vault_server_stash() {
+  wikiTestStashed = JSON.parse(JSON.stringify(wikiTestVault));
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [] });
+}
+
+function wiki_test_vault_server_unstash() {
+  if (wikiTestStashed !== null) Object.assign(wikiTestVault, wikiTestStashed);
+  wikiTestStashed = null;
+}
+
+// A passkey the server knows and the password manager keeps, made before
+// the others but holding no copy of the vault's key (as one whose
+// wrapping was never stored): the first the stub would choose.
+function wiki_test_vault_server_add_unwrapped() {
+  const id = wikiTestBase64(crypto.getRandomValues(new Uint8Array(16)));
+  wikiTestVault.passkeys.unshift({ id, name: "A passkey that cannot unlock", wrapped: null });
+  wikiTestPasskeys.credentials.unshift(id);
+}
+
+// The keys the page holds, saved, and put back: what another tab of the
+// wiki holds while this one changes what is stored.
+let wikiTestSavedPageKeys = null;
+
+function wiki_test_page_keys_save() {
+  wikiTestSavedPageKeys = new Map(globalThis.wikiVaultPageKeys ?? []);
+}
+
+function wiki_test_page_keys_restore() {
+  globalThis.wikiVaultPageKeys = new Map(wikiTestSavedPageKeys ?? []);
+}
+
+// Another tab let go of a user's settings (nothing set there, and not
+// syncing): the stored record and key deleted, and the tabs told, as
+// wiki_vault_drop_key does.
+async function wikiTestDeleteEntry(name, store, key) {
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(store);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(store, "readwrite");
+      transaction.objectStore(store).delete(key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function wiki_test_other_tab_drops(user) {
+  await wikiTestDeleteEntry("wiki-assistant", "settings", String(user));
+  await wikiTestDeleteEntry("wiki-assistant-keys", "keys", String(user));
+  const other = new BroadcastChannel("wiki-assistant-keys");
+  other.postMessage({ dropped: String(user) });
+  other.close();
+  // The message arrives as a task of its own.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+// How many keys the page still holds that can be exported, through the
+// vault's own functions (Wiki.App.Assistant's): every handle given so far
+// is tried as the key to wrap, with a wrapping key from a passkey the
+// stub makes for this, which is no touch of the person's.
+async function wiki_test_exportable_keys_left() {
+  const vault = Object.getOwnPropertySymbols(globalThis)
+    .map((symbol) => globalThis[symbol])
+    .find((namespace) => typeof namespace?.wiki_vault_wrap === "function" && typeof namespace?.wiki_vault_get === "function");
+  if (vault === undefined) throw new Error("The vault's functions are not in this page.");
+  const id = wikiTestBase64(crypto.getRandomValues(new Uint8Array(16)));
+  wikiTestPasskeys.credentials.push(id);
+  const salt = wikiTestBase64(crypto.getRandomValues(new Uint8Array(32)));
+  const prf = wikiTestPasskeys.prf;
+  wikiTestPasskeys.prf = true;
+  try {
+    const got = JSON.parse(await vault.wiki_vault_get(JSON.stringify({ challenge: salt, rpId: location.hostname, allow: [id] }), salt, "probe"));
+    wikiTestPasskeys.touches--;
+    if (!got.wrapping) throw new Error(`No wrapping key for the probe: ${got.error}`);
+    let left = 0;
+    for (let handle = 1; handle < got.wrapping; handle++) {
+      if (JSON.parse(await vault.wiki_vault_wrap(got.wrapping, handle, "probe")).key !== undefined) left++;
+    }
+    vault.wiki_vault_forget_key(got.wrapping);
+    return left;
+  } finally {
+    wikiTestPasskeys.prf = prf;
+    wikiTestPasskeys.credentials = wikiTestPasskeys.credentials.filter((c) => c !== id);
+  }
 }

@@ -49,14 +49,13 @@ module Wiki.Server.Vault
 where
 
 import Crypto.Random (getRandomBytes)
-import Data.CaseInsensitive qualified as CI
+import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
-import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
-import Network.Wai (Request (..))
+import Network.Wai (Request)
 import Protolude
 import Wiki.Api.ContentPolicy (originOf)
 import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
@@ -65,6 +64,7 @@ import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), Vault (..), Va
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Accounts (immediately)
+import Wiki.Server.Address (requestOrigin)
 import Wiki.Server.Storage (Storage, withDatabase)
 import Wiki.Server.Storage.Rows (Stamp (..))
 import Wiki.Server.WebAuthn (AssertionRefusal (..), NewCredential (..), StoredKey (..), toBase64Url)
@@ -82,16 +82,16 @@ data Site = Site
   deriving stock (Eq, Show)
 
 -- | The site a request reaches: that of the wiki's public address when
--- the administration has set one, or else the host the request names (as
--- a proxy in front of the server passes it on), over HTTPS or plain HTTP,
--- since the server may not know which the browser used.
+-- the administration has set one, or else the origin the request names
+-- ('requestOrigin': the host, and the scheme a proxy in front of the
+-- server says the browser used, else plain HTTP). A proxy that serves the
+-- wiki over HTTPS and does not say so with @X-Forwarded-Proto@ needs the
+-- public address set, or the browser's origin is refused.
 siteFor :: Maybe Url -> Request -> Site
-siteFor publicUrl request = case publicUrl >>= originOf . (\u -> u.text) of
-  Just origin -> Site {rpId = hostOf (T.drop 3 (snd (T.breakOn "://" origin))), origins = [origin]}
-  Nothing -> Site {rpId = hostOf host, origins = ["https://" <> host, "http://" <> host]}
+siteFor publicUrl request = Site {rpId = hostOf (T.drop 3 (snd (T.breakOn "://" origin))), origins = [origin]}
   where
-    header name = decodeUtf8With lenientDecode <$> lookup (CI.mk name) (requestHeaders request)
-    host = T.toLower (T.strip (T.takeWhile (/= ',') (fromMaybe "localhost" (header "X-Forwarded-Host" <|> (decodeUtf8With lenientDecode <$> requestHeaderHost request)))))
+    asked = requestOrigin request
+    origin = fromMaybe (T.toLower asked) ((publicUrl >>= originOf . (\u -> u.text)) <|> originOf asked)
     hostOf authority
       | "[" `T.isPrefixOf` authority = T.takeWhile (/= ']') (T.drop 1 authority)
       | otherwise = T.takeWhile (/= ':') authority
@@ -133,7 +133,7 @@ maxVaultText = 256 * 1024
 storeVault :: Storage -> UTCTime -> UserId -> Maybe VaultTag -> Vault -> IO (Either WikiError StoredVault)
 storeVault st now u base v
   | v.format /= vaultFormat = pure (Left (Invalid ("A vault of format " <> show v.format <> ": this wiki writes format " <> show vaultFormat <> ".")))
-  | any (\t -> T.null t || T.length t > maxVaultText) [v.salt, v.sealed.nonce, v.sealed.ciphertext] = pure (Left (Invalid "This is not a vault this wiki keeps: a part of it is empty or too long."))
+  | any (\t -> T.null t || T.length t > maxVaultText) ([v.salt, v.sealed.nonce, v.sealed.ciphertext] <> concat [[w.nonce, w.key] | w <- Map.elems v.wrapped]) = pure (Left (Invalid "This is not a vault this wiki keeps: a part of it is empty or too long."))
   | otherwise = withDatabase st $ \c -> immediately c $ do
       mine <- map fromOnly <$> query c "SELECT credential_id FROM passkeys WHERE user_id = ?" (Only u.text)
       revision <- map fromOnly <$> query c "SELECT revision FROM assistant_vaults WHERE user_id = ?" (Only u.text)
@@ -187,10 +187,23 @@ passkeysIn c u =
   map (\(i, name, Stamp createdAt, lastUsed, unlocks) -> PasskeyInfo {id = CredentialId i, name, createdAt, lastUsedAt = (\(Stamp t) -> t) <$> lastUsed, unlocks})
     <$> query c "SELECT credential_id, name, created_at, last_used_at, wrapped_key IS NOT NULL FROM passkeys WHERE user_id = ? ORDER BY created_at, credential_id" (Only u.text)
 
+-- | The longest public key of a passkey that is stored, in bytes: an
+-- RS256 key of 4096 bits takes some 550, so nothing much longer is one.
+maxPublicKey :: Int
+maxPublicKey = 16 * 1024
+
+-- | The longest credential id, in bytes, as WebAuthn bounds it.
+maxCredentialId :: Int
+maxCredentialId = 1023
+
 -- | Store a passkey just registered for a user, without a wrapped key yet.
 -- A credential registered already (by anyone) is a 'Conflict'; one more
--- than 'maxPasskeys' is 'Invalid'.
+-- than 'maxPasskeys', or one whose id or public key is too long, is
+-- 'Invalid'.
 registerPasskey :: Storage -> UTCTime -> UserId -> NewCredential -> IO (Either WikiError PasskeyInfo)
+registerPasskey _ _ _ new
+  | BS.length new.publicKey > maxPublicKey || BS.null new.credentialId || BS.length new.credentialId > maxCredentialId =
+      pure (Left (Invalid "This passkey's id or public key is longer than a passkey's."))
 registerPasskey st now u new = withDatabase st $ \c -> immediately c $ do
   let i = toBase64Url new.credentialId
   taken <- query c "SELECT count(*) FROM passkeys WHERE credential_id = ?" (Only i)

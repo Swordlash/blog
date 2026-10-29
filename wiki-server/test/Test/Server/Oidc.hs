@@ -34,7 +34,7 @@ import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), NewPassword (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
-import Wiki.Api.ContentPolicy (signInPolicy)
+import Wiki.Api.ContentPolicy (headerPolicy)
 import Wiki.Api.Links (links)
 import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
 import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
@@ -480,14 +480,11 @@ overHttp = describe "over HTTP" $ do
       noCookie.status `shouldBe` 400
       unknown `says` "start it again"
 
-    it "sends its pages with the application's policy, their forms let lead to the provider" $ withOidc $ \fake r -> do
+    it "sends its pages with the application's policy" $ withOidc $ \_ r -> do
       missing <- getUrl r (onPublic r "auth/nobody/start?next=%2F")
-      header "Content-Security-Policy" missing `shouldBe` Just (encodeUtf8 (signInPolicy []))
-      -- Once the provider has said how to sign in (at the first start),
-      -- its authorisation address is known.
-      _ <- getUrl r (onPublic r "auth/acme/start?next=%2F")
+      header "Content-Security-Policy" missing `shouldBe` Just (encodeUtf8 (headerPolicy []))
       unknown <- getUrlWith r (onPublic r "auth/acme/callback?code=c&state=nothing") [("Cookie", "wiki_oidc=nothing")]
-      header "Content-Security-Policy" unknown `shouldBe` Just (encodeUtf8 (signInPolicy [fake.url]))
+      header "Content-Security-Policy" unknown `shouldBe` Just (encodeUtf8 (headerPolicy []))
       (header "Referrer-Policy" unknown, header "Permissions-Policy" unknown) `shouldBe` (Just "no-referrer", Just "camera=(), microphone=(), geolocation=()")
 
     it "answers a provider it does not have with 404, and nothing on the admin listener" $ withOidc $ \_ r -> do

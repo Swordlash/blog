@@ -71,9 +71,11 @@
 -- = The pages' policy
 --
 -- Every answer carries the application page's Content Security Policy
--- (WP5.21 of docs/PLAN.md), with @form-action@ allowing the provider's
--- authorisation address as well as the wiki ('signInPolicy'), and the
--- same @Permissions-Policy@. The pages keep @Referrer-Policy: no-referrer@,
+-- as the server sends it (WP5.21 of docs/PLAN.md, 'headerPolicy'), and
+-- the same @Permissions-Policy@. Its @form-action 'self'@ is enough: the
+-- browser reaches a provider from a link to @start@ and its redirect,
+-- which @form-action@ does not govern, and the one form here, the second
+-- factor's, posts to the wiki. The pages keep @Referrer-Policy: no-referrer@,
 -- stricter than the application's, because the callback's address carries
 -- the provider's code.
 module Wiki.Server.Auth
@@ -96,7 +98,7 @@ import Wiki.Api.Account
   , InvitationToken (..)
   )
 import Wiki.Api.Auth (callbackPath)
-import Wiki.Api.ContentPolicy (originOf, signInPolicy)
+import Wiki.Api.ContentPolicy (headerPolicy)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..), User (..))
 import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), accountOf, endSession, landWith, startSession)
@@ -104,7 +106,7 @@ import Wiki.Server.Api (Caller (..), Env (..), Signing (..), currentProviders, r
 import Wiki.Server.Limiter (Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (Level (..), Logger, logWith)
-import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, knownAuthorization, newSecrets, remember, takePending)
+import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, newSecrets, remember, takePending)
 import Wiki.Server.SecondFactor (PendingSignIn (..), checkCode, finishPending, holdSignIn, pendingCookie, pendingSignIn, requestPending, wrongCode)
 import Wiki.Server.Session (CookieSettings (..), sessionCookie)
 import Wiki.Server.Storage (Who (..), withDatabase)
@@ -120,10 +122,8 @@ authApplication logger env caller mount name rest request respondWithout = do
   -- The providers as the administration has them now: one added a moment
   -- ago signs people in, one removed no longer does.
   providers <- currentProviders env
-  let found = find (\p -> p.option.name == name) providers
-  targets <- maybe (pure []) (fmap (maybe [] (maybeToList . originOf)) . knownAuthorization) found
-  let respond = respondWithout . mapResponseHeaders (<> policyHeaders targets)
-  case (found, caller.signing, rest) of
+  let respond = respondWithout . mapResponseHeaders (<> policyHeaders)
+  case (find (\p -> p.option.name == name) providers, caller.signing, rest) of
     (Just p, Just signing, ["start"])
       | readOnly -> start logger env caller signing mount p request respond
     (Just p, Just signing, ["callback"])
@@ -348,11 +348,10 @@ flowCookieOf request =
 --------------------------------------------------------------------------------
 -- Pages
 
--- | The policy headers of every answer, with the given addresses a form
--- may lead to besides the wiki.
-policyHeaders :: [Text] -> [Header]
-policyHeaders targets =
-  [ ("Content-Security-Policy", encodeUtf8 (signInPolicy targets))
+-- | The policy headers of every answer.
+policyHeaders :: [Header]
+policyHeaders =
+  [ ("Content-Security-Policy", encodeUtf8 (headerPolicy []))
   , ("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
   ]
 

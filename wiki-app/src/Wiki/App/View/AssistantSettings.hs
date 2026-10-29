@@ -60,7 +60,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Vault (PasskeyInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
-import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
+import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, readKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
 import Wiki.App.Assistant.Sync (MonadVault (..))
 import Wiki.App.Backend (Session (..))
 import Wiki.App.View.Common (Context (..), attr)
@@ -139,6 +139,8 @@ data State = State
   , user :: Maybe UserId
   , settings :: Maybe (Either Text Settings)
   , secure :: Bool
+  , sealing :: Bool
+  -- ^ Whether the browser can seal the keys here ('sealingHere').
   , scripted :: Bool
   , typedKeys :: Map Provider Text
   , typedModels :: Map Provider Text
@@ -183,6 +185,7 @@ component =
               , user = userOf input
               , settings = Nothing
               , secure = True
+              , sealing = True
               , scripted = False
               , typedKeys = mempty
               , typedModels = mempty
@@ -235,6 +238,11 @@ component =
               This page was not served over HTTPS. Your key still goes to its provider over an encrypted connection, but anyone between you and this wiki could change this page to read what you type into it. Use the assistant from an HTTPS address of this wiki.
             </p>
           {% end %}
+          {% if not st.sealing %}
+            <p class="warning assistant-unsealed" role="alert">
+              This browser offers no encryption to a page served over plain HTTP, so your keys are kept in this browser as text, not sealed. Open this wiki at its HTTPS address to have them sealed.
+            </p>
+          {% end %}
           {{ syncView st.sync }}
           <fieldset class="assistant-provider" disabled={{ st.busy }}>
             <legend>The assistant asks</legend>
@@ -273,8 +281,10 @@ component =
               <p class="assistant-sync-state assistant-sync-locked">Your keys sync from your other devices, and are locked in this browser.</p>
               <div class="actions">
                 <button type="button" class="primary assistant-unlock" disabled={{ isJust sy.working }} onClick={{ const Unlock }}>Unlock with passkey</button>
+                <button type="button" class="danger assistant-sync-off" disabled={{ isJust sy.working }} onClick={{ const TurnOff }}>Turn off</button>
               </div>
               <p class="account-note assistant-type-here">or type a key here, below: it stays in this browser, and joins your synced keys once you unlock them.</p>
+              <p class="account-note assistant-locked-off">Lost every passkey? "Turn off" deletes the vault and your passkeys on the server, and needs no passkey. The keys in the vault are lost with it; keys typed in this browser stay here.</p>
             {% else %}
               {% if sy.synced %}
                 <p class="assistant-sync-state assistant-sync-on">Sync across devices: on. Your keys are sealed in a vault this wiki's server keeps and cannot open; one of your passkeys opens it on your other devices, with one touch.</p>
@@ -441,8 +451,9 @@ component =
       -- rendered, and the program adopts it.
       Initialize -> whenM (H.liftEffect assistantHere) $ do
         secure <- H.liftEffect secureContext
+        sealing <- H.liftEffect sealingHere
         scripted <- H.liftEffect scriptedInstalled
-        modify (\st -> st {secure, scripted})
+        modify (\st -> st {secure, sealing, scripted})
         load
       Receive input -> do
         before <- gets (\st -> st.user)
@@ -558,7 +569,10 @@ component =
 
     -- A step of syncing, which may wait on the browser's passkey dialog:
     -- said while it runs, and then the settings and the passkeys as they
-    -- are after it, or why it failed.
+    -- are after it, with why it failed if it did. A step that fails may
+    -- still have changed what this device keeps (turning on finds the
+    -- vault another device made, and follows it, locked), so the keys are
+    -- read again then.
     syncStep :: Text -> (UserId -> m (Either Text Keys)) -> H.HalogenM State Action Empty output m ()
     syncStep saying step =
       gets (\st -> st.user)
@@ -566,22 +580,26 @@ component =
           ( \user -> do
               modify (\st -> st {sync = st.sync {working = Just saying, trouble = Nothing}})
               result <- lift (step user)
-              passkeys <- case result of
+              keys <- either (const (lift (readKeys user))) (pure . Right) result
+              passkeys <- case keys of
                 Right k | k.synced -> either (const []) identity <$> lift listPasskeys
                 _ -> pure []
-              modify $ \st -> case result of
-                Right k -> st {settings = Just (Right k.settings), sync = (syncOf result st.sync) {working = Nothing, passkeys}}
-                Left why -> st {sync = st.sync {working = Nothing, trouble = Just why}}
+              let trouble = either Just (const Nothing) result
+              modify $ \st -> case keys of
+                Right k -> st {settings = Just (Right k.settings), sync = (syncOf keys st.sync) {working = Nothing, passkeys, trouble}}
+                Left _ -> st {sync = st.sync {working = Nothing, trouble}}
           )
 
     -- Change the settings, and store them immediately.
     change :: (Settings -> Settings) -> H.HalogenM State Action Empty output m ()
     change f =
       gets (\st -> (st.user, st.settings)) >>= \case
-        (Just user, Just (Right s)) -> do
-          let new = f s
+        (Just user, Just (Right _)) -> do
           modify (\st -> st {busy = True, problem = Nothing})
-          result <- lift (changeKeys user (const new))
+          -- The change itself, not the settings it gives: when another
+          -- device changed the settings meanwhile, it is made again on
+          -- theirs.
+          result <- lift (changeKeys user f)
           modify $ \st -> case result of
             Right k -> st {busy = False, settings = Just (Right k.settings), sync = syncOf result st.sync}
             Left why -> st {busy = False, problem = Just why}

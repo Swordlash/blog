@@ -10,6 +10,7 @@
 -- speaks plain HTTP), and the path where the listener serves the wiki.
 module Wiki.Server.Address
   ( publicAddress
+  , requestOrigin
   , addressOf
   , hrefAddress
   )
@@ -34,7 +35,12 @@ publicAddress storage mount request = do
 -- | The address a request names the wiki by: its host, as the browser or
 -- a proxy in front of the server requested it, under the listener's path.
 requestAddress :: Text -> Request -> Text
-requestAddress mount request = scheme <> "://" <> host <> mount
+requestAddress mount request = requestOrigin request <> mount
+
+-- | The origin a request names the wiki by: the scheme and the host, as
+-- the browser or a proxy in front of the server requested them.
+requestOrigin :: Request -> Text
+requestOrigin request = scheme <> "://" <> host
   where
     header name = decodeUtf8With lenientDecode <$> lookup (CI.mk name) (requestHeaders request)
     firstOf = T.strip . T.takeWhile (/= ',')
