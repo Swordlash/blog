@@ -2,9 +2,9 @@
 
 The server speaks one HTTP API, under `/api/v1`, and the application's backend
 over HTTP is its client. The API is a servant type, `Wiki.Api` in `wiki-api`:
-the server serves that type, and the client makes every address it requests
-from the same type (`Wiki.Api.Links`), so the two cannot disagree about a
-path, a parameter or a header. It covers everything the application's backend
+the server serves that type, and the client is derived from the same type
+with servant-client-core (`Wiki.App.Backend.Http.Client` in `wiki-app`), so
+the two cannot disagree about a path, a parameter, a header or a body. It covers everything the application's backend
 interface (`MonadWiki` in `wiki-app`) does, one endpoint per method, plus what
 only the server does: describing itself, exporting the wiki and importing an
 archive. The Haddock of `Wiki.Api` and of each module under it says the same
@@ -18,9 +18,10 @@ as this page.
   path. Ids (`<space>`, `<page>`, `<attachment>`) are the opaque text the
   server gave them, percent-encoded; slugs keep the slug rules, and a path
   segment that is not a slug is refused with 400.
-- **Bodies are JSON** (`Content-Type: application/json`), except an
-  attachment's file and an archive, which are sent as a multipart form
-  (`multipart/form-data`, a browser's `FormData`) and come back as bytes. A
+- **Bodies are JSON** (`Content-Type: application/json`; the application
+  sends `application/json;charset=utf-8`), except an attachment's file and an
+  archive, which are sent as a multipart form (`multipart/form-data`) and
+  come back as bytes. A
   request body is an object whose fields name its arguments, even for one
   argument (`{"name": "Team"}`), so that a field can be added later. A
   response is one of the domain's own types, whose JSON the golden files in

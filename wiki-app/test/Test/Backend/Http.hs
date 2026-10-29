@@ -21,20 +21,21 @@ import Halogen.Subscription qualified as HS
 import Protolude
 import Servant.Client.Core (Response)
 import Test.Hspec
+import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Vault (StoredVault (..))
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Links (searchUrl)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Vault (StoredVault (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
+import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
-import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Client (fromSessionInfo)
-import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
+import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..))
@@ -46,7 +47,6 @@ import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
-import Test.Scripted (jsonResponse, responseWith, bodyOf, formOf, headersOf, methodOf)
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.

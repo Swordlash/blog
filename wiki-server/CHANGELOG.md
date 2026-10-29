@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`Wiki.Server.Render.inProcess`, the transport that hands the application's
+requests to the API in the same process, takes servant's request and
+returns servant's response, as the application's client is now derived
+from the API's type (WP5.23). The handlers' record is `WikiApi Tmp
+AsServer`. Nothing the server answers changes.
+
 The assistant's vault and passkeys (WP5.21): migration
 `0016-assistant-vault.sql` (`passkeys`, `assistant_vaults`),
 `Wiki.Server.Vault` (storage, and the challenges waiting for an answer,

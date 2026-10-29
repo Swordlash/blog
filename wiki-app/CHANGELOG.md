@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+The HTTP backend's client is derived from the API's type with
+servant-client-core (WP5.23). `Wiki.App.Backend.Http.Request` is gone: its
+`Request`, `Body`, `Response`, `multipart` and `multipartForm` are replaced
+by servant's request and response and by servant-multipart-client, and
+every method of `HttpWiki` calls an endpoint function made from
+`ApiWith Mem`, so a request the API does not declare no longer compiles.
+`HttpWiki` has a `RunClient` instance: every request goes through it, and it
+keeps what the hand-written calls did (giving up inside `atOnce`, the
+request marker, asking who is asking after a 401 or 403). A `Transport` now
+takes an `HttpRequest` (servant's request, its body collected, its path
+relative to the page's base; `requestUrl` and `requestHeaderList` give its
+address and headers) and returns servant's `Response`; the transports live
+in `Wiki.App.Backend.Http.Transport` and are re-exported by
+`Wiki.App.Backend.Http`. `answer`, `failureOf`, `fromApiError`,
+`sessionInfo` and `fromSessionInfo` move to `Wiki.App.Backend.Http.Client`.
+On the wire: JSON is sent as `application/json;charset=utf-8`, an `Accept`
+header is sent, a form's boundary is random, and a response with a status
+other than the one the endpoint declares (a 201 for a read, say) is
+`Unreachable`, as a 2xx with the wrong body already was.
+
 The assistant's settings are sealed in a vault (WP5.21): `MonadAssistant`
 stores the device's record (`deviceRecord`, `keepDeviceRecord`) instead of
 the settings (`assistantSettings`, `keepAssistantSettings`,

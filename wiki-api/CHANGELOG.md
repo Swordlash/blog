@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The records of the API with an upload (`WikiApi`, `SpacesApi`, `PagesApi`,
+`ArchiveApi`) take the multipart backend of their forms as their first
+parameter (WP5.23): `Api` is `ApiWith Tmp`, what the server serves, and the
+browser's client is derived from `ApiWith Mem`, whose uploads are bytes in
+memory. A handler record is now `WikiApi Tmp AsServer`, and `links` is
+`WikiApi Tmp (AsLink Text)`. Nothing on the wire changes.
+`Wiki.Api.Links` gains `searchParameters`, the search endpoint's
+parameters for a query (what `searchUrl` and the client's call are written
+from), and `archiveExportUrl`.
+
 `WikiApi` gains `assistant`, the `AssistantApi` of the vault and its
 passkeys (WP5.21, `Wiki.Api.Vault`): `GET`, `PUT` and `DELETE
 assistant/vault` (with `If-None-Match` and `If-Match` by the vault's tag),
