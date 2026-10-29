@@ -153,6 +153,7 @@ library
       bytestring,
       case-insensitive,
       containers,
+      free,
       http-media,
       http-types,
       primitive,

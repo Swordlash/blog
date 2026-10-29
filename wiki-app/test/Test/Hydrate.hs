@@ -40,7 +40,7 @@ import Wiki.Api.Activity (firstPage)
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Links (links, searchQueryOf)
+import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
@@ -48,6 +48,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv, requestUrl)
+import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
@@ -257,34 +258,34 @@ apiOver providers st = do
         draft <- getDraft p.id
         versions <- listVersions p.id latestVersions
         each <- for (Map.keys (Map.findWithDefault mempty p.id st.versions)) $ \at ->
-          (links.pages.version p.id (VersionTime at),) . answerOf <$> getVersion p.id at
+          (endpointUrl (\e -> e.pages.version p.id (VersionTime at)),) . answerOf <$> getVersion p.id at
         threads <- fromRight [] <$> listThreads p.id
         watch <- watching (WatchPage p.id)
         let logins = Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments])
         named <- Body.askPeople logins
         pure
-          ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id Nothing Nothing, answerOf versions)]
-              <> [(links.notifications.pageWatch p.id, answerOf watch)]
-              <> [(links.notifications.people logins, answerOf (Right named :: Either WikiError (Map Text Author))) | not (null logins)]
+          ( [(endpointUrl (\e -> e.spaces.pageAt s.id (pagePath p.id)), answerOf page), (endpointUrl (\e -> e.pages.draft p.id), answerOf draft), (endpointUrl (\e -> e.pages.versions p.id Nothing Nothing), answerOf versions)]
+              <> [(endpointUrl (\e -> e.notifications.pageWatch p.id), answerOf watch)]
+              <> [(endpointUrl (\e -> e.notifications.people logins), answerOf (Right named :: Either WikiError (Map Text Author))) | not (null logins)]
               <> each
           )
       spaceWatch <- watching (WatchSpace s.id)
-      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages), (links.spaces.postDetails s.id, answerOf details), (links.notifications.spaceWatch s.id, answerOf spaceWatch)] <> concat perPage)
+      pure ([(endpointUrl (\e -> e.spaces.atPath (spacePath s.id)), answerOf space), (endpointUrl (\e -> e.spaces.listPages s.id), answerOf pages), (endpointUrl (\e -> e.spaces.postDetails s.id), answerOf details), (endpointUrl (\e -> e.notifications.spaceWatch s.id), answerOf spaceWatch)] <> concat perPage)
     told <- notifications
     pure
       ( Map.fromList
-          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
-              : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
-              : (links.spaces.pageCounts, answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
-              : (links.admin.directory, answerOf people)
-              : (links.admin.settings, answerOf settings)
-              : (links.admin.invitations, answerOf invited)
-              : (links.admin.server, answerOf server)
-              : (links.admin.backups, answerOf kept)
-              : (links.admin.activity Nothing Nothing Nothing, answerOf logged)
-              : (links.admin.status, answerOf (Right status :: Either WikiError ServerStatus))
-              : (links.notifications.list, answerOf told)
-              : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
+          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
+              : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
+              : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
+              : (endpointUrl (\e -> e.admin.directory), answerOf people)
+              : (endpointUrl (\e -> e.admin.settings), answerOf settings)
+              : (endpointUrl (\e -> e.admin.invitations), answerOf invited)
+              : (endpointUrl (\e -> e.admin.server), answerOf server)
+              : (endpointUrl (\e -> e.admin.backups), answerOf kept)
+              : (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing), answerOf logged)
+              : (endpointUrl (\e -> e.admin.status), answerOf (Right status :: Either WikiError ServerStatus))
+              : (endpointUrl (\e -> e.notifications.list), answerOf told)
+              : (endpointUrl (\e -> e.invitations.details (InvitationToken "valid")), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )
       )

@@ -22,6 +22,7 @@ import Protolude
 import Servant.Client.Core (Response)
 import Test.Hspec
 import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
+import Wiki.Api (NotificationsApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
@@ -34,9 +35,10 @@ import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
-import Wiki.App.Backend.Http.Client (fromSessionInfo)
+import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..))
 import Wiki.Core.Draft (Draft (..))
@@ -47,6 +49,7 @@ import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.Version (Author)
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.
@@ -146,6 +149,13 @@ requests = describe "its requests" $ do
     _ <- runHttpWiki env (searchPages q)
     map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/search?q=x%20y&space=" <> hello.space.text <> "&only&limit=50&templates"]
     map requestUrl <$> readIORef asked `shouldReturn` [searchUrl q]
+
+  it "asks for a list in the query a parameter at a time, and names that address without asking" $ do
+    (env, asked) <- backend (const (ok (mempty :: Map Text Author)))
+    _ <- runHttpWiki env (mentionable ["ada", "edgar"])
+    let people = endpointUrl (\e -> e.notifications.people ["ada", "edgar"])
+    people `shouldBe` "api/v1/notifications/people?login=ada&login=edgar"
+    map requestUrl <$> readIORef asked `shouldReturn` [people]
 
   it "saves against the version it started from, in If-Match, with the edit as JSON" $ do
     (env, asked) <- backend (const (ok hello))

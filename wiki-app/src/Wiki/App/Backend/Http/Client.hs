@@ -26,6 +26,7 @@ module Wiki.App.Backend.Http.Client
     -- * Requests
   , prepare
   , withBoundary
+  , endpointUrl
 
     -- * Answers
   , answer
@@ -41,24 +42,27 @@ module Wiki.App.Backend.Http.Client
   )
 where
 
+import Control.Monad.Free (Free (..))
 import Data.Aeson (eitherDecode)
-import Data.ByteString.Builder (toLazyByteString)
+import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.CaseInsensitive qualified as CI
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Network.HTTP.Types (statusCode)
 import Protolude
-import Servant.Client.Core (ClientError (..), Request, RequestBody (..), RequestF (..), Response, ResponseF (..))
+import Servant.Client.Core (ClientError (..), Request, RequestBody (..), RequestF (..), Response, ResponseF (..), clientIn)
+import Servant.Client.Free (ClientF (..))
+import Servant.Client.Generic (AsClientT)
 import Servant.Multipart.API (Mem)
 import Servant.Multipart.Client (genBoundary)
 import Servant.Types.SourceT (runSourceT)
-import Wiki.Api (ApiWith, requestMarker)
+import Wiki.Api (ApiWith, WikiApi, requestMarker)
 import Wiki.Api.Error (ApiError, errorForStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (Session (..), WikiError (..))
-import Wiki.App.Backend.Http.Transport (HttpRequest)
+import Wiki.App.Backend.Http.Transport (HttpRequest, requestUrl)
 
 -- | 'ClientApi' is the API as the browser's client sees it: the server's
 -- API, with an upload's bytes in memory rather than in a file on disk
@@ -84,7 +88,7 @@ prepare r = do
   body <- for r.requestBody $ \(contents, mediaType) -> (,mediaType) <$> bytesOf contents
   pure
     Request
-      { requestPath = T.drop 1 (decodeUtf8 (BSL.toStrict (toLazyByteString r.requestPath)))
+      { requestPath = relativePath r.requestPath
       , requestQueryString = r.requestQueryString
       , requestBody = body
       , requestAccept = r.requestAccept
@@ -100,6 +104,22 @@ prepare r = do
         runExceptT (runSourceT source) >>= \case
           Left why -> throwIO (noResponse ("its body could not be written: " <> toS why))
           Right chunks -> pure (BSL.toStrict (mconcat chunks))
+
+-- | A request's path as servant builds it (@\/api\/v1\/…@), without the
+-- leading slash: relative to the page's base.
+relativePath :: Builder -> Text
+relativePath = T.drop 1 . decodeUtf8 . BSL.toStrict . toLazyByteString
+
+-- | The address a call of the client asks for, relative to the page's
+-- base, worked out without sending anything: for a test that answers
+-- requests by their address, and must name the address as the client
+-- writes it. servant writes some addresses differently from
+-- "Wiki.Api.Links" (a list in the query, a colon in a path), and the
+-- server reads both.
+endpointUrl :: (WikiApi Mem (AsClientT (Free ClientF)) -> Free ClientF a) -> Text
+endpointUrl endpoint = case endpoint (clientIn (Proxy @ClientApi) (Proxy @(Free ClientF))) of
+  Free (RunRequest r _) -> requestUrl (relativePath <$> r)
+  _ -> ""
 
 -- | Call an endpoint that takes a multipart form, with a new boundary.
 -- servant-multipart-client wants the boundary with the form; it is random

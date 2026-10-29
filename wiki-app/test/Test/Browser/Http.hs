@@ -61,7 +61,7 @@ import Wiki.Api.Links (links)
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
 import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.Api.Version (VersionTime (..))
+import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend
@@ -69,6 +69,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, fetchTransport, newHttpEnv, newHttpEnvWith, runHttpWiki)
 import Wiki.App.Backend.Http.Cache (Cache)
+import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -194,7 +195,7 @@ serveDemo = do
           <*> for spaces (\s -> (links.notifications.spaceWatch s.id,) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
       pure (named, watched)
   answerWith "GET" links.notifications.list 200 Notifications {unread = 0, items = []}
-  for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (links.notifications.people logins) 200 found)
+  for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
@@ -744,22 +745,22 @@ views m = describe "the application over it" $ do
     let older = addUTCTime (negate 86400) hello.updatedAt
         ada = Just Author {id = UserId "user-admin", name = "Ada Admin"}
         current = VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = ada, number = 2}
-    answerWith "GET" (links.pages.versions hello.id Nothing Nothing) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing, number = 1}]
-    answerWith "GET" (links.pages.version hello.id (VersionTime older)) 200 Version {page = hello.id, updatedAt = older, title = "Hello", body = "# Hello\n", author = Nothing}
-    answerWith "POST" (links.pages.restore hello.id (VersionTime older)) 200 hello
+    answerWith "GET" (endpointUrl (\e -> e.pages.versions hello.id Nothing Nothing)) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing, number = 1}]
+    answerWith "GET" (endpointUrl (\e -> e.pages.version hello.id (VersionTime older))) 200 Version {page = hello.id, updatedAt = older, title = "Hello", body = "# Hello\n", author = Nothing}
+    answerWith "POST" (endpointUrl (\e -> e.pages.restore hello.id (VersionTime older) (PageVersion hello.updatedAt))) 200 hello
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) (Just older) AgainstPrevious)
     find ui ".version-detail h2" >>= (`shouldHaveText` "Version 1")
     versions <- traverse textContent =<< findAll ui ".version-list li > a"
     versions `shouldBe` ["Version 2 (current)", "Version 1"]
     (find ui ".diff-added .diff-text" >>= textContent) `shouldReturn` "# Hello"
     fetched <- map (\r -> r.url) . filter (\r -> r.method == "GET") <$> asked
-    filter (T.isInfixOf "/versions") fetched `shouldBe` [links.pages.versions hello.id Nothing Nothing, links.pages.version hello.id (VersionTime older)]
+    filter (T.isInfixOf "/versions") fetched `shouldBe` [endpointUrl (\e -> e.pages.versions hello.id Nothing Nothing), endpointUrl (\e -> e.pages.version hello.id (VersionTime older))]
     find ui "button.restore" >>= click
     find ui ".restore-confirm button.primary" >>= click
     eventually $ do
       restores <- filter (\r -> r.method == "POST") <$> asked
       map (\r -> (r.url, Map.lookup "If-Match" r.headers)) restores
-        `shouldBe` [(links.pages.restore hello.id (VersionTime older), Just "\"2026-09-01T12:00:00Z\"")]
+        `shouldBe` [(endpointUrl (\e -> e.pages.restore hello.id (VersionTime older) (PageVersion hello.updatedAt)), Just "\"2026-09-01T12:00:00Z\"")]
     unmount ui
     serverStops
 
@@ -767,7 +768,7 @@ views m = describe "the application over it" $ do
     serverStarts
     serveDemo
     hello <- unsafeIOToPageM helloWorld
-    let versions = links.pages.versions hello.id Nothing Nothing
+    let versions = endpointUrl (\e -> e.pages.versions hello.id Nothing Nothing)
     unsafeIOToPageM (js_server_hold_at (toJSText "GET") (toJSText versions))
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])
