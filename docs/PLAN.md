@@ -69,7 +69,11 @@ confirms it against reality and the plan is amended if it does not hold.
 7. **Server: servant over SQLite** (`sqlite-simple`), attachments on disk, one binary
    that also serves the wasm bundle. SQLite fits a personal wiki/blog and keeps
    deployment to one file plus one directory; the storage layer is behind its own
-   interface so Postgres can come later if ever needed.
+   interface so Postgres can come later if ever needed. **Superseded on 2026-10-29 by
+   WP5.22:** one storage layer on Beam with the backend as a type parameter, PostgreSQL
+   the default deployment (docker compose), SQLite the option without a second container;
+   `sqlite-simple` stays only for what Beam has no form for (PRAGMAs, `BEGIN IMMEDIATE`,
+   `VACUUM INTO`).
 8. **Authentication: local accounts with argon2 passwords and cookie sessions first;
    OIDC (GitHub/Google) as a later work package.** Authorisation is enforced on the
    server; the client only uses the same rules to hide what the user cannot do.
@@ -4045,6 +4049,60 @@ Amended by the planning session after each work package's report.
   answers (`PostCreated` against `Post`), a mismatch shows as `Unreachable`; a test
   transport's response must carry `Content-Type: application/json` (`jsonResponse` in
   `Test.Scripted`); new endpoints are called through `endpoints.<record>.<field>`.
+
+- **WP5.22 merged** (2026-10-29, PR #110, `main` at `5150b0d`, sixteen commits; the agent
+  was restarted once with the container, its uncommitted work survived on disk). One
+  storage layer on Beam (`beam-core` 0.11.1, `beam-sqlite` 0.7, `beam-postgres` 0.6.4) in
+  `Wiki.Server.Storage.*`: `Backend` (a class with `Db` and `Connection`: connections,
+  transactions, the retry rule, search, size, backup), `Schema` (every table once), `Rows`
+  (shared queries), `Sqlite` and `Postgres` (what differs), `Migrate` and `Backup` for both.
+  `OverloadedRecordDot` resolves Beam's columns, no `FieldSelectors` needed. One `0001-initial`
+  schema per backend (`.sqlite.sql`, `.postgres.sql`), WP5.21's tables in both, `Vault.hs`
+  ported; no data migration; a database of the old shape makes `wiki-server backup` exit 3,
+  which the deploy reads as "incompatible" and refuses without `--fresh` (which moves the
+  old data to `data/replaced/<time>`). Pools: one writer and four readers on both;
+  PostgreSQL writes SERIALIZABLE with three attempts, reads REPEATABLE READ READ ONLY.
+  Search: a generated `tsvector` (title A, body D) with a GIN index, `websearch_to_tsquery
+  ('simple')` and `ts_rank`, whole words, no stemming; SQLite keeps the folded search;
+  `ServerInfo.capabilities` says `database` and `search`, the application does not read it
+  yet. Options: `--sqlite FILE`, or `--database URL` plus `--database-password-file FILE`
+  (a URL with a password is refused; the password never joins the URL text, it is a
+  `Secret` and reaches libpq in the connection string and `pg_dump`/`pg_restore` through
+  `PGPASSWORD`), `WIKI_DATABASE_URL`, `WIKI_DATABASE_PASSWORD_FILE`, `--pg-dump`/`--pg-restore`;
+  with none, `DIR/wiki.sqlite` as before. `docker-compose.yml`: `postgres:17` with a named
+  volume, a healthcheck and a `db-password` secret; the image carries `libpq5` and
+  `postgresql-client-17`. `deploy-local.sh`: PostgreSQL by default (brings the container up
+  with `up --wait` on 127.0.0.1 at `--db-port`, default 5433; reuses an existing one with a
+  `pg_dump` into `data/backups` before the new server starts, which applies pending
+  migrations), `--sqlite` as the alternative, a change of direction either way refused
+  without `--fresh`, no Docker names `--sqlite`; `test-deploy-local.sh` 67 cases with a
+  fake docker. `backup`/`restore` for both; every open storage holds a PostgreSQL advisory
+  lock shared on a connection of its own and a restore takes it alone, so a restore refuses
+  a live database from any data directory and a server refuses a database being restored;
+  the replaced dump keeps its facts file so a restore can be undone. CI: `ci-postgres.sh`
+  starts a container by a step (not `services:`, for a runner without Docker); the native
+  tests and the smoke test run on both; locally the fixture starts a temporary cluster when
+  `initdb`/`pg_ctl` are found, else the PostgreSQL half is pending. Bench (this container,
+  medians): page view 2.5 ms SQLite against 11 ms PostgreSQL 16 over a socket; search of
+  20,000 pages 57 ms against 4 ms (every page: 192 against 23 ms); save of a page 50 users
+  watch 13 against 44 ms. The PostgreSQL gap is not reconnects (checked with
+  `log_connections`: one writer and one reader carry the run) but ~0.2 ms of client wait per
+  statement through GHC's IO manager over 29 statements (6 BEGIN/COMMIT, 15 permission
+  context, 8 the view); PostgreSQL executes the view in 1.8 ms. Review: ten findings of a
+  Claude Code review and two of Codex, two of them confirmed by running the code (the
+  `--database` URL check refused every URL with a user, so no PostgreSQL deploy could start;
+  the password from the file was printed in the start-up log through `?password=`); all
+  fixed in the last commits with tests through the real option parser; the mail queue's
+  `loadPending` was not a pure read (it also unqueued disabled users), now split into a
+  read and a conditional write. Not run here (no Docker daemon): the image build, a real
+  `docker compose up`, PostgreSQL 17 (local runs used 16); CI's first `ci-postgres.sh` run
+  passed. For later: one read transaction per request would cut the page view's round
+  trips from 29 to about 15 but needs a request-scoped storage context (the render calls
+  the API in process, one transaction per call); prefix matching on PostgreSQL search
+  (`:*` on the last word, our own escaping, a minimum prefix length) is the owner's
+  decision; the lock-holder connection dies silently if PostgreSQL restarts under a
+  running server, so until the server restarts a restore is not refused; `Env.ceremonies`
+  stays per process; `LISTEN/NOTIFY` and `SKIP LOCKED` unused.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
