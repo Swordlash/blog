@@ -1331,8 +1331,9 @@ must be in before it is.
   that the server folds into the header; a base URL outside the list is refused by the
   browser, and the assistant's settings say so ("Test the key" reports that the address is
   not allowed by this wiki, with the administrator's list to extend). The sign-in pages the
-  server renders itself (`Wiki.Server.Auth`) get the same policy with `form-action 'self'`
-  and the provider's authorisation address. `X-Content-Type-Options: nosniff` already;
+  server renders itself (`Wiki.Server.Auth`) get the same policy (a provider's sign-in
+  starts from a link and a redirect, which `form-action` does not govern, as the review
+  found; the first head had a policy of their own for it, since removed). `X-Content-Type-Options: nosniff` already;
   add `Referrer-Policy: same-origin` and `Permissions-Policy` turning off camera, microphone,
   geolocation. Tests: the server's static test finds the header on the page and not on
   `app.wasm`; the browser suites run under the policy (`wiki-app/test/web/index.html` carries
@@ -3963,6 +3964,49 @@ Amended by the planning session after each work package's report.
   the server-settings secrets. Tests: `Test.User`, `Test.Attachment` additions, the `Show`
   of the keys and tokens. Full gate on the first head; after the rebase over WP5.20 (only
   changelog conflicts) the native gate again, wasm and smoke by CI; CI green.
+
+- **WP5.21 merged** (2026-10-29, PR #108, `main` at `97a8a1a`, four commits). Part A: one
+  policy, written once as the meta element of `web/index.html` (and `offline.html`);
+  `Wiki.Api.ContentPolicy` reads it at compile time and renders the server's header from
+  it, adding `frame-ancestors 'none'`; `connect-src` is the two providers plus the hosts of
+  `--assistant-hosts` or the server settings' `assistantHosts` ("The assistant's hosts" in
+  the administration); `base-uri 'self'` because the pages carry `<base href>`; every page
+  also sends `Referrer-Policy: same-origin` and a `Permissions-Policy`; a provider address
+  the policy would block is reported by the assistant first (`ErrorKind Blocked`,
+  `allowsConnect` normalising default ports). The browser suite runs under the policy
+  (`test/web/policy.mjs` writes `0-policy.js`, a spec after the suite checks nothing was
+  refused); a native test that raw HTML renders nothing the policy would block; the smoke
+  tests check the meta and the header on every page; CI runs `npm audit --omit=dev
+  --audit-level=high`. Part B: `Wiki.Core.Assistant.Vault` (AES-GCM under a vault key,
+  wrapped per passkey under HKDF-SHA256 of the passkey's PRF output, the device record),
+  routes under `api/v1/assistant` (`vault` GET with ETag/304, PUT with If-Match, DELETE;
+  `passkeys`; the registration and assertion ceremonies), migration 0016 (`passkeys`,
+  `assistant_vaults`), `Wiki.Server.WebAuthn` written here with crypton and cborg
+  (attestation none, ES256 and RS256, rpIdHash, UP/UV, sign count; the expected origin from
+  `Wiki.Server.Address.requestOrigin`, one origin honouring `X-Forwarded-Proto`),
+  `Wiki.Server.Vault` storing only ciphertext, salt and wrapped keys with every field
+  bounded, at most 20 passkeys, ceremonies 5 minutes in memory. In the application the
+  device keeps a non-extractable `CryptoKey` in IndexedDB and an exportable key never
+  outlives its step; the settings page: turn on, unlock, add and remove a passkey, "ask
+  each time" (one touch per page load), turn off also while locked (the way back after
+  losing every passkey); the demo offers no sync; plain HTTP without WebCrypto keeps the
+  settings as text with a warning and says sync needs HTTPS; old settings are sealed on
+  first load; tabs learn of a dropped key through a `BroadcastChannel`. Tests: pure, server
+  (a played ES256 authenticator, RS256, HTTP flows, bounds, migration), 14 browser specs
+  with a stub of `navigator.credentials` (one probes that no exportable key remains after
+  a cancelled step), and `toolchain/test-passkeys.mjs` in the smoke test: a real
+  `wiki-server` and Chromium's virtual authenticator with PRF. Review: nine findings from
+  a Claude Code review and three from Codex, all confirmed and fixed in `97a8a1a` (stale
+  settings after turn-off, the exportable key on failure paths, unbounded fields, the
+  allow list at unlock, the origin check, the dead form-action plumbing on the sign-in
+  pages, the panel after a failed turn-on, a stale key in a second tab, default ports,
+  the retry after a conflict, turn-off while locked, plain HTTP). Decisions kept: the
+  editor loads the vault only on a device that already syncs; the administration shows
+  nothing about vaults. Not done: the browser's own passkey dialog was not seen by a
+  person. For WP5.22: migration 0016 and the raw SQL of `Wiki.Server.Vault` move to the
+  new storage layer; `Env.ceremonies` is per process. Full gate by the agent (`-j1`),
+  CI green on the merged head. The owner's review comment on the hand-rolled request
+  types became WP5.23.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
