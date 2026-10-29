@@ -142,7 +142,10 @@ class
 -- connection is then closed anyway: 'Data.Pool.withResource' closes a
 -- connection whose action threw. If the rollback's exception went on
 -- instead, a thread being stopped would see an ordinary error in place of
--- the exception that stops it, and go on running.
+-- the exception that stops it, and go on running. For the same reason an
+-- asynchronous exception that comes while the rollback waits for the
+-- database (a thread stopped then) is not ignored: it goes on in place of
+-- the first exception, so that the thread stops.
 withTransaction :: (Backend be) => Bool -> Connection be -> IO a -> IO a
 withTransaction writes c body = either absurd identity <$> withTransactionEither writes c (Right <$> body)
 
@@ -158,7 +161,10 @@ withTransactionEither writes c body = mask $ \restore -> do
     Right _ -> commitTransaction c `onException` rollBackQuietly
   pure result
   where
-    rollBackQuietly = try @SomeException (rollbackTransaction c)
+    rollBackQuietly =
+      try @SomeException (rollbackTransaction c) >>= \case
+        Left e | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
+        _ -> pass
 
 instance Backend Sqlite where
   type Db Sqlite = SqliteM
