@@ -17,6 +17,9 @@ keeps the wiki in PostgreSQL, or in SQLite where a second process is too much.
 **The demo: <https://swordlash.github.io/blog/>.** It opens at a tour that says
 what to try, and nothing written there leaves your browser.
 
+It runs in browsers released within the last year: Chrome and Edge 140 or
+later, Firefox 133 or later, Safari 18.2 or later.
+
 | | |
 | --- | --- |
 | ![A page of the demo with formulas set by KaTeX and a diagram drawn by Mermaid](docs/screenshots/page.png) | ![The editor, with the page's preview beside the Markdown](docs/screenshots/editor.png) |
@@ -501,8 +504,9 @@ page says so instead. A browser offers no encryption to such a page either:
 there the keys are kept in the browser as text, as the settings page warns. Behind a proxy that serves the wiki over HTTPS, set the
 wiki's public address in the administration, or have the proxy send
 `X-Forwarded-Proto: https`: the server checks that a passkey was used on the
-wiki's own origin. They need a browser with the PRF extension: Chrome and
-Edge 116 or later, Safari 18 or later, a recent Firefox. A passkey here does
+wiki's own origin. They need a browser with the PRF extension, which the
+browsers the wiki runs in have: Chrome and Edge 140 or later, Firefox 133 or
+later, Safari 18.2 or later. A passkey here does
 not sign you in; it only unlocks the assistant's keys.
 
 ## How it is built

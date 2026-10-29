@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The application needs a browser released within the last year: Chrome and
+Edge 140 or later, Firefox 133 or later, Safari 18.2 or later (WP5.27). The
+jsbits now use what the platform offers in place of code of their own:
+`Uint8Array.prototype.toBase64` and `Uint8Array.fromBase64` for the bytes of
+uploads, of the demo's attachments and of the passkeys and sealed keys
+(those set the floor), and `indexedDB.databases()` alone to find the demo's
+data, without the fallback for Firefox before 126.
+
 The HTTP backend's client is derived from the API's type with
 servant-client-core (WP5.23). `Wiki.App.Backend.Http.Request` is gone: its
 `Request`, `Body`, `Response`, `multipart` and `multipartForm` are replaced
