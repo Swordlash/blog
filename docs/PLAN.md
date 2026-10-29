@@ -1647,6 +1647,52 @@ must be in before it is.
   editor's JavaScript if the editor has one. `docs/markdown.md`'s mentions section says
   that the editor completes them; `docs/api.md` the endpoint.
 
+- **WP5.29 Boxes of your own, and the guide on every server** (the owner, 2026-10-29:
+  "gdzie jest lista znaczników typu [!TIP]? chyba nie ma tego w guide. Da się dodać swój,
+  np exercise?" and "zróbmy też by default że serwer wyświetla też guide. Na świeżym
+  serwerze nie mam teraz tour/guide'a"). Two parts, one package.
+
+  **A. Boxes.** Today `> [!NOTE]` takes GitHub's five kinds (`AlertKind` in
+  `Wiki.Core.Markdown.Ast`: note, tip, important, warning, caution) and any other box is a
+  fenced div `::: name` with a class and no look; `docs/markdown.md` says so under "Notes
+  and boxes", the guide page in the wiki says nothing. After: `> [!KIND]` takes any kind.
+  The five keep their look; another kind (`[!EXERCISE]`) is a box with the class
+  `alert-exercise`, the title "Exercise" (the kind's name, capitalised), and a neutral
+  look, unless an administrator has defined it: the server settings gain "Boxes", a list
+  of kinds, each with a name, a label (the title shown), a colour from the theme's palette
+  (the same accents the five use, by name, so light and dark both work) and an icon from
+  a fixed set; the renderer gives the box the class and the label, and the colour and the
+  icon come as CSS custom properties on the box, so the stylesheet needs no change per
+  kind. An optional title after the marker (`> [!EXERCISE] Exercise 3`) replaces the
+  label for that box, for the five kinds too. `AlertKind` becomes the five plus
+  `Custom Text`; the exports: pandoc writes the five as its alerts (as today) and the others
+  as fenced divs with the class, so DOCX, HTML and Beamer get a plain box with the title.
+  The demo's settings and the guide: the in-wiki Markdown guide gets a "Notes and boxes"
+  section (the five, an own kind, the title), and the demo defines one kind, `exercise`,
+  to show it. Tests: parsing of a custom kind and of a title, rendering (class, label,
+  properties), the settings' validation (a name is letters and dashes, lower case, not one
+  of the five), the exports, the guide text.
+
+  **B. The guide on every server.** The demo's Tour, Markdown guide, Diagrams, Mathematics
+  and Presentations (`Wiki.App.Demo`) are the wiki's documentation, and a fresh server has
+  none of it. The texts move to a module of their own that both the demo and the server
+  use (`Wiki.App.Guide`: the server already depends on `wiki-app`), with two tours: the
+  demo's (choosing a user, resetting the content) and the server's (signing in, your
+  spaces, editing, the assistant, where the administration is). On its first start with
+  no spaces, the server creates a public space "Guide" (slug `guide`, readable by everyone
+  the wiki is open to, editable by administrators) with those pages and their
+  attachments, in one transaction, by the same path as an import; `--no-guide` skips it.
+  Afterwards: `wiki-server guide install` puts it back if it was deleted, and
+  `wiki-server guide update` writes a new version of each guide page whose text differs
+  from the current release's (page history keeps what was there; a page an administrator
+  renamed or moved is left alone and named in the output), run by the deploy after a new
+  server starts, so the guide follows the wiki's version; the administration's Overview
+  shows "Install the guide" when the space is missing. The tour's first page links the
+  Markdown guide and says where the administration is. Tests: the server's first start
+  makes the space with the pages and attachments (and not twice; not with `--no-guide`);
+  `guide update` changes only pages whose text changed and leaves a renamed page alone;
+  the demo still shows its own tour; the deploy test covers the call.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
