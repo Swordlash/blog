@@ -12,10 +12,13 @@ module Test.Browser.Text
   , editorSelection
   , movedBy
   , completing
+  , setMarkdown
+  , mathIn
   )
 where
 
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Data.Aeson (decodeStrict)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Protolude hiding (find)
 import Test.Hspec.Halogen
 
@@ -26,6 +29,8 @@ $( browserJS
      , ("js_selection_end", "wiki_test_editor_selection_end", Unsafe, [t|IO Int|])
      , ("js_jump", "wiki_test_editor_jump", Unsafe, [t|IO JSText|])
      , ("js_completing", "wiki_test_editor_completing", Unsafe, [t|IO JSText|])
+     , ("js_set", "wiki_test_editor_set", Unsafe, [t|JSText -> IO ()|])
+     , ("js_math", "wiki_test_editor_math", Unsafe, [t|IO JSText|])
      ]
  )
 
@@ -61,3 +66,18 @@ completing :: Mounted s q o m -> PageM s Text
 completing ui = do
   _ <- editorText ui
   unsafeIOToPageM (fromJSText <$> js_completing)
+
+-- | Make the editor's text this, as one edit.
+setMarkdown :: Mounted s q o m -> Text -> PageM s ()
+setMarkdown ui text = do
+  _ <- editorText ui
+  unsafeIOToPageM (js_set (toJSText text))
+  settle
+
+-- | The pieces of TeX math the editor's syntax tree has, each with its
+-- delimiters, in the order of the text.
+mathIn :: Mounted s q o m -> PageM s [Text]
+mathIn ui = do
+  _ <- editorText ui
+  found <- unsafeIOToPageM (fromJSText <$> js_math)
+  pure (fromMaybe [] (decodeStrict (encodeUtf8 found)))

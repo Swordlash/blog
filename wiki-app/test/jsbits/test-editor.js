@@ -48,3 +48,16 @@ function wiki_test_editor_jump() {
 function wiki_test_editor_completing() {
   return wikiTestEditor()?.completing() ?? "";
 }
+
+// Make the open editor's text this, as one edit, with the cursor at its
+// start.
+function wiki_test_editor_set(text) {
+  const editor = wikiTestEditor();
+  editor?.replace(0, editor.text().length, text, 0, 0);
+}
+
+// The text of each piece of TeX math in the open editor's syntax tree, as
+// JSON: what web/src/editor.js's math parsers found.
+function wiki_test_editor_math() {
+  return JSON.stringify(wikiTestEditor()?.nodes("TeXMath") ?? []);
+}

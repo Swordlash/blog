@@ -18,7 +18,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
-import Test.Browser.Text (completing, editorSelection, editorText, markdown)
+import Test.Browser.Text (completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -29,6 +29,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.Core.Attachment (Attachment (name), FileName (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.User (Login (..), User (..))
@@ -600,6 +601,38 @@ spec m = do
     find ui ".editor-side-by-side input" >>= \box -> getProperty box "checked" `shouldReturn` "true"
     find ui ".editor-preview" >>= shouldBeVisible
 
+  it "finds TeX math in the text where the wiki's own parser does" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    -- The cases of commonmark-extensions' math and of TexMath: delimiters
+    -- that open and close, a blank or a digit that stops them, braces, a
+    -- backslash, a formula over two lines, and math beside a mention.
+    let cases =
+          [ "$x$"
+          , "$ x$"
+          , "$x $"
+          , "$5 and $6"
+          , "$x$5"
+          , "a $x$ and $y$ b"
+          , "$a{$}b$"
+          , "$a}b$"
+          , "$\\$x$"
+          , "$\\alpha + 1$"
+          , "$a\nb$"
+          , "$$x$$"
+          , "$$a $ b$$"
+          , "$$ $$"
+          , "\\(x\\)"
+          , "\\( \\)"
+          , "\\[a \\\\ b\\]"
+          , "\\(x"
+          , "`$x$` $y$"
+          , "$x @an y$ @an"
+          ]
+    for_ cases $ \source -> do
+      setMarkdown ui source
+      found <- map stripDelimiters <$> mathIn ui
+      (source, found) `shouldBe` (source, wikiMath source)
+
   it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor
     text <- editorText ui
@@ -626,6 +659,20 @@ spec m = do
     press "Escape"
     eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
     markdown ui `shouldReturn` "Ask @anna and @jsmith or @an"
+    -- Chosen with a space after the cursor already: no second space.
+    clear text
+    typeText text "Ask  now"
+    typeAfter 4 ["@", "a", "n"]
+    _ <- listShown ui
+    press "Enter"
+    markdown ui `shouldReturn` "Ask @anna now"
+    -- Brackets with no link defined are text, where a mention counts.
+    clear text
+    typeText text "[note ]"
+    typeAfter 6 ["@", "a", "n"]
+    _ <- listShown ui
+    press "Escape"
+    eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
     -- Not in a code fence, where a mention does not count.
     clear text
     typeText text "```\n@an"
@@ -635,6 +682,12 @@ spec m = do
     typeText text "[see ](https://example.org)"
     typeAfter 5 ["@", "a", "n"]
     markdown ui `shouldReturn` "[see @an](https://example.org)"
+    noCompletion ui
+    -- Nor in a link to a page of the wiki, [[page]].
+    clear text
+    typeText text "[[Plans ]]"
+    typeAfter 8 ["@", "a", "n"]
+    markdown ui `shouldReturn` "[[Plans @an]]"
     noCompletion ui
     -- Nor in math, between dollars or TeX's own delimiters.
     clear text
@@ -654,6 +707,21 @@ spec m = do
     pass
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+    -- The TeX of each formula the wiki's parser finds, in the order of the
+    -- text: in a paragraph, or a block of its own for display math alone
+    -- in one.
+    wikiMath source = case parseMarkdown source of
+      Right blocks -> concatMap formulas blocks
+      Left _ -> []
+    formulas = \case
+      Para inlines -> [tex | Math _ tex <- inlines]
+      MathBlock tex -> [tex]
+      _ -> []
+    -- A formula as the editor's tree has it, without its delimiters.
+    stripDelimiters t
+      | "$$" `T.isPrefixOf` t = T.dropEnd 2 (T.drop 2 t)
+      | "$" `T.isPrefixOf` t = T.dropEnd 1 (T.drop 1 t)
+      | otherwise = T.dropEnd 2 (T.drop 2 t)
     -- Two users whose names start with "an", one by login and one by
     -- display name, one whose login a mention cannot name, and one who
     -- does not start so.

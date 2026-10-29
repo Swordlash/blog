@@ -3,7 +3,8 @@
 ## Unreleased
 
 The editor completes mentions (WP5.28). An `@` followed by two letters or
-more, where a mention counts (not in code, a link, HTML or math), opens a
+more, where a mention counts (not in code, a link, HTML or math; brackets
+that make no link are text), opens a
 list of the users whose login or display name starts with the letters, from
 `@codemirror/autocomplete`, a new npm dependency of the bundle; Enter or Tab
 writes `@login` and a space. Only users whose login a mention can name are

@@ -100,7 +100,8 @@ name, each with their login after it. A user whose login a mention cannot
 name (one with a space or an `@` in it, or ending in `.` or `-`) is not
 offered. The arrows move in the list, Enter or Tab writes `@login` and a
 space, and Escape closes it. In code, in a link, in HTML and in math
-nothing opens. The list is offered to someone signed in; the demo offers
+nothing opens; brackets that make no link (`[note @an]` with no
+`[note @an]: …` defined) are text, and there it opens. The list is offered to someone signed in; the demo offers
 its own users. On a server that keeps the wiki in SQLite, only the letters
 of ASCII are matched without regard to case: another letter is matched in
 the case it was typed in, so `@Łu` finds Łukasz there and `@łu` does not.

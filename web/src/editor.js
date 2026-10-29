@@ -51,11 +51,11 @@
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { acceptCompletion, autocompletion, completionKeymap, completionStatus, ifNotIn } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, closeCompletion, completionKeymap, completionStatus, insertCompletionText, pickedCompletion } from "@codemirror/autocomplete";
 import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
-import { Language, LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { Language, LanguageSupport, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 // The language alone, not markdown(): that brings HTML's, CSS's and
 // JavaScript's parsers for HTML in a page, list continuation on Enter and
 // tag completion, none of which the editor wants.
@@ -373,14 +373,11 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // or one of . _ - + / @), followed by a login's characters (letters,
 // digits, marks, _ . -). Wiki.Core.Markdown.Ast takes none in code, links,
 // embeds, HTML or math: the syntax tree's nodes for them are in
-// notMentions, and ifNotIn leaves the completion out where the cursor is
-// inside one.
-const notMentions = [
+// notMentions, and links and embeds are checked by isLink.
+const notMentions = new Set([
   "InlineCode",
   "FencedCode",
   "CodeBlock",
-  "Link",
-  "Image",
   "Autolink",
   "URL",
   "LinkReference",
@@ -391,15 +388,65 @@ const notMentions = [
   "ProcessingInstruction",
   "ProcessingInstructionBlock",
   "TeXMath",
-];
+]);
 const typedMention = /@[\p{L}\p{N}\p{M}_.-]+$/u;
 // The character before the @, read as a whole code point: the two units
 // of a character beyond the Basic Multilingual Plane are one letter.
 const wordBefore = /[\p{L}\p{N}\p{M}._+\/@-]$/u;
 
-// How long an answer from the component is waited for. One that has not
-// come by then (the component went away, or failed before answering) is
-// given up, and the letters are asked about again the next time.
+// A reference's label as CommonMark matches it: case folded, its white
+// space made one space.
+const labelKey = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
+
+// The labels the document defines ([label]: destination), found where
+// blocks are: a paragraph, a heading or code holds none.
+const definedLabels = (state) => {
+  const labels = new Set();
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name === "LinkReference") {
+        const label = node.node.getChild("LinkLabel");
+        if (label) labels.add(labelKey(state.sliceDoc(label.from + 1, label.to - 1)));
+        return false;
+      }
+      if (/^(Paragraph|ATXHeading|SetextHeading|FencedCode|CodeBlock|HTMLBlock|Table)/.test(node.name)) return false;
+      return undefined;
+    },
+  });
+  return labels;
+};
+
+// Whether a Link or Image node of CodeMirror's tree is one for the wiki's
+// renderer too. CodeMirror makes one of every [text], but CommonMark only
+// of [text](destination), of [text][label] or [text] whose label the
+// document defines, and the wiki also of [[page]] (commonmark-extensions'
+// wiki links); any other [text] is text, where a mention counts.
+const isLink = (state, node, labels) => {
+  const marks = node.getChildren("LinkMark").map((mark) => state.sliceDoc(mark.from, mark.to));
+  if (marks.includes("(")) return true;
+  if (state.sliceDoc(node.from - 1, node.from) === "[" && state.sliceDoc(node.to, node.to + 1) === "]") return true;
+  const label = node.getChild("LinkLabel");
+  const textFrom = node.name === "Image" ? node.from + 2 : node.from + 1;
+  const textTo = marks.length > 1 ? node.getChildren("LinkMark")[1].from : node.to - 1;
+  const labelText = label && label.to - label.from > 2 ? state.sliceDoc(label.from + 1, label.to - 1) : state.sliceDoc(textFrom, textTo);
+  return labels().has(labelKey(labelText));
+};
+
+// Whether a mention may be completed at a position: not inside any node
+// of notMentions, nor inside a link or an embed.
+const mentionCounts = (state, pos) => {
+  let defined = null;
+  const labels = () => (defined ??= definedLabels(state));
+  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+    if (notMentions.has(node.name)) return false;
+    if ((node.name === "Link" || node.name === "Image") && isLink(state, node, labels)) return false;
+    if (node.type.isTop) break;
+  }
+  return true;
+};
+
+// How long an answer from the component is waited for before the list is
+// given up. An answer that comes later is still kept for the next time.
 const answerTime = 10_000;
 
 // Each question to the component has its own number, for every editor of
@@ -409,12 +456,14 @@ let questions = 0;
 
 // The completion source of one editor, and how the component answers it.
 // `answers` keeps the users the component answered, by the letters asked
-// about (lowered), for as long as the editor lives, so that typing a letter
-// and deleting it asks nothing again. An answer of null (the backend could
-// not be reached) is not kept. `asking` holds the questions not yet
-// answered, by the same letters, so that the same letters typed again
-// while the first question is out wait for it rather than ask again; a
-// question leaves it when it is answered or given up. The library waits a
+// about as they were typed (a server on SQLite tells "Łu" from "łu"), for
+// as long as the editor lives, so that typing a letter and deleting it
+// asks nothing again. An answer of null (the backend failed) is not kept.
+// `asking` holds the questions not yet answered, so that the same letters
+// typed again while the first question is out wait for it rather than ask
+// again; a question leaves it when it is answered, or after answerTime,
+// when it is asked again the next time. `waiting` holds each question's
+// answer until it comes, even after answerTime. The library waits a
 // moment after the last key before it asks the source (its
 // activateOnTypingDelay), so a name typed quickly is asked about once.
 const mentions = (host) => {
@@ -422,31 +471,39 @@ const mentions = (host) => {
   const asking = new Map();
   const waiting = new Map();
   const ask = (letters) => {
-    const key = letters.toLowerCase();
-    if (answers.has(key)) return Promise.resolve(answers.get(key));
-    let question = asking.get(key);
+    if (answers.has(letters)) return Promise.resolve(answers.get(letters));
+    let question = asking.get(letters);
     if (question === undefined) {
       const id = ++questions;
       question = new Promise((resolve) => {
-        const timer = setTimeout(() => settle(null), answerTime);
-        const settle = (people) => {
+        const timer = setTimeout(() => {
+          if (asking.get(letters) === question) asking.delete(letters);
+          resolve(null);
+        }, answerTime);
+        waiting.set(id, (people) => {
           clearTimeout(timer);
           waiting.delete(id);
-          asking.delete(key);
-          if (people !== null) answers.set(key, people);
+          if (asking.get(letters) === question) asking.delete(letters);
+          if (people !== null) answers.set(letters, people);
           resolve(people);
-        };
-        waiting.set(id, settle);
+        });
       });
-      asking.set(key, question);
+      asking.set(letters, question);
       host.dispatchEvent(new CustomEvent("wiki-mention", { detail: { id, letters } }));
     }
     return question;
   };
-  const source = ifNotIn(notMentions, async (context) => {
+  // "@login", and a space unless one follows already.
+  const choose = (login) => (view, completion, from, to) => {
+    const next = view.state.sliceDoc(to, to + 1);
+    const text = `@${login}${next === " " || next === "\t" ? "" : " "}`;
+    view.dispatch({ ...insertCompletionText(view.state, text, from, to), annotations: pickedCompletion.of(completion) });
+  };
+  const source = async (context) => {
     const typed = context.matchBefore(typedMention);
     if (typed === null) return null;
     if (wordBefore.test(context.state.sliceDoc(Math.max(0, typed.from - 2), typed.from))) return null;
+    if (!mentionCounts(context.state, context.pos)) return null;
     // The question stays out for the next time these letters are typed;
     // a completion the library has given up on (more was typed) does not
     // wait for it.
@@ -460,17 +517,23 @@ const mentions = (host) => {
       // The server has chosen and ordered them: the library is not to
       // filter them again by the display name it shows.
       filter: false,
-      options: people.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: `@${person.login} ` })),
+      options: people.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: choose(person.login) })),
     };
-  });
+  };
   // The list's keys: the library's, and Tab, which chooses as Enter does.
   // A key the list acts on goes no further, so that the form's keydown
   // (wiki-app/jsbits/editor.js) does not act on it too: Tab does not
   // indent and Escape does not close a menu. A key the list does not act
-  // on (no list is open) goes on as before.
-  const keys = [...completionKeymap, { key: "Tab", run: acceptCompletion }].map((binding) => ({ ...binding, stopPropagation: true }));
+  // on goes on as before. Escape acts only on a list that is shown: the
+  // library's closes a completion still being asked for too, which would
+  // keep Escape from the form while nothing is shown.
+  const escape = (view) => completionStatus(view.state) === "active" && closeCompletion(view);
+  const keys = [...completionKeymap.filter((binding) => binding.key !== "Escape"), { key: "Escape", run: escape }, { key: "Tab", run: acceptCompletion }];
   return {
-    extension: [autocompletion({ override: [source], icons: false, defaultKeymap: false }), Prec.highest(keymap.of(keys))],
+    extension: [
+      autocompletion({ override: [source], icons: false, defaultKeymap: false }),
+      Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true })))),
+    ],
     answer: (id, people) => waiting.get(id)?.(people),
     status: (state) => completionStatus(state) ?? "",
   };
@@ -606,6 +669,17 @@ export function attach(textarea, host, original, codeTokens) {
     // Whether the list of a mention's completion is open ("active"), being
     // asked for ("pending"), or neither (""), for the browser tests.
     completing: () => completion.status(view.state),
+    // The text of each node of a kind in the syntax tree, the whole text
+    // parsed, for the browser tests (TeXMath against the wiki's parser).
+    nodes: (name) => {
+      const found = [];
+      (ensureSyntaxTree(view.state, view.state.doc.length, 5000) ?? syntaxTree(view.state)).iterate({
+        enter: (node) => {
+          if (node.name === name) found.push(view.state.sliceDoc(node.from, node.to));
+        },
+      });
+      return found;
+    },
     // The tracked changes, as {id, from, to, removed}, in UTF-16 units.
     changes: () => view.state.field(changes.field).map((change) => ({ ...change })),
     // The assistant's edit: from..to replaced with `insert`, tracked as the
