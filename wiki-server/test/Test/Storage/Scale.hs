@@ -15,8 +15,8 @@
 -- page view finds its page one slug at a time, its watch button reads the
 -- viewer's watches of the page and its spaces, the mentions read the
 -- logins mentioned, and an attachment reads the permission context once
--- per generation (WP5.24). A
--- blog's list reads the first version of each page, and a history is read
+-- per generation (WP5.24). A blog's list reads the first version of each
+-- page, and a history is read
 -- a page of versions at a time. The audit log's Activity reads one page of
 -- entries, however far back, and its list of actors a few rows per actor.
 --

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Passkeys are checked by the `webauthn` package (0.12.0.0) instead of code
+of the server's own (WP5.27). What is stored and what the server answers
+are unchanged. `Wiki.Server.WebAuthn` no longer exports
+`AuthenticatorData`, `parseAuthenticatorData` or `derSignature`, and its
+`CoseKey` is the package's key with its algorithm. `cabal.project` allows
+webauthn newer `base`, `time`, `crypton`, `crypton-x509`,
+`crypton-x509-store` and `crypton-x509-validation` than it names.
+
 An ID token for another client is refused with a message that names the
 token's clients and the wiki's client id ("is for the client X and not for
 this wiki's Y."), so that an operator sees the mismatch.
