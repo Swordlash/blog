@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Migration `0003-users-by-prefix` adds indexes on the folded display name
+(both databases) and, on PostgreSQL, on the folded login and display name
+in the collation "C", for `GET api/v1/notifications/people/search` (WP5.28),
+which finds the users whose login or display name starts with some letters
+in one statement. `Wiki.Server.Storage.Rows` gains `loadUsersStartingWith`,
+and the `Backend` class `byCodePoints`, a text compared by its code points
+(WP5.25 adds the same).
+
 The second factor's codes are one-time-password's (3.0.1.0, WP5.27), over
 sel's bindings to libsodium: building the server needs libsodium's
 development files (`libsodium-dev`), and running it the library

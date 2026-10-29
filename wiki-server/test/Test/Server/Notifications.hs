@@ -161,6 +161,7 @@ overHttp backing = describe "over HTTP" $ do
     found (Just people.reader) "jd" `shouldReturn` ["jdoe"]
     found (Just people.reader) "fil" `shouldReturn` ["fill" <> T.justifyRight 2 '0' (show i) | i <- [1 .. 10 :: Int]]
     found (Just people.reader) "" `shouldReturn` []
+    (.status) <$> asWithout r (Just people.reader) methodGet "api/v1/notifications/people/search" `shouldReturn` 400
     -- Nobody to a visitor, as with the people asked for by login.
     found Nothing "an" `shouldReturn` []
 

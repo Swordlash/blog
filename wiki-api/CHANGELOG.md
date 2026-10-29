@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`NotificationsApi` gains `searchPeople`, `GET
+notifications/people/search?q=<letters>` (WP5.28): the users who may sign in
+whose login or display name starts with the letters, ignoring case, at most
+`maxPeopleFound` (ten), ordered by display name, as `[User]`; nobody to a
+visitor. The editor completes mentions with it.
+
 `providerProblems`, and so `checkServerSettings`, refuse a provider of
 kind Google whose client id does not end with
 `.apps.googleusercontent.com`. Google takes the short form when a person

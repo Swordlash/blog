@@ -382,6 +382,7 @@ closes every connection when it stops.
 | GET | `api/v1/notifications/settings` | | `NotificationSettings` `{"mail", "watchOwn", "verifiedEmail", "mailing"}` | 403 | `notificationSettings` |
 | PUT | `api/v1/notifications/settings` | `NotificationSettingsChange` `{"mail", "watchOwn"}` | `NotificationSettings` | 403 | `setNotificationSettings` |
 | GET | `api/v1/notifications/people?login[]=<login>&…` | | `{"<login>": Author}`, of those that are users' | | `mentionable` |
+| GET | `api/v1/notifications/people/search?q=<letters>` | | `[User]` `{"id", "login", "displayName"}` | 400 | `mentionCandidates` |
 | GET | `api/v1/notifications/watches/pages/<page>` | | `Watch` `{"watching", "reason"}` | 404, 403 | `watching` |
 | PUT | `api/v1/notifications/watches/pages/<page>` | `Watching` `{"watching": bool}` | `Watch` | 404, 403 | `setWatching` |
 | GET | `api/v1/notifications/watches/spaces/<space>` | | `Watch` | 404, 403 | `watching` |
@@ -402,6 +403,15 @@ applies in that order, never the one who did it, and never someone who may
 not read the page; a notification of a page the user may no longer read is
 left out of the list. The list is the latest 50, the newest first; `unread`
 counts all of those kept (90 days, at most 500 a user).
+
+`people/search` is what the editor completes a mention with: the users who
+may sign in whose login or display name starts with `q`, ignoring case, at
+most ten, ordered by display name and then login, compared by code points.
+To a visitor who is not signed in, and for an empty `q`, it answers `[]`;
+without `q` it is a 400. The server answers it from one statement over the
+indexes of the folded login and display name. PostgreSQL folds every
+letter; SQLite folds only the letters of ASCII, so a display name that
+starts with another capital letter is found there by its login only.
 
 A page is watched as its `Watch` says: `{"watching": bool, "reason"}`, the
 reason `{"tag": "Chosen"}` (the user chose so for it), `{"tag": "FromSpace",

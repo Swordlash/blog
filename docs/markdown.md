@@ -93,6 +93,17 @@ cannot be mentioned. Nothing in code, `` `@ada` ``, or in a link's text is
 a mention; to write an `@` before a word without mentioning anyone, put it
 in code.
 
+The editor completes mentions. Typing `@` and a letter or more, where a
+mention counts, opens a list of the users whose login or display name
+starts with those letters, whatever their case: at most ten, by display
+name, each with their login after it. The arrows move in the list, Enter or
+Tab writes `@login` and a space, and Escape closes it. In code, in a link
+and in HTML nothing opens. The list is offered to someone signed in; the
+demo offers its own users. On a server that keeps the wiki in SQLite, a
+display name is matched without regard to case only in its ASCII letters,
+so a user whose display name starts with another capital letter (Łukasz)
+is found there by their login.
+
 ## Images, video and attachments
 
 An image is `![caption](destination)`: ![A diagram](https://example.com/diagram.png)
