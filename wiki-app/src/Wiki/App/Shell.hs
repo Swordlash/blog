@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The shell: the application's frame around whatever the route shows.
@@ -1171,10 +1172,20 @@ component =
     -- first section's address. Where the two are the same, nothing
     -- happens; the router then announces the route already shown, which
     -- 'Arrived' ignores.
+    --
+    -- A view's initializer runs before the shell's, and so before the shell
+    -- listens to the router. The users section's may already have put
+    -- another address in place of the one the shell started with (a page
+    -- number back in range). Then the shell goes to the route the address
+    -- names now, rather than writing back the route it started with.
     canonicalAdmin :: H.HalogenM (State m) Action Slots output m ()
     canonicalAdmin = do
       st <- get
-      when (isAdminRoute st.route) (Router.redirect st.router st.route)
+      now <- Router.current st.router
+      if
+        | now /= st.route -> handleAction (Arrived now)
+        | isAdminRoute st.route -> Router.redirect st.router st.route
+        | otherwise -> pass
 
     -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
