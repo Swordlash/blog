@@ -211,8 +211,10 @@ indexPlanOnPostgres st statement = case (storagePlace st).database of
 scansOf :: Storage -> Text -> IO [Text]
 scansOf st statement = do
   plan <- planOf st statement
-  pure [Map.findWithDefault alias alias aliases | detail <- plan, Just scanned <- [T.stripPrefix "SCAN " detail], let alias = T.takeWhile (/= ' ') scanned]
+  pure [Map.findWithDefault alias alias aliases | detail <- plan, detail /= "SCAN CONSTANT ROW", Just scanned <- [T.stripPrefix "SCAN " detail], let alias = T.takeWhile (/= ' ') scanned]
   where
+    -- A statement with no table (SELECT LOWER(?)) scans the one row of
+    -- its constants, which is no table's.
     -- Each @"name" AS "alias"@ of the statement: the text before the
     -- needle ends with the name, the text after it starts with the needle
     -- and then the alias.

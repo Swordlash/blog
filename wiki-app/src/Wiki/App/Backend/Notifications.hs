@@ -60,23 +60,22 @@ class (Monad m) => MonadNotifications m where
   -- | The users who may sign in whose login or display name starts with
   -- these letters, ignoring case: what the editor offers to complete a
   -- mention with, while an \@login is typed. Only users whose login a
-  -- mention can name are given ('Wiki.Core.Markdown.Mention.mentionsWhole'),
+  -- mention can name are given ('Wiki.Core.Markdown.Ast.mentionsWhole'),
   -- so that writing \@ and the login chosen mentions that user. They are
   -- ordered by display name, then login, and there are at most
   -- 'Wiki.Api.Notifications.maxPeopleFound'. Someone not signed in gets
   -- nobody, as from 'mentionable', and so do fewer letters than
   -- 'Wiki.Api.Notifications.minPeopleSearch'.
   --
-  -- The letters are lowered, and on the server compared with the login and
-  -- display name lowered by the database's @lower@. PostgreSQL lowers
-  -- every letter. SQLite lowers only the letters of ASCII, and there the
-  -- letters typed are lowered the same way, so another letter (Ł, É)
-  -- matches only in the case it was typed in: \"Łu\" finds Łukasz and
-  -- \"łu\" does not, in a login as in a display name.
+  -- On the server the letters, the login and the display name are all
+  -- lowered by the database's @lower@. PostgreSQL lowers every letter (as
+  -- its character type says). SQLite lowers only the letters of ASCII, so
+  -- there another letter (Ł, É) matches only in the case it was typed in:
+  -- \"Łu\" finds Łukasz and \"łu\" does not, in a login as in a display
+  -- name. The demo lowers every letter.
   --
-  -- On the HTTP backend a server that cannot be reached is 'Unreachable',
-  -- asked again later; a refusal (a server without this endpoint) is no
-  -- users.
+  -- On the HTTP backend a server without this endpoint (a 404) is no
+  -- users; every other error is returned, and the editor asks again later.
   mentionCandidates :: Text -> m (Either WikiError [User])
   default mentionCandidates :: (MonadTrans t, m ~ t n, MonadNotifications n) => Text -> m (Either WikiError [User])
   mentionCandidates = lift . mentionCandidates

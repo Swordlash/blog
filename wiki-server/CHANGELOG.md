@@ -6,10 +6,9 @@ Migration `0003-users-by-prefix` adds indexes on the folded display name
 (both databases) and, on PostgreSQL, on the folded login and display name
 in the collation "C", for `GET api/v1/notifications/people/search` (WP5.28),
 which finds the users whose login or display name starts with some letters
-in one statement. `Wiki.Server.Storage.Rows` gains `loadUsersStartingWith`
-and `prefixEnd`, and the `Backend` class `byCodePoints`, a text compared by
-its code points (WP5.25 adds the same), and `lowered`, a text lowered as the
-database's `lower` lowers it.
+through those indexes, comparing by WP5.25's `Backend.byCodePoints`, after
+the database has lowered the letters with its own `lower`.
+`Wiki.Server.Storage.Rows` gains `loadUsersStartingWith` and `prefixEnd`.
 
 The second factor's codes are one-time-password's (3.0.1.0, WP5.27), over
 sel's bindings to libsodium: building the server needs libsodium's

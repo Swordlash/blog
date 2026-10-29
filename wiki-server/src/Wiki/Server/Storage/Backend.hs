@@ -29,8 +29,6 @@ module Wiki.Server.Storage.Backend
   )
 where
 
-import Data.Char (isAsciiUpper)
-import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Database.Beam (FromBackendRow, HasQBuilder, HasSqlEqualityCheck, MonadBeam, QExpr)
 import Database.Beam.Backend.SQL (BeamSqlBackend, BeamSqlBackendCanSerialize, BeamSqlBackendIsString, SqlNull)
@@ -133,12 +131,6 @@ class
   -- collation @C@.
   byCodePoints :: QExpr be s Text -> QExpr be s Text
 
-  -- | A text lowered as the database's @lower@ lowers it, so that letters
-  -- compared with a column the database lowered match in the same way.
-  -- PostgreSQL lowers every letter; SQLite, without its ICU extension,
-  -- only the letters of ASCII, and leaves Ł or É as they are.
-  lowered :: Proxy be -> Text -> Text
-
 -- | 'withTransaction' runs an action in a transaction on a connection: it
 -- begins a transaction (one that writes, for @True@), runs the action, and
 -- commits. If the action throws, or the commit throws, the transaction is
@@ -198,7 +190,6 @@ instance Backend Sqlite where
   capabilities _ = Capabilities {database = "sqlite", search = FoldedText}
   searchMatches spaces templates ws _ _ = map (\(n, t) -> (n, t, Nothing)) <$> sqliteSearch spaces templates ws
   byCodePoints = identity
-  lowered _ = T.map (\c -> if isAsciiUpper c then toLower c else c)
 
 instance Backend Postgres where
   type Db Postgres = Pg
@@ -217,4 +208,3 @@ instance Backend Postgres where
   capabilities _ = Capabilities {database = "postgres", search = FullText}
   searchMatches spaces templates _ folded most = map (\(n, t, r) -> (n, t, Just r)) <$> postgresSearch spaces templates folded most
   byCodePoints = postgresCodePoints
-  lowered _ = T.toLower

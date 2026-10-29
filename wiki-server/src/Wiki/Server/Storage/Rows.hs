@@ -548,20 +548,27 @@ loadActiveUsersByLogin logins = inChunks (ordNub logins) $ \chunk ->
 -- ('byCodePoints'), so that both databases agree with the in-memory
 -- backend.
 --
--- The statement reads a page of the number given. Users the test leaves
--- out are made up for by the next page, read only then, so a wiki whose
--- logins can all be mentioned reads one page.
+-- The login and display name are lowered by the database's @lower@, which
+-- the indexes hold. The letters are lowered by the same @lower@, in a
+-- statement of their own before the search: how @lower@ lowers depends on
+-- the database (SQLite lowers only the letters of ASCII) and on its
+-- character type (PostgreSQL's @LC_CTYPE@), so no lowering in Haskell is
+-- sure to match it.
 --
--- The login and display name are lowered by the database's @lower@, and
--- the letters the same way ('lowered'): every letter on PostgreSQL, only
--- the letters of ASCII on SQLite.
+-- The search reads a page of the number given. Users the test leaves out
+-- are made up for by the next page, read only then, so a wiki whose logins
+-- can all be mentioned reads one page. The pages are read in one read
+-- transaction, which sees one snapshot of the database (PostgreSQL's
+-- @REPEATABLE READ@, SQLite's read transaction), so a page read at an
+-- offset continues the one before it.
 loadUsersStartingWith :: forall be. (Backend be) => (User -> Bool) -> Text -> Int -> Db be [User]
 loadUsersStartingWith kept letters most
-  | T.null start || most <= 0 = pure []
-  | otherwise = go 0 []
+  | T.null letters || most <= 0 = pure []
+  | otherwise = do
+      start <- fromMaybe letters <$> runSelectReturningOne (select (pure (lower_ (val_ letters))))
+      go start 0 []
   where
-    start = lowered (Proxy @be) letters
-    go offset found = do
+    go start offset found = do
       page <-
         map userOf
           <$> runSelectReturningList
@@ -569,14 +576,14 @@ loadUsersStartingWith kept letters most
                 . limit_ (fromIntegral most)
                 . offset_ (fromIntegral offset)
                 . orderBy_ (\u -> (asc_ (byCodePoints u.display_name), asc_ (byCodePoints u.login), asc_ u.id))
-                $ filter_ (\u -> u.disabled ==. val_ False &&. (startsWith u.login ||. startsWith u.display_name)) (all_ wikiDb.users)
+                $ filter_ (\u -> u.disabled ==. val_ False &&. (startsWith start u.login ||. startsWith start u.display_name)) (all_ wikiDb.users)
             )
       let found' = found <> filter kept page
       if length found' >= most || length page < most
         then pure (take most found')
-        else go (offset + most) found'
-    startsWith :: forall s. QExpr be s Text -> QExpr be s Bool
-    startsWith column =
+        else go start (offset + most) found'
+    startsWith :: forall s. Text -> QExpr be s Text -> QExpr be s Bool
+    startsWith start column =
       let folded = byCodePoints (lower_ column)
        in (folded >=. val_ start) &&. maybe (val_ True) (\end -> folded <. val_ end) (prefixEnd start)
 

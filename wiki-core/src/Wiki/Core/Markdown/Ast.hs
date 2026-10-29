@@ -62,6 +62,7 @@ module Wiki.Core.Markdown.Ast
   , attribute
   , classes
   , mentions
+  , mentionsWhole
   )
 where
 
@@ -262,6 +263,18 @@ attribute key attrs = head [v | (k, v) <- attrs, k == key]
 -- alike.
 classes :: Attributes -> [Text]
 classes attrs = concatMap T.words [v | ("class", v) <- attrs]
+
+-- | Whether a page that says @\@login@ mentions this login and nothing
+-- else: the text parsed as Markdown, as a page is, is one paragraph that
+-- holds only a 'Mention' of the login. A login a mention reads less of
+-- (one that ends in @.@ or @-@, or has a space, an @\@@ or other
+-- punctuation in it) fails, and so does one that Markdown reads as
+-- something else first, such as @_anna_@, which is emphasis around
+-- @anna@. The editor offers to complete a mention only with logins for
+-- which this holds ("Wiki.App.Backend.Notifications"' @mentionCandidates@),
+-- so that the login it writes mentions the user chosen and tells them.
+mentionsWhole :: Text -> Bool
+mentionsWhole login = parseMarkdown ("@" <> login) == Right [Para [Mention login]]
 
 -- | The logins a document mentions, outside links (where a mention is
 -- shown as text, since a link cannot contain a link): who it would notify.

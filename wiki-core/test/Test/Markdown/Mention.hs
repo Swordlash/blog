@@ -46,6 +46,10 @@ spec = describe "Markdown mentions" $ do
       map mentionsWhole ["ada", "ada.lovelace", "grace-h", "x_", "zoë", "Łukasz"] `shouldBe` replicate 6 True
     it "fails for a login a mention reads less of, or not at all" $
       map mentionsWhole ["anna-", "ada.", "ada lovelace", "ada@example.org", "a+b", "", "@ada"] `shouldBe` replicate 7 False
+    it "fails for a login Markdown reads as something else around a shorter login" $
+      map mentionsWhole ["_anna_", "anna*", "*anna*", "anna`x`"] `shouldBe` replicate 4 False
+    it "holds for a login with a dot or an underscore inside" $
+      map mentionsWhole ["a.b", "a_b", "anna"] `shouldBe` replicate 3 True
   describe "the parser" $ do
     it "makes a mention in a paragraph, in emphasis and in a heading" $ do
       "Hi @ada!" `parses` [Para [Str "Hi ", Mention "ada", Str "!"]]

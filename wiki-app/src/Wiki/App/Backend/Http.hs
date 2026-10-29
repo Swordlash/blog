@@ -577,16 +577,17 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
 
   -- Not cached here: the editor's completion keeps the answers it has
   -- had for as long as the editor is open (@web/src/editor.js@). Too few
-  -- letters ask nothing. A refusal (a server from before this endpoint)
-  -- is no users, which the editor keeps, so that it does not ask again at
-  -- every key; a server that cannot be reached is asked again later.
+  -- letters ask nothing. A 404 (a server from before this endpoint) is no
+  -- users, which the editor keeps, so that it does not ask again at every
+  -- key. Any other error (a server that cannot be reached, a session that
+  -- has ended) is an error, which the editor does not keep and asks again
+  -- later, when it may be answered.
   mentionCandidates letters
     | not (searchable letters) = pure (Right [])
     | otherwise =
         send (endpoints.notifications.searchPeople letters) <&> \case
-          Left e@(Unreachable _) -> Left e
-          Left _ -> Right []
-          Right found -> Right found
+          Left NotFound -> Right []
+          other -> other
   notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices
   markRead m = do
     result <- send (endpoints.notifications.markRead m)

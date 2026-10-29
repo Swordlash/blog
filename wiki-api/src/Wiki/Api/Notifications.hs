@@ -58,7 +58,7 @@ data NotificationsApi mode = NotificationsApi
   -- display name starts with @q@, ignoring case, ordered by display name,
   -- at most 'maxPeopleFound'. The editor offers them when an \@ is typed.
   -- Only users whose login a mention can name are answered: those for
-  -- which "Wiki.Core.Markdown.Mention"'s 'Wiki.Core.Markdown.Mention.mentionsWhole'
+  -- which "Wiki.Core.Markdown.Ast"'s 'Wiki.Core.Markdown.Ast.mentionsWhole'
   -- holds, so that writing @\@login@ mentions the user chosen.
   --
   -- Empty for a visitor who is not signed in, and for a @q@ shorter than

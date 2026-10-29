@@ -408,18 +408,19 @@ counts all of those kept (90 days, at most 500 a user).
 may sign in whose login or display name starts with `q`, ignoring case, at
 most ten, ordered by display name and then login, compared by code points.
 Only users whose login a mention can name are answered
-(`Wiki.Core.Markdown.Mention.mentionsWhole`: `@login` mentions that login
-and nothing shorter), so that the login written mentions the user chosen.
+(`Wiki.Core.Markdown.Ast.mentionsWhole`: a page that says `@login`
+mentions that login and nothing else), so that the login written mentions the user chosen.
 To a visitor who is not signed in, and for a `q` of fewer than two
 characters, it answers `[]`; without `q` it is a 400. A signed-in user is
 otherwise never given a list of the wiki's users (only an administrator,
 or a space's administrator choosing whom to grant to, sees them all); the
 shortest `q` keeps the search from listing everyone a letter at a time.
-The server answers it from the indexes of the folded login and display
-name, in one statement unless logins a mention cannot name fill a page of
-the answer. PostgreSQL folds every letter; SQLite folds only the letters of
-ASCII, and the letters of `q` the same way, so there another letter is
-matched only in the case it was typed in.
+The server lowers `q` with the database's own `lower`, then answers from
+the indexes of the lowered login and display name, in one statement unless
+logins a mention cannot name fill a page of the answer. PostgreSQL lowers
+every letter (as its character type says); SQLite lowers only the letters
+of ASCII, so there another letter is matched only in the case it was typed
+in.
 
 A page is watched as its `Watch` says: `{"watching": bool, "reason"}`, the
 reason `{"tag": "Chosen"}` (the user chose so for it), `{"tag": "FromSpace",
