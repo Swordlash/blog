@@ -1571,6 +1571,23 @@ must be in before it is.
   settings and the per-user switch. The README gets "The assistant through the wiki's
   identity" with the console steps; `docs/api.md` the endpoints.
 
+  **Also in this package, the assistant's modes** (the owner, 2026-10-29: "do edytora
+  asystenta dodać opcje auto-approve edits (z timeoutem), agent/ask mode - może być w tym
+  samym"). Today the model edits the page through its tools as tracked changes and the
+  author accepts or rejects each, or all at once. Two settings in the assistant's panel,
+  kept per user with the assistant's settings: a **mode**, *Ask* (the model answers and
+  may propose, with its tools off: a proposed edit is shown as a quoted suggestion with
+  an "Apply" button that makes the tracked change) or *Agent* (as today: the model edits
+  as tracked changes), the mode shown in the message box and switchable there; and
+  **auto-accept** for Agent mode, off by default: a tracked change the author has not
+  touched is accepted after a timeout the author chooses (10 s, 30 s, 1 min, 5 min),
+  with a visible countdown on the change and on the panel's "n changes" line, stopped by
+  the pointer entering the change or the author rejecting it; "Reject all" stops every
+  countdown. Nothing is saved by auto-accept: saving stays the author's, as the editor
+  says next to Save. Tests: hspec-halogen for both modes, the countdown and its stops,
+  the setting kept across a reload; the mode and the timeout are part of the vault's
+  settings (WP5.21) so they follow the user across devices.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
