@@ -738,7 +738,9 @@ activeUser c u = viaConn c (loadActiveUser u) >>= traverse (\found -> (found,) <
 -- change made by another process (the console) bumps the generation in
 -- the database too, so the next read sees it.
 data Permissions = Permissions
-  { generation :: Int64
+  { generation :: Maybe Int64
+  -- ^ 'Nothing' for a permission context read without a generation, which
+  -- is never kept.
   , spaces :: Map SpaceId Space
   , grants :: Grants
   -- ^ The grants as the database has them, without whom the wiki is open
@@ -759,19 +761,29 @@ maxKeptUsers = 500
 -- the spaces and grants read from the database, which are then kept. Of
 -- two reads that find a new generation at once, each reads it, and the
 -- newer generation is kept.
+--
+-- Without the generation's row (deleted by hand) there is no generation to
+-- trust, and a copy kept under any number could be served after the
+-- permission context changed: then it is read from the database and
+-- nothing is kept, in every read until the row is back.
 keptPermissions :: Storage -> Conn -> IO Permissions
-keptPermissions st c = do
-  generation <- viaConn c permissionsGeneration
-  readIORef st.permissions >>= \case
-    Just kept | kept.generation == generation -> pure kept
-    _ -> do
+keptPermissions st c =
+  viaConn c permissionsGeneration >>= \case
+    Nothing -> fresh Nothing
+    Just generation ->
+      readIORef st.permissions >>= \case
+        Just kept | kept.generation == Just generation -> pure kept
+        _ -> do
+          read' <- fresh (Just generation)
+          atomicModifyIORef' st.permissions $ \case
+            Just kept | kept.generation >= Just generation -> (Just kept, ())
+            _ -> (Just read', ())
+          pure read'
+  where
+    fresh generation = do
       spaces <- viaConn c loadSpaces
       grants <- viaConn c loadGrants
-      let fresh = Permissions {generation, spaces, grants, users = mempty}
-      atomicModifyIORef' st.permissions $ \case
-        Just kept | kept.generation >= generation -> (Just kept, ())
-        _ -> (Just fresh, ())
-      pure fresh
+      pure Permissions {generation, spaces, grants, users = mempty}
 
 -- | A user who may act, with their groups, in a read transaction of the
 -- generation of the permission context given: from memory if a read of
@@ -782,7 +794,7 @@ keptUser st c kept u = case Map.lookup u kept.users of
   Nothing -> do
     found <- activeUser c u
     let remember held
-          | held.generation == kept.generation && Map.size held.users < maxKeptUsers = Permissions {generation = held.generation, spaces = held.spaces, grants = held.grants, users = Map.insert u found held.users}
+          | isJust kept.generation && held.generation == kept.generation && Map.size held.users < maxKeptUsers = Permissions {generation = held.generation, spaces = held.spaces, grants = held.grants, users = Map.insert u found held.users}
           | otherwise = held
     atomicModifyIORef' st.permissions (\held -> (remember <$> held, ()))
     pure found
@@ -1230,9 +1242,9 @@ saving tx = StoredWiki $ do
 -- lives on the web). The server's route for an attachment's bytes serves
 -- this.
 --
--- It reads the attachment and its page's space in one query, and only
--- that space's chain and grants ('readWithin'): a page with many images
--- asks for each of them.
+-- It reads the attachment and its page's space in one query, and the
+-- permission context from memory, read once per generation ('readWithin'):
+-- a page with many images asks for each of them.
 attachmentFile :: (MonadIO m) => AttachmentId -> StoredWiki m (Either WikiError (Attachment, Maybe FilePath))
 attachmentFile aid = StoredWiki . ReaderT $ \env -> liftIO . readWithin env.storage env.who (loadAttachmentIn aid) $ \sid a -> do
   requireView =<< asks (`chainOf` sid)
@@ -1762,7 +1774,9 @@ placeAsShown s = \case
 
 -- | Number these spaces 0, 1, 2, … in the order given.
 placeSpaces :: [Space] -> Tx ()
-placeSpaces siblings = db (setSpacePositions (Map.toList (renumber (\x -> x.id) siblings)))
+placeSpaces siblings = db $
+  for_ (Map.toList (renumber (\x -> x.id) siblings)) $ \(sid, n) ->
+    setSpacePosition sid n
 
 -- | Number these pages 0, 1, 2, … in the order given.
 placePages :: [PageNode] -> Tx ()
@@ -2739,7 +2753,7 @@ importArchive st a = writingEither st $ do
                 SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
                 url -> url
            in insertAttachment p.id ordinal x {source}
-      updateSpaces [sp | sp <- spaces, isJust sp.homePage]
+      traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
       traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
       restoreAudit a.audit
       pure (Right ())

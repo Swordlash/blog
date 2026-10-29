@@ -53,7 +53,7 @@ spec :: Backing -> Spec
 spec backing = describe "the permission context kept in memory" $ do
   it "has its generation bumped by every write that changes the permission context, and by no other" $ withDemo backing $ \st -> do
     -- The import of the demo's wiki gave users, groups, spaces and grants.
-    reading st permissionsGeneration >>= (`shouldSatisfy` (> 0))
+    reading st permissionsGeneration >>= (`shouldSatisfy` (> Just 0))
     ritaId <- userId st "reader"
     let admin :: StoredWiki IO a -> IO a
         admin = runStoredWiki st Administrator
@@ -155,6 +155,19 @@ spec backing = describe "the permission context kept in memory" $ do
     _ <- runStoredWiki st Administrator (addMember crew.id ritaId) >>= ok
     replicateM_ 2 $ runStoredWiki st rita (spaceHome team.id) >>= (`shouldSatisfy` isRight)
     _ <- runStoredWiki st Administrator (removeMember crew.id ritaId) >>= ok
+    runStoredWiki st rita (spaceHome team.id) `shouldReturn` Left NotFound
+
+  it "reads the permission context afresh, keeping nothing, while the generation's row is missing" $ withDemo backing $ \st -> do
+    rita <- whoFor st (As "reader")
+    ritaId <- userId st "reader"
+    team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
+    replicateM_ 2 $ runStoredWiki st rita (spaceHome team.id) `shouldReturn` Left NotFound
+    byHand st "DELETE FROM permissions_generation"
+    reading st permissionsGeneration `shouldReturn` Nothing
+    replicateM_ 2 $ runStoredWiki st rita (spaceHome team.id) `shouldReturn` Left NotFound
+    _ <- runStoredWiki st Administrator (setSpaceGrant team.id (SubjectUser ritaId) View True) >>= ok
+    runStoredWiki st rita (spaceHome team.id) >>= (`shouldSatisfy` isRight)
+    _ <- runStoredWiki st Administrator (setSpaceGrant team.id (SubjectUser ritaId) View False) >>= ok
     runStoredWiki st rita (spaceHome team.id) `shouldReturn` Left NotFound
 
   it "refuses a user disabled by another process at once" $ withDemo backing $ \st -> do

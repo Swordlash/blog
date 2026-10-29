@@ -111,8 +111,7 @@ module Wiki.Server.Storage.Rows
   , insertSpace
   , insertSpaces
   , updateSpace
-  , updateSpaces
-  , setSpacePositions
+  , setSpacePosition
   , deleteSpaceRow
   , clearHomePage
   , insertPage
@@ -849,8 +848,7 @@ passwordHashOf u = runSelectReturningOne (select ((\r -> r.password_hash) <$> fi
 
 -- | Set whether a user is disabled.
 updateDisabled :: (Backend be) => UserId -> Bool -> Db be ()
-updateDisabled u disabled = do
-  runUpdate (update wikiDb.users (\r -> r.disabled <-. val_ disabled) (\r -> r.id ==. val_ u.text))
+updateDisabled u disabled = runUpdate (update wikiDb.users (\r -> r.disabled <-. val_ disabled) (\r -> r.id ==. val_ u.text))
 
 -- | End every session of a user.
 deleteSessionsOf :: (Backend be) => UserId -> Db be ()
@@ -982,9 +980,11 @@ resetsSince u since =
 -- grant, and each user with their groups: what a permission check reads.
 -- A read transaction reads the generation first, and takes the permission
 -- context from the storage's memory when the generation there is the same
--- ("Wiki.Server.Storage").
-permissionsGeneration :: (Backend be) => Db be Int64
-permissionsGeneration = maybe 0 (\r -> r.generation) <$> runSelectReturningOne (select (all_ wikiDb.permissions_generation))
+-- ("Wiki.Server.Storage"). 'Nothing' when the row is missing (deleted by
+-- hand, or a database put together by hand without it): then there is no
+-- generation to trust.
+permissionsGeneration :: (Backend be) => Db be (Maybe Int64)
+permissionsGeneration = fmap (\r -> r.generation) <$> runSelectReturningOne (select (all_ wikiDb.permissions_generation))
 
 -- | Start a new generation of the permission context without changing
 -- anything else, in the running transaction: what a test does to have the
@@ -998,9 +998,10 @@ bumpPermissions = runUpdate (update wikiDb.permissions_generation (\r -> r.gener
 --------------------------------------------------------------------------------
 -- Writes
 
--- | Add users, as an import brings them: no password, enabled.
+-- | Add users, as an import brings them: no password, enabled. One
+-- statement for each 500.
 insertUsers :: (Backend be) => [User] -> Db be ()
-insertUsers us = unless (null us) $ do
+insertUsers us =
   for_ (chunksOf 500 us) $ \chunk ->
     runInsert . insert wikiDb.users $
       insertValues
@@ -1027,16 +1028,15 @@ insertMember :: (Backend be) => GroupId -> UserId -> Db be ()
 insertMember g u = insertMembers [(g, u)]
 
 -- | Put users in groups, each pair a group and a user; a user who is in a
--- group already stays.
+-- group already stays. One statement for each 500.
 insertMembers :: (Backend be) => [(GroupId, UserId)] -> Db be ()
-insertMembers pairs = unless (null pairs) $ do
-  for_ pairs $ \(g, u) ->
-    runInsert (insertOnConflict wikiDb.group_members (insertValues [S.MemberRow {group_id = g.text, user_id = u.text}]) anyConflict onConflictDoNothing)
+insertMembers pairs =
+  for_ (chunksOf 500 pairs) $ \chunk ->
+    runInsert (insertOnConflict wikiDb.group_members (insertValues [S.MemberRow {group_id = g.text, user_id = u.text} | (g, u) <- chunk]) anyConflict onConflictDoNothing)
 
 -- | Take a user out of a group.
 deleteMember :: (Backend be) => GroupId -> UserId -> Db be ()
-deleteMember g u = do
-  runDelete (delete wikiDb.group_members (\m -> m.group_id ==. val_ g.text &&. m.user_id ==. val_ u.text))
+deleteMember g u = runDelete (delete wikiDb.group_members (\m -> m.group_id ==. val_ g.text &&. m.user_id ==. val_ u.text))
 
 -- | Rename a group.
 renameGroupRow :: (Backend be) => GroupId -> Text -> Db be ()
@@ -1061,19 +1061,17 @@ setGlobalGrant granted g
 deleteGlobalGrant :: (Backend be) => GlobalGrant -> Db be ()
 deleteGlobalGrant g =
   let (kind, i) = subjectColumns g.subject
-   in do
-        runDelete (delete wikiDb.global_grants (\r -> r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (globalText g.permission)))
+   in runDelete (delete wikiDb.global_grants (\r -> r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (globalText g.permission)))
 
 -- | Remove a grant on a space, if it exists.
 deleteSpaceGrant :: (Backend be) => SpaceGrant -> Db be ()
 deleteSpaceGrant g =
   let (kind, i) = subjectColumns g.subject
-   in do
-        runDelete
-          ( delete
-              wikiDb.space_grants
-              (\r -> r.space_id ==. val_ g.space.text &&. r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (spaceText g.permission))
-          )
+   in runDelete
+        ( delete
+            wikiDb.space_grants
+            (\r -> r.space_id ==. val_ g.space.text &&. r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (spaceText g.permission))
+        )
 
 -- | Add these grants, in order, each numbered after the last; a grant that
 -- already exists is left as it is.
@@ -1101,46 +1099,40 @@ insertSpace :: (Backend be) => Space -> Db be ()
 insertSpace s = insertSpaces [s]
 
 -- | Add spaces, in the order given, so that a space can come after its
--- parent.
+-- parent: one statement for each 500, which the databases check the
+-- foreign keys of at its end.
 insertSpaces :: (Backend be) => [Space] -> Db be ()
-insertSpaces ss = unless (null ss) $ do
-  for_ ss $ \s -> runInsert (insert wikiDb.spaces (insertValues [spaceRow s]))
+insertSpaces ss = for_ (chunksOf 500 ss) $ \chunk -> runInsert (insert wikiDb.spaces (insertValues (map spaceRow chunk)))
 
 -- | Overwrite the space with this id: every column of it.
 updateSpace :: (Backend be) => Space -> Db be ()
-updateSpace s = updateSpaces [s]
+updateSpace s =
+  let r = spaceRow s
+   in runUpdate $
+        update
+          wikiDb.spaces
+          ( \x ->
+              mconcat
+                [ x.parent <-. val_ r.parent
+                , x.name <-. val_ r.name
+                , x.slug <-. val_ r.slug
+                , x.public <-. val_ r.public
+                , x.math_macros <-. val_ r.math_macros
+                , x.created_at <-. val_ r.created_at
+                , x.position <-. val_ r.position
+                , x.subspace_order <-. val_ r.subspace_order
+                , x.page_order <-. val_ r.page_order
+                , x.home_page <-. val_ r.home_page
+                , x.icon <-. val_ r.icon
+                , x.description <-. val_ r.description
+                , x.blog <-. val_ r.blog
+                ]
+          )
+          (\x -> x.id ==. val_ r.id)
 
--- | Overwrite these spaces, each by its id.
-updateSpaces :: (Backend be) => [Space] -> Db be ()
-updateSpaces ss = unless (null ss) $ do
-  for_ ss $ \s -> do
-    let r = spaceRow s
-    runUpdate $
-      update
-        wikiDb.spaces
-        ( \x ->
-            mconcat
-              [ x.parent <-. val_ r.parent
-              , x.name <-. val_ r.name
-              , x.slug <-. val_ r.slug
-              , x.public <-. val_ r.public
-              , x.math_macros <-. val_ r.math_macros
-              , x.created_at <-. val_ r.created_at
-              , x.position <-. val_ r.position
-              , x.subspace_order <-. val_ r.subspace_order
-              , x.page_order <-. val_ r.page_order
-              , x.home_page <-. val_ r.home_page
-              , x.icon <-. val_ r.icon
-              , x.description <-. val_ r.description
-              , x.blog <-. val_ r.blog
-              ]
-        )
-        (\x -> x.id ==. val_ r.id)
-
--- | Give spaces their positions among their siblings.
-setSpacePositions :: (Backend be) => [(SpaceId, Int)] -> Db be ()
-setSpacePositions placed = unless (null placed) $ do
-  for_ placed $ \(sid, n) -> runUpdate (update wikiDb.spaces (\x -> x.position <-. val_ (fromIntegral n)) (\x -> x.id ==. val_ sid.text))
+-- | Give a space a position among its siblings.
+setSpacePosition :: (Backend be) => SpaceId -> Int -> Db be ()
+setSpacePosition sid n = runUpdate (update wikiDb.spaces (\x -> x.position <-. val_ (fromIntegral n)) (\x -> x.id ==. val_ sid.text))
 
 -- | Delete a space: its subspaces, their pages, the pages' versions,
 -- attachments and drafts, and the grants on all of them go with it, as the
@@ -1150,7 +1142,7 @@ deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.te
 
 -- | Make the spaces whose home page is one of these pages have none.
 clearHomePage :: (Backend be) => [PageId] -> Db be ()
-clearHomePage pids = do
+clearHomePage pids =
   for_ (chunksOf 500 pids) $ \chunk -> runUpdate (update wikiDb.spaces (\x -> x.home_page <-. val_ Nothing) (\x -> x.home_page `in_` map (\p -> just_ (val_ p.text)) chunk))
 
 -- | The fold a search matches a page against: its title and its search
