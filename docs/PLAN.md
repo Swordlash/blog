@@ -1851,7 +1851,8 @@ and Codex with `gpt-6.1-sol` at high reasoning effort, as `AGENTS.md` says; the 
 go to the implementing agent, and the merge follows the green push that answers them.
 On one machine only one agent builds or tests at a time (the owner, 2026-10-29, "testy są
 za wolne w ten sposób"): the brief gives a lock (`flock` on a file in the scratchpad) to
-take around every build and test command; editing goes on in parallel.
+hold around the whole gate, and the agent nearest to merging goes first, so that one
+pull request merges soon rather than several late; editing goes on in parallel.
 The brief is written from this plan and contains:
 
 1. The goal and the acceptance criteria of the work package, verbatim from above.
