@@ -1802,6 +1802,20 @@ must be in before it is.
   `docs/api.md` (the endpoint and the feed), the notifications section of the user docs
   ("Your notifications as a feed"). Queued after WP5.30; not started until the owner says so (the same note).
 
+
+- **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
+  Goal: run `native` and `format` on GitHub's hosted runners in parallel with
+  `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
+  Only `wasm` uses the runner selected by `plan`: keep the existing trust rule,
+  busy-machine fallback, scheduled hosted run and `runner: hosted` override.
+  Acceptance: `native`, `format` and `deploy` use `ubuntu-latest`; `wasm` keeps
+  `needs.plan.outputs.runner`; the build jobs depend only on `plan`, and `deploy`
+  still waits for all three or uses the already-tested artifact. The runner
+  script's trust and fallback tests pass, `actionlint` is clean, and the README
+  and workflow comments explain that the runner choice applies only to `wasm`.
+  No change to the build, test, artifact or Pages behaviour. The wasm job still
+  builds the native prerequisites of its browser suites, prerender and smoke test.
+
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
   najbardziej typowane api. Bez ręcznego sqla, może oprócz migracji. Pod postgresem wszystkie
