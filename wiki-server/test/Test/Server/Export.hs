@@ -87,7 +87,7 @@ slug :: Text -> Slug
 slug = either (panic . show) identity . mkSlug
 
 blocksOf :: (HasCallStack) => Output -> Place -> Text -> IO [P.Block]
-blocksOf output at source = either (\e -> panic ("pandoc: " <> show e)) pure (pageBlocks output at source)
+blocksOf output at source = either (\e -> panic ("pandoc: " <> show e)) pure (pageBlocks output at (readPage source))
 
 maths :: [P.Block] -> [(P.MathType, Text)]
 maths = query $ \case
@@ -205,6 +205,45 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     boxClasses nested `shouldBe` [["tip", "alert"], ["alert-exercise"]]
     titles nested `shouldBe` [[P.Str "One"], [P.Str "Two"]]
     show nested `shouldNotSatisfy` T.isInfixOf "wikibox"
+
+  it "starts a box's content where the page does, whatever the first block is" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+        inBox bs = concat [rest | P.Div (_, ["note", "alert"], _) (_ : rest) <- bs]
+    table <- blocksOf ToOther place "> [!NOTE]\n> | a | b |\n> |---|---|\n> | 1 | 2 |\n"
+    [() | P.Table {} <- inBox table] `shouldBe` [()]
+    fencedDiv <- blocksOf ToOther place "> [!NOTE]\n> ::: summary\n> x\n> :::\n"
+    [cls | P.Div (_, cls, _) _ <- inBox fencedDiv] `shouldBe` [["summary"]]
+    html <- blocksOf ToOther place "> [!NOTE]\n> <div>x</div>\n"
+    boxClasses html `shouldBe` [["note", "alert"]]
+    [() | P.Para _ <- inBox html] `shouldBe` []
+    show html `shouldNotSatisfy` T.isInfixOf "div>"
+    -- In a numbered list item, the box stays in the one item.
+    listed <- blocksOf ToOther place "1. > [!NOTE] T\n   > x\n"
+    [length items | P.OrderedList _ items <- listed] `shouldBe` [1]
+    boxClasses listed `shouldBe` [["note", "alert"]]
+
+  it "reads a box whatever the page's line endings" $ do
+    let boxTitles bs = [xs | P.Div (_, ["note", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
+    crlf <- blocksOf ToOther place "> [!NOTE] T\r\n> x\r\n"
+    boxTitles crlf `shouldBe` [[P.Str "T"]]
+    cr <- blocksOf ToOther place "> [!NOTE] T\r> x\r\r> [!NOTE] U\r> y\r"
+    boxTitles cr `shouldBe` [[P.Str "T"], [P.Str "U"]]
+
+  it "shows a marker as written where pandoc does not read a quotation, and no placeholder" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+    -- A tab after the first quotation mark: the wiki reads a box, pandoc
+    -- code; the code shows the marker.
+    tabbed <- blocksOf ToOther place ">\t> [!NOTE] A\n"
+    boxClasses tabbed `shouldBe` []
+    show tabbed `shouldNotSatisfy` T.isInfixOf "wikibox"
+    show tabbed `shouldSatisfy` T.isInfixOf "[!NOTE] A"
+    -- A placeholder spelled with an entity is not one: its digits depend
+    -- on the whole page, so the page cannot hold them, and the box keeps
+    -- its own title.
+    spelled <- blocksOf ToOther place "> [!NOTE] Mine\n> x\n\n> wiki&#98;ox1z\n> y\n"
+    boxClasses spelled `shouldBe` [["note", "alert"]]
+    query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) spelled `shouldBe` [[P.Str "Mine"]]
+    [() | P.BlockQuote _ <- spelled] `shouldBe` [()]
 
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"

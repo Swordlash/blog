@@ -63,6 +63,7 @@ module Wiki.Core.Markdown.Ast
   , parseMarkdown
   , BoxMarker (..)
   , boxMarkers
+  , parseWithMarkers
 
     -- * Reading the tree
   , plainText
@@ -215,7 +216,14 @@ newtype ParseError = ParseError Text
 
 -- | Parse a page's Markdown.
 parseMarkdown :: Text -> Either ParseError [Block]
-parseMarkdown source = (\(Blocks bs _) -> withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs))) <$> parsed source
+parseMarkdown = fmap fst . parseWithMarkers
+
+-- | Parse a page's Markdown, with the markers of its boxes in the order of
+-- the source ('boxMarkers'): one parse, for a caller that needs both.
+parseWithMarkers :: Text -> Either ParseError ([Block], [BoxMarker])
+parseWithMarkers source =
+  (\(Blocks bs ms) -> (withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs)), sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)))
+    <$> parsed source
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
@@ -234,7 +242,7 @@ data BoxMarker = BoxMarker
 -- | Every box's marker in a page's source, in the order of the source;
 -- none when the source cannot be parsed.
 boxMarkers :: Text -> [BoxMarker]
-boxMarkers source = either (const []) (\(Blocks _ ms) -> sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)) (parsed source)
+boxMarkers = either (const []) snd . parseWithMarkers
 
 -- | The source parsed, as the parser builds it.
 parsed :: Text -> Either ParseError Blocks

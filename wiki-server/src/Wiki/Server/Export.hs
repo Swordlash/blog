@@ -96,7 +96,6 @@ import Wiki.App.Backend (MonadWiki (listSpaces), WikiError (..))
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), MediaKind (..), MimeType (..), Source (..), attachmentKind)
 import Wiki.Core.Id
-import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Page (Page (..), pageTreeOrder)
@@ -167,15 +166,16 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
     Right (page, spaces, pages) -> do
       settings <- readServerSettings storage
       now <- getCurrentTime
-      let deck = either (const False) isDeck (parseMarkdown page.body)
-          looks = either (const (deckOf [])) deckOf (parseMarkdown page.body)
+      let read' = readPage page.body
+          deck = either (const False) isDeck read'.blocks
+          looks = either (const (deckOf [])) deckOf read'.blocks
           output = outputOf format
           place = placeOf settings.publicUrl settings.boxes spaces pages page (\_ _ -> Nothing) ""
       if forDecks format && not deck
         then pure (Left (ApiError.Invalid "Only a page written as slides exports as a presentation."))
         else do
           (bag, stored) <- mediaOf storage [page]
-          case pageBlocks output (place stored) page.body of
+          case pageBlocks output (place stored) read' of
             Left e -> pure (Left (ApiError.Invalid ("The page could not be read: " <> renderError e)))
             Right blocks -> do
               let doc
@@ -211,7 +211,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
           let pageOf p =
                 let anchor = Map.findWithDefault "" p.id anchors
                  in DocumentPage p (length (pagePathOf pages p.id) - 1) anchor
-                      <$> pageBlocks output (placeOf settings.publicUrl settings.boxes spaces pages p inDocument (anchor <> "-") stored) p.body
+                      <$> pageBlocks output (placeOf settings.publicUrl settings.boxes spaces pages p inDocument (anchor <> "-") stored) (readPage p.body)
           case traverse pageOf ordered of
             Left e -> pure (Left (ApiError.Invalid ("A page could not be read: " <> renderError e)))
             Right documentPages -> do
