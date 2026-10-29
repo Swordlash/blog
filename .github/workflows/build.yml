@@ -225,6 +225,27 @@ jobs:
       if: runner.environment == 'github-hosted'
       run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
 
+    # The PDF export tests exercise XeLaTeX's file restrictions as well as
+    # page, space and Beamer output. An engine without these packages would
+    # leave those checks pending, so verify the complete setup after apt too.
+    - name: Install XeLaTeX and the PDF test packages when missing
+      run: |
+        tex_ready() {
+          command -v xelatex >/dev/null && command -v kpsewhich >/dev/null || return 1
+          xelatex --version >/dev/null || return 1
+          for file in mhchem.sty tikz.sty soul.sty beamer.cls; do
+            tex_file=$(kpsewhich "$file") || return 1
+            [ -n "$tex_file" ] || return 1
+          done
+        }
+        if ! tex_ready; then
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            texlive-xetex texlive-science texlive-pictures \
+            texlive-plain-generic texlive-latex-recommended
+        fi
+        tex_ready
+
     - name: Update Cabal package index
       run: cabal update
 

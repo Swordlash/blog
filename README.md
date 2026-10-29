@@ -1348,6 +1348,14 @@ test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`
 `wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
 and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
 
+The native job checks for XeLaTeX and its `mhchem`, TikZ, `soul` and Beamer
+packages before testing. If any are missing, it installs `texlive-xetex`,
+`texlive-science`, `texlive-pictures`, `texlive-plain-generic` and
+`texlive-latex-recommended`, then verifies the engine and required TeX files.
+A complete setup skips that installation. PDF export and TeX file-access tests
+therefore run in CI; only the test for refusing PDF without an engine may stay
+pending on a machine with XeLaTeX.
+
 A fourth, `deploy`, publishes the demo on GitHub Pages, at
 <https://swordlash.github.io/blog/>, on a push to `main` once the three have
 passed, and on a run by hand from `main` (*Run workflow*) to redeploy. It takes the
