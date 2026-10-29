@@ -11,8 +11,8 @@
 -- the same on the demo's wiki and the server's, and the shell shows it to
 -- administrators only.
 --
--- Everything it shows comes from one read, as in the users section
--- ("Wiki.App.View.Admin"): at once where the backend answers at once, and
+-- Everything it shows comes from one read, as in the groups section
+-- ("Wiki.App.View.Groups"): at once where the backend answers at once, and
 -- otherwise in its initializer. After a change it tells the shell, which
 -- reloads who is asking (closing the wiki changes what their session
 -- says) and increments the context's revision, which makes this view

@@ -1233,7 +1233,6 @@ findUser st u = maybe (Left NotFound) Right (Map.lookup u st.users)
 findGroup :: MemState -> GroupId -> Either WikiError Group
 findGroup st g = maybe (Left NotFound) Right (Map.lookup g st.groups)
 
--- | Every user and group, as the administration shows them.
 -- | A page of the users, as 'pageOfDirectory' defines it, read from the
 -- directory: the demo's wiki has a handful of users.
 userPageIn :: UserQuery -> MemState -> Either WikiError UserPage
@@ -1242,6 +1241,7 @@ userPageIn q st = do
   checked <- first Invalid (checkUserQuery q)
   pageOfDirectory checked <$> directoryIn st
 
+-- | Every user and group, as the administration shows them.
 directoryIn :: MemState -> Either WikiError Directory
 directoryIn st = do
   requireAdministrator st

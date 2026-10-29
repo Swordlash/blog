@@ -67,7 +67,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Import" (Import.spec BrowserDOM)
   describe "Wiki.App.Backend.Mem kept in IndexedDB" (Persist.spec BrowserDOM)
   describe "The order of a space's children" (Order.spec BrowserDOM)
-  describe "Wiki.App.View.Admin" (Admin.spec BrowserDOM)
+  describe "the administration: Wiki.App.View.Users, Wiki.App.View.UserDialog and Wiki.App.View.Groups" (Admin.spec BrowserDOM)
   describe "Wiki.App.View.Permissions" (Permissions.spec BrowserDOM)
   describe "Whom the wiki lets in" (Access.spec BrowserDOM)
   describe "Wiki.App.View.Server" (Server.spec BrowserDOM)
