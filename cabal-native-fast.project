@@ -1,0 +1,7 @@
+-- Native helpers for wasm builds and smoke tests. Keep their unoptimised
+-- objects separate from the normal native server and test build.
+import: cabal.project
+
+-- This applies to the wiki packages, keeping external dependencies at their
+-- usual optimisation level so the Cabal store can reuse them.
+optimization: False

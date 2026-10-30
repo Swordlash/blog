@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run independent API examples in parallel.
+
 The server's settings gain `boxes`, the kinds of box the administration
 defined (WP5.29), which `SessionInfo` carries too, so that every reader
 renders them. `ServerStatus` gains `guide`, whether the wiki has its guide,

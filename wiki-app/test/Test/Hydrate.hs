@@ -18,7 +18,7 @@
 -- sees it; then adopted by a fresh application whose backend starts from
 -- what the page carries, written as JSON and read back as the program reads
 -- it ("Wiki.App.Backend.Http.Preload"), over a transport it must never ask.
-module Test.Hydrate (spec) where
+module Test.Hydrate (spec, storageSpec) where
 
 import Data.Aeson (ToJSON, encode)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
@@ -77,7 +77,6 @@ spec = do
   demoPages
   serverPage
   servedPages
-  keptPageSize
 
 -- At the root, and under the base path GitHub Pages serves the demo at
 -- (@\/blog\/@, the repository's name), which is in every link the page has:
@@ -223,8 +222,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
 -- | The users at the page size this browser keeps (50), which the server
 -- does not know: the program adopts the page the server rendered at 25
 -- users, every node kept, and then asks once for the page at 50.
-keptPageSize :: Spec
-keptPageSize = describe "Wiki.App.Static, the users at the page size the browser keeps" $
+storageSpec :: Spec
+storageSpec = describe "Wiki.App.Static, the users at the page size the browser keeps" $
   it "adopts the page rendered at the first size, and then asks once for the kept size" $ do
     let wiki = savedOnce {current = Just (UserId "user-admin")}
         at = Admin (Users (UserListing "" 1 Everyone))

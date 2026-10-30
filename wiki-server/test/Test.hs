@@ -6,8 +6,9 @@ module Main (main) where
 
 import Protolude
 import Sel (secureMain)
-import Test.Database (backingName, withBackings)
-import Test.Hspec (describe, hspec)
+import Test.Database (TestGroup (..), backingName, testGroup, withBackings)
+import Test.Hspec (around_, describe, parallel)
+import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
 import Test.Server.Access qualified as Access
 import Test.Server.Accounts qualified as Accounts
 import Test.Server.Api qualified as Api
@@ -44,39 +45,54 @@ import Test.Storage.Scale qualified as Scale
 import Test.Storage.Transactions qualified as Transactions
 
 main :: IO ()
-main = secureMain . withBackings $ \backings -> hspec $ do
-  Presence.spec
-  Totp.spec
-  WebAuthn.spec
-  Metrics.spec
-  for_ backings $ \b -> describe (backingName b) $ do
-    Contract.spec b
-    Http.spec b
-    Storage.spec b
-    Migrate.spec b
-    Transactions.spec b
-    Permissions.spec b
-    Scale.spec b
-    Backup.spec b
-    StorageAccounts.spec b
-    Removal.spec b
-    Options.spec b
-    Api.spec b
-    Static.spec b
-    Render.spec b
-    Feed.spec b
-    Import.spec b
-    Guide.spec b
-    Accounts.spec b
-    Access.spec b
-    Comments.spec b
-    Mail.spec b
-    Settings.spec b
-    Backups.spec b
-    Oidc.spec b
-    Export.spec b
-    Vault.spec b
-    Hygiene.spec b
-    Audit.spec b
-    Observability.spec b
-    Notifications.spec b
+main = secureMain $ do
+  selection <- testGroup
+  withBackings selection $ \backings -> do
+    -- One permit per independent example; process-wide changes take every
+    -- permit. Hspec's sequential marker alone does not exclude parallel work.
+    permits <- newQSemN maxBound
+    let holding n = bracket_ (waitQSemN permits n) (signalQSemN permits n)
+        independent = around_ (holding 1)
+        alone = around_ (holding maxBound)
+    -- Bound simultaneous database fixtures; Hspec's --jobs overrides this.
+    hspecWith defaultConfig {configConcurrentJobs = Just 4} . parallel $ do
+      when (selection == AllTests || selection == UnitTests) $ independent $ do
+        Presence.spec
+        Totp.spec
+        WebAuthn.spec
+        Metrics.spec
+      for_ backings $ \b -> describe (backingName b) $ do
+        independent $ do
+          Contract.spec b
+          Http.spec b
+          Storage.spec b
+          Migrate.spec b
+          Transactions.spec b
+          Permissions.spec b
+          Scale.spec b
+          Backup.spec b
+          StorageAccounts.spec b
+          Removal.spec b
+          Options.spec b
+          Api.spec b
+          Static.spec b
+          Render.spec b
+          Feed.spec b
+          Import.spec b
+          Guide.spec b
+          Accounts.spec b
+          Access.spec b
+          Comments.spec b
+          Mail.spec b
+          Settings.spec b
+          Backups.spec b
+          Oidc.spec b
+          Export.spec b
+          Vault.spec b
+          Hygiene.spec b
+          Audit.spec b
+          Observability.spec b
+          Notifications.spec b
+        alone $ do
+          Options.environmentSpec
+          Export.environmentSpec b

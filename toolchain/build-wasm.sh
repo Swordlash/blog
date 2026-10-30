@@ -8,7 +8,7 @@
 # JSFFI glue for that binary), the page from web/ and the islands bundle
 # web/bundle.sh writes (islands.js, islands.css, fonts/, islands/, tikzjax/). Its
 # pages are then written by wiki-app-prerender, a native program built with
-# the host GHC (into dist-newstyle/native) and run as
+# the host GHC (without optimisation, into dist-newstyle/native-fast) and run as
 #
 #   wiki-app-prerender web/index.html <output dir>
 #
@@ -27,8 +27,7 @@
 # cannot render one (wiki-app-prerender --server).
 # app.wasm is the same either way: the page's <meta name="wiki-backend"> says
 # which backend it runs on. WIKI_PUBLIC_DIR, if set, is the output directory
-# instead of $WASM_BUILDDIR/public/app. Finally the sizes of what is served are
-# reported, raw, gzipped and brotli'd (toolchain/compress.mjs).
+# instead of $WASM_BUILDDIR/public/app.
 #
 # WASM_PROJECT and WASM_BUILDDIR choose the cabal project file and the build
 # directory (default cabal-wasm.project and dist-newstyle/wasm); the output is
@@ -43,18 +42,40 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-. "$HOME/.ghc-wasm/env"
 
 package=wiki-app
 project=${WASM_PROJECT:-cabal-wasm.project}
 build_dir=${WASM_BUILDDIR:-dist-newstyle/wasm}
 public_dir=${WIKI_PUBLIC_DIR:-$build_dir/public/app}
 backend=${WIKI_BACKEND:-demo}
+native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
+native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}
+
+# stage reports where build time goes, including commands that reuse all
+# compiled modules. The subshell keeps nested stage variables independent.
+stage() (
+  stage_name=$1
+  shift
+  stage_started=$(date +%s)
+  "$@"
+  printf 'Build stage %s: %s s\n' "$stage_name" "$(($(date +%s) - stage_started))" >&2
+)
 case $backend in
   demo) prerender_args= ;;
   server) prerender_args=--server ;;
   *) printf 'build-wasm.sh: WIKI_BACKEND is demo or server, not %s\n' "$backend" >&2; exit 2 ;;
 esac
+
+# Build the host program before loading the cross toolchain. Its PATH also
+# contains a different ar and clang; unsetting CC alone leaves those active
+# and invalidates Cabal's native configuration on every backend switch.
+prerender=$package-prerender
+prerender_bin=$(
+  stage native-prerender-build cabal build "$package:exe:$prerender" --project-file="$native_project" --builddir="$native_build_dir" >&2
+  cabal list-bin -v0 "$package:exe:$prerender" --project-file="$native_project" --builddir="$native_build_dir"
+)
+
+. "$HOME/.ghc-wasm/env"
 
 wasm_ghc=$(command -v wasm32-wasi-ghc)
 wasm_ghc_pkg=$(command -v wasm32-wasi-ghc-pkg)
@@ -78,7 +99,7 @@ set -- \
   --with-hsc2hs="$wasm_hsc2hs" \
   "$package:exe:$package" "$@"
 
-cabal build "$@"
+stage wasm-compile cabal build "$@"
 # Again: in a build directory that did not exist before, the build above
 # leaves the host ghc-pkg in this cache despite --with-hc-pkg, and list-bin
 # then fails with "Version mismatch between ghc and ghc-pkg" (a second run
@@ -89,13 +110,13 @@ wasm_libdir=$($wasm_ghc --print-libdir)
 
 rm -rf "$public_dir"
 mkdir -p "$public_dir"
-node "$wasm_libdir/post-link.mjs" --input "$wasm_binary" --output "$public_dir/ghc_wasm_jsffi.js"
+stage post-link node "$wasm_libdir/post-link.mjs" --input "$wasm_binary" --output "$public_dir/ghc_wasm_jsffi.js"
 # The linker output carries a name section and debug info worth about a third
 # of the file; stripping those and optimising for size roughly halves the
 # binary and takes about a fifth off what is served gzipped. wasm-opt comes with
 # ghc-wasm-meta's binaryen and leaves the imports and exports the JSFFI glue
 # binds to untouched.
-wasm-opt -Oz --strip-debug --strip-producers "$wasm_binary" -o "$public_dir/app.wasm"
+stage wasm-opt wasm-opt -Oz --strip-debug --strip-producers "$wasm_binary" -o "$public_dir/app.wasm"
 # The page itself; web/bundle.sh and the sources it bundles (web/src/) are
 # build inputs, not part of it. The bundle -- islands.js, islands.css, KaTeX's
 # fonts, Mermaid's modules and TikZJax -- is written next to the page.
@@ -105,41 +126,10 @@ for entry in web/*; do
     *) cp -R "$entry" "$public_dir/" ;;
   esac
 done
-sh web/bundle.sh "$public_dir"
+stage bundle sh web/bundle.sh "$public_dir"
 
-# A native program, so built without the wasm toolchain's CC and friends,
-# which ~/.ghc-wasm/env exported above (as toolchain/build-hspec-halogen.sh
-# does).
-prerender=$package-prerender
-prerender_bin=$(
-  unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
-  cabal build -v0 "$package:exe:$prerender" --builddir=dist-newstyle/native >&2
-  cabal list-bin -v0 "$package:exe:$prerender" --builddir=dist-newstyle/native
-)
 # shellcheck disable=SC2086 # empty, or one flag
-"$prerender_bin" $prerender_args web/index.html "$public_dir"
+stage prerender "$prerender_bin" $prerender_args web/index.html "$public_dir"
 printf 'Prerendered %s with %s, for the %s.\n' "$public_dir/index.html" "$prerender" "$backend"
-
-# GitHub Pages compresses on the fly, so only report the sizes rather than
-# writing precompressed copies next to the files.
-# Mermaid's chunks are many and each is fetched only by a page with a diagram
-# that needs it, so they are summed up rather than listed.
-# The editor's CodeMirror (islands/editor.js) is fetched only by the editor.
-# TikZJax's files are fetched only by a page with a picture: its worker and
-# TeX (the .bin files are zlib streams already, and served as they are), and
-# of tex_files/ and fonts/ only what a picture uses.
-node toolchain/compress.mjs --no-write \
-  $(find "$public_dir" -maxdepth 1 -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' \) | sort) \
-  "$public_dir/islands/mermaid.js" "$public_dir/islands/tikz.js" "$public_dir/islands/editor.js" \
-  "$public_dir/tikzjax/run-tex.js"
-printf '%s\t%s files, %s KiB\n' "$public_dir/islands/chunks/" \
-  "$(find "$public_dir/islands/chunks" -type f | wc -l)" "$(du -sk "$public_dir/islands/chunks" | cut -f1)"
-for file in tex.wasm.bin core.dump.bin; do
-  printf '%s\t%s KiB\n' "$public_dir/tikzjax/$file" "$(du -k "$public_dir/tikzjax/$file" | cut -f1)"
-done
-for dir in tex_files fonts; do
-  printf '%s\t%s files, %s KiB\n' "$public_dir/tikzjax/$dir/" \
-    "$(find "$public_dir/tikzjax/$dir" -type f | wc -l)" "$(du -sk "$public_dir/tikzjax/$dir" | cut -f1)"
-done
 
 printf '\nBuilt %s in %s.\n' "$package" "$public_dir"

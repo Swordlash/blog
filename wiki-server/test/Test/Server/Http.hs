@@ -11,9 +11,10 @@
 -- who have no passwords to sign in with, and the principal of a request
 -- in process is given rather than found. Signing in, and the listeners
 -- themselves, are "Test.Server.Accounts"' and "Test.Server.Api"'s.
-module Test.Server.Http (spec, apiEnv) where
+module Test.Server.Http (spec, withApiEnv) where
 
 import Data.Time (getCurrentTime)
+import Ki qualified
 import Protolude
 import Test.Database (Backing)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
@@ -55,8 +56,7 @@ spec backing = describe "HttpWiki against the server's API" $ do
   importing backing
   where
     fixture example =
-      withDemo backing $ \st -> do
-        env <- apiEnv st
+      withDemo backing $ \st -> withApiEnv st $ \env ->
         example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
 
 -- | The import's two steps, as the administration's dialog makes them: the
@@ -70,8 +70,7 @@ spec backing = describe "HttpWiki against the server's API" $ do
 importing :: Backing -> Spec
 importing backing = describe "importing an archive" $
   it "previews it, and imports it as chosen, once, then finds it all there" $
-    withDemo backing $ \st -> do
-      env <- apiEnv st
+    withDemo backing $ \st -> withApiEnv st $ \env -> do
       http <- newHttpEnv (inProcess env Administrator)
       let run :: HttpWiki IO a -> IO a
           run = runHttpWiki http
@@ -108,9 +107,10 @@ importing backing = describe "importing an archive" $
         }
     slug = either (panic . show) identity . mkSlug
 
--- | The handlers' environment over a storage, as the server makes it.
-apiEnv :: Storage -> IO Env
-apiEnv storage = do
+-- | 'withApiEnv' keeps an API environment and its reset scope inside the
+-- storage's lifetime, as the server does.
+withApiEnv :: Storage -> (Env -> IO a) -> IO a
+withApiEnv storage test = Ki.scoped $ \resetTasks -> do
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
   registrations <- newLimiter defaultLimits
@@ -126,4 +126,4 @@ apiEnv storage = do
   metrics <- newMetrics
   feeds <- newFeedCache
   ceremonies <- newCeremonies
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies}
+  test Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, resetTasks, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies}

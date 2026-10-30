@@ -5,13 +5,13 @@
 -- policy from before the suite starts (@test\/web\/policy.mjs@), so every
 -- spec of the suite runs under it: the islands (KaTeX, Mermaid, TikZ,
 -- highlighting), the editor's CodeMirror, the assistant's providers. The
--- policy refuses nothing those need: 'afterTheSuite', the suite's last
--- spec, fails on any violation the browser reported. The specs here check
+-- policy refuses nothing those need: 'checkViolations', run after each context's
+-- examples, fails on any violation the browser reported. The specs here check
 -- the policy itself: that it is the application's and in force, that a
 -- page's HTML runs nothing, that the providers' SDKs work under it, and
 -- that an address it does not allow is refused, by the browser and first
 -- by the assistant, which says why.
-module Test.Browser.Policy (spec, afterTheSuite) where
+module Test.Browser.Policy (spec, checkViolations) where
 
 import Data.Aeson (Value, decodeStrict)
 import Data.Aeson qualified as Aeson
@@ -78,14 +78,12 @@ spec m = do
       Aeson.Object o -> Just o
       _ -> Nothing
 
--- | The suite's last spec: no part of the suite made the browser refuse
--- anything under the page's policy. A violation names the directive, the
--- address refused and the script that tried.
-afterTheSuite :: Spec
-afterTheSuite =
-  it "was broken by no spec of the suite" $ runPage $ do
-    violations <- unsafeIOToPageM (fromJSText <$> js_violations)
-    (decodeStrict (encodeUtf8 violations) :: Maybe [Value]) `shouldBe` Just []
+-- | Check every violation recorded by this browser context. The suite's
+-- afterAll hook runs this in each context, including parallel shards.
+checkViolations :: IO ()
+checkViolations = runPage $ do
+  violations <- unsafeIOToPageM (fromJSText <$> js_violations)
+  (decodeStrict (encodeUtf8 violations) :: Maybe [Value]) `shouldBe` Just []
 
 -- | HTML in a page that would run a script if it were let through: an
 -- image's error handler and a script element, rendered as a page renders

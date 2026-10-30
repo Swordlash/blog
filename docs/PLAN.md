@@ -1819,8 +1819,9 @@ must be in before it is.
   dependency store, so unchanged wiki modules need not compile on every run.
   Hosted jobs restore separate incremental build caches for `native` and `wasm`;
   the wasm cache includes its native prerender and test programs. Cache compatibility
-  includes the runner environment, compiler/toolchain pins and project configuration;
-  source changes can reuse a compatible older snapshot. The owner's runner retains
+  uses the runner platform/environment and compiler pins. Exact snapshots also
+  record Cabal and source inputs; project, flag, module and Cabal changes may
+  restore older objects, which Cabal/GHC validate themselves. The owner's runner retains
   or restores its build directories across checkout without retaining unrelated stale
   workspace files. Acceptance also requires a real warm-build check: unchanged
   modules are reused, a source edit still rebuilds its affected modules, and all
@@ -1972,6 +1973,100 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   change in WP2.3 if wanted.
 
 ## Progress
+
+- **Session consolidation (2026-10-30, owner override):** the owner requested direct
+  implementation without subagents, integrating their work into main and deleting
+  their worktrees. WP5.32 and WP5.33 are continued together in this checkout.
+  Review #115: incremental-cache fallback is bounded by compiler/platform, not
+  project, Cabal or npm configuration; Cabal/GHC validate reused objects themselves.
+  Install `libxml2-utils` for native schema checks. Try Hspec parallel first on the
+  independent core/API suites, retaining sequential process-environment and browser
+  tests. Exercise PDF refusal by hiding the engine in that sequential test rather
+  than reporting it pending. Profile the warm wasm build by stage before choosing
+  further build optimisations. The ordinary verification gate still applies.
+  Native verification on the consolidated tree passed: 1859 server examples on
+  SQLite/PostgreSQL, no pending cases and no uncaught SQL exceptions. The reset
+  regressions also passed ten repeated reset runs. An isolated 897-example core
+  comparison (seed 413) took 2.905 s with `-N1`, 1.858 s with `-N2`, 1.560 s with
+  `-N`; the native parallel suites use `-N` as requested.
+  The current haskell-halogen pin exposes `Halogen.Static` and the in-memory DOM
+  only natively. A standalone WASI prerenderer needs upstream backend support;
+  changing the wiki executable's target alone cannot reuse those modules.
+  The wasm script now builds the native prerenderer before sourcing the cross
+  environment: the latter also replaces `ar`/`clang` through PATH. Its size-only
+  report caches compression lengths by content and compression library versions.
+  All public output is still generated fresh.
+  The final native gate with `-N` passed, including all 1859 server examples
+  without pending cases or uncaught SQL errors. The first wasm build after this
+  checkout caught up with the pinned dependency revision passed: native prerender
+  build 0 s, wasm compilation 252 s, wasm-opt 10 s, bundle 4 s, prerender 1 s,
+  size report 31 s (initial measurement-cache fill). On the owner's instruction
+  to push for CI, the remaining local wasm tests/warm timing/smoke gate was
+  stopped rather than competing with the self-hosted CI. Those checks remain
+  assigned to the pushed CI; no local full-gate success is claimed.
+
+- **CI follow-up (2026-10-30):** the owner merged haskell-halogen #94 and
+  requested its pin in the blog. Keep prerendering native: WASI would still
+  need its own build. Use a separate `-O0` native project/build directory for
+  wasm helpers and smoke servers; keep the normal native build's optimisation.
+  Remove the size-only compression report (34 seconds in CI). Cache apt's
+  downloaded archives while preserving dpkg setup and TeX format generation.
+  Run browser specs with one `parallel` at the root, checking CSP in each
+  context, and independent smoke programs concurrently through Node's test
+  runner. Keep stateful steps within a smoke program in order. Deadline
+  timers must not keep completed smoke processes alive. Continue
+  directly without subagents and update PR #115.
+  Verification: native and wasm builds/tests pass; the server has 1,859
+  examples with no failures, pending cases or uncaught libpq errors. Browser
+  specs pass in two contexts (150 and 149 examples). The 45 demo and three
+  server HTML files are byte-identical at `-O0` and `-O1`. A warm wasm build
+  takes 24.83 seconds. Smoke programs pass on SQLite and PostgreSQL: 199.01
+  seconds serial, 101.69 parallel, 89.63 after unref'ing deadline timers.
+  Failure checks verify the runner's exit status and database cleanup after
+  exceptions and explicit process exit. Format, actionlint and all 25 CI
+  script cases pass. Warm apt-cache timing still needs a seeded CI run.
+
+- **Native test parallelism (2026-10-30):** CI #319 passed, but its server
+  suite took 286 seconds and its application suite 107 seconds. Both were
+  sequential; the application's test executable also lacked the threaded RTS.
+  Run their whole spec trees in parallel, with four concurrent examples by
+  default and `-N -A16m` for the RTS. The 16 MiB allocation area per
+  capability reduces collections in the large JSON/DOM/SQL fixtures. Eight
+  workers passed a randomized run but did not improve server time; keep four.
+  Every independent example takes one permit from a `QSemN`; process-wide examples take all permits. Hspec's `sequential`
+  does not exclude other concurrent examples. Keep PDF checks (which set TeX
+  limits and sometimes hide xelatex through PATH), the inherited PGPASSWORD
+  check, and the native page-size and assistant settings checks exclusive.
+  IndexedDB contract fixtures delete their private databases after each example
+  so the process-wide map does not retain every example's records. Fixtures
+  keep their own database, directory and ports. Keep all examples and backends.
+  Validation: native and wasm builds/tests and formatting pass. The full native
+  command takes 218.42 seconds locally, down from 371.92 on the same machine;
+  server 357.58 to 212.09 seconds, application 103.25 to 75.15. All 1,859
+  server and 1,402 application examples remain, with no failures or pending
+  cases. The shared assistant database passes 100 examples over 20 seeds at
+  16 workers. The wasm gate also exposed two apps sharing location.hash in
+  one admin test; unmount the first before restoring the second. Both browser
+  contexts pass (150 and 149 examples).
+
+- **Native CI groups (2026-10-30):** the owner requested another reduction
+  after CI #320's native Test step still took 239 seconds. Use three hosted
+  matrix jobs: unit (all other suites and the server's database-free examples),
+  SQLite, and PostgreSQL. Each job has its own CPU and memory; all restore the
+  same compiler-bounded caches. Only unit saves the Cabal store/build snapshot,
+  and only postgres saves apt archives. Unit skips TeX and neither unit nor
+  SQLite starts PostgreSQL. Keep the default local native command unchanged.
+  `WIKI_TEST_GROUP=unit|sqlite|postgres` selects a group; invalid groups fail,
+  and explicit postgres requires a URL instead of passing with pending cases.
+  Compare the groups' complete Hspec paths against `all`: currently 33 + 912 +
+  914 = 1,859 server examples, with no omissions or duplicates.
+  Validation: the three real groups pass locally in 39.80, 60.31 and 110.71
+  seconds; the unchanged full command passes in 225.75 seconds. Native and
+  wasm builds/tests pass without compiler warnings, and both browser contexts
+  pass (150 and 149 examples). Group manifests/default behavior, invalid groups,
+  missing/blank PostgreSQL URLs, argument forwarding and failure propagation
+  pass. Base/full apt profiles, 20 bootstrap regressions (including an injected
+  hosted ghcup prefix), all 25 CI script cases, format and actionlint pass.
 
 - **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
   PATH, the pinned toolchain, effective wasm environment and command-specific npm

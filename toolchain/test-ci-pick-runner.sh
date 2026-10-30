@@ -2,7 +2,7 @@
 # Regression tests of toolchain/ci-pick-runner.sh, against a fake curl that
 # answers the GitHub API from canned responses, as
 # test-ci-already-tested.sh does: what it prints for $GITHUB_OUTPUT (the
-# runner the build jobs take) when the owner's machine is free, when
+# runner the wasm job takes) when the owner's machine is free, when
 # another run has a job queued or running there, when only this run's own
 # jobs, hosted jobs or finished ones are there, when the API fails or
 # answers something it cannot read, and when the run is not trusted or a

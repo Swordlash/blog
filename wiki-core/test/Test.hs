@@ -8,7 +8,7 @@ import Test.Blog qualified as Blog
 import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
 import Test.Export qualified as Export
-import Test.Hspec (hspec)
+import Test.Hspec (hspec, parallel)
 import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
@@ -33,7 +33,7 @@ import Test.User qualified as User
 import Test.Vault qualified as Vault
 
 main :: IO ()
-main = hspec $ do
+main = hspec . parallel $ do
   Slug.spec
   Ast.spec
   Box.spec

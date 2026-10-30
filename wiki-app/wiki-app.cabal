@@ -239,8 +239,8 @@ executable wiki-app
       "-optl-Wl,--export=hs_start"
 
 -- The page with the component already rendered into it, written natively at
--- build time (toolchain/build-wasm.sh runs it). Only a host GHC renders to
--- HTML, so there is nothing to build on wasm.
+-- build time (toolchain/build-wasm.sh runs it). Keep this helper native at
+-- -O0 so it compiles quickly and shares the native Cabal store.
 executable wiki-app-prerender
   import:           shared
   main-is:          Prerender.hs
@@ -261,8 +261,7 @@ executable wiki-app-prerender
         wiki-app
 
 -- What the component renders, through Halogen.Static's in-memory document,
--- which exists natively only, and the backend's contract, run against the
--- in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
+-- and the backend's contract, run against the in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
 -- the built page.
 test-suite wiki-app-test
   import:           shared
@@ -273,6 +272,8 @@ test-suite wiki-app-test
   if arch(wasm32)
     buildable: False
   else
+    -- Parallel JSON and DOM fixtures need fewer global garbage collections.
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A16m"
     other-modules:
         Test.Assistant
         Test.Backend.Http
@@ -385,6 +386,9 @@ test-suite wiki-app-browser-test
       wiki-api,
       wiki-app,
       wiki-core
+
+  if arch(wasm32)
+    build-depends: hspec >= 2
 
   if arch(wasm32) && !flag(interactive)
     ghc-options:

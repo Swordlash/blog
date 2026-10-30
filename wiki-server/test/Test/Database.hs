@@ -1,6 +1,8 @@
 -- | 'Backing' is a database the tests run the storage on: SQLite, or
--- PostgreSQL (WP5.22 of docs/PLAN.md). Every suite that uses the storage
--- runs on each ("Test"), through one parameter of its fixtures.
+-- PostgreSQL (WP5.22 of docs/PLAN.md). Local runs cover each backing.
+-- CI sets @WIKI_TEST_GROUP@ to @unit@, @sqlite@ or @postgres@: unit tests
+-- need no database, and each database group runs only its own backing.
+-- An explicit postgres group requires @WIKI_TEST_DATABASE_URL@.
 --
 -- The PostgreSQL the tests use is the one @WIKI_TEST_DATABASE_URL@ names
 -- (a URL to a database of a server the tests may create databases on, as
@@ -17,7 +19,9 @@
 -- PostgreSQL's programs refuse to run as root, so a test run as root runs
 -- them as the user @postgres@ (with @su@), in a directory that user owns.
 module Test.Database
-  ( Backing (..)
+  ( TestGroup (..)
+  , testGroup
+  , Backing (..)
   , PgServer (..)
   , backingName
   , withBackings
@@ -39,6 +43,7 @@ import Protolude
 import System.Directory (doesFileExist, findExecutable, listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
+import System.IO.Error (userError)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.Posix.Signals (Handler (..), installHandler, sigTERM)
 import System.Posix.User (getEffectiveUserID)
@@ -49,6 +54,22 @@ import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDi
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Postgres (PgPrograms (..), closePostgres, defaultPgPrograms, openPostgres)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
+
+-- | One native CI job's tests. Local runs include every group by default.
+data TestGroup = AllTests | UnitTests | SqliteTests | PostgresTests
+  deriving (Eq)
+
+-- | Select tests before starting a database. Unknown values fail rather
+-- than silently dropping part of the suite.
+testGroup :: IO TestGroup
+testGroup =
+  lookupEnv "WIKI_TEST_GROUP" >>= \case
+    Nothing -> pure AllTests
+    Just "all" -> pure AllTests
+    Just "unit" -> pure UnitTests
+    Just "sqlite" -> pure SqliteTests
+    Just "postgres" -> pure PostgresTests
+    Just _ -> ioError (userError "WIKI_TEST_GROUP must be all, unit, sqlite or postgres")
 
 -- | A database the tests run on.
 data Backing
@@ -77,22 +98,30 @@ backingName = \case
   OnPostgres _ -> "on PostgreSQL"
   PostgresNotRun _ -> "on PostgreSQL"
 
--- | Run the tests with the backings there are: SQLite, and PostgreSQL if
--- it is at hand (see the module's comment).
-withBackings :: ([Backing] -> IO a) -> IO a
-withBackings act =
-  lookupEnv "WIKI_TEST_DATABASE_URL" >>= \case
-    Just url -> do
-      made <- newIORef 0
-      dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
-      restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
-      act [OnSqlite, OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}}]
-    Nothing ->
-      findPostgres >>= \case
-        Nothing -> act [OnSqlite, PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH"]
-        Just bin -> stoppedByTerm . withCluster bin $ \url -> do
-          made <- newIORef 0
-          act [OnSqlite, OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}}]
+-- | Start only the databases the selected group needs. An explicit
+-- PostgreSQL group requires a server URL and cannot pass as pending.
+-- The default local run may start its own cluster, as before.
+withBackings :: TestGroup -> ([Backing] -> IO a) -> IO a
+withBackings selection act = case selection of
+  UnitTests -> act []
+  SqliteTests -> act [OnSqlite]
+  _ -> do
+    let run pg = act ([OnSqlite | selection == AllTests] <> [pg])
+    configured <- lookupEnv "WIKI_TEST_DATABASE_URL"
+    when (selection == PostgresTests && maybe True (T.null . T.strip . T.pack) configured) $
+      ioError (userError "The postgres test group requires WIKI_TEST_DATABASE_URL")
+    case configured of
+      Just url -> do
+        made <- newIORef 0
+        dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
+        restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
+        run (OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}})
+      Nothing ->
+        findPostgres >>= \case
+          Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
+          Just bin -> stoppedByTerm . withCluster bin $ \url -> do
+            made <- newIORef 0
+            run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}})
 
 -- | Run an action that a SIGTERM (what @timeout@ sends) interrupts as a
 -- Ctrl-C would, so that the cluster it started is stopped and deleted

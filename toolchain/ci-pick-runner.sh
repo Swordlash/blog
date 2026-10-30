@@ -1,5 +1,5 @@
 #!/bin/sh
-# Which runner this run's build jobs take: the owner's machine
+# Which runner this run's wasm job takes: the owner's machine
 # (`self-hosted`) when the run is trusted and the machine is free, GitHub's
 # hosted runners (`ubuntu-latest`) otherwise. Prints `runner=<label>` for
 # $GITHUB_OUTPUT, and the decision with its reason, in one line, to the
@@ -8,8 +8,8 @@
 # GitHub has no "first available" across a self-hosted runner and its
 # hosted ones: `runs-on` with several labels asks for a runner carrying all
 # of them. So the workflow's first job, `plan`, which always runs on a
-# hosted runner, asks this script and hands its answer to every other job's
-# `runs-on`.
+# hosted runner, asks this script and hands its answer only to wasm's
+# `runs-on`. The other jobs always use hosted runners.
 #
 # Usage: ci-pick-runner.sh, with
 #   TRUSTED          `true` when the workflow's trust rule lets the run use

@@ -8,7 +8,7 @@ import Test.Backups qualified as Backups
 import Test.ContentPolicy qualified as ContentPolicy
 import Test.Error qualified as Error
 import Test.Events qualified as Events
-import Test.Hspec (hspec)
+import Test.Hspec (hspec, parallel)
 import Test.Info qualified as Info
 import Test.Json qualified as Json
 import Test.Links qualified as Links
@@ -19,7 +19,7 @@ import Test.Users qualified as Users
 import Test.Version qualified as Version
 
 main :: IO ()
-main = hspec $ do
+main = hspec . parallel $ do
   Info.spec
   Json.spec
   Error.spec

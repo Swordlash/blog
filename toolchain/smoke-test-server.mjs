@@ -204,7 +204,8 @@ const listening = new Promise((ready, fail) => {
   server.stderr.on("data", read);
   server.on("exit", (code) => fail(new Error(`wiki-server exited (${code}):\n${log}`)));
 });
-const origin = await Promise.race([listening, new Promise((_, fail) => setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout))]);
+// Deadlines must not keep a completed smoke test process alive.
+const origin = await Promise.race([listening, new Promise((_, fail) => setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout).unref())]);
 const url = (path) => `${origin}${path}`;
 const here = (page) => new URL(page.url()).pathname;
 console.log(`note: wiki-server at ${origin}, data in ${data}, administrator ${adminLogin}`);
@@ -1091,7 +1092,7 @@ try {
   await watcher.goto(url("/s/smoke-space/p/first-page/"));
   await eventually(async () => assert.ok(await programStarted(watcher), "no listener yet"), "the second tab's program starting");
   await watcher.locator("#app .page-comments").waitFor({ timeout });
-  await Promise.race([subscribed, new Promise((_, fail) => setTimeout(() => fail(new Error(`no subscription on the WebSocket: ${JSON.stringify(sockets)}`)), timeout))]);
+  await Promise.race([subscribed, new Promise((_, fail) => setTimeout(() => fail(new Error(`no subscription on the WebSocket: ${JSON.stringify(sockets)}`)), timeout).unref())]);
   assert.ok(sockets[0].endsWith("/api/v1/events"), `a WebSocket at ${sockets[0]}`);
   await fresh.locator("#app .page-comments .comment-new textarea").fill("Live from the *smoke* test.");
   await fresh.locator("#app .page-comments .comment-new button", { hasText: "Comment" }).click();

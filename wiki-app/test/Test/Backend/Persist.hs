@@ -110,12 +110,17 @@ stripFields names bytes = case decodeStrict' bytes of
   Just (Object o) -> encodeJson (Object (foldr (KeyMap.delete . Key.fromText) o names))
   _ -> bytes
 
+-- | Delete a fixture's database after the example. Native IndexedDB keeps
+-- named databases in a process-wide map; otherwise every example's records
+-- stay reachable until the entire suite exits.
+withFreshDatabase :: (Database -> IO a) -> IO a
+withFreshDatabase = bracket freshDatabase (runMemDOM . IDB.deleteDatabase . (.name))
+
 -- | The demo kept in a database of its own, run as each of its users, and
 -- after every program checked against a fresh start from the database: so
 -- every law of the contract is checked to be kept, too.
-keptFixture :: IO (Fixture (MemWiki IO))
-keptFixture = do
-  db <- freshDatabase
+keptFixture :: (Fixture (MemWiki IO) -> IO a) -> IO a
+keptFixture useFixture = withFreshDatabase $ \db -> do
   opened <- open db
   users <- runKept opened memUsers
   let userId = \case
@@ -126,13 +131,12 @@ keptFixture = do
         result <- runKept opened (switchUser (userId who) >> program)
         shouldReload db opened
         pure result
-  pure (Fixture run)
+  useFixture (Fixture run)
 
 -- | 'keptFixture', except that each program runs on the wiki loaded again
 -- from the database, as a reload would load it.
-reopenedFixture :: IO (Fixture (MemWiki IO))
-reopenedFixture = do
-  db <- freshDatabase
+reopenedFixture :: (Fixture (MemWiki IO) -> IO a) -> IO a
+reopenedFixture useFixture = withFreshDatabase $ \db -> do
   seeded <- open db
   users <- runKept seeded memUsers
   let userId = \case
@@ -144,7 +148,7 @@ reopenedFixture = do
         result <- runKept opened (switchUser (userId who) >> program)
         shouldReload db opened
         pure result
-  pure (Fixture run)
+  useFixture (Fixture run)
 
 spec :: Spec
 spec = describe "MemWiki kept in IndexedDB" $ do
@@ -419,15 +423,15 @@ spec = describe "MemWiki kept in IndexedDB" $ do
   -- Every law of the contract on a wiki loaded again from the database
   -- before each program, so that every read and write meets the
   -- attachments and the versions not read yet.
-  Contract.spec (type (MemWiki IO)) (reopenedFixture >>=)
-  Notifications.spec (type (MemWiki IO)) (reopenedFixture >>=)
-  Comments.spec (type (MemWiki IO)) (reopenedFixture >>=)
-  Contract.spec (type (MemWiki IO)) (keptFixture >>=)
+  Contract.spec (type (MemWiki IO)) reopenedFixture
+  Notifications.spec (type (MemWiki IO)) reopenedFixture
+  Comments.spec (type (MemWiki IO)) reopenedFixture
+  Contract.spec (type (MemWiki IO)) keptFixture
   -- The administration's changes are kept too: its groups, their members
   -- and the global grants, records the database has had from the start.
-  Admin.spec (type (MemWiki IO)) (keptFixture >>=)
-  Comments.spec (type (MemWiki IO)) (keptFixture >>=)
-  Notifications.spec (type (MemWiki IO)) (keptFixture >>=)
+  Admin.spec (type (MemWiki IO)) keptFixture
+  Comments.spec (type (MemWiki IO)) keptFixture
+  Notifications.spec (type (MemWiki IO)) keptFixture
   where
     unreadable = \case
       Unreadable _ -> True

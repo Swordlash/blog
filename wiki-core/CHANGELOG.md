@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run independent domain and native HTML examples in parallel.
+
 A box, `> [!KIND]`, takes any kind and an optional title after the marker
 (WP5.29). `Alert` is `Alert AlertKind (Maybe Text) [Block]`, with the title
 written after the marker; `AlertKind` gains `Custom Text`, the name in

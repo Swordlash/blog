@@ -6,7 +6,7 @@
 -- the demo's wiki, checked for its media type, its name and what its file
 -- holds; who may export what; one export at a time each; and the PDFs, where
 -- the machine has @xelatex@ (skipped, saying so, where it has not).
-module Test.Server.Export (spec) where
+module Test.Server.Export (spec, environmentSpec) where
 
 import Codec.Compression.Zlib qualified as Zlib
 import Data.ByteString qualified as BS
@@ -16,7 +16,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (methodPost)
 import Protolude
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, setEnv, unsetEnv)
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Test.Database (Backing)
 import Test.Hspec
@@ -52,7 +53,11 @@ spec backing = describe "export with pandoc" $ do
   spaces
   overHttp backing
   oneAtATimeEach
-  pdfs backing
+
+-- | PDF checks require exclusive access to the process environment:
+-- exports set TeX's limits, and one example hides xelatex through PATH.
+environmentSpec :: Backing -> Spec
+environmentSpec backing = describe "export with pandoc" (pdfs backing)
 
 -- | An image attachment, whose bytes are in the media bag.
 tree :: Attachment
@@ -394,6 +399,8 @@ pagesOf r space = ok200 (getUrl r (r.admin <> "/admin/" <> links.spaces.listPage
 -- | The bytes of an export, which must have been made, with its media type.
 exported :: (HasCallStack) => Reply -> ExportFormat -> IO ByteString
 exported reply format = do
+  when (reply.status /= 200) $
+    expectationFailure ("export returned " <> show reply.status <> ": " <> show reply.body)
   (reply.status, header "Content-Type" reply) `shouldBe` (200, Just (encodeUtf8 (formatMediaType format)))
   header "Content-Disposition" reply `shouldSatisfy` maybe False ("attachment; filename=\"" `BS.isPrefixOf`)
   BSL.length reply.body `shouldSatisfy` (> 0)
@@ -586,10 +593,10 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     (Pdf `elem` formats, BeamerPdf `elem` formats) `shouldBe` (tex, tex)
 
   it "are refused, saying why, where it has not" $ withDemoRunning backing identity $ \r -> do
-    tex <- texEngine
-    when (isJust tex) (pendingWith "xelatex is on this machine, so the PDFs are made, not refused")
     (_, pages) <- docsIds r
-    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
+    withoutTeX $ do
+      texEngine `shouldReturn` Nothing
+      getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
 
   it "are made of a page that needs nothing beyond LaTeX where it has" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
@@ -622,3 +629,10 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     pdfPages pdf `shouldReturn` (1 + sum (map (\s -> s.steps) (either (panic . show) deckOf (parseMarkdown stepsDeck)).slides))
     -- The headers say nothing a browser would act on but the download.
     lookup "X-Content-Type-Options" reply.headers `shouldBe` Just "nosniff"
+
+-- | withoutTeX hides programs from the exclusive server test that checks
+-- PDF refusal. The original PATH is restored even when the assertion fails.
+withoutTeX :: IO a -> IO a
+withoutTeX action = withSystemTempDirectory "wiki-without-tex" $ \dir ->
+  bracket (lookupEnv "PATH") (maybe (unsetEnv "PATH") (setEnv "PATH")) $ \_ ->
+    setEnv "PATH" dir >> action

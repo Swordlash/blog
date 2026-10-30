@@ -101,6 +101,10 @@ test-suite wiki-api-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Test.hs
+
+  if !arch(wasm32)
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N"
+
   other-modules:
       Test.Backups
       Test.ContentPolicy
@@ -139,6 +143,9 @@ test-suite wiki-api-server-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test-server
   main-is:          Test.hs
+
+  if !arch(wasm32)
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N"
 
   if arch(wasm32)
     buildable: False

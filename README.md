@@ -1343,10 +1343,19 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 ## CI
 
 `.github/workflows/build.yml` runs three build jobs on every pull request to `main` and
-every push to it, after a first job, `plan` (below): `native` (build and test natively,
-and test the deploy scripts with `toolchain/test-deploy-local.sh`), `wasm` (build for
-wasm, run the test suites and the smoke test in headless Chromium, and keep the built
-page as the run's `app` artifact) and `format` (`npm run format-check`).
+every push to it, in parallel after a first job, `plan` (below): `native` (build and
+test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`),
+`wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
+and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
+
+The native job installs `libxml2-utils` and checks `xmllint` before testing, so
+Atom and RSS schema checks run in CI. It also checks for XeLaTeX, Pandoc's Latin Modern style and the `mhchem`,
+TikZ, `soul` and Beamer packages before testing. If any are missing, it installs
+`texlive-xetex`, `lmodern`, `texlive-science`, `texlive-pictures`, `texlive-plain-generic` and
+`texlive-latex-recommended`, then verifies the engine and required TeX files.
+A complete setup skips that installation. PDF export and TeX file-access tests
+therefore run in CI. The refusal test temporarily hides the engine from PATH,
+so it also runs on a machine with XeLaTeX.
 
 A fourth, `deploy`, publishes the demo on GitHub Pages, at
 <https://swordlash.github.io/blog/>, on a push to `main` once the three have
@@ -1372,16 +1381,17 @@ fast-forwarded to their head, so the push to `main` is normally that very commit
 
 ### Which runner, and who may run on it
 
-The build jobs and the deploy run on one of two kinds of runner, which the first
-job, `plan`, picks for the whole run. `plan` itself runs on GitHub's hosted runners
-for everyone (a few seconds, free on a public repository), and every other job's
-`runs-on` is its answer:
+`native`, `format` and `deploy` always run on GitHub's hosted runners
+(`ubuntu-latest`). Only `wasm` uses the runner the first job, `plan`, picks.
+`plan` itself runs on GitHub's hosted runners for everyone (a few seconds, free on
+a public repository). It chooses where `wasm` runs:
 
 - **GitHub's hosted runners** (`ubuntu-latest`) for a run that is not trusted: a
   pull request from a fork (its head's repository is not this one), anything a
   bot started (an actor whose name ends in `[bot]`, such as Dependabot, whose
   branches are in this repository), and a run by hand with the input `runner` set
-  to `hosted`. The rule is one expression in the workflow, `plan`'s `TRUSTED`.
+  to `hosted`. The weekly scheduled run also uses hosted runners to keep the wasm
+  caches warm. The rule is one expression in the workflow, `plan`'s `TRUSTED`.
 - For a trusted run (a push to `main`, a run by hand, a pull request whose head
   branch is in this repository, which only someone with write access pushes: the
   owner, and the Claude sessions working for them), **the self-hosted runner**
@@ -1396,8 +1406,8 @@ for everyone (a few seconds, free on a public repository), and every other job's
 GitHub has no "whichever is free" of its own (`runs-on` with several labels asks for
 a runner that carries them all), hence the extra job. `plan` writes what it picked
 and why in one line in the run's summary. Two runs that start within seconds of each
-other can both find the machine free and queue there one after the other, as every
-run did before. What the token cannot see is whether the machine is on (that needs
+other can both find the machine free and queue their wasm jobs there one after
+the other. What the token cannot see is whether the machine is on (that needs
 `administration: read`, which a workflow's token cannot have): a run sent to it while
 it is off waits in the queue until it is back. The way out is to cancel it and run the
 workflow by hand with `runner: hosted` (*Run workflow*; the input is `self-hosted`,
@@ -1437,20 +1447,61 @@ What remains:
 - `pull_request_target`, which runs with the repository's rights whatever the
   pull request's origin, is not used, and must not be without the same care.
 
+The pure core/API suites and their native HTML/API checks use Hspec `parallel`.
+Native pure suites use the available runtime capabilities (`-N`). Server tests remain sequential:
+they include tests of process-wide environment variables. Browser tests also
+keep their existing ordering.
+
 ### The toolchain on each runner
 
 On a hosted
 runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
 and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
-self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
-installs the toolchain into the runner user's home the first time (a while: GHC, the
-wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
-`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
-there (the account's artifact storage quota refused uploads while the repository was
-private): the toolchain, the cabal
-store and the built page stay on the machine. One runner runs one job at a time, so
-a run's jobs queue there one after another, and a run that finds another's jobs on
-the machine goes to the hosted runners (see above).
+self-hosted runner the wasm job runs `sh toolchain/bootstrap.sh toolchain` instead,
+which installs the toolchain into the runner user's home the first time (a while:
+GHC, the wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and
+puts it on
+`PATH` with `sh toolchain/bootstrap.sh path`. The toolchain and cabal store stay on
+the machine instead of being cached to GitHub; the built page is uploaded as the
+`app` artifact while the repository is public. Only wasm can queue on this runner;
+`native` and `format` run in parallel on hosted runners. When another run has a job
+on the machine, `plan` sends wasm to the hosted runners too (see above).
+
+Native CI has three independent hosted jobs: `unit`, `sqlite` and `postgres`.
+The unit job runs every other native suite and the server's database-free
+examples. The database jobs run only their own server backing. A dry-run
+compares the groups' full spec paths, including duplicate descriptions, against
+the unsplit suite. Only PostgreSQL starts a container; unit installs the small
+system dependencies and xmllint, while the database jobs also install TeX.
+All three restore the same dependency and build caches; unit saves the Cabal
+store and complete build snapshot, and postgres saves the apt archives.
+
+The database jobs cache downloaded apt `.deb` archives, by Ubuntu
+release, architecture, runner image and package list. Apt still installs and
+configures them normally, including TeX's format generation. A warm cache
+avoids downloading the TeX packages again; it does not skip package setup.
+
+Hosted builds cache `dist-newstyle` as well as the dependency store. The native
+job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
+`dist-newstyle/native-fast` helpers and its wasm objects, interfaces and Cabal
+metadata. The keys include the runner environment, OS and architecture and
+compiler pins. The exact snapshot also records Cabal and source inputs, but the fallback crosses project,
+flag and Cabal changes: Cabal and GHC check which objects remain valid. Identical source reuses the
+same immutable snapshot rather than uploading another one. Every build and test
+still runs: Cabal resolves dependencies against the current package index, and
+Cabal and GHC decide which modules need recompiling. If dependency versions change
+without a source change, they rebuild as needed; the snapshot remains an older
+starting point until the next source change gives it a new key. A pull request's
+cache belongs to that pull request; after merging this workflow change, run it
+once on `main` with `runner: hosted` to seed the default-branch incremental caches
+that other branches can restore. The weekly hosted run keeps those caches warm.
+
+On the owner's runner, checkout retains `dist-newstyle/native`, `dist-newstyle/native-fast` and
+`dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
+ignored workspace files. Those build directories stay with the same local cabal
+store; they are never shared with hosted runners. The generated `wasm/public`
+site is removed, never cached, and rebuilt before the tests and upload. Both build
+jobs report their incremental directory sizes in the run's summary.
 
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 
@@ -1502,7 +1553,7 @@ npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), then the server's build against a real wiki-server
+npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), and the server's build against a real wiki-server, in parallel
 npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
@@ -1591,10 +1642,52 @@ other. Its first run compiles every dependency again at `-O2`, `ghc-lib-parser`
 among them, and can take over an hour; later runs rebuild only what changed. CI
 and `build-wasm` keep the default optimisation.
 
+The native helpers used by wasm builds and smoke tests use
+`cabal-native-fast.project`: the wiki packages compile at `-O0`, while external
+dependencies keep their usual optimisation and can reuse the store. These
+objects live in `dist-newstyle/native-fast`; the normal native server build
+keeps `dist-newstyle/native` and its optimisation. `NATIVE_PROJECT` and
+`NATIVE_BUILDDIR` can select another helper build. The wasm build reports stage
+timings and no longer compresses assets merely to print their sizes; deployment
+still creates the `.br` files it serves.
+
+Browser specs mark the whole tree `parallel`, and CI sets
+`HSPEC_HALOGEN_JOBS=2` to use isolated Chromium contexts. The Content Security
+Policy check runs after each context's examples. Smoke programs use Node's
+test runner with two isolated processes (`SMOKE_JOBS` changes that limit).
+Demo, SQLite, PostgreSQL and passkeys have separate browser contexts, servers
+and data; dependent editing/history steps remain sequential within a program.
+The PostgreSQL run creates and drops its own databases, and reports a skip when
+`WIKI_TEST_DATABASE_URL` is absent.
+
 `serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always
 build for wasm through the `toolchain/` scripts, which pass the cross compiler to
 cabal explicitly and keep the wasm tools' `CC` away from native builds.
+
+Local `npm run test-native` still runs every native test on both databases.
+`WIKI_TEST_GROUP` selects the same groups CI uses:
+
+```sh
+WIKI_TEST_GROUP=unit npm run test-native     # other suites and database-free server tests
+WIKI_TEST_GROUP=sqlite npm run test-native   # server tests on SQLite only
+WIKI_TEST_GROUP=postgres npm run test-native # server tests on PostgreSQL only
+```
+
+The postgres group requires `WIKI_TEST_DATABASE_URL`; a missing server URL or
+unknown group fails rather than silently skipping tests. The default `all`
+keeps local PostgreSQL discovery and the usual explicit pending results when
+PostgreSQL is unavailable.
+
+Native application and server specs mark the whole tree `parallel` and run four
+examples at a time by default. Their threaded RTS uses all cores (`-N`) and
+a 16 MiB allocation area per capability (`-A16m`) to reduce GC during large
+JSON, DOM and SQL fixtures. Hspec's `--jobs` changes the number of concurrent
+examples. Each server fixture has its own database, directory and ports. PDF and password-environment checks take
+exclusive access to the process environment; the application's stored page-size
+and assistant settings checks have exclusive access to the native stores.
+IndexedDB contract fixtures delete their database after each example.
+Hspec's `sequential` alone would not keep other parallel examples away from these global settings.
 
 The test suites are hspec, each `main-is: Test.hs` aggregating `Test.*` modules; a
 new test module goes into the suite's `other-modules` and `test/Test.hs`. Run one

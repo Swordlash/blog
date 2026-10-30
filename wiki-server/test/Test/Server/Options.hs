@@ -1,13 +1,13 @@
 -- | The server's configuration: addresses as written on its command line,
 -- and the rule about who a request's sender is taken for, which a server
 -- refuses to start without (the admin listener on loopback only).
-module Test.Server.Options (spec) where
+module Test.Server.Options (spec, environmentSpec) where
 
 import Data.Text qualified as T
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
-import System.Environment (setEnv, unsetEnv)
+import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
@@ -132,22 +132,6 @@ database = describe "a PostgreSQL database" $ do
     withoutPassword "postgres://wiki@db/wiki" `shouldBe` "postgres://wiki@db/wiki"
     show (PostgresAt PgDatabase {url = "postgres://wiki:secret@db/wiki", password = Just (Secret "other")}) `shouldNotSatisfy` (\t -> any (`T.isInfixOf` t) ["secret", "other"])
 
-  it "gives its password to pg_dump in the environment: its own, the URL's decoded as libpq does, or else the server's PGPASSWORD" $
-    withSystemTempDirectory "wiki-options-test" $ \dir -> do
-      -- A pg_dump that writes the password it was given, and its
-      -- arguments, as its dump.
-      let program = dir </> "pg_dump"
-      writeFile program "#!/bin/sh\nprintf '%s|%s' \"$PGPASSWORD\" \"$*\"\n"
-      setPermissions program (setOwnerExecutable True (setOwnerReadable True emptyPermissions))
-      let given db = do
-            dumped <- dumpPostgres defaultPgPrograms {dump = program} db Nothing (dir </> "out")
-            dumped `shouldBe` Right ()
-            readFile (dir </> "out")
-      given PgDatabase {url = encodeUtf8 url, password = Just (Secret "from a file")} `shouldReturn` ("from a file|--format=custom --no-owner --no-privileges --dbname=" <> url)
-      given PgDatabase {url = "postgres://wiki@db/wiki?password=a+b%20c&sslmode=require", password = Nothing} `shouldReturn` "a+b c|--format=custom --no-owner --no-privileges --dbname=postgres://wiki@db/wiki?sslmode=require"
-      bracket_ (setEnv "PGPASSWORD" "inherited") (unsetEnv "PGPASSWORD") $
-        given PgDatabase {url = encodeUtf8 url, password = Nothing} `shouldReturn` ("inherited|--format=custom --no-owner --no-privileges --dbname=" <> url)
-
 refusedAtStart :: Backing -> Spec
 refusedAtStart backing = describe "a server" $ do
   let starts :: (ServeOptions -> ServeOptions) -> IO (Maybe [Text])
@@ -166,3 +150,25 @@ refusedAtStart backing = describe "a server" $ do
 
   it "does not start on an address that is not this machine's, and says which" $
     starts (\o -> o {listen = Listen "192.0.2.1" 0}) >>= (`shouldSatisfy` maybe False (any ("cannot listen on 192.0.2.1:0" `T.isPrefixOf`)))
+
+-- | Check the inherited password with exclusive access to the process
+-- environment. Other examples may run pg_dump at the same time otherwise.
+environmentSpec :: Spec
+environmentSpec = describe "the server's options" $ describe "a PostgreSQL database" $ do
+  let url = "postgres://wiki@127.0.0.1:5433/wiki"
+  it "gives its password to pg_dump in the environment: its own, the URL's decoded as libpq does, or else the server's PGPASSWORD" $
+    withSystemTempDirectory "wiki-options-test" $ \dir -> do
+      -- A pg_dump that writes the password it was given, and its
+      -- arguments, as its dump.
+      let program = dir </> "pg_dump"
+      writeFile program "#!/bin/sh\nprintf '%s|%s' \"$PGPASSWORD\" \"$*\"\n"
+      setPermissions program (setOwnerExecutable True (setOwnerReadable True emptyPermissions))
+      let given db = do
+            dumped <- dumpPostgres defaultPgPrograms {dump = program} db Nothing (dir </> "out")
+            dumped `shouldBe` Right ()
+            readFile (dir </> "out")
+      given PgDatabase {url = encodeUtf8 url, password = Just (Secret "from a file")} `shouldReturn` ("from a file|--format=custom --no-owner --no-privileges --dbname=" <> url)
+      given PgDatabase {url = "postgres://wiki@db/wiki?password=a+b%20c&sslmode=require", password = Nothing} `shouldReturn` "a+b c|--format=custom --no-owner --no-privileges --dbname=postgres://wiki@db/wiki?sslmode=require"
+      bracket (lookupEnv "PGPASSWORD") (maybe (unsetEnv "PGPASSWORD") (setEnv "PGPASSWORD")) $ \_ -> do
+        setEnv "PGPASSWORD" "inherited"
+        given PgDatabase {url = encodeUtf8 url, password = Nothing} `shouldReturn` ("inherited|--format=custom --no-owner --no-privileges --dbname=" <> url)

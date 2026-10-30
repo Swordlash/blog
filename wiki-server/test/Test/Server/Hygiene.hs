@@ -10,6 +10,7 @@
 -- editor signs in with a password the operator gives them.
 module Test.Server.Hygiene (spec) where
 
+import Control.Monad.Fail (fail)
 import Data.Aeson (encode)
 import Data.ByteString.Char8 qualified as BC
 import Data.IORef (readIORef)
@@ -20,6 +21,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Database.Beam (all_, filter_, runSelectReturningList, select, val_, (==.))
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Protolude
+import System.Timeout (timeout)
 import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
@@ -41,7 +43,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
-import Wiki.Server.Mail (Message (..))
+import Wiki.Server.Mail (Message (..), SendMail)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
 import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, reading, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage.Rows (insertIdentity, micro)
@@ -351,6 +353,49 @@ reset backing = describe "a password reset" $ do
       other <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
       (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken other))) NewPasswordByMail {password = Password "another new password"} >>= jsonAs 404) `shouldReturn` NotFound
 
+  it "answers while a reset task is blocked, then cancels and joins it on shutdown" $ withinResetTest $ do
+    entered <- newEmptyMVar
+    stopped <- newEmptyMVar
+    blocked <- newEmptyMVar @()
+    let sending :: SendMail -> SendMail
+        sending deliver smtp password message
+          | "Reset your password" `T.isPrefixOf` message.subject =
+              (myThreadId >>= putMVar entered >> takeMVar blocked >> pure (Right ()))
+                `catch` (\(e :: SomeAsyncException) -> putMVar stopped () >> throwIO e)
+          | otherwise = deliver smtp password message
+        cleanup = do
+          tryReadMVar entered >>= traverse_ killThread
+          void (tryPutMVar blocked ())
+    flip finally cleanup $ do
+      withVerifiedEditorUsing backing sending $ \r _ -> do
+        (.status) <$> askReset r "editor" `shouldReturn` 204
+        void (readMVar entered)
+      tryReadMVar stopped `shouldReturn` Just ()
+
+  it "propagates an unexpected reset task failure to the server's owner" $
+    withinResetTest $ do
+      entered <- newEmptyMVar
+      release <- newEmptyMVar
+      blocked <- newEmptyMVar @()
+      let sending :: SendMail -> SendMail
+          sending deliver smtp password message
+            | "Reset your password" `T.isPrefixOf` message.subject = do
+                putMVar entered ()
+                takeMVar release
+                throwIO ResetTaskFailure
+            | otherwise = deliver smtp password message
+      flip finally (void (tryPutMVar blocked ())) $
+        withVerifiedEditorUsing
+          backing
+          sending
+          ( \r _ -> do
+              (.status) <$> askReset r "editor" `shouldReturn` 204
+              takeMVar entered
+              putMVar release ()
+              takeMVar blocked
+          )
+          `shouldThrow` (== ResetTaskFailure)
+
   it "is limited per address it is asked from" $ withDemoRunning backing identity $ \r -> do
     mailing r
     replicateM_ 10 (askReset r "nobody" >>= \reply -> reply.status `shouldBe` 204)
@@ -370,12 +415,30 @@ reset backing = describe "a password reset" $ do
 -- | The editor, signed in with a password, with a verified address, on a
 -- server that mails: the cookie.
 withVerifiedEditor :: Backing -> (Running -> Text -> IO a) -> IO a
-withVerifiedEditor backing test = withEditor backing $ \r t -> do
+withVerifiedEditor backing = withVerifiedEditorUsing backing identity
+
+-- | 'withVerifiedEditorUsing' prepares the verified editor with a decorated
+-- mail sender, so a test can control reset delivery.
+withVerifiedEditorUsing :: Backing -> (SendMail -> SendMail) -> (Running -> Text -> IO a) -> IO a
+withVerifiedEditorUsing backing sending test = withDemoRunningUsing backing sending $ \r -> do
+  givePassword r "user-editor" "editor's password"
+  t <- signInAs r "editor" "editor's password"
   mailing r
   _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just (Password "editor's password")}) >>= jsonAs @EmailState 200
   verify <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
   (.status) <$> send r methodPost (onPublic r (links.emailVerification (VerificationToken verify))) [] "" `shouldReturn` 204
   test r t
+
+-- | 'ResetTaskFailure' is the exception injected into a password-reset task.
+data ResetTaskFailure = ResetTaskFailure
+  deriving stock (Eq, Show)
+
+instance Exception ResetTaskFailure
+
+-- | 'withinResetTest' bounds synchronized tests, so a broken lifetime fails.
+withinResetTest :: IO a -> IO a
+withinResetTest action =
+  timeout 10_000_000 action >>= maybe (fail "Timed out waiting for a password-reset task") pure
 
 -- | Ask for an administrator's link to choose a password for a user, on
 -- the admin listener.

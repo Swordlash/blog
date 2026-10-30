@@ -3,8 +3,9 @@ module Main (main) where
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Protolude
 import Test.Browser.Islands qualified as Islands
-import Test.Hspec.Halogen (describe, runBrowserTests)
+import Test.Hspec.Halogen (Spec, describe, parallel, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
+import Test.Hspec (afterAll_)
 import Test.Browser.Access qualified as Access
 import Test.Browser.Admin qualified as Admin
 import Test.Browser.Assistant qualified as Assistant
@@ -50,7 +51,14 @@ import Test.Browser.Vault qualified as Vault
 -- type-checked in their own modules, polymorphic in the monad, and picked
 -- here in a browser only.
 main :: IO ()
-main = runBrowserTests $ do
+#if defined(wasm32_HOST_ARCH)
+main = runBrowserTests (afterAll_ Policy.checkViolations (parallel spec))
+#else
+main = runBrowserTests (parallel spec)
+#endif
+
+spec :: Spec
+spec = do
   describe "Wiki.App.Islands" (Islands.spec BrowserDOM)
 #if defined(wasm32_HOST_ARCH)
   describe "The page's Content Security Policy" (Policy.spec BrowserDOM)
@@ -82,8 +90,6 @@ main = runBrowserTests $ do
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
-  -- Last: what the whole suite made the browser refuse under the policy.
-  describe "The page's Content Security Policy, after the suite" Policy.afterTheSuite
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)
