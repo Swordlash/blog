@@ -28,6 +28,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Links (searchUrl)
+import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (StoredVault (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
@@ -453,8 +454,9 @@ signedIn =
     , providers = []
     , exports = []
     , boxes = []
+    , homePage = defaultHomePage
     }
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = []}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
 
 accounts :: Spec
 accounts = describe "signing in and out" $ do

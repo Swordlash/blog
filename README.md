@@ -558,6 +558,22 @@ Pages does. `npx http-server` does, from a directory holding it as `blog/`
 mkdir site && unzip app.zip -d site/blog && cp site/blog/404.html site/ && npx http-server site -p 8080
 ```
 
+An administrator can choose **Edit home page** on the front page to set its shared
+title and Markdown, preview it, and independently show or hide **Spaces** and
+**Recently visited**. Save keeps the result on the server or in the demo's
+IndexedDB; Cancel leaves it unchanged. A failed save keeps the draft and shows the
+error. Readers see the saved content, while the shell's sidebar still offers the
+spaces they may open, even when Spaces is hidden on the front page. Recently
+visited belongs to each browser and includes only spaces its reader may view.
+
+The home page uses the same Markdown renderer, CodeMirror editor, diagrams,
+formulas, highlighted code and custom boxes as ordinary pages. Wiki links start
+at the wiki root, for example `[[/docs]]`; the home page has no page attachments
+or inherited space macros. Its content is shared with everyone who may open the
+wiki: an open wiki includes anonymous readers, while a closed wiki requires sign-in.
+Only a global administrator or the loopback operator may change it. Whole-wiki
+export and import include this public configuration.
+
 The front page invites you to the tour, which says what to try. Nothing you do is
 sent anywhere, and a reload starts the demo over.
 

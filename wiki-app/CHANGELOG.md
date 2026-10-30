@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Let an administrator edit the shared front page's title and Markdown with CodeMirror, preview it, toggle Spaces and Recently visited independently, save or cancel. Reuse the page renderer and islands, preserve failed drafts and lock editing during a save, and persist the configuration in IndexedDB and exports. The shell keeps space navigation when homepage cards are hidden.
+
 The wiki's guide, the demo's Tour, Markdown guide, Diagrams, Mathematics and
 Presentations, moves to `Wiki.App.Guide` (WP5.29), which the demo and the
 server share; the server's guide has a tour of its own. The Markdown guide

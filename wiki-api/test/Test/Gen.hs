@@ -52,6 +52,7 @@ import Test.QuickCheck
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
+import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -130,7 +131,7 @@ genSessionInfo = do
   providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
   exports <- sublistOf [minBound .. maxBound]
   boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements [minBound .. maxBound] <*> elements [minBound .. maxBound]))
-  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes}
+  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> (Password <$> genText)

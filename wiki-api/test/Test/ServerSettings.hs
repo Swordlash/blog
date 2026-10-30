@@ -3,7 +3,7 @@
 -- pass, and the JSON of a change that leaves a secret out.
 module Test.ServerSettings (spec) where
 
-import Data.Aeson (decode)
+import Data.Aeson (decode, encode)
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
@@ -28,6 +28,7 @@ kept =
     , providers = [providerWithSecret "google" (Just "g"), providerWithSecret "other" (Just "o")]
     , assistantHosts = ["http://localhost:11434"]
     , boxes = []
+    , homePage = defaultHomePage
     }
 
 -- | A kind of box, blue with no icon, labelled as given.
@@ -36,15 +37,25 @@ box name label = BoxKind {name, label, colour = Blue, icon = NoIcon}
 
 spec :: Spec
 spec = describe "the server's settings" $ do
+  describe "the home page" $ do
+    it "defaults to the directory when older settings omit it" $
+      ((\s -> s.homePage) <$> (decode "{\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just defaultHomePage
+    it "round trips the Markdown and independent section switches" $ do
+      let home = HomePage {title = "Welcome", body = "# Start\r\n\n> [!exercise]\n> Work.", showSpaces = False, showRecent = True}
+      decode (encode home) `shouldBe` Just home
+      (checkServerSettings isJust (noServerSettings {homePage = home} :: Kept)) `shouldBe` Right noServerSettings {homePage = home}
+    it "refuses an empty title and trims a title without changing Markdown" $ do
+      checkHomePage defaultHomePage {title = "  "} `shouldSatisfy` isLeft
+      checkHomePage defaultHomePage {title = " Welcome ", body = "  source\r\n"} `shouldBe` Right defaultHomePage {title = "Welcome", body = "  source\r\n"}
   describe "a change" $ do
     it "keeps each secret it leaves out, by the provider's name" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = []}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = [], homePage = defaultHomePage}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just (Just "pw")
       map (\p -> (p.name, p.secret)) changed.providers `shouldBe` [("other", Just "o"), ("google", Just "g")]
 
     it "replaces a secret given, and clears an empty one" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = []}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = [], homePage = defaultHomePage}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just Nothing
       map (\p -> p.secret) changed.providers `shouldBe` [Just "new"]
@@ -58,7 +69,7 @@ spec = describe "the server's settings" $ do
     it "is read with a secret left out as keeping it" $ do
       let json = "{\"publicUrl\":null,\"mail\":{\"host\":\"h\",\"port\":25,\"security\":\"plain\",\"user\":null,\"from\":\"f@example.org\"},\"providers\":[{\"name\":\"g\",\"kind\":\"google\",\"clientId\":\"c\",\"issuer\":null}]}"
       (decode json :: Maybe ServerSettingsChange)
-        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = []}
+        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = [], homePage = defaultHomePage}
 
     it "takes the assistant's hosts as the change gives them" $
       (applyChange identity kept (noServerSettings {assistantHosts = ["https://openrouter.ai"]} :: ServerSettingsChange)).assistantHosts `shouldBe` ["https://openrouter.ai"]

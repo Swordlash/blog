@@ -43,6 +43,7 @@ import Data.Aeson (FromJSON (..), ToJSON, withObject, (.!=), (.:), (.:?))
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
+import Wiki.Api.ServerSettings (HomePage, defaultHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
@@ -72,6 +73,8 @@ data SessionInfo = SessionInfo
   , exports :: [ExportFormat]
   -- ^ The document formats the server exports pages and spaces in
   -- ("Wiki.Api.Export"): the PDF formats only when it has a TeX engine.
+  , homePage :: HomePage
+  -- ^ The public configuration of the shared front page.
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administration defined ("Wiki.Core.Markdown.Box"),
   -- which every page is rendered with.
@@ -92,6 +95,7 @@ instance FromJSON SessionInfo where
       <*> o .: "standing"
       <*> o .: "providers"
       <*> o .: "exports"
+      <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
 
 -- | 'NewSpace': a space to create, @createSpace@.

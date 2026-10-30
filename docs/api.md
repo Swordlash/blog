@@ -915,6 +915,24 @@ a disabled user stays in the directory. A password is never part of an
 answer. The same operations, and making a user an administrator, are on the
 console: `wiki-server users …` (see the README).
 
+### The shared home page
+
+`SessionInfo.homePage` carries the front page's public configuration:
+`{"title":"Spaces","body":"","showSpaces":true,"showRecent":true}` by default.
+The title and Markdown are shared by every reader who may open the front page.
+A visitor shut out by a closed wiki receives the defaults, without the saved
+content. An older session or settings object without `homePage` uses the defaults.
+
+| Method | Path | Body | Response | Refused |
+| ------ | ---- | ---- | -------- | ------- |
+| PUT | `api/v1/admin/home-page` | `HomePage` `{"title","body","showSpaces","showRecent"}` | the saved `HomePage` | 403 without global administration, 400 for a blank title |
+
+The loopback operator may also write the home page. The title is trimmed; the
+Markdown is kept as written. This endpoint changes only the home page, preserving
+mail, providers, secrets and other server settings. The existing server settings
+API also carries `homePage`; no server secrets occur in `SessionInfo`.
+The activity log records `settings.home-page` for the dedicated update.
+
 ### The server's settings
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |

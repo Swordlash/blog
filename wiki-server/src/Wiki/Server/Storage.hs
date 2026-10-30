@@ -115,6 +115,7 @@ module Wiki.Server.Storage
     -- * The wiki's settings
   , readSettings
   , readServerSettings
+  , cacheServerSettings
 
     -- * The backups
   , readBackups
@@ -182,8 +183,10 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound, searchable)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
-import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
+import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkHomePage, checkServerSettings, defaultHomePage, kindName, secretState, securityName)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
+import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
@@ -437,10 +440,16 @@ writing st action = either absurd identity <$> writingEither st (Right <$> actio
 -- | 'writing', committed only if the result is a 'Right': a 'Left' rolls
 -- the transaction back, as an exception does.
 writingEither :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> IO (Either e a)
-writingEither st action = case st.engine of
-  Engine p -> retrying p.writer $ \c -> withTransactionEither True c $ do
-    tracer <- tracedBegin st True
-    runTraced tracer c action
+writingEither st action = writingEitherThen st action (const pass)
+
+-- | Commit a successful transaction, then update its cache before another write.
+writingEitherThen :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> (a -> IO ()) -> IO (Either e a)
+writingEitherThen st action committed = case st.engine of
+  Engine p -> retrying p.writer $ \c -> do
+    outcome <- withTransactionEither True c $ do
+      tracer <- tracedBegin st True
+      runTraced tracer c action
+    either (pure . Left) (\a -> Right a <$ committed a) outcome
 
 -- | 'writing', then, once the transaction is committed and before any
 -- other write may begin, the given action on its result, as a save
@@ -530,8 +539,11 @@ storageCapabilities st = case st.engine of
 readSettings :: Storage -> IO WikiSettings
 readSettings st = readIORef st.settings >>= maybe (writing st loadSettings) pure
 
--- | The server's own settings as they are now, with their secrets, from
--- memory.
+-- | Publish server settings after their transaction commits, before another write.
+cacheServerSettings :: Storage -> Kept -> IO ()
+cacheServerSettings st = writeIORef st.serverKept . Just
+
+-- | The server's own settings as they are now, with their secrets, from memory.
 readServerSettings :: Storage -> IO Kept
 readServerSettings st = readIORef st.serverKept >>= maybe (writing st loadServerSettings) pure
 
@@ -1129,6 +1141,9 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
 
   -- The server's own settings: kept in memory as soon as they are
   -- committed, as the wiki's are, and never returned with their secrets.
+  setHomePage change = StoredWiki $ do
+    env <- ask
+    fmap (\s -> s.homePage) <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setHomePageTx change) (writeIORef env.storage.serverKept . Just))
   serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
   setServerSettings change = StoredWiki $ do
     env <- ask
@@ -1354,7 +1369,7 @@ sessionTx :: Tx Session
 sessionTx = do
   ctx <- ask
   pure $ case (,) <$> ctx.user <*> ctx.principal of
-    Nothing -> anonymousIn ctx.grants.access
+    Nothing -> (anonymousIn ctx.grants.access) {B.homePage = if ctx.grants.access == Closed then defaultHomePage else ctx.server.homePage}
     Just (u, p) ->
       Session
         { user = Just u
@@ -1377,6 +1392,7 @@ sessionTx = do
         , -- Nor the kinds of box, which are the server's settings: the
           -- API adds them as well.
           boxes = []
+        , homePage = ctx.server.homePage
         }
 
 listSpacesTx :: Tx [Space]
@@ -2308,8 +2324,18 @@ setWikiSettingsTx new = do
     ]
   pure new
 
--- | The server's settings with a change written over them, checked
--- ('checkServerSettings') and kept.
+-- | Change only the shared front page, preserving other server settings.
+setHomePageTx :: HomePage -> Tx Kept
+setHomePageTx change = do
+  requireAdministrator
+  old <- asks (\x -> x.server)
+  homePage <- either invalid pure (checkHomePage change)
+  let new = old {SS.homePage = homePage}
+  db (storeServerSettings new)
+  record "settings.home-page" (settingsSubject "the home page") []
+  pure new
+
+-- | Check and store the server's settings.
 setServerSettingsTx :: ServerSettingsChange -> Tx Kept
 setServerSettingsTx change = do
   requireAdministrator
@@ -2810,45 +2836,49 @@ instance (MonadIO m) => MonadNotifications (StoredWiki m) where
 -- another is a merge, which is the job of the import (WP2.8 of
 -- docs/PLAN.md).
 importArchive :: Storage -> Archive -> IO (Either Text ())
-importArchive st a = writingEither st $ do
-  vacant <- wikiIsEmpty
-  let unkept = [x | p <- a.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
-      iconless = [sp | sp <- a.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
-  case (vacant, unkept, iconless) of
-    (False, _, _) -> pure (Left "The server has a wiki already: an archive is imported into an empty one only.")
-    (_, x : _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
-    (_, _, sp : _) -> pure (Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> "."))
-    (True, [], []) -> do
-      insertUsers a.users
-      traverse_ insertGroup a.groups
-      insertMembers [(g, u) | (g, members) <- Map.toList a.membership, u <- Set.toList members]
-      hashes <- liftIO (traverse (storeBlob (attachmentsDir st.place.dataDir)) a.blobs)
-      -- An archive gives spaces and pages in any order, a child before its
-      -- parent too, and a space names its home page before the page is
-      -- there. Each is added after its parent, and the spaces' home pages
-      -- once the pages are there, so that every foreign key holds at each
-      -- step, as PostgreSQL checks them.
-      let spaces =
-            [ case sp.icon of
-                Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog} sp
-                _ -> sp
-            | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
-            ]
-      insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp | sp <- spaces]
-      -- A grant on a space names the space, so the grants come after.
-      insertGrants a.grants
-      for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do
-        insertPage p
-        insertVersion p Nothing
-        for_ (zip [0 ..] p.attachments) $ \(ordinal, x) ->
-          let source = case x.source of
-                SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
-                url -> url
-           in insertAttachment p.id ordinal x {source}
-      traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
-      traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
-      restoreAudit a.audit
-      pure (Right ())
+importArchive st a = fmap void (writingEitherThen st transaction (cacheServerSettings st))
+  where
+    transaction :: (Backend be) => Db be (Either Text Kept)
+    transaction = do
+      vacant <- wikiIsEmpty
+      let unkept = [x | p <- a.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
+          iconless = [sp | sp <- a.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
+      case (vacant, unkept, iconless) of
+        (False, _, _) -> pure (Left "The server has a wiki already: an archive is imported into an empty one only.")
+        (_, x : _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
+        (_, _, sp : _) -> pure (Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> "."))
+        (True, [], []) -> do
+          insertUsers a.users
+          traverse_ insertGroup a.groups
+          insertMembers [(g, u) | (g, members) <- Map.toList a.membership, u <- Set.toList members]
+          hashes <- liftIO (traverse (storeBlob (attachmentsDir st.place.dataDir)) a.blobs)
+          -- An archive gives spaces and pages in any order, a child before its
+          -- parent too, and a space names its home page before the page is
+          -- there. Each is added after its parent, and the spaces' home pages
+          -- once the pages are there, so that every foreign key holds at each
+          -- step, as PostgreSQL checks them.
+          let spaces =
+                [ case sp.icon of
+                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog} sp
+                    _ -> sp
+                | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
+                ]
+          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp | sp <- spaces]
+          -- A grant on a space names the space, so the grants come after.
+          insertGrants a.grants
+          for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do
+            insertPage p
+            insertVersion p Nothing
+            for_ (zip [0 ..] p.attachments) $ \(ordinal, x) ->
+              let source = case x.source of
+                    SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
+                    url -> url
+               in insertAttachment p.id ordinal x {source}
+          traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
+          traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
+          for_ a.homePage $ \home -> storeSetting "home-page" (decodeUtf8 (Export.encodeJson home))
+          restoreAudit a.audit
+          Right <$> loadServerSettings
 
 -- | Records in an order where each comes after its parent: those with no
 -- parent among them first, then those whose parent has come, and so on.
@@ -2907,11 +2937,11 @@ writeExport st app target =
 exportRecords :: Storage -> Text -> IO (Either Text (Archive, Map BlobId FilePath))
 exportRecords st app = do
   createdAt <- getCurrentTime
-  (users, groups, membership, grants, spaces, pages, threads, audit) <-
+  (users, groups, membership, grants, spaces, pages, threads, audit, homePage) <-
     -- One read transaction, so that the records are of one state of the
     -- wiki.
     reading st $
-      (,,,,,,,)
+      (,,,,,,,,)
         <$> loadUsers
         <*> loadGroups
         <*> loadMembership
@@ -2920,6 +2950,7 @@ exportRecords st app = do
         <*> loadAllPages
         <*> Comments.loadAllThreads commentAuthor
         <*> loadAuditLog
+        <*> ((Just . (\s -> s.homePage)) <$> loadServerSettings)
   let commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
       dir = attachmentsDir st.place.dataDir
       -- A blob's file, if it is there.
@@ -2932,7 +2963,7 @@ exportRecords st app = do
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
       <$> fileOf b
-  pure $ (\files -> (Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = mempty, audit}, Map.fromList files)) <$> sequence (attachments <> icons)
+  pure $ (\files -> (Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = mempty, audit, homePage}, Map.fromList files)) <$> sequence (attachments <> icons)
 
 -- | 'uploadAttachment' with the bytes in a file: an upload the server
 -- received into a temporary file. The file is copied into the blob store

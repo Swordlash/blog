@@ -500,6 +500,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   -- Cached like the wiki's settings, so that the administration page the
   -- server prerendered is also the program's first render. Asking a
   -- provider and sending a test mail change nothing, so the cache stays.
+  setHomePage new = write (endpoints.admin.setHomePage new)
   serverSettings = cached (\c -> c.server) endpoints.admin.server withServerSettings
   setServerSettings new = write (endpoints.admin.setServer new)
   checkProvider name given = send (endpoints.admin.checkProvider name given)

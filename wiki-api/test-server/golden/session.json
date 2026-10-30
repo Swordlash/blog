@@ -37,6 +37,12 @@
   "groups": [
     "g1"
   ],
+  "homePage": {
+    "body": "",
+    "showRecent": true,
+    "showSpaces": true,
+    "title": "Spaces"
+  },
   "providers": [
     {
       "label": "GitHub",

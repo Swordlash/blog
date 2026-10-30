@@ -23,6 +23,7 @@ import Wiki.Api.Comments (NewThread (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
 import Wiki.Api.Links (attachmentUrl, links, spaceIconUrl)
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.View.Common (pagePathOf)
@@ -31,7 +32,9 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthor)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
+import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
+import Wiki.Core.HomePage (HomePage (..), defaultHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
@@ -131,6 +134,7 @@ archive spaces pages =
     , commentAuthors = []
     , blobs = Map.fromList [(BlobId "b1", "PNG")]
     , audit = []
+    , homePage = Nothing
     }
 
 zipped :: Archive -> LByteString
@@ -281,6 +285,16 @@ choices backing = describe "what is left unchecked" $ do
 
 roundTrip :: Backing -> Spec
 roundTrip backing = describe "an export" $ do
+  it "restores public homepage metadata, while an archive without it leaves settings alone" $ withRunning backing $ \r -> do
+    let home = defaultHomePage {title = "Welcome", body = "Shared.", showSpaces = False, showRecent = False}
+    _ <- apply r docs {Export.homePage = Just home} importEverything
+    (\s -> s.homePage) <$> serverAs r `shouldReturn` home
+    _ <- apply r docs importEverything
+    (\s -> s.homePage) <$> serverAs r `shouldReturn` home
+    reply <- getUrl r (admin r links.archive.export)
+    exported <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict reply.body) >>= readArchive)
+    exported.homePage `shouldBe` Just home
+
   it "is a zip file of the whole wiki, which imports into another server as it was" $
     withRunning backing $ \origin -> withRunning backing $ \copy -> do
       _ <- apply origin docs importEverything

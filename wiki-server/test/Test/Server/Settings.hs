@@ -19,10 +19,12 @@ import Test.Hspec
 import Test.Server.FakeProvider (Fake (..), clientSecret, withFakeProvider)
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), WikiApi (..))
+import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings
 import Wiki.Api.Types qualified as Types
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), SignInProvider (..))
@@ -30,6 +32,7 @@ import Wiki.Server.Mail (Message (..))
 
 spec :: Backing -> Spec
 spec backing = describe "the server's settings, over HTTP" $ do
+  homepage backing
   reading backing
   secrets backing
   checks backing
@@ -68,7 +71,7 @@ reading backing = describe "reading and writing them" $ do
 
   it "gives the kinds of box to every reader's session, and the pages the server renders draw them" $ withDemoRunning backing identity $ \r -> do
     let exercise = BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}
-    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise]}
+    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise], homePage = defaultHomePage}
     set.boxes `shouldBe` [exercise]
     session <- getUrl r (onPublic r links.session) >>= jsonAs 200
     (session :: Types.SessionInfo).boxes `shouldBe` [exercise]
@@ -213,3 +216,39 @@ testMails backing = describe "a test mail" $ do
       `shouldReturn` Invalid "This wiki has no mail server yet, or no public address: set them first."
     _ <- setServer r withAddress {mail = Just (mailServer "mail.test" Nothing)}
     (sendJson r "POST" (onAdmin r links.admin.testMail) MailTest {to = "not an address"} >>= jsonAs @ApiError 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+
+-- | The front page is public configuration; only its writes need administration.
+homepage :: Backing -> Spec
+homepage backing = describe "the shared home page" $ do
+  let home = HomePage {title = "Knowledge", body = "Shared **welcome**.", showSpaces = False, showRecent = False}
+  it "allows the operator and administrator, refuses other writers and never exposes server secrets" $ withAdminSession backing identity $ \r admin -> do
+    (sendJson r "PUT" (onAdmin r links.admin.setHomePage) home >>= jsonAs 200) `shouldReturn` home
+    (send r "PUT" (onPublic r links.admin.setHomePage) [admin, ("Content-Type", "application/json")] (encode home) >>= jsonAs 200) `shouldReturn` home
+    (sendJson r "PUT" (onPublic r links.admin.setHomePage) home >>= jsonAs 403) `shouldReturn` Forbidden
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    (send r "PUT" (onPublic r links.admin.setHomePage) [editor, ("Content-Type", "application/json")] (encode home) >>= jsonAs 403) `shouldReturn` Forbidden
+  it "redacts a closed wiki's homepage from anonymous API and embedded HTML" $ withAdminSession backing identity $ \r admin -> do
+    let secret = home {title = "Private home", body = "secret-front-91"}
+    _ :: HomePage <- sendJson r "PUT" (onAdmin r links.admin.setHomePage) secret >>= jsonAs 200
+    _ :: WikiSettings <- sendJson r "PUT" (onAdmin r links.admin.setSettings) defaultSettings {access = Closed} >>= jsonAs 200
+    info :: Types.SessionInfo <- getUrl r (onPublic r links.session) >>= jsonAs 200
+    info.homePage `shouldBe` defaultHomePage
+    allowed :: Types.SessionInfo <- getUrlWith r (onPublic r links.session) [admin] >>= jsonAs 200
+    allowed.homePage `shouldBe` secret
+    page <- getUrl r (r.public <> "/")
+    decodeUtf8 (BSL.toStrict page.body) `shouldSatisfy` (not . T.isInfixOf "secret-front-91")
+  it "keeps saved content across restart and renders it for an anonymous reader" $
+    withDemoRestarted
+      backing
+      (\r -> sendJson r "PUT" (onAdmin r links.admin.setHomePage) home >>= jsonAs @HomePage 200)
+      ( \saved again -> do
+          info :: Types.SessionInfo <- getUrl again (onPublic again links.session) >>= jsonAs 200
+          info.homePage `shouldBe` saved
+          page <- getUrl again (again.public <> "/")
+          page.status `shouldBe` 200
+          let html = decodeUtf8 (BSL.toStrict page.body)
+          html `shouldSatisfy` T.isInfixOf "Shared <strong>welcome</strong>."
+          html `shouldSatisfy` (not . T.isInfixOf "space-cards")
+          html `shouldSatisfy` T.isInfixOf "wiki-sidebar"
+      )

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Add `Wiki.Core.HomePage` for the public front page configuration. Whole-wiki archives carry it in optional `settings.json`; older archives leave the current home page unchanged on import. Invalid titles are refused before import.
+
 - Run independent domain and native HTML examples in parallel.
 
 A box, `> [!KIND]`, takes any kind and an optional title after the marker

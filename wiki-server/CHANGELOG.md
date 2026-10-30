@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Persist the editable shared front page in the `home-page` settings row on SQLite and PostgreSQL. Permit writes only to global administrators and the loopback operator. Include public configuration in full exports/imports; redact it for anonymous sessions shut out by a closed wiki. Record dedicated updates as `settings.home-page` in the audit log.
+
 - Check PDF refusal even when XeLaTeX is installed; provision XML schema checks in CI.
 
 Password-reset tasks belong to a Ki scope inside the server's open storage

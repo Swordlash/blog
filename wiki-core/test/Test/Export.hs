@@ -5,7 +5,7 @@
 -- archive of version 1 read as the same wiki, and what a reader refuses.
 module Test.Export (spec) where
 
-import Data.Aeson (Value (..), decodeStrict', toJSON)
+import Data.Aeson (Value (..), decodeStrict', object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -20,6 +20,9 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Export
+import Wiki.Core.Export qualified as Export
+import Wiki.Core.HomePage (HomePage (..), defaultHomePage)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
@@ -160,6 +163,7 @@ wiki =
     , commentAuthors = [administrator]
     , blobs = Map.fromList ((BlobId "blob-icon", "PNG image") : [(BlobId ("blob-" <> i), bytesOf i) | i <- ["x1", "x3", "x4", "x5", "x6"]])
     , audit = []
+    , homePage = Nothing
     }
 
 files :: Map Text ByteString
@@ -195,6 +199,17 @@ version1 a =
 
 spec :: Spec
 spec = describe "Wiki.Core.Export" $ do
+  describe "the shared home page in an archive" $ do
+    it "round trips public configuration in optional metadata" $ do
+      let home = defaultHomePage {Home.title = "Welcome", body = "Shared.", showSpaces = False}
+          exported = wiki {Export.homePage = Just home}
+      readArchive (Map.fromList (writeArchive exported)) `shouldBe` Right exported
+      (\a -> a.homePage) <$> readArchive (Map.delete "settings.json" (Map.fromList (writeArchive exported))) `shouldBe` Right Nothing
+    it "refuses malformed or invalid homepage settings" $ do
+      let exported = Map.fromList (writeArchive wiki)
+      readArchive (Map.insert "settings.json" "{bad" exported) `shouldSatisfy` isLeft
+      readArchive (Map.insert "settings.json" (encodeJson (object ["homePage" .= defaultHomePage {Home.title = " "}])) exported) `shouldSatisfy` isLeft
+
   it "reads a wiki back from its files as it was" $
     readArchive files `shouldBe` Right wiki
 

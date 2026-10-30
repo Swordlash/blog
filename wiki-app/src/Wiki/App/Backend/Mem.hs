@@ -76,6 +76,8 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -86,7 +88,7 @@ import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
-import Wiki.Core.Export (Archive)
+import Wiki.Core.Export (Archive (homePage))
 import Wiki.Core.Id (BlobId (..), PageId, UserId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
@@ -333,6 +335,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
 
   -- Stored for the tab's life, like the wiki's settings. No provider is
   -- asked and no mail is sent: those need a server.
+  setHomePage = write . setHomePageIn
   serverSettings = query serverSettingsIn
   setServerSettings = write . setServerSettingsIn
   checkProvider name = query . checkProviderIn name
@@ -486,12 +489,10 @@ openMemWiki db seed = withRunInIO $ \run -> do
         | notOurs e.failure -> (seed,) <$> reseed (describe e)
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
       Right held -> case restore held of
-        -- Signed in as the demo's content says, as the prerendered page
-        -- shows it, and with the demo's server settings (its kinds of box
-        -- among them), which the store does not keep: they last for the
-        -- tab's life.
+        -- Signed in as the demo starts, with its server settings except
+        -- for the shared home page, which is kept in IndexedDB.
         Stored restored ->
-          let start = restored {current = seed.current, server = seed.server}
+          let start = restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}}
            in (start,) . (,Restored) . Just <$> storeHolding start held
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
@@ -549,7 +550,7 @@ readWholly = do
 
 -- | Replace the whole wiki with an archive's content, staying signed in as
 -- the same user if the archive has them, and keeping the server's settings
--- (an archive has none: they are the demo's own). If the wiki is saved, the
+-- except for a home page the archive includes. If the wiki is saved, the
 -- database gets the archive's records in one transaction first. If that
 -- fails, nothing changes, in the database or in memory, and the result is
 -- the reason.
@@ -558,7 +559,7 @@ importMemWiki archive = MemWiki $ do
   env <- ask
   liftIO . serially env $ do
     (current, server) <- (\st -> (st.current, st.server)) <$> readIORef env.wiki
-    let new = (fromArchive archive) {current, server}
+    let new = (fromArchive archive) {current, server = server {SS.homePage = fromMaybe server.homePage archive.homePage}}
     written <- case env.store of
       Nothing -> pure (Right ())
       Just store -> do

@@ -260,6 +260,7 @@ stubs =
           , revokeInvitation = \i -> if i == InvitationId "i1" then pure NoContent else refuse NotFound
           , unlinkIdentity = \u provider -> if u == UserId "u2" && provider == "github" then pure NoContent else refuse NotFound
           , removeSecondFactor = \u -> if u == UserId "u1" then pure NoContent else refuse NotFound
+          , setHomePage = pure
           , server = pure Sample.serverSettings
           , -- What was sent, each secret said to be set if it was given.
             setServer = \change -> pure (maybe NotSet (const Set) <$> change)
@@ -682,6 +683,7 @@ spec = describe "a server of the API's type" $ do
     it "reads them, and writes a change, at server" $ do
       links.admin.server `shouldBe` "api/v1/admin/server"
       answers (getAt links.admin.server) 200 Sample.serverSettings
+      answers (sendJson methodPut links.admin.setHomePage Sample.serverChange.homePage) 200 Sample.serverChange.homePage
       answers (sendJson methodPut links.admin.setServer Sample.serverChange) 200 ((\secret -> if isJust secret then Set else NotSet) <$> Sample.serverChange)
 
     it "checks a provider by its name, as set or as given" $ do

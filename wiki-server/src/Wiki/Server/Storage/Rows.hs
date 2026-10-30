@@ -214,7 +214,7 @@ import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
 import Wiki.Api.Admin (Invitation (..), UserQuery (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
-import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
@@ -1609,7 +1609,7 @@ grantCreateSpaces u = setGlobalGrant True GlobalGrant {subject = SubjectUser u, 
 -- out, and a mail server without a host counts as none.
 loadServerSettings :: (Backend be) => Db be Kept
 loadServerSettings = do
-  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "mail-"]
+  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "home-page", settingsLike "mail-"]
   providerRows <- runSelectReturningList (select (orderBy_ (\p -> (asc_ p.position, asc_ p.name)) (all_ wikiDb.sign_in_providers)))
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
@@ -1632,6 +1632,7 @@ loadServerSettings = do
           , Just kind <- [readKind p.kind]
           ]
       , assistantHosts = maybe [] (filter (not . T.null) . map T.strip . T.lines) (valueOf "assistant-hosts")
+      , homePage = fromMaybe defaultHomePage (valueOf "home-page" >>= decodeStrict' . encodeUtf8)
       , -- A value this program cannot read (a newer one's colour or icon)
         -- reads as no kinds rather than failing every page.
         boxes = fromMaybe [] (valueOf "boxes" >>= decodeStrict' . encodeUtf8)
@@ -1643,9 +1644,11 @@ storeServerSettings s = do
   deleteSettingsLike "public-url" []
   deleteSettingsLike "assistant-hosts" []
   deleteSettingsLike "boxes" []
+  deleteSettingsLike "home-page" []
   deleteSettingsLike "mail-" []
   let rows =
-        [("public-url", u.text) | Just u <- [s.publicUrl]]
+        [("home-page", decodeUtf8 (BSL.toStrict (encode s.homePage)))]
+          <> [("public-url", u.text) | Just u <- [s.publicUrl]]
           <> [("assistant-hosts", T.unlines s.assistantHosts) | not (null s.assistantHosts)]
           <> [("boxes", decodeUtf8 (BSL.toStrict (encode s.boxes))) | not (null s.boxes)]
           <> case s.mail of

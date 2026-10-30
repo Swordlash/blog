@@ -124,6 +124,7 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (AuditEntry (..), encodeAuditEntry, parseAuditEntry)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor, formerAuthorName)
+import Wiki.Core.HomePage (HomePage, checkHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
@@ -159,6 +160,9 @@ data Archive = Archive
   -- administrator is one: it has no record among the users. An import
   -- matches them by login with its own users.
   , blobs :: Map BlobId ByteString
+  , homePage :: Maybe HomePage
+  -- ^ The public front page, on whole-wiki exports. Missing on older or
+  -- space-only archives; importing those leaves the front page unchanged.
   , audit :: [AuditEntry]
   -- ^ The audit log, oldest first: who did what in the wiki's
   -- administration (WP4.10 of docs/PLAN.md).
@@ -215,6 +219,7 @@ archiveFiles a =
   , ("groups.json", FileBytes (encodeJson [encodeGroup g (Map.findWithDefault mempty g.id a.membership) | g <- a.groups]))
   , ("grants.json", FileBytes (encodeJson (encodeGrants a.grants)))
   ]
+    <> [("settings.json", FileBytes (encodeJson (object ["homePage" .= h]))) | Just h <- [a.homePage]]
     <> [("audit.json", FileBytes (encodeJson (map encodeAuditEntry a.audit))) | not (null a.audit)]
     <> concatMap (spaceFiles "") [s | s <- a.spaces, not (spaceUnderParent s)]
   where
@@ -499,6 +504,7 @@ readVersion1 manifest entries = do
           , threads = mempty
           , commentAuthors = []
           , blobs
+          , homePage = Nothing
           , audit
           }
       naming =
@@ -526,6 +532,11 @@ data Found
 -- @spaces\/@.
 readVersion2 :: Manifest -> Files -> Either Text Archive
 readVersion2 manifest entries = do
+  homePage <- case Map.lookup "settings.json" entries of
+    Nothing -> Right Nothing
+    Just bytes -> inFile "settings.json" $ do
+      value <- decodeJson (withObject "settings" (\o -> o .:? "homePage")) bytes
+      traverse checkHomePage value
   (users, groupsAndMembers, grants, audit) <- readPeople entries
   let byLogin = Map.fromList [(u.login, u) | u <- users]
       userIds = Set.fromList (map (\u -> u.id) users)
@@ -561,6 +572,7 @@ readVersion2 manifest entries = do
           , threads = Map.fromList [(p.id, ts) | (_, p, _, (_, ts), _) <- foundPages, not (null ts)]
           , commentAuthors = Map.elems (Map.fromList [(u.id, u) | (_, _, _, _, authors) <- foundPages, u <- authors])
           , blobs
+          , homePage
           , audit
           }
       located :: (Ord k) => [(k, Text)] -> k -> Text

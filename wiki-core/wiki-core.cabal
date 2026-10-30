@@ -73,6 +73,7 @@ library
       Wiki.Core.Diff
       Wiki.Core.Draft
       Wiki.Core.Export
+      Wiki.Core.HomePage
       Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast

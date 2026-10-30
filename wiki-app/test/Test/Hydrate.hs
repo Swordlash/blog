@@ -44,6 +44,8 @@ import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
+import Wiki.Api.ServerSettings (HomePage (..), defaultHomePage)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
@@ -77,6 +79,31 @@ spec = do
   demoPages
   serverPage
   servedPages
+  savedHomePage
+
+-- | Saved front page Markdown and switches agree with embedded session data.
+savedHomePage :: Spec
+savedHomePage = describe "the saved front page, adopted" $
+  for_ ["/", "/wiki/"] $ \base ->
+    it ("keeps every node and base-path link under " <> toS base) $ do
+      let home = defaultHomePage {title = "Knowledge", body = "Shared **welcome**.\n\n[[/docs]]", showSpaces = False, showRecent = False}
+          seed = demoState demoNow
+          custom = seed {M.server = seed.server {SS.homePage = home}}
+      transport <- apiOver [] custom
+      rendering <- newImmediateHttpEnv transport
+      container <- detached (fmap snd . startServed Build rendering base Home)
+      original <- nodesOf container
+      html <- markup container
+      html `shouldSatisfy` T.isInfixOf "Shared <strong>welcome</strong>."
+      html `shouldSatisfy` T.isInfixOf ("href=\"" <> base <> "s/docs/\"")
+      html `shouldNotSatisfy` T.isInfixOf "space-cards"
+      carried <- either (panic . ("the preload: " <>)) pure . decodePreload . encodePreload =<< cacheOf rendering
+      adopting <- newHttpEnvWith (Transport (\_ -> expectationFailure "hydration asked the network" $> Left "no network")) carried
+      (_, dispose) <- startServed Adopt adopting base Home container
+      markup container >>= (`shouldBe` html)
+      adopted <- nodesOf container
+      map fst adopted `shouldBe` map fst original
+      dispose
 
 -- At the root, and under the base path GitHub Pages serves the demo at
 -- (@\/blog\/@, the repository's name), which is in every link the page has:
@@ -310,7 +337,7 @@ apiOver providers st = do
     told <- notifications
     pure
       ( Map.fromList
-          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = []} :: Either WikiError SessionInfo))
+          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = [], homePage = me.homePage} :: Either WikiError SessionInfo))
               : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
               : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (endpointUrl (\e -> e.admin.directory), answerOf people)

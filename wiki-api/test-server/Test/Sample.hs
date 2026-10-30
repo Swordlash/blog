@@ -67,7 +67,7 @@ import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
-import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
+import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Core.Access (Access (..))
@@ -207,6 +207,7 @@ sessionInfo =
     , providers = [SignInProvider {name = "github", label = "GitHub"}]
     , exports = [Docx, Html, Pdf]
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
+    , homePage = defaultHomePage
     }
 
 -- | A user's account, as the administration sees it.
@@ -417,6 +418,7 @@ serverSettings =
         ]
     , assistantHosts = ["http://localhost:11434"]
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
+    , homePage = defaultHomePage
     }
 
 -- | A change of them: the mail's password kept (left out), one provider's
@@ -432,6 +434,7 @@ serverChange =
         ]
     , assistantHosts = ["https://openrouter.ai"]
     , boxes = [BoxKind {name = "aside", label = "By the way", colour = Grey, icon = NoIcon}]
+    , homePage = defaultHomePage
     }
 
 -- | The backups of a server that makes them every six hours, keeping a
