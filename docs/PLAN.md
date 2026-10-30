@@ -1848,22 +1848,39 @@ must be in before it is.
   document exports where the backend supports them. Disable comments and comment
   selection/loading for this page; ordinary pages retain their comments and all
   other existing behaviour. The home page remains shared, writable only by a
-  global administrator/operator, readable under the wiki's existing access rules.
+  global administrator/operator, readable under the wiki's existing access rules
+  with the explicit anonymous-home exception below.
   Keep the independent Spaces/Recently visited switches and shell navigation.
-  Existing WP5.34 titles, Markdown and switches survive upgrade automatically;
-  any required schema/data migration is part of this package, with no manual
-  reset. SQLite, PostgreSQL and the IndexedDB demo persist the page, its
+  Existing-home migration is optional: the owner explicitly allowed dropping
+  migration of the WP5.34 home if that simplifies the implementation. Keep cheap
+  compatibility already implemented, but do not build a legacy migration layer.
+  This exception concerns only the old home, never ordinary wiki data. SQLite,
+  PostgreSQL and the IndexedDB demo persist the page, its
   attachments, drafts and versions. Full-wiki archives preserve it; old and
   space-only archives retain their existing compatibility rules. Do not expose
-  homepage content through anonymous sessions of a closed wiki. Keep canonical
+  homepage content through anonymous sessions of a closed wiki unless the
+  administrator explicitly enables the exception below. Keep canonical
   home navigation, base paths and server/browser hydration consistent. Native
   and browser regressions cover reuse of the full editor, representative toolbar
   commands, attachments across reload, draft recovery/navigation protection,
   save/stay and save/close, switches, source/history/restore, the disabled comment
-  UI and unchanged ordinary-page comments, and existing-content upgrade. Update
+  UI and unchanged ordinary-page comments. Update
   docs and changelogs. Run and report the ordinary full verification gate on both
   database backends. Report the storage choice and any unavoidable home-specific
   restrictions before treating acceptance as met.
+  Extended by the owner during implementation: "zrób opcję 'pokaż dla
+  niezalogowanych' przy prywatnej wiki." Add an administrator option on the home
+  page, relevant when the wiki is private, "Show to signed-out visitors", off
+  by default and decoded as off for old settings. Enabled, it makes only the
+  home document, its attachments and ordinary reader features available to an
+  anonymous visitor; user spaces, other pages, drafts and administration remain
+  protected by Closed. Session access stays Closed; no global public-access
+  relaxation. Disabled again, it revokes anonymous access through rendered home
+  routes, session/preload data and direct document/attachment/export endpoints.
+  Anonymous writes stay forbidden. The public home must work in the initial
+  server HTML and after browser hydration, including beneath a base path. Tests
+  cover the default, opt-in, attachments, access to ordinary private content,
+  revocation and persistence/export compatibility.
 
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
@@ -2035,6 +2052,30 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   change in WP2.3 if wanted.
 
 ## Progress
+
+- **WP5.35 implementation (2026-10-30, `wp5.35-full-home-page`).** The root has a
+  real page in a real backing space, identified by storage-owned IDs in the
+  optional `HomeDocument` reference. Ordinary page, attachment, draft and version
+  storage and the existing Editor/Page/Source/History/Slides components serve it.
+  Comments are disabled for the root; Rename remains available. Its singleton
+  space/page cannot be moved, deleted, made a template or given children. Backing
+  records are absent from the space directory/search and use canonical root
+  routes. Full archives carry optional root versions and import into the one
+  destination root; equal versions deduplicate and differing timestamp collisions
+  move to a free microsecond. Ordinary archive records retain their semantics.
+  Homepage settings change options only, preserving current content and trusted
+  IDs, so stale settings cannot overwrite a newer page save. Page saves and
+  restores update compatibility metadata and its cache after commit.
+  The private-wiki option `showAnonymous`, off by default, exposes only the home
+  document's reader routes and its own attachments; the session stays Closed and
+  ordinary wiki data stays private. The administrator's checkbox names attachments,
+  source and history as public too. Exact ownership checks protect the early API
+  boundary as well as storage. The simple old-field initializer is retained: it
+  already worked and the owner allowed omitting it only if that simplified work;
+  no separate legacy migration layer or schema migration is added. Native tests
+  on SQLite/PostgreSQL, the unchanged memory bound, wasm build and the focused
+  home browser scenarios have passed. The full gate, smoke tests and external
+  review results are recorded in the pull request before completion.
 
 - **WP5.34 merged (2026-10-30, PR #116, `2499da3`); corrected by WP5.35.**
   The directory's "Edit home page" opens CodeMirror for a shared title and
