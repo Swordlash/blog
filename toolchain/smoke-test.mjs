@@ -1475,11 +1475,12 @@ try {
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));
-  if (process.env.SMOKE_DEBUG) {
-    for (const [i, context] of browser.contexts().entries()) {
-      for (const [j, p] of context.pages().entries()) {
+  for (const [i, context] of browser.contexts().entries()) {
+    for (const [j, p] of context.pages().entries()) {
+      console.error("open page", i, j, p.url(), await shown(p).catch(() => null));
+      console.error("navigation", await p.locator("#app .sidebar-space, #app .space-card-link, #app .leave-confirm").evaluateAll((nodes) => nodes.map((n) => ({ text: n.textContent.trim(), href: n.getAttribute("href") }))).catch(() => []));
+      if (process.env.SMOKE_DEBUG) {
         await p.screenshot({ path: `${process.env.SMOKE_DEBUG}/failure-${i}-${j}.png` }).catch(() => {});
-        console.error("open page", i, j, p.url());
       }
     }
   }
