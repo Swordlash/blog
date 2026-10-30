@@ -547,7 +547,8 @@ try {
   const front = await fetch(url("/"));
   assert.equal(front.status, 200);
   const frontHtml = await front.text();
-  assert.match(frontHtml, /<section class="directory">.*<h1>Spaces<\/h1>/s, "the front page, the directory of spaces, is not rendered");
+  assert.match(frontHtml, /class="wiki-home".*class="page-view".*<h1[^>]*>Spaces<\/h1>/s, "the front page's ordinary page view is not rendered");
+  assert.match(frontHtml, /<section class="directory">/s, "the front page's directory of spaces is not rendered");
   assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
   assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
   // The page's Content Security Policy (Wiki.Api.ContentPolicy): sent as a
