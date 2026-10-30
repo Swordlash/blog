@@ -1803,6 +1803,33 @@ must be in before it is.
   ("Your notifications as a feed"). Queued after WP5.30; not started until the owner says so (the same note).
 
 
+- **WP5.34 An editable wiki front page** (the owner, 2026-10-30).
+  Goal: let an administrator customise the shared front page with Markdown and
+  independently show or hide the Spaces and Recently visited sections. The owner
+  chose a shared Markdown page with optional sections, rather than a per-user layout
+  or a redirect to an existing page.
+  Acceptance: an administrator can open "Edit home page" from the front page,
+  edit its title and Markdown, preview the result, toggle Spaces and Recently
+  visited independently, and save or cancel. Saving persists across reloads on the
+  server (SQLite and PostgreSQL) and in the IndexedDB demo. Readers, including
+  anonymous readers allowed by the wiki's existing access rules, see the saved
+  front page; only a global administrator or the loopback operator may write it.
+  Defaults keep today's directory, including both sections. Turning off the Spaces
+  section must leave a discoverable way to browse spaces through the existing shell.
+  Markdown uses the existing renderer and editor, including supported islands and
+  custom boxes, with no HTML strings or new editor implementation. The custom
+  content is wiki-wide and public to every reader who may open the front page;
+  permission-filtered space links and recent spaces remain filtered as today.
+  Initial HTML and browser hydration agree; base paths work. Failed saves retain the
+  draft and show an error; cancel leaves stored settings unchanged. Older settings
+  without these fields keep the defaults. Full-wiki export/import preserves the
+  public configuration through optional archive metadata; older and space-only
+  archives leave the current front page unchanged. Server secrets are not exported.
+  Native tests cover defaults, serialisation,
+  persistence and write permissions; browser tests cover editing, preview, save,
+  cancel, section switches, reload and a reader without edit access. Update API/user
+  documentation and changelogs. The ordinary verification gate applies.
+
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
