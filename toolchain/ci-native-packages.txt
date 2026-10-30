@@ -1,0 +1,9 @@
+libpq-dev
+libsodium-dev
+libxml2-utils
+texlive-xetex
+lmodern
+texlive-science
+texlive-pictures
+texlive-plain-generic
+texlive-latex-recommended

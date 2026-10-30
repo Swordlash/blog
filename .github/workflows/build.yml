@@ -217,37 +217,24 @@ jobs:
         sh toolchain/bootstrap.sh toolchain
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
-    # libpq's development files, which postgresql-libpq (wiki-server's way
-    # to PostgreSQL) builds against, and libsodium's, which sel (under the
-    # second factor's codes) builds against. A self-hosted runner has them
-    # from the bootstrap.
-    - name: Install native system dependencies (hosted)
-      if: runner.environment == 'github-hosted'
+    # Cache downloads, not an extracted installation: apt/dpkg must still
+    # configure TeX and run its triggers on each fresh hosted runner.
+    - name: Identify the apt cache platform
+      id: apt-platform
       run: |
-        sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev libxml2-utils
-        xmllint --version
+        . /etc/os-release
+        echo "os=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
-    # The PDF export tests exercise XeLaTeX's file restrictions as well as
-    # page, space and Beamer output. An engine without these packages would
-    # leave those checks pending, so verify the complete setup after apt too.
-    - name: Install XeLaTeX and the PDF test packages when missing
-      run: |
-        tex_ready() {
-          command -v xelatex >/dev/null && command -v kpsewhich >/dev/null || return 1
-          xelatex --version >/dev/null || return 1
-          for file in lmodern.sty mhchem.sty tikz.sty soul.sty beamer.cls; do
-            tex_file=$(kpsewhich "$file") || return 1
-            [ -n "$tex_file" ] || return 1
-          done
-        }
-        if ! tex_ready; then
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            texlive-xetex lmodern texlive-science texlive-pictures \
-            texlive-plain-generic texlive-latex-recommended
-        fi
-        tex_ready
+    - name: Cache native apt archives
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/wiki-apt/*.deb
+        key: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-${{ steps.apt-platform.outputs.image }}-${{ hashFiles('toolchain/ci-native-packages.txt') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
+
+    - name: Install native system and PDF test dependencies
+      run: sh toolchain/ci-native-deps.sh
 
     - name: Update Cabal package index
       run: cabal update
@@ -384,7 +371,7 @@ jobs:
     - name: Clean the self-hosted workspace, keeping incremental builds
       if: runner.environment == 'self-hosted'
       run: |
-        git clean -ffdx -e /dist-newstyle/native/ -e /dist-newstyle/wasm/
+        git clean -ffdx -e /dist-newstyle/native/ -e /dist-newstyle/native-fast/ -e /dist-newstyle/wasm/
         rm -rf dist-newstyle/wasm/public
 
     - name: Pin the cabal directory
@@ -533,7 +520,7 @@ jobs:
         compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}
       with:
         path: |
-          dist-newstyle/native
+          dist-newstyle/native-fast
           dist-newstyle/wasm/build
           dist-newstyle/wasm/cache
           dist-newstyle/wasm/packagedb
@@ -562,7 +549,7 @@ jobs:
     # dependencies, with the arguments toolchain/bootstrap.sh's warm-up uses.
     - name: Install dependencies
       run: |
-        cabal build all --only-dependencies --project-file=cabal.project --builddir=dist-newstyle/native
+        cabal build all --only-dependencies --project-file=cabal-native-fast.project --builddir=dist-newstyle/native-fast
         sh toolchain/build-hspec-halogen.sh
         (
           # shellcheck source=/dev/null
@@ -614,10 +601,12 @@ jobs:
       run: npx playwright install --only-shell chromium
 
     - name: Test
+      env:
+        HSPEC_HALOGEN_JOBS: '2'
       run: npm run test-wasm
 
-    # The smoke test's server runs on SQLite, then again on PostgreSQL in
-    # the container toolchain/ci-postgres.sh starts, as the native job's
+    # Independent SQLite and PostgreSQL smoke runs can overlap. PostgreSQL
+    # uses the container toolchain/ci-postgres.sh starts, as the native job's
     # tests do; without Docker (a self-hosted runner) only on SQLite, and
     # it says so.
     - name: Start PostgreSQL for the smoke test
@@ -639,7 +628,7 @@ jobs:
 
     - name: Report incremental build sizes
       run: |
-        du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
+        du -sh dist-newstyle/native-fast | tee -a "$GITHUB_STEP_SUMMARY"
         du -sh --exclude=public dist-newstyle/wasm | tee -a "$GITHUB_STEP_SUMMARY"
 
     # The built page, kept with the run as the artifact `app`: the deploy job

@@ -1467,11 +1467,16 @@ the machine instead of being cached to GitHub; the built page is uploaded as the
 `native` and `format` run in parallel on hosted runners. When another run has a job
 on the machine, `plan` sends wasm to the hosted runners too (see above).
 
+The native hosted job also caches downloaded apt `.deb` archives, by Ubuntu
+release, architecture, runner image and package list. Apt still installs and
+configures them normally, including TeX's format generation. A warm cache
+avoids downloading the TeX packages again; it does not skip package setup.
+
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
-native programs and its wasm objects, interfaces and Cabal metadata. The keys
-include the runner environment, OS and architecture and compiler pins. The exact
-snapshot also records Cabal and source inputs, but the fallback crosses project,
+`dist-newstyle/native-fast` helpers and its wasm objects, interfaces and Cabal
+metadata. The keys include the runner environment, OS and architecture and
+compiler pins. The exact snapshot also records Cabal and source inputs, but the fallback crosses project,
 flag and Cabal changes: Cabal and GHC check which objects remain valid. Identical source reuses the
 same immutable snapshot rather than uploading another one. Every build and test
 still runs: Cabal resolves dependencies against the current package index, and
@@ -1482,7 +1487,7 @@ cache belongs to that pull request; after merging this workflow change, run it
 once on `main` with `runner: hosted` to seed the default-branch incremental caches
 that other branches can restore. The weekly hosted run keeps those caches warm.
 
-On the owner's runner, checkout retains only `dist-newstyle/native` and
+On the owner's runner, checkout retains `dist-newstyle/native`, `dist-newstyle/native-fast` and
 `dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
 ignored workspace files. Those build directories stay with the same local cabal
 store; they are never shared with hosted runners. The generated `wasm/public`
@@ -1539,7 +1544,7 @@ npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), then the server's build against a real wiki-server
+npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), and the server's build against a real wiki-server, in parallel
 npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
@@ -1627,6 +1632,24 @@ compiles every package at `-O2`, dependencies included, into its own build direc
 other. Its first run compiles every dependency again at `-O2`, `ghc-lib-parser`
 among them, and can take over an hour; later runs rebuild only what changed. CI
 and `build-wasm` keep the default optimisation.
+
+The native helpers used by wasm builds and smoke tests use
+`cabal-native-fast.project`: the wiki packages compile at `-O0`, while external
+dependencies keep their usual optimisation and can reuse the store. These
+objects live in `dist-newstyle/native-fast`; the normal native server build
+keeps `dist-newstyle/native` and its optimisation. `NATIVE_PROJECT` and
+`NATIVE_BUILDDIR` can select another helper build. The wasm build reports stage
+timings and no longer compresses assets merely to print their sizes; deployment
+still creates the `.br` files it serves.
+
+Browser specs mark the whole tree `parallel`, and CI sets
+`HSPEC_HALOGEN_JOBS=2` to use isolated Chromium contexts. The Content Security
+Policy check runs after each context's examples. Smoke programs use Node's
+test runner with two isolated processes (`SMOKE_JOBS` changes that limit).
+Demo, SQLite, PostgreSQL and passkeys have separate browser contexts, servers
+and data; dependent editing/history steps remain sequential within a program.
+The PostgreSQL run creates and drops its own databases, and reports a skip when
+`WIKI_TEST_DATABASE_URL` is absent.
 
 `serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always

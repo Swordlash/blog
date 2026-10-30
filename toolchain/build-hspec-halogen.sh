@@ -10,6 +10,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
+native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
+native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}
 
-cabal build -v0 hspec-halogen:exe:hspec-halogen --builddir=dist-newstyle/native >&2
-cabal list-bin -v0 hspec-halogen:exe:hspec-halogen --builddir=dist-newstyle/native
+cabal build -v0 hspec-halogen:exe:hspec-halogen --project-file="$native_project" --builddir="$native_build_dir" >&2
+cabal list-bin -v0 hspec-halogen:exe:hspec-halogen --project-file="$native_project" --builddir="$native_build_dir"

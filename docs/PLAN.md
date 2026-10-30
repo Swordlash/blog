@@ -2005,6 +2005,27 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   stopped rather than competing with the self-hosted CI. Those checks remain
   assigned to the pushed CI; no local full-gate success is claimed.
 
+- **CI follow-up (2026-10-30):** the owner merged haskell-halogen #94 and
+  requested its pin in the blog. Keep prerendering native: WASI would still
+  need its own build. Use a separate `-O0` native project/build directory for
+  wasm helpers and smoke servers; keep the normal native build's optimisation.
+  Remove the size-only compression report (34 seconds in CI). Cache apt's
+  downloaded archives while preserving dpkg setup and TeX format generation.
+  Run browser specs with one `parallel` at the root, checking CSP in each
+  context, and independent smoke programs concurrently through Node's test
+  runner. Keep stateful steps within a smoke program in order. Deadline
+  timers must not keep completed smoke processes alive. Continue
+  directly without subagents and update PR #115.
+  Verification: native and wasm builds/tests pass; the server has 1,859
+  examples with no failures, pending cases or uncaught libpq errors. Browser
+  specs pass in two contexts (150 and 149 examples). The 45 demo and three
+  server HTML files are byte-identical at `-O0` and `-O1`. A warm wasm build
+  takes 24.83 seconds. Smoke programs pass on SQLite and PostgreSQL: 199.01
+  seconds serial, 101.69 parallel, 89.63 after unref'ing deadline timers.
+  Failure checks verify the runner's exit status and database cleanup after
+  exceptions and explicit process exit. Format, actionlint and all 25 CI
+  script cases pass. Warm apt-cache timing still needs a seeded CI run.
+
 - **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
   PATH, the pinned toolchain, effective wasm environment and command-specific npm
   packages without installing. Five npm build/serve entry points share one guard;

@@ -66,7 +66,8 @@ await new Promise((ready, fail) => {
   server.stdout.on("data", read);
   server.stderr.on("data", read);
   server.on("exit", (code) => fail(new Error(`wiki-server exited (${code}):\n${log}`)));
-  setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout);
+  // Bound startup without keeping a completed smoke test process alive.
+  setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout).unref();
 });
 const origin = `http://localhost:${port}`;
 
