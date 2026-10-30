@@ -172,6 +172,8 @@ data State = State
   -- ^ A quote being commented on, in a new thread in the panel.
   , watching :: Maybe PageId
   -- ^ The page the live channel is watching.
+  , subscription :: Maybe H.SubscriptionId
+  -- ^ The listener for the current feed, removed when the feed is unavailable.
   , editors :: [Author]
   -- ^ Who has the page's editor open, as the live channel last said.
   , changed :: Bool
@@ -235,6 +237,7 @@ component =
               , selected = Nothing
               , quoting = Nothing
               , watching = Nothing
+              , subscription = Nothing
               , editors = []
               , changed = False
               , text
@@ -543,7 +546,7 @@ component =
       -- or it is loaded now. From now on its comments' events are
       -- received, and the comments are loaded if they were not with it.
       Initialize -> do
-        gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (Heard <$> f.heard)))
+        subscribeFeed
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment
           loaded -> do
@@ -558,14 +561,16 @@ component =
             gets (\st -> st.threads) >>= \case
               ThreadsLoading -> loadThreads
               _ -> pass
-      Finalize -> unwatchAll
+      Finalize -> disconnectFeed
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
       Receive input -> do
         old <- gets (\st -> st.input)
-        when (isJust old.feed && isNothing input.feed) unwatchAll
+        let gainedFeed = isNothing old.feed && isJust input.feed
+        when (isJust old.feed && isNothing input.feed) disconnectFeed
         modify (\st -> st {input})
+        when gainedFeed subscribeFeed
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path
         when elsewhere $ do
           unwatchAll
@@ -575,6 +580,7 @@ component =
           -- be someone else now.
           modify (\st -> st {mode = Viewing, problem = Nothing, changed = False, people = Body.noPeople})
           load
+        when gainedFeed watch
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
@@ -727,6 +733,19 @@ component =
           traverse_ f.unwatch st.watching
           traverse_ f.watch shown
         modify (\s -> s {watching = shown})
+
+    subscribeFeed :: H.HalogenM State Action Slots ViewOutput m ()
+    subscribeFeed = do
+      st <- get
+      when (isNothing st.subscription) $ for_ st.input.feed $ \f -> do
+        subscription <- H.subscribe (Heard <$> f.heard)
+        modify (\s -> s {subscription = Just subscription})
+
+    disconnectFeed :: H.HalogenM State Action Slots ViewOutput m ()
+    disconnectFeed = do
+      unwatchAll
+      gets (\st -> st.subscription) >>= traverse_ H.unsubscribe
+      modify (\st -> st {subscription = Nothing, editors = []})
 
     unwatchAll :: H.HalogenM State Action Slots ViewOutput m ()
     unwatchAll = do
