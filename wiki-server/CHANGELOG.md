@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Check PDF refusal even when XeLaTeX is installed; provision XML schema checks in CI.
+
+Password-reset tasks belong to a Ki scope inside the server's open storage
+(WP5.33). Shutdown cancels and joins every reset task before closing storage,
+and a closed scope refuses new tasks. An unexpected task exception reaches
+`withServerUsing`'s caller and stops the production server, so its supervisor
+can restart it. Ordinary SMTP failures remain handled and logged. The reset
+endpoint keeps its immediate, identical answer and asynchronous account
+lookup and delivery.
+
 A server that starts with no spaces installs the guide, the public space
 Guide at `/guide` with the wiki's documentation, in one transaction, by the
 same path as an import (WP5.29); `--no-guide` starts without it.

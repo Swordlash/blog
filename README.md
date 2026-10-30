@@ -1348,13 +1348,14 @@ test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`
 `wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
 and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
 
-The native job checks for XeLaTeX, Pandoc's Latin Modern style and the `mhchem`,
+The native job installs `libxml2-utils` and checks `xmllint` before testing, so
+Atom and RSS schema checks run in CI. It also checks for XeLaTeX, Pandoc's Latin Modern style and the `mhchem`,
 TikZ, `soul` and Beamer packages before testing. If any are missing, it installs
 `texlive-xetex`, `lmodern`, `texlive-science`, `texlive-pictures`, `texlive-plain-generic` and
 `texlive-latex-recommended`, then verifies the engine and required TeX files.
 A complete setup skips that installation. PDF export and TeX file-access tests
-therefore run in CI; only the test for refusing PDF without an engine may stay
-pending on a machine with XeLaTeX.
+therefore run in CI. The refusal test temporarily hides the engine from PATH,
+so it also runs on a machine with XeLaTeX.
 
 A fourth, `deploy`, publishes the demo on GitHub Pages, at
 <https://swordlash.github.io/blog/>, on a push to `main` once the three have
@@ -1446,6 +1447,11 @@ What remains:
 - `pull_request_target`, which runs with the repository's rights whatever the
   pull request's origin, is not used, and must not be without the same care.
 
+The pure core/API suites and their native HTML/API checks use Hspec `parallel`.
+Native pure suites use the available runtime capabilities (`-N`). Server tests remain sequential:
+they include tests of process-wide environment variables. Browser tests also
+keep their existing ordering.
+
 ### The toolchain on each runner
 
 On a hosted
@@ -1464,9 +1470,9 @@ on the machine, `plan` sends wasm to the hosted runners too (see above).
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
 native programs and its wasm objects, interfaces and Cabal metadata. The keys
-include the runner environment, OS and architecture, compiler pins and project
-configuration. A source change can restore an older compatible snapshot; changes
-to the toolchain or configuration start a new one. Identical source reuses the
+include the runner environment, OS and architecture and compiler pins. The exact
+snapshot also records Cabal and source inputs, but the fallback crosses project,
+flag and Cabal changes: Cabal and GHC check which objects remain valid. Identical source reuses the
 same immutable snapshot rather than uploading another one. Every build and test
 still runs: Cabal resolves dependencies against the current package index, and
 Cabal and GHC decide which modules need recompiling. If dependency versions change

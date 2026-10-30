@@ -1819,8 +1819,9 @@ must be in before it is.
   dependency store, so unchanged wiki modules need not compile on every run.
   Hosted jobs restore separate incremental build caches for `native` and `wasm`;
   the wasm cache includes its native prerender and test programs. Cache compatibility
-  includes the runner environment, compiler/toolchain pins and project configuration;
-  source changes can reuse a compatible older snapshot. The owner's runner retains
+  uses the runner platform/environment and compiler pins. Exact snapshots also
+  record Cabal and source inputs; project, flag, module and Cabal changes may
+  restore older objects, which Cabal/GHC validate themselves. The owner's runner retains
   or restores its build directories across checkout without retaining unrelated stale
   workspace files. Acceptance also requires a real warm-build check: unchanged
   modules are reused, a source edit still rebuilds its affected modules, and all
@@ -1972,6 +1973,37 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   change in WP2.3 if wanted.
 
 ## Progress
+
+- **Session consolidation (2026-10-30, owner override):** the owner requested direct
+  implementation without subagents, integrating their work into main and deleting
+  their worktrees. WP5.32 and WP5.33 are continued together in this checkout.
+  Review #115: incremental-cache fallback is bounded by compiler/platform, not
+  project, Cabal or npm configuration; Cabal/GHC validate reused objects themselves.
+  Install `libxml2-utils` for native schema checks. Try Hspec parallel first on the
+  independent core/API suites, retaining sequential process-environment and browser
+  tests. Exercise PDF refusal by hiding the engine in that sequential test rather
+  than reporting it pending. Profile the warm wasm build by stage before choosing
+  further build optimisations. The ordinary verification gate still applies.
+  Native verification on the consolidated tree passed: 1859 server examples on
+  SQLite/PostgreSQL, no pending cases and no uncaught SQL exceptions. The reset
+  regressions also passed ten repeated reset runs. An isolated 897-example core
+  comparison (seed 413) took 2.905 s with `-N1`, 1.858 s with `-N2`, 1.560 s with
+  `-N`; the native parallel suites use `-N` as requested.
+  The current haskell-halogen pin exposes `Halogen.Static` and the in-memory DOM
+  only natively. A standalone WASI prerenderer needs upstream backend support;
+  changing the wiki executable's target alone cannot reuse those modules.
+  The wasm script now builds the native prerenderer before sourcing the cross
+  environment: the latter also replaces `ar`/`clang` through PATH. Its size-only
+  report caches compression lengths by content and compression library versions.
+  All public output is still generated fresh.
+  The final native gate with `-N` passed, including all 1859 server examples
+  without pending cases or uncaught SQL errors. The first wasm build after this
+  checkout caught up with the pinned dependency revision passed: native prerender
+  build 0 s, wasm compilation 252 s, wasm-opt 10 s, bundle 4 s, prerender 1 s,
+  size report 31 s (initial measurement-cache fill). On the owner's instruction
+  to push for CI, the remaining local wasm tests/warm timing/smoke gate was
+  stopped rather than competing with the self-hosted CI. Those checks remain
+  assigned to the pushed CI; no local full-gate success is claimed.
 
 - **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
   PATH, the pinned toolchain, effective wasm environment and command-specific npm

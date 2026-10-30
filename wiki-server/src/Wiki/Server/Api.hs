@@ -75,6 +75,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import Ki qualified
 import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status500, status503)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai (Application, Middleware, Request (..), Response, mapResponseHeaders, responseFile, responseHeaders, responseLBS, responseStatus)
@@ -180,6 +181,10 @@ data Env = Env
   , resets :: Limiter
   -- ^ The requests for a password reset, every one counted by the address
   -- it came from.
+  , resetTasks :: Ki.Scope
+  -- ^ 'resetTasks' is the scope that owns password-reset work. Closing it
+  -- cancels and joins the tasks; an unexpected failure reaches the server's
+  -- caller.
   , pending :: PendingSignIns
   -- ^ The sign-ins waiting for a second factor's code.
   , logger :: Logger
@@ -939,7 +944,7 @@ handlers env caller =
           liftIO (currentMailer env) >>= \case
             Nothing -> refuse (ApiError.Invalid "This wiki does not send mail, so it cannot reset a password by mail: ask one of its administrators to set a new one for you.")
             Just m -> do
-              void . liftIO . forkIO $ do
+              void . liftIO . Ki.fork env.resetTasks $ do
                 mails <- Reset.requestReset env.storage now body.login
                 for_ mails $ \r -> do
                   login <- maybe (Login "") (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage r.user

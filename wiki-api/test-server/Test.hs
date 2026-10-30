@@ -4,10 +4,10 @@ module Main (main) where
 
 import Protolude
 import Test.Golden qualified as Golden
-import Test.Hspec (hspec)
+import Test.Hspec (hspec, parallel)
 import Test.Server qualified as Server
 
 main :: IO ()
-main = hspec $ do
+main = hspec . parallel $ do
   Golden.spec
   Server.spec

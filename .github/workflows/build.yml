@@ -221,9 +221,12 @@ jobs:
     # to PostgreSQL) builds against, and libsodium's, which sel (under the
     # second factor's codes) builds against. A self-hosted runner has them
     # from the bootstrap.
-    - name: Install libpq and libsodium (hosted)
+    - name: Install native system dependencies (hosted)
       if: runner.environment == 'github-hosted'
-      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev libxml2-utils
+        xmllint --version
 
     # The PDF export tests exercise XeLaTeX's file restrictions as well as
     # page, space and Beamer output. An engine without these packages would
@@ -275,13 +278,15 @@ jobs:
     # object and interface files. A source edit restores a compatible older
     # snapshot, then Cabal and GHC rebuild what changed. An exact hit still
     # runs every build and test step and creates no duplicate snapshot.
+    # Only the compiler/platform bounds the fallback: a new module or flag
+    # change does not discard all existing objects. Cabal validates its plan.
     - name: Cache native build directories
       uses: actions/cache@v5
       env:
-        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', '**/*.cabal', 'toolchain/*.sh', 'package*.json') }}
+        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}
       with:
         path: dist-newstyle/native
-        key: ${{ env.compatibility }}-${{ hashFiles('wiki-*/**', 'web/**') }}
+        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
         restore-keys: ${{ env.compatibility }}-
 
     # Cheap when the restored store already satisfies the plan, and it keeps
@@ -518,13 +523,14 @@ jobs:
     # Separate from native's snapshot: the wasm job also builds native
     # prerender, browser-test and smoke-test programs. Only Cabal's build
     # directories are cached; public/ is generated afresh by build-wasm.sh.
-    # There is no fallback across toolchain or project changes, or between
-    # hosted and self-hosted stores, whose registration paths differ.
+    # Project and Cabal changes can reuse objects from the same compilers;
+    # Cabal and GHC validate their own metadata and rebuild affected modules.
+    # Hosted and self-hosted stores have different registration paths.
     - name: Cache wasm and native build directories
       if: runner.environment == 'github-hosted'
       uses: actions/cache@v5
       env:
-        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v1-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}-${{ env.GHC_WASM_META_REV }}-${{ hashFiles('cabal*.project*', '**/*.cabal', 'toolchain/*.sh', 'package*.json') }}
+        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}
       with:
         path: |
           dist-newstyle/native
@@ -532,7 +538,7 @@ jobs:
           dist-newstyle/wasm/cache
           dist-newstyle/wasm/packagedb
           dist-newstyle/wasm/src
-        key: ${{ env.compatibility }}-${{ hashFiles('wiki-*/**', 'web/**') }}
+        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
         restore-keys: ${{ env.compatibility }}-
 
     # ghc-lib-parser (under haskell-halogen-th) runs alex and happy while it

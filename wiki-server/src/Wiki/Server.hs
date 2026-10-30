@@ -12,7 +12,9 @@
 -- On @SIGTERM@ (systemd stopping it) or @SIGINT@ the server stops
 -- accepting connections, gives the requests in progress up to ten seconds
 -- to finish, and closes the database, so that stopping never interrupts a
--- write.
+-- write. Password-reset tasks are then cancelled and joined before storage
+-- closes. An unexpected reset failure stops the server, as a failed listener
+-- does, so the process supervisor can restart it.
 module Wiki.Server
   ( -- * Running a server
     serve
@@ -27,6 +29,7 @@ import Control.Concurrent.Async qualified as Async
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import Ki qualified
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (..), Socket, SocketOption (..), SocketType (..), bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket, setSocketOption)
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
 import Protolude hiding (Handler)
@@ -99,6 +102,8 @@ withServer logger options = withServerUsing logger options smtpSend
 
 -- | 'withServer' with mail sent this way, whatever mail server the
 -- administration has set: what the tests run, with their own outbox.
+-- An unexpected password-reset task failure is thrown to the caller.
+-- All reset tasks stop before storage closes, on success or failure.
 withServerUsing :: Logger -> ServeOptions -> SendMail -> (Server -> IO a) -> IO a
 withServerUsing given raw sendMail action = do
   -- Every error logged is kept, the last twenty, for the administration's
@@ -133,7 +138,7 @@ withServerUsing given raw sendMail action = do
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
     $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
-    $ \storage -> do
+    $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage
       let notifier = newNotifier logger sendMail wake storage
       let env =
@@ -152,6 +157,7 @@ withServerUsing given raw sendMail action = do
               , exports
               , backups
               , resets
+              , resetTasks
               , pending
               , logger
               , errors

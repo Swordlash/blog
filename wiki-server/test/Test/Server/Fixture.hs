@@ -7,6 +7,7 @@ module Test.Server.Fixture
   , withRunning
   , withRunningAs
   , withDemoRunning
+  , withDemoRunningUsing
   , withDemoRestarted
   , site
   , template
@@ -149,6 +150,14 @@ template =
 withDemoRunning :: Backing -> (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
 withDemoRunning backing change = withRunningPrepared backing change demoPrepared
 
+-- | 'withDemoRunningUsing' runs a demo server with a decorated mail sender.
+-- A test can block or fail one delivery while other mail reaches the outbox.
+withDemoRunningUsing :: Backing -> (SendMail -> SendMail) -> (Running -> IO a) -> IO a
+withDemoRunningUsing backing sending test =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> withPlace backing (dir </> "data") $ \at -> do
+    staticDir <- prepared dir at demoPrepared
+    serveInUsing identity sending at staticDir test
+
 -- | The directories of a server whose build is the server's, over the
 -- demo's wiki.
 demoPrepared :: Place -> FilePath -> IO ()
@@ -200,7 +209,11 @@ prepared dir at prepare = do
 -- changed as given, while the test runs. The server's database is the
 -- place's: a test of a server on PostgreSQL is a test of PostgreSQL.
 serveIn :: (ServeOptions -> ServeOptions) -> Place -> FilePath -> (Running -> IO a) -> IO a
-serveIn change at staticDir test = do
+serveIn change = serveInUsing change identity
+
+-- | 'serveInUsing' runs a server with a test's options and mail sender.
+serveInUsing :: (ServeOptions -> ServeOptions) -> (SendMail -> SendMail) -> Place -> FilePath -> (Running -> IO a) -> IO a
+serveInUsing change sending at staticDir test = do
   let dataDir = at.dataDir
   logged <- newIORef []
   outbox <- newIORef []
@@ -217,7 +230,7 @@ serveIn change at staticDir test = do
               -- the guide turn it on ("Test.Server.Guide").
               guide = False
             }
-  withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (testMail outbox) $ \server ->
+  withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (sending (testMail outbox)) $ \server ->
     test
       Running
         { public = root server.publicAddress
