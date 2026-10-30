@@ -2001,6 +2001,26 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
 
 ## Progress
 
+- **WP5.34 prepared (2026-10-30, `wp5.34-editable-home`, awaiting review).**
+  The directory's "Edit home page" opens CodeMirror for a shared title and
+  Markdown body, a preview and independent Spaces/Recently visited switches.
+  `HomePage` lives in `wiki-core`; session data carries the public value, redacted
+  for anonymous visitors to a closed wiki. `PUT api/v1/admin/home-page` changes
+  only this configuration, with the existing global-administrator/operator check.
+  The server stores it in the settings row `home-page`; the demo keeps it in
+  IndexedDB. Defaults preserve the old directory. The existing body renderer
+  supplies islands and custom boxes; links start at the wiki root, with no
+  page attachments or inherited space macros. The shell keeps space navigation
+  when cards are hidden. Full archives carry optional public `settings.json`
+  metadata; old and space-only archives preserve the current front page. Import
+  publishes refreshed settings after commit under the writer lock, preserving
+  the storage's cache and scale tests. Native builds/tests and the wasm build
+  pass without warnings; the separate PostgreSQL run passes 920 examples with
+  no failures or pending cases. All five added browser scenarios pass, including
+  draft retention after a refused save, which required a stable error container
+  beside the CodeMirror host. The pull request records the full gate and external
+  review results; this package is not merged.
+
 - **Session consolidation (2026-10-30, owner override):** the owner requested direct
   implementation without subagents, integrating their work into main and deleting
   their worktrees. WP5.32 and WP5.33 are continued together in this checkout.
