@@ -126,6 +126,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
 import Wiki.Api.Links (archiveExportUrl)
+import Wiki.Api.ServerSettings (HomePage (title))
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
@@ -1465,6 +1466,7 @@ crumbs st = case st.route of
       _ -> []
 
 documentTitle :: State m -> Text
+documentTitle st | st.route == Home && not (isShut st) && st.session.homePage.title /= "Spaces" = st.session.homePage.title <> " · Wiki"
 documentTitle st = case reverse (map fst (crumbs st)) of
   -- A space that cannot be shown has no name to show either: the content
   -- in its place says why.

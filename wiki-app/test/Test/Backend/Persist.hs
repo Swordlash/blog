@@ -23,7 +23,8 @@ import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.Account (Account (..), NewAccount (..))
-import Wiki.Api.ServerSettings (noServerSettings)
+import Wiki.Api.ServerSettings (HomePage (..), ServerSettingsOf (..), defaultHomePage, noServerSettings)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Contract (As (..), Fixture (..))
@@ -85,7 +86,7 @@ lasting st =
     , newAccountsCreateSpaces = False
     , adminCreatesPasswordAccounts = True
     , invitations = mempty
-    , server = noServerSettings
+    , server = noServerSettings {SS.homePage = st.server.homePage}
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one
@@ -152,6 +153,16 @@ reopenedFixture useFixture = withFreshDatabase $ \db -> do
 
 spec :: Spec
 spec = describe "MemWiki kept in IndexedDB" $ do
+  it "persists the shared home page and defaults older metadata" $ withFreshDatabase $ \db -> do
+    opened <- open db
+    let home = defaultHomePage {title = "Welcome", body = "Kept.", showSpaces = False, showRecent = False}
+    _ <- runKept opened (setHomePage home) >>= ok
+    again <- open db
+    (\s -> s.homePage) <$> runKept again session `shouldReturn` home
+    let older = Map.adjust (Map.delete "homePage") metaStore (records seed)
+    case restore older of
+      Stored st -> st.server.homePage `shouldBe` defaultHomePage
+      other -> expectationFailure (show other)
   describe "records" $ do
     it "read back as the wiki they were made from" $
       case restore (records seed) of

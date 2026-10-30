@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Add `HomePage` to server settings and reader sessions, with directory defaults for older JSON. `PUT api/v1/admin/home-page` replaces only this public configuration. Closed-wiki anonymous sessions receive defaults instead of saved content.
+
 - Run independent API examples in parallel.
 
 The server's settings gain `boxes`, the kinds of box the administration

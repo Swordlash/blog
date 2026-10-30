@@ -78,7 +78,7 @@ import Wiki.Api.Import
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Export (Archive (..), readArchive, threadsAmong)
+import Wiki.Core.Export (Archive (..), encodeJson, readArchive, threadsAmong)
 import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
@@ -86,7 +86,8 @@ import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
-import Wiki.Server.Storage (Storage, administratorUser, reading, storageDataDir, writing)
+import Wiki.Server.Secret (Kept)
+import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
@@ -244,28 +245,31 @@ data Progress = Progress
 -- asking from an address (which the audit log records): either all of it
 -- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
-applyImport st actor address a choices = writing st $ do
-  (s, comments) <- mergeArchive (attachmentsDir (storageDataDir st)) a choices
-  insertAudit
-    Recorded
-      { actor
-      , action = "wiki.import"
-      , subject = Subject {kind = "wiki", id = Nothing, name = a.app}
-      , detail =
-          [ ("written", show a.createdAt)
-          , ("spaces made", show s.spacesCreated)
-          , ("spaces merged", show s.spacesMerged)
-          , ("pages made", show s.pagesCreated)
-          , ("pages replaced", show s.pagesReplaced)
-          , ("pages kept", show s.pagesKept)
-          , ("pages skipped", show s.pagesSkipped)
-          , ("attachments", show s.attachments)
-          , ("comments", show comments)
-          , ("log entries", show (length a.audit))
-          ]
-      , address
-      }
-  pure s
+applyImport st actor address a choices = fst <$> writingThen st transaction (cacheServerSettings st . snd)
+  where
+    transaction :: (Backend be) => Db be (ImportSummary, Kept)
+    transaction = do
+      (s, comments) <- mergeArchive (attachmentsDir (storageDataDir st)) a choices
+      insertAudit
+        Recorded
+          { actor
+          , action = "wiki.import"
+          , subject = Subject {kind = "wiki", id = Nothing, name = a.app}
+          , detail =
+              [ ("written", show a.createdAt)
+              , ("spaces made", show s.spacesCreated)
+              , ("spaces merged", show s.spacesMerged)
+              , ("pages made", show s.pagesCreated)
+              , ("pages replaced", show s.pagesReplaced)
+              , ("pages kept", show s.pagesKept)
+              , ("pages skipped", show s.pagesSkipped)
+              , ("attachments", show s.attachments)
+              , ("comments", show comments)
+              , ("log entries", show (length a.audit))
+              ]
+          , address
+          }
+      (s,) <$> loadServerSettings
 
 -- | Import an archive with these choices, inside a transaction the caller
 -- holds, with the attachments' bytes stored in this directory. The
@@ -281,6 +285,7 @@ mergeArchive blobs a choices = do
   let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
       discussions = threadsAmong (administratorUser : people) a
   done <- foldlM (importSpace blobs a discussions choices) start matches
+  for_ a.homePage $ \home -> storeSetting "home-page" (decodeUtf8 (encodeJson home))
   restoreAudit a.audit
   pure (done.summary, done.commentsBrought)
 

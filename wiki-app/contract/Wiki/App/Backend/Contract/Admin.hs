@@ -22,7 +22,8 @@ import Wiki.Api.Activity (Activity (..), firstPage)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), defaultSettings, pageOfDirectory)
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
 import Wiki.Api.Notifications (Notifications (..))
-import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
+import Wiki.Api.ServerSettings (HomePage (..), MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), defaultHomePage, noServerSettings)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -595,18 +596,35 @@ serverWith user password secret =
     , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing, secret}]
     , assistantHosts = []
     , boxes = []
+    , homePage = defaultHomePage
     }
 
 -- | Settings as they are, with no kinds of box.
 withoutBoxes :: ServerSettingsOf s -> ServerSettingsOf s
-withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = []}
+withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = [], homePage = defaultHomePage}
 
 -- | Settings with nothing set but these kinds of box.
 boxesOnly :: [BoxKind] -> ServerSettingsChange
-boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes}
+boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes, homePage = defaultHomePage}
 
-serverSide :: (MonadAdmin m) => SpecWith (Fixture m)
+serverSide :: (MonadAdmin m, MonadWiki m) => SpecWith (Fixture m)
 serverSide = describe "serverSettings and setServerSettings" $ do
+  it "changes only the home page and gives its public content to every reader" $ \(Fixture run) -> do
+    let home = HomePage {title = "Welcome", body = "Shared **content**.", showSpaces = False, showRecent = True}
+    previous <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
+    run admin (setHomePage home) >>= ok >>= (`shouldBe` home)
+    changed <- run admin serverSettings >>= ok
+    changed `shouldBe` previous {SS.homePage = home}
+    for_ [Anonymous, editor, reader, admin] $ \who -> run who session >>= (`shouldBe` home) . (\s -> s.homePage)
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who (setHomePage defaultHomePage) >>= (`shouldFailWith` Forbidden)
+      run who (setHomePage home {SS.title = " "}) >>= (`shouldFailWith` Forbidden)
+    run admin (setHomePage home {SS.title = " "}) >>= shouldBeInvalid
+    run admin session >>= (`shouldBe` home) . (\s -> s.homePage)
+    _ <- run admin (setWikiSettings closedWiki) >>= ok
+    run Anonymous session >>= (`shouldBe` defaultHomePage) . (\s -> s.homePage)
+    run admin session >>= (`shouldBe` home) . (\s -> s.homePage)
+
   -- The demo defines a kind of box, which the Markdown guide shows; a
   -- server has none until its administrator defines one.
   it "have nothing set at first but kinds of box, and are refused to whoever does not administer the wiki" $ \(Fixture run) -> do

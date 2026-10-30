@@ -33,6 +33,7 @@ import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant, assistantDatabase)
 import Wiki.App.Assistant.Keys (Keys (..), readKeys)
@@ -381,7 +382,7 @@ signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = []}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
 
 -- | A field of JSON, by its path of keys (an array's items by number).
 field :: [Text] -> Value -> Maybe Value

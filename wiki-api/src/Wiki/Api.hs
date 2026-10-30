@@ -99,7 +99,7 @@ import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Notifications (NotificationsApi (..))
 import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
-import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
+import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
@@ -488,6 +488,8 @@ data AdminApi mode = AdminApi
     -- returned.
     server :: mode :- "server" :> Get '[JSON] ServerSettings
   -- ^ @serverSettings@: the settings, with each secret shown only as whether it is set.
+  , setHomePage :: mode :- "home-page" :> ReqBody '[JSON] HomePage :> Put '[JSON] HomePage
+  -- ^ Replace the shared front page, leaving other server settings unchanged.
   , setServer :: mode :- "server" :> ReqBody '[JSON] ServerSettingsChange :> Put '[JSON] ServerSettings
   -- ^ @setServerSettings@: replace the settings, each secret kept,
   -- replaced or cleared; the response is the settings after the change.

@@ -24,6 +24,7 @@ import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
+import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
@@ -126,7 +127,7 @@ spec m = do
         serveDemo
         unsafeIOToPageM (evaluate =<< js_keep_reads)
         keptKinds `shouldReturn` "answers app pages"
-        answerWith "DELETE" "api/v1/session" 200 SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = []}
+        answerWith "DELETE" "api/v1/session" 200 SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
         ui <- startServer m Home
         find ui ".account .sign-out" >>= click
         _ <- find ui ".sign-in-toggle"

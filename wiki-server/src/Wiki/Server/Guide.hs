@@ -63,6 +63,7 @@ import Wiki.App.Guide (guideSlug, guideState)
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..), savedAs)
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -83,7 +84,7 @@ guideIn = find (\s -> isNothing s.parent && s.slug == guideSlug) . Map.elems
 -- | The guide as an archive of a wiki that holds it alone, written at this
 -- time by this server.
 guideArchive :: UTCTime -> Archive
-guideArchive now = toArchive now serverVersion (guideState now)
+guideArchive now = (toArchive now serverVersion (guideState now)) {Export.homePage = Nothing}
 
 --------------------------------------------------------------------------------
 -- What the wiki has

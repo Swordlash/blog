@@ -19,6 +19,7 @@ import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.ServerSettings (noServerSettings)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem
@@ -32,6 +33,7 @@ import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
 -- Qualified, for the fields of an archive, which the in-memory wiki has too.
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
+import Wiki.Core.HomePage (HomePage (..), defaultHomePage)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
@@ -147,7 +149,7 @@ withoutHistory st = imported {counter = nextCounter imported}
 
 -- | The files every archive has, besides its tree of spaces and pages.
 recordFiles :: [Text]
-recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json"]
+recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "settings.json"]
 
 -- | A wiki with its space grants in an order of their own: the store keeps
 -- them by space.
@@ -187,6 +189,14 @@ refused saying = \case
 
 spec :: Spec
 spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
+  it "exports and restores the public home page with a whole demo wiki" $ do
+    st <- edited
+    let home = defaultHomePage {title = "Welcome", body = "Shared.", showSpaces = False}
+        custom = st {server = st.server {SS.homePage = home}}
+    archive <- either (assertFailure . toS) pure (readArchive (filesOf (toArchive goldenTime "test" custom)))
+    archive.homePage `shouldBe` Just home
+    (fromArchive archive).server.homePage `shouldBe` home
+
   it "reads a wiki back from its zip file as it was, attachments' bytes and comments included" $ do
     st <- edited
     let zipped = zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))

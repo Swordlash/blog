@@ -102,6 +102,7 @@ module Wiki.App.Backend.Mem.State
 
     -- * The server's own settings
   , serverSettingsIn
+  , setHomePageIn
   , setServerSettingsIn
   , checkProviderIn
   , sendTestMailIn
@@ -164,7 +165,7 @@ import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Notifications (NotificationSettings (NotificationSettings), NotificationSettingsChange, Notifications (Notifications), ReadMark)
 import Wiki.Api.Notifications qualified as N
-import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkHomePage, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
@@ -718,7 +719,7 @@ repage space parent slug position p =
 -- box the settings define, which everyone's pages are rendered with.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes}
+  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.homePage = if st.grants.access == Closed then SS.defaultHomePage else st.server.homePage}
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -735,6 +736,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
         B.providers = []
       , -- Nor does it export: exporting needs pandoc, on the server.
         B.exports = []
+      , B.homePage = st.server.homePage
       , B.boxes = st.server.boxes
       }
 
@@ -1535,8 +1537,14 @@ removeSecondFactorIn u st = do
 --------------------------------------------------------------------------------
 -- The server's own settings
 
--- | The server's settings, with each secret shown only as whether it is
--- set.
+-- | Change only the public front page after checking global administration.
+setHomePageIn :: HomePage -> Write HomePage
+setHomePageIn change st = do
+  requireAdministrator st
+  new <- first Invalid (checkHomePage change)
+  pure (st {server = st.server {SS.homePage = new}}, new)
+
+-- | The server's settings, with each secret shown only as whether it is set.
 serverSettingsIn :: MemState -> Either WikiError ServerSettings
 serverSettingsIn st = do
   requireAdministrator st

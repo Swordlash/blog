@@ -14,6 +14,7 @@ import Test.Browser.Contents qualified as Contents
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Export qualified as Export
 import Test.Browser.History qualified as History
+import Test.Browser.HomePage qualified as HomePage
 import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
@@ -63,6 +64,7 @@ spec = do
 #if defined(wasm32_HOST_ARCH)
   describe "The page's Content Security Policy" (Policy.spec BrowserDOM)
   describe "Wiki.App.Shell" (Shell.spec BrowserDOM)
+  describe "The shared home page" (HomePage.spec BrowserDOM)
   describe "One space at a time" (Spaces.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)

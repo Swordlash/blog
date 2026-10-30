@@ -37,6 +37,9 @@ module Wiki.Api.ServerSettings
   , ProviderSettings
   , ProviderChange
   , noServerSettings
+  , HomePage (..)
+  , defaultHomePage
+  , checkHomePage
 
     -- * Secrets
   , SecretState (..)
@@ -83,6 +86,7 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Auth (callbackPath)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import Wiki.Core.HomePage (HomePage (..), checkHomePage, defaultHomePage)
 import Wiki.Core.Markdown.Box (BoxKind, checkBoxKinds)
 import Wiki.Core.Url (Url (..))
 
@@ -109,6 +113,8 @@ data ServerSettingsOf s = ServerSettings
   -- Ollama or LM Studio, or a proxy. The page's Content Security Policy
   -- allows them ("Wiki.Api.ContentPolicy"), and refuses every other
   -- address. Each is an origin, as 'parseAssistantHost' writes it.
+  , homePage :: HomePage
+  -- ^ The shared front page. This value contains no server secrets.
   , boxes :: [BoxKind]
   -- ^ The kinds of box, @> [!KIND]@, the administrator defined, with the
   -- label, colour and icon of each (WP5.29 of docs/PLAN.md;
@@ -136,6 +142,7 @@ instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
       <*> o .:? "mail"
       <*> o .: "providers"
       <*> o .:? "assistantHosts" .!= []
+      <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
 
 -- | 'MailSettingsOf': a mail server, reached over SMTP.
@@ -189,7 +196,7 @@ instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 -- server, no provider. A wiki created before these settings existed keeps
 -- working as before.
 noServerSettings :: ServerSettingsOf s
-noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = []}
+noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [], homePage = defaultHomePage}
 
 --------------------------------------------------------------------------------
 -- Secrets
@@ -224,6 +231,7 @@ applyChange keep old new =
     , mail = (\m -> withPassword (resolve (old.mail >>= \o -> o.password) m.password) m) <$> new.mail
     , providers = [withSecret (resolve (previous p.name) p.secret) p | p <- new.providers]
     , assistantHosts = new.assistantHosts
+    , homePage = new.homePage
     , boxes = new.boxes
     }
   where
@@ -356,7 +364,8 @@ checkServerSettings isSet s = do
     Left "The providers need the wiki's public address: they send people back below it."
   assistantHosts <- ordNub <$> traverse parseAssistantHost (filter (not . T.null . T.strip) s.assistantHosts)
   boxes <- checkBoxKinds s.boxes
-  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes}
+  homePage <- checkHomePage s.homePage
+  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes, homePage}
   where
     checkMail m = do
       let host = T.strip m.host

@@ -13,7 +13,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.Api.ServerSettings (noServerSettings)
+import Wiki.Api.ServerSettings (ServerSettingsOf (..), noServerSettings)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend.Mem.State (MemState (..), completeVersions, prepareSearch)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
@@ -42,6 +43,7 @@ toArchive createdAt app st =
     , -- The demo keeps no audit log (WP4.10 of docs/PLAN.md): its
       -- administration has one user, in this browser.
       audit = []
+    , homePage = Just st.server.homePage
     }
 
 -- | The wiki an archive holds, with nobody signed in. Its ids are the
@@ -85,7 +87,7 @@ fromArchive a =
           newAccountsCreateSpaces = False
         , adminCreatesPasswordAccounts = True
         , invitations = mempty
-        , server = noServerSettings
+        , server = noServerSettings {SS.homePage = fromMaybe noServerSettings.homePage a.homePage}
         , threads = threadsAmong a.users a
         , -- Nor notifications, watches or notification choices: they
           -- belong to each user, and are about the pages of the wiki that

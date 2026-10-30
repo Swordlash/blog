@@ -95,6 +95,8 @@ import Protolude
 import System.Mem.StableName (makeStableName)
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.ServerSettings (ServerSettingsOf (..), defaultHomePage)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend.Mem.State (Choices (..), MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Thread (..))
@@ -217,7 +219,8 @@ records st =
     ,
       ( metaStore
       , encoded
-          [ (counterKey, encodeJson st.counter)
+          [ ("homePage", encodeJson st.server.homePage)
+          , (counterKey, encodeJson st.counter)
           , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
           , (accountsKey, encodeJson (object ["disabled" .= st.disabled, "passwords" .= st.passwords, "removed" .= Map.mapKeys (\u -> u.text) st.removed]))
           ]
@@ -267,6 +270,7 @@ touched old new = do
   notices <- same (\x -> x.notices)
   watches <- same (\x -> x.watches)
   choices <- same (\x -> x.choices)
+  homePage <- same (\x -> x.server.homePage)
   pure
     [ store
     | (store, unchanged) <-
@@ -276,7 +280,7 @@ touched old new = do
         , (pagesStore, pages)
         , (attachmentsStore, blobs && unreadBlobs)
         , (grantsStore, grants)
-        , (metaStore, old.counter == new.counter && grants && disabled && passwords && removed)
+        , (metaStore, old.counter == new.counter && grants && disabled && passwords && removed && homePage)
         , (draftsStore, drafts)
         , (versionsStore, versions && unreadVersions)
         , (threadsStore, threads)
@@ -470,6 +474,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
   Nothing -> Unseeded
   Just counterBytes -> either Unreadable Stored $ do
     counter <- first (failure metaStore counterKey . toS) (eitherDecodeStrict' counterBytes :: Either [Char] Natural)
+    homePage <- maybe (Right defaultHomePage) (decoding metaStore "homePage" parseJSON) (Map.lookup "homePage" (holding metaStore))
     global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
     (disabled, passwords, removed) <- maybe (Right mempty) (decoding metaStore accountsKey parseAccounts) (Map.lookup accountsKey (holding metaStore))
     users <- keyed usersStore parseUser (\u -> u.id.text) UserId
@@ -497,7 +502,8 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         else Left (failure grantsStore key "has grants on another space")
     pure . completeVersions . prepareSearch $
       emptyState
-        { users
+        { server = emptyState.server {SS.homePage = homePage}
+        , users
         , groups = map fst groupsAndMembers
         , membership = map snd groupsAndMembers
         , spaces

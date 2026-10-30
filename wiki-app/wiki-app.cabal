@@ -345,6 +345,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Editor
       Test.Browser.Export
       Test.Browser.History
+      Test.Browser.HomePage
       Test.Browser.Http
       Test.Browser.Hydrate
       Test.Browser.Import

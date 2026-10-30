@@ -185,6 +185,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
+import Wiki.Api.ServerSettings (HomePage, defaultHomePage)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Blog (PostDetails)
@@ -257,6 +258,8 @@ data Session = Session
   -- none, because it has no pandoc. A server offers the PDF formats only if
   -- it found a TeX engine. Part of the session for the same reason as
   -- 'providers'.
+  , homePage :: HomePage
+  -- ^ The public configuration of the shared front page.
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administration defined, with their labels,
   -- colours and icons ("Wiki.Core.Markdown.Box"), which every page is
@@ -275,7 +278,7 @@ anonymous = anonymousIn Open
 -- wiki is open to ("Wiki.Core.Access"), so that the application knows
 -- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = []}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.

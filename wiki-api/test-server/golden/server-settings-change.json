@@ -10,6 +10,12 @@
       "name": "aside"
     }
   ],
+  "homePage": {
+    "body": "",
+    "showRecent": true,
+    "showSpaces": true,
+    "title": "Spaces"
+  },
   "mail": {
     "from": "wiki@example.org",
     "host": "mail.example.org",

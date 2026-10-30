@@ -20,6 +20,7 @@ manifest.json
 users.json
 groups.json
 grants.json
+settings.json                                optional public wiki configuration
 audit.json                                   only when the log has entries
 spaces/<slug>/space.json
 spaces/<slug>/icon.<ext>                     only for an icon that is an image
@@ -37,6 +38,7 @@ spaces/<slug>/spaces/<slug>/…                subspaces, the same shape, to any
 | `users.json`             | `[{"id", "login", "displayName"}]` |
 | `groups.json`            | `[{"id", "name", "members": [user id]}]` |
 | `grants.json`            | `{"global": [{"subject", "permission"}], "spaces": [{"space", "subject", "permission"}]}` |
+| `settings.json`          | `{"homePage":{"title","body","showSpaces","showRecent"}}`, optional public front page configuration |
 | `audit.json`             | `[{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}]`, the audit log, oldest first |
 | `space.json`             | `{"id", "name", "slug", "public", "createdAt", "mathMacros", "position", "subspaceOrder", "pageOrder", "homePage", "icon", "description", "blog"}`, from `mathMacros` on only when they are not the default |
 | `icon.<ext>`             | the image a space is pictured with, as its `icon`'s `file` names it; the extension is the image's type (`png`, `jpg`, `gif`, `webp`, `avif`) |
@@ -268,3 +270,14 @@ space's or a page's record kept there and one in an archive of version 1
 are one format; version 2's records are those without the fields the tree
 gives. The demo keeps each page's comment threads there too, in a record
 of its own that is older than `comments.json` and has another shape.
+
+## The shared home page
+
+A whole-wiki export includes `settings.json` with the shared front page's title,
+Markdown and section switches. It contains no mail passwords, sign-in provider
+secrets or other server settings. Importing this configuration replaces the shared
+front page along with the selected wiki content. An older archive or a space-only
+archive without `homePage` leaves the existing front page unchanged. Guide imports
+omit the shared configuration. A blank title or malformed configuration refuses
+the archive before anything is imported. This optional file needs no format version
+change.

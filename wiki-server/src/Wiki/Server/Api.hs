@@ -99,12 +99,12 @@ import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
-import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
@@ -596,6 +596,7 @@ handlers env caller =
           , unlinkIdentity = \u provider -> wiki (unlinkUserIdentity u provider) $> NoContent
           , removeSecondFactor = \u -> wiki (removeSecondFactor u) $> NoContent
           , server = wiki serverSettings
+          , setHomePage = wiki . setHomePage
           , setServer = wiki . setServerSettings
           , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
           , testMail = \body -> administrator >> liftIO (sendingTestMail env body) >>= either refuse pure
@@ -725,7 +726,7 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO availableFormats
       settings <- liftIO (readServerSettings env.storage)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes}
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, homePage = if shutOut s then defaultHomePage else settings.homePage}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.

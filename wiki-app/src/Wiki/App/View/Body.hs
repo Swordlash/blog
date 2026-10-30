@@ -44,6 +44,7 @@ module Wiki.App.View.Body
   , HasIslands
   , heading
   , article
+  , homeArticle
   , rendered
   , articleOf
   , commentBodies
@@ -242,25 +243,51 @@ slides place = Slides.renderDeck (options place)
 
 options :: (MonadIslands m, MonadUUID m, HasIslands slots) => Place -> Md.Options PageLink (H.ComponentSlot slots m action) action
 options place =
+  (islandOptions place.context (spaceMacros place.context.spaces place.space.id))
+    { Md.resolveLink = resolve place
+    , Md.pageHref = \(PageLink r fragment) -> Router.href place.context.router r <> fragment
+    , Md.resolveMention = \login ->
+        (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
+          <$> Map.lookup login place.people
+    }
+
+-- | The shared front page's Markdown. Paths start at the wiki root;
+-- attachments and inherited space macros have no meaning outside a space.
+homeArticle
+  :: (MonadIslands m, MonadUUID m, HasIslands slots)
+  => (ArticleLink -> action)
+  -> Context
+  -> Text
+  -> H.ComponentHTML action slots m
+homeArticle onLink ctx source = case Md.renderMarkdown opts source of
+  Right nodes -> [hh|<article class="page-body" {{ HE.preventingDefault (HE.handler' (EventType "click") (fmap onLink . articleLink ctx.router)) }}>{{ nodes }}</article>|]
+  Left e -> [hh|<div><p class="error" role="alert">This page's Markdown could not be read: {{ show e :: Text }}</p><pre>{{ source }}</pre></div>|]
+  where
+    opts =
+      (islandOptions ctx mempty)
+        { Md.resolveLink = \destination -> case Md.classifyDestination destination of
+            Md.ToAttachment _ -> Md.Unresolved
+            Md.ToUrl url -> Md.External url
+            Md.ToAnchor fragment -> Md.External ("#" <> fragment)
+            Md.ToPath _ -> maybe Md.Unresolved Md.Page (resolvePageLink ctx.spaces [] ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination))
+        , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
+        }
+
+-- | Renderer options shared by page bodies, previews and the front page.
+islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
+islandOptions ctx spaceDefined =
   Md.defaultOptions
     { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
     , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
     , Md.tikz = \k source -> island k (Islands.Tikz source)
-    , Md.resolveLink = resolve place
-    , Md.pageHref = \(PageLink r fragment) -> Router.href place.context.router r <> fragment
-    , Md.resolveMention = \login ->
-        (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
-          <$> Map.lookup login place.people
-    , Md.boxes = place.context.session.boxes
+    , Md.resolveLink = const Md.Unresolved
+    , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
+    , Md.boxes = ctx.session.boxes
     }
   where
     island key = HH.slot_ "island" key Islands.component
-    -- The macros of the space and its ancestors come before the page's
-    -- own: a page can define a macro again over its space's, as a subspace
-    -- can over its parent's.
-    spaceDefined = spaceMacros place.context.spaces place.space.id
 
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of

@@ -133,7 +133,7 @@ import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Activity (Activity, ActivityQuery)
 import Wiki.Api.Admin (Directory, Invitations, Invited, ServerStatus, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
-import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
+import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (GroupId, InvitationId, UserId)
 import Wiki.Core.User (Group, Password (..))
@@ -283,6 +283,11 @@ class (Monad m) => MonadAdmin m where
 
   -- | The server's own settings, with each secret shown only as whether it
   -- is set.
+  -- | Replace only the shared front page; requires global administration.
+  setHomePage :: HomePage -> m (Either WikiError HomePage)
+  default setHomePage :: (MonadTrans t, m ~ t n, MonadAdmin n) => HomePage -> m (Either WikiError HomePage)
+  setHomePage = lift . setHomePage
+
   serverSettings :: m (Either WikiError ServerSettings)
   default serverSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError ServerSettings)
   serverSettings = lift serverSettings

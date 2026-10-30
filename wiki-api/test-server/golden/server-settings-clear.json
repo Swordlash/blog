@@ -1,6 +1,12 @@
 {
   "assistantHosts": [],
   "boxes": [],
+  "homePage": {
+    "body": "",
+    "showRecent": true,
+    "showSpaces": true,
+    "title": "Spaces"
+  },
   "mail": null,
   "providers": [],
   "publicUrl": null
