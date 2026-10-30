@@ -1830,6 +1830,41 @@ must be in before it is.
   cancel, section switches, reload and a reader without edit access. Update API/user
   documentation and changelogs. The ordinary verification gate applies.
 
+- **WP5.35 The front page uses the ordinary page editor and features** (the owner,
+  2026-10-30, after merging WP5.34: "czemu nie moge edytować strony głównej normalnie
+  jak inne strony? ... Usuń tylko komentarze, całą resztę zostaw").
+  Goal: make the shared front page work like an ordinary wiki page, using the
+  existing full page editor and page features, with comments disabled for the
+  front page alone. WP5.34's separate reduced editor and its missing page
+  capabilities are not the intended product.
+  Acceptance: "Edit home page" opens the same editor component ordinary pages
+  use, with its complete toolbar, shortcuts, Save and Save and close, side-by-side
+  preview, attachments (selection, paste/drop, insertion, removal and persistence),
+  automatic drafts and recovery, unsaved-navigation protection, mention completion,
+  the writing assistant and tracked changes, and conflict handling. Reuse the
+  components and backend operations; do not copy the toolbar or build a second
+  editor. The front page keeps the ordinary page features, including source,
+  history and restore, Markdown rendering/islands, contents, presentation and
+  document exports where the backend supports them. Disable comments and comment
+  selection/loading for this page; ordinary pages retain their comments and all
+  other existing behaviour. The home page remains shared, writable only by a
+  global administrator/operator, readable under the wiki's existing access rules.
+  Keep the independent Spaces/Recently visited switches and shell navigation.
+  Existing WP5.34 titles, Markdown and switches survive upgrade automatically;
+  any required schema/data migration is part of this package, with no manual
+  reset. SQLite, PostgreSQL and the IndexedDB demo persist the page, its
+  attachments, drafts and versions. Full-wiki archives preserve it; old and
+  space-only archives retain their existing compatibility rules. Do not expose
+  homepage content through anonymous sessions of a closed wiki. Keep canonical
+  home navigation, base paths and server/browser hydration consistent. Native
+  and browser regressions cover reuse of the full editor, representative toolbar
+  commands, attachments across reload, draft recovery/navigation protection,
+  save/stay and save/close, switches, source/history/restore, the disabled comment
+  UI and unchanged ordinary-page comments, and existing-content upgrade. Update
+  docs and changelogs. Run and report the ordinary full verification gate on both
+  database backends. Report the storage choice and any unavoidable home-specific
+  restrictions before treating acceptance as met.
+
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
@@ -2001,7 +2036,7 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
 
 ## Progress
 
-- **WP5.34 prepared (2026-10-30, `wp5.34-editable-home`, awaiting review).**
+- **WP5.34 merged (2026-10-30, PR #116, `2499da3`); corrected by WP5.35.**
   The directory's "Edit home page" opens CodeMirror for a shared title and
   Markdown body, a preview and independent Spaces/Recently visited switches.
   `HomePage` lives in `wiki-core`; session data carries the public value, redacted
@@ -2019,7 +2054,10 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   no failures or pending cases. All five added browser scenarios pass, including
   draft retention after a refused save, which required a stable error container
   beside the CodeMirror host. The pull request records the full gate and external
-  review results; this package is not merged.
+  review results. The owner merged the package, tested it, and rejected the
+  reduced editor: the front page must retain ordinary page features, with only
+  comments removed. WP5.35 supersedes the limited editor and missing page
+  attachment context recorded above.
 
 - **Session consolidation (2026-10-30, owner override):** the owner requested direct
   implementation without subagents, integrating their work into main and deleting
