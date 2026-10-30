@@ -1,6 +1,3 @@
-libpq-dev
-libsodium-dev
-libxml2-utils
 texlive-xetex
 lmodern
 texlive-science

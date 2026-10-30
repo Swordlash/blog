@@ -8,6 +8,9 @@ SOURCE_DIR=${SOURCE%/*}
 NODE_REAL=$(command -v node)
 NPM_REAL=$(command -v npm)
 export NODE_REAL
+# Hosted setup may export its installation prefix. Discovery in these tests
+# must use the temporary HOME rather than the runner's real ghcup.
+unset GHCUP_INSTALL_BASE_PREFIX
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 REV=358ea50b8496a69da6ce375c0c58bc049dbcb92d
@@ -229,7 +232,7 @@ pass 'project Playwright must match the lockfile version'
 readiness_fixture() {
   fixture "$1"
   sysroot
-  cp "$SOURCE_DIR/check-npm-deps.cjs" "$SOURCE_DIR/npm-command.sh" "$SOURCE_DIR/serve-wasm.sh" "$case_dir/repo/toolchain/"
+  cp "$SOURCE_DIR/check-npm-deps.cjs" "$SOURCE_DIR/npm-command.sh" "$SOURCE_DIR/test-native.sh" "$SOURCE_DIR/serve-wasm.sh" "$case_dir/repo/toolchain/"
   cp "$SOURCE_DIR/../package.json" "$case_dir/repo/package.json"
   mkdir -p "$HOME/.ghc-wasm/compiler/bin" "$case_dir/repo/node_modules/.bin"
   mv "$case_dir/bin/wasm32-wasi-ghc" "$HOME/.ghc-wasm/compiler/bin/wasm32-wasi-ghc"
@@ -445,6 +448,12 @@ rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME
 bootstrap ready build-wasm >"$case_dir/wasm-no-browser"
 assert_contains "$case_dir/wasm-no-browser" 'ready for build-wasm'
 rm "$case_dir/bin/alex" "$case_dir/bin/happy" "$case_dir/bin/node" "$case_dir/bin/npm"
+# The host may already have Node 24 in /usr/bin. An explicit old mock
+# makes this case independent of the machine running the test.
+ln -s tool "$case_dir/bin/node"
+ln -s tool "$case_dir/bin/npm"
+NODE_REPORT=v18.0.0
+export NODE_REPORT
 rm -r "$HOME/.ghc-wasm"
 for command in build-native test-native; do
   bootstrap ready "$command" >"$case_dir/$command"

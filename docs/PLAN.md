@@ -2049,6 +2049,25 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   one admin test; unmount the first before restoring the second. Both browser
   contexts pass (150 and 149 examples).
 
+- **Native CI groups (2026-10-30):** the owner requested another reduction
+  after CI #320's native Test step still took 239 seconds. Use three hosted
+  matrix jobs: unit (all other suites and the server's database-free examples),
+  SQLite, and PostgreSQL. Each job has its own CPU and memory; all restore the
+  same compiler-bounded caches. Only unit saves the Cabal store/build snapshot,
+  and only postgres saves apt archives. Unit skips TeX and neither unit nor
+  SQLite starts PostgreSQL. Keep the default local native command unchanged.
+  `WIKI_TEST_GROUP=unit|sqlite|postgres` selects a group; invalid groups fail,
+  and explicit postgres requires a URL instead of passing with pending cases.
+  Compare the groups' complete Hspec paths against `all`: currently 33 + 912 +
+  914 = 1,859 server examples, with no omissions or duplicates.
+  Validation: the three real groups pass locally in 39.80, 60.31 and 110.71
+  seconds; the unchanged full command passes in 225.75 seconds. Native and
+  wasm builds/tests pass without compiler warnings, and both browser contexts
+  pass (150 and 149 examples). Group manifests/default behavior, invalid groups,
+  missing/blank PostgreSQL URLs, argument forwarding and failure propagation
+  pass. Base/full apt profiles, 20 bootstrap regressions (including an injected
+  hosted ghcup prefix), all 25 CI script cases, format and actionlint pass.
+
 - **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
   PATH, the pinned toolchain, effective wasm environment and command-specific npm
   packages without installing. Five npm build/serve entry points share one guard;

@@ -54,7 +54,7 @@ permissions:
   contents: read
 
 # Only wasm may use the owner's runner. native, format and deploy always
-# run on ubuntu-latest; the three build jobs run in parallel after plan.
+# run on ubuntu-latest; the native groups, wasm and format run in parallel after plan.
 # The first job, `plan`, runs on GitHub's hosted runners for every run
 # (seconds, and free on a public repository) and hands its runner choice
 # only to wasm's `runs-on`. It goes by trust first, by one expression
@@ -179,7 +179,14 @@ jobs:
   native:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
+    name: native (${{ matrix.group }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [unit, sqlite, postgres]
+    env:
+      WIKI_TEST_GROUP: ${{ matrix.group }}
 
     steps:
     - name: Checkout code
@@ -209,32 +216,35 @@ jobs:
       with:
         node-version: ${{ env.NODE_VERSION }}
 
-    # The whole toolchain, into the runner user's home, and a no-op once it is
-    # there; then its ghcup and Node directories on PATH for the later steps.
-    - name: Install the toolchain (self-hosted)
-      if: runner.environment == 'self-hosted'
-      run: |
-        sh toolchain/bootstrap.sh toolchain
-        sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
-
     # Cache downloads, not an extracted installation: apt/dpkg must still
     # configure TeX and run its triggers on each fresh hosted runner.
     - name: Identify the apt cache platform
+      if: matrix.group != 'unit'
       id: apt-platform
       run: |
         . /etc/os-release
         echo "os=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
         echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
-    - name: Cache native apt archives
-      uses: actions/cache@v5
+    - name: Restore native apt archives
+      if: matrix.group != 'unit'
+      uses: actions/cache/restore@v5
+      id: apt-cache
       with:
         path: ~/.cache/wiki-apt/*.deb
-        key: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-${{ steps.apt-platform.outputs.image }}-${{ hashFiles('toolchain/ci-native-packages.txt') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-${{ steps.apt-platform.outputs.image }}-${{ hashFiles('toolchain/ci-native-*-packages.txt') }}
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
 
-    - name: Install native system and PDF test dependencies
-      run: sh toolchain/ci-native-deps.sh
+    - name: Install native test dependencies
+      run: sh toolchain/ci-native-deps.sh ${{ matrix.group == 'unit' && 'base' || 'full' }}
+
+    # One writer for each shared cache; both database jobs read the same apt archives.
+    - name: Save native apt archives
+      if: matrix.group == 'postgres' && steps.apt-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ~/.cache/wiki-apt/*.deb
+        key: ${{ steps.apt-cache.outputs.cache-primary-key }}
 
     - name: Update Cabal package index
       run: cabal update
@@ -267,8 +277,9 @@ jobs:
     # runs every build and test step and creates no duplicate snapshot.
     # Only the compiler/platform bounds the fallback: a new module or flag
     # change does not discard all existing objects. Cabal validates its plan.
-    - name: Cache native build directories
-      uses: actions/cache@v5
+    - name: Restore native build directories
+      uses: actions/cache/restore@v5
+      id: native-build
       env:
         compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}
       with:
@@ -284,7 +295,7 @@ jobs:
     # Before the build, so a run that fails on our own code still banks the
     # dependencies it compiled.
     - name: Save cached dependencies
-      if: runner.environment == 'github-hosted'
+      if: matrix.group == 'unit'
       uses: actions/cache/save@v5
       with:
         path: ${{ steps.setup.outputs.cabal-store }}
@@ -293,30 +304,36 @@ jobs:
     - name: Build
       run: npm run build-native
 
-    # The server's tests run once on SQLite and once on PostgreSQL
-    # (wiki-server/test/Test/Database.hs). PostgreSQL is postgres:17 in a
-    # container the step starts (toolchain/ci-postgres.sh), with a port of
-    # its own on 127.0.0.1 and the container's own pg_dump; not a `services:`
-    # container, which a self-hosted runner without Docker could not start
-    # at all. A hosted runner has Docker, and the step fails without it.
-    # Without Docker, a self-hosted runner's tests start a PostgreSQL cluster
-    # of their own when initdb and pg_ctl are installed, and otherwise
-    # report the PostgreSQL half as pending, not passed.
-    - name: Start PostgreSQL for the tests
+    # Build all native components once per job; the unit job publishes the
+    # complete snapshot even if a later test fails. Database jobs only read it.
+    - name: Save native build directories
+      if: matrix.group == 'unit' && steps.native-build.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: dist-newstyle/native
+        key: ${{ steps.native-build.outputs.cache-primary-key }}
+
+    - name: Check native test groups cover the full suite
+      if: matrix.group == 'unit'
       run: |
-        if vars=$(sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin"); then
-          printf '%s\n' "$vars" >> "$GITHUB_ENV"
-        elif [ "$RUNNER_ENVIRONMENT" = github-hosted ]; then
-          exit 1
-        else
-          echo "::warning::Docker does not answer on this runner: the server's PostgreSQL tests use a cluster of their own if initdb and pg_ctl are installed, and are pending otherwise."
-        fi
+        server_test=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)
+        node toolchain/test-native-groups.mjs "$server_test"
+
+    - name: Test bootstrap scripts
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-bootstrap.sh
+
+    # The two database groups use separate hosted VMs. Only PostgreSQL
+    # needs a container; unit and SQLite never start or discover a cluster.
+    - name: Start PostgreSQL for the tests
+      if: matrix.group == 'postgres'
+      run: sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin" >> "$GITHUB_ENV"
 
     - name: Test
       run: npm run test-native
 
     - name: Stop PostgreSQL
-      if: always()
+      if: always() && matrix.group == 'postgres'
       run: sh toolchain/ci-postgres.sh stop
 
     # The deploy scripts against fakes of systemd, ufw, sudo, tailscale (and
@@ -326,22 +343,27 @@ jobs:
     # one the Build step made (cabal list-bin in dist-newstyle/native). About
     # two minutes.
     - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
+      if: matrix.group == 'unit'
       run: sh toolchain/test-deploy-local.sh
 
     # The plan job's scripts, against a fake GitHub API: a second each.
     - name: Test ci-already-tested.sh
+      if: matrix.group == 'unit'
       run: sh toolchain/test-ci-already-tested.sh
 
     - name: Test ci-pick-runner.sh
+      if: matrix.group == 'unit'
       run: sh toolchain/test-ci-pick-runner.sh
 
     # The README's screenshots are taken by hand (npm run screenshots, which
     # needs a wasm build and Chromium), so nothing in CI runs the script:
     # parsing it at least catches a syntax error before someone next needs it.
     - name: Check screenshots.mjs parses
+      if: matrix.group == 'unit'
       run: node --check toolchain/screenshots.mjs
 
     - name: Report incremental build size
+      if: matrix.group == 'unit'
       run: du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
 
   wasm:

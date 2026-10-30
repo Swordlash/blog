@@ -38,7 +38,7 @@ fi
 sh toolchain/bootstrap.sh ready "$command"
 case $command in
   build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
-  test-native) exec cabal test all --builddir=dist-newstyle/native "$@" ;;
+  test-native) exec sh toolchain/test-native.sh "$@" ;;
   build-wasm) exec sh toolchain/build-wasm.sh "$@" ;;
   # The -O2 production build, in a build directory of its own so that it and
   # the everyday build never invalidate each other (cabal-wasm-opt.project).

@@ -1467,7 +1467,16 @@ the machine instead of being cached to GitHub; the built page is uploaded as the
 `native` and `format` run in parallel on hosted runners. When another run has a job
 on the machine, `plan` sends wasm to the hosted runners too (see above).
 
-The native hosted job also caches downloaded apt `.deb` archives, by Ubuntu
+Native CI has three independent hosted jobs: `unit`, `sqlite` and `postgres`.
+The unit job runs every other native suite and the server's database-free
+examples. The database jobs run only their own server backing. A dry-run
+compares the groups' full spec paths, including duplicate descriptions, against
+the unsplit suite. Only PostgreSQL starts a container; unit installs the small
+system dependencies and xmllint, while the database jobs also install TeX.
+All three restore the same dependency and build caches; unit saves the Cabal
+store and complete build snapshot, and postgres saves the apt archives.
+
+The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
 configures them normally, including TeX's format generation. A warm cache
 avoids downloading the TeX packages again; it does not skip package setup.
@@ -1655,6 +1664,20 @@ The PostgreSQL run creates and drops its own databases, and reports a skip when
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always
 build for wasm through the `toolchain/` scripts, which pass the cross compiler to
 cabal explicitly and keep the wasm tools' `CC` away from native builds.
+
+Local `npm run test-native` still runs every native test on both databases.
+`WIKI_TEST_GROUP` selects the same groups CI uses:
+
+```sh
+WIKI_TEST_GROUP=unit npm run test-native     # other suites and database-free server tests
+WIKI_TEST_GROUP=sqlite npm run test-native   # server tests on SQLite only
+WIKI_TEST_GROUP=postgres npm run test-native # server tests on PostgreSQL only
+```
+
+The postgres group requires `WIKI_TEST_DATABASE_URL`; a missing server URL or
+unknown group fails rather than silently skipping tests. The default `all`
+keeps local PostgreSQL discovery and the usual explicit pending results when
+PostgreSQL is unavailable.
 
 Native application and server specs mark the whole tree `parallel` and run four
 examples at a time by default. Their threaded RTS uses all cores (`-N`) and
