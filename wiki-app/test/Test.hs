@@ -9,7 +9,8 @@ import Test.Blog qualified as Blog
 import Test.Demo qualified as Demo
 import Test.Export qualified as Export
 import Test.Guide qualified as Guide
-import Test.Hspec (hspec)
+import Test.Hspec (around_, parallel)
+import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
 import Test.Hydrate qualified as Hydrate
 import Test.Import qualified as Import
 import Test.Islands qualified as Islands
@@ -25,25 +26,33 @@ import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 
 main :: IO ()
-main = hspec $ do
-  Islands.spec
-  Mem.spec
-  Http.spec
-  Persist.spec
-  Demo.spec
-  Guide.spec
-  Export.spec
-  Route.spec
-  Link.spec
-  Live.spec
-  Shell.spec
-  Server.spec
-  Passwords.spec
-  Blog.spec
-  Hydrate.spec
-  Import.spec
-  Manifest.spec
-  Policy.spec
-  Licence.spec
-  Readme.spec
-  Assistant.spec
+main = do
+  -- Most components use detached documents and independent backends. The
+  -- page-size and assistant examples need the process's native stores alone.
+  permits <- newQSemN maxBound
+  let holding n = bracket_ (waitQSemN permits n) (signalQSemN permits n)
+  hspecWith defaultConfig {configConcurrentJobs = Just 4} . parallel $ do
+    around_ (holding 1) $ do
+      Islands.spec
+      Mem.spec
+      Http.spec
+      Persist.spec
+      Demo.spec
+      Guide.spec
+      Export.spec
+      Route.spec
+      Link.spec
+      Live.spec
+      Shell.spec
+      Server.spec
+      Passwords.spec
+      Blog.spec
+      Hydrate.spec
+      Import.spec
+      Manifest.spec
+      Policy.spec
+      Licence.spec
+      Readme.spec
+    around_ (holding maxBound) $ do
+      Hydrate.storageSpec
+      Assistant.spec

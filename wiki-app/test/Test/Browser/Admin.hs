@@ -123,6 +123,8 @@ spec m = do
       -- Every word, in either: Person 4, 14, 24, 34, 40 to 49 and 54.
       eventually (find ui ".users-count" >>= (`shouldHaveText` "1–15 of 15"))
       eventually (locationHash `shouldReturn` "#/admin/users/?q=Person%204")
+      -- The restored app replaces this one: both routers use location.hash.
+      unmount ui
       -- A page of users kept in the address comes back as it was.
       ui2 <- startChanged m (withUsers 60) (Just "user-admin") (Admin (Users (UserListing "person" 2 Everyone)))
       eventually (find ui2 ".users-count" >>= (`shouldHaveText` "26–50 of 60"))

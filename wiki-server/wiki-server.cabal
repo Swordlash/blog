@@ -266,8 +266,9 @@ test-suite wiki-server-test
   hs-source-dirs:   test
   main-is:          Test.hs
   -- The tests start servers, which need the threaded runtime as the
-  -- executable does.
-  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
+  -- executable does. Large SQL fixtures benefit from a 16 MiB nursery
+  -- per capability when several examples allocate at once.
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N -A16m"
 
   if arch(wasm32)
     buildable: False

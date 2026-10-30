@@ -1656,6 +1656,16 @@ not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; alwa
 build for wasm through the `toolchain/` scripts, which pass the cross compiler to
 cabal explicitly and keep the wasm tools' `CC` away from native builds.
 
+Native application and server specs mark the whole tree `parallel` and run four
+examples at a time by default. Their threaded RTS uses all cores (`-N`) and
+a 16 MiB allocation area per capability (`-A16m`) to reduce GC during large
+JSON, DOM and SQL fixtures. Hspec's `--jobs` changes the number of concurrent
+examples. Each server fixture has its own database, directory and ports. PDF and password-environment checks take
+exclusive access to the process environment; the application's stored page-size
+and assistant settings checks have exclusive access to the native stores.
+IndexedDB contract fixtures delete their database after each example.
+Hspec's `sequential` alone would not keep other parallel examples away from these global settings.
+
 The test suites are hspec, each `main-is: Test.hs` aggregating `Test.*` modules; a
 new test module goes into the suite's `other-modules` and `test/Test.hs`. Run one
 suite, or one test, with hspec's `--match`:

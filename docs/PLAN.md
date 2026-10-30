@@ -2026,6 +2026,29 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   exceptions and explicit process exit. Format, actionlint and all 25 CI
   script cases pass. Warm apt-cache timing still needs a seeded CI run.
 
+- **Native test parallelism (2026-10-30):** CI #319 passed, but its server
+  suite took 286 seconds and its application suite 107 seconds. Both were
+  sequential; the application's test executable also lacked the threaded RTS.
+  Run their whole spec trees in parallel, with four concurrent examples by
+  default and `-N -A16m` for the RTS. The 16 MiB allocation area per
+  capability reduces collections in the large JSON/DOM/SQL fixtures. Eight
+  workers passed a randomized run but did not improve server time; keep four.
+  Every independent example takes one permit from a `QSemN`; process-wide examples take all permits. Hspec's `sequential`
+  does not exclude other concurrent examples. Keep PDF checks (which set TeX
+  limits and sometimes hide xelatex through PATH), the inherited PGPASSWORD
+  check, and the native page-size and assistant settings checks exclusive.
+  IndexedDB contract fixtures delete their private databases after each example
+  so the process-wide map does not retain every example's records. Fixtures
+  keep their own database, directory and ports. Keep all examples and backends.
+  Validation: native and wasm builds/tests and formatting pass. The full native
+  command takes 218.42 seconds locally, down from 371.92 on the same machine;
+  server 357.58 to 212.09 seconds, application 103.25 to 75.15. All 1,859
+  server and 1,402 application examples remain, with no failures or pending
+  cases. The shared assistant database passes 100 examples over 20 seeds at
+  16 workers. The wasm gate also exposed two apps sharing location.hash in
+  one admin test; unmount the first before restoring the second. Both browser
+  contexts pass (150 and 149 examples).
+
 - **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
   PATH, the pinned toolchain, effective wasm environment and command-specific npm
   packages without installing. Five npm build/serve entry points share one guard;

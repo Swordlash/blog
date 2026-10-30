@@ -272,6 +272,8 @@ test-suite wiki-app-test
   if arch(wasm32)
     buildable: False
   else
+    -- Parallel JSON and DOM fixtures need fewer global garbage collections.
+    ghc-options: -threaded -rtsopts "-with-rtsopts=-N -A16m"
     other-modules:
         Test.Assistant
         Test.Backend.Http

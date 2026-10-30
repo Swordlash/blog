@@ -6,7 +6,7 @@
 -- the demo's wiki, checked for its media type, its name and what its file
 -- holds; who may export what; one export at a time each; and the PDFs, where
 -- the machine has @xelatex@ (skipped, saying so, where it has not).
-module Test.Server.Export (spec) where
+module Test.Server.Export (spec, environmentSpec) where
 
 import Codec.Compression.Zlib qualified as Zlib
 import Data.ByteString qualified as BS
@@ -53,7 +53,11 @@ spec backing = describe "export with pandoc" $ do
   spaces
   overHttp backing
   oneAtATimeEach
-  pdfs backing
+
+-- | PDF checks require exclusive access to the process environment:
+-- exports set TeX's limits, and one example hides xelatex through PATH.
+environmentSpec :: Backing -> Spec
+environmentSpec backing = describe "export with pandoc" (pdfs backing)
 
 -- | An image attachment, whose bytes are in the media bag.
 tree :: Attachment
@@ -626,7 +630,7 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     -- The headers say nothing a browser would act on but the download.
     lookup "X-Content-Type-Options" reply.headers `shouldBe` Just "nosniff"
 
--- | withoutTeX hides programs from the sequential server test that checks
+-- | withoutTeX hides programs from the exclusive server test that checks
 -- PDF refusal. The original PATH is restored even when the assertion fails.
 withoutTeX :: IO a -> IO a
 withoutTeX action = withSystemTempDirectory "wiki-without-tex" $ \dir ->
