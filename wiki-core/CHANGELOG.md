@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Represent the shared root with a trusted reference to real page/space records. Extend full archives with optional home versions, validate the singleton and retain legacy settings-only archives. Anonymous root sharing defaults off.
+
 Add `Wiki.Core.HomePage` for the public front page configuration. Whole-wiki archives carry it in optional `settings.json`; older archives leave the current home page unchanged on import. Invalid titles are refused before import.
 
 - Run independent domain and native HTML examples in parallel.

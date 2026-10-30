@@ -123,6 +123,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
+import Wiki.App.Backend.Http.Cache qualified as Cache
 import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noResponse, prepare, refusal, sessionInfo, withBoundary)
 import Wiki.App.Backend.Http.Transport
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
@@ -390,6 +391,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
     orThrow . fmap (fmap fromSessionInfo) $
       cachedAlways (fmap sessionInfo . (\c -> c.session)) endpoints.session (withSession . fromSessionInfo)
+  getHomeDocument = pageContent (\c -> c.homeDocument) endpoints.homeDocument (\a c -> c {Cache.homeDocument = Just a})
   listSpaces = orThrow (cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces)
   getSpace path = cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
   createSpace parent name = write (endpoints.spaces.create NewSpace {parent, name})

@@ -23,7 +23,7 @@ import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.Api.Security
-import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (Session (..), session)
@@ -54,10 +54,10 @@ signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = (demoState demoNow).server.homePage}
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
@@ -297,7 +297,7 @@ administration m = describe "the administration's accounts" $ do
     serverStarts
     serveDemo
     (me, listed) <- people
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
     for_ listed $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withSecurity d)
     for_ listed (answerUsers . withSecurity)
     answerRaw "DELETE" "api/v1/admin/users/user-editor/second-factor" 204 ""

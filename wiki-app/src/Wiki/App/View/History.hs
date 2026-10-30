@@ -162,7 +162,7 @@ component =
 
     back :: Input -> H.ComponentHTML Action Slots m
     back input =
-      Router.link input.context.router Followed (Page (spacePathOf input.context.spaces input.space.id) input.path) [HP.class_ "button history-back"] [HH.text "Back"]
+      Router.link input.context.router Followed (documentRoute input.context input.space.id (Page (spacePathOf input.context.spaces input.space.id) input.path)) [HP.class_ "button history-back"] [HH.text "Back"]
 
     versionList :: Input -> Maybe WikiError -> Viewed -> H.ComponentHTML Action Slots m
     versionList input olderProblem shown =
@@ -302,7 +302,7 @@ component =
             restoreVersion shown.page.id (snd shown.chosen).updatedAt shown.page.updatedAt >>= \case
               -- The page as it now is: the shell reloads and navigates
               -- there.
-              Right _ -> H.raise (Changed (Just (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path)))
+              Right _ -> H.raise (Changed (Just (documentRoute st.input.context st.input.space.id (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path))))
               -- Perhaps saved since: what is shown is loaded again, so that
               -- the newer version can be seen.
               Left e -> do
@@ -379,11 +379,12 @@ numbered = map (\v -> (v.number, v))
 -- the history's own address.
 versionRoute :: Input -> Viewed -> Numbered -> Against -> Route
 versionRoute input shown v against =
-  PageHistory
-    (spacePathOf input.context.spaces input.space.id)
-    input.path
-    (if isLatest shown v then Nothing else Just (snd v).updatedAt)
-    (if isLatest shown v then AgainstPrevious else against)
+  documentRoute input.context input.space.id $
+    PageHistory
+      (spacePathOf input.context.spaces input.space.id)
+      input.path
+      (if isLatest shown v then Nothing else Just (snd v).updatedAt)
+      (if isLatest shown v then AgainstPrevious else against)
 
 -- | Whether a version is the latest: the current page.
 isLatest :: Viewed -> Numbered -> Bool

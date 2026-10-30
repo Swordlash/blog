@@ -16,6 +16,8 @@ module Wiki.App.View.Common
   , mayEdit
   , mayAdminister
   , notified
+  , homeSpace
+  , documentRoute
 
     -- * Paths
   , spacePathOf
@@ -54,13 +56,15 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend (Session (grants, standing, user), WikiError (..), sessionPrincipal)
+import Wiki.App.Backend (Session (grants, homePage, standing, user), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
+import Wiki.Core.HomePage (HomePage (showAnonymous))
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Order (ChildOrder, Shift (..))
 import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
-import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
+import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canView, hasGlobalPermission, spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
 import Wiki.Core.User (Standing (..))
@@ -107,9 +111,26 @@ chainOf :: Context -> SpaceId -> [Space]
 chainOf ctx = spaceChain ctx.spaces
 
 mayView, mayEdit, mayAdminister :: Context -> SpaceId -> Bool
+mayView ctx sid | homeSpace ctx sid, ctx.session.homePage.showAnonymous = True
 mayView ctx sid = canView (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
+mayEdit ctx sid | homeSpace ctx sid = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
 mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
+
+-- | Whether this is the real backing space of the wiki root.
+homeSpace :: Context -> SpaceId -> Bool
+homeSpace ctx = Home.isHomeSpace ctx.session.homePage
+
+-- | Keep ordinary page features at the root's canonical addresses.
+documentRoute :: Context -> SpaceId -> Route -> Route
+documentRoute ctx sid r | not (homeSpace ctx sid) = r
+documentRoute _ _ r = case r of
+  Page {} -> Home
+  EditPage {} -> EditHome
+  PageSource {} -> HomeSource
+  PageHistory _ _ v a -> HomeHistory v a
+  PageSlides _ _ n k -> HomeSlides n k
+  _ -> r
 
 -- | Whether the reader gets notifications (WP4.13 of docs/PLAN.md): only a
 -- signed-in user of the wiki. The server's operator is not a user, so not.

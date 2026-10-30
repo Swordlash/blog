@@ -634,7 +634,7 @@ linkTarget place dest = case classifyDestination dest of
   ToAnchor fragment -> Just ("#" <> fragment)
   ToAttachment name -> absolute place . place.attachmentAddress =<< findAttachment name place.attachments
   ToPath _ -> do
-    PageLink r fragment <- resolvePageLink place.spaces place.spacePath place.pages place.pagePath dest
+    PageLink r fragment <- resolvePageLink place.spaces place.spacePath place.pages place.pagePath (if null place.spacePath then "/" <> T.dropWhile (== '/') dest else dest)
     case r of
       Page s p | Just anchor <- place.inDocument s p -> Just ("#" <> anchor)
       _ -> absolute place (Duplex.print route r <> fragment)

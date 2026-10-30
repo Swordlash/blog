@@ -41,7 +41,7 @@ spec = describe "the server's settings" $ do
     it "defaults to the directory when older settings omit it" $
       ((\s -> s.homePage) <$> (decode "{\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just defaultHomePage
     it "round trips the Markdown and independent section switches" $ do
-      let home = HomePage {title = "Welcome", body = "# Start\r\n\n> [!exercise]\n> Work.", showSpaces = False, showRecent = True}
+      let home = HomePage {title = "Welcome", body = "# Start\r\n\n> [!exercise]\n> Work.", showSpaces = False, showRecent = True, showAnonymous = False, document = Nothing}
       decode (encode home) `shouldBe` Just home
       (checkServerSettings isJust (noServerSettings {homePage = home} :: Kept)) `shouldBe` Right noServerSettings {homePage = home}
     it "refuses an empty title and trims a title without changing Markdown" $ do

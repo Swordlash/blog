@@ -59,6 +59,7 @@ module Wiki.Server.Storage.Rows
   , countPagesIn
   , countRows
   , wikiIsEmpty
+  , ensureHomeDocument
   , blobSizes
   , loadIcons
   , blobAttached
@@ -158,12 +159,14 @@ module Wiki.Server.Storage.Rows
   )
 where
 
+import Control.Monad.UUID (generateV4)
 import Data.Aeson (decodeStrict', encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), diffTimeToPicoseconds, picosecondsToDiffTime)
+import Data.Time (UTCTime (..), diffTimeToPicoseconds, getCurrentTime, picosecondsToDiffTime)
+import Data.UUID.Types qualified as UUID
 import Database.Beam
   ( QExpr
   , aggregate_
@@ -215,9 +218,11 @@ import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..),
 import Wiki.Api.Admin (Invitation (..), UserQuery (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
@@ -226,6 +231,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
@@ -826,7 +832,31 @@ countRows =
 -- | Whether the wiki has no users, no groups and no spaces: one an archive
 -- may be imported into whole.
 wikiIsEmpty :: (Backend be) => Db be Bool
-wikiIsEmpty = all (== 0) <$> sequence [countAll wikiDb.users, countAll wikiDb.groups, countAll wikiDb.spaces]
+wikiIsEmpty = do
+  server <- loadServerSettings
+  spaces <- loadSpaces
+  emptyPeople <- all (== 0) <$> sequence [countAll wikiDb.users, countAll wikiDb.groups]
+  pure (emptyPeople && all (Home.isHomeSpace server.homePage) (Map.keys spaces))
+
+-- | Upgrade the legacy settings-only front page in one writer transaction.
+-- Existing documents are left alone, including their versions and attachments.
+ensureHomeDocument :: (Backend be) => Db be ()
+ensureHomeDocument = do
+  server <- loadServerSettings
+  case server.homePage.document of
+    Just _ -> pure ()
+    Nothing -> do
+      sid <- liftIO (SpaceId . UUID.toText <$> generateV4)
+      pid <- liftIO (PageId . UUID.toText <$> generateV4)
+      time <- liftIO (micro <$> getCurrentTime)
+      let document = Home.HomeDocument {space = sid, page = pid}
+          slug = either (panic . show) identity (mkSlug ("wiki-home-" <> sid.text))
+          (space, page) = Home.makeHomeDocument document slug time server.homePage
+      insertSpace space {Space.homePage = Nothing, Space.public = space.public}
+      insertPage page
+      insertVersion page Nothing
+      updateSpace space
+      storeServerSettings server {SS.homePage = server.homePage {Home.document = Just document}}
 
 -- | Each blob the attachments name, with its size as their rows record
 -- it: two attachments with the same bytes share one blob, of one size.

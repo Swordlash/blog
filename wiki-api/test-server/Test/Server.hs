@@ -78,6 +78,7 @@ stubs :: WikiApi Tmp AsServer
 stubs =
   WikiApi
     { info = pure ServerInfo {name = "Stub", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
+    , homeDocument = pure (Sample.space, Sample.page)
     , session = pure Sample.sessionInfo
     , signIn = \c ->
         if c.login == "ada" && c.password == Password "secret"

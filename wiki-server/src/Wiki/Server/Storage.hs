@@ -199,9 +199,10 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong)
+import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
@@ -233,6 +234,7 @@ import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUploa
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
+import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
@@ -382,6 +384,7 @@ openWith collect config place = do
         (settings, serverKept) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
             _ <- migrate c
+            withTransaction True c (runDb c ensureHomeDocument)
             when collect $ do
               collectGarbage c place.dataDir
               -- Uploads and exports left by a server that stopped: nothing
@@ -909,13 +912,30 @@ chainOfPage p = asks (`chainOf` p.space)
 -- only then whether the caller may do what is asked ('requireEdit',
 -- 'requireAdminister'), which is 'Forbidden' when they may not.
 requireView :: [Space] -> Tx ()
-requireView c = ask >>= \x -> unless (canView x.principal x.grants c) (failWith NotFound)
+requireView c =
+  ask >>= \x ->
+    unless
+      (canView x.principal x.grants c || (x.server.homePage.showAnonymous && any (\s -> Home.isHomeSpace x.server.homePage s.id) c))
+      (failWith NotFound)
 
 requireEdit :: [Space] -> Tx ()
-requireEdit c = requireView c >> ask >>= \x -> require (canEdit x.principal x.grants c)
+requireEdit c = do
+  requireView c
+  x <- ask
+  require
+    ( if any (\s -> Home.isHomeSpace x.server.homePage s.id) c
+        then hasGlobalPermission x.principal x.grants Administer
+        else canEdit x.principal x.grants c
+    )
+
+-- | Root documents cannot be restructured through the ordinary space APIs.
+requireOrdinary :: SpaceId -> Tx ()
+requireOrdinary sid =
+  asks (\x -> Home.isHomeSpace x.server.homePage sid) >>= \home ->
+    when home (invalid "The wiki home is a singleton; its space and page cannot be restructured.")
 
 requireAdminister :: [Space] -> Tx ()
-requireAdminister c = requireView c >> ask >>= \x -> require (canAdministerSpace x.principal x.grants c)
+requireAdminister c = requireView c >> ask >>= \x -> require (canAdministerSpace x.principal x.grants c) >> traverse_ (requireOrdinary . (\s -> s.id)) c
 
 -- | A name or title with the blanks around it trimmed, or 'Invalid' if
 -- nothing is left.
@@ -1018,6 +1038,13 @@ answer fallback tx = fromRight fallback <$> run Reads tx
 
 instance (MonadIO m) => MonadWiki (StoredWiki m) where
   session = answer anonymous sessionTx
+  getHomeDocument = run Reads $ do
+    home <- asks (\x -> x.server.homePage)
+    d <- maybe (failWith NotFound) pure home.document
+    (space, c) <- findSpace d.space
+    requireView c
+    page <- findPage d.page
+    pure (space, page)
   listSpaces = answer [] listSpacesTx
   getSpace = run Reads . getSpaceTx
   createSpace parent = run Writes . createSpaceTx parent
@@ -1251,7 +1278,11 @@ editorOf st who pid =
 -- runs its callbacks ('publish') on the writer too, so a write that
 -- commits after the read reports its change after the subscription.
 threadsThen :: Storage -> Who -> PageId -> ([Thread] -> IO ()) -> IO (Either WikiError [Thread])
-threadsThen st who pid = transactThen st who ReadsOnWriter (listThreadsTx pid)
+threadsThen st who pid = transactThen st who ReadsOnWriter $ do
+  p <- findNode pid
+  requireView =<< chainOfPage p
+  home <- asks (\x -> Home.isHomePage x.server.homePage pid)
+  if home then pure [] else listThreadsTx pid
 
 -- | The comment operations, as the class's Haddock describes them
 -- ("Wiki.App.Backend.Comments"). Each operation is one transaction, and
@@ -1279,7 +1310,22 @@ commenting tx = StoredWiki $ do
 saving :: (MonadIO m) => Tx Page -> StoredWiki m (Either WikiError Page)
 saving tx = StoredWiki $ do
   env <- ask
-  liftIO (transactThen env.storage env.who Writes tx (\p -> env.storage.config.publish p.id (PageChanged p.updatedAt)))
+  liftIO
+    $ fmap (fmap fst)
+    $ transactThen
+      env.storage
+      env.who
+      Writes
+      ( do
+          p <- tx
+          server <- asks (\x -> x.server)
+          let updated =
+                if Home.isHomePage server.homePage p.id
+                  then Just server {SS.homePage = server.homePage {Home.title = p.title, Home.body = p.body}}
+                  else Nothing
+          pure (p, updated)
+      )
+      (\(p, server) -> traverse_ (cacheServerSettings env.storage) server >> env.storage.config.publish p.id (PageChanged p.updatedAt))
 
 -- | An attachment, if the 'Who' may view its page, with the file its bytes
 -- are in when the storage holds them ('Nothing' for an attachment that
@@ -1314,7 +1360,7 @@ spacePages = run Reads . spacePagesTx
 sitemapPages :: (MonadIO m) => StoredWiki m (Map SpaceId [SitemapNode])
 sitemapPages = answer mempty $ do
   ctx <- ask
-  let viewable = [sid | sid <- Map.keys ctx.spaces, canView ctx.principal ctx.grants (chainOf ctx sid)]
+  let viewable = [sid | sid <- Map.keys ctx.spaces, not (Home.isHomeSpace ctx.server.homePage sid), canView ctx.principal ctx.grants (chainOf ctx sid)]
   -- SQLite would read every page for an empty @IN ()@.
   nodes <- if null viewable then pure [] else db (loadSitemapNodes viewable)
   pure (Map.fromListWith (<>) ([(sid, []) | sid <- viewable] <> [(n.space, [n]) | n <- nodes]))
@@ -1369,7 +1415,7 @@ sessionTx :: Tx Session
 sessionTx = do
   ctx <- ask
   pure $ case (,) <$> ctx.user <*> ctx.principal of
-    Nothing -> (anonymousIn ctx.grants.access) {B.homePage = if ctx.grants.access == Closed then defaultHomePage else ctx.server.homePage}
+    Nothing -> (anonymousIn ctx.grants.access) {B.homePage = if ctx.grants.access == Closed && not ctx.server.homePage.showAnonymous then defaultHomePage else ctx.server.homePage}
     Just (u, p) ->
       Session
         { user = Just u
@@ -1398,7 +1444,7 @@ sessionTx = do
 listSpacesTx :: Tx [Space]
 listSpacesTx = do
   ctx <- ask
-  let visible = filter (canView ctx.principal ctx.grants) (map (chainOf ctx) (Map.keys ctx.spaces))
+  let visible = filter (canView ctx.principal ctx.grants) (map (chainOf ctx) [sid | sid <- Map.keys ctx.spaces, not (Home.isHomeSpace ctx.server.homePage sid)])
       listed = Set.fromList (map (\s -> s.id) (concat visible))
   pure (spaceTreeOrder (Map.elems (Map.restrictKeys ctx.spaces listed)))
 
@@ -1412,6 +1458,7 @@ pageCountsTx = do
     ( Map.fromList
         [ (sid, Map.findWithDefault 0 sid byId)
         | sid <- Map.keys ctx.spaces
+        , not (Home.isHomeSpace ctx.server.homePage sid)
         , canView ctx.principal ctx.grants (chainOf ctx sid)
         ]
     )
@@ -1495,7 +1542,7 @@ searchPagesTx q = do
           | otherwise -> fmap (\s -> s.id) (lastMay c) == Just sid
       searched =
         Map.filter
-          (\c -> wanted c && canView ctx.principal ctx.grants c)
+          (\c -> wanted c && not (any (\s -> Home.isHomeSpace ctx.server.homePage s.id) c) && canView ctx.principal ctx.grants c)
           (Map.mapWithKey (\sid _ -> chainOf ctx sid) ctx.spaces)
       ws = queryWords q
   -- No words find nothing, and no space has nothing to find. SQLite would
@@ -1547,6 +1594,7 @@ createSpaceTx parent name = do
   ctx <- ask
   parentChain <- traverse (fmap snd . findSpace) parent
   traverse_ requireView parentChain
+  traverse_ requireOrdinary parent
   require (mayCreateSpace ctx.principal ctx.grants parentChain)
   n <- nonBlank "A space's name" name
   i <- newId
@@ -1738,6 +1786,8 @@ moveSpaceTx sid destination = do
   requireView c
   traverse_ requireView destinationChain
   require (mayMoveSpace ctx.principal ctx.grants c destinationChain)
+  requireOrdinary sid
+  traverse_ (requireOrdinary) destination
   when (maybe False (within sid) destinationChain) $
     invalid "A space cannot be moved into itself or one of its subspaces."
   let others = Map.elems (Map.delete sid ctx.spaces)
@@ -1854,6 +1904,7 @@ shiftPageTx pid how = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireEdit c
+  requireOrdinary p.space
   unless (s.pageOrder == ByHand) $
     invalid (s.name <> " lists its pages " <> T.toLower (orderName s.pageOrder) <> ", not by hand.")
   nodes <- db (childPages p.space p.parent)
@@ -1868,6 +1919,7 @@ createPageTx sid parent title body = do
   (_, c) <- findSpace sid
   parentPage <- traverse findNode parent
   requireEdit c
+  requireOrdinary sid
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
   t <- nonBlank "A page's title" title
@@ -1915,6 +1967,9 @@ savePageTx pid base title body = do
     updatePageText pid t body p'.updatedAt
     insertVersion p' author
     for_ author (deleteDraft pid)
+  server <- asks (\x -> x.server)
+  when (Home.isHomePage server.homePage pid) $
+    db (storeServerSettings server {SS.homePage = server.homePage {Home.title = t, Home.body = body}})
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)
   pure p'
 
@@ -1928,6 +1983,10 @@ movePageTx pid destination parent = do
   requireView source
   requireView target
   require (mayMovePage ctx.principal ctx.grants source target)
+  requireEdit source
+  requireEdit target
+  requireOrdinary p.space
+  requireOrdinary destination
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
   subtree <- db (subtreeIds pid)
@@ -1953,6 +2012,7 @@ setPageTemplateTx pid template = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireEdit c
+  requireOrdinary p.space
   when (template && s.homePage == Just pid) $
     invalid "A space's home page cannot be a template."
   db (setPageTemplateRow pid template)
@@ -1965,6 +2025,7 @@ deletePageTx pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireEdit c
+  requireOrdinary p.space
   under <- subtract 1 . Set.size <$> db (subtreeIds pid)
   above <- lineageOf pid
   let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
@@ -2329,8 +2390,14 @@ setHomePageTx :: HomePage -> Tx Kept
 setHomePageTx change = do
   requireAdministrator
   old <- asks (\x -> x.server)
-  homePage <- either invalid pure (checkHomePage change)
-  let new = old {SS.homePage = homePage}
+  checked <- either invalid pure (checkHomePage change)
+  let homePage =
+        old.homePage
+          { Home.showSpaces = checked.showSpaces
+          , Home.showRecent = checked.showRecent
+          , Home.showAnonymous = checked.showAnonymous
+          }
+      new = old {SS.homePage = homePage}
   db (storeServerSettings new)
   record "settings.home-page" (settingsSubject "the home page") []
   pure new
@@ -2340,7 +2407,10 @@ setServerSettingsTx :: ServerSettingsChange -> Tx Kept
 setServerSettingsTx change = do
   requireAdministrator
   old <- asks (\x -> x.server)
-  new <- either invalid pure (checkServerSettings isJust (applyChange Secret old change))
+  checked <- either invalid pure (checkServerSettings isJust (applyChange Secret old change))
+  let requested = checked.homePage
+      home = old.homePage {Home.showSpaces = requested.showSpaces, Home.showRecent = requested.showRecent, Home.showAnonymous = requested.showAnonymous}
+      new = checked {SS.homePage = home}
   db (storeServerSettings new)
   record "settings.server" (settingsSubject "the server") (serverChanges old new)
   pure new
@@ -2483,6 +2553,8 @@ discussion pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireView c
+  home <- asks (\x -> Home.isHomePage x.server.homePage pid)
+  when home (failWith NotFound)
   ts <- db (Comments.loadThreads commentAuthor pid)
   pure (c, ts)
 
@@ -2836,13 +2908,14 @@ instance (MonadIO m) => MonadNotifications (StoredWiki m) where
 -- another is a merge, which is the job of the import (WP2.8 of
 -- docs/PLAN.md).
 importArchive :: Storage -> Archive -> IO (Either Text ())
-importArchive st a = fmap void (writingEitherThen st transaction (cacheServerSettings st))
+importArchive st incoming = fmap void (writingEitherThen st transaction (cacheServerSettings st))
   where
+    a = withoutHomeDocument incoming
     transaction :: (Backend be) => Db be (Either Text Kept)
     transaction = do
       vacant <- wikiIsEmpty
-      let unkept = [x | p <- a.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
-          iconless = [sp | sp <- a.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
+      let unkept = [x | p <- incoming.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
+          iconless = [sp | sp <- incoming.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
       case (vacant, unkept, iconless) of
         (False, _, _) -> pure (Left "The server has a wiki already: an archive is imported into an empty one only.")
         (_, x : _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
@@ -2876,7 +2949,7 @@ importArchive st a = fmap void (writingEitherThen st transaction (cacheServerSet
                in insertAttachment p.id ordinal x {source}
           traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
           traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
-          for_ a.homePage $ \home -> storeSetting "home-page" (decodeUtf8 (Export.encodeJson home))
+          importHomeDocument (attachmentsDir st.place.dataDir) incoming
           restoreAudit a.audit
           Right <$> loadServerSettings
 
@@ -2937,11 +3010,11 @@ writeExport st app target =
 exportRecords :: Storage -> Text -> IO (Either Text (Archive, Map BlobId FilePath))
 exportRecords st app = do
   createdAt <- getCurrentTime
-  (users, groups, membership, grants, spaces, pages, threads, audit, homePage) <-
+  (users, groups, membership, grants, spaces, pages, threads, audit, homePage, homeVersions) <-
     -- One read transaction, so that the records are of one state of the
     -- wiki.
     reading st $
-      (,,,,,,,,)
+      (,,,,,,,,,)
         <$> loadUsers
         <*> loadGroups
         <*> loadMembership
@@ -2951,6 +3024,14 @@ exportRecords st app = do
         <*> Comments.loadAllThreads commentAuthor
         <*> loadAuditLog
         <*> ((Just . (\s -> s.homePage)) <$> loadServerSettings)
+        <*> ( do
+                settings <- loadServerSettings
+                case settings.homePage.document of
+                  Nothing -> pure []
+                  Just d -> do
+                    (_, versions) <- loadVersionsPage d.page Nothing maxBound
+                    catMaybes <$> traverse (\v -> fmap (versionOf d.page) <$> loadVersion d.page v.updatedAt) versions
+            )
   let commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
       dir = attachmentsDir st.place.dataDir
       -- A blob's file, if it is there.
@@ -2963,7 +3044,7 @@ exportRecords st app = do
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
       <$> fileOf b
-  pure $ (\files -> (Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = mempty, audit, homePage}, Map.fromList files)) <$> sequence (attachments <> icons)
+  pure $ (\files -> (Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = mempty, audit, homePage, homeVersions}, Map.fromList files)) <$> sequence (attachments <> icons)
 
 -- | 'uploadAttachment' with the bytes in a file: an upload the server
 -- received into a temporary file. The file is copied into the blob store

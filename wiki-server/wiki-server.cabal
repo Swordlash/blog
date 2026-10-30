@@ -78,6 +78,7 @@ library
         Wiki.Server.Feed
         Wiki.Server.Guide
         Wiki.Server.Import
+        Wiki.Server.HomePage
         Wiki.Server.Limiter
         Wiki.Server.Log
         Wiki.Server.Mail

@@ -313,6 +313,11 @@ class (Monad m) => MonadWiki m where
   default session :: (MonadTrans t, m ~ t n, MonadWiki n) => m Session
   session = lift session
 
+  -- | The real document backing the shared wiki root.
+  getHomeDocument :: m (Either WikiError (Space, Page))
+  default getHomeDocument :: (MonadTrans t, m ~ t n, MonadWiki n) => m (Either WikiError (Space, Page))
+  getHomeDocument = lift getHomeDocument
+
   -- * Spaces
 
   -- | Every space the current user may view, together with the ancestors of

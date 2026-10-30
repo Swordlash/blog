@@ -59,8 +59,9 @@ import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
-import Wiki.Api.ServerSettings (ServerSettings, defaultHomePage, noServerSettings)
+import Wiki.Api.ServerSettings (HomePage (showAnonymous), ServerSettings, ServerSettingsOf (homePage), noServerSettings)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
+import Wiki.Api.Types qualified as Api
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Assistant (MonadAssistant)
@@ -81,12 +82,14 @@ import Wiki.App.Route qualified as R
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
+import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
 import Wiki.Core.Notification (Watch (..), WatchReason (..), WatchTarget (..))
 import Wiki.Core.Page qualified as P
+import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Space qualified as S
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Standing (..))
@@ -177,10 +180,11 @@ asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's r
 -- administration's people.
 serveDemo :: PageM s ()
 serveDemo = do
-  (me, spaces, pages, people, threads, counts) <- unsafeIOToPageM $ do
+  (me, home, spaces, pages, people, threads, counts) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       me <- session
+      home <- getHomeDocument
       spaces <- listSpaces
       pages <- for spaces $ \s -> do
         ps <- fromRight [] <$> listPages s.id
@@ -191,7 +195,7 @@ serveDemo = do
       people <- directory
       threads <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
       counts <- pageCounts
-      pure (me, spaces, pages, people, threads, counts)
+      pure (me, home, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
   -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body").
   (named, watched) <- unsafeIOToPageM $ do
@@ -209,7 +213,11 @@ serveDemo = do
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage}
+  for_ home $ \document@(space, page) -> do
+    answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 document
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [page.slug])) 200 page
+    answerWith "GET" (endpointUrl (\e -> e.notifications.pageWatch page.id)) 200 (Watch False Unchosen)
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
   for_ people answerUsers
   answerWith "GET" (endpointUrl (\e -> e.admin.server)) 200 (noServerSettings :: ServerSettings)
@@ -347,10 +355,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = (demoState demoNow).server.homePage}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -518,7 +526,7 @@ ownPassword m = describe "one's own password" $ do
     serverStarts
     serveDemo
     rita <- unsafeIOToPageM (signedInAs "user-admin")
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = rita.homePage}
     ui <- startServer m Home
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     length <$> findAll ui ".account-toggle" `shouldReturn` 0
@@ -786,7 +794,7 @@ views m = describe "the application over it" $ do
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])
     find ui ".all-spaces" >>= click
-    find ui ".directory h1" >>= (`shouldHaveText` "Spaces")
+    find ui ".wiki-home .page-view h1" >>= (`shouldHaveText` "Spaces")
     -- The history view went with its fiber, and the request with them.
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [True])
     unmount ui
@@ -1048,6 +1056,63 @@ presence m = describe "who is editing" $ do
           p <- either (panic . show) identity <$> getPage s.id helloAt
           ps <- either (panic . show) identity <$> listPages s.id
           pure (p, ps)
+  it "starts receiving home events after signing in, stops on sign-out and resumes without losing ordinary comments" $ runPage $ do
+    serverStarts
+    serveDemo
+    ada <- unsafeIOToPageM (signedInAs "user-admin")
+    (space, home) <- unsafeIOToPageM $ do
+      wiki <- newMemWiki (demoState demoNow)
+      runMemWiki wiki (either (panic . show) identity <$> getHomeDocument)
+    let public = ada.homePage {showAnonymous = True}
+        visitor, signed :: SessionInfo
+        visitor = nobody {Api.grants = nobody.grants {Permission.access = Closed}, Api.homePage = public}
+        signed = ada {Api.grants = ada.grants {Permission.access = Closed}, Api.homePage = public}
+        signIn ui = do
+          find ui ".sign-in-toggle" >>= click
+          find ui ".sign-in-form input[name=login]" >>= (`typeText` "ada")
+          find ui ".sign-in-form input[name=password]" >>= (`typeText` "correct horse")
+          find ui ".sign-in-form button[type=submit]" >>= click
+          find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
+    answerWith "GET" "api/v1/session" 200 visitor
+    answerWith "POST" "api/v1/session" 200 signed
+    answerWith "DELETE" "api/v1/session" 200 visitor
+    ui <- startServer m Home
+    _ <- find ui ".wiki-home .page-view"
+    said `shouldReturn` []
+    signIn ui
+    eventually $ (Subscribe home.id `elem`) <$> said `shouldReturn` True
+    tell (Event home.id (Editing [edgar]))
+    find ui ".page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
+    let later = addUTCTime 60 home.updatedAt
+        saved = home {P.body = "Home saved in another tab.", P.updatedAt = later}
+    answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 (space, saved)
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [home.slug])) 200 saved
+    tell (Event home.id (PageChanged later))
+    find ui ".page-body p" >>= (`shouldHaveText` "Home saved in another tab.")
+    length <$> findAll ui ".comments-toggle, .page-comments" `shouldReturn` 0
+    find ui ".account .sign-out" >>= click
+    _ <- find ui ".sign-in-toggle"
+    eventually $ length <$> findAll ui ".page-editors" `shouldReturn` 0
+    tell (Event home.id (Editing [rita]))
+    length <$> findAll ui ".page-editors" `shouldReturn` 0
+    subscriptions <- length . filter (== Subscribe home.id) <$> said
+    signIn ui
+    eventually $ (length . filter (== Subscribe home.id) <$> said) >>= (`shouldSatisfy` (> subscriptions))
+    tell (Event home.id (Editing [rita]))
+    find ui ".page-editors" >>= (`shouldHaveText` "Rita Reader is editing this page.")
+    find ui ".space-card-link[href$='#/s/blog/']" >>= click
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
+    (hello, _) <- demoHello
+    _ <- find ui ".comments-toggle"
+    eventually $ (Subscribe hello.id `elem`) <$> said `shouldReturn` True
+    let remote = Comment {id = CommentId "comment-after-home-sign-in", thread = CommentThreadId "thread-hello-3", author = rita, body = "Live comments still arrive.", createdAt = demoNow, editedAt = Nothing}
+    tell (Event hello.id (CommentAdded remote))
+    find ui ".page-comments #comment-thread-thread-hello-3 .comment:last-child .comment-body" >>= (`shouldHaveText` "Live comments still arrive.")
+    tell (Event hello.id (Editing [edgar]))
+    find ui ".page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
+    unmount ui
+    serverStops
+
   it "names who edits the page shown, and shows a save of it at once" $ runPage $ do
     serverStarts
     serveDemo

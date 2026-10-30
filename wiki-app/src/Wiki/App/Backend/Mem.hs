@@ -82,13 +82,15 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
+import Wiki.App.Backend.Mem.Archive (replaceFromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, changes, changesIn, lazyStores, readVersion, records, restore, storeNames, touched, versionKey, versionsStore)
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
-import Wiki.Core.Export (Archive (homePage))
+import Wiki.Core.Export (Archive)
+import Wiki.Core.Export qualified as Export
+import Wiki.Core.HomePage (HomeDocument (..), HomePage (document))
 import Wiki.Core.Id (BlobId (..), PageId, UserId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
@@ -149,7 +151,7 @@ runMemWikiWith store wiki (MemWiki program) = runReaderT program MemEnv {wiki, s
 
 -- | An 'IORef' holding this wiki, for 'runMemWiki'.
 newMemWiki :: (MonadIO m) => MemState -> m (IORef MemState)
-newMemWiki = liftIO . newIORef
+newMemWiki st = liftIO (getCurrentTime >>= newIORef . (`ensureHomeDocument` st))
 
 -- | Set who is signed in from now on: one of the wiki's users, or nobody.
 -- An id that belongs to no user means nobody.
@@ -185,6 +187,7 @@ writeAt f = liftIO getCurrentTime >>= write . f
 
 instance (MonadIO m) => MonadWiki (MemWiki m) where
   session = query sessionOf
+  getHomeDocument = query getHomeDocumentIn
   listSpaces = query listSpacesIn
   getSpace = query . getSpaceIn
   createSpace parent = writeAt . createSpaceIn parent
@@ -463,7 +466,9 @@ data Found
 -- as before there was a database. Either way the demo starts with its own
 -- content, and says why on the browser's console.
 openMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> MemState -> n Opened
-openMemWiki db seed = withRunInIO $ \run -> do
+openMemWiki db source = withRunInIO $ \run -> do
+  time <- getCurrentTime
+  let seed = ensureHomeDocument time source
   lock <- newMVar ()
   let readAll = Map.fromList <$> for storeNames (\name -> (name,) <$> run (readStore db name))
       wipe = run (IDB.deleteDatabase db.name)
@@ -492,8 +497,16 @@ openMemWiki db seed = withRunInIO $ \run -> do
         -- Signed in as the demo starts, with its server settings except
         -- for the shared home page, which is kept in IndexedDB.
         Stored restored ->
-          let start = restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}}
-           in (start,) . (,Restored) . Just <$> storeHolding start held
+          do
+            let start = ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}}
+            kept <- storeHolding start held
+            let updates = changes held (records start)
+            written <- tried (unless (null updates) (writeAll updates))
+            case written of
+              Left e -> pure (start, (Nothing, NotKept (describe e)))
+              Right () -> do
+                writeIORef kept.kept Kept {wiki = start, records = records start}
+                pure (start, (Just kept, Restored))
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
   case found of
@@ -527,6 +540,7 @@ resetMemWiki seed = MemWiki $ do
 -- it, and are not kept in memory afterwards.
 memArchive :: (MonadIO m) => Text -> MemWiki m Archive
 memArchive app = do
+  needVersions (\st -> maybe [] (\d -> unreadHistory d.page st) st.server.homePage.document)
   now <- liftIO getCurrentTime
   st <- readState
   unread <- for (Set.toList st.unreadBlobs) (\b -> fmap (b,) <$> readBlob b)
@@ -555,22 +569,27 @@ readWholly = do
 -- fails, nothing changes, in the database or in memory, and the result is
 -- the reason.
 importMemWiki :: (MonadIO m) => Archive -> MemWiki m (Either Text ())
-importMemWiki archive = MemWiki $ do
-  env <- ask
-  liftIO . serially env $ do
-    (current, server) <- (\st -> (st.current, st.server)) <$> readIORef env.wiki
-    let new = (fromArchive archive) {current, server = server {SS.homePage = fromMaybe server.homePage archive.homePage}}
-    written <- case env.store of
-      Nothing -> pure (Right ())
-      Just store -> do
-        before <- readIORef store.kept
-        tried (store.writeAll (changes before.records (records new))) >>= \case
-          Left e -> pure (Left ("The browser would not keep it (" <> describe e <> ")"))
-          Right () -> Right <$> writeIORef store.kept Kept {wiki = new, records = records new}
-    for_ written $ \() -> do
-      old <- atomicModifyIORef' env.wiki (new,)
-      traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
-    pure written
+importMemWiki archive = do
+  Export.Archive {Export.blobs = keptBlobs} <- memArchive "Before import"
+  MemWiki $ do
+    env <- ask
+    liftIO . serially env $ do
+      old <- readIORef env.wiki
+      time <- getCurrentTime
+      case replaceFromArchive time old {blobs = old.blobs <> keptBlobs} archive of
+        Left reason -> pure (Left reason)
+        Right new -> do
+          written <- case env.store of
+            Nothing -> pure (Right ())
+            Just store -> do
+              before <- readIORef store.kept
+              tried (store.writeAll (changes before.records (records new))) >>= \case
+                Left e -> pure (Left ("The browser would not keep it (" <> describe e <> ")"))
+                Right () -> Right <$> writeIORef store.kept Kept {wiki = new, records = records new}
+          for_ written $ \() -> do
+            previous <- atomicModifyIORef' env.wiki (new,)
+            traverse_ (js_revoke_object_url . toJSText) (Map.elems previous.objectUrls)
+          pure written
 
 --------------------------------------------------------------------------------
 -- The demo's wiki, read from elsewhere

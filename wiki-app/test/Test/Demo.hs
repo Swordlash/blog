@@ -6,10 +6,12 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoDatabase, demoNow, demoState)
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -40,7 +42,7 @@ spec = describe "Wiki.App.Demo" $ do
     demoDatabase.name `shouldBe` "wiki-demo"
 
   it "has the spaces the tour describes" $
-    sort [s.name | s <- Map.elems demo.spaces] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
+    sort [s.name | s <- Map.elems demo.spaces, not (Home.isHomeSpace demo.server.homePage s.id)] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
 
   it "puts the tour in Docs" $ do
     let docs = find (\s -> s.name == "Docs") (Map.elems demo.spaces)

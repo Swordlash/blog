@@ -68,7 +68,7 @@ demoDatabase = memDatabase "wiki-demo"
 -- | The demo's wiki as it is at the given time: the pages were written in
 -- the weeks before it. @admin@ is signed in.
 demoState :: UTCTime -> MemState
-demoState now = flip execState emptyState $ do
+demoState now = ensureHomeDocument now $ flip execState emptyState $ do
   modify $
     insertUser User {id = adminId, login = Login "admin", displayName = "Ada Admin"}
       . insertUser User {id = editorId, login = Login "editor", displayName = "Edgar Editor"}

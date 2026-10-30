@@ -1898,7 +1898,7 @@ headingOf st = case st.loaded of
 
 -- | Where Cancel, and Save and close, navigate to: the page.
 leaving :: Input -> Route
-leaving input = Page (spacePathOf input.context.spaces input.space.id) input.path
+leaving input = documentRoute input.context input.space.id (Page (spacePathOf input.context.spaces input.space.id) input.path)
 
 -- | The place the work's links are resolved from: where the page is.
 placeOf :: Input -> Work -> Body.Place

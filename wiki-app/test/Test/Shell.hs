@@ -81,7 +81,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "lists the public spaces on the front page for someone not signed in" $ do
     Rendered {html, title} <- render (as Nothing) Home
     title `shouldBe` "Wiki"
-    html `contains` "<h1>Spaces</h1>"
+    html `contains` "<h1 class=\"page-title\">Spaces</h1>"
     html `contains` "<a class=\"space-card-link\" href=\"/s/blog/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">✍️</span><span class=\"space-card-name\">Blog</span></a>"
     html `contains` "<span class=\"space-card-name\">Docs</span>"
     html `lacks` "Team"

@@ -323,7 +323,7 @@ component =
       Router.link
         input.context.router
         Followed
-        (Page (spacePathOf input.context.spaces input.space.id) input.path)
+        (documentRoute input.context input.space.id (Page (spacePathOf input.context.spaces input.space.id) input.path))
         [HP.class_ "button slides-back"]
         [HH.text "Back to page"]
 
@@ -428,7 +428,7 @@ component =
       when ((n, k) /= (st.current, st.step)) $ do
         put st {current = n, step = k, asked = take 20 ((n, k) : st.asked)}
         let input = st.input
-        Router.redirect input.context.router (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k)
+        Router.redirect input.context.router (documentRoute input.context input.space.id (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k))
 
     -- Focus into the view, where Tab then finds its controls.
     focusView :: H.HalogenM State Action Slots ViewOutput m ()

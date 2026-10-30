@@ -6,6 +6,10 @@
 -- that the server can serve exactly the same addresses:
 --
 -- > /                              Home
+-- > /edit/                         EditHome
+-- > /source/                       HomeSource
+-- > /history/                      HomeHistory Nothing AgainstPrevious
+-- > /slides/                       HomeSlides 1 1
 -- > /s/team/projects/              Space [team, projects]
 -- > /s/blog/?page=2                Posts [blog] 2
 -- > /s/team/projects/pages/        SpacePages [team, projects]
@@ -91,6 +95,10 @@ import Wiki.Core.Space (Space (slug))
 data Route
   = -- | The front page: the top-level spaces.
     Home
+  | EditHome
+  | HomeSource
+  | HomeHistory (Maybe UTCTime) Against
+  | HomeSlides Int Int
   | -- | A space, by its path from the top level. Entering it shows its home
     -- page ('Wiki.Core.Space.homePage'), or, for a space without one, its
     -- list of pages ('SpacePages').
@@ -254,6 +262,10 @@ route =
   root $
     alternatives
       [ alternative (\case Home -> Just (); _ -> Nothing) (const Home) noArgs
+      , alternative (\case EditHome -> Just (); _ -> Nothing) (const EditHome) (prefix "edit" (directory noArgs))
+      , alternative (\case HomeSource -> Just (); _ -> Nothing) (const HomeSource) (prefix "source" (directory noArgs))
+      , alternative (\case HomeHistory v a -> Just (v, a); _ -> Nothing) (uncurry HomeHistory) (prefix "history" (directory historyParams))
+      , alternative (\case HomeSlides n k -> Just (n, k); _ -> Nothing) (uncurry HomeSlides) (prefix "slides" (directory slideParams))
       , -- Before 'Space', which parses the same path and ignores the
         -- query: this one parses it only with its parameter.
         alternative

@@ -44,7 +44,6 @@ module Wiki.App.View.Body
   , HasIslands
   , heading
   , article
-  , homeArticle
   , rendered
   , articleOf
   , commentBodies
@@ -251,28 +250,6 @@ options place =
           <$> Map.lookup login place.people
     }
 
--- | The shared front page's Markdown. Paths start at the wiki root;
--- attachments and inherited space macros have no meaning outside a space.
-homeArticle
-  :: (MonadIslands m, MonadUUID m, HasIslands slots)
-  => (ArticleLink -> action)
-  -> Context
-  -> Text
-  -> H.ComponentHTML action slots m
-homeArticle onLink ctx source = case Md.renderMarkdown opts source of
-  Right nodes -> [hh|<article class="page-body" {{ HE.preventingDefault (HE.handler' (EventType "click") (fmap onLink . articleLink ctx.router)) }}>{{ nodes }}</article>|]
-  Left e -> [hh|<div><p class="error" role="alert">This page's Markdown could not be read: {{ show e :: Text }}</p><pre>{{ source }}</pre></div>|]
-  where
-    opts =
-      (islandOptions ctx mempty)
-        { Md.resolveLink = \destination -> case Md.classifyDestination destination of
-            Md.ToAttachment _ -> Md.Unresolved
-            Md.ToUrl url -> Md.External url
-            Md.ToAnchor fragment -> Md.External ("#" <> fragment)
-            Md.ToPath _ -> maybe Md.Unresolved Md.Page (resolvePageLink ctx.spaces [] ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination))
-        , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
-        }
-
 -- | Renderer options shared by page bodies, previews and the front page.
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
 islandOptions ctx spaceDefined =
@@ -298,4 +275,6 @@ resolve place destination = case Md.classifyDestination destination of
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)
   Md.ToPath _ ->
     maybe Md.Unresolved Md.Page $
-      resolvePageLink place.context.spaces (spacePathOf place.context.spaces place.space.id) place.pages place.path destination
+      if homeSpace place.context place.space.id
+        then resolvePageLink (filter (not . homeSpace place.context . (\s -> s.id)) place.context.spaces) [] ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination)
+        else resolvePageLink place.context.spaces (spacePathOf place.context.spaces place.space.id) place.pages place.path destination

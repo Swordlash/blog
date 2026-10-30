@@ -118,6 +118,7 @@ import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Properties qualified as HP
 import Halogen.Query.Event.Window qualified as Window
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
@@ -126,7 +127,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
 import Wiki.Api.Links (archiveExportUrl)
-import Wiki.Api.ServerSettings (HomePage (title))
+import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
@@ -179,10 +180,10 @@ import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Comment (Thread (..))
-import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
+import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), templatePages, treePages)
+import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), summaryOf, templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
@@ -230,7 +231,7 @@ data Query a = Settled (Maybe Head -> a)
 -- its place in alphabetical order.
 type Slots =
   R
-    '[ "editor" :-> H.Slot Editor.Query ViewOutput [Slug]
+    '[ "editor" :-> H.Slot Editor.Query ViewOutput (SpaceId, [Slug])
      , "invite" :-> H.Slot (Const Void) InviteView.Output ()
      , "part" :-> H.Slot (Const Void) Void PartSlot
      , "reset" :-> H.Slot (Const Void) ResetView.Output ()
@@ -412,7 +413,7 @@ component =
           feed <- traverse (\l -> l.liveFeed) live
           loaded <- atOnce $ do
             world <- fetchWorld demo
-            here <- if shutOut world.asking then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let (Around signedIn users spaces icons kept, here) = fromMaybe (Around anonymous [] [] mempty False, NoSpace) loaded
           pure
@@ -788,7 +789,7 @@ component =
     sidebar :: State m -> H.ComponentHTML Action Slots m
     sidebar st = case (st.route, st.here) of
       (Admin section, _) | st.world == WorldReady && isAdministrator st -> adminSidebar st section
-      (_, InSpace _ space pages) -> spaceSidebar st space pages
+      (_, InSpace _ space pages) | not (homeSpace (context st) space.id) -> spaceSidebar st space pages
       _ -> spacesSidebar st
 
     -- The administration's navigation, in the sidebar's place: an entry per
@@ -945,7 +946,6 @@ component =
 
     routeContent :: State m -> Route -> H.ComponentHTML Action Slots m
     routeContent st = \case
-      Home -> HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
       Unknown -> notFound st
       Admin section -> admin st section
       NewSpace parent -> HH.slot "view" NewSpaceSlot NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
@@ -960,27 +960,39 @@ component =
         NoSpace -> notFound st
         LoadingSpace _ -> loading
         SpaceFailed _ e -> failureView e RetryHere
-        InSpace _ space pages -> case st.route of
-          -- Entering a blog shows its posts, at the requested page of them.
-          Space _ | space.blog -> blogView space pages 1
-          Posts _ n | space.blog -> blogView space pages n
-          -- Entering a space shows its home page, if it has one, at any
-          -- requested page of posts.
-          Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
-          Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
-          Page _ path -> pageView space pages path
-          PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
-          PageHistory _ path version against ->
-            HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
-          PageSlides _ path slide step ->
-            HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide, step} FromView
-          -- One editor per page edited: another page's editor is a
-          -- separate component, with its own draft.
-          EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
-          NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
-          _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
+        InSpace _ space pages ->
+          let homePath = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
+           in case st.route of
+                Home ->
+                  HH.div
+                    [HP.class_ "wiki-home"]
+                    [ pageView space pages homePath
+                    , HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
+                    ]
+                EditHome -> HH.slot "editor" (space.id, homePath) Editor.component Editor.Input {context = context st, space, pages, path = homePath, feed = st.feed} FromView
+                HomeSource -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path = homePath} FromView
+                HomeHistory version against -> HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = homePath, version, against} FromView
+                HomeSlides slide step -> HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path = homePath, slide, step} FromView
+                -- Entering a blog shows its posts, at the requested page of them.
+                Space _ | space.blog -> blogView space pages 1
+                Posts _ n | space.blog -> blogView space pages n
+                -- Entering a space shows its home page, if it has one, at any
+                -- requested page of posts.
+                Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
+                Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
+                Page _ path -> pageView space pages path
+                PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
+                PageHistory _ path version against ->
+                  HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
+                PageSlides _ path slide step ->
+                  HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide, step} FromView
+                -- One editor per page edited: another page's editor is a
+                -- separate component, with its own draft.
+                EditPage _ path -> HH.slot "editor" (space.id, path) Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
+                NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
+                _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
-        pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
+        pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
         blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
 
     loading :: H.ComponentHTML Action Slots m
@@ -1252,7 +1264,7 @@ component =
     loadHere again = do
       st <- get
       case spaceOfRoute st.route of
-        _ | shutOut st.session -> modify (\s -> s {here = NoSpace})
+        _ | shutOut st.session && not (publicHomeRoute st.session st.route) -> modify (\s -> s {here = NoSpace})
         Nothing -> modify (\s -> s {here = NoSpace})
         Just path
           | not again, hereIs path st.here -> pass
@@ -1273,11 +1285,20 @@ component =
     -- else is loaded by now.
     announce :: H.HalogenM (State m) Action Slots output m ()
     announce = do
+      before <- get
+      case before.here of
+        InSpace path space _
+          | not (null path)
+          , homeSpace (context before) space.id -> do
+              let target = documentRoute (context before) space.id before.route
+                  canonical = if target == before.route then Home else target
+              Router.redirect before.router canonical
+        _ -> pass
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
       -- A space shown counts as visited, for the directory to offer again.
       case st.here of
-        InSpace _ space _ -> H.liftEffect (rememberVisit space.id)
+        InSpace _ space _ | not (homeSpace (context st) space.id) -> H.liftEffect (rememberVisit space.id)
         _ -> pass
       unless (waitsForPage st) settle
 
@@ -1315,6 +1336,7 @@ fetchWorld demo = do
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
+fetchHere [] = either (SpaceFailed []) (\(space, page) -> InSpace [] space [summaryOf page]) <$> getHomeDocument
 fetchHere path =
   either (SpaceFailed path) identity
     <$> runExceptT
@@ -1333,7 +1355,17 @@ overNetwork st = isJust st.accounts
 -- | Whether the shell shows the closed wiki's frame: the wiki is closed to
 -- the current user, and the route is not the page of a mailed link.
 isShut :: State m -> Bool
-isShut st = st.world == WorldReady && shutOut st.session && not (isMailedLink st.route)
+isShut st = st.world == WorldReady && shutOut st.session && not (isMailedLink st.route) && not (publicHomeRoute st.session st.route)
+
+-- | Only the root's reader routes may be public in a closed wiki.
+publicHomeRoute :: Session -> Route -> Bool
+publicHomeRoute s r =
+  s.homePage.showAnonymous && case r of
+    Home -> True
+    HomeSource -> True
+    HomeHistory {} -> True
+    HomeSlides {} -> True
+    _ -> False
 
 -- | Whether a route is the page of a link mailed to someone who may not be
 -- able to sign in yet: an invitation, a password reset, an address
@@ -1361,10 +1393,20 @@ isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Admini
     ctx = context st
 
 context :: State m -> Context
-context st = Context {router = st.router, session = st.session, spaces = st.spaces, icons = st.icons, revision = st.generation}
+context st = Context {router = st.router, session = st.session, spaces = available, icons = st.icons, revision = st.generation}
+  where
+    available =
+      st.spaces <> case st.here of
+        InSpace [] space _ -> [space]
+        _ -> []
 
 spaceOfRoute :: Route -> Maybe [Slug]
 spaceOfRoute = \case
+  Home -> Just []
+  EditHome -> Just []
+  HomeSource -> Just []
+  HomeHistory {} -> Just []
+  HomeSlides {} -> Just []
   Space path -> Just path
   Posts path _ -> Just path
   SpacePages path -> Just path
@@ -1388,7 +1430,11 @@ waitsForPage st = case (st.route, st.here) of
   -- The closed frame shows no view that could report having loaded.
   _ | isShut st -> False
   -- The directory says when it has counted the spaces' pages.
-  (Home, _) -> st.world == WorldReady
+  (Home, InSpace {}) -> st.world == WorldReady
+  (EditHome, InSpace {}) -> True
+  (HomeSource, InSpace {}) -> True
+  (HomeHistory {}, InSpace {}) -> True
+  (HomeSlides {}, InSpace {}) -> True
   -- A space's own route shows its posts, if it is a blog, or its home
   -- page, if it has one.
   (Space _, InSpace _ space pages) -> space.blog || isJust (homeOf space pages)
@@ -1406,6 +1452,7 @@ currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>=
 
 currentPage :: State m -> Maybe PageSummary
 currentPage st = case (st.route, st.here) of
+  (r, InSpace [] space pages) | spaceOfRoute r == Just [] -> homeOf space pages
   (Space _, InSpace _ space pages) -> homeOf space pages
   (Posts _ _, InSpace _ space pages) -> homeOf space pages
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
@@ -1418,7 +1465,7 @@ currentPage st = case (st.route, st.here) of
 -- | The breadcrumbs: inside a space, the directory of spaces first, then
 -- 'crumbs'.
 trail :: State m -> [(Text, Maybe Route)]
-trail st = [("Spaces", Just Home) | isJust (spaceOfRoute st.route), st.world == WorldReady, not (isShut st)] <> crumbs st
+trail st = [("Spaces", Just Home) | maybe False (not . null) (spaceOfRoute st.route), st.world == WorldReady, not (isShut st)] <> crumbs st
 
 -- | The title for the route, as far as it has been loaded.
 crumbs :: State m -> [(Text, Maybe Route)]
@@ -1431,6 +1478,10 @@ crumbs st = case st.route of
   VerifyEmail _ -> [("E-mail address", Nothing)]
   Unsubscribe _ -> [("Notification mail", Nothing)]
   Home -> []
+  EditHome -> [(st.session.homePage.title, Just Home), ("Edit", Nothing)]
+  HomeSource -> [(st.session.homePage.title, Just Home), ("Source", Nothing)]
+  HomeHistory {} -> [(st.session.homePage.title, Just Home), ("History", Nothing)]
+  HomeSlides {} -> [(st.session.homePage.title, Just Home), ("Slides", Nothing)]
   Space path -> spaceCrumbs path
   Posts path n -> spaceCrumbs path <> [("Page " <> show n, Nothing)]
   SpacePages path -> spaceCrumbs path <> [("Pages and settings", Nothing)]
@@ -1494,6 +1545,7 @@ headOf st = Head {title = documentTitle st, preview, feeds}
             Just Feeds {address = href (Space path), name = space.name}
       _ -> Nothing
     preview = case (st.route, st.here) of
+      (Home, InSpace [] space pages) | public space, Just p <- homeOf space pages >>= shownPage -> Just (ofPage space p (href Home))
       _ | isShut st -> Nothing
       (Space path, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
       (Posts path _, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
@@ -1551,7 +1603,7 @@ archiveSummary a =
   T.intercalate
     ", "
     [ counted (length a.users) "user" "users"
-    , counted (length a.spaces) "space" "spaces"
+    , counted (length (withoutHomeDocument a).spaces) "space" "spaces"
     , counted (length a.pages) "page" "pages"
     , counted (sum [length p.attachments | p <- a.pages]) "attachment" "attachments"
     , counted (sum [length t.comments | ts <- Map.elems a.threads, t <- ts]) "comment" "comments"

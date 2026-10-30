@@ -273,11 +273,18 @@ of its own that is older than `comments.json` and has another shape.
 
 ## The shared home page
 
-A whole-wiki export includes `settings.json` with the shared front page's title,
-Markdown and section switches. It contains no mail passwords, sign-in provider
-secrets or other server settings. Importing this configuration replaces the shared
-front page along with the selected wiki content. An older archive or a space-only
-archive without `homePage` leaves the existing front page unchanged. Guide imports
-omit the shared configuration. A blank title or malformed configuration refuses
-the archive before anything is imported. This optional file needs no format version
-change.
+A whole-wiki export includes `settings.json` with the home page's title/body
+snapshot, independent section switches, anonymous-reader option and real document
+reference. The backing space/page and its attachments use the ordinary archive
+records. Optional `home-versions.json` preserves saved root versions. No server
+secrets are included. The importer validates the singleton reference, page,
+attachments and version timestamps before changing anything.
+
+An import maps the archived root into the destination's root, without creating
+another directory space. Legacy WP5.34 settings without a document reference
+import their title, Markdown and switches into the real root. Archives without
+home settings, including old and space-only archives, leave the existing root
+unchanged. Guide imports omit it. Independent root histories can have the same
+timestamp: identical records are deduplicated; differing server-imported versions
+use the first free microsecond after their original time. The import then saves a
+new current version. These optional files need no archive format version change.

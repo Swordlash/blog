@@ -66,8 +66,12 @@ import Network.Wai (Application, Request (..), mapResponseHeaders, responseLBS)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
+import Wiki.App.Backend (MonadWiki (getHomeDocument))
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Attachment (Attachment (id))
+import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
+import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Page (Page (attachments))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication, currentAssistantHosts)
 import Wiki.Server.Auth (authApplication)
@@ -81,7 +85,7 @@ import Wiki.Server.Routes (routePattern)
 import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
 import Wiki.Server.Static (StaticSite, serveStatic)
-import Wiki.Server.Storage (Who (..), readServerSettings, readSettings)
+import Wiki.Server.Storage (Who (..), readServerSettings, readSettings, runStoredWiki)
 import Wiki.Server.Vault (siteFor)
 
 -- | A listener's configuration.
@@ -198,6 +202,24 @@ listenerRoutes logger env site l caller request respond = do
   shut <- case caller.who of
     Anonymous -> (\s -> s.access == Closed) <$> readSettings env.storage
     _ -> pure False
+  home <- (\s -> s.homePage) <$> readServerSettings env.storage
+  let relative = drop (length (pathSegments l.mount)) (pathInfo request)
+      readHome = requestMethod request `elem` [methodGet, methodHead] && home.showAnonymous
+  homeRead <-
+    if not (shut && readHome)
+      then pure False
+      else case (home.document, relative) of
+        (_, ["api", "v1", "home"]) -> pure True
+        (Just d, ["api", "v1", "spaces", sid, "pages", "at", "home"]) -> pure (sid == d.space.text)
+        (Just d, ["api", "v1", "pages", pid, "versions"]) -> pure (pid == d.page.text)
+        (Just d, ["api", "v1", "pages", pid, "versions", _]) -> pure (pid == d.page.text)
+        (Just d, ["api", "v1", "pages", pid, "export", _]) -> pure (pid == d.page.text)
+        (_, ["api", "v1", "attachments", aid, _]) -> do
+          -- The exception belongs to the root document, not to the attachment
+          -- resource as a whole. Ordinary attachments never pass this gate.
+          found <- runStoredWiki env.storage Anonymous getHomeDocument
+          pure (either (const False) (\(_, page) -> any (\a -> a.id.text == aid) page.attachments) found)
+        _ -> pure False
   let mounted = pathSegments l.mount
       segments = pathInfo request
       query = rawQueryString request
@@ -215,7 +237,7 @@ listenerRoutes logger env site l caller request respond = do
           -- The path itself without its trailing slash.
           [] | not (null mounted) -> redirect (encodeUtf8 l.mount)
           rest@("api" : "v1" : endpoint)
-            | shut, take 1 endpoint `notElem` map pure openToAnyone -> unauthenticated
+            | shut, take 1 endpoint `notElem` map pure openToAnyone, not homeRead -> unauthenticated
             -- The live channel, upgraded to a WebSocket on its own, outside
             -- the API's middlewares, which read and rewrite a response's
             -- status and headers ("Wiki.Server.Events").

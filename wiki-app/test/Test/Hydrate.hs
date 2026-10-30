@@ -65,6 +65,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Users (pageSizeKey)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
+import Wiki.Core.HomePage (HomeDocument (page))
 import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page qualified as P
@@ -86,9 +87,13 @@ savedHomePage :: Spec
 savedHomePage = describe "the saved front page, adopted" $
   for_ ["/", "/wiki/"] $ \base ->
     it ("keeps every node and base-path link under " <> toS base) $ do
-      let home = defaultHomePage {title = "Knowledge", body = "Shared **welcome**.\n\n[[/docs]]", showSpaces = False, showRecent = False}
+      let home = defaultHomePage {title = "Knowledge", body = "Shared **welcome**.\n\n[[/docs]]", showSpaces = False, showRecent = False, document = Nothing}
           seed = demoState demoNow
-          custom = seed {M.server = seed.server {SS.homePage = home}}
+          custom =
+            seed
+              { M.server = seed.server {SS.homePage = home {document = seed.server.homePage.document}}
+              , M.pages = Map.map (\p -> if maybe False (\d -> d.page == p.id) seed.server.homePage.document then p {P.title = home.title, P.body = home.body} else p) seed.pages
+              }
       transport <- apiOver [] custom
       rendering <- newImmediateHttpEnv transport
       container <- detached (fmap snd . startServed Build rendering base Home)
@@ -295,8 +300,9 @@ helloMade = addUTCTime (negate (30 * 86400)) demoNow
 -- answers, its refusals with their status, and a 404 for an address it does
 -- not have.
 apiOver :: [SignInProvider] -> MemState -> IO Transport
-apiOver providers st = do
-  wiki <- newMemWiki st
+apiOver providers seed = do
+  wiki <- newMemWiki seed
+  st <- readIORef wiki
   let spacePath s = fromMaybe [] (pathOf (`Map.lookup` st.spaces) s)
       pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
   now <- getCurrentTime
@@ -310,6 +316,7 @@ apiOver providers st = do
     server <- serverSettings
     kept <- backups
     logged <- activity firstPage
+    home <- getHomeDocument
     spaces <- listSpaces
     counts <- pageCounts
     perSpace <- for (Map.elems st.spaces) $ \s -> do
@@ -338,6 +345,7 @@ apiOver providers st = do
     pure
       ( Map.fromList
           ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = [], homePage = me.homePage} :: Either WikiError SessionInfo))
+              : (endpointUrl (\e -> e.homeDocument), answerOf home)
               : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
               : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (endpointUrl (\e -> e.admin.directory), answerOf people)
@@ -365,10 +373,10 @@ apiOver providers st = do
         { version = "wiki-server test"
         , startedAt = demoNow
         , dataDir = "/data"
-        , spaces = Map.size st.spaces
-        , pages = Map.size st.pages
+        , spaces = Map.size seed.spaces
+        , pages = Map.size seed.pages
         , attachments = 0
-        , users = Map.size st.users
+        , users = Map.size seed.users
         , backups = 1
         , schemaVersion = 9
         , lastBackup = Just demoNow

@@ -4,6 +4,7 @@
 module Wiki.App.Backend.Mem.Archive
   ( toArchive
   , fromArchive
+  , replaceFromArchive
   , nextCounter
   )
 where
@@ -15,14 +16,21 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.ServerSettings (ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.ServerSettings qualified as SS
-import Wiki.App.Backend.Mem.State (MemState (..), completeVersions, prepareSearch)
+import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, prepareSearch, versionOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment qualified as A
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Export (Archive (..), threadsAmong)
+import Wiki.Core.Export (Archive (..), threadsAmong, withoutHomeDocument)
+import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space qualified as S
 import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.Version (Author (..), Version (..))
 
 -- | The whole wiki, as written at this time by this program.
 toArchive :: UTCTime -> Text -> MemState -> Archive
@@ -43,6 +51,9 @@ toArchive createdAt app st =
     , -- The demo keeps no audit log (WP4.10 of docs/PLAN.md): its
       -- administration has one user, in this browser.
       audit = []
+    , homeVersions = case st.server.homePage.document of
+        Nothing -> []
+        Just d -> [versionOf st d.page at saved | (at, saved) <- Map.toList (Map.findWithDefault mempty d.page st.versions)]
     , homePage = Just st.server.homePage
     }
 
@@ -72,7 +83,7 @@ fromArchive a =
         , -- An archive has no drafts: drafts belong to their authors, and
           -- were written for other pages than these.
           drafts = mempty
-        , versions = mempty
+        , versions = Map.fromListWith (<>) [(v.page, Map.singleton v.updatedAt Saved {title = v.title, body = v.body, author = (\author -> author.id) <$> v.author}) | v <- a.homeVersions]
         , unreadVersions = mempty
         , searchText = mempty
         , -- Nor account flags: its users come with neither a disabled
@@ -97,6 +108,66 @@ fromArchive a =
         , choices = mempty
         , current = Nothing
         , counter = 1
+        }
+
+-- | Replace user content while importing the root into its existing identity.
+-- An older or space-only archive leaves the root, its attachments and history.
+replaceFromArchive :: UTCTime -> MemState -> Archive -> Either Text MemState
+replaceFromArchive time old a = do
+  for_ root.attachments $ \attachment -> case attachment.source of
+    SourceBlob b | Map.notMember b sourceBlobs -> Left ("The home attachment " <> attachment.name.text <> " has no stored bytes.")
+    _ -> pure ()
+  pure (completeVersions (prepareSearch finished))
+  where
+    base = fromArchive (withoutHomeDocument a)
+    counter = max (nextCounter old) (nextCounter base)
+    oldHome = old.server.homePage
+    incoming = fromMaybe oldHome a.homePage
+    oldRoot = oldHome.document >>= \d -> (,) <$> Map.lookup d.space old.spaces <*> Map.lookup d.page old.pages
+    archived = a.homePage >>= (\h -> h.document) >>= \d -> find (\p -> p.id == d.page) a.pages
+    -- User records from the imported wiki can happen to use this demo's
+    -- old IDs. In that case allocate fresh root IDs, as ordinary imports do.
+    freeSpace = case oldHome.document of
+      Just d | Map.notMember d.space base.spaces -> d.space
+      _ -> SpaceId ("home-space-" <> show counter)
+    freePage = case oldHome.document of
+      Just d | Map.notMember d.page base.pages -> d.page
+      _ -> PageId ("home-page-" <> show counter)
+    document = HomeDocument {space = freeSpace, page = freePage}
+    slug = either (panic . show) identity (mkSlug ("wiki-home-" <> freeSpace.text))
+    (createdSpace, createdPage) = Home.makeHomeDocument document slug time incoming
+    space = maybe createdSpace (\(s, _) -> s {S.id = freeSpace, S.homePage = Just freePage}) oldRoot
+    previous = maybe createdPage snd oldRoot
+    source = fromMaybe previous archived
+    content = if isJust a.homePage then source {P.title = maybe incoming.title (\p -> p.title) archived, P.body = maybe incoming.body (\p -> p.body) archived} else source
+    root = content {P.id = freePage, P.space = freeSpace, P.parent = Nothing, P.slug = previous.slug, P.template = False, P.body = content.body}
+    sourceBlobs = if isJust archived then a.blobs else old.blobs
+    -- Reassign attachment and blob IDs, keeping the imported user's IDs free.
+    attach (items, bytes, n) attachment =
+      let id = AttachmentId ("attachment-" <> show n)
+          blob = BlobId ("blob-" <> show n)
+          (source', bytes') = case attachment.source of
+            SourceBlob b -> (SourceBlob blob, Map.insert blob (fromMaybe (panic "checked home attachment bytes") (Map.lookup b sourceBlobs)) bytes)
+            url -> (url, bytes)
+       in (items <> [attachment {A.id = id, A.source = source'}], bytes', n + 1)
+    allocatedRoot = maybe True (\d -> d.space /= freeSpace || d.page /= freePage) oldHome.document
+    (attachments, blobs, next) = foldl' attach ([], base.blobs, counter + if allocatedRoot then 1 else 0) root.attachments
+    keptVersions = maybe mempty (\(_, p) -> Map.findWithDefault mempty p.id old.versions) oldRoot
+    importedVersions = Map.fromList [(v.updatedAt, Saved {title = v.title, body = v.body, author = (\author -> author.id) <$> v.author}) | v <- a.homeVersions]
+    versions = if isJust archived then importedVersions else keptVersions
+    -- Legacy settings change the text but must retain an existing history.
+    changedLegacy = isJust a.homePage && isNothing archived && (root.title /= previous.title || root.body /= previous.body)
+    page = if changedLegacy then P.savedAs time root.title root.body previous {P.id = freePage, P.space = freeSpace, P.attachments = attachments} else root {P.attachments = attachments}
+    home = incoming {Home.document = Just document, Home.title = page.title, Home.body = page.body}
+    finished =
+      base
+        { spaces = Map.insert freeSpace space base.spaces
+        , pages = Map.insert freePage page base.pages
+        , versions = Map.insert freePage versions base.versions
+        , blobs
+        , counter = next
+        , current = old.current
+        , server = old.server {SS.homePage = home}
         }
 
 -- | The number after the largest number that ends one of the wiki's ids.

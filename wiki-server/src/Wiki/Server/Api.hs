@@ -99,7 +99,7 @@ import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
-import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
@@ -480,6 +480,7 @@ handlers env caller =
               sent <- liftIO (traverse (mailVerification u) made)
               emailStateOf u (join sent)
           }
+    , homeDocument = wiki getHomeDocument
     , spaces =
         SpacesApi
           { list = ask' listSpaces
@@ -726,7 +727,7 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO availableFormats
       settings <- liftIO (readServerSettings env.storage)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, homePage = if shutOut s then defaultHomePage else settings.homePage}
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.

@@ -30,6 +30,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Attachment (Attachment (id))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
@@ -607,23 +608,71 @@ withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = Serve
 boxesOnly :: [BoxKind] -> ServerSettingsChange
 boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes, homePage = defaultHomePage}
 
-serverSide :: (MonadAdmin m, MonadWiki m) => SpecWith (Fixture m)
+serverSide :: (MonadAdmin m, MonadWiki m, MonadComments m) => SpecWith (Fixture m)
 serverSide = describe "serverSettings and setServerSettings" $ do
-  it "changes only the home page and gives its public content to every reader" $ \(Fixture run) -> do
-    let home = HomePage {title = "Welcome", body = "Shared **content**.", showSpaces = False, showRecent = True}
-    previous <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
-    run admin (setHomePage home) >>= ok >>= (`shouldBe` home)
-    changed <- run admin serverSettings >>= ok
-    changed `shouldBe` previous {SS.homePage = home}
-    for_ [Anonymous, editor, reader, admin] $ \who -> run who session >>= (`shouldBe` home) . (\s -> s.homePage)
-    for_ [Anonymous, editor, reader] $ \who -> do
-      run who (setHomePage defaultHomePage) >>= (`shouldFailWith` Forbidden)
-      run who (setHomePage home {SS.title = " "}) >>= (`shouldFailWith` Forbidden)
-    run admin (setHomePage home {SS.title = " "}) >>= shouldBeInvalid
-    run admin session >>= (`shouldBe` home) . (\s -> s.homePage)
+  it "reuses page saves, attachments, drafts and versions for the home document" $ \(Fixture run) -> do
+    (space, page) <- run admin getHomeDocument >>= ok
+    spaces <- run admin listSpaces
+    map (\x -> x.id) spaces `shouldNotContain` [space.id]
+    initialVersions <- run admin (listVersions page.id latestVersions) >>= ok
+    saved <- run admin (savePage page.id page.updatedAt "Welcome" "Shared **content**.") >>= ok
+    (_, readBack) <- run Anonymous getHomeDocument >>= ok
+    readBack.body `shouldBe` saved.body
+    run editor (savePage page.id saved.updatedAt "Changed" "No") >>= (`shouldFailWith` Forbidden)
+    for_ [Anonymous, editor, reader] $ \who -> run who (setHomePage defaultHomePage) >>= (`shouldFailWith` Forbidden)
+    _ <- run admin (saveDraft page.id saved.updatedAt "Draft" "Unsaved") >>= ok
+    draft <- run admin (getDraft page.id) >>= ok
+    draft `shouldSatisfy` isJust
+    attachment <- run admin (uploadAttachment page.id "home.txt" "text/plain" "kept") >>= ok
+    (_, attached) <- run admin getHomeDocument >>= ok
+    map (\x -> x.id) attached.attachments `shouldContain` [attachment.id]
+    versions <- run Anonymous (listVersions page.id latestVersions) >>= ok
+    length versions `shouldBe` length initialVersions + 1
+    run admin (listThreads page.id) >>= (`shouldFailWith` NotFound)
+    run admin (openThread page.id Nothing "Disabled") >>= (`shouldFailWith` NotFound)
+    restored <- run admin (restoreVersion page.id page.updatedAt saved.updatedAt) >>= ok
+    restored.title `shouldBe` page.title
+    run admin (getDraft page.id) >>= ok >>= (`shouldBe` Nothing)
+    run admin (movePage page.id space.id Nothing) >>= shouldBeInvalid
+    run admin (deletePage page.id) >>= shouldBeInvalid
+    run admin (createPage space.id Nothing "Child" "") >>= shouldBeInvalid
+
+  it "changes options without replaying stale content or forging the document reference" $ \(Fixture run) -> do
+    old <- run admin session
+    (_, page) <- run admin getHomeDocument >>= ok
+    saved <- run admin (savePage page.id page.updatedAt "Newer title" "Newer content") >>= ok
+    let stale = old.homePage {SS.title = "Stale", SS.body = "Stale", SS.showSpaces = False, SS.document = Nothing}
+    options <- run admin (setHomePage stale) >>= ok
+    options.title `shouldBe` saved.title
+    options.body `shouldBe` saved.body
+    options.document `shouldBe` old.homePage.document
+    options.showSpaces `shouldBe` False
+    _ <- run admin (setServerSettings noServerSettings {SS.homePage = stale}) >>= ok
+    (_, final) <- run admin getHomeDocument >>= ok
+    final.updatedAt `shouldBe` saved.updatedAt
+    final.body `shouldBe` "Newer content"
+    run admin (setHomePage stale {SS.title = " "}) >>= shouldBeInvalid
+
+  it "exposes only the opted-in home document to closed-wiki visitors and revokes it" $ \(Fixture run) -> do
+    (_, page) <- run admin getHomeDocument >>= ok
+    initialVersions <- run admin (listVersions page.id latestVersions) >>= ok
+    _ <- run admin (savePage page.id page.updatedAt "Public landing" "Welcome") >>= ok
     _ <- run admin (setWikiSettings closedWiki) >>= ok
+    run Anonymous getHomeDocument >>= (`shouldFailWith` NotFound)
     run Anonymous session >>= (`shouldBe` defaultHomePage) . (\s -> s.homePage)
-    run admin session >>= (`shouldBe` home) . (\s -> s.homePage)
+    settings <- run admin session
+    _ <- run admin (setHomePage settings.homePage {SS.showAnonymous = True}) >>= ok
+    visitor <- run Anonymous session
+    visitor.grants.access `shouldBe` Closed
+    visitor.homePage.showAnonymous `shouldBe` True
+    (_, shown) <- run Anonymous getHomeDocument >>= ok
+    shown.body `shouldBe` "Welcome"
+    run Anonymous listSpaces `shouldReturn` []
+    run Anonymous (listVersions page.id latestVersions) >>= ok >>= (\vs -> length vs `shouldBe` length initialVersions + 1)
+    run Anonymous (savePage page.id shown.updatedAt "No" "No") >>= (`shouldFailWith` Forbidden)
+    _ <- run admin (setHomePage settings.homePage {SS.showAnonymous = False}) >>= ok
+    run Anonymous getHomeDocument >>= (`shouldFailWith` NotFound)
+    run Anonymous (listVersions page.id latestVersions) >>= (`shouldFailWith` NotFound)
 
   -- The demo defines a kind of box, which the Markdown guide shows; a
   -- server has none until its administrator defines one.
@@ -637,7 +686,7 @@ serverSide = describe "serverSettings and setServerSettings" $ do
   it "keep what is written, and say of each secret only whether it is set" $ \(Fixture run) -> do
     set <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
     run admin serverSettings >>= ok >>= (`shouldBe` set)
-    set `shouldBe` (maybe NotSet (const Set) <$> serverWith (Just "wiki") (Just "pw") (Just "s"))
+    set {SS.homePage = defaultHomePage} `shouldBe` (maybe NotSet (const Set) <$> serverWith (Just "wiki") (Just "pw") (Just "s"))
 
   it "keep a secret left out, clear an empty one, and drop one with what it was for" $ \(Fixture run) -> do
     _ <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok

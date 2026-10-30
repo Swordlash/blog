@@ -558,21 +558,27 @@ Pages does. `npx http-server` does, from a directory holding it as `blog/`
 mkdir site && unzip app.zip -d site/blog && cp site/blog/404.html site/ && npx http-server site -p 8080
 ```
 
-An administrator can choose **Edit home page** on the front page to set its shared
-title and Markdown, preview it, and independently show or hide **Spaces** and
-**Recently visited**. Save keeps the result on the server or in the demo's
-IndexedDB; Cancel leaves it unchanged. A failed save keeps the draft and shows the
-error. Readers see the saved content, while the shell's sidebar still offers the
-spaces they may open, even when Spaces is hidden on the front page. Recently
-visited belongs to each browser and includes only spaces its reader may view.
+An administrator can choose **Edit home page** to use the ordinary page editor:
+the full formatting toolbar and shortcuts, previews, uploads and pasted or dropped
+attachments, automatic drafts, the writing assistant, tracked changes and save
+conflicts. **Save** stays in the editor; **Save and close** returns to the root.
+The home page also has source, history and restore, contents, presentation and
+server document exports. Comments are disabled on the home page alone.
 
-The home page uses the same Markdown renderer, CodeMirror editor, diagrams,
-formulas, highlighted code and custom boxes as ordinary pages. Wiki links start
-at the wiki root, for example `[[/docs]]`; the home page has no page attachments
-or inherited space macros. Its content is shared with everyone who may open the
-wiki: an open wiki includes anonymous readers, while a closed wiki requires sign-in.
-Only a global administrator or the loopback operator may change it. Whole-wiki
-export and import include this public configuration.
+**Spaces** and **Recently visited** have independent switches below the page.
+The sidebar keeps the spaces the reader may open even when the directory is hidden.
+Recently visited belongs to each browser. Wiki links in the home page start at
+the wiki root, for example `[[/docs]]`; attachments belong to its real page and
+persist on the server or in the demo's IndexedDB.
+
+Only global administrators and the loopback operator can edit the shared root.
+In a closed wiki, **Show to signed-out visitors** is off by default. Turning it
+on shares this home page, its attachments, source and history, including older
+versions. Other wiki pages still require sign-in. Turning it off revokes these
+anonymous reads. The root is a singleton, so its space and page cannot be moved,
+deleted, used as a template or given children. Existing home content and section
+switches upgrade automatically without a reset. Full exports include the home
+page, its attachments and versions; older and space-only archives preserve it.
 
 The front page invites you to the tour, which says what to try. Nothing you do is
 sent anywhere, and a reload starts the demo over.

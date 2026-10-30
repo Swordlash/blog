@@ -74,6 +74,7 @@ module Wiki.Core.Export
     Archive (..)
   , currentVersion
   , writeArchive
+  , withoutHomeDocument
   , ArchiveFile (..)
   , archiveFiles
   , readArchive
@@ -124,15 +125,17 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (AuditEntry (..), encodeAuditEntry, parseAuditEntry)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor, formerAuthorName)
-import Wiki.Core.HomePage (HomePage, checkHomePage)
+import Wiki.Core.Comment qualified as C
+import Wiki.Core.HomePage (HomeDocument (..), HomePage (document), checkHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
+import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
-import Wiki.Core.Version (Author (..))
+import Wiki.Core.Version (Author (..), Version (..))
 
 -- | A whole wiki: its users, its grants, its spaces and pages (each page
 -- with its attachments' records), its pages' comments, and the bytes of
@@ -160,6 +163,8 @@ data Archive = Archive
   -- administrator is one: it has no record among the users. An import
   -- matches them by login with its own users.
   , blobs :: Map BlobId ByteString
+  , homeVersions :: [Version]
+  -- ^ Saved root versions on whole-wiki exports; absent on older archives.
   , homePage :: Maybe HomePage
   -- ^ The public front page, on whole-wiki exports. Missing on older or
   -- space-only archives; importing those leaves the front page unchanged.
@@ -168,6 +173,18 @@ data Archive = Archive
   -- administration (WP4.10 of docs/PLAN.md).
   }
   deriving stock (Eq, Show)
+
+-- | Ordinary space records of an archive. The root is imported separately.
+withoutHomeDocument :: Archive -> Archive
+withoutHomeDocument a = case a.homePage >>= (\h -> h.document) of
+  Nothing -> a
+  Just d ->
+    a
+      { spaces = filter (\s -> s.id /= d.space) a.spaces
+      , pages = filter (\p -> p.space /= d.space) a.pages
+      , threads = Map.delete d.page a.threads
+      , grants = a.grants {Permission.spaces = filter (\g -> g.space /= d.space) a.grants.spaces}
+      }
 
 -- | The version of the format this module writes, and the newest it reads.
 currentVersion :: Int
@@ -220,6 +237,7 @@ archiveFiles a =
   , ("grants.json", FileBytes (encodeJson (encodeGrants a.grants)))
   ]
     <> [("settings.json", FileBytes (encodeJson (object ["homePage" .= h]))) | Just h <- [a.homePage]]
+    <> [("home-versions.json", FileBytes (encodeJson a.homeVersions)) | not (null a.homeVersions)]
     <> [("audit.json", FileBytes (encodeJson (map encodeAuditEntry a.audit))) | not (null a.audit)]
     <> concatMap (spaceFiles "") [s | s <- a.spaces, not (spaceUnderParent s)]
   where
@@ -505,6 +523,7 @@ readVersion1 manifest entries = do
           , commentAuthors = []
           , blobs
           , homePage = Nothing
+          , homeVersions = []
           , audit
           }
       naming =
@@ -532,6 +551,7 @@ data Found
 -- @spaces\/@.
 readVersion2 :: Manifest -> Files -> Either Text Archive
 readVersion2 manifest entries = do
+  homeVersions <- maybe (Right []) (inFile "home-versions.json" . decodeJson parseJSON) (Map.lookup "home-versions.json" entries)
   homePage <- case Map.lookup "settings.json" entries of
     Nothing -> Right Nothing
     Just bytes -> inFile "settings.json" $ do
@@ -573,6 +593,7 @@ readVersion2 manifest entries = do
           , commentAuthors = Map.elems (Map.fromList [(u.id, u) | (_, _, _, _, authors) <- foundPages, u <- authors])
           , blobs
           , homePage
+          , homeVersions
           , audit
           }
       located :: (Ord k) => [(k, Text)] -> k -> Text
@@ -713,6 +734,23 @@ checkArchive naming a attachments = do
   for_ a.spaces $ \s -> for_ s.homePage $ \home ->
     unless (fmap (\p -> p.space) (Map.lookup home pagesById) == Just s.id) $
       Left (naming.spaceAt s.id <> ": the space " <> show s.id.text <> " has the home page " <> show home.text <> ", which is not one of its pages.")
+  for_ (a.homePage >>= (\h -> h.document)) $ \d -> do
+    space <- note "The home document's backing space is missing." (Map.lookup d.space spacesById)
+    page <- note "The home document's page is missing." (Map.lookup d.page pagesById)
+    unless (isNothing space.parent && isNothing page.parent && page.space == space.id && space.homePage == Just page.id && space.public && not page.template) $
+      Left "The home document must be the only ordinary page of its own public root space."
+    unless (length [p | p <- a.pages, p.space == space.id] == 1 && not (any (\s -> s.parent == Just space.id) a.spaces)) $
+      Left "The home document's backing space cannot contain other pages or spaces."
+    unless (Map.notMember page.id a.threads) (Left "The home document cannot have comments.")
+  unless (null a.homeVersions) $ do
+    d <- note "Home versions need a home document." (a.homePage >>= (\h -> h.document))
+    page <- note "The home document's page is missing." (Map.lookup d.page pagesById)
+    unique "home version" [(show v.updatedAt, "home-versions.json") | v <- a.homeVersions]
+    for_ a.homeVersions $ \v -> do
+      unless (v.page == d.page && v.updatedAt <= page.updatedAt) (Left "A home version must belong to the home page and precede its current version.")
+      when (T.null (T.strip v.title)) (Left "A home version needs a title.")
+    for_ (find (\v -> v.updatedAt == page.updatedAt) a.homeVersions) $ \v ->
+      unless (v.title == page.title && v.body == page.body) (Left "The current home version differs from its page.")
   siblings "pages" [(((p.space, p.parent), p.slug), naming.pageAt p.id) | p <- a.pages]
   for_ attachments $ \r -> do
     unless (Map.member r.page pagesById) $
@@ -779,7 +817,8 @@ threadsAmong here a = map (map thread) a.threads
   where
     archived = Map.fromList [(u.id, u) | u <- a.commentAuthors <> a.users]
     byLogin = Map.fromList [(u.login, u) | u <- here]
-    thread t = t {comments = map (\c -> c {author = author c.author}) t.comments}
+    thread t = t {comments = map (\c -> c {C.author = author c.author}) t.comments}
+    author :: Author -> Author
     author given = case Map.lookup given.id archived of
       Just person
         | Just u <- Map.lookup person.login byLogin -> Author {id = u.id, name = u.displayName}

@@ -23,7 +23,8 @@ import Test.Hspec
 import Text.Printf (printf)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.Core.Attachment (Attachment (..))
-import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Export (Archive (..), withoutHomeDocument)
+import Wiki.Core.HomePage (HomePage (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Import (readUploadFile)
@@ -61,7 +62,9 @@ main = hspec . describe "the server's memory with large attachments" $
           importArchive fresh archive >>= ok
           original <- exportArchive st "test" >>= ok
           again <- exportArchive fresh "test" >>= ok
-          wiki again `shouldBe` wiki original
+          wiki (withoutHomeDocument again) `shouldBe` wiki (withoutHomeDocument original)
+          (\h -> (h.title, h.body, h.showSpaces, h.showRecent)) <$> again.homePage
+            `shouldBe` ((\h -> (h.title, h.body, h.showSpaces, h.showRecent)) <$> original.homePage)
           Map.size again.blobs `shouldBe` 100
   where
     wiki a = (a.users, a.groups, a.grants, a.spaces, a.pages, a.blobs)

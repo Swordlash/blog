@@ -120,7 +120,7 @@ component =
       Router.link
         input.context.router
         Followed
-        (Page (spacePathOf input.context.spaces input.space.id) input.path)
+        (documentRoute input.context input.space.id (Page (spacePathOf input.context.spaces input.space.id) input.path))
         [HP.class_ "button source-back"]
         [HH.text "Back"]
 

@@ -79,6 +79,7 @@ preloadJSON :: Cache -> Value
 preloadJSON c =
   object
     [ "session" .= (sessionInfo <$> c.session)
+    , "homeDocument" .= answer "document" c.homeDocument
     , "spaces" .= c.spaces
     , "pageCounts" .= c.pageCounts
     , "spacesAt" .= answers "space" (\path -> ["path" .= path]) c.spaceAt
@@ -144,6 +145,7 @@ refusal = \case
 parsePreload :: Value -> Parser Cache
 parsePreload = withObject "the page's payload" $ \o -> do
   session <- fmap fromSessionInfo <$> o .:? "session"
+  homeDocument <- traverse (withObject "an answer" (answerIn "document")) =<< o .:? "homeDocument"
   spaces <- o .:? "spaces"
   pageCounts <- o .:? "pageCounts"
   spaceAt <- byArguments "space" (.: "path") =<< o .: "spacesAt"

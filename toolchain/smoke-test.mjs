@@ -691,7 +691,7 @@ try {
     await samePage(step);
     visits.push({ ...visit, step });
   };
-  await arrive({ path: "/", view: "directory" }, "the front page");
+  await arrive({ path: "/", view: "wiki-home" }, "the front page");
   // A space from anywhere: the directory, by the site's name, and the
   // space's card there; the space opens at its home page.
   const toSpace = async (href) => {
@@ -730,7 +730,7 @@ try {
   // Every root space, from its card in the directory, which opens it at its
   // home page with a sidebar of its own; and a page of each from there.
   await page.locator("#app .all-spaces").click();
-  await arrive({ path: "/", view: "directory" }, "the directory");
+  await arrive({ path: "/", view: "wiki-home" }, "the directory");
   const roots = await page.locator("#app .space-card-link").evaluateAll((links) =>
     links.map((a) => ({ href: a.getAttribute("href"), name: a.querySelector(".space-card-name").textContent })),
   ).then((links) => links.map((link) => ({ ...link, href: local(link.href) })));
@@ -738,7 +738,7 @@ try {
   for (const space of roots) {
     if (here(page) !== "/") {
       await page.locator("#app .all-spaces").click();
-      await arrive({ path: "/", view: "directory" }, `the directory, for ${space.name}`);
+      await arrive({ path: "/", view: "wiki-home" }, `the directory, for ${space.name}`);
     }
     await page.locator(`#app .space-card-link[href='${at(space.href)}']`).click();
     // The blog opens at its posts (WP4.14), the others at their home pages.
@@ -751,7 +751,7 @@ try {
     await arrive({ path: target.href, view: "page-view", crumb: target.title }, `the page ${target.title}`);
   }
   await page.locator("#app .wiki-brand").click();
-  await arrive({ path: "/", view: "directory" }, "the directory again");
+  await arrive({ path: "/", view: "wiki-home" }, "the directory again");
   const recent = await page.locator("#app .recent-space-name").allTextContents();
   assert.deepEqual(recent, ["Team", "Docs", "Blog"], "the spaces visited last, the latest first");
   await samePage("going through the spaces");
@@ -852,7 +852,7 @@ try {
   // Every step is an entry of the history, which the walk goes back and
   // forward through later.
   await page.locator("#app .wiki-brand").click();
-  await arrive({ path: "/", view: "directory" }, "the front page, for the team's space");
+  await arrive({ path: "/", view: "wiki-home" }, "the front page, for the team's space");
   await page.locator(`#app .space-card-link[href='${at("/s/team/")}']`).click();
   await arrive({ path: "/s/team/", view: "page-view", text: "Team handbook" }, "the team's space");
   await page.locator("#app .wiki-sidebar .sidebar-templates a", { hasText: "Weekly sync" }).waitFor({ timeout });
@@ -1308,7 +1308,7 @@ try {
     });
     await reader.route("https://upload.wikimedia.org/**", (route) => route.fulfill({ contentType: "image/png", body: standInImage }));
     await reader.goto(url("/"));
-    await reader.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    await reader.locator("#app .wiki-home .page-view h1", { hasText: "Spaces" }).waitFor({ timeout });
     assert.equal(await reader.locator('head link[rel="manifest"]').getAttribute("href"), "./manifest.webmanifest");
     // The worker takes the page over, and keeps the page it did not serve
     // (the one that installed it) when the page asks.
@@ -1391,7 +1391,7 @@ try {
       };
     });
     await writer.goto(url("/"));
-    await writer.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    await writer.locator("#app .wiki-home .page-view h1", { hasText: "Spaces" }).waitFor({ timeout });
     await eventually(async () => assert.ok(await programStarted(writer), "no listener yet"), "the program starting");
     // The settings, from the user menu: the demo starts as admin.
     await writer.locator("#app .user-switcher-toggle").click();
@@ -1475,11 +1475,12 @@ try {
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));
-  if (process.env.SMOKE_DEBUG) {
-    for (const [i, context] of browser.contexts().entries()) {
-      for (const [j, p] of context.pages().entries()) {
+  for (const [i, context] of browser.contexts().entries()) {
+    for (const [j, p] of context.pages().entries()) {
+      console.error("open page", i, j, p.url(), await shown(p).catch(() => null));
+      console.error("navigation", await p.locator("#app .sidebar-space, #app .space-card-link, #app .leave-confirm").evaluateAll((nodes) => nodes.map((n) => ({ text: n.textContent.trim(), href: n.getAttribute("href") }))).catch(() => []));
+      if (process.env.SMOKE_DEBUG) {
         await p.screenshot({ path: `${process.env.SMOKE_DEBUG}/failure-${i}-${j}.png` }).catch(() => {});
-        console.error("open page", i, j, p.url());
       }
     }
   }
