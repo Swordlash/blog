@@ -62,13 +62,14 @@ import Servant.Client.Core qualified as Servant
 import System.Timeout (timeout)
 import Text.Printf (printf)
 import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
-import Wiki.App.Backend (WikiError (..), shutOut)
+import Wiki.App.Backend (Session (homePage), WikiError (..), shutOut)
 import Wiki.App.Backend.Http (Transport (..), requestHeaderList, requestUrl)
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Head (Site (..))
 import Wiki.App.Route (Route (..), route, routeOfHref)
 import Wiki.App.Static (Served (..), renderServed, withHead)
+import Wiki.Core.HomePage (HomePage (showAnonymous))
 import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (VersionInfo (number, updatedAt))
@@ -167,7 +168,7 @@ statusOf at c = case at of
   ResetPassword _ -> status200
   VerifyEmail _ -> status200
   Unsubscribe _ -> status200
-  _ | maybe False shutOut c.session -> status401
+  _ | maybe False shutOut c.session, not (publicHome at) -> status401
   Unknown -> status404
   Space s -> ofSpace s
   Posts s _ -> ofSpace s
@@ -180,6 +181,13 @@ statusOf at c = case at of
   NewPage s _ -> ofSpace s
   _ -> status200
   where
+    publicHome r =
+      maybe False (\s -> s.homePage.showAnonymous) c.session && case r of
+        Home -> True
+        HomeSource -> True
+        HomeHistory {} -> True
+        HomeSlides {} -> True
+        _ -> False
     unlessRefused a b = if a == status200 then b else a
     ofSpace s = refusal (Map.lookup s c.spaceAt)
     ofPage s p = case Map.lookup s c.spaceAt of

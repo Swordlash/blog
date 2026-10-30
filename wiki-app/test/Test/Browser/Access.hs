@@ -21,7 +21,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage), defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (Session (..), session)
@@ -45,14 +45,14 @@ spec m = do
 
 -- | Nobody, in a wiki of this access.
 nobodyIn :: Access -> SessionInfo
-nobodyIn access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+nobodyIn access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = if access == Closed then defaultHomePage else (demoState demoNow).server.homePage}
 
 -- | One of the demo's users, signed in.
 signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
 
 registering :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 registering m = describe "making an account" $ do

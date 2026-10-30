@@ -268,7 +268,7 @@ placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
     { spaces
     , spacePath = spacePathOf spaces page.space
     , pages
-    , pagePath = pagePathOf pages page.id
+    , pagePath = if null (spacePathOf spaces page.space) then [] else pagePathOf pages page.id
     , attachments = page.attachments
     , stored
     , attachmentAddress = attachmentUrl

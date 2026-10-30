@@ -299,8 +299,8 @@ status backing = describe "the server's status" $ do
   it "is given to the administrator, with the server's counts" $ withRunning backing $ \r -> do
     (_, _) <- withSpace r False
     s <- ok200 (getUrl r (onAdmin r links.admin.status))
-    -- The space's home page, and the page made in it.
-    ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (1, 2, 0, toS r.dataDir)
+    -- The shared root, the space's home page, and the page made in it.
+    ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (2, 3, 0, toS r.dataDir)
     s.version `shouldSatisfy` T.isPrefixOf "wiki-server "
 
   it "is refused to an anonymous reader" $ withRunning backing $ \r ->

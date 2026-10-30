@@ -79,7 +79,7 @@ firstStart backing = describe "a server's first start" $ do
     withStorageIn backing $ \_ st -> do
       _ <- runStoredWiki st Administrator (createSpace Nothing "Team") >>= ok
       installOnFirstStart st >>= (`shouldSatisfy` isNothing)
-      reading st (Map.size <$> loadSpaces) `shouldReturn` 1
+      length <$> runStoredWiki st Administrator listSpaces `shouldReturn` 1
 
   it "installs nothing with --no-guide" $
     withRunningAs backing (\o -> o {Options.guide = False}) $ \r -> do

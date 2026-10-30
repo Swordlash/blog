@@ -35,6 +35,7 @@ import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
 import Wiki.Core.HomePage (HomePage (..), defaultHomePage)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
@@ -134,6 +135,7 @@ archive spaces pages =
     , commentAuthors = []
     , blobs = Map.fromList [(BlobId "b1", "PNG")]
     , audit = []
+    , homeVersions = []
     , homePage = Nothing
     }
 
@@ -199,7 +201,7 @@ intoAnEmptyWiki backing = describe "into an empty wiki" $ do
     more <- pageAt r ["docs"] ["tour", "more"]
     more.parent `shouldBe` Just tour.id
     s <- ok200 (getUrl r (admin r links.admin.status))
-    ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 2, 3, 1)
+    ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 3, 4, 1)
 
 merging :: Backing -> Spec
 merging backing = describe "a space at the same path" $ do
@@ -286,14 +288,14 @@ choices backing = describe "what is left unchecked" $ do
 roundTrip :: Backing -> Spec
 roundTrip backing = describe "an export" $ do
   it "restores public homepage metadata, while an archive without it leaves settings alone" $ withRunning backing $ \r -> do
-    let home = defaultHomePage {title = "Welcome", body = "Shared.", showSpaces = False, showRecent = False}
+    let home = defaultHomePage {title = "Welcome", body = "Shared.", showSpaces = False, showRecent = False, document = Nothing}
     _ <- apply r docs {Export.homePage = Just home} importEverything
-    (\s -> s.homePage) <$> serverAs r `shouldReturn` home
+    (\s -> s.homePage {Home.document = Nothing}) <$> serverAs r `shouldReturn` home
     _ <- apply r docs importEverything
-    (\s -> s.homePage) <$> serverAs r `shouldReturn` home
+    (\s -> s.homePage {Home.document = Nothing}) <$> serverAs r `shouldReturn` home
     reply <- getUrl r (admin r links.archive.export)
     exported <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict reply.body) >>= readArchive)
-    exported.homePage `shouldBe` Just home
+    ((\h -> h {Home.document = Nothing}) <$> exported.homePage) `shouldBe` Just home
 
   it "is a zip file of the whole wiki, which imports into another server as it was" $
     withRunning backing $ \origin -> withRunning backing $ \copy -> do

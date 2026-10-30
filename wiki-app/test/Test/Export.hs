@@ -33,10 +33,11 @@ import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
 -- Qualified, for the fields of an archive, which the in-memory wiki has too.
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
-import Wiki.Core.HomePage (HomePage (..), defaultHomePage)
+import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
@@ -134,7 +135,7 @@ withoutHistory st = imported {counter = nextCounter imported}
           , notices = mempty
           , watches = mempty
           , choices = mempty
-          , server = noServerSettings
+          , server = noServerSettings {SS.homePage = st.server.homePage}
           , threads = map (map (\t -> t {comments = map named t.comments})) st.threads
           }
     named c =
@@ -149,7 +150,7 @@ withoutHistory st = imported {counter = nextCounter imported}
 
 -- | The files every archive has, besides its tree of spaces and pages.
 recordFiles :: [Text]
-recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "settings.json"]
+recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "settings.json", "home-versions.json"]
 
 -- | A wiki with its space grants in an order of their own: the store keeps
 -- them by space.
@@ -191,8 +192,12 @@ spec :: Spec
 spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
   it "exports and restores the public home page with a whole demo wiki" $ do
     st <- edited
-    let home = defaultHomePage {title = "Welcome", body = "Shared.", showSpaces = False}
-        custom = st {server = st.server {SS.homePage = home}}
+    let previous = st.server.homePage
+        home = previous {title = "Welcome", body = "Shared.", showSpaces = False}
+        reference = fromMaybe (panic "no root document") previous.document
+        rootPage = fromMaybe (panic "no root page") (Map.lookup reference.page st.pages)
+        page = rootPage {P.title = home.title, P.body = home.body}
+        custom = withoutHistory st {server = st.server {SS.homePage = home}, pages = Map.insert page.id page st.pages}
     archive <- either (assertFailure . toS) pure (readArchive (filesOf (toArchive goldenTime "test" custom)))
     archive.homePage `shouldBe` Just home
     (fromArchive archive).server.homePage `shouldBe` home
@@ -228,7 +233,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
   it "writes the manifest, the people, and a directory per space and page with each attachment's bytes as a file" $ do
     st <- edited
     let files = filesOf (toArchive goldenTime "test" st)
-    filter (`Map.member` files) recordFiles `shouldBe` recordFiles
+    filter (`Map.member` files) (filter (/= "home-versions.json") recordFiles) `shouldBe` filter (/= "home-versions.json") recordFiles
     -- The images spaces are pictured with have files of their own.
     [p | p <- Map.keys files, "/attachments/" `T.isInfixOf` p || "/icon." `T.isInfixOf` p] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
     length (recordsIn "/page.json" files) `shouldBe` Map.size st.pages
@@ -364,7 +369,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
 
     it "defaults the fields that may be missing" $ do
       st <- ordered
-      let files = filesOf (toArchive goldenTime "test" st)
+      let files = filesOf (Export.withoutHomeDocument (toArchive goldenTime "test" st)) {Export.homePage = Nothing, Export.homeVersions = []}
           thin =
             editRecords "/page.json" (KeyMap.delete "position") $
               editRecords

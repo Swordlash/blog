@@ -163,6 +163,7 @@ wiki =
     , commentAuthors = [administrator]
     , blobs = Map.fromList ((BlobId "blob-icon", "PNG image") : [(BlobId ("blob-" <> i), bytesOf i) | i <- ["x1", "x3", "x4", "x5", "x6"]])
     , audit = []
+    , homeVersions = []
     , homePage = Nothing
     }
 

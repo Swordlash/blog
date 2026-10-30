@@ -75,17 +75,20 @@ import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
 import Wiki.Api.Import
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Export (Archive (..), encodeJson, readArchive, threadsAmong)
+import Wiki.Core.Export (Archive (..), readArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
+import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
@@ -222,10 +225,12 @@ planImport st a = toPlan a <$> reading st (matchIn a)
 -- | The archive matched against the wiki in a database.
 matchIn :: (Backend be) => Archive -> Db be [SpaceMatch]
 matchIn a = do
-  spaces <- Map.elems <$> loadSpaces
-  let wanted = matchArchive spaces (const []) a
+  settings <- loadServerSettings
+  spaces <- filter (not . Home.isHomeSpace settings.homePage . (\s -> s.id)) . Map.elems <$> loadSpaces
+  let ordinary = withoutHomeDocument a
+      wanted = matchArchive spaces (const []) ordinary
   pages <- Map.fromList <$> for [s | m <- wanted, Just s <- [m.server]] (\s -> (s.id,) <$> loadPages s.id)
-  pure (matchArchive spaces (\sid -> Map.findWithDefault [] sid pages) a)
+  pure (matchArchive spaces (\sid -> Map.findWithDefault [] sid pages) ordinary)
 
 -- | What applying an import has done so far, and where the archive's
 -- spaces and pages went.
@@ -285,7 +290,7 @@ mergeArchive blobs a choices = do
   let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
       discussions = threadsAmong (administratorUser : people) a
   done <- foldlM (importSpace blobs a discussions choices) start matches
-  for_ a.homePage $ \home -> storeSetting "home-page" (decodeUtf8 (encodeJson home))
+  importHomeDocument blobs a
   restoreAudit a.audit
   pure (done.summary, done.commentsBrought)
 

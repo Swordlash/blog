@@ -13,6 +13,8 @@ module Wiki.App.Backend.Mem.State
   ( -- * The store
     MemState (..)
   , emptyState
+  , ensureHomeDocument
+  , getHomeDocumentIn
   , currentPrincipal
   , Prepared (..)
   , prepareSearch
@@ -48,6 +50,7 @@ module Wiki.App.Backend.Mem.State
   , getDraftIn
   , listVersionsIn
   , getVersionIn
+  , versionOf
 
     -- * Writes
   , Write
@@ -178,6 +181,7 @@ import Wiki.Core.Comment (Comment (Comment), Thread (Thread), absentAuthor, chec
 import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Notification), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, keptNotifications, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
@@ -430,6 +434,32 @@ searchCandidate st p spacePath pagePath = case Map.lookup p.id st.searchText of
 newId :: Text -> MemState -> (Text, MemState)
 newId kind st = (kind <> "-" <> show st.counter, st {counter = st.counter + 1})
 
+-- | Materialize legacy homepage content as a real page, without changing it.
+ensureHomeDocument :: UTCTime -> MemState -> MemState
+ensureHomeDocument time st = case st.server.homePage.document of
+  Just _ -> st
+  Nothing -> completeVersions (prepareSearch made)
+    where
+      (sid, withSpaceId) = newId "space" st
+      (pid, two) = newId "page" withSpaceId
+      document = Home.HomeDocument {space = SpaceId sid, page = PageId pid}
+      slug = either (panic . show) identity (mkSlug ("wiki-home-" <> sid))
+      (space, page) = Home.makeHomeDocument document slug time st.server.homePage
+      made =
+        two
+          { spaces = Map.insert space.id space two.spaces
+          , pages = Map.insert page.id page two.pages
+          , server = two.server {SS.homePage = two.server.homePage {Home.document = Just document}}
+          }
+
+getHomeDocumentIn :: MemState -> Either WikiError (Space, Page)
+getHomeDocumentIn st = do
+  d <- maybe (Left NotFound) Right st.server.homePage.document
+  (space, c) <- findSpace st d.space
+  requireView st c
+  page <- findPage st d.page
+  pure (space, page)
+
 -- | The signed-in user, in the form the permission rules take.
 currentPrincipal :: MemState -> Maybe Principal
 currentPrincipal st = do
@@ -655,15 +685,30 @@ require ok = unless ok (Left Forbidden)
 -- ("Wiki.Server.Storage"'s @requireView@): a 'Forbidden' would tell the
 -- user that it exists.
 requireView :: MemState -> [Space] -> Either WikiError ()
-requireView st c = unless (canView (currentPrincipal st) st.grants c) (Left NotFound)
+requireView st c =
+  unless
+    (canView (currentPrincipal st) st.grants c || (st.server.homePage.showAnonymous && any (\s -> Home.isHomeSpace st.server.homePage s.id) c))
+    (Left NotFound)
 
 -- | The current user may edit the pages of the space at the end of the chain.
 requireEdit :: MemState -> [Space] -> Either WikiError ()
-requireEdit st c = requireView st c >> require (canEdit (currentPrincipal st) st.grants c)
+requireEdit st c =
+  requireView st c
+    >> require
+      ( if any (\s -> Home.isHomeSpace st.server.homePage s.id) c
+          then hasGlobalPermission (currentPrincipal st) st.grants Administer
+          else canEdit (currentPrincipal st) st.grants c
+      )
+
+requireOrdinary :: MemState -> SpaceId -> Either WikiError ()
+requireOrdinary st sid =
+  when
+    (Home.isHomeSpace st.server.homePage sid)
+    (Left (Invalid "The wiki home is a singleton; its space and page cannot be restructured."))
 
 -- | The current user administers the space at the end of the chain.
 requireAdminister :: MemState -> [Space] -> Either WikiError ()
-requireAdminister st c = requireView st c >> require (canAdministerSpace (currentPrincipal st) st.grants c)
+requireAdminister st c = requireView st c >> require (canAdministerSpace (currentPrincipal st) st.grants c) >> traverse_ (requireOrdinary st . (\s -> s.id)) c
 
 -- | A name or title with the blanks around it trimmed, or 'Invalid' if
 -- nothing is left.
@@ -719,7 +764,7 @@ repage space parent slug position p =
 -- box the settings define, which everyone's pages are rendered with.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.homePage = if st.grants.access == Closed then SS.defaultHomePage else st.server.homePage}
+  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.homePage = if st.grants.access == Closed && not st.server.homePage.showAnonymous then SS.defaultHomePage else st.server.homePage}
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -744,7 +789,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
 listSpacesIn :: MemState -> [Space]
 listSpacesIn st = spaceTreeOrder (Map.elems (Map.restrictKeys st.spaces listed))
   where
-    visible = filter (canView (currentPrincipal st) st.grants) (map (chainOf st) (Map.keys st.spaces))
+    visible = filter (canView (currentPrincipal st) st.grants) (map (chainOf st) [sid | sid <- Map.keys st.spaces, not (Home.isHomeSpace st.server.homePage sid)])
     listed = Set.fromList (map (\s -> s.id) (concat visible))
 
 -- | The space at a path.
@@ -760,6 +805,7 @@ pageCountsIn st =
   Map.fromList
     [ (sid, length [p | p <- pagesOf sid st, not p.template])
     | sid <- Map.keys st.spaces
+    , not (Home.isHomeSpace st.server.homePage sid)
     , canView (currentPrincipal st) st.grants (chainOf st sid)
     ]
 
@@ -805,6 +851,7 @@ searchPagesIn q st =
     q
     [ searchCandidate st p (map (\s -> s.slug) c) pagePath
     | (sid, c) <- Map.toList chains
+    , not (Home.isHomeSpace st.server.homePage sid)
     , wanted c
     , canView (currentPrincipal st) st.grants c
     , p <- pagesOf sid st
@@ -831,6 +878,7 @@ createSpaceIn :: Maybe SpaceId -> Text -> UTCTime -> Write Space
 createSpaceIn parent name now st = do
   parentChain <- traverse (fmap snd . findSpace st) parent
   traverse_ (requireView st) parentChain
+  traverse_ (requireOrdinary st) parent
   require (mayCreateSpace who st.grants parentChain)
   n <- nonBlank "A space's name" name
   let (st1, made) = insertSpace parent n False now st
@@ -921,6 +969,8 @@ moveSpaceIn sid destination st = do
   requireView st c
   traverse_ (requireView st) destinationChain
   require (mayMoveSpace (currentPrincipal st) st.grants c destinationChain)
+  requireOrdinary st sid
+  traverse_ (requireOrdinary st) destination
   when (maybe False (within sid) destinationChain) $
     Left (Invalid "A space cannot be moved into itself or one of its subspaces.")
   let others = Map.elems (Map.delete sid st.spaces)
@@ -1017,6 +1067,7 @@ shiftPageIn pid how st = do
   p <- findPage st pid
   (s, c) <- findSpace st p.space
   requireEdit st c
+  requireOrdinary st p.space
   unless (s.pageOrder == ByHand) $
     Left (Invalid (s.name <> " lists its pages " <> T.toLower (orderName s.pageOrder) <> ", not by hand."))
   let siblings = childPages ByHand (pagesOf p.space st) p.parent
@@ -1031,6 +1082,7 @@ setPageTemplateIn pid template st = do
   p <- findPage st pid
   (s, c) <- findSpace st p.space
   requireEdit st c
+  requireOrdinary st p.space
   when (template && s.homePage == Just pid) $
     Left (Invalid "A space's home page cannot be a template.")
   let p' = p {template}
@@ -1042,6 +1094,7 @@ createPageIn sid parent title body now st = do
   (_, c) <- findSpace st sid
   parentPage <- traverse (findPage st) parent
   requireEdit st c
+  requireOrdinary st sid
   when (any (\p -> p.space /= sid) parentPage) $
     Left (Invalid "A page's parent has to be in the same space.")
   t <- nonBlank "A page's title" title
@@ -1066,7 +1119,9 @@ savePageIn pid base title body now st = do
       p' = p {title = t, body, updatedAt}
       -- The draft's unsaved changes are now saved, so the draft goes.
       drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
-      saved = recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}
+      home = st.server.homePage
+      server = if Home.isHomePage home pid then st.server {SS.homePage = home {Home.title = t, Home.body = body}} else st.server
+      saved = recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText, server}
   pure (tell now p' Nothing "" PageSaved (newlyMentioned p.body body) saved, p')
 
 -- | The page and the pages under it, by id.
@@ -1088,6 +1143,10 @@ movePageIn pid destination parent st = do
   requireView st source
   requireView st target
   require (mayMovePage (currentPrincipal st) st.grants source target)
+  requireEdit st source
+  requireEdit st target
+  requireOrdinary st p.space
+  requireOrdinary st destination
   when (any (\q -> q.space /= destination) parentPage) $
     Left (Invalid "A page's parent has to be in the same space.")
   let subtree = subtreeOf st pid
@@ -1111,6 +1170,7 @@ deletePageIn :: PageId -> Write ()
 deletePageIn pid st = do
   p <- findPage st pid
   requireEdit st (chainOf st p.space)
+  requireOrdinary st p.space
   let gone = subtreeOf st pid
       st1 = clearHomes gone (dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st)
   pure
@@ -1541,7 +1601,13 @@ removeSecondFactorIn u st = do
 setHomePageIn :: HomePage -> Write HomePage
 setHomePageIn change st = do
   requireAdministrator st
-  new <- first Invalid (checkHomePage change)
+  checked <- first Invalid (checkHomePage change)
+  let new =
+        st.server.homePage
+          { Home.showSpaces = checked.showSpaces
+          , Home.showRecent = checked.showRecent
+          , Home.showAnonymous = checked.showAnonymous
+          }
   pure (st {server = st.server {SS.homePage = new}}, new)
 
 -- | The server's settings, with each secret shown only as whether it is set.
@@ -1555,8 +1621,10 @@ serverSettingsIn st = do
 setServerSettingsIn :: ServerSettingsChange -> Write ServerSettings
 setServerSettingsIn change st = do
   requireAdministrator st
-  new <- first Invalid (checkServerSettings isJust (applyChange identity st.server change))
-  pure (st {server = new}, secretState <$> new)
+  checked <- first Invalid (checkServerSettings isJust (applyChange identity st.server change))
+  (saved, home) <- setHomePageIn checked.homePage st
+  let new = checked {SS.homePage = home}
+  pure (saved {server = new}, secretState <$> new)
 
 -- | What checking a provider returns in the demo: what a server would say
 -- without asking the provider, and that the demo cannot ask it.
@@ -1624,6 +1692,7 @@ readable st pid = do
   p <- findPage st pid
   let c = chainOf st p.space
   requireView st c
+  when (Home.isHomePage st.server.homePage pid) (Left NotFound)
   pure (c, Map.findWithDefault [] pid st.threads)
 
 -- | A thread of a page, which must exist on that page.

@@ -59,7 +59,7 @@ import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
-import Wiki.Api.ServerSettings (ServerSettings, defaultHomePage, noServerSettings)
+import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsOf (homePage), noServerSettings)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
@@ -177,10 +177,11 @@ asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's r
 -- administration's people.
 serveDemo :: PageM s ()
 serveDemo = do
-  (me, spaces, pages, people, threads, counts) <- unsafeIOToPageM $ do
+  (me, home, spaces, pages, people, threads, counts) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       me <- session
+      home <- getHomeDocument
       spaces <- listSpaces
       pages <- for spaces $ \s -> do
         ps <- fromRight [] <$> listPages s.id
@@ -191,7 +192,7 @@ serveDemo = do
       people <- directory
       threads <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
       counts <- pageCounts
-      pure (me, spaces, pages, people, threads, counts)
+      pure (me, home, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
   -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body").
   (named, watched) <- unsafeIOToPageM $ do
@@ -209,7 +210,11 @@ serveDemo = do
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage}
+  for_ home $ \document@(space, page) -> do
+    answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 document
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [page.slug])) 200 page
+    answerWith "GET" (endpointUrl (\e -> e.notifications.pageWatch page.id)) 200 (Watch False Unchosen)
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
   for_ people answerUsers
   answerWith "GET" (endpointUrl (\e -> e.admin.server)) 200 (noServerSettings :: ServerSettings)
@@ -347,10 +352,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = (demoState demoNow).server.homePage}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -518,7 +523,7 @@ ownPassword m = describe "one's own password" $ do
     serverStarts
     serveDemo
     rita <- unsafeIOToPageM (signedInAs "user-admin")
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = rita.homePage}
     ui <- startServer m Home
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     length <$> findAll ui ".account-toggle" `shouldReturn` 0
@@ -786,7 +791,7 @@ views m = describe "the application over it" $ do
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])
     find ui ".all-spaces" >>= click
-    find ui ".directory h1" >>= (`shouldHaveText` "Spaces")
+    find ui ".wiki-home .page-view h1" >>= (`shouldHaveText` "Spaces")
     -- The history view went with its fiber, and the request with them.
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [True])
     unmount ui

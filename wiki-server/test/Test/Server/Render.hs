@@ -83,7 +83,7 @@ anonymous backing = describe "for someone not signed in" $ do
     (status, html) <- page r r.public "/"
     status `shouldBe` 200
     html `shouldSatisfy` T.isInfixOf "<title>Wiki</title>"
-    appIn html `shouldSatisfy` T.isInfixOf "<h1>Spaces</h1>"
+    appIn html `shouldSatisfy` T.isInfixOf "<h1 class=\"page-title\">Spaces</h1>"
     appIn html `shouldSatisfy` T.isInfixOf "<p class=\"space-card-meta\">5 pages <span class=\"badge badge-public\">Public</span></p>"
     appIn html `shouldSatisfy` T.isInfixOf "Docs"
     appIn html `shouldSatisfy` T.isInfixOf "class=\"sign-in-toggle\""

@@ -218,7 +218,7 @@ component =
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
           threads <- case loaded of
-            Ready page _ _ _ -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
+            Ready page _ _ _ | not (homeSpace input.context input.space.id) -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
@@ -277,7 +277,7 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> attachments page urls
-                <> [commentsOf st place text page CommentsView.Below]
+                <> [commentsOf st place text page CommentsView.Below | not (homeSpace input.context input.space.id)]
           place = placeOf input page urls st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
@@ -287,31 +287,36 @@ component =
     actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
     actions input page deck comments
       | mayEdit input.context page.space =
-          [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
+          [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           , viewSource
           , history
           ]
             <> present
             <> export
-            <> [comments]
-            <> [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
-               , button "Rename" (Open (Renaming page.title))
-               , button "Move" StartMove
-               , button "Delete" (Open ConfirmingDelete)
-               ]
-            <> useAsTemplate
-            <> setHome
-      | otherwise = [viewSource, history] <> present <> export <> [comments] <> setHome
+            <> [comments | not home]
+            <> ( if home
+                   then [button "Rename" (Open (Renaming page.title))]
+                   else
+                     [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
+                     , button "Rename" (Open (Renaming page.title))
+                     , button "Move" StartMove
+                     , button "Delete" (Open ConfirmingDelete)
+                     ]
+                       <> useAsTemplate
+                       <> setHome
+               )
+      | otherwise = [viewSource, history] <> present <> export <> [comments | not home] <> setHome
       where
+        home = homeSpace input.context input.space.id
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source may be read by anyone who may read
         -- the page.
-        viewSource = Router.link input.context.router Followed (PageSource spacePath input.path) [HP.class_ "button"] [HH.text "View source"]
+        viewSource = Router.link input.context.router Followed (documentRoute input.context page.space (PageSource spacePath input.path)) [HP.class_ "button"] [HH.text "View source"]
         -- The same for its history.
-        history = Router.link input.context.router Followed (PageHistory spacePath input.path Nothing AgainstPrevious) [HP.class_ "button"] [HH.text "History"]
+        history = Router.link input.context.router Followed (documentRoute input.context page.space (PageHistory spacePath input.path Nothing AgainstPrevious)) [HP.class_ "button"] [HH.text "History"]
         -- Also presenting it, if it is written as slides: any page can be
         -- shown as slides by its address, but only a deck offers it.
-        present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
+        present = [Router.link input.context.router Followed (documentRoute input.context page.space (PageSlides spacePath input.path 1 1)) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
         export = exportMenu (pageFormats deck input.context.session.exports) (pageExportUrl page.id) page.title
@@ -421,7 +426,7 @@ component =
     textAndPanel st place rendered text page contents =
       [hh|
         <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
-          <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
+          <div class="page-text" {{ [HE.onMouseUp (const Selecting) | commentsEnabled] }} {{ [HE.onKeyUp (const Selecting) | commentsEnabled] }} {{ quoteClicks }}>
             {{ Body.articleOf FollowLink place page.body marked }}
           </div>
           {% for s in maybeToList st.selected %}
@@ -454,7 +459,8 @@ component =
         -- page's contents, and the panel of comments when it is open.
         side = isJust contents || st.panelOpen
         marked = highlight (markings st text) <$> rendered
-        quoteClicks = HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread)
+        commentsEnabled = not (homeSpace st.input.context st.input.space.id)
+        quoteClicks = [HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread) | commentsEnabled]
         position :: Selected -> Text
         position s = "top: " <> px s.top <> "; left: " <> px s.left
         px x = show (round x :: Int) <> "px"
@@ -558,6 +564,7 @@ component =
         load
       Receive input -> do
         old <- gets (\st -> st.input)
+        when (isJust old.feed && isNothing input.feed) unwatchAll
         modify (\st -> st {input})
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path
         when elsewhere $ do
@@ -691,7 +698,8 @@ component =
     -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
     loadThreads = withPage $ \page -> do
-      threads <- threadsOf <$> listThreads page.id
+      input <- gets (\st -> st.input)
+      threads <- if homeSpace input.context input.space.id then pure (ThreadsReady []) else threadsOf <$> listThreads page.id
       -- Only if it is still the page shown.
       withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
       resolvePeople
@@ -712,7 +720,7 @@ component =
     watch = do
       st <- get
       let shown = case st.loaded of
-            Ready page _ _ _ -> Just page.id
+            Ready page _ _ _ | isJust st.input.feed -> Just page.id
             _ -> Nothing
       when (shown /= st.watching) $ do
         for_ st.input.feed $ \f -> H.liftEffect . liftIO $ do
@@ -818,7 +826,7 @@ busy st = isJust st.selected || isJust st.quoting || not viewing
 
 -- | Whether the reader may comment on the page shown.
 mayCommentHere :: State -> Bool
-mayCommentHere st = mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
+mayCommentHere st = not (homeSpace st.input.context st.input.space.id) && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
 
 -- | Where each inline thread's quote is in the page's text.
 locatedIn :: Text -> [Thread] -> [(Thread, Located)]

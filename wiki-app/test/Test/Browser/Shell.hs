@@ -136,7 +136,7 @@ spec m = do
 
   it "shows a reader no way to the administration, and at its address only whom it is for" $ runPage $ do
     ui <- start m (Just "user-reader") Home
-    _ <- find ui ".directory h1"
+    _ <- find ui ".wiki-home .page-view h1"
     length <$> findAll ui ".admin-link" `shouldReturn` 0
     unmount ui
     there <- start m (Just "user-reader") (Admin R.Backups)

@@ -917,21 +917,34 @@ console: `wiki-server users …` (see the README).
 
 ### The shared home page
 
-`SessionInfo.homePage` carries the front page's public configuration:
-`{"title":"Spaces","body":"","showSpaces":true,"showRecent":true}` by default.
-The title and Markdown are shared by every reader who may open the front page.
-A visitor shut out by a closed wiki receives the defaults, without the saved
-content. An older session or settings object without `homePage` uses the defaults.
+`SessionInfo.homePage` carries the shared root's compatibility title/body snapshot,
+section switches, `showAnonymous` (false by default), and a storage-created
+`document` reference `{space,page}`. Older JSON defaults missing fields. The
+registry identifies a real page in a hidden backing space; clients cannot replace
+it through settings requests. The title and body are written through the ordinary
+versioned page save and restore endpoints, with the same attachment, draft,
+history and document export operations as other pages. Root comments and
+structural changes (move, delete, template and children) are refused.
 
 | Method | Path | Body | Response | Refused |
 | ------ | ---- | ---- | -------- | ------- |
-| PUT | `api/v1/admin/home-page` | `HomePage` `{"title","body","showSpaces","showRecent"}` | the saved `HomePage` | 403 without global administration, 400 for a blank title |
+| GET | `api/v1/home` | | `[Space, Page]`, the actual root document | 401/404 when inaccessible |
+| PUT | `api/v1/admin/home-page` | `HomePage` with section and anonymous-reader switches | the saved `HomePage` | 403 without global administration, 400 for a blank title |
 
-The loopback operator may also write the home page. The title is trimmed; the
-Markdown is kept as written. This endpoint changes only the home page, preserving
-mail, providers, secrets and other server settings. The existing server settings
-API also carries `homePage`; no server secrets occur in `SessionInfo`.
-The activity log records `settings.home-page` for the dedicated update.
+The dedicated settings endpoint and full server settings update options only.
+They preserve the current page title/body and trusted document reference atomically,
+so a stale settings form cannot overwrite an editor's newer save. Only global
+administrators and the loopback operator may write root content or attachments.
+The backing space is absent from ordinary spaces, counts and search.
+
+Anonymous sessions of a closed wiki receive default home metadata unless
+`showAnonymous` is enabled. The opt-in admits only root reader routes, its page
+read/version/export endpoints and attachment IDs owned by that root page. It does
+not change `grants.access`: other wiki content remains behind Closed access.
+Source and all saved versions become readable with the page. Disabling the option
+revokes anonymous page, version, export and attachment reads. Reader routes are
+`/`, `/source/`, `/history/` and `/slides/`; the ordinary editor is `/edit/`.
+The activity log records option changes as `settings.home-page`.
 
 ### The server's settings
 

@@ -35,7 +35,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
-import Wiki.Core.Export (Archive (..), readArchive)
+import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument)
 import Wiki.Core.Space qualified as S
 
 $( browserJS
@@ -179,7 +179,7 @@ fromTheDemo m = do
       Just zipped -> unsafeIOToPageM (unzipFiles zipped)
     case archive >>= readArchive of
       Left why -> expectationFailure ("not an archive: " <> toS why)
-      Right a -> sort [s.name | s <- a.spaces] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
+      Right a -> sort [s.name | s <- (withoutHomeDocument a).spaces] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
     unmount ui
     serverStops
 

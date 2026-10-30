@@ -187,6 +187,7 @@ data Cache = Cache
   { session :: Maybe Session
   , spaces :: Maybe [Space]
   -- ^ 'Wiki.App.Backend.listSpaces'.
+  , homeDocument :: Maybe (Either WikiError (Space, Page))
   , pageCounts :: Maybe (Map SpaceId Int)
   -- ^ 'Wiki.App.Backend.pageCounts'.
   , spaceAt :: Map [Slug] (Either WikiError Space)
@@ -284,6 +285,7 @@ emptyCache =
   Cache
     { session = Nothing
     , spaces = Nothing
+    , homeDocument = Nothing
     , pageCounts = Nothing
     , spaceAt = mempty
     , pages = mempty
@@ -479,6 +481,7 @@ forgetPageContent c =
     , postDetails = mempty
     , versionLists = mempty
     , searches = []
+    , homeDocument = Nothing
     , pageCounts = Nothing
     }
 

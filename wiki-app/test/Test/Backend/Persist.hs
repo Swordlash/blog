@@ -39,6 +39,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (encodeJson)
+import Wiki.Core.HomePage (HomeDocument (..))
 import Wiki.Core.Id
   ( BlobId (..)
   , PageId (..)
@@ -153,12 +154,40 @@ reopenedFixture useFixture = withFreshDatabase $ \db -> do
 
 spec :: Spec
 spec = describe "MemWiki kept in IndexedDB" $ do
+  it "upgrades settings-only homepage content without resetting the stored wiki" $ withFreshDatabase $ \db -> do
+    let reference = fromMaybe (panic "seed has no home") seed.server.homePage.document
+        home = defaultHomePage {SS.title = "Legacy title", SS.body = "Legacy **content**.", showSpaces = False, showRecent = True}
+        legacy =
+          seed
+            { spaces = Map.delete reference.space seed.spaces
+            , pages = Map.delete reference.page seed.pages
+            , versions = Map.delete reference.page seed.versions
+            , searchText = Map.delete reference.page seed.searchText
+            , server = seed.server {SS.homePage = home}
+            }
+        held = Map.adjust (Map.adjust (fmap (stripFields ["document", "showAnonymous"])) "homePage") metaStore (records legacy)
+    runMemDOM (IDB.writeMany db (changes mempty held))
+    upgraded <- open db
+    upgraded.found `shouldBe` Restored
+    (_, document) <- runKept upgraded getHomeDocument >>= ok
+    (document.title, document.body) `shouldBe` (home.title, home.body)
+    sessionNow <- runKept upgraded session
+    sessionNow.homePage.document `shouldSatisfy` isJust
+    sessionNow.homePage.showAnonymous `shouldBe` False
+    sessionNow.homePage.showSpaces `shouldBe` False
+    again <- open db
+    (_, restored) <- runKept again getHomeDocument >>= ok
+    restored.id `shouldBe` document.id
+    restored.body `shouldBe` home.body
+
   it "persists the shared home page and defaults older metadata" $ withFreshDatabase $ \db -> do
     opened <- open db
-    let home = defaultHomePage {title = "Welcome", body = "Kept.", showSpaces = False, showRecent = False}
-    _ <- runKept opened (setHomePage home) >>= ok
+    let home = defaultHomePage {title = "Welcome", body = "Kept.", showSpaces = False, showRecent = False, document = Nothing}
+    (_, page) <- runKept opened getHomeDocument >>= ok
+    _ <- runKept opened (savePage page.id page.updatedAt home.title home.body) >>= ok
+    saved <- runKept opened (setHomePage home) >>= ok
     again <- open db
-    (\s -> s.homePage) <$> runKept again session `shouldReturn` home
+    (\s -> s.homePage) <$> runKept again session `shouldReturn` saved
     let older = Map.adjust (Map.delete "homePage") metaStore (records seed)
     case restore older of
       Stored st -> st.server.homePage `shouldBe` defaultHomePage

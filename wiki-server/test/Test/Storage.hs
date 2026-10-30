@@ -19,35 +19,100 @@ import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
 import Wiki.Api.Info (Capabilities (..), SearchKind (..))
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend
+import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (As))
-import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), findAttachment)
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
+import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
+import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), unzipFile, writeZipFile, zipFiles)
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
+import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir)
+import Wiki.Server.Storage.Rows qualified as Rows
 import Wiki.Server.Storage.Schema (GlobalGrants (..), GroupMembers (..), PageVersions (..), Pages (..), SpaceGrants (..), Users (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
 spec backing = describe "StoredWiki, besides the contract" $ do
+  homeDocument backing
   times backing
   administrator backing
   versionsAndSearchText backing
   attachmentsOnDisk backing
   wholeWikis backing
   searching backing
+
+-- | The root migrates without resetting user data and uses ordinary persistence.
+homeDocument :: Backing -> Spec
+homeDocument backing = describe "the real home document" $ do
+  it "upgrades legacy settings-only content on reopen and keeps its switches" $ withPlaceIn backing $ \place -> do
+    let home = Home.defaultHomePage {Home.title = "Legacy root", Home.body = "Kept **text**.", Home.showSpaces = False}
+    withStorage defaultConfig place $ \st -> do
+      settings <- readServerSettings st
+      writing st $ do
+        for_ settings.homePage.document (Rows.deleteSpaceRow . (\d -> d.space))
+        Rows.storeServerSettings settings {SS.homePage = home}
+    withStorage defaultConfig place $ \st -> do
+      (_, page) <- runStoredWiki st Administrator getHomeDocument >>= ok
+      (page.title, page.body) `shouldBe` (home.title, home.body)
+      settings <- readServerSettings st
+      settings.homePage.showSpaces `shouldBe` False
+      settings.homePage.showAnonymous `shouldBe` False
+      runStoredWiki st Administrator listSpaces `shouldReturn` []
+      versions <- runStoredWiki st Administrator (listVersions page.id latestVersions) >>= ok
+      length versions `shouldBe` 1
+
+  it "preserves root attachments and saved versions in a whole-wiki archive" $ withDemo backing $ \st -> do
+    (_, initial) <- asAdmin st getHomeDocument >>= ok
+    saved <- asAdmin st (savePage initial.id initial.updatedAt "First root" "First body") >>= ok
+    latest <- asAdmin st (savePage saved.id saved.updatedAt "Second root" "[root.txt](attachment:root.txt)") >>= ok
+    _ <- asAdmin st (uploadAttachment latest.id "root.txt" "text/plain" "root bytes") >>= ok
+    archive <- exportArchive st "test" >>= either (\e -> expectationFailure (toS e) >> panic e) pure
+    for_ ["First root", "Second root"] $ \title -> map (\v -> v.title) archive.homeVersions `shouldContain` [title]
+    withStorageIn backing $ \_ destination -> do
+      importArchive destination archive >>= (`shouldBe` Right ())
+      (_, restored) <- runStoredWiki destination Administrator getHomeDocument >>= ok
+      restored.id `shouldNotBe` latest.id
+      (restored.title, restored.body) `shouldBe` (latest.title, latest.body)
+      map (\a -> a.name.text) restored.attachments `shouldBe` ["root.txt"]
+      let attachment = fromMaybe (panic "missing root attachment") (head restored.attachments)
+      stored <- runStoredWiki destination Administrator (attachmentFile attachment.id) >>= ok
+      bytes <- maybe (expectationFailure "root attachment has no file" $> "") BS.readFile (snd stored)
+      bytes `shouldBe` "root bytes"
+      versions <- runStoredWiki destination Administrator (listVersions restored.id latestVersions) >>= ok
+      for_ ["First root", "Second root"] $ \title -> map (\v -> v.title) versions `shouldContain` [title]
+
+  it "keeps distinct root versions whose timestamps collide on import" $ withDemo backing $ \st -> do
+    (_, page) <- asAdmin st getHomeDocument >>= ok
+    archive <- exportArchive st "collision" >>= either (\e -> expectationFailure (toS e) >> panic e) pure
+    let changed = page {P.title = "Imported collision", P.body = "Different text"}
+        incoming =
+          archive
+            { Export.pages = [if p.id == page.id then changed else p | p <- archive.pages]
+            , Export.homePage = (\h -> h {Home.title = changed.title, Home.body = changed.body}) <$> archive.homePage
+            , Export.homeVersions = [Version {page = page.id, updatedAt = page.updatedAt, title = changed.title, body = changed.body, author = Nothing}]
+            }
+    writing st (importHomeDocument (attachmentsDir (storageDataDir st)) incoming)
+    versions <- asAdmin st (listVersions page.id latestVersions) >>= ok
+    for_ [page.title, changed.title] $ \title -> map (\v -> v.title) versions `shouldContain` [title]
+    let different = [v | v <- versions, v.title == changed.title]
+    length different `shouldBe` 2
+    map (\v -> v.updatedAt) different `shouldSatisfy` all (> page.updatedAt)
 
 -- | Run as the demo's administrator user.
 asAdmin :: Storage -> StoredWiki IO a -> IO a
@@ -133,7 +198,8 @@ administrator backing = describe "the administrator" $ do
 
   it "is told apart from a user who is not there, who is nobody" $
     withDemo backing $ \st -> do
-      runStoredWiki st (AsUser (UserId "no-such-user")) session `shouldReturn` anonymous
+      asking <- runStoredWiki st (AsUser (UserId "no-such-user")) session
+      asking {B.homePage = anonymous.homePage} `shouldBe` anonymous
       names <- map (\s -> s.name) <$> runStoredWiki st (AsUser (UserId "no-such-user")) listSpaces
       names `shouldBe` ["Blog", "Docs"]
 
@@ -379,7 +445,7 @@ wholeWikis backing = describe "importArchive and exportArchive" $ do
 
 -- | What an archive holds, but for when and by what it was written.
 contents :: Archive -> _
-contents a = (a.users, a.groups, a.membership, a.grants, a.spaces, a.pages, a.blobs)
+contents whole = let a = withoutHomeDocument whole in (a.users, a.groups, a.membership, a.grants, a.spaces, a.pages, a.blobs)
 
 -- | An archive with its blobs named by their hashes, as the storage names
 -- them: two archives of the same wiki are then equal.

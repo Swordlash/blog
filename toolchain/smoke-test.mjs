@@ -1308,7 +1308,7 @@ try {
     });
     await reader.route("https://upload.wikimedia.org/**", (route) => route.fulfill({ contentType: "image/png", body: standInImage }));
     await reader.goto(url("/"));
-    await reader.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    await reader.locator("#app .wiki-home .page-view h1", { hasText: "Spaces" }).waitFor({ timeout });
     assert.equal(await reader.locator('head link[rel="manifest"]').getAttribute("href"), "./manifest.webmanifest");
     // The worker takes the page over, and keeps the page it did not serve
     // (the one that installed it) when the page asks.
@@ -1391,7 +1391,7 @@ try {
       };
     });
     await writer.goto(url("/"));
-    await writer.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    await writer.locator("#app .wiki-home .page-view h1", { hasText: "Spaces" }).waitFor({ timeout });
     await eventually(async () => assert.ok(await programStarted(writer), "no listener yet"), "the program starting");
     // The settings, from the user menu: the demo starts as admin.
     await writer.locator("#app .user-switcher-toggle").click();

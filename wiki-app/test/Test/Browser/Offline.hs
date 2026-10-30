@@ -72,7 +72,7 @@ spec m = do
       (findIn line ".wiki-time" >>= (`getAttribute` "datetime")) `shouldReturn` Just "2026-10-20T08:30:00Z"
       find ui ".offline-notice" >>= (`shouldHaveText` "You are offline: the wiki cannot be reached until the connection is back.")
       find ui ".wiki-brand" >>= click
-      find ui ".directory h1" >>= (`shouldHaveText` "Spaces")
+      find ui ".wiki-home .page-view h1" >>= (`shouldHaveText` "Spaces")
       length <$> findAll ui ".offline-copy" `shouldReturn` 0
       unmount ui
       servedOffline Nothing

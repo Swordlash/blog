@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Use the full ordinary page editor and reader features on the shared home page, with comments disabled only there. Keep attachments, drafts and versions in IndexedDB and archives. Add canonical home source/history/presentation routes and a closed-wiki option to share only the home page with signed-out visitors.
+
 Let an administrator edit the shared front page's title and Markdown with CodeMirror, preview it, toggle Spaces and Recently visited independently, save or cancel. Reuse the page renderer and islands, preserve failed drafts and lock editing during a save, and persist the configuration in IndexedDB and exports. The shell keeps space navigation when homepage cards are hidden.
 
 The wiki's guide, the demo's Tour, Markdown guide, Diagrams, Mathematics and

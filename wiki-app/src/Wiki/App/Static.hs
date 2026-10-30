@@ -63,6 +63,7 @@ import Halogen.VDom.DOM.Monad (MemDOM, MonadBrowserDOM, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Halogen.VDom.Driver (hydrateUI, renderSpec)
 import Protolude
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.App (component, input, serverInput)
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
@@ -79,6 +80,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.Shell qualified as Shell
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (body, id, space))
 import Wiki.Core.Path (pathOf)
@@ -117,9 +119,13 @@ prerenderedRoutes :: MemState -> [Route]
 prerenderedRoutes st =
   Home
     : Search Nothing Nothing True
-    : [r | s <- Map.elems st.spaces, Just path <- [spacePath s.id], r <- [Space path, SpacePages path]]
+    : HomeSource
+    : HomeHistory Nothing AgainstPrevious
+    : [HomeSlides 1 1 | any (\p -> Home.isHomePage st.server.homePage p.id && deck p.body) (Map.elems st.pages)]
+      <> [r | s <- Map.elems st.spaces, not (Home.isHomeSpace st.server.homePage s.id), Just path <- [spacePath s.id], r <- [Space path, SpacePages path]]
       <> [ r
          | p <- Map.elems st.pages
+         , not (Home.isHomePage st.server.homePage p.id)
          , Just sp <- [spacePath p.space]
          , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
          , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p.body]

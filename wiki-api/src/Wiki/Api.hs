@@ -166,6 +166,7 @@ data WikiApi form mode = WikiApi
   -- 'Wiki.Api.Error.TooManyRequests'.
   , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
   , account :: mode :- "account" :> NamedRoutes AccountApi
+  , homeDocument :: mode :- "home" :> Get '[JSON] (Space, Page)
   , spaces :: mode :- "spaces" :> NamedRoutes (SpacesApi form)
   , pages :: mode :- "pages" :> NamedRoutes (PagesApi form)
   , attachments :: mode :- "attachments" :> NamedRoutes AttachmentsApi

@@ -232,6 +232,7 @@ restoring backing = describe "restore" $ do
 
   it "refuses what is not a sound backup of a wiki, and a directory of attachments that is not there" $
     withSystemTempDirectory "wiki-restore-test" $ \dir -> withPlaceIn backing $ \at -> do
+      priorRows <- withStorageAside at tableRows
       let refused r = restore r >>= either (const pass) (\_ -> expectationFailure ("restored " <> show r))
       BS.writeFile (dir </> "junk.sqlite") "not a database at all, but long enough to look like a header of one"
       BS.writeFile (dir </> "junk.pgdump") "not a dump at all"
@@ -248,7 +249,7 @@ restoring backing = describe "restore" $ do
         whenM (doesFileExist (made <> ".json")) (copyFile (made <> ".json") (copy <> ".json"))
         pure copy
       refused (restoreInto at file (Just (dir </> "nowhere")))
-      withStorageAside at tableRows >>= (`shouldSatisfy` all (null . snd) . filter ((/= "settings") . fst))
+      withStorageAside at tableRows `shouldReturn` priorRows
 
 -- | What the server's own backups keep: their settings, checked, with the
 -- rclone configuration never given back; a backup checked as it is made;

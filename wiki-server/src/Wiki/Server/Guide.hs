@@ -58,12 +58,14 @@ import Data.UUID.Types qualified as UUID
 import Protolude
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportSummary (..), importEverything)
+import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Guide (guideSlug, guideState)
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export qualified as Export
+import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..), savedAs)
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -161,7 +163,8 @@ installOnFirstStart st = do
       ( do
           spaces <- loadSpaces
           before <- everInstalled
-          if not (Map.null spaces) || before
+          settings <- loadServerSettings
+          if any (not . Home.isHomeSpace settings.homePage) (Map.keys spaces) || before
             then pure (Left ())
             else Right <$> install st now operator "server"
       )
