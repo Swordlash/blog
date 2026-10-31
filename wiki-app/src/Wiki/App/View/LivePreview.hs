@@ -14,7 +14,9 @@
 -- its window closed), the window says so and keeps the last text. A window
 -- opened, or loaded again, while the editor is open asks it for what it
 -- has, and follows it from there. When a file is uploaded in the editor,
--- the window fetches the page's attachments again.
+-- the window fetches the page's attachments again. In the demo, whose wiki
+-- each tab keeps in memory from what was stored when it loaded, the window
+-- does not see a file uploaded after it opened until it is reloaded.
 module Wiki.App.View.LivePreview
   ( Input (..)
   , component
@@ -71,7 +73,7 @@ data Shown
 data State = State
   { input :: Input
   , shown :: Shown
-  , feed :: Maybe LiveFeed
+  , feed :: Maybe (LiveFeed, H.SubscriptionId)
   , article :: H.RefLabel
   , attachments :: [Attachment]
   -- ^ The page's attachments, and their addresses: what its links to them
@@ -87,6 +89,7 @@ data State = State
 -- was uploaded to the page, or that the editor has gone.
 data Heard = Heard
   { text :: Maybe Text
+  , title :: Maybe Text
   , line :: Maybe Int
   , uploaded :: Bool
   , closed :: Bool
@@ -94,7 +97,7 @@ data Heard = Heard
 
 instance FromJSON Heard where
   parseJSON = withObject "message" $ \o ->
-    Heard <$> o .:? "text" <*> o .:? "line" <*> o .:? "attachments" .!= False <*> o .:? "closed" .!= False
+    Heard <$> o .:? "text" <*> o .:? "title" <*> o .:? "line" <*> o .:? "attachments" .!= False <*> o .:? "closed" .!= False
 
 -- | The page as saved: what the window shows until the editor speaks, and
 -- the attachments its links resolve to, with their addresses.
@@ -163,9 +166,9 @@ component =
         -- On the loop, without a wait, so that the window cannot be
         -- finalized between listening and keeping what stops it.
         channel <- H.liftEffect (liftIO HS.create)
-        void (H.subscribe (Listened <$> channel.emitter))
+        subscription <- H.subscribe (Listened <$> channel.emitter)
         feed <- H.liftEffect (listenLive (liveKey input.space.id input.path) (HS.notify channel.listener))
-        modify (\st -> st {feed = Just feed})
+        modify (\st -> st {feed = Just (feed, subscription)})
         fetched <- gets (\st -> st.fetched)
         unless fetched $ do
           Fetched saved attachments urls <- lift (fetchSaved input)
@@ -176,14 +179,22 @@ component =
               , fetched = True
               , shown = case (st.shown, saved) of
                   -- The editor spoke while the page was loading: its text,
-                  -- under the page's title (the editor sends no title).
-                  (Shows source _ body, Shows _ title _) -> Shows source title body
+                  -- under its title, or the page's if it sent none.
+                  (Shows source typed body, Shows _ title _) -> Shows source (if T.null typed then title else typed) body
                   (Shows {}, _) -> st.shown
                   _ -> saved
               }
         H.raise Loaded
-      Finalize -> gets (\st -> st.feed) >>= traverse_ stopLive
-      Receive input -> modify (\st -> st {input})
+      Finalize -> stopListening
+      Receive input -> do
+        old <- gets (\st -> st.input)
+        modify (\st -> st {input})
+        -- Another page in the same window: its own text and attachments,
+        -- and its own editor to listen for.
+        when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
+          stopListening
+          modify (\st -> st {shown = Loading, attachments = [], urls = mempty, fetched = False})
+          handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of
         Left _ -> pass
         Right heard
@@ -203,12 +214,23 @@ component =
                 _ -> pass
           | otherwise -> do
               for_ heard.text $ \body -> modify $ \st ->
-                let title = case st.shown of
+                let kept = case st.shown of
                       Shows _ t _ -> t
                       _ -> ""
+                    title = fromMaybe kept (mfilter (not . T.null) heard.title)
                  in st {shown = Shows Editor title body}
               for_ heard.line $ \n ->
                 gets (\st -> st.article) >>= H.getRef >>= traverse_ (H.liftEffect . (`followLine` n))
+
+    stopListening :: H.HalogenM State Action Slots ViewOutput m ()
+    stopListening =
+      gets (\st -> st.feed)
+        >>= traverse_
+          ( \(feed, subscription) -> do
+              H.unsubscribe subscription
+              stopLive feed
+              modify (\st -> st {feed = Nothing})
+          )
 
     -- Links are resolved from where the page is, as in its editor.
     place :: State -> Body.Place

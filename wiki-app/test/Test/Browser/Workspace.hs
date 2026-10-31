@@ -32,7 +32,7 @@ $( browserJS
      , ("js_live_hello", "wiki_test_live_hello", Unsafe, [t|IO JSText|])
      , ("js_live_heard", "wiki_test_live_heard", Unsafe, [t|IO JSText|])
      , ("js_live_heard_all", "wiki_test_live_heard_all", Unsafe, [t|IO JSText|])
-     , ("js_live_send", "wiki_test_live_send", Unsafe, [t|JSText -> Int -> IO ()|])
+     , ("js_live_send", "wiki_test_live_send", Unsafe, [t|JSText -> JSText -> Int -> IO ()|])
      , ("js_live_close", "wiki_test_live_close", Unsafe, [t|IO ()|])
      , ("js_live_cursor", "wiki_test_live_cursor", Unsafe, [t|Int -> IO ()|])
      , ("js_scrolled", "wiki_test_live_scrolled", Unsafe, [t|JSText -> IO Double|])
@@ -84,7 +84,9 @@ spec m = do
     -- Back at the top: the first block, under the page's title.
     unsafeIOToPageM (js_live_cursor 0)
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (< 100))
-    find ui ".editor-side-by-side input" >>= click
+    -- "Show preview" shows the whole page, not the pane beside the text.
+    find ui ".editor-show-preview" >>= click
+    eventually $ computedStyle ".editor-preview" "overflow-y" `shouldReturn` "visible"
     unmount ui
 
   it "tells the window of its page what is typed and where" $ runPage $ do
@@ -99,6 +101,10 @@ spec m = do
       (field "text" =<< message, field "line" =<< message)
         `shouldBe` (Just (String "# Typed here\n\nand here"), Just (Number 3))
     find ui ".editor-detach" >>= \detach -> getAttribute detach "target" `shouldReturn` Just "wiki-live-preview"
+    -- The title, typed outside the Markdown, goes with it.
+    find ui ".editor-title input" >>= clear
+    find ui ".editor-title input" >>= (`typeText` "Retitled")
+    eventually $ (field "title" =<<) . lastMay <$> heardAll `shouldReturn` Just (String "Retitled")
     -- A file uploaded: the window is told to fetch the attachments again.
     unsafeIOToPageM (evaluate =<< js_choose_file (toJSText ".editor-attach input") (toJSText "dot.png") (toJSText "image/png") (toJSText dotPng))
     settle
@@ -119,10 +125,11 @@ spec m = do
     find ui ".live-preview-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The page as saved")
     find ui ".live-preview .page-body h1" >>= (`shouldHaveText` "Hello, world")
     eventually $ unsafeIOToPageM (fromJSText <$> js_live_hello) >>= (`shouldSatisfy` T.isSuffixOf "/hello-world")
-    unsafeIOToPageM (js_live_send (toJSText long) 1)
+    unsafeIOToPageM (js_live_send (toJSText long) (toJSText "Retitled") 1)
     find ui ".live-preview-state" >>= (`shouldHaveText` "Following the editor.")
     eventually $ length <$> findAll ui ".live-preview .page-body h2" `shouldReturn` 60
-    unsafeIOToPageM (js_live_send (toJSText long) 230)
+    find ui ".live-preview .page-title" >>= (`shouldHaveText` "Retitled")
+    unsafeIOToPageM (js_live_send (toJSText long) (toJSText "") 230)
     eventually $ scrolled "" >>= (`shouldSatisfy` (> 500))
     unsafeIOToPageM js_live_close
     eventually $ find ui ".live-preview-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The editor was closed")

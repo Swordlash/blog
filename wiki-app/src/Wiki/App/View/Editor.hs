@@ -1118,6 +1118,7 @@ component =
                 class="editor-cm"
                 ref={{ st.host }}
                 data-live-key={{ liveKey st.input.space.id st.input.path }}
+                data-live-title={{ liveTitle st }}
                 {{ HE.handler' (EventType "wiki-input") typed }}
                 {{ HE.handler' (EventType "wiki-selection") (\ev -> Just $! Selected (selectedSpan ev)) }}
                 {{ HE.handler' (EventType "wiki-changes") (\ev -> Just $! ChangesLeft (changesLeft ev)) }}
@@ -1143,6 +1144,13 @@ component =
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
+
+    -- The title as typed, for the preview in a window of its own: the
+    -- editor's CodeMirror sends it with the text (web/src/editor.js).
+    liveTitle :: State -> Text
+    liveTitle st = case st.loaded of
+      Ready w -> w.title
+      _ -> ""
 
     -- CodeMirror's text after a change, taken in the event's listener.
     typed :: Event -> Maybe Action

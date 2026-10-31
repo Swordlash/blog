@@ -590,16 +590,22 @@ function following(host) {
     if (p && p.offsetParent !== null) followLine(p, line);
   };
   const send = () => {
+    clearTimeout(timer);
     timer = null;
-    if (view !== null) channel?.postMessage({ key, text: view.state.doc.toString(), line });
+    if (view !== null) channel?.postMessage({ key, text: view.state.doc.toString(), title: host.dataset.liveTitle ?? "", line });
   };
+  const sendSoon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(send, 150);
+  };
+  // The page's title is typed outside CodeMirror: the component keeps it on
+  // the host (data-live-title), and a change of it is sent as the text's is.
+  const titles = channel === null ? null : new MutationObserver(sendSoon);
+  titles?.observe(host, { attributes: true, attributeFilter: ["data-live-title"] });
   // The editor goes: what is typed but not sent yet is sent first, so that
   // the window keeps the text as it was last typed.
   const gone = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      send();
-    }
+    if (timer !== null) send();
     channel?.postMessage({ key, closed: true });
   };
   // Closing the editor's tab, or leaving its page, destroys no editor; the
@@ -631,8 +637,7 @@ function following(host) {
       if (textToo) setTimeout(scrollPane, 400);
       if (channel === null) return;
       if (textToo) {
-        clearTimeout(timer);
-        timer = setTimeout(send, 150);
+        sendSoon();
       } else if (timer === null) {
         channel.postMessage({ key, line });
       }
@@ -641,6 +646,7 @@ function following(host) {
     // attachments again, so that the reference about to be typed resolves.
     uploaded: () => channel?.postMessage({ key, attachments: true }),
     stop: () => {
+      titles?.disconnect();
       window.removeEventListener("pagehide", hidden);
       window.removeEventListener("pageshow", shown);
       gone();

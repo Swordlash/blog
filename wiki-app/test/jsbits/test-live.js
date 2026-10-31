@@ -35,10 +35,10 @@ function wiki_test_live_heard_all() {
   return JSON.stringify(wikiTestLive?.heard ?? []);
 }
 
-// Speak as the editor of the page a preview window asked about: the text and
-// the line, or that the editor has gone.
-function wiki_test_live_send(text, line) {
-  wikiTestLive?.channel.postMessage({ key: wikiTestLive.hello, text, line });
+// Speak as the editor of the page a preview window asked about: the text,
+// the title ("" for none) and the line, or that the editor has gone.
+function wiki_test_live_send(text, title, line) {
+  wikiTestLive?.channel.postMessage({ key: wikiTestLive.hello, text, title, line });
 }
 
 function wiki_test_live_close() {

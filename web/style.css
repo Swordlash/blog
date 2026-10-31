@@ -2698,6 +2698,8 @@ body:has(.slides-view) {
 .editor-form.previewing .editor-panes .editor-preview {
   display: block;
   max-height: none;
+  height: auto;
+  overflow-y: visible;
 }
 
 .editor-panes.dropping {
