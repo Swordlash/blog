@@ -521,10 +521,13 @@ vault m = do
     find ui ".assistant-add-passkey" >>= click
     eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
     exportable `shouldReturn` 0
-    -- Turning on: a new vault key made, and the passkey's dialog closed.
+    -- Turning on: a new vault key made, and both dialogs closed, the one
+    -- for the passkey kept when syncing was turned off and the one for a
+    -- new passkey made in its place.
     find ui ".assistant-sync-off" >>= click
     _ <- eventually $ find ui ".assistant-sync-off-state"
-    unsafeIOToPageM (js_cancel_after 0)
+    unsafeIOToPageM js_cancel_next
+    unsafeIOToPageM js_cancel_next
     find ui ".assistant-sync-on-button" >>= click
     eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
     exportable `shouldReturn` 0

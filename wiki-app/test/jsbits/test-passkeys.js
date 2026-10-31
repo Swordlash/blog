@@ -22,7 +22,8 @@ const wikiTestPasskeys = {
   credentials: [],
   prf: true,
   prfAtCreate: true,
-  cancelNext: false,
+  // How many of the next dialogs the person closes.
+  cancelNext: 0,
   cancelAt: null,
   touches: 0,
   // The login field's offer of passkeys (conditional mediation) waiting
@@ -56,10 +57,14 @@ async function wikiTestPrf(id, salt) {
 
 function wikiTestTouch() {
   wikiTestPasskeys.touches++;
-  if (wikiTestPasskeys.cancelNext || wikiTestPasskeys.cancelAt === wikiTestPasskeys.touches) {
-    wikiTestPasskeys.cancelNext = false;
+  const closed = new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
+  if (wikiTestPasskeys.cancelNext > 0) {
+    wikiTestPasskeys.cancelNext--;
+    throw closed;
+  }
+  if (wikiTestPasskeys.cancelAt === wikiTestPasskeys.touches) {
     wikiTestPasskeys.cancelAt = null;
-    throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
+    throw closed;
   }
 }
 
@@ -123,7 +128,7 @@ function wiki_test_passkeys_install(prf, prfAtCreate) {
   Object.defineProperty(navigator, "credentials", { value: wikiTestCredentials, configurable: true });
   if (wikiTestPasskeys.conditional === undefined) wikiTestPasskeys.conditional = Object.getOwnPropertyDescriptor(PublicKeyCredential, "isConditionalMediationAvailable") ?? null;
   Object.defineProperty(PublicKeyCredential, "isConditionalMediationAvailable", { value: async () => true, configurable: true });
-  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0, offered: null, offers: 0 });
+  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: 0, cancelAt: null, touches: 0, offered: null, offers: 0 });
 }
 
 function wiki_test_passkeys_uninstall() {
@@ -177,7 +182,7 @@ function wiki_test_passkeys_touches() {
 
 // The person closes the next dialog.
 function wiki_test_passkeys_cancel_next() {
-  wikiTestPasskeys.cancelNext = true;
+  wikiTestPasskeys.cancelNext++;
 }
 
 // The person closes a later dialog: the one after this many touches.
