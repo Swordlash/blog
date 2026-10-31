@@ -211,7 +211,7 @@ resets m = describe "a password reset" $ do
     find ui ".reset-request-form input[name=login]" >>= (`typeText` "rita")
     find ui ".reset-request-form button[type=submit]" >>= click
     find ui ".reset-told" >>= (`shouldContainText` "If that is the login or the verified address of an account")
-    askedWith "POST" `shouldReturn` [("api/v1/password-reset", "{\"login\":\"rita\"}")]
+    filter ((/= "api/v1/session/passkey") . fst) <$> askedWith "POST" `shouldReturn` [("api/v1/password-reset", "{\"login\":\"rita\"}")]
     find ui ".reset-request-form button[type=button]" >>= click
     _ <- find ui ".sign-in-form input[name=login]"
     unmount ui

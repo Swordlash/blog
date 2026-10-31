@@ -378,7 +378,8 @@ accounts m = describe "signing in and out" $ do
     find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
     _ <- find ui ".account .sign-out"
     length <$> findAll ui ".sign-in-form" `shouldReturn` 0
-    [signIn] <- filter (\r -> r.method == "POST") <$> asked
+    -- The login field's offer of passkeys asks for a challenge of its own.
+    [signIn] <- filter (\r -> r.method == "POST" && r.url /= "api/v1/session/passkey") <$> asked
     (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\"}")
     Map.lookup "X-Wiki-Request" signIn.headers `shouldBe` Just "1"
     -- Everything read as nobody is read again as Ada: the spaces were.

@@ -107,7 +107,9 @@ closed m = describe "a closed wiki" $
       length <$> findAll ui ".breadcrumbs" `shouldReturn` 0
       find ui ".closed-sign-in" >>= click
       _ <- find ui ".sign-in-form input[name=login]"
-      map (\r -> r.url) <$> asked `shouldReturn` ["api/v1/session"]
+      -- Besides the session, only the challenge the login field's offer of
+      -- passkeys asks for.
+      filter (/= "api/v1/session/passkey") . map (\r -> r.url) <$> asked `shouldReturn` ["api/v1/session"]
       unmount ui
       serverStops
 
