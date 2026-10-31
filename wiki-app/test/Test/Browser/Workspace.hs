@@ -84,6 +84,12 @@ spec m = do
     -- Back at the top: the first block, under the page's title.
     unsafeIOToPageM (js_live_cursor 0)
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (< 100))
+    -- The cursor moved while the pane is hidden: shown again, the pane
+    -- goes to its line.
+    find ui ".editor-side-by-side input" >>= click
+    unsafeIOToPageM (js_live_cursor (T.length long))
+    find ui ".editor-side-by-side input" >>= click
+    eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (> 500))
     -- "Show preview" shows the whole page, not the pane beside the text.
     find ui ".editor-show-preview" >>= click
     eventually $ computedStyle ".editor-preview" "overflow-y" `shouldReturn` "visible"

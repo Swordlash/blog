@@ -36,6 +36,7 @@ module Wiki.App.Editor.Browser
   , stopLive
   , followLine
   , announceUpload
+  , paneShown
   , clearField
   , clickElement
   , EditorKey (..)
@@ -104,6 +105,7 @@ $( browserJS
      , ("js_live_stop", "wiki_live_stop", Unsafe, [t|Int -> IO ()|])
      , ("js_live_follow", "wiki_live_follow", Unsafe, [t|Element -> Int -> IO ()|])
      , ("js_live_uploaded", "wiki_live_uploaded", Unsafe, [t|Element -> IO ()|])
+     , ("js_live_pane_shown", "wiki_live_pane_shown", Unsafe, [t|Element -> IO ()|])
      , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
@@ -262,6 +264,11 @@ followLine element = liftIO . js_live_follow element
 -- so that a reference to the new file resolves there too.
 announceUpload :: (MonadIO m) => Element -> m ()
 announceUpload = liftIO . js_live_uploaded
+
+-- | Scroll the preview beside the text in the editor (the host), just
+-- switched on, to the line the editor follows.
+paneShown :: (MonadIO m) => Element -> m ()
+paneShown = liftIO . js_live_pane_shown
 
 -- | Empty a form field the component does not control, such as a password
 -- once it has been sent: what was typed in it would otherwise stay there.

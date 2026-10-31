@@ -642,6 +642,12 @@ function following(host) {
         channel.postMessage({ key, line });
       }
     },
+    // The preview beside the text was switched on: it goes to the line
+    // followed meanwhile, now and once it has rendered.
+    paneShown: () => {
+      scrollPane();
+      setTimeout(scrollPane, 400);
+    },
     // A file was uploaded to the page: the window fetches the page's
     // attachments again, so that the reference about to be typed resolves.
     uploaded: () => channel?.postMessage({ key, attachments: true }),
@@ -817,6 +823,7 @@ export function attach(textarea, host, original, codeTokens) {
       );
     },
     uploaded: () => follow.uploaded(),
+    paneShown: () => follow.paneShown(),
     destroy: () => {
       editors.delete(editor);
       follow.stop();

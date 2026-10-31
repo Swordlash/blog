@@ -372,6 +372,11 @@ function wiki_live_stop(handle) {
   wikiLiveListeners.delete(handle);
 }
 
+// Scroll the preview beside the text, just shown, to the line followed.
+function wiki_live_pane_shown(host) {
+  host.wikiEditor?.paneShown();
+}
+
 // Tell the window of the page that a file was uploaded to it.
 function wiki_live_uploaded(host) {
   host.wikiEditor?.uploaded();

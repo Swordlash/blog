@@ -79,6 +79,9 @@ data State = State
   -- ^ The page's attachments, and their addresses: what its links to them
   -- are resolved with. Fetched again each time the editor uploads a file.
   , urls :: Map AttachmentId Text
+  , page :: Int
+  -- ^ How many pages this window has shown: an answer to a read made for
+  -- an earlier one is dropped.
   , fetched :: Bool
   -- ^ Whether the saved page has been fetched: at once in the initial
   -- state when the backend can, so that the first render matches the
@@ -129,8 +132,8 @@ component =
           article <- H.newRefLabel "live-preview"
           found <- atOnce (fetchSaved input)
           pure $ case found of
-            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, fetched = True}
-            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, fetched = False}
+            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, page = 0, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, page = 0, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -171,8 +174,9 @@ component =
         modify (\st -> st {feed = Just (feed, subscription)})
         fetched <- gets (\st -> st.fetched)
         unless fetched $ do
+          shownPage <- gets (\st -> st.page)
           Fetched saved attachments urls <- lift (fetchSaved input)
-          modify $ \st ->
+          modifyFor shownPage $ \st ->
             st
               { attachments
               , urls
@@ -193,7 +197,7 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
-          modify (\st -> st {shown = Loading, attachments = [], urls = mempty, fetched = False})
+          modify (\st -> st {shown = Loading, attachments = [], urls = mempty, page = st.page + 1, fetched = False})
           handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of
         Left _ -> pass
@@ -208,8 +212,9 @@ component =
               -- is told to fetch from now on.
               lift endPreload
               input <- gets (\st -> st.input)
+              shownPage <- gets (\st -> st.page)
               lift (fetchSaved input) >>= \case
-                Fetched (Shows {}) attachments urls -> modify (\st -> st {attachments, urls})
+                Fetched (Shows {}) attachments urls -> modifyFor shownPage (\st -> st {attachments, urls})
                 -- Not fetched: the attachments as they were.
                 _ -> pass
           | otherwise -> do
@@ -221,6 +226,11 @@ component =
                  in st {shown = Shows Editor title body}
               for_ heard.line $ \n ->
                 gets (\st -> st.article) >>= H.getRef >>= traverse_ (H.liftEffect . (`followLine` n))
+
+    -- Change the state with what was read for a page, if the window still
+    -- shows that page.
+    modifyFor :: Int -> (State -> State) -> H.HalogenM State Action Slots ViewOutput m ()
+    modifyFor shownPage f = modify (\st -> if st.page == shownPage then f st else st)
 
     stopListening :: H.HalogenM State Action Slots ViewOutput m ()
     stopListening =

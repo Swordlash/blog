@@ -237,6 +237,7 @@ import Wiki.App.Editor.Browser
   , guardUnload
   , insertAtCursor
   , mentionAsked
+  , paneShown
   , pastedFiles
   , pickedFiles
   , readPickedFile
@@ -1292,6 +1293,8 @@ component =
       SideBySide wanted -> do
         modify (\st -> st {sideBySide = wanted, previewMounted = st.previewMounted || wanted})
         if wanted then catchUp else cancelPreview
+        -- The cursor may have moved while the pane was hidden.
+        when wanted $ gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . paneShown)
         H.liftEffect (Storage.setItem LocalStorage sideBySideKey wanted)
       AskCancel -> modify (\st -> st {askingCancel = True})
       GoOnEditing -> modify (\st -> st {askingCancel = False})
