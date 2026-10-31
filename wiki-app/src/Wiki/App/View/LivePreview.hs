@@ -82,6 +82,9 @@ data State = State
   , page :: Int
   -- ^ How many pages this window has shown: an answer to a read made for
   -- an earlier one is dropped.
+  , refreshes :: Int
+  -- ^ How many times the attachments were fetched again: only the answer
+  -- to the last is kept, whichever arrives first.
   , fetched :: Bool
   -- ^ Whether the saved page has been fetched: at once in the initial
   -- state when the backend can, so that the first render matches the
@@ -132,8 +135,8 @@ component =
           article <- H.newRefLabel "live-preview"
           found <- atOnce (fetchSaved input)
           pure $ case found of
-            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, page = 0, fetched = True}
-            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, page = 0, fetched = False}
+            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, page = 0, refreshes = 0, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, page = 0, refreshes = 0, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -211,10 +214,11 @@ component =
               -- first route; this window has no other route, so the cache
               -- is told to fetch from now on.
               lift endPreload
-              input <- gets (\st -> st.input)
-              shownPage <- gets (\st -> st.page)
+              modify (\st -> st {refreshes = st.refreshes + 1})
+              State {input, page = shownPage, refreshes = refresh} <- get
               lift (fetchSaved input) >>= \case
-                Fetched (Shows {}) attachments urls -> modifyFor shownPage (\st -> st {attachments, urls})
+                Fetched (Shows {}) attachments urls ->
+                  modifyFor shownPage (\st -> if st.refreshes == refresh then st {attachments, urls} else st)
                 -- Not fetched: the attachments as they were.
                 _ -> pass
           | otherwise -> do
@@ -233,13 +237,15 @@ component =
     modifyFor shownPage f = modify (\st -> if st.page == shownPage then f st else st)
 
     stopListening :: H.HalogenM State Action Slots ViewOutput m ()
+    -- On the loop, without a wait, so that a second change of page cannot
+    -- stop the same feed again.
     stopListening =
       gets (\st -> st.feed)
         >>= traverse_
           ( \(feed, subscription) -> do
-              H.unsubscribe subscription
-              stopLive feed
               modify (\st -> st {feed = Nothing})
+              H.unsubscribe subscription
+              H.liftEffect (stopLive feed)
           )
 
     -- Links are resolved from where the page is, as in its editor.

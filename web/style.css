@@ -2182,6 +2182,7 @@ body:has(.slides-view) {
   .wiki:has(.slides-view) .wiki-sidebar,
   .wiki:has(.slides-view) .wiki-footer,
   .wiki:has(.slides-view) .leave-confirm,
+  .sidebar-fold,
   .slides-progress,
   .slides-controls {
     display: none;
