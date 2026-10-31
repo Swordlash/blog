@@ -29,6 +29,7 @@ const wikiTestPasskeys = {
   // for the person to pick one: its resolve, which wiki_test_passkeys_pick
   // calls.
   offered: null,
+  offers: 0,
   insecure: null,
 };
 
@@ -79,6 +80,7 @@ const wikiTestCredentials = {
   },
   async get({ publicKey, mediation, signal }) {
     if (mediation === "conditional") {
+      wikiTestPasskeys.offers++;
       // The offer in the login field waits until a passkey is picked there,
       // or until the page ends it.
       await new Promise((resolve, reject) => {
@@ -121,7 +123,7 @@ function wiki_test_passkeys_install(prf, prfAtCreate) {
   Object.defineProperty(navigator, "credentials", { value: wikiTestCredentials, configurable: true });
   if (wikiTestPasskeys.conditional === undefined) wikiTestPasskeys.conditional = Object.getOwnPropertyDescriptor(PublicKeyCredential, "isConditionalMediationAvailable") ?? null;
   Object.defineProperty(PublicKeyCredential, "isConditionalMediationAvailable", { value: async () => true, configurable: true });
-  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0, offered: null });
+  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0, offered: null, offers: 0 });
 }
 
 function wiki_test_passkeys_uninstall() {
@@ -149,6 +151,11 @@ function wiki_test_passkeys_existing() {
 // waiting).
 function wiki_test_passkeys_offered() {
   return wikiTestPasskeys.offered !== null;
+}
+
+// How many offers the login field has started.
+function wiki_test_passkeys_offers() {
+  return wikiTestPasskeys.offers;
 }
 
 // The person picks the passkey the login field offers.

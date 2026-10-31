@@ -548,7 +548,7 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          lift abortSignInPasskey
+          H.liftEffect abortSignInPasskey
           result <- lift (st.input.accounts.signIn st.typedLogin (Password st.typedPassword))
           case result of
             Left SecondFactorNeeded -> do
@@ -564,23 +564,29 @@ component =
         -- The login field's offer of saved passkeys. It waits until a
         -- passkey is picked there, which signs in as the button does, or
         -- until it is ended ('Cancelled'), which says nothing.
+        -- The ticket is taken before the challenge is asked for: closing
+        -- the form or using the button meanwhile keeps the offer from
+        -- starting when the challenge arrives.
+        ticket <- H.liftEffect offerTicket
         here <- lift conditionalHere
         when here $
           gets (\st -> st.input.accounts) >>= \a ->
             lift a.beginPasskeySignIn >>= \case
               Left _ -> pass
               Right options ->
-                lift (signInPasskey options True) >>= \case
+                lift (signInPasskey options (Just ticket)) >>= \case
                   Right used -> finishPasskey used
                   Left _ -> pass
       PasskeySignIn -> do
         st <- get
         unless st.busy $ do
+          -- The field's offer ends now, not only once the dialog opens.
+          H.liftEffect abortSignInPasskey
           modify (\s -> s {busy = True, problem = Nothing})
           lift st.input.accounts.beginPasskeySignIn >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just (passkeyErrorText e)})
             Right options ->
-              lift (signInPasskey options False) >>= \case
+              lift (signInPasskey options Nothing) >>= \case
                 Right used -> finishPasskey used
                 Left Cancelled -> modify (\s -> s {busy = False}) *> offer
                 Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why}) *> offer
@@ -597,7 +603,7 @@ component =
           lift st.input.accounts.beginSecondFactorPasskey >>= \case
             Left e -> refused e
             Right options ->
-              lift (signInPasskey options False) >>= \case
+              lift (signInPasskey options Nothing) >>= \case
                 Left Cancelled -> modify (\s -> s {busy = False})
                 Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why})
                 Right used ->
@@ -641,7 +647,7 @@ component =
         gets (\st -> st.registering) >>= \case
           True -> close
           False -> do
-            lift abortSignInPasskey
+            H.liftEffect abortSignInPasskey
             -- The other form's inputs are removed, together with what was
             -- typed in them.
             modify (\st -> st {registering = True, open = False, notice = Nothing, problem = Nothing, typedLogin = "", typedName = "", typedPassword = ""})
@@ -762,7 +768,7 @@ component =
     forgetPassword st = st {changingPassword = False, typedCurrent = "", typedNew = "", typedRepeat = "", passwordProblem = Nothing}
 
     close :: H.HalogenM (State m) Action Slots Output m ()
-    close = lift abortSignInPasskey *> modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})
+    close = H.liftEffect abortSignInPasskey *> modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})
 
 -- | The button that opens the form for one's own password, if any:
 -- "Change password…" for a user who has a password; "Set a password…" for

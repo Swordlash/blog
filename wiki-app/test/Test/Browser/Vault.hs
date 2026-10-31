@@ -29,7 +29,7 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -75,6 +75,7 @@ $( browserJS
      , ("js_existing", "wiki_test_passkeys_existing", Unsafe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Unsafe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Unsafe, [t|IO ()|])
+     , ("js_offers", "wiki_test_passkeys_offers", Unsafe, [t|IO Int|])
      , ("js_insecure", "wiki_test_passkeys_insecure", Unsafe, [t|IO ()|])
      ]
  )
@@ -129,6 +130,20 @@ signing m = describe "signing in with a passkey" $ do
     -- Closing the form ends the offer.
     find ui ".sign-in-toggle" >>= click
     eventually $ unsafeIOToPageM js_offered `shouldReturn` False
+    closedSignedIn ui
+
+  it "starts no offer in the login field whose challenge arrives after the form closed" $ runPage $ do
+    (ui, _) <- signedOut m
+    holdAt "POST" "api/v1/session/passkey"
+    find ui ".sign-in-toggle" >>= click
+    eventually $ length . filter (\r -> r.url == "api/v1/session/passkey") <$> asked `shouldReturn` 1
+    find ui ".sign-in-toggle" >>= click
+    release
+    -- The challenge arrived after the form it was for closed. The form
+    -- opened again starts its own offer, and only that one.
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    unsafeIOToPageM js_offers `shouldReturn` 1
     closedSignedIn ui
 
   it "completes a password's sign-in with a passkey in place of the code" $ runPage $ do
@@ -341,6 +356,18 @@ vault m = do
     kept <- vaultState
     (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept) `shouldBe` (Just Aeson.Null, 1)
     find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "off")
+    closed ui
+
+  it "turns syncing on with a passkey the user has already, making none" $ runPage $ do
+    ui <- opened m True True
+    existing <- fromJSText <$> unsafeIOToPageM js_existing
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    -- One touch: the passkey used, none made.
+    touches `shouldReturn` 1
+    kept <- vaultState
+    (field ["passkeys", "0", "id"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept, isJust (field ["passkeys", "0", "wrapped", "key"] kept))
+      `shouldBe` (Just (Aeson.String existing), 1, True)
     closed ui
 
   it "turns syncing off with no passkey, and keeps the keys in this browser" $ runPage $ do

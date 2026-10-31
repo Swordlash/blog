@@ -31,6 +31,8 @@ module Test.Browser.Http
   , startServer
   , startServerWith
   , tellServer
+  , holdAt
+  , release
   )
 where
 
@@ -135,6 +137,15 @@ data Asked = Asked
 
 instance FromJSON Asked where
   parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body" <*> o .: "bytes" <*> o .: "aborted"
+
+-- | Hold the answers to requests of this method to this address until
+-- 'release'.
+holdAt :: Text -> Text -> PageM s ()
+holdAt method url = unsafeIOToPageM (js_server_hold_at (toJSText method) (toJSText url))
+
+-- | Answer the requests held.
+release :: PageM s ()
+release = unsafeIOToPageM js_server_release
 
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.

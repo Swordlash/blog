@@ -380,6 +380,16 @@ function wikiPasskeyUserHandle(assertion) {
 // button, after the field's offer) replaces the last.
 let wikiPasskeySignIn = null;
 
+// The number of the login field's offer that may start: every abort and
+// every sign-in with the button moves it on, so that an offer whose
+// challenge arrives after either does not start at all.
+let wikiPasskeyOffer = 0;
+
+// The number an offer about to ask for its challenge holds.
+function wiki_passkey_offer_ticket() {
+  return wikiPasskeyOffer;
+}
+
 // Whether the browser offers saved passkeys in the login field
 // (conditional mediation), as it does as the field is focused.
 async function wiki_passkey_conditional_here() {
@@ -393,9 +403,13 @@ async function wiki_passkey_conditional_here() {
 // Sign in with a passkey (Wiki.Api.Vault's AssertionOptions, as JSON): the
 // browser's dialog, or, when conditional, the offer in the login field
 // marked autocomplete="username webauthn", which waits until a passkey is
-// picked there or the sign-in is aborted. No PRF is asked for: signing in
-// unwraps nothing. JSON {response}, or {error, cancelled}.
-async function wiki_passkey_sign_in(options, conditional) {
+// picked there or the sign-in is aborted; it starts only if its ticket
+// (wiki_passkey_offer_ticket) is still the current one, and the button's
+// (ticket -1) ends any offer. No PRF is asked for: signing in unwraps
+// nothing. JSON {response}, or {error, cancelled}.
+async function wiki_passkey_sign_in(options, conditional, ticket) {
+  if (conditional && ticket !== wikiPasskeyOffer) return JSON.stringify({ error: "The offer ended.", cancelled: true });
+  if (!conditional) wikiPasskeyOffer++;
   wikiPasskeySignIn?.abort();
   const controller = new AbortController();
   wikiPasskeySignIn = controller;
@@ -431,6 +445,7 @@ async function wiki_passkey_sign_in(options, conditional) {
 // End the sign-in with a passkey under way, if any: the form closed, or
 // the password was used instead.
 function wiki_passkey_abort() {
+  wikiPasskeyOffer++;
   wikiPasskeySignIn?.abort();
   wikiPasskeySignIn = null;
 }
