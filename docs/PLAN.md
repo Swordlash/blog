@@ -2013,7 +2013,8 @@ The session the owner talks to implements every work package itself, one at a ti
 without subagents (the owner, 2026-10-31: "Usuń wzmiankę o wykonywaniu zadań przez
 subagentow opus, będziesz wykonywać wszystko sam"). Before a pull request merges, it is
 reviewed with Codex, `gpt-6.1-sol` at high reasoning effort, with the owner's key, as
-`AGENTS.md` says; the session fixes the real findings and pushes. The owner merges; the
+`AGENTS.md` says; the session fixes the real findings and pushes, for four rounds at
+most (the owner, 2026-10-31: "4 rundy review wystarczą"). The owner merges; the
 session merges only when asked ("nie merguj sam, chyba że poproszę"). Each work package
 starts from its goal and acceptance criteria above, the decisions it builds on, and the
 haskell-halogen modules it uses, and ends with the verification gate of `AGENTS.md`

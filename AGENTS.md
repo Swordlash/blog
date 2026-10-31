@@ -28,7 +28,9 @@ Before a pull request merges, the session reviews it with Codex on the pushed he
 in a detached checkout of the head, with the owner's key given on standard input and the
 saved credential removed afterwards; a model or effort below that is not a review). The
 session verifies each finding, fixes the real ones and pushes; a second round follows
-large fixes. Every pull request, every time.
+large fixes. Every pull request, every time. Four rounds at most (the owner,
+2026-10-31): the fixes after the fourth are made and described in the pull request,
+not reviewed again.
 
 The owner merges. The session does not merge a pull request unless the owner asks it
 to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
