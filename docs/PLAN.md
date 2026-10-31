@@ -1914,9 +1914,8 @@ must be in before it is.
   says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
-  any more). Open: a multi-line `$$` block in a box that worked only on one line; the
-  parser reads every variant tried (`>` on each line or not, text before it), so the
-  fault is further on, and the owner's exact source is asked for.
+  any more). A multi-line `$$` block in a box that seemed to work only on one line
+  works (the owner tried again; the parser reads every variant tried).
 - **WP5.37 Fixes to WP5.36.** With the sidebar folded the page keeps
   `.wiki-content`'s `max-width: 54rem`, so the editor leaves the right of the screen
   empty and its bar takes two rows: the content takes the width while folded, and the
@@ -1930,7 +1929,10 @@ must be in before it is.
   where "Back to edit" stays too. "Show preview" opens at the block being edited (the
   line markers of WP5.36 in the full preview). Showing the preview pushes a history
   entry: the browser's Back returns to editing, and only the next Back leaves the
-  editor (with the question about unsaved changes).
+  editor (with the question about unsaved changes). "Side by side" stops being a
+  checkbox: both it and "Show preview" are buttons, the first a toggle that shows
+  whether it is on (`aria-pressed`), with labels and icons that tell them apart (the
+  owner keeps mixing them up).
 - **WP5.39 The title is the first line's `#`.** Every page's text starts with `# ` and
   the title; the editor anchors that `#` (it cannot be deleted or moved), and the title
   field is greyed out and filled from what follows it. A page without it gets
