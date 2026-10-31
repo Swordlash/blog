@@ -130,7 +130,7 @@ try {
   await page.locator(".assistant-unlock").click();
   await page.locator(".assistant-sync-on").waitFor({ timeout });
   await anthropic.locator(".assistant-key-kept").waitFor({ timeout });
-  const [used] = await (await api("assistant/passkeys")).json();
+  const [used] = await (await api("account/passkeys")).json();
   assert.ok(used.lastUsedAt !== null, "the server checked no use of the passkey");
   console.log("ok: asked each time, the vault is locked after a reload, and a use of the passkey, checked by the server, unlocks it");
 
@@ -163,7 +163,7 @@ try {
       .waitFor({ timeout })
       .then(async () => assert.fail(`adding a passkey: ${await page.locator(".assistant-sync-problem").textContent()}`)),
   ]);
-  const both = await (await api("assistant/passkeys")).json();
+  const both = await (await api("account/passkeys")).json();
   assert.deepEqual(both.map((p) => p.unlocks), [true, true], "both passkeys unlock the vault");
   console.log("ok: a second passkey is added, and unlocks the vault too");
 
@@ -171,7 +171,21 @@ try {
   await page.locator(".assistant-sync-off-state").waitFor({ timeout });
   assert.equal((await api("assistant/vault")).status, 404, "the vault is still on the server");
   await anthropic.locator(".assistant-key-kept").waitFor({ timeout });
-  console.log("ok: turned off, the vault is gone from the server, and the key stays in the browser");
+  const kept = await (await api("account/passkeys")).json();
+  assert.deepEqual(kept.map((p) => p.unlocks), [false, false], "the passkeys stay, unlocking nothing");
+  console.log("ok: turned off, the vault is gone from the server, the key stays in the browser, and the passkeys stay");
+
+  // Signed out, the passkey left on the authenticator signs Ada in alone:
+  // a discoverable credential, whose user handle names her, and no code.
+  await context.clearCookies();
+  await page.goto(`${origin}/`);
+  await page.locator(".sign-in-toggle").click();
+  await page.locator(".passkey-sign-in").click();
+  await page.locator(".account .user-name").waitFor({ timeout });
+  assert.equal((await page.locator(".account .user-name").textContent()).trim(), "Ada", "signed in as Ada");
+  const session = await page.evaluate(async () => (await fetch("/api/v1/session", { headers: { "X-Wiki-Request": "1" } })).json());
+  assert.equal(session.user?.login, "ada", "the server's session is Ada's");
+  console.log("ok: signed out, a real passkey signs its owner in from the sign-in form, with no password");
 } catch (error) {
   failures.push(String(error?.stack ?? error));
 } finally {
