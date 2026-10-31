@@ -132,7 +132,7 @@ stubs =
           , endSession = \ref -> if ref == SessionRef "4e5f6a7b" then pure (take 1 Sample.sessions) else refuse NotFound
           , endOtherSessions = pure (take 1 Sample.sessions)
           , passkeys = pure [Sample.passkeyInfo]
-          , beginRegistration = pure Sample.registrationOptions
+          , beginRegistration = \body -> if body.password == Just (Password "secret") then pure Sample.registrationOptions else refuse Unauthenticated
           , finishRegistration = \_ -> pure Sample.passkeyInfo
           , removePasskey = \i -> if i == Sample.passkeyInfo.id then pure [] else refuse NotFound
           , secondFactorState = pure Sample.secondFactor
@@ -526,7 +526,8 @@ spec = describe "a server of the API's type" $ do
           k = links.account
       (k.passkeys, k.beginRegistration, k.removePasskey Sample.passkeyInfo.id)
         `shouldBe` ("api/v1/account/passkeys", "api/v1/account/passkeys/registration", "api/v1/account/passkeys/Y3JlZGVudGlhbC0x")
-      answers (request methodPost k.beginRegistration [] "") 200 Sample.registrationOptions
+      answers (sendJson methodPost k.beginRegistration CurrentPassword {password = Just (Password "secret")}) 200 Sample.registrationOptions
+      answers (sendJson methodPost k.beginRegistration CurrentPassword {password = Nothing}) 401 Unauthenticated
       answers (sendJson methodPut k.finishRegistration Sample.registrationResponse) 200 Sample.passkeyInfo
       answers (request methodPost a.beginAssertion [] "") 200 Sample.assertionOptions
       answers (sendJson methodPut a.finishAssertion Sample.assertionResponse) 200 Sample.passkeyInfo

@@ -146,6 +146,23 @@ signing m = describe "signing in with a passkey" $ do
     unsafeIOToPageM js_offers `shouldReturn` 1
     closedSignedIn ui
 
+  it "opens no passkey dialog whose challenge arrives after the form closed" $ runPage $ do
+    (ui, _) <- signedOut m
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    holdAt "POST" "api/v1/session/passkey"
+    find ui ".passkey-sign-in" >>= click
+    eventually $ length . filter (\r -> r.url == "api/v1/session/passkey") <$> asked `shouldReturn` 2
+    find ui ".sign-in-toggle" >>= click
+    release
+    -- The form opened again offers in the field; no dialog was opened, and
+    -- nobody signed in.
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    touches `shouldReturn` 0
+    length . filter (\r -> r.method == "PUT") <$> asked `shouldReturn` 0
+    closedSignedIn ui
+
   it "completes a password's sign-in with a passkey in place of the code" $ runPage $ do
     (ui, id') <- signedOut m
     me <- signedInAs "user-editor"
@@ -177,12 +194,16 @@ signing m = describe "signing in with a passkey" $ do
     eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
     find ui ".passkey-name" >>= (`shouldHaveText` "My laptop")
     find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` "My phone")
+    find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
     find ui ".passkey-add button[type=submit]" >>= click
     eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 2
     map (T.strip) <$> (findAll ui ".passkey-name" >>= traverse textContent) `shouldReturn` ["My laptop", "My phone"]
     -- Made without the PRF extension: a passkey to sign in with.
     sent <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
     map (\r -> field ["name"] =<< decodeStrict (encodeUtf8 r.body)) sent `shouldBe` [Just (Aeson.String "My phone")]
+    -- Making it asked for the password, since it signs the user in.
+    begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` [Just (Aeson.String "editor's password")]
     findAll ui ".passkey-remove" >>= \case
       remove : _ -> click remove
       [] -> panic "no Remove"
@@ -225,6 +246,8 @@ signing m = describe "signing in with a passkey" $ do
       id' <- fromJSText <$> unsafeIOToPageM js_existing
       ui <- startServer m' Home
       pure (ui, id')
+    touches :: PageM s Int
+    touches = unsafeIOToPageM js_touches
     -- What the account panel fetches besides the passkeys.
     answerAccount = do
       answerWith "GET" "api/v1/account/identities" 200 (Aeson.object ["password" Aeson..= True, "identities" Aeson..= ([] :: [Text])])

@@ -21,9 +21,11 @@ import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
 import Protolude
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
+import Wiki.App.Account (SignInError (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Mem (MemWiki)
 import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
+import Wiki.Core.User (Password)
 
 -- | 'Fetched': the server's answer to a device that asks for the vault.
 data Fetched
@@ -65,9 +67,9 @@ class (Monad m) => MonadVault m where
   listPasskeys = lift listPasskeys
 
   -- | The options of a new passkey, with the server's challenge.
-  beginRegistration :: m (Either WikiError RegistrationOptions)
-  default beginRegistration :: (MonadTrans t, m ~ t n, MonadVault n) => m (Either WikiError RegistrationOptions)
-  beginRegistration = lift beginRegistration
+  beginRegistration :: Maybe Password -> m (Either SignInError RegistrationOptions)
+  default beginRegistration :: (MonadTrans t, m ~ t n, MonadVault n) => Maybe Password -> m (Either SignInError RegistrationOptions)
+  beginRegistration = lift . beginRegistration
 
   -- | The browser's answer to a registration, which the server checks and
   -- stores.
@@ -105,7 +107,7 @@ instance (Monad m) => MonadVault (MemWiki m) where
   storeVault _ _ = pure (Left unavailable)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
-  beginRegistration = pure (Left unavailable)
+  beginRegistration _ = pure (Left (SignInFailed unavailable))
   finishRegistration _ = pure (Left unavailable)
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)
@@ -120,7 +122,7 @@ instance MonadVault BrowserDOM where
   storeVault _ _ = pure (Left unavailable)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
-  beginRegistration = pure (Left unavailable)
+  beginRegistration _ = pure (Left (SignInFailed unavailable))
   finishRegistration _ = pure (Left unavailable)
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)
@@ -133,7 +135,7 @@ instance MonadVault MemDOM where
   storeVault _ _ = pure (Left unavailable)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
-  beginRegistration = pure (Left unavailable)
+  beginRegistration _ = pure (Left (SignInFailed unavailable))
   finishRegistration _ = pure (Left unavailable)
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)

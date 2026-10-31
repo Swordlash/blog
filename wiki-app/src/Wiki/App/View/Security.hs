@@ -107,6 +107,9 @@ data State = State
   -- ^ Whether the browser offers passkeys to this page.
   , keys :: Maybe (Either WikiError [PasskeyInfo])
   , typedKeyName :: Text
+  , typedKeyPassword :: Text
+  -- ^ The current password, which making a passkey asks for, since a
+  -- passkey signs the user in.
   , keysProblem :: Maybe Text
   }
 
@@ -140,6 +143,7 @@ data Action
   | ResendEmail
   | ClearEmail
   | TypedKeyName Text
+  | TypedKeyPassword Text
   | AddKey
   | RemoveKey CredentialId
 
@@ -177,6 +181,7 @@ component =
               , keysHere = False
               , keys = Nothing
               , typedKeyName = ""
+              , typedKeyPassword = ""
               , keysProblem = Nothing
               }
       , render
@@ -262,6 +267,12 @@ component =
                     <span>Name</span>
                     <input type="text" name="passkey-name" maxlength="100" placeholder="This device" onValueInput={{ TypedKeyName }}>
                   </label>
+                  {% if asksPassword %}
+                    <label class="field">
+                      <span>Current password</span>
+                      <input type="password" name="passkey-password" autocomplete="current-password" required onValueInput={{ TypedKeyPassword }}>
+                    </label>
+                  {% end %}
                   <button type="submit" disabled={{ st.busy }}>Add a passkey</button>
                 </form>
                 <div class="sign-in-told">
@@ -271,6 +282,12 @@ component =
                 </div>
               </div>
             |]
+      where
+        -- A user without a password (one who signs in with a provider)
+        -- has none to give; while the state is not known, the field shows.
+        asksPassword = case st.factor of
+          Just (Right f) -> f.asksPassword
+          _ -> True
 
     factorView :: State -> H.ComponentHTML Action Empty m
     factorView st
@@ -458,10 +475,12 @@ component =
           keys <- lift listPasskeys
           modify (\st -> st {keys = Just keys})
       TypedKeyName t -> modify (\st -> st {typedKeyName = t})
+      TypedKeyPassword t -> modify (\st -> st {typedKeyPassword = t})
       AddKey -> busily $ do
         modify (\st -> st {keysProblem = Nothing})
-        lift beginRegistration >>= \case
-          Left e -> modify (\st -> st {keysProblem = Just (errorMessage e)})
+        typed <- gets (\st -> st.typedKeyPassword)
+        lift (beginRegistration (if T.null typed then Nothing else Just (Password typed))) >>= \case
+          Left e -> modify (\st -> st {keysProblem = Just (passwordErrorText e)})
           Right options ->
             -- No salt: a passkey added here signs in, and wraps no vault
             -- key until the assistant asks it to.

@@ -581,8 +581,11 @@ data AccountApi mode = AccountApi
   -- ^ The user's passkeys, the oldest first (WP5.30 of docs/PLAN.md): each
   -- signs them in, and those the vault has a wrapped key for unlock the
   -- writing assistant's vault ("Wiki.Api.Vault").
-  , beginRegistration :: mode :- "passkeys" :> "registration" :> Post '[JSON] RegistrationOptions
+  , beginRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] CurrentPassword :> Post '[JSON] RegistrationOptions
   -- ^ The options of a new passkey, with a challenge kept for this session.
+  -- Since a passkey signs the user in, making one asks for their current
+  -- password, where they have one, as a second factor does: a wrong one is
+  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in.
   , finishRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] RegistrationResponse :> Put '[JSON] PasskeyInfo
   -- ^ Check and store the passkey the browser made. No challenge waiting,
   -- or an answer that does not check, is 'Wiki.Api.Error.Invalid'; a

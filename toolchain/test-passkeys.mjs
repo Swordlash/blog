@@ -114,6 +114,8 @@ try {
   await anthropic.locator(".assistant-key-form button").click();
   await anthropic.locator(".assistant-key-kept").waitFor({ timeout });
 
+  // Making a passkey asks for the password: a passkey signs Ada in.
+  await page.locator(".assistant-passkey-password").fill(password);
   await page.locator(".assistant-sync-on-button").click();
   await page.locator(".assistant-sync-on").waitFor({ timeout });
   const vault = await (await api("assistant/vault")).json();
@@ -155,6 +157,7 @@ try {
     await devtools.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: first.authenticatorId });
     await devtools.send("WebAuthn.addVirtualAuthenticator", { options: { ...authenticator, transport: "usb" } });
   };
+  await page.locator(".assistant-passkey-password").fill(password);
   await page.locator(".assistant-add-passkey").click();
   await Promise.race([
     page.locator(".assistant-passkey").nth(1).waitFor({ timeout }),

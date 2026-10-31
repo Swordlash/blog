@@ -567,32 +567,36 @@ component =
         -- The ticket is taken before the challenge is asked for: closing
         -- the form or using the button meanwhile keeps the offer from
         -- starting when the challenge arrives.
-        ticket <- H.liftEffect offerTicket
+        ticket <- H.liftEffect passkeyTicket
         here <- lift conditionalHere
         when here $
           gets (\st -> st.input.accounts) >>= \a ->
             lift a.beginPasskeySignIn >>= \case
               Left _ -> pass
               Right options ->
-                lift (signInPasskey options (Just ticket)) >>= \case
+                lift (signInPasskey options True ticket) >>= \case
                   Right used -> finishPasskey used
                   Left _ -> pass
       PasskeySignIn -> do
         st <- get
         unless st.busy $ do
           -- The field's offer ends now, not only once the dialog opens.
+          -- Closing the form while the challenge is fetched keeps the
+          -- dialog from opening ('passkeyTicket').
           H.liftEffect abortSignInPasskey
+          ticket <- H.liftEffect passkeyTicket
           modify (\s -> s {busy = True, problem = Nothing})
           lift st.input.accounts.beginPasskeySignIn >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just (passkeyErrorText e)})
             Right options ->
-              lift (signInPasskey options Nothing) >>= \case
+              lift (signInPasskey options False ticket) >>= \case
                 Right used -> finishPasskey used
                 Left Cancelled -> modify (\s -> s {busy = False}) *> offer
                 Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why}) *> offer
       PasskeyCode -> do
         st <- get
         unless st.busy $ do
+          ticket <- H.liftEffect passkeyTicket
           modify (\s -> s {busy = True, problem = Nothing})
           let refused = \case
                 -- Waited too long, or too many wrong answers: back to the
@@ -603,7 +607,7 @@ component =
           lift st.input.accounts.beginSecondFactorPasskey >>= \case
             Left e -> refused e
             Right options ->
-              lift (signInPasskey options Nothing) >>= \case
+              lift (signInPasskey options False ticket) >>= \case
                 Left Cancelled -> modify (\s -> s {busy = False})
                 Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why})
                 Right used ->

@@ -57,12 +57,14 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Protolude
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.App.Account (passwordErrorText)
 import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), PasskeyRefusal (..), Used (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
+import Wiki.Core.User (Password)
 
 -- | 'Keys': the assistant's settings on this device, and how they are kept.
 data Keys = Keys
@@ -189,8 +191,8 @@ changeKeys user f = sealing (plainChange user f) $ runExceptT (attempt (2 :: Int
 -- refuse to make another on the same authenticator, since the wiki names
 -- them as made already. A user with none makes one; one without the PRF
 -- extension is kept to sign in with, and said so ('newPasskey').
-turnOnSync :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
-turnOnSync user = sealing (pure (Left needsSealing)) $ runExceptT $ do
+turnOnSync :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> m (Either Text Keys)
+turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   record <- refreshed user =<< current user
   when (isJust record.server) (throwError "Your keys sync already, or another device of yours syncs them: unlock them with a passkey.")
   key <- lift (deviceKey user)
@@ -206,7 +208,7 @@ turnOnSync user = sealing (pure (Left needsSealing)) $ runExceptT $ do
   stored' <- withKey (lift (newVaultKey True)) $ \vaultKey -> do
     (credential, wrapping) <-
       if null existing
-        then newPasskey salt
+        then newPasskey password salt
         else usedPasskey salt Nothing
     -- A passkey made here goes again if the vault is not stored; one the
     -- user had stays, since it signs them in.
@@ -264,8 +266,8 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
 -- is unlocked: a passkey the vault knows gives the vault key (one touch),
 -- then the new passkey is made (another, and a third if its authenticator
 -- gives its PRF output only when used).
-addPasskey :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
-addPasskey user = sealing (pure (Left needsSealing)) $ runExceptT $ do
+addPasskey :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> m (Either Text Keys)
+addPasskey user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   record <- refreshed user =<< current user
   copy <- maybe (throwError "Your keys do not sync: turn syncing on first.") pure record.server
   key <- lift (deviceKey user)
@@ -280,7 +282,7 @@ addPasskey user = sealing (pure (Left needsSealing)) $ runExceptT $ do
         wrapped <- maybe (throwError "This passkey has no copy of the vault's key: use another one.") pure (wrappedFor known copy.vault)
         unwrap wrapping wrapped True
   fresh <- withKey vaultKeyOf $ \vaultKey -> do
-    (credential, newWrapping) <- newPasskey copy.vault.salt
+    (credential, newWrapping) <- newPasskey password copy.vault.salt
     forgetting
       newWrapping
       ( do
@@ -482,9 +484,10 @@ localKey user = do
 -- wraps the vault key for it: from its PRF output at once, or by using it
 -- once. A passkey without the PRF extension cannot wrap the vault key; it
 -- is kept, since it signs the user in (WP5.30), and the person is told.
-newPasskey :: (MonadAssistant m, MonadVault m) => Text -> Step m (CredentialId, KeyRef)
-newPasskey salt = do
-  options <- server beginRegistration
+newPasskey :: (MonadAssistant m, MonadVault m) => Maybe Password -> Text -> Step m (CredentialId, KeyRef)
+newPasskey password salt = do
+  -- Making a passkey asks for the user's password, since it signs them in.
+  options <- ExceptT (first passwordErrorText <$> beginRegistration password)
   made <- passkey (createPasskey options salt wrappingInfo)
   let credential = made.response.id
       -- The key the PRF output gave goes if a step below fails.

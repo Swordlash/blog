@@ -59,7 +59,7 @@ module Wiki.App.Assistant
     -- * The vault in the browser
   , KeyRef
   , Made (..)
-  , OfferTicket
+  , PasskeyTicket
   , Used (..)
   , PasskeyRefusal (..)
 
@@ -165,9 +165,9 @@ data Used = Used
   }
   deriving stock (Show)
 
--- | 'OfferTicket': the number of a login field's offer of passkeys, which
--- the offer starts with only while it is current ('offerTicket').
-newtype OfferTicket = OfferTicket Int
+-- | 'PasskeyTicket': the number of a sign-in with a passkey, which starts
+-- only while the number is current ('passkeyTicket').
+newtype PasskeyTicket = PasskeyTicket Int
   deriving stock (Eq, Show)
 
 -- | 'PasskeyRefusal': why a passkey was not made or used.
@@ -363,23 +363,24 @@ class (Monad m) => MonadAssistant m where
   default conditionalHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
   conditionalHere = lift conditionalHere
 
-  -- | The ticket of a login field's offer about to ask the server for its
-  -- challenge: the offer starts only if no abort nor dialog came since
+  -- | The ticket of a sign-in with a passkey about to ask the server for
+  -- its challenge: it starts only if no abort nor other dialog came since
   -- ('signInPasskey'). It returns at once.
-  offerTicket :: m OfferTicket
-  default offerTicket :: (MonadTrans t, MonadAssistant n, m ~ t n) => m OfferTicket
-  offerTicket = lift offerTicket
+  passkeyTicket :: m PasskeyTicket
+  default passkeyTicket :: (MonadTrans t, MonadAssistant n, m ~ t n) => m PasskeyTicket
+  passkeyTicket = lift passkeyTicket
 
   -- | Use a passkey to sign in with (WP5.30 of docs/PLAN.md), with the
   -- server's options, asking for no PRF: in the browser's dialog, which
-  -- ends any offer, or, given a ticket, from the login field's offer, which
-  -- waits until a passkey is picked there or 'abortSignInPasskey' is
-  -- called, and does not start ('Cancelled') if either happened since the
-  -- ticket was taken. The result is the browser's answer for the server
-  -- to check.
-  signInPasskey :: AssertionOptions -> Maybe OfferTicket -> m (Either PasskeyRefusal AssertionResponse)
-  default signInPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => AssertionOptions -> Maybe OfferTicket -> m (Either PasskeyRefusal AssertionResponse)
-  signInPasskey options = lift . signInPasskey options
+  -- ends any offer, or, when conditional, from the login field's offer,
+  -- which waits until a passkey is picked there or 'abortSignInPasskey' is
+  -- called. Neither starts ('Cancelled') if an abort or another dialog
+  -- came since the ticket was taken ('passkeyTicket'), as when the form
+  -- closed while the challenge was being fetched. The result is the
+  -- browser's answer for the server to check.
+  signInPasskey :: AssertionOptions -> Bool -> PasskeyTicket -> m (Either PasskeyRefusal AssertionResponse)
+  default signInPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => AssertionOptions -> Bool -> PasskeyTicket -> m (Either PasskeyRefusal AssertionResponse)
+  signInPasskey options conditional = lift . signInPasskey options conditional
 
   -- | End the sign-in with a passkey under way, if any; it comes back
   -- 'Cancelled'.
@@ -505,9 +506,9 @@ instance MonadAssistant BrowserDOM where
     pure (answered (\o -> KeyRef <$> o .: "handle") answer)
   discardPasskey rpId credential = liftIO (evaluate =<< js_discard (toJSText rpId) (toJSText credential.text))
   conditionalHere = liftIO (evaluate =<< js_conditional_here)
-  offerTicket = liftIO (OfferTicket <$> js_passkey_offer_ticket)
-  signInPasskey options ticket = liftIO $ do
-    answer <- evaluate . fromJSText =<< js_passkey_sign_in (toJSText (json (toJSON options))) (isJust ticket) (maybe (-1) (\(OfferTicket n) -> n) ticket)
+  passkeyTicket = liftIO (PasskeyTicket <$> js_passkey_offer_ticket)
+  signInPasskey options conditional (PasskeyTicket ticket) = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_passkey_sign_in (toJSText (json (toJSON options))) conditional ticket
     pure . passkeyAnswer answer $ \o -> o .: "response"
   abortSignInPasskey = liftIO js_passkey_abort
   scriptedInstalled = liftIO js_scripted
@@ -569,8 +570,8 @@ instance MonadAssistant MemDOM where
   unwrapWith _ _ _ _ = pure (Left noBrowser)
   discardPasskey _ _ = pass
   conditionalHere = pure False
-  offerTicket = pure (OfferTicket 0)
-  signInPasskey _ _ = pure (Left (PasskeyFailed noBrowser))
+  passkeyTicket = pure (PasskeyTicket 0)
+  signInPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
   abortSignInPasskey = pass
   scriptedInstalled = pure False
   secureContext = pure True

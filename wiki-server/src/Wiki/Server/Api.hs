@@ -513,8 +513,11 @@ handlers env caller =
               now <- liftIO getCurrentTime
               liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
           , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
-          , beginRegistration = do
+          , beginRegistration = \body -> do
               (u, s, key) <- ceremonyCaller
+              -- A passkey signs its owner in: someone at a browser left
+              -- signed in may not add one without the password.
+              reauthenticated u body.password
               now <- liftIO getCurrentTime
               challenge <- liftIO (beginCeremony env.ceremonies now key u Registering)
               mine <- liftIO (passkeysOf env.storage u)

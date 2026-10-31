@@ -267,7 +267,11 @@ async function wiki_vault_create(options, salt, info) {
         attestation: "none",
         excludeCredentials: (o.exclude ?? []).map((id) => ({ type: "public-key", id: wikiVaultFromBase64(id) })),
         timeout: 300000,
-        extensions: salt === "" ? {} : { prf: { eval: { first: wikiVaultFromBase64(salt) } } },
+        // Without a salt (a passkey added to sign in with), PRF is still
+        // asked for, unevaluated: some authenticators give a credential
+        // its PRF only when asked as it is made, and the vault may use it
+        // later.
+        extensions: { prf: salt === "" ? {} : { eval: { first: wikiVaultFromBase64(salt) } } },
       },
     });
     const prf = credential.getClientExtensionResults().prf ?? {};
@@ -380,12 +384,12 @@ function wikiPasskeyUserHandle(assertion) {
 // button, after the field's offer) replaces the last.
 let wikiPasskeySignIn = null;
 
-// The number of the login field's offer that may start: every abort and
-// every sign-in with the button moves it on, so that an offer whose
-// challenge arrives after either does not start at all.
+// The number of the sign-in with a passkey that may start: every abort and
+// every dialog moves it on, so that a sign-in whose challenge arrives after
+// either (the form closed meanwhile) does not start at all.
 let wikiPasskeyOffer = 0;
 
-// The number an offer about to ask for its challenge holds.
+// The number a sign-in about to ask for its challenge holds.
 function wiki_passkey_offer_ticket() {
   return wikiPasskeyOffer;
 }
@@ -403,12 +407,12 @@ async function wiki_passkey_conditional_here() {
 // Sign in with a passkey (Wiki.Api.Vault's AssertionOptions, as JSON): the
 // browser's dialog, or, when conditional, the offer in the login field
 // marked autocomplete="username webauthn", which waits until a passkey is
-// picked there or the sign-in is aborted; it starts only if its ticket
-// (wiki_passkey_offer_ticket) is still the current one, and the button's
-// (ticket -1) ends any offer. No PRF is asked for: signing in unwraps
-// nothing. JSON {response}, or {error, cancelled}.
+// picked there or the sign-in is aborted. Either starts only if its ticket
+// (wiki_passkey_offer_ticket) is still the current one; the dialog then
+// ends any offer. No PRF is asked for: signing in unwraps nothing. JSON
+// {response}, or {error, cancelled}.
 async function wiki_passkey_sign_in(options, conditional, ticket) {
-  if (conditional && ticket !== wikiPasskeyOffer) return JSON.stringify({ error: "The offer ended.", cancelled: true });
+  if (ticket !== wikiPasskeyOffer) return JSON.stringify({ error: "The sign-in ended.", cancelled: true });
   if (!conditional) wikiPasskeyOffer++;
   wikiPasskeySignIn?.abort();
   const controller = new AbortController();

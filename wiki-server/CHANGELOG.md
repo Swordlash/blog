@@ -8,7 +8,8 @@ session/second-factor/passkey` in place of the code after a password. The
 answer's user handle must be the passkey's owner's, and the authenticator
 must have verified the user. Failures count against the address, then
 against the login once the passkey names one. Passkeys are registered,
-listed and removed under `account/passkeys`, with a name; turning the
+listed and removed under `account/passkeys`, with a name, and making one
+asks for the current password, as a second factor does; turning the
 assistant's syncing off keeps them and drops only the vault key's wrapped
 copies.
 

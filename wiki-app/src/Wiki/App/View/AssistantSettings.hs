@@ -101,7 +101,7 @@ import Wiki.Core.Assistant
 import Wiki.Core.Assistant.Vault (CredentialId)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (User (id))
+import Wiki.Core.User (Password (..), User (id))
 
 newtype Input = Input {context :: Context}
 
@@ -152,6 +152,9 @@ data State = State
   , problem :: Maybe Text
   , busy :: Bool
   , sync :: Sync
+  , syncPassword :: Text
+  -- ^ The password typed to make a passkey, which signs the user in, so
+  -- that the server asks for it ("Wiki.Api.Vault").
   }
 
 data Action
@@ -168,6 +171,7 @@ data Action
   | TypedBaseUrl Provider Text
   | ChooseEffort Provider Text
   | TurnOn
+  | TypedSyncPassword Text
   | Unlock
   | AddPasskey
   | RemovePasskey CredentialId
@@ -195,6 +199,7 @@ component =
               , problem = Nothing
               , busy = False
               , sync = noSync
+              , syncPassword = ""
               }
       , render
       , eval =
@@ -299,6 +304,7 @@ component =
                     </li>
                   {% end %}
                 </ul>
+                {{ passwordField }}
                 <div class="actions">
                   <button type="button" class="assistant-add-passkey" disabled={{ isJust sy.working }} onClick={{ const AddPasskey }}>Add passkey</button>
                   <button type="button" class="danger assistant-sync-off" disabled={{ isJust sy.working }} onClick={{ const TurnOff }}>Turn off</button>
@@ -310,6 +316,7 @@ component =
                 <p class="account-note">Asked each time, this browser keeps no key that opens your settings, only the sealed vault. "Turn off" deletes the vault on the server, and needs no passkey; your keys stay in this browser.</p>
               {% else %}
                 <p class="assistant-sync-state assistant-sync-off-state">Sync across devices: off. Your keys are sealed in this browser only.</p>
+                {{ passwordField }}
                 <div class="actions">
                   <button type="button" class="assistant-sync-on-button" disabled={{ isJust sy.working }} onClick={{ const TurnOn }}>Turn on with a passkey</button>
                 </div>
@@ -324,6 +331,17 @@ component =
             {% end %}
           </section>
         |]
+      where
+        -- A new passkey signs the user in, so the server asks for their
+        -- password to make one. A passkey of theirs already, used instead,
+        -- needs none; nor does a user who signs in only with a provider.
+        passwordField =
+          [hh|
+            <label class="field">
+              <span>Your password, to make a new passkey (none if you sign in with a provider)</span>
+              <input type="password" class="assistant-passkey-password" autocomplete="current-password" disabled={{ isJust sy.working }} onValueInput={{ TypedSyncPassword }}>
+            </label>
+          |]
 
     providerView :: State -> Settings -> Provider -> H.ComponentHTML Action Empty m
     providerView st s p =
@@ -502,9 +520,10 @@ component =
             when (isNothing result) (fetchModels p)
           _ -> pass
       Refresh p -> fetchModels p
-      TurnOn -> syncStep "Waiting for your new passkey…" turnOnSync
+      TurnOn -> withSyncPassword (\p -> syncStep "Waiting for your passkey…" (`turnOnSync` p))
+      TypedSyncPassword t -> modify (\st -> st {syncPassword = t})
       Unlock -> syncStep "Waiting for your passkey…" unlockKeys
-      AddPasskey -> syncStep "Waiting for a passkey you have, then for the new one…" addPasskey
+      AddPasskey -> withSyncPassword (\p -> syncStep "Waiting for a passkey you have, then for the new one…" (`addPasskey` p))
       TurnOff -> syncStep "Turning syncing off…" turnOffSync
       AskEachTime asking -> syncStep "Changing how this browser keeps the key…" (`setAskEachTime` asking)
       RemovePasskey credential ->
@@ -573,6 +592,14 @@ component =
     -- still have changed what this device keeps (turning on finds the
     -- vault another device made, and follows it, locked), so the keys are
     -- read again then.
+    -- The password typed for a new passkey, if any (a user who signs in
+    -- only with a provider has none), forgotten once used.
+    withSyncPassword :: (Maybe Password -> H.HalogenM State Action Empty output m ()) -> H.HalogenM State Action Empty output m ()
+    withSyncPassword act = do
+      typed <- gets (\st -> st.syncPassword)
+      modify (\st -> st {syncPassword = ""})
+      act (if T.null typed then Nothing else Just (Password typed))
+
     syncStep :: Text -> (UserId -> m (Either Text Keys)) -> H.HalogenM State Action Empty output m ()
     syncStep saying step =
       gets (\st -> st.user)

@@ -481,7 +481,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 
 Over `wiki-server`, a passkey signs you in without your password or a code.
 Add one under **Passkeys** in your account panel (click your name), with a
-name for the device; the list says when each was added and last used, and
+name for the device and your current password (a passkey signs you in, so
+someone at a browser you left signed in cannot add one); the list says when each was added and last used, and
 removes one. Then **Sign in with a passkey** under the sign-in form opens
 the browser's dialog, and browsers that can also offer your passkey in the
 login field as you focus it. The authenticator verifies you (fingerprint,
