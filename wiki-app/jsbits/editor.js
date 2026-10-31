@@ -233,6 +233,11 @@ function wiki_editor_focus(element) {
   element.focus({ preventScroll: true });
 }
 
+// Empty a form field the page does not control: a password used once.
+function wiki_editor_clear_field(element) {
+  element.value = "";
+}
+
 // Focus the text, at its selection, without scrolling to it: coming back
 // from the preview, where it was.
 function wiki_editor_focus_text(host) {

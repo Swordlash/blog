@@ -65,6 +65,7 @@ $( browserJS
      , ("js_record", "wiki_test_device_record", Safe, [t|JSText -> IO JSText|])
      , ("js_scripted", "wiki_test_passkeys_scripted", Unsafe, [t|IO ()|])
      , ("js_cancel_after", "wiki_test_passkeys_cancel_after", Unsafe, [t|Int -> IO ()|])
+     , ("js_cancel_next", "wiki_test_passkeys_cancel_next", Unsafe, [t|IO ()|])
      , ("js_stash", "wiki_test_vault_server_stash", Unsafe, [t|IO ()|])
      , ("js_unstash", "wiki_test_vault_server_unstash", Unsafe, [t|IO ()|])
      , ("js_add_unwrapped", "wiki_test_vault_server_add_unwrapped", Unsafe, [t|IO ()|])
@@ -197,6 +198,8 @@ signing m = describe "signing in with a passkey" $ do
     find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
     find ui ".passkey-add button[type=submit]" >>= click
     eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 2
+    -- The password went with that one attempt: the field is empty again.
+    (find ui ".passkey-add input[name=passkey-password]" >>= (`getProperty` "value")) `shouldReturn` ""
     map (T.strip) <$> (findAll ui ".passkey-name" >>= traverse textContent) `shouldReturn` ["My laptop", "My phone"]
     -- Made without the PRF extension: a passkey to sign in with.
     sent <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
@@ -379,6 +382,19 @@ vault m = do
     kept <- vaultState
     (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept) `shouldBe` (Just Aeson.Null, 1)
     find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "off")
+    closed ui
+
+  it "empties the password field after an attempt to make a passkey, which a retry sends again" $ runPage $ do
+    ui <- opened m True True
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    unsafeIOToPageM js_cancel_next
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
+    (find ui ".assistant-passkey-password" >>= (`getProperty` "value")) `shouldReturn` ""
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    turnOn ui
+    begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
     closed ui
 
   it "turns syncing on with a passkey the user has already, making none" $ runPage $ do

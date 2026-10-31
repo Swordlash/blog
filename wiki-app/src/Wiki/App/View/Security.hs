@@ -69,7 +69,7 @@ import Wiki.App.Account (codeErrorText, passwordErrorText)
 import Wiki.App.Assistant (Made (..), MonadAssistant (..), PasskeyRefusal (..))
 import Wiki.App.Assistant.Sync (MonadVault (..))
 import Wiki.App.Backend (WikiError)
-import Wiki.App.Editor.Browser (focusElement)
+import Wiki.App.Editor.Browser (clearField, focusElement)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.View.Common (attr, errorMessage)
 import Wiki.Core.Assistant.Vault (CredentialId)
@@ -108,6 +108,7 @@ data State = State
   , keys :: Maybe (Either WikiError [PasskeyInfo])
   , typedKeyName :: Text
   , typedKeyPassword :: Text
+  , keyPasswordField :: H.RefLabel
   -- ^ The current password, which making a passkey asks for, since a
   -- passkey signs the user in.
   , keysProblem :: Maybe Text
@@ -155,6 +156,7 @@ component =
           codeField <- H.newRefLabel "second-factor-code"
           emailField <- H.newRefLabel "account-email"
           passwordField <- H.newRefLabel "account-current-password"
+          keyPasswordField <- H.newRefLabel "passkey-current-password"
           pure
             State
               { available = True
@@ -182,6 +184,7 @@ component =
               , keys = Nothing
               , typedKeyName = ""
               , typedKeyPassword = ""
+              , keyPasswordField
               , keysProblem = Nothing
               }
       , render
@@ -270,7 +273,7 @@ component =
                   {% if asksPassword %}
                     <label class="field">
                       <span>Current password</span>
-                      <input type="password" name="passkey-password" autocomplete="current-password" required onValueInput={{ TypedKeyPassword }}>
+                      <input type="password" name="passkey-password" autocomplete="current-password" required onValueInput={{ TypedKeyPassword }} {{ HP.ref st.keyPasswordField }}>
                     </label>
                   {% end %}
                   <button type="submit" disabled={{ st.busy }}>Add a passkey</button>
@@ -479,6 +482,11 @@ component =
       AddKey -> busily $ do
         modify (\st -> st {keysProblem = Nothing})
         typed <- gets (\st -> st.typedKeyPassword)
+        -- The password goes with this one attempt, however it ends: left
+        -- in the field, it would let someone else at this browser add a
+        -- passkey of theirs.
+        modify (\st -> st {typedKeyPassword = ""})
+        gets (\st -> st.keyPasswordField) >>= H.getRef >>= traverse_ (H.liftEffect . clearField)
         lift (beginRegistration (if T.null typed then Nothing else Just (Password typed))) >>= \case
           Left e -> modify (\st -> st {keysProblem = Just (passwordErrorText e)})
           Right options ->

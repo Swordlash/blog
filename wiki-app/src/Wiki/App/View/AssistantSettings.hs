@@ -49,6 +49,7 @@ module Wiki.App.View.AssistantSettings
   )
 where
 
+import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Set qualified as Set
@@ -56,6 +57,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
+import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Vault (PasskeyInfo (..))
@@ -63,6 +65,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, readKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
 import Wiki.App.Assistant.Sync (MonadVault (..))
 import Wiki.App.Backend (Session (..))
+import Wiki.App.Editor.Browser (clearField)
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (..)
@@ -153,6 +156,7 @@ data State = State
   , busy :: Bool
   , sync :: Sync
   , syncPassword :: Text
+  , syncPasswordField :: H.RefLabel
   -- ^ The password typed to make a passkey, which signs the user in, so
   -- that the server asks for it ("Wiki.Api.Vault").
   }
@@ -178,14 +182,16 @@ data Action
   | TurnOff
   | AskEachTime Bool
 
-component :: forall query output m. (MonadAssistant m, MonadVault m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadAssistant m, MonadVault m, MonadUUID m, MonadIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input ->
+      { initialState = \input -> do
+          syncPasswordField <- H.newRefLabel "assistant-passkey-password"
           pure
             State
               { input
+              , syncPasswordField
               , user = userOf input
               , settings = Nothing
               , secure = True
@@ -248,7 +254,7 @@ component =
               This browser offers no encryption to a page served over plain HTTP, so your keys are kept in this browser as text, not sealed. Open this wiki at its HTTPS address to have them sealed.
             </p>
           {% end %}
-          {{ syncView st.sync }}
+          {{ syncView st.syncPasswordField st.sync }}
           <fieldset class="assistant-provider" disabled={{ st.busy }}>
             <legend>The assistant asks</legend>
             {% for p in providers st.scripted %}
@@ -268,8 +274,8 @@ component =
       |]
 
     -- Sync across devices (WP5.21 of docs/PLAN.md, "Wiki.App.Assistant.Keys").
-    syncView :: Sync -> H.ComponentHTML Action Empty m
-    syncView sy = case sy.offer of
+    syncView :: H.RefLabel -> Sync -> H.ComponentHTML Action Empty m
+    syncView field sy = case sy.offer of
       NoServer -> [hh|<span class="assistant-sync-none"></span>|]
       NotSecure ->
         [hh|
@@ -339,7 +345,7 @@ component =
           [hh|
             <label class="field">
               <span>Your password, to make a new passkey (none if you sign in with a provider)</span>
-              <input type="password" class="assistant-passkey-password" autocomplete="current-password" disabled={{ isJust sy.working }} onValueInput={{ TypedSyncPassword }}>
+              <input type="password" class="assistant-passkey-password" autocomplete="current-password" disabled={{ isJust sy.working }} onValueInput={{ TypedSyncPassword }} {{ HP.ref field }}>
             </label>
           |]
 
@@ -597,7 +603,10 @@ component =
     withSyncPassword :: (Maybe Password -> H.HalogenM State Action Empty output m ()) -> H.HalogenM State Action Empty output m ()
     withSyncPassword act = do
       typed <- gets (\st -> st.syncPassword)
+      -- The field is emptied with the state, so that what it shows is what
+      -- a retry sends, and no password is left in it.
       modify (\st -> st {syncPassword = ""})
+      gets (\st -> st.syncPasswordField) >>= H.getRef >>= traverse_ (H.liftEffect . clearField)
       act (if T.null typed then Nothing else Just (Password typed))
 
     syncStep :: Text -> (UserId -> m (Either Text Keys)) -> H.HalogenM State Action Empty output m ()
