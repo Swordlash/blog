@@ -36,8 +36,11 @@ The owner merges. The session does not merge a pull request unless the owner ask
 to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
 work-package branches belong to the session) so CI runs on the rebased head.
 
-When a work package is done, the session records it in the plan: what was built, the
-choices made, what could not be done and why, and what the next package should know.
+When a work package is done, its pull request's description says what was built, the
+choices made, and what differs from the plan. The plan keeps no log of the work (the
+owner, 2026-10-31): the package leaves "Open work", a decision taken or changed goes
+under "Decisions", and what could not be done, or was found and left, goes under "Known
+gaps and notes" for the packages after it.
 
 ## Verification gate
 
