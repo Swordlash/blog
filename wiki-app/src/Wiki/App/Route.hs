@@ -119,6 +119,10 @@ data Route
   | -- | A page's Markdown, for anyone who may read the page: its space's
     -- path, and its own path there.
     PageSource [Slug] [Slug]
+  | -- | The preview of a page being edited, in a window of its own, which
+    -- follows its editor (WP5.36 of docs/PLAN.md,
+    -- "Wiki.App.View.LivePreview"): its space's path, and its own path.
+    LivePreview [Slug] [Slug]
   | -- | The form for a new space, at the top level or under a space.
     NewSpace (Maybe [Slug])
   | -- | An address that is none of the above.
@@ -286,6 +290,10 @@ route =
           (\case PageSource s p -> Just (s, p); _ -> Nothing)
           (uncurry PageSource)
           (prefix "s" (directory (spaceAndPage (`suffix` "source"))))
+      , alternative
+          (\case LivePreview s p -> Just (s, p); _ -> Nothing)
+          (uncurry LivePreview)
+          (prefix "s" (directory (spaceAndPage (`suffix` "live-preview"))))
       , alternative
           (\case NewSpace parent -> Just parent; _ -> Nothing)
           NewSpace

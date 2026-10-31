@@ -44,6 +44,7 @@ module Wiki.App.View.Body
   , HasIslands
   , heading
   , article
+  , articleLines
   , rendered
   , articleOf
   , commentBodies
@@ -168,6 +169,19 @@ article
   -> Text
   -> H.ComponentHTML action slots m
 article onLink place source = articleOf onLink place source (rendered place source)
+
+-- | 'article', with each block of the page after an empty marker of the
+-- source line it starts on ('Md.renderLines'): what the editor's preview,
+-- and the preview in a window of its own, are scrolled by to show the
+-- block being written (WP5.36 of docs/PLAN.md).
+articleLines
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => (ArticleLink -> action)
+  -> Place
+  -> Text
+  -> H.ComponentHTML action slots m
+articleLines onLink place source = articleOf onLink place source (Md.renderLines (options place) <$> Md.parseWithLines source)
 
 -- | A page's Markdown rendered as 'article' renders it, before it is put
 -- in its article. The page view highlights its comments' quotes in this

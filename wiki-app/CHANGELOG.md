@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The room to write in (WP5.36). The sidebar folds away from a « button at its
+bottom left, and the browser keeps it folded. The editor's A− and A+ set the
+size of the Markdown's font, kept too. The side by side preview scrolls on its
+own, as tall as the text, to the block of the cursor's line (or of the text's
+top line while it is scrolled). "Detach preview" opens the preview in a window
+of its own, at the page's `live-preview` address, which the editor feeds on a
+`BroadcastChannel`: it follows what is typed and the line being written, says
+when the editor has gone, and shows the page as saved until an editor speaks.
+
 Sign in with a passkey (WP5.30): "Sign in with a passkey" in the sign-in
 form, the browser's offer of saved passkeys in the login field, and "Use a
 passkey instead" in the second factor's form. The account panel gains a

@@ -120,6 +120,7 @@ library
       Wiki.App.View.Page
       Wiki.App.View.Permissions
       Wiki.App.View.Preview
+      Wiki.App.View.LivePreview
       Wiki.App.View.ProviderIcons
       Wiki.App.View.Reset
       Wiki.App.View.Search
@@ -368,6 +369,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Spaces
       Test.Browser.Text
       Test.Browser.Vault
+      Test.Browser.Workspace
       Test.Counting
   build-depends:
       aeson,

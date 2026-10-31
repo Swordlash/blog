@@ -31,6 +31,10 @@ module Wiki.App.Editor.Browser
   , insertAtCursor
   , focusText
   , focusElement
+  , LiveFeed
+  , listenLive
+  , stopLive
+  , followLine
   , clearField
   , clickElement
   , EditorKey (..)
@@ -58,7 +62,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, objec
 import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Callback, JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
 import Numeric.Natural (Natural)
 import Protolude
 import System.IO.Error qualified as IOError
@@ -95,6 +99,9 @@ $( browserJS
      , ("js_write", "wiki_editor_write", Unsafe, [t|Element -> JSText -> Int -> Int -> IO ()|])
      , ("js_key", "wiki_editor_key", Unsafe, [t|Event -> JSText|])
      , ("js_focus", "wiki_editor_focus", Unsafe, [t|Element -> IO ()|])
+     , ("js_live_listen", "wiki_live_listen", Unsafe, [t|JSText -> Callback -> IO Int|])
+     , ("js_live_stop", "wiki_live_stop", Unsafe, [t|Int -> IO ()|])
+     , ("js_live_follow", "wiki_live_follow", Unsafe, [t|Element -> Int -> IO ()|])
      , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
@@ -218,6 +225,35 @@ focusText = liftIO . js_focus_text
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
 focusElement = liftIO . js_focus
+
+-- | 'LiveFeed' is a window's subscription to what the editor of a page
+-- sends on the browser's channel between the wiki's windows (WP5.36 of
+-- docs/PLAN.md, "Wiki.App.View.LivePreview"): the channel's number in
+-- @jsbits/editor.js@ and the callback its messages come through, freed
+-- when it stops.
+data LiveFeed = LiveFeed Int (Maybe Callback)
+
+-- | Listen for the editor of the page the key names; each message for it,
+-- as JSON, is given to the handler. Natively there is no browser, and
+-- nothing is heard.
+listenLive :: (MonadIO m) => Text -> (Text -> IO ()) -> m LiveFeed
+listenLive key heard
+  | inBrowser = liftIO $ do
+      callback <- mkSyncCallback (heard . jsValText)
+      channel <- js_live_listen (toJSText key) callback
+      pure (LiveFeed channel (Just callback))
+  | otherwise = pure (LiveFeed 0 Nothing)
+
+-- | Stop listening, and free the callback.
+stopLive :: (MonadIO m) => LiveFeed -> m ()
+stopLive (LiveFeed channel callback) = liftIO $ do
+  when inBrowser (js_live_stop channel)
+  traverse_ freeCallback callback
+
+-- | Scroll rendered Markdown with line markers ("Wiki.Core.Markdown.Render"'s
+-- @renderLines@) to the block of a source line.
+followLine :: (MonadIO m) => Element -> Int -> m ()
+followLine element = liftIO . js_live_follow element
 
 -- | Empty a form field the component does not control, such as a password
 -- once it has been sent: what was typed in it would otherwise stay there.

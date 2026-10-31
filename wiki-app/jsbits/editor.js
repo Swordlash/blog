@@ -344,3 +344,54 @@ function wiki_editor_mention_asked(event) {
 function wiki_editor_mentioned(host, id, people) {
   host.wikiEditor?.mentioned(id, people === "" ? null : JSON.parse(people));
 }
+
+// The preview of a page being edited, in a window of its own (WP5.36 of
+// docs/PLAN.md, Wiki.App.View.LivePreview). The editor's CodeMirror
+// (web/src/editor.js) sends what is typed on the "wiki-live-preview"
+// channel, as {key, text, line}, and {key, closed: true} when it goes; the
+// key names the page. A window that starts listening asks with {hello: key},
+// and an editor of that page answers with what it has.
+const wikiLiveListeners = new Map();
+let wikiLiveNext = 0;
+
+// Listen for the editor of a page: each message for it is given to the
+// callback as JSON. The number to stop with.
+function wiki_live_listen(key, callback) {
+  const channel = new BroadcastChannel("wiki-live-preview");
+  channel.onmessage = (event) => {
+    if (event.data?.key === key && !event.data.hello) callback(JSON.stringify(event.data));
+  };
+  channel.postMessage({ hello: key });
+  const handle = ++wikiLiveNext;
+  wikiLiveListeners.set(handle, channel);
+  return handle;
+}
+
+function wiki_live_stop(handle) {
+  wikiLiveListeners.get(handle)?.close();
+  wikiLiveListeners.delete(handle);
+}
+
+// Scroll to the block of a source line in rendered Markdown with line
+// markers (span.source-line[data-line]): the last block that starts at or
+// before the line. A container that scrolls itself is scrolled; otherwise
+// the window is.
+function wiki_live_follow(container, line) {
+  wikiFollowLine(container, line);
+}
+
+function wikiFollowLine(container, line) {
+  let target = null;
+  for (const marker of container.querySelectorAll(".source-line")) {
+    if (Number(marker.dataset.line) <= line) target = marker;
+    else break;
+  }
+  if (target === null) return;
+  const own = container.scrollHeight > container.clientHeight && getComputedStyle(container).overflowY !== "visible";
+  if (own) {
+    const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+    container.scrollTop = Math.max(0, top - 16);
+  } else {
+    target.scrollIntoView({ block: "start" });
+  }
+}

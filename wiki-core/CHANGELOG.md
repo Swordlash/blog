@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`parseWithLines` gives each block of a page with the source line it starts
+on, and `renderLines` renders the blocks each after an empty
+`span.source-line[data-line]` marker (WP5.36), by which the editor's preview is
+scrolled to the block being written. Pages as read have no markers.
+
 Represent the shared root with a trusted reference to real page/space records. Extend full archives with optional home versions, validate the singleton and retain legacy settings-only archives. Anonymous root sharing defaults off.
 
 Add `Wiki.Core.HomePage` for the public front page configuration. Whole-wiki archives carry it in optional `settings.json`; older archives leave the current home page unchanged on import. Invalid titles are refused before import.

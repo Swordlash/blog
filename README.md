@@ -440,6 +440,11 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   (CodeMirror), with the preview beside it or in its place, files dropped or
   pasted in as attachments, drafts kept a few seconds after the typing stops,
   and a conflict shown in place when someone else saved first.
+  The preview beside the text scrolls to the block being written; **Detach
+  preview** opens it in a window of its own (on another monitor, say), which
+  follows the editor as it is typed. **A−** and **A+** set the size of the
+  Markdown's font, and **«** at the bottom left folds the sidebar away; the
+  browser keeps both.
 - **A writing assistant** in the editor, with your own API key for Anthropic's
   Claude or OpenAI, or any service that speaks OpenAI's API (GitHub Models,
   OpenRouter, Ollama on your own machine): a chat beside the Markdown, whose

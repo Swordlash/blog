@@ -126,6 +126,8 @@ import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
+import Web.Storage.Storage (StorageKind (..))
+import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Links (archiveExportUrl)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
@@ -160,6 +162,7 @@ import Wiki.App.View.Groups qualified as GroupsView
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.Invite qualified as InviteView
+import Wiki.App.View.LivePreview qualified as LivePreviewView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
@@ -248,6 +251,7 @@ data ViewSlot
   | PageSlot
   | BlogSlot
   | SourceSlot
+  | LivePreviewSlot
   | HistorySlot
   | SlidesSlot
   | NewSpaceSlot
@@ -311,6 +315,9 @@ data State m = State
   , here :: Here
   , switcherOpen :: Bool
   -- ^ Whether the sidebar's menu of spaces to switch to is open.
+  , sidebarFolded :: Bool
+  -- ^ Whether the sidebar is folded away on a wide screen, to give its
+  -- width to the page (WP5.36 of docs/PLAN.md); the browser keeps it.
   , generation :: Int
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
@@ -368,6 +375,7 @@ data Action
   | Arrived Route
   | Followed (Follow Route)
   | ToggleSwitcher
+  | FoldSidebar Bool
   | ToggleMenu
   | SwitchTo (Maybe UserId)
   | AskReset
@@ -433,6 +441,7 @@ component =
               , icons
               , here
               , switcherOpen = False
+              , sidebarFolded = False
               , generation = 0
               , menuOpen = False
               , demoAccountOpen = False
@@ -463,8 +472,18 @@ component =
           [hh|
         <div class="wiki">
           {{ header st }}
-          <div class="wiki-body">
+          <div class="wiki-body{% if st.sidebarFolded %} sidebar-folded{% end %}">
             {{ sidebar st }}
+            <button
+              type="button"
+              class="sidebar-fold"
+              aria-label={{ if st.sidebarFolded then "Show the sidebar" else "Hide the sidebar" :: Text }}
+              title={{ if st.sidebarFolded then "Show the sidebar" else "Hide the sidebar" :: Text }}
+              aria-expanded={{ ariaBool (not st.sidebarFolded) }}
+              onClick={{ const (FoldSidebar (not st.sidebarFolded)) }}
+            >
+              {{ if st.sidebarFolded then "»" else "«" :: Text }}
+            </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
               {% if isJust st.leaving %}
@@ -785,6 +804,10 @@ component =
           | st.kept = "Changes to the demo are kept in this browser."
           | otherwise = "This browser keeps nothing for the demo: changes last until the page is closed."
 
+    -- The browser's key for whether the sidebar is folded.
+    sidebarFoldedKey :: Text
+    sidebarFoldedKey = "sidebar-folded"
+
     -- Inside a space, that space alone; elsewhere, the spaces.
     sidebar :: State m -> H.ComponentHTML Action Slots m
     sidebar st = case (st.route, st.here) of
@@ -977,6 +1000,7 @@ component =
                 Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
                 Page _ path -> pageView space pages path
                 PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
+                LivePreview _ path -> HH.slot "view" LivePreviewSlot LivePreviewView.component LivePreviewView.Input {context = context st, space, pages, path} FromView
                 PageHistory _ path version against ->
                   HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
                 PageSlides _ path slide step ->
@@ -1045,6 +1069,9 @@ component =
     handleAction :: Action -> H.HalogenM (State m) Action Slots output m ()
     handleAction = \case
       Initialize -> do
+        -- After the first render, which a prerendered page shows unfolded.
+        folded <- H.liftEffect (Storage.getItem LocalStorage sidebarFoldedKey)
+        when (folded == Just (Right True)) $ modify (\st -> st {sidebarFolded = True})
         -- Made in 'H.liftEffect', before anything here waits, so that the
         -- shell listens to the browser from the moment it has started.
         whenM (gets overNetwork) $ do
@@ -1127,6 +1154,9 @@ component =
           else Router.redirect st.router st.route
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       ToggleSwitcher -> modify (\st -> st {switcherOpen = not st.switcherOpen})
+      FoldSidebar folded -> do
+        modify (\st -> st {sidebarFolded = folded})
+        H.liftEffect (Storage.setItem LocalStorage sidebarFoldedKey folded)
       ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
       -- The questions and results about the wiki's data were for the user
       -- one was before switching, so they are cleared.
@@ -1429,6 +1459,7 @@ spaceOfRoute = \case
   Page path _ -> Just path
   EditPage path _ -> Just path
   PageSource path _ -> Just path
+  LivePreview path _ -> Just path
   PageHistory path _ _ _ -> Just path
   PageSlides path _ _ _ -> Just path
   NewPage path _ -> Just path
@@ -1458,6 +1489,7 @@ waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
+  (LivePreview _ _, InSpace {}) -> True
   (PageHistory {}, InSpace {}) -> True
   (PageSlides {}, InSpace {}) -> True
   (Search {}, _) -> True
@@ -1474,6 +1506,7 @@ currentPage st = case (st.route, st.here) of
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
+  (LivePreview _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
   (PageSlides _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
@@ -1511,6 +1544,9 @@ crumbs st = case st.route of
   PageHistory path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("History", Nothing) | not (null page)]
+  LivePreview path pagePath ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("Preview", Nothing) | not (null page)]
   PageSlides path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Slides", Nothing) | not (null page)]
