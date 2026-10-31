@@ -59,6 +59,7 @@ module Wiki.App.Assistant
     -- * The vault in the browser
   , KeyRef
   , Made (..)
+  , PasskeyTicket
   , Used (..)
   , PasskeyRefusal (..)
 
@@ -131,6 +132,10 @@ $( browserJS
      , ("js_wrap", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO JSText|])
      , ("js_unwrap", "wiki_vault_unwrap", Safe, [t|Int -> JSText -> JSText -> JSText -> Bool -> IO JSText|])
      , ("js_discard", "wiki_vault_discard", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_conditional_here", "wiki_passkey_conditional_here", Safe, [t|IO Bool|])
+     , ("js_passkey_sign_in", "wiki_passkey_sign_in", Safe, [t|JSText -> Bool -> Int -> IO JSText|])
+     , ("js_passkey_offer_ticket", "wiki_passkey_offer_ticket", Unsafe, [t|IO Int|])
+     , ("js_passkey_abort", "wiki_passkey_abort", Unsafe, [t|IO ()|])
      ]
  )
 
@@ -159,6 +164,11 @@ data Used = Used
   , wrapping :: Maybe KeyRef
   }
   deriving stock (Show)
+
+-- | 'PasskeyTicket': the number of a sign-in with a passkey, which starts
+-- only while the number is current ('passkeyTicket').
+newtype PasskeyTicket = PasskeyTicket Int
+  deriving stock (Eq, Show)
 
 -- | 'PasskeyRefusal': why a passkey was not made or used.
 data PasskeyRefusal
@@ -347,6 +357,37 @@ class (Monad m) => MonadAssistant m where
   default usePasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => AssertionOptions -> Text -> Text -> m (Either PasskeyRefusal Used)
   usePasskey options salt = lift . usePasskey options salt
 
+  -- | Whether the browser offers saved passkeys in a login field
+  -- (conditional mediation), for 'signInPasskey'.
+  conditionalHere :: m Bool
+  default conditionalHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
+  conditionalHere = lift conditionalHere
+
+  -- | The ticket of a sign-in with a passkey about to ask the server for
+  -- its challenge: it starts only if no abort nor other dialog came since
+  -- ('signInPasskey'). It returns at once.
+  passkeyTicket :: m PasskeyTicket
+  default passkeyTicket :: (MonadTrans t, MonadAssistant n, m ~ t n) => m PasskeyTicket
+  passkeyTicket = lift passkeyTicket
+
+  -- | Use a passkey to sign in with (WP5.30 of docs/PLAN.md), with the
+  -- server's options, asking for no PRF: in the browser's dialog, which
+  -- ends any offer, or, when conditional, from the login field's offer,
+  -- which waits until a passkey is picked there or 'abortSignInPasskey' is
+  -- called. Neither starts ('Cancelled') if an abort or another dialog
+  -- came since the ticket was taken ('passkeyTicket'), as when the form
+  -- closed while the challenge was being fetched. The result is the
+  -- browser's answer for the server to check.
+  signInPasskey :: AssertionOptions -> Bool -> PasskeyTicket -> m (Either PasskeyRefusal AssertionResponse)
+  default signInPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => AssertionOptions -> Bool -> PasskeyTicket -> m (Either PasskeyRefusal AssertionResponse)
+  signInPasskey options conditional = lift . signInPasskey options conditional
+
+  -- | End the sign-in with a passkey under way, if any; it comes back
+  -- 'Cancelled'.
+  abortSignInPasskey :: m ()
+  default abortSignInPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => m ()
+  abortSignInPasskey = lift abortSignInPasskey
+
   -- | Wrap a vault key (one that can be exported) with a passkey's
   -- wrapping key, authenticating the given data with it.
   wrapWith :: KeyRef -> KeyRef -> Text -> m (Either Text WrappedKey)
@@ -464,6 +505,12 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_unwrap wrapping (toJSText wrapped.nonce) (toJSText wrapped.key) (toJSText info) exportable
     pure (answered (\o -> KeyRef <$> o .: "handle") answer)
   discardPasskey rpId credential = liftIO (evaluate =<< js_discard (toJSText rpId) (toJSText credential.text))
+  conditionalHere = liftIO (evaluate =<< js_conditional_here)
+  passkeyTicket = liftIO (PasskeyTicket <$> js_passkey_offer_ticket)
+  signInPasskey options conditional (PasskeyTicket ticket) = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_passkey_sign_in (toJSText (json (toJSON options))) conditional ticket
+    pure . passkeyAnswer answer $ \o -> o .: "response"
+  abortSignInPasskey = liftIO js_passkey_abort
   scriptedInstalled = liftIO js_scripted
   secureContext = liftIO js_secure
   prepareAssistant = liftIO js_prepare
@@ -522,6 +569,10 @@ instance MonadAssistant MemDOM where
   wrapWith _ _ _ = pure (Left noBrowser)
   unwrapWith _ _ _ _ = pure (Left noBrowser)
   discardPasskey _ _ = pass
+  conditionalHere = pure False
+  passkeyTicket = pure (PasskeyTicket 0)
+  signInPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
+  abortSignInPasskey = pass
   scriptedInstalled = pure False
   secureContext = pure True
   prepareAssistant = pass

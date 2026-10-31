@@ -31,6 +31,7 @@ module Wiki.App.Editor.Browser
   , insertAtCursor
   , focusText
   , focusElement
+  , clearField
   , clickElement
   , EditorKey (..)
   , editorKey
@@ -94,6 +95,7 @@ $( browserJS
      , ("js_write", "wiki_editor_write", Unsafe, [t|Element -> JSText -> Int -> Int -> IO ()|])
      , ("js_key", "wiki_editor_key", Unsafe, [t|Event -> JSText|])
      , ("js_focus", "wiki_editor_focus", Unsafe, [t|Element -> IO ()|])
+     , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
      , ("js_guard_unload", "wiki_editor_guard_unload", Unsafe, [t|Bool -> IO ()|])
@@ -216,6 +218,11 @@ focusText = liftIO . js_focus_text
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
 focusElement = liftIO . js_focus
+
+-- | Empty a form field the component does not control, such as a password
+-- once it has been sent: what was typed in it would otherwise stay there.
+clearField :: (MonadIO m) => Element -> m ()
+clearField = liftIO . js_clear_field
 
 -- | Click an element, as the user would.
 clickElement :: (MonadIO m) => Element -> m ()

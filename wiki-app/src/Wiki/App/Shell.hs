@@ -956,6 +956,7 @@ component =
       VerifyEmail token -> HH.slot_ "part" VerifyEmailSlot VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
       Unsubscribe token -> HH.slot_ "part" UnsubscribeSlot UnsubscribeView.component UnsubscribeView.Input {token}
       AssistantSettings -> HH.slot_ "part" AssistantSettingsSlot AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
+      Home -> homeContent st
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
@@ -963,12 +964,6 @@ component =
         InSpace _ space pages ->
           let homePath = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
            in case st.route of
-                Home ->
-                  HH.div
-                    [HP.class_ "wiki-home"]
-                    [ pageView space pages homePath
-                    , HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
-                    ]
                 EditHome -> HH.slot "editor" (space.id, homePath) Editor.component Editor.Input {context = context st, space, pages, path = homePath, feed = st.feed} FromView
                 HomeSource -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path = homePath} FromView
                 HomeHistory version against -> HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = homePath, version, against} FromView
@@ -994,6 +989,27 @@ component =
       where
         pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
         blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
+
+    -- The front page: its page, and under it the spaces and the ones
+    -- visited last ("Wiki.App.View.Directory"). The directory stays mounted
+    -- while the page loads again (after a change of user, or coming back
+    -- from the editor), so that a click on a space's card made meanwhile is
+    -- not lost with a directory taken down and made again, and the cards
+    -- do not go away and come back.
+    homeContent :: State m -> H.ComponentHTML Action Slots m
+    homeContent st = case st.here of
+      NoSpace -> notFound st
+      here ->
+        HH.div
+          [HP.class_ "wiki-home"]
+          [ case here of
+              InSpace _ space pages ->
+                let path = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
+                 in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+              SpaceFailed _ e -> failureView e RetryHere
+              _ -> loading
+          , HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
+          ]
 
     loading :: H.ComponentHTML Action Slots m
     loading = [hh|<p class="loading">Loading…</p>|]

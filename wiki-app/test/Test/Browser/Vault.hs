@@ -29,7 +29,7 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -44,8 +44,10 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Assistant (ApiKey (..), Provider (..), ProviderSettings (..), Settings, defaultSettings, settingsOf, withKey, withModel)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Standing (..))
 
 $( browserJS
@@ -63,6 +65,7 @@ $( browserJS
      , ("js_record", "wiki_test_device_record", Safe, [t|JSText -> IO JSText|])
      , ("js_scripted", "wiki_test_passkeys_scripted", Unsafe, [t|IO ()|])
      , ("js_cancel_after", "wiki_test_passkeys_cancel_after", Unsafe, [t|Int -> IO ()|])
+     , ("js_cancel_next", "wiki_test_passkeys_cancel_next", Unsafe, [t|IO ()|])
      , ("js_stash", "wiki_test_vault_server_stash", Unsafe, [t|IO ()|])
      , ("js_unstash", "wiki_test_vault_server_unstash", Unsafe, [t|IO ()|])
      , ("js_add_unwrapped", "wiki_test_vault_server_add_unwrapped", Unsafe, [t|IO ()|])
@@ -70,6 +73,11 @@ $( browserJS
      , ("js_restore_page_keys", "wiki_test_page_keys_restore", Unsafe, [t|IO ()|])
      , ("js_other_tab_drops", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO ()|])
      , ("js_exportable", "wiki_test_exportable_keys_left", Safe, [t|IO Int|])
+     , ("js_existing", "wiki_test_passkeys_existing", Unsafe, [t|IO JSText|])
+     , ("js_offered", "wiki_test_passkeys_offered", Unsafe, [t|IO Bool|])
+     , ("js_pick", "wiki_test_passkeys_pick", Unsafe, [t|IO ()|])
+     , ("js_offers", "wiki_test_passkeys_offers", Unsafe, [t|IO Int|])
+     , ("js_insecure", "wiki_test_passkeys_insecure", Unsafe, [t|IO ()|])
      ]
  )
 
@@ -77,6 +85,186 @@ type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands 
 
 spec :: forall m -> (Specs m) => Spec
 spec m = do
+  vault m
+  signing m
+
+-- | Signing in with a passkey, and the account's passkeys (WP5.30 of
+-- docs/PLAN.md): the button and the login field's offer sign in with the
+-- stub's passkey alone; the second factor's form takes one in place of the
+-- code; the account panel lists, adds and removes them; over plain HTTP
+-- there is neither.
+signing :: forall m -> (Specs m) => Spec
+signing m = describe "signing in with a passkey" $ do
+  it "signs in with the button, and with the passkey the login field offers" $ runPage $ do
+    (ui, id') <- signedOut m
+    me <- signedInAs "user-editor"
+    answerWith "PUT" "api/v1/session/passkey" 200 me
+    find ui ".sign-in-toggle" >>= click
+    -- The login field offers the passkey as the form opens; the button
+    -- ends that offer and opens the dialog.
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    find ui ".passkey-sign-in" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    unsafeIOToPageM js_offered `shouldReturn` False
+    sent <- filter (\r -> r.method == "PUT" && r.url == "api/v1/session/passkey") <$> asked
+    map (\r -> (field ["id"] =<< decodeStrict (encodeUtf8 r.body), field ["userHandle"] =<< decodeStrict (encodeUtf8 r.body))) sent
+      `shouldBe` [(Just (Aeson.String id'), Just (Aeson.String "dXNlci1lZGl0b3I"))]
+    unmount ui
+    unsafeIOToPageM js_uninstall
+    serverStops
+    -- Picked in the login field instead.
+    (again, _) <- signedOut m
+    answerWith "PUT" "api/v1/session/passkey" 200 me
+    find again ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    unsafeIOToPageM js_pick
+    find again ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    closedSignedIn again
+
+  it "says why a passkey did not sign in, and offers it again" $ runPage $ do
+    (ui, _) <- signedOut m
+    answerWith "PUT" "api/v1/session/passkey" 400 (Aeson.object ["error" Aeson..= ("Invalid" :: Text), "message" Aeson..= ("This passkey is not one of this wiki's: it may have been removed. Sign in with your password." :: Text)])
+    find ui ".sign-in-toggle" >>= click
+    find ui ".passkey-sign-in" >>= click
+    find ui ".sign-in-form .sign-in-error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "not one of this wiki's")
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    -- Closing the form ends the offer.
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` False
+    closedSignedIn ui
+
+  it "starts no offer in the login field whose challenge arrives after the form closed" $ runPage $ do
+    (ui, _) <- signedOut m
+    holdAt "POST" "api/v1/session/passkey"
+    find ui ".sign-in-toggle" >>= click
+    eventually $ length . filter (\r -> r.url == "api/v1/session/passkey") <$> asked `shouldReturn` 1
+    find ui ".sign-in-toggle" >>= click
+    release
+    -- The challenge arrived after the form it was for closed. The form
+    -- opened again starts its own offer, and only that one.
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    unsafeIOToPageM js_offers `shouldReturn` 1
+    closedSignedIn ui
+
+  it "opens no passkey dialog whose challenge arrives after the form closed" $ runPage $ do
+    (ui, _) <- signedOut m
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    holdAt "POST" "api/v1/session/passkey"
+    find ui ".passkey-sign-in" >>= click
+    eventually $ length . filter (\r -> r.url == "api/v1/session/passkey") <$> asked `shouldReturn` 2
+    find ui ".sign-in-toggle" >>= click
+    release
+    -- The form opened again offers in the field; no dialog was opened, and
+    -- nobody signed in.
+    find ui ".sign-in-toggle" >>= click
+    eventually $ unsafeIOToPageM js_offered `shouldReturn` True
+    touches `shouldReturn` 0
+    length . filter (\r -> r.method == "PUT") <$> asked `shouldReturn` 0
+    closedSignedIn ui
+
+  it "completes a password's sign-in with a passkey in place of the code" $ runPage $ do
+    (ui, id') <- signedOut m
+    me <- signedInAs "user-editor"
+    answerWith "POST" "api/v1/session" 401 (Aeson.object ["error" Aeson..= ("SecondFactorRequired" :: Text)])
+    answerWith "POST" "api/v1/session/second-factor/passkey" 200 (Aeson.object ["challenge" Aeson..= ("Y2hhbGxlbmdl" :: Text), "rpId" Aeson..= ("localhost" :: Text), "allow" Aeson..= [id']])
+    answerWith "PUT" "api/v1/session/second-factor/passkey" 401 (Aeson.object ["error" Aeson..= ("Unauthenticated" :: Text)])
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "editor")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "editor's password")
+    find ui ".sign-in-form button[type=submit]" >>= click
+    find ui ".sign-in-code-form .passkey-code" >>= click
+    find ui ".sign-in-code-form .sign-in-error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "That passkey was not accepted")
+    answerWith "PUT" "api/v1/session/second-factor/passkey" 200 me
+    find ui ".sign-in-code-form .passkey-code" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    closedSignedIn ui
+
+  it "lists the account's passkeys, adds one with a name, and removes one" $ runPage $ do
+    serverStarts
+    serveDemo
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    _ <- unsafeIOToPageM js_existing
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    find ui ".passkey-name" >>= (`shouldHaveText` "My laptop")
+    find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` "My phone")
+    find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
+    find ui ".passkey-add button[type=submit]" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 2
+    -- The password went with that one attempt: the field is empty again.
+    (find ui ".passkey-add input[name=passkey-password]" >>= (`getProperty` "value")) `shouldReturn` ""
+    map (T.strip) <$> (findAll ui ".passkey-name" >>= traverse textContent) `shouldReturn` ["My laptop", "My phone"]
+    -- Made without the PRF extension: a passkey to sign in with.
+    sent <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    map (\r -> field ["name"] =<< decodeStrict (encodeUtf8 r.body)) sent `shouldBe` [Just (Aeson.String "My phone")]
+    -- Making it asked for the password, since it signs the user in.
+    begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` [Just (Aeson.String "editor's password")]
+    findAll ui ".passkey-remove" >>= \case
+      remove : _ -> click remove
+      [] -> panic "no Remove"
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    find ui ".passkey-name" >>= (`shouldHaveText` "My phone")
+    closedSignedIn ui
+
+  it "offers no passkey on a page served over plain HTTP, and says why" $ runPage $ do
+    serverStarts
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 nobody
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    unsafeIOToPageM js_insecure
+    ui <- startServer m Home
+    find ui ".sign-in-toggle" >>= click
+    _ <- find ui ".sign-in-form input[name=login]"
+    length <$> findAll ui ".passkey-sign-in" `shouldReturn` 0
+    unsafeIOToPageM js_offered `shouldReturn` False
+    unmount ui
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    signedIn <- startServer m Home
+    find signedIn ".account-toggle" >>= click
+    find signedIn ".passkeys-unavailable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "served over HTTPS")
+    closedSignedIn signedIn
+  where
+    -- The wiki over the test's server with nobody signed in, the vault's
+    -- server keeping one passkey of the editor's, which the stub has too:
+    -- the page, and the passkey's id.
+    signedOut :: forall m -> (Specs m) => PageM s (Mounted s Shell.Query Void m, Text)
+    signedOut m' = do
+      serverStarts
+      serveDemo
+      answerWith "GET" "api/v1/session" 200 nobody
+      answerWith "POST" "api/v1/session/passkey" 200 (Aeson.object ["challenge" Aeson..= ("Y2hhbGxlbmdl" :: Text), "rpId" Aeson..= ("localhost" :: Text), "allow" Aeson..= ([] :: [Text])])
+      unsafeIOToPageM js_vault_server
+      unsafeIOToPageM (js_install True True)
+      id' <- fromJSText <$> unsafeIOToPageM js_existing
+      ui <- startServer m' Home
+      pure (ui, id')
+    touches :: PageM s Int
+    touches = unsafeIOToPageM js_touches
+    -- What the account panel fetches besides the passkeys.
+    answerAccount = do
+      answerWith "GET" "api/v1/account/identities" 200 (Aeson.object ["password" Aeson..= True, "identities" Aeson..= ([] :: [Text])])
+      answerWith "GET" "api/v1/account/sessions" 200 ([] :: [Text])
+      answerWith "GET" "api/v1/account/second-factor" 200 (Aeson.object ["enabled" Aeson..= False, "recoveryCodesLeft" Aeson..= (0 :: Int), "asksPassword" Aeson..= True])
+      answerWith "GET" "api/v1/account/email" 200 (Aeson.object ["email" Aeson..= Aeson.Null, "verified" Aeson..= False, "mailing" Aeson..= False, "mailError" Aeson..= Aeson.Null, "asksPassword" Aeson..= True])
+    closedSignedIn :: Mounted s Shell.Query Void m -> PageM s ()
+    closedSignedIn ui = do
+      unmount ui
+      unsafeIOToPageM js_uninstall
+      serverStops
+
+vault :: forall m -> (Specs m) => Spec
+vault m = do
   it "turns syncing on with a passkey, and sends the server the keys sealed only" $ runPage $ do
     ui <- opened m True True
     anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
@@ -187,13 +375,51 @@ spec m = do
     touches `shouldReturn` 2
     closed ui
 
-  it "refuses a passkey without the PRF extension, says why, and removes it" $ runPage $ do
+  it "refuses a passkey without the PRF extension for the keys, says why, and keeps it to sign in with" $ runPage $ do
     ui <- opened m False False
     find ui ".assistant-sync-on-button" >>= click
-    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "This passkey cannot sync the keys")
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "It was kept to sign in with")
     kept <- vaultState
-    (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept) `shouldBe` (Just Aeson.Null, 0)
+    (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept) `shouldBe` (Just Aeson.Null, 1)
     find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "off")
+    closed ui
+
+  it "empties the password field after an attempt to make a passkey, which a retry sends again" $ runPage $ do
+    ui <- opened m True True
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    unsafeIOToPageM js_cancel_next
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
+    (find ui ".assistant-passkey-password" >>= (`getProperty` "value")) `shouldReturn` ""
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    turnOn ui
+    begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
+    closed ui
+
+  it "makes a new passkey for syncing when the one the user has is not used" $ runPage $ do
+    ui <- opened m True True
+    existing <- fromJSText <$> unsafeIOToPageM js_existing
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    -- The dialog for the passkey the user has is closed: a new one is made.
+    unsafeIOToPageM js_cancel_next
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    kept <- vaultState
+    (field ["passkeys", "0", "id"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept, isJust (field ["passkeys", "1", "wrapped", "key"] kept))
+      `shouldBe` (Just (Aeson.String existing), 2, True)
+    closed ui
+
+  it "turns syncing on with a passkey the user has already, making none" $ runPage $ do
+    ui <- opened m True True
+    existing <- fromJSText <$> unsafeIOToPageM js_existing
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    -- One touch: the passkey used, none made.
+    touches `shouldReturn` 1
+    kept <- vaultState
+    (field ["passkeys", "0", "id"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept, isJust (field ["passkeys", "0", "wrapped", "key"] kept))
+      `shouldBe` (Just (Aeson.String existing), 1, True)
     closed ui
 
   it "turns syncing off with no passkey, and keeps the keys in this browser" $ runPage $ do
@@ -203,8 +429,9 @@ spec m = do
     find ui ".assistant-sync-off" >>= click
     eventually $ find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "off")
     touches `shouldReturn` before
+    -- The passkey stays, to sign in with, without its copy of the key.
     kept <- vaultState
-    (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept) `shouldBe` (Just Aeson.Null, 0)
+    (field ["vault"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept, field ["passkeys", "0", "wrapped"] kept) `shouldBe` (Just Aeson.Null, 1, Just Aeson.Null)
     (\s -> (settingsOf Anthropic s).key) <$> settingsHere m `shouldReturn` Just (ApiKey secretKey)
     unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
     closed ui
@@ -294,10 +521,13 @@ spec m = do
     find ui ".assistant-add-passkey" >>= click
     eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
     exportable `shouldReturn` 0
-    -- Turning on: a new vault key made, and the passkey's dialog closed.
+    -- Turning on: a new vault key made, and both dialogs closed, the one
+    -- for the passkey kept when syncing was turned off and the one for a
+    -- new passkey made in its place.
     find ui ".assistant-sync-off" >>= click
     _ <- eventually $ find ui ".assistant-sync-off-state"
-    unsafeIOToPageM (js_cancel_after 0)
+    unsafeIOToPageM js_cancel_next
+    unsafeIOToPageM js_cancel_next
     find ui ".assistant-sync-on-button" >>= click
     eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dialog was closed")
     exportable `shouldReturn` 0
@@ -376,6 +606,10 @@ turnOn ui = do
 -- | The editor's settings as this device keeps them now.
 settingsHere :: forall m -> (Specs m) => PageM s Settings
 settingsHere m = unsafeIOToPageM (either (const defaultSettings) (\k -> k.settings) <$> runTest (readKeys (UserId "user-editor") :: m (Either Text Keys)))
+
+-- | Nobody signed in, in an open wiki.
+nobody :: SessionInfo
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
 
 -- | One of the demo's users, signed in.
 signedInAs :: Text -> PageM s SessionInfo

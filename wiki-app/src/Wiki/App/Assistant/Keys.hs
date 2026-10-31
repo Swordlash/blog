@@ -56,13 +56,15 @@ import Data.Aeson (eitherDecodeStrict, encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Protolude
-import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo, RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.App.Account (passwordErrorText)
 import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), PasskeyRefusal (..), Used (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
+import Wiki.Core.User (Password)
 
 -- | 'Keys': the assistant's settings on this device, and how they are kept.
 data Keys = Keys
@@ -182,12 +184,17 @@ changeKeys user f = sealing (plainChange user f) $ runExceptT (attempt (2 :: Int
 --------------------------------------------------------------------------------
 -- Across devices
 
--- | Make a passkey and sync the settings with it: the vault made, sealed
--- with a new vault key wrapped for the passkey, stored on the server, and
--- the key kept on this device. A passkey without the PRF extension is
--- removed again, and said so.
-turnOnSync :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
-turnOnSync user = sealing (pure (Left needsSealing)) $ runExceptT $ do
+-- | Sync the settings with a passkey: the vault made, sealed with a new
+-- vault key wrapped for the passkey, stored on the server, and the key
+-- kept on this device. A user who has passkeys already (to sign in with,
+-- or kept when syncing was turned off) is asked for one of them first: the
+-- browser would refuse to make another on the same authenticator, since
+-- the wiki names them as made already. If that fails (the dialog closed,
+-- no passkey at hand, no PRF output), a new one is made, as for a user who
+-- has none; one without the PRF extension is kept to sign in with, and
+-- said so ('newPasskey').
+turnOnSync :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> m (Either Text Keys)
+turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   record <- refreshed user =<< current user
   when (isJust record.server) (throwError "Your keys sync already, or another device of yours syncs them: unlock them with a passkey.")
   key <- lift (deviceKey user)
@@ -197,10 +204,20 @@ turnOnSync user = sealing (pure (Left needsSealing)) $ runExceptT $ do
       Fresh -> pure defaultSettings
       Locked _ _ -> throwError "Unlock your keys first."
   salt <- lift newSalt
+  existing <- server listPasskeys
   -- The new vault key can be exported, to be wrapped: the page forgets it
   -- however this ends, and keeps only a copy that cannot be.
   stored' <- withKey (lift (newVaultKey True)) $ \vaultKey -> do
-    (credential, wrapping) <- newPasskey salt
+    -- A passkey the user has may be out of reach (lost, on another
+    -- device) or lack the PRF extension: then a new one is made, on
+    -- another authenticator.
+    (credential, wrapping) <-
+      if null existing
+        then newPasskey password salt
+        else usedPasskey salt Nothing `recover` const (newPasskey password salt)
+    -- A passkey made here goes again if the vault is not stored; one the
+    -- user had stays, since it signs them in.
+    let made = credential `notElem` map (\p -> p.id) existing
     stored' <-
       forgetting
         wrapping
@@ -209,7 +226,7 @@ turnOnSync user = sealing (pure (Left needsSealing)) $ runExceptT $ do
             sealed <- seal vaultKey secrets
             server (storeVault Nothing Vault {format = vaultFormat, salt, sealed, wrapped = Map.singleton credential wrapped})
         )
-        `recover` \why -> lift (void (dropPasskey credential)) >> throwError why
+        `recover` \why -> lift (when made (void (dropPasskey credential))) >> throwError why
     keep user vaultKey (not record.askEachTime)
     pure stored'
   let synced' = serverTo (Just (ServerCopy stored'.tag stored'.vault)) (sealedTo (Just stored'.vault.sealed) record)
@@ -254,8 +271,8 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
 -- is unlocked: a passkey the vault knows gives the vault key (one touch),
 -- then the new passkey is made (another, and a third if its authenticator
 -- gives its PRF output only when used).
-addPasskey :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
-addPasskey user = sealing (pure (Left needsSealing)) $ runExceptT $ do
+addPasskey :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> m (Either Text Keys)
+addPasskey user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   record <- refreshed user =<< current user
   copy <- maybe (throwError "Your keys do not sync: turn syncing on first.") pure record.server
   key <- lift (deviceKey user)
@@ -270,7 +287,7 @@ addPasskey user = sealing (pure (Left needsSealing)) $ runExceptT $ do
         wrapped <- maybe (throwError "This passkey has no copy of the vault's key: use another one.") pure (wrappedFor known copy.vault)
         unwrap wrapping wrapped True
   fresh <- withKey vaultKeyOf $ \vaultKey -> do
-    (credential, newWrapping) <- newPasskey copy.vault.salt
+    (credential, newWrapping) <- newPasskey password copy.vault.salt
     forgetting
       newWrapping
       ( do
@@ -470,11 +487,12 @@ localKey user = do
 
 -- | Make a passkey for the wiki, checked by the server, and the key that
 -- wraps the vault key for it: from its PRF output at once, or by using it
--- once. A passkey without the PRF extension is removed from the server
--- and from the person's password manager, and said so.
-newPasskey :: (MonadAssistant m, MonadVault m) => Text -> Step m (CredentialId, KeyRef)
-newPasskey salt = do
-  options <- server beginRegistration
+-- once. A passkey without the PRF extension cannot wrap the vault key; it
+-- is kept, since it signs the user in (WP5.30), and the person is told.
+newPasskey :: (MonadAssistant m, MonadVault m) => Maybe Password -> Text -> Step m (CredentialId, KeyRef)
+newPasskey password salt = do
+  -- Making a passkey asks for the user's password, since it signs them in.
+  options <- ExceptT (first passwordErrorText <$> beginRegistration password)
   made <- passkey (createPasskey options salt wrappingInfo)
   let credential = made.response.id
       -- The key the PRF output gave goes if a step below fails.
@@ -485,10 +503,8 @@ newPasskey salt = do
     server (finishRegistration made.response)
       `recover` \why -> lift (discardPasskey options.rpId credential) >> forgetWrapping >> throwError why
   unless made.prf $ do
-    lift (void (dropPasskey credential))
-    lift (discardPasskey options.rpId credential)
     forgetWrapping
-    throwError "This passkey cannot sync the keys: it has no PRF extension, which the browser or the password manager that keeps it does not offer. It was removed. Try a passkey kept elsewhere (Google Password Manager, iCloud Keychain, Windows Hello, a security key)."
+    throwError "This passkey cannot sync the keys: it has no PRF extension, which the browser or the password manager that keeps it does not offer. It was kept to sign in with, and is listed under Passkeys in your account. Try a passkey kept elsewhere (Google Password Manager, iCloud Keychain, Windows Hello, a security key)."
   case made.wrapping of
     Just wrapping -> pure (credential, wrapping)
     Nothing ->
@@ -508,7 +524,7 @@ usedPasskey salt only = do
   when (null allowed) (throwError "None of your passkeys holds a copy of the vault's key: turn syncing off, and on again with a passkey.")
   used <- passkey (usePasskey AssertionOptions {challenge = options.challenge, rpId = options.rpId, allow = allowed} salt wrappingInfo)
   _ <- server (finishAssertion used.response) `recover` \why -> lift (traverse_ forgetKey used.wrapping) >> throwError why
-  wrapping <- maybe (throwError "This passkey gave no PRF output, so it cannot unlock the keys.") pure used.wrapping
+  wrapping <- maybe (throwError "This passkey gave no PRF output, so it cannot unlock the keys. Use another passkey, or remove this one under Passkeys in your account and turn syncing on again with a new one.") pure used.wrapping
   pure (used.response.id, wrapping)
 
 seal :: (MonadAssistant m) => KeyRef -> Settings -> Step m Sealed

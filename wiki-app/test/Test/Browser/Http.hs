@@ -31,6 +31,8 @@ module Test.Browser.Http
   , startServer
   , startServerWith
   , tellServer
+  , holdAt
+  , release
   )
 where
 
@@ -135,6 +137,15 @@ data Asked = Asked
 
 instance FromJSON Asked where
   parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body" <*> o .: "bytes" <*> o .: "aborted"
+
+-- | Hold the answers to requests of this method to this address until
+-- 'release'.
+holdAt :: Text -> Text -> PageM s ()
+holdAt method url = unsafeIOToPageM (js_server_hold_at (toJSText method) (toJSText url))
+
+-- | Answer the requests held.
+release :: PageM s ()
+release = unsafeIOToPageM js_server_release
 
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.
@@ -378,7 +389,8 @@ accounts m = describe "signing in and out" $ do
     find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
     _ <- find ui ".account .sign-out"
     length <$> findAll ui ".sign-in-form" `shouldReturn` 0
-    [signIn] <- filter (\r -> r.method == "POST") <$> asked
+    -- The login field's offer of passkeys asks for a challenge of its own.
+    [signIn] <- filter (\r -> r.method == "POST" && r.url /= "api/v1/session/passkey") <$> asked
     (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\"}")
     Map.lookup "X-Wiki-Request" signIn.headers `shouldBe` Just "1"
     -- Everything read as nobody is read again as Ada: the spaces were.

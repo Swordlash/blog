@@ -731,6 +731,9 @@ try {
   // home page with a sidebar of its own; and a page of each from there.
   await page.locator("#app .all-spaces").click();
   await arrive({ path: "/", view: "wiki-home" }, "the directory");
+  // The cards come with the directory under the front page, which may
+  // still be loading the page above them.
+  await page.locator("#app .space-card-link").first().waitFor({ timeout });
   const roots = await page.locator("#app .space-card-link").evaluateAll((links) =>
     links.map((a) => ({ href: a.getAttribute("href"), name: a.querySelector(".space-card-name").textContent })),
   ).then((links) => links.map((link) => ({ ...link, href: local(link.href) })));

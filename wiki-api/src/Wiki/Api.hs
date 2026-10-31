@@ -152,6 +152,25 @@ data WikiApi form mode = WikiApi
   -- code is 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in;
   -- a sign-in that has expired or was never started in this browser is
   -- 'Wiki.Api.Error.Invalid'.
+  , beginSecondFactorPasskey :: mode :- "session" :> "second-factor" :> "passkey" :> Post '[JSON] AssertionOptions
+  -- ^ The options of the second step of a sign-in by one of the user's
+  -- passkeys instead of a code (WP5.30 of docs/PLAN.md), for the sign-in
+  -- the cookie names, as for 'secondFactor'.
+  , finishSecondFactorPasskey :: mode :- "session" :> "second-factor" :> "passkey" :> ReqBody '[JSON] AssertionResponse :> Put '[JSON] (WithCookie SessionInfo)
+  -- ^ Complete that sign-in with the browser's answer. An answer that does
+  -- not check is 'Wiki.Api.Error.Unauthenticated', counted as a failed
+  -- sign-in, as a wrong code is.
+  , beginPasskeySignIn :: mode :- "session" :> "passkey" :> Post '[JSON] AssertionOptions
+  -- ^ The options of a sign-in with a passkey alone, with no passkey named:
+  -- the browser offers the passkeys it has for the wiki (WP5.30 of
+  -- docs/PLAN.md, "Wiki.Api.Vault"). Too many asked for from one address is
+  -- 'Wiki.Api.Error.TooManyRequests'.
+  , finishPasskeySignIn :: mode :- "session" :> "passkey" :> ReqBody '[JSON] AssertionResponse :> Put '[JSON] (WithCookie SessionInfo)
+  -- ^ Sign in with the browser's answer: the user whose passkey it is,
+  -- with no second step. The response is the user's new session, as for
+  -- 'signIn'. An answer that does not check is 'Wiki.Api.Error.Invalid';
+  -- a disabled user is 'Wiki.Api.Error.Unauthenticated'; too many failures
+  -- are 'Wiki.Api.Error.TooManyRequests'.
   , passwordReset :: mode :- "password-reset" :> NamedRoutes PasswordResetApi
   , emailVerification :: mode :- "email-verification" :> Capture "token" VerificationToken :> PostNoContent
   -- ^ Follow a link that verifies an e-mail address: the address the link
@@ -207,8 +226,9 @@ data WikiApi form mode = WikiApi
   deriving stock (Generic)
 
 -- | 'AssistantApi': the signed-in user's vault of the assistant's settings,
--- and the passkeys that unlock it (WP5.21 of docs/PLAN.md,
--- "Wiki.Api.Vault"). A visitor who is not signed in is refused with
+-- and the use of a passkey to unlock it (WP5.21 of docs/PLAN.md,
+-- "Wiki.Api.Vault"). The passkeys themselves are the account's
+-- ('AccountApi'). A visitor who is not signed in is refused with
 -- 'Wiki.Api.Error.Unauthenticated', and the operator, who has no account,
 -- with 'Wiki.Api.Error.Invalid'.
 data AssistantApi mode = AssistantApi
@@ -223,14 +243,6 @@ data AssistantApi mode = AssistantApi
   -- key for a passkey that is not the user's is 'Wiki.Api.Error.Invalid'.
   , deleteVault :: mode :- "vault" :> DeleteNoContent
   -- ^ Turn synchronisation off: the vault and every passkey of the user go.
-  , passkeys :: mode :- "passkeys" :> Get '[JSON] [PasskeyInfo]
-  -- ^ The user's passkeys, the oldest first.
-  , beginRegistration :: mode :- "passkeys" :> "registration" :> Post '[JSON] RegistrationOptions
-  -- ^ The options of a new passkey, with a challenge kept for this session.
-  , finishRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] RegistrationResponse :> Put '[JSON] PasskeyInfo
-  -- ^ Check and store the passkey the browser made. No challenge waiting,
-  -- or an answer that does not check, is 'Wiki.Api.Error.Invalid'; a
-  -- passkey registered already is 'Wiki.Api.Error.Conflict'.
   , beginAssertion :: mode :- "passkeys" :> "assertion" :> Post '[JSON] AssertionOptions
   -- ^ The options of a use of one of the user's passkeys, with a challenge
   -- kept for this session.
@@ -239,9 +251,6 @@ data AssistantApi mode = AssistantApi
   -- 'Wiki.Api.Error.NotFound'; an answer that does not check is
   -- 'Wiki.Api.Error.Invalid'; a signature counter that went back is
   -- 'Wiki.Api.Error.Conflict'.
-  , removePasskey :: mode :- "passkeys" :> Capture "passkey" CredentialId :> Delete '[JSON] [PasskeyInfo]
-  -- ^ Remove one of the user's passkeys, with its wrapped copy of the
-  -- vault key. The response is the passkeys left.
   }
   deriving stock (Generic)
 
@@ -568,6 +577,22 @@ data AccountApi mode = AccountApi
   -- ^ End every session of the user except the current one: "Sign out
   -- everywhere". The response is their remaining sessions, the current one
   -- only.
+  , passkeys :: mode :- "passkeys" :> Get '[JSON] [PasskeyInfo]
+  -- ^ The user's passkeys, the oldest first (WP5.30 of docs/PLAN.md): each
+  -- signs them in, and those the vault has a wrapped key for unlock the
+  -- writing assistant's vault ("Wiki.Api.Vault").
+  , beginRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] CurrentPassword :> Post '[JSON] RegistrationOptions
+  -- ^ The options of a new passkey, with a challenge kept for this session.
+  -- Since a passkey signs the user in, making one asks for their current
+  -- password, where they have one, as a second factor does: a wrong one is
+  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in.
+  , finishRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] RegistrationResponse :> Put '[JSON] PasskeyInfo
+  -- ^ Check and store the passkey the browser made. No challenge waiting,
+  -- or an answer that does not check, is 'Wiki.Api.Error.Invalid'; a
+  -- passkey registered already is 'Wiki.Api.Error.Conflict'.
+  , removePasskey :: mode :- "passkeys" :> Capture "passkey" CredentialId :> Delete '[JSON] [PasskeyInfo]
+  -- ^ Remove one of the user's passkeys, with its wrapped copy of the
+  -- vault key. The response is the passkeys left.
   , secondFactorState :: mode :- "second-factor" :> Get '[JSON] SecondFactorState
   -- ^ Whether the user has a second factor.
   , enrolTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] CurrentPassword :> Post '[JSON] TotpEnrolment

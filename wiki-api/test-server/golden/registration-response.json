@@ -1,5 +1,6 @@
 {
   "attestationObject": "o2NmbXRkbm9uZQ",
   "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0",
-  "id": "Y3JlZGVudGlhbC0y"
+  "id": "Y3JlZGVudGlhbC0y",
+  "name": "Laptop"
 }

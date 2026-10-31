@@ -192,7 +192,8 @@ signingIn m = describe "signing in with a second factor" $
       find ui ".sign-in-code-form button[type=submit]" >>= click
       find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
       length <$> findAll ui ".sign-in-code-form" `shouldReturn` 0
-      map snd <$> askedWith "POST" `shouldReturn` ["{\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
+      -- The login field's offer of passkeys asks for its own challenge.
+      map snd . filter ((/= "api/v1/session/passkey") . fst) <$> askedWith "POST" `shouldReturn` ["{\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
       unmount ui
       serverStops
 
@@ -210,7 +211,7 @@ resets m = describe "a password reset" $ do
     find ui ".reset-request-form input[name=login]" >>= (`typeText` "rita")
     find ui ".reset-request-form button[type=submit]" >>= click
     find ui ".reset-told" >>= (`shouldContainText` "If that is the login or the verified address of an account")
-    askedWith "POST" `shouldReturn` [("api/v1/password-reset", "{\"login\":\"rita\"}")]
+    filter ((/= "api/v1/session/passkey") . fst) <$> askedWith "POST" `shouldReturn` [("api/v1/password-reset", "{\"login\":\"rita\"}")]
     find ui ".reset-request-form button[type=button]" >>= click
     _ <- find ui ".sign-in-form input[name=login]"
     unmount ui

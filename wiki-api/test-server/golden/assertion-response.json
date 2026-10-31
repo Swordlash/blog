@@ -2,5 +2,6 @@
   "authenticatorData": "YXV0aGVudGljYXRvci1kYXRh",
   "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0",
   "id": "Y3JlZGVudGlhbC0x",
-  "signature": "c2lnbmF0dXJl"
+  "signature": "c2lnbmF0dXJl",
+  "userHandle": "dXNlci0x"
 }

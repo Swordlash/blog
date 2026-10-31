@@ -107,6 +107,10 @@ of the server, not a refusal.
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 | POST | `api/v1/session/second-factor` | `OneTimeCode` `{"code"}`, with the `wiki_pending` cookie | as `POST session` | 401 (a wrong code, counted as a failed sign-in), 429, 400 (no sign-in waiting in this browser, or it expired) | (`confirmSecondFactor`) |
+| POST | `api/v1/session/second-factor/passkey` | with the `wiki_pending` cookie | `AssertionOptions` naming the waiting user's passkeys | 400 (no sign-in waiting, or it expired), 409 (the user has no passkey) | (`beginSecondFactorPasskey`) |
+| PUT | `api/v1/session/second-factor/passkey` | `AssertionResponse`, with the `wiki_pending` cookie | as `POST session` | 401 (an answer that does not check, counted as a wrong code), 429, 400 | (`finishSecondFactorPasskey`) |
+| POST | `api/v1/session/passkey` | | `AssertionOptions` with `"allow": []`: any passkey for the wiki | 429 (fifty waiting from this address) | (`beginPasskeySignIn`) |
+| PUT | `api/v1/session/passkey` | `AssertionResponse`, its `userHandle` required | as `POST session`; no second factor is asked for | 400 (an unknown passkey, a challenge not waiting, an answer that does not check), 409 (its counter went back), 401 (a disabled user), 429 | (`finishPasskeySignIn`) |
 
 `standing` is `"NotSignedIn"` (nobody: the application offers to sign in),
 `"SignedIn"` (a user with a session: it offers to sign out) or
@@ -803,13 +807,13 @@ shows to anyone, as an invitation's.
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/assistant/vault` | | `StoredVault` `{"tag", "vault"}`, the tag also as `ETag`; with `If-None-Match` naming the server's tag, 304 and no body | 401, 400 (the operator), 404 (no vault: syncing is off) | `fetchVault` |
 | PUT | `api/v1/assistant/vault` | `Vault` `{"format", "salt", "nonce", "ciphertext", "wrapped"}`, over the version `If-Match` names, or without `If-Match` a first one | `StoredVault` as it now is | 401, 409 (another version, or a first one where there is a vault), 400 (a wrapped key for a passkey not the user's, another format, a part empty or longer than 256 KiB) | `storeVault` |
-| DELETE | `api/v1/assistant/vault` | | 204: the vault and every passkey of the user gone | 401 | `deleteVault` |
-| GET | `api/v1/assistant/passkeys` | | `[PasskeyInfo]` `{"id", "name", "createdAt", "lastUsedAt", "unlocks"}`, the oldest first | 401 | `listPasskeys` |
-| POST | `api/v1/assistant/passkeys/registration` | | `RegistrationOptions` `{"challenge", "rpId", "rpName", "userId", "userName", "displayName", "exclude"}` | 401 | `beginRegistration` |
-| PUT | `api/v1/assistant/passkeys/registration` | `RegistrationResponse` `{"id", "clientDataJSON", "attestationObject"}` | `PasskeyInfo` | 401, 400 (no challenge waiting, or an answer that does not check), 409 (registered already), 400 (twenty passkeys already) | `finishRegistration` |
+| DELETE | `api/v1/assistant/vault` | | 204: the vault and the vault key's wrapped copies gone; the passkeys stay, to sign in with | 401 | `deleteVault` |
+| GET | `api/v1/account/passkeys` | | `[PasskeyInfo]` `{"id", "name", "createdAt", "lastUsedAt", "unlocks"}`, the oldest first | 401 | `listPasskeys` |
+| POST | `api/v1/account/passkeys/registration` | `CurrentPassword` `{"password"}`, `null` for a user who has none: a passkey signs the user in | `RegistrationOptions` `{"challenge", "rpId", "rpName", "userId", "userName", "displayName", "exclude"}` | 401 (also a wrong password, counted as a failed sign-in), 429 | `beginRegistration` |
+| PUT | `api/v1/account/passkeys/registration` | `RegistrationResponse` `{"id", "clientDataJSON", "attestationObject", "name"}`, the name optional (the day it was added otherwise) | `PasskeyInfo` | 401, 400 (no challenge waiting, or an answer that does not check), 409 (registered already), 400 (twenty passkeys already, a name over 100 characters) | `finishRegistration` |
 | POST | `api/v1/assistant/passkeys/assertion` | | `AssertionOptions` `{"challenge", "rpId", "allow"}` | 401 | `beginAssertion` |
-| PUT | `api/v1/assistant/passkeys/assertion` | `AssertionResponse` `{"id", "clientDataJSON", "authenticatorData", "signature"}` | `PasskeyInfo`, used now | 401, 404 (not one of the user's passkeys), 400 (no challenge waiting, or an answer that does not check), 409 (its counter went back) | `finishAssertion` |
-| DELETE | `api/v1/assistant/passkeys/<id>` | | `[PasskeyInfo]` left; its wrapped key goes, and the vault's tag changes | 401, 404 | `dropPasskey` |
+| PUT | `api/v1/assistant/passkeys/assertion` | `AssertionResponse` `{"id", "clientDataJSON", "authenticatorData", "signature", "userHandle"}`, the user handle optional | `PasskeyInfo`, used now | 401, 404 (not one of the user's passkeys), 400 (no challenge waiting, or an answer that does not check), 409 (its counter went back) | `finishAssertion` |
+| DELETE | `api/v1/account/passkeys/<id>` | | `[PasskeyInfo]` left; its wrapped key goes, and the vault's tag changes | 401, 404 | `dropPasskey` |
 
 WP5.21 of the plan (`Wiki.Api.Vault`, `Wiki.Core.Assistant.Vault`). The
 writing assistant's settings, API keys among them, are sealed in the browser
@@ -842,7 +846,21 @@ relying party's hash (the host without its port), the user present and
 verified, and for a use the signature (ES256 or RS256) over the
 authenticator data and the client data's SHA-256, and a counter that goes
 up (or stays 0, as a synced passkey's does). The attestation statement is
-not checked: the wiki asks for none. Neither signs anyone in.
+not checked: the wiki asks for none.
+
+The passkeys are the account's (WP5.30): each signs its owner in, and those
+the vault has a wrapped key for also unlock it. A sign-in with a passkey
+alone (`session/passkey`) names no passkey: the challenge is kept under
+itself for five minutes, at most fifty waiting per address, and found again
+by the challenge the client data names. The passkey is looked up by its
+credential id, and the answer's user handle (the bytes of the user's id, as
+the registration's `userId`) must be its owner's. The authenticator must
+say it verified the user: a user-verified passkey is both factors, so no
+second factor follows. Failures count against the address until the passkey
+names a login, then against that login as a password's do. In the second
+step of a password's sign-in (`session/second-factor/passkey`), the
+challenge is kept for the sign-in waiting, and a refused answer counts as a
+wrong code.
 
 ### Administration
 

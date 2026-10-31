@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Sign in with a passkey (WP5.30): "Sign in with a passkey" in the sign-in
+form, the browser's offer of saved passkeys in the login field, and "Use a
+passkey instead" in the second factor's form. The account panel gains a
+Passkeys section: the list, with when each was added and last used, "Add a
+passkey" with a name, and "Remove". Over plain HTTP the button is not shown
+and the section says why. A passkey made for the assistant without the PRF
+extension is now kept to sign in with, and turning syncing off keeps the
+passkeys.
+
 Use the full ordinary page editor and reader features on the shared home page, with comments disabled only there. Keep attachments, drafts and versions in IndexedDB and archives. Add canonical home source/history/presentation routes and a closed-wiki option to share only the home page with signed-out visitors.
 
 Let an administrator edit the shared front page's title and Markdown with CodeMirror, preview it, toggle Spaces and Recently visited independently, save or cancel. Reuse the page renderer and islands, preserve failed drafts and lock editing during a save, and persist the configuration in IndexedDB and exports. The shell keeps space navigation when homepage cards are hidden.

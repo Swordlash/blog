@@ -241,7 +241,8 @@ async function wikiVaultWrappingKey(output, salt, info) {
 }
 
 // Make a passkey for the wiki (Wiki.Api.Vault's RegistrationOptions, as
-// JSON), asking for its PRF on the salt: JSON {response, prf, wrapping},
+// JSON), asking for its PRF on the salt, unless the salt is "" (a passkey
+// added to sign in with, WP5.30): JSON {response, prf, wrapping},
 // where response is what the server checks (Wiki.Api.Vault's
 // RegistrationResponse), prf whether the passkey has the PRF extension,
 // and wrapping the handle of the key its PRF output gives, when the
@@ -266,7 +267,11 @@ async function wiki_vault_create(options, salt, info) {
         attestation: "none",
         excludeCredentials: (o.exclude ?? []).map((id) => ({ type: "public-key", id: wikiVaultFromBase64(id) })),
         timeout: 300000,
-        extensions: { prf: { eval: { first: wikiVaultFromBase64(salt) } } },
+        // Without a salt (a passkey added to sign in with), PRF is still
+        // asked for, unevaluated: some authenticators give a credential
+        // its PRF only when asked as it is made, and the vault may use it
+        // later.
+        extensions: { prf: salt === "" ? {} : { eval: { first: wikiVaultFromBase64(salt) } } },
       },
     });
     const prf = credential.getClientExtensionResults().prf ?? {};
@@ -312,6 +317,7 @@ async function wiki_vault_get(options, salt, info) {
         clientDataJSON: wikiVaultToBase64(assertion.response.clientDataJSON),
         authenticatorData: wikiVaultToBase64(assertion.response.authenticatorData),
         signature: wikiVaultToBase64(assertion.response.signature),
+        userHandle: wikiPasskeyUserHandle(assertion),
       },
       wrapping,
     });
@@ -364,4 +370,86 @@ async function wiki_vault_discard(rpId, credentialId) {
   } catch {
     // Not every browser can, and nothing depends on it.
   }
+}
+
+// The user handle an assertion gave (the bytes of its owner's user id), in
+// base64url, or null when the authenticator gave none.
+function wikiPasskeyUserHandle(assertion) {
+  const handle = assertion.response.userHandle;
+  return handle && handle.byteLength > 0 ? wikiVaultToBase64(handle) : null;
+}
+
+// The sign-in with a passkey under way, if any (WP5.30): one at a time,
+// since a browser shows one passkey dialog at a time, and a new one (the
+// button, after the field's offer) replaces the last.
+let wikiPasskeySignIn = null;
+
+// The number of the sign-in with a passkey that may start: every abort and
+// every dialog moves it on, so that a sign-in whose challenge arrives after
+// either (the form closed meanwhile) does not start at all.
+let wikiPasskeyOffer = 0;
+
+// The number a sign-in about to ask for its challenge holds.
+function wiki_passkey_offer_ticket() {
+  return wikiPasskeyOffer;
+}
+
+// Whether the browser offers saved passkeys in the login field
+// (conditional mediation), as it does as the field is focused.
+async function wiki_passkey_conditional_here() {
+  try {
+    return wiki_vault_passkeys_here() && (await globalThis.PublicKeyCredential.isConditionalMediationAvailable?.()) === true;
+  } catch {
+    return false;
+  }
+}
+
+// Sign in with a passkey (Wiki.Api.Vault's AssertionOptions, as JSON): the
+// browser's dialog, or, when conditional, the offer in the login field
+// marked autocomplete="username webauthn", which waits until a passkey is
+// picked there or the sign-in is aborted. Either starts only if its ticket
+// (wiki_passkey_offer_ticket) is still the current one; the dialog then
+// ends any offer. No PRF is asked for: signing in unwraps nothing. JSON
+// {response}, or {error, cancelled}.
+async function wiki_passkey_sign_in(options, conditional, ticket) {
+  if (ticket !== wikiPasskeyOffer) return JSON.stringify({ error: "The sign-in ended.", cancelled: true });
+  if (!conditional) wikiPasskeyOffer++;
+  wikiPasskeySignIn?.abort();
+  const controller = new AbortController();
+  wikiPasskeySignIn = controller;
+  try {
+    const o = JSON.parse(options);
+    const assertion = await navigator.credentials.get({
+      mediation: conditional ? "conditional" : "optional",
+      signal: controller.signal,
+      publicKey: {
+        challenge: wikiVaultFromBase64(o.challenge),
+        rpId: o.rpId,
+        allowCredentials: (o.allow ?? []).map((id) => ({ type: "public-key", id: wikiVaultFromBase64(id) })),
+        userVerification: "required",
+        timeout: 300000,
+      },
+    });
+    return JSON.stringify({
+      response: {
+        id: wikiVaultToBase64(assertion.rawId),
+        clientDataJSON: wikiVaultToBase64(assertion.response.clientDataJSON),
+        authenticatorData: wikiVaultToBase64(assertion.response.authenticatorData),
+        signature: wikiVaultToBase64(assertion.response.signature),
+        userHandle: wikiPasskeyUserHandle(assertion),
+      },
+    });
+  } catch (error) {
+    return wikiVaultFailure(error);
+  } finally {
+    if (wikiPasskeySignIn === controller) wikiPasskeySignIn = null;
+  }
+}
+
+// End the sign-in with a passkey under way, if any: the form closed, or
+// the password was used instead.
+function wiki_passkey_abort() {
+  wikiPasskeyOffer++;
+  wikiPasskeySignIn?.abort();
+  wikiPasskeySignIn = null;
 }

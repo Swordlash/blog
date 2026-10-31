@@ -12,6 +12,7 @@ module Test.Server.WebAuthn
   , authenticator
   , registration
   , assertion
+  , assertionFlagged
   , clientData
   )
 where
@@ -84,9 +85,14 @@ registration a flags rpId origin challenge =
 -- authenticator data with this counter (the user present and verified),
 -- and the signature over both, in DER.
 assertion :: Authenticator -> Word32 -> Text -> Text -> ByteString -> IO (ByteString, ByteString, ByteString)
-assertion a counter rpId origin challenge = do
+assertion = assertionFlagged 0x05
+
+-- | 'assertion', with the given flags in the authenticator data (0x05:
+-- the user present and verified; 0x01: present only).
+assertionFlagged :: Word8 -> Authenticator -> Word32 -> Text -> Text -> ByteString -> IO (ByteString, ByteString, ByteString)
+assertionFlagged flags a counter rpId origin challenge = do
   let client = clientData "webauthn.get" challenge origin
-      authData = rpIdHash rpId <> BS.singleton 0x05 <> BS.pack [fromIntegral (counter `div` (256 ^ k)) | k <- [3, 2, 1, 0 :: Int]]
+      authData = rpIdHash rpId <> BS.singleton flags <> BS.pack [fromIntegral (counter `div` (256 ^ k)) | k <- [3, 2, 1, 0 :: Int]]
   signature <- ECDSA.sign curve a.key SHA256 (authData <> convert (hashWith SHA256 client))
   let (r, s) = ECDSA.signatureToIntegers curve signature
   pure (client, authData, der r s)
@@ -107,6 +113,7 @@ spec = describe "Wiki.Server.WebAuthn" $ do
       challenge = "a challenge of thirty-two bytes!"
       expected = Expected {challenge, origins = [origin], rpId = site}
       passkey = authenticator "credential-one"
+      owner = Identified "u1"
       registered = do
         let (client, attestation) = registration passkey 0x45 site origin challenge
         either (\why -> panic ("refused: " <> why)) pure (verifyRegistration expected client attestation)
@@ -159,25 +166,51 @@ spec = describe "Wiki.Server.WebAuthn" $ do
     it "is taken with its signature by the passkey, and gives its counter" $ do
       new <- registered
       (client, authData, signature) <- assertion passkey 7 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 3} client authData signature `shouldBe` Right 7
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 3} (Answer client authData signature Nothing) `shouldBe` Right 7
 
     it "is refused when another key signed it, or it signs something else" $ do
       new <- registered
       (client, authData, _) <- assertion passkey 1 site origin challenge
       (_, _, otherSignature) <- assertion (authenticator "credential-two") 1 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 0} client authData otherSignature `shouldSatisfy` isRefused
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 0} (Answer client authData otherSignature Nothing) `shouldSatisfy` isRefused
       (otherClient, _, signature) <- assertion passkey 1 site origin "another challenge, also 32 bytes"
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 0} otherClient authData signature `shouldSatisfy` isRefused
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 0} (Answer otherClient authData signature Nothing) `shouldSatisfy` isRefused
       (_, _, signed) <- assertion passkey 1 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 0} client authData signed `shouldBe` Right 1
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 0} (Answer client authData signed Nothing) `shouldBe` Right 1
 
     it "reports a counter that does not go up, and takes a passkey that counts nothing" $ do
       new <- registered
       (client, authData, signature) <- assertion passkey 5 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 5} client authData signature `shouldBe` Left (CounterWentBack 5 5)
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 9} client authData signature `shouldBe` Left (CounterWentBack 9 5)
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 5} (Answer client authData signature Nothing) `shouldBe` Left (CounterWentBack 5 5)
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 9} (Answer client authData signature Nothing) `shouldBe` Left (CounterWentBack 9 5)
       (synced, syncedData, syncedSignature) <- assertion passkey 0 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = new.publicKey, signCount = 0} synced syncedData syncedSignature `shouldBe` Right 0
+      verifyAssertion expected owner StoredKey {publicKey = new.publicKey, signCount = 0} (Answer synced syncedData syncedSignature Nothing) `shouldBe` Right 0
+
+  describe "whose passkey an assertion is" $ do
+    it "is the user handle's, which a sign-in with a passkey alone needs and checks" $ do
+      new <- registered
+      (client, authData, signature) <- assertion passkey 2 site origin challenge
+      let stored = StoredKey {publicKey = new.publicKey, signCount = 1}
+      verifyAssertion expected (Unnamed "u1") stored (Answer client authData signature (Just "u1")) `shouldBe` Right 2
+      verifyAssertion expected (Unnamed "u1") stored (Answer client authData signature Nothing) `shouldBe` Left (Refused "the authenticator did not say whose passkey it is")
+      verifyAssertion expected (Unnamed "u1") stored (Answer client authData signature (Just "u2")) `shouldBe` Left (Refused "it is another user's passkey")
+
+    it "must be the user's the wiki knows, when it knows who asks" $ do
+      new <- registered
+      (client, authData, signature) <- assertion passkey 2 site origin challenge
+      let stored = StoredKey {publicKey = new.publicKey, signCount = 1}
+      verifyAssertion expected (Identified "u1") stored (Answer client authData signature (Just "u1")) `shouldBe` Right 2
+      verifyAssertion expected (Identified "u1") stored (Answer client authData signature (Just "u2")) `shouldBe` Left (Refused "it is another user's passkey")
+
+    it "is refused when the authenticator does not say it verified the user" $ do
+      new <- registered
+      (client, authData, signature) <- assertionFlagged 0x01 passkey 2 site origin challenge
+      verifyAssertion expected (Unnamed "u1") StoredKey {publicKey = new.publicKey, signCount = 1} (Answer client authData signature (Just "u1"))
+        `shouldBe` Left (Refused "the authenticator does not say it verified the user")
+
+    it "names its challenge in its client data" $ do
+      challengeOf (clientData "webauthn.get" challenge origin) `shouldBe` Just challenge
+      challengeOf "not JSON" `shouldBe` Nothing
 
   describe "a key stored before the wiki used the webauthn package" $
     it "is read in another order and with a key id, and checks an assertion" $ do
@@ -186,7 +219,7 @@ spec = describe "Wiki.Server.WebAuthn" $ do
         Right (_, TMap pairs) -> pure (toStrictByteString (encodeTerm (TMap ((TInt 2, TBytes "a key id") : reverse pairs))))
         _ -> panic "not a COSE key"
       (client, authData, signature) <- assertion passkey 2 site origin challenge
-      verifyAssertion expected StoredKey {publicKey = stored, signCount = 1} client authData signature `shouldBe` Right 2
+      verifyAssertion expected owner StoredKey {publicKey = stored, signCount = 1} (Answer client authData signature Nothing) `shouldBe` Right 2
 
   describe "an RS256 key" $
     it "checks its signatures" $ do

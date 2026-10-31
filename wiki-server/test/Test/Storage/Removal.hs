@@ -59,7 +59,7 @@ spec backing = describe "removing an account" $ do
     void (ok =<< setPassword st u (Password "editor's password"))
     signIn st now "127.0.0.1" "editor" (Password "editor's password") >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
     void (ok =<< enrol st now u)
-    passkey <- ok =<< registerPasskey st now u NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
+    passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
     let vault = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.singleton passkey.id (WrappedKey "bm9uY2U" "a2V5")}
     void (ok =<< storeVault st now u Nothing vault)
     blog <- ok =<< asEditor (getSpace (path "blog"))

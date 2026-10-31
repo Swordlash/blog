@@ -45,6 +45,16 @@
 -- with a message of its own ('Prompt'), when a session has ended by
 -- itself.
 --
+-- Where the browser offers passkeys (a secure page), the sign-in form
+-- has "Sign in with a passkey" (WP5.30 of docs/PLAN.md), which opens the
+-- browser's dialog of the passkeys it has for the wiki, and signs in with
+-- the one picked, without a second factor. Where the browser can, it also
+-- offers those passkeys in the login field as it is focused (conditional
+-- mediation): the form asks for that as it opens ('Offer'), and ends it
+-- when it closes or the password is sent. The second factor's form has
+-- "Use a passkey instead", which asks for one of the user's passkeys in
+-- place of the code.
+--
 -- The second factor's form and the reset form each sit in their own
 -- container, which is always there, so that neither takes the place of
 -- the sign-in form. Otherwise the sign-in form's login field (with what
@@ -79,7 +89,9 @@ import Protolude hiding (State)
 import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect, providerOnly)
 import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.Api.Security (resetLifetime)
-import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passwordErrorText, signInErrorText)
+import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passkeyErrorText, passwordErrorText, signInErrorText)
+import Wiki.App.Assistant (MonadAssistant (..), PasskeyRefusal (..))
+import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
@@ -136,6 +148,9 @@ data State m = State
   , problem :: Maybe Text
   -- ^ Why the last attempt failed.
   , busy :: Bool
+  , passkeys :: Bool
+  -- ^ Whether the browser offers passkeys here, known once the form has
+  -- opened.
   , loginField :: H.RefLabel
   , registering :: Bool
   -- ^ Whether the form to create an account is open (and the sign-in form
@@ -169,6 +184,9 @@ data Action
   | Submit
   | TypedCode Text
   | SubmitCode
+  | Offer
+  | PasskeySignIn
+  | PasskeyCode
   | ForgotPassword
   | SubmitReset
   | BackToPassword
@@ -186,7 +204,7 @@ data Action
   | SavePassword
   | Followed (Follow Route)
 
-component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m) => H.Component Query (Input m) Output m
+component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m, MonadAssistant m, MonadVault m) => H.Component Query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -211,6 +229,7 @@ component =
               , notice = Nothing
               , problem = Nothing
               , busy = False
+              , passkeys = False
               , loginField
               , registering = False
               , typedName = ""
@@ -283,7 +302,7 @@ component =
                 </div>
                 <label class="field">
                   <span>Login</span>
-                  <input type="text" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedLogin }} {{ HP.ref st.loginField }}>
+                  <input type="text" name="login" autocomplete="username webauthn" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedLogin }} {{ HP.ref st.loginField }}>
                 </label>
                 <label class="field">
                   <span>Password</span>
@@ -299,6 +318,9 @@ component =
                   <button type="button" onClick={{ const Close }}>Cancel</button>
                 </div>
                 <button type="button" class="link-button forgot-password" onClick={{ const ForgotPassword }}>Forgot your password?</button>
+                {% if st.passkeys %}
+                  <button type="button" class="passkey-sign-in" disabled={{ st.busy }} onClick={{ const PasskeySignIn }}>Sign in with a passkey</button>
+                {% end %}
                 {{ providerLinks st "Sign in with " }}
               </form>
             {% end %}
@@ -324,6 +346,9 @@ component =
             <button type="submit" class="primary" disabled={{ st.busy }}>Sign in</button>
             <button type="button" onClick={{ const Close }}>Cancel</button>
           </div>
+          {% if st.passkeys %}
+            <button type="button" class="link-button passkey-code" disabled={{ st.busy }} onClick={{ const PasskeyCode }}>Use a passkey instead</button>
+          {% end %}
         </form>
       |]
 
@@ -523,15 +548,74 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
+          H.liftEffect abortSignInPasskey
           result <- lift (st.input.accounts.signIn st.typedLogin (Password st.typedPassword))
           case result of
             Left SecondFactorNeeded -> do
               modify (\s -> s {busy = False, step = AtCode, typedPassword = "", typedCode = "", notice = Nothing, problem = Nothing})
               gets (\s -> s.codeField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
-            Left e -> modify (\s -> s {busy = False, problem = Just (signInErrorText e)})
+            Left e -> do
+              modify (\s -> s {busy = False, problem = Just (signInErrorText e)})
+              offer
             Right s -> do
               modify (\x -> x {busy = False, open = False, typedPassword = "", notice = Nothing, problem = Nothing})
               H.raise (AccountChanged s)
+      Offer -> do
+        -- The login field's offer of saved passkeys. It waits until a
+        -- passkey is picked there, which signs in as the button does, or
+        -- until it is ended ('Cancelled'), which says nothing.
+        -- The ticket is taken before the challenge is asked for: closing
+        -- the form or using the button meanwhile keeps the offer from
+        -- starting when the challenge arrives.
+        ticket <- H.liftEffect passkeyTicket
+        here <- lift conditionalHere
+        when here $
+          gets (\st -> st.input.accounts) >>= \a ->
+            lift a.beginPasskeySignIn >>= \case
+              Left _ -> pass
+              Right options ->
+                lift (signInPasskey options True ticket) >>= \case
+                  Right used -> finishPasskey used
+                  Left _ -> pass
+      PasskeySignIn -> do
+        st <- get
+        unless st.busy $ do
+          -- The field's offer ends now, not only once the dialog opens.
+          -- Closing the form while the challenge is fetched keeps the
+          -- dialog from opening ('passkeyTicket').
+          H.liftEffect abortSignInPasskey
+          ticket <- H.liftEffect passkeyTicket
+          modify (\s -> s {busy = True, problem = Nothing})
+          lift st.input.accounts.beginPasskeySignIn >>= \case
+            Left e -> modify (\s -> s {busy = False, problem = Just (passkeyErrorText e)})
+            Right options ->
+              lift (signInPasskey options False ticket) >>= \case
+                Right used -> finishPasskey used
+                Left Cancelled -> modify (\s -> s {busy = False}) *> offer
+                Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why}) *> offer
+      PasskeyCode -> do
+        st <- get
+        unless st.busy $ do
+          ticket <- H.liftEffect passkeyTicket
+          modify (\s -> s {busy = True, problem = Nothing})
+          let refused = \case
+                -- Waited too long, or too many wrong answers: back to the
+                -- password.
+                SignInFailed (Invalid why) -> modify (\s -> s {busy = False, step = AtPassword, typedCode = "", problem = Just why}) *> offer
+                WrongCredentials -> modify (\s -> s {busy = False, problem = Just "That passkey was not accepted: use another one, or type a code."})
+                e -> modify (\s -> s {busy = False, problem = Just (passkeyErrorText e)})
+          lift st.input.accounts.beginSecondFactorPasskey >>= \case
+            Left e -> refused e
+            Right options ->
+              lift (signInPasskey options False ticket) >>= \case
+                Left Cancelled -> modify (\s -> s {busy = False})
+                Left (PasskeyFailed why) -> modify (\s -> s {busy = False, problem = Just why})
+                Right used ->
+                  lift (st.input.accounts.finishSecondFactorPasskey used) >>= \case
+                    Left e -> refused e
+                    Right s -> do
+                      modify (\x -> x {busy = False, open = False, step = AtPassword, typedCode = "", notice = Nothing, problem = Nothing})
+                      H.raise (AccountChanged s)
       TypedCode typedCode -> modify (\st -> st {typedCode})
       SubmitCode -> do
         st <- get
@@ -567,6 +651,7 @@ component =
         gets (\st -> st.registering) >>= \case
           True -> close
           False -> do
+            H.liftEffect abortSignInPasskey
             -- The other form's inputs are removed, together with what was
             -- typed in them.
             modify (\st -> st {registering = True, open = False, notice = Nothing, problem = Nothing, typedLogin = "", typedName = "", typedPassword = ""})
@@ -649,11 +734,37 @@ component =
 
     openForm :: Maybe Text -> H.HalogenM (State m) Action Slots Output m ()
     openForm notice = do
+      opened <- gets (\st -> st.open && st.step == AtPassword)
       modify $ \st ->
-        if st.open && st.step == AtPassword
+        if opened
           then st {notice, problem = Nothing}
           else st {open = True, step = AtPassword, registering = False, notice, problem = Nothing, typedLogin = "", typedPassword = "", typedCode = ""}
       gets (\st -> st.loginField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      unless opened $ do
+        passkeys <- lift passkeysHere
+        modify (\st -> st {passkeys})
+        offer
+
+    -- Ask for the login field's offer of passkeys, in a fork of its own,
+    -- since it waits for as long as the form is open.
+    offer :: H.HalogenM (State m) Action Slots Output m ()
+    offer = do
+      st <- get
+      when (st.passkeys && st.open && st.step == AtPassword) $
+        void (H.fork (handleAction Offer))
+
+    -- Sign in with the browser's answer for a passkey, from the button or
+    -- the login field's offer.
+    finishPasskey used = do
+      modify (\s -> s {busy = True, problem = Nothing})
+      accounts <- gets (\st -> st.input.accounts)
+      lift (accounts.finishPasskeySignIn used) >>= \case
+        Left e -> do
+          modify (\s -> s {busy = False, problem = Just (passkeyErrorText e)})
+          offer
+        Right s -> do
+          modify (\x -> x {busy = False, open = False, typedPassword = "", notice = Nothing, problem = Nothing})
+          H.raise (AccountChanged s)
 
     -- Close the form to change the password, and clear what was typed in
     -- it.
@@ -661,7 +772,7 @@ component =
     forgetPassword st = st {changingPassword = False, typedCurrent = "", typedNew = "", typedRepeat = "", passwordProblem = Nothing}
 
     close :: H.HalogenM (State m) Action Slots Output m ()
-    close = modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})
+    close = H.liftEffect abortSignInPasskey *> modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})
 
 -- | The button that opens the form for one's own password, if any:
 -- "Change password…" for a user who has a password; "Set a password…" for

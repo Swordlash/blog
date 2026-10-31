@@ -135,7 +135,7 @@ import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
 import Wiki.Server.Password (SessionToken (..), newToken, tokenHash)
 import Wiki.Server.Reset qualified as Reset
-import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
+import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken (..), checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
 import Wiki.Server.SecondFactor qualified as SecondFactor
 import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
@@ -144,9 +144,9 @@ import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
 import Wiki.Server.Storage.Rows (countRows)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
-import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, passkeysOf, registerPasskey, storedVault, takeCeremony)
+import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, beginSignIn, ownerOf, passkeysOf, registerPasskey, storedVault, takeCeremony, takeSignIn)
 import Wiki.Server.Vault qualified as Vault
-import Wiki.Server.WebAuthn (Expected (..), NewCredential (..), fromBase64Url, toBase64Url, verifyAssertion, verifyRegistration)
+import Wiki.Server.WebAuthn (Answer (..), Expected (..), NewCredential (..), Signer (..), challengeOf, fromBase64Url, toBase64Url, verifyAssertion, verifyRegistration)
 
 -- | What the handlers work with, the same for every request.
 data Env = Env
@@ -413,6 +413,72 @@ handlers env caller =
                       startedAs s a.user token
                     _ -> refuse ApiError.Unauthenticated
           _ -> refuse (ApiError.Invalid "This sign-in has expired, or was begun in another browser: sign in again with your password.")
+    , beginSecondFactorPasskey = do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        (held, p) <- pendingHere s now
+        mine <- liftIO (passkeysOf env.storage p.user)
+        -- Not 'ApiError.Invalid', which says the sign-in itself is over.
+        when (null mine) $ refuse (ApiError.Conflict "You have no passkey: type a code instead.")
+        challenge <- liftIO (beginCeremony env.ceremonies now (pendingKey held) p.user Confirming)
+        pure AssertionOptions {challenge = toBase64Url challenge, rpId = s.site.rpId, allow = map (\k -> k.id) mine}
+    , finishSecondFactorPasskey = \answer -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        (held, p) <- pendingHere s now
+        limitedFor p.login.text s $ do
+          challenge <- challengeFor now (pendingKey held) p.user Confirming
+          given <- answerOf answer
+          liftIO (assertPasskey env.storage now p.user answer.id (\stored -> verifyAssertion (expectedOf s challenge) (Identified (handleOf p.user)) stored given)) >>= \case
+            -- Refused as a wrong code is: the sign-in waits for another try.
+            Left _ -> do
+              liftIO (wrongCode env.pending held)
+              liftIO (Limiter.failed env.limiter now p.login.text s.address)
+              refuse ApiError.Unauthenticated
+            Right _ -> do
+              liftIO (finishPending env.pending held)
+              liftIO (Limiter.succeeded env.limiter p.login.text s.address)
+              signInAs s now p.user
+    , beginPasskeySignIn = do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        liftIO (beginSignIn env.ceremonies now s.address) >>= \case
+          Nothing -> refuse (ApiError.TooManyRequests "Too many sign-ins with a passkey begun from here: finish one, or wait five minutes.")
+          Just challenge -> pure AssertionOptions {challenge = toBase64Url challenge, rpId = s.site.rpId, allow = []}
+    , finishPasskeySignIn = \answer -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        liftIO (Limiter.addressVerdict env.limiter now s.address) >>= \case
+          Refused seconds -> tooMany seconds
+          Allowed -> do
+            given <- answerOf answer
+            -- The challenge is found by the one the answer names, and used
+            -- up whatever follows; whether the answer is right is checked
+            -- after, with the challenge.
+            challenge <- case challengeOf given.clientData of
+              Just c -> liftIO (takeSignIn env.ceremonies now c) >>= \waiting -> if waiting then pure c else expired
+              Nothing -> expired
+            liftIO (ownerOf env.storage answer.id) >>= \case
+              Nothing -> do
+                liftIO (Limiter.failedAt env.limiter now s.address)
+                refuse (ApiError.Invalid "This passkey is not one of this wiki's: it may have been removed. Sign in with your password.")
+              Just owner -> do
+                account <- liftIO (Accounts.accountOf env.storage owner)
+                let login = maybe "" (\a -> a.user.login.text) account
+                -- A disabled user is refused before the passkey is checked,
+                -- as a password's sign-in refuses them, and nothing of the
+                -- passkey is recorded.
+                unless (maybe False (\a -> not a.disabled) account) $ do
+                  liftIO (Limiter.failed env.limiter now login s.address)
+                  refuse ApiError.Unauthenticated
+                limitedFor login s $
+                  liftIO (assertPasskey env.storage now owner answer.id (\stored -> verifyAssertion (expectedOf s challenge) (Unnamed (handleOf owner)) stored given)) >>= \case
+                    Left e -> do
+                      liftIO (Limiter.failed env.limiter now login s.address)
+                      throwError (wikiError (passkeyRefusal e))
+                    Right _ -> do
+                      liftIO (Limiter.succeeded env.limiter login s.address)
+                      signInAs s now owner
     , passwordReset =
         PasswordResetApi
           { request = requestingReset
@@ -446,6 +512,40 @@ handlers env caller =
               u <- signedInUser
               now <- liftIO getCurrentTime
               liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
+          , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
+          , beginRegistration = \body -> do
+              (u, s, key) <- ceremonyCaller
+              -- A passkey signs its owner in: someone at a browser left
+              -- signed in may not add one without the password.
+              reauthenticated u body.password
+              now <- liftIO getCurrentTime
+              challenge <- liftIO (beginCeremony env.ceremonies now key u Registering)
+              mine <- liftIO (passkeysOf env.storage u)
+              account <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.NotFound) pure
+              pure
+                RegistrationOptions
+                  { challenge = toBase64Url challenge
+                  , rpId = s.site.rpId
+                  , rpName = "Wiki"
+                  , userId = toBase64Url (handleOf u)
+                  , userName = account.user.login.text
+                  , displayName = account.user.displayName
+                  , exclude = map (\p -> p.id) mine
+                  }
+          , finishRegistration = \answer -> do
+              (u, s, key) <- ceremonyCaller
+              now <- liftIO getCurrentTime
+              challenge <- challengeFor now key u Registering
+              clientData <- bytesOf answer.clientDataJSON
+              attestation <- bytesOf answer.attestationObject
+              new <- either (\why -> refuse (ApiError.Invalid ("The passkey was refused: " <> why <> "."))) pure (verifyRegistration (expectedOf s challenge) clientData attestation)
+              unless (toBase64Url new.credentialId == answer.id.text) $
+                refuse (ApiError.Invalid "The passkey was refused: its id is not the one its authenticator data names.")
+              liftIO (registerPasskey env.storage now u answer.name new) >>= either (throwError . wikiError) pure
+          , removePasskey = \i -> do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Vault.removePasskey env.storage now u i) >>= either (throwError . wikiError) pure
           , secondFactorState = signedInUser >>= liftIO . secondFactorState env.storage
           , enrolTotp = \body -> do
               u <- signedInUser
@@ -651,33 +751,6 @@ handlers env caller =
               now <- liftIO getCurrentTime
               liftIO (Vault.storeVault env.storage now u base v) >>= either (throwError . wikiError) pure
           , deleteVault = signedInUser >>= \u -> liftIO (Vault.deleteVault env.storage u) $> NoContent
-          , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
-          , beginRegistration = do
-              (u, s, key) <- ceremonyCaller
-              now <- liftIO getCurrentTime
-              challenge <- liftIO (beginCeremony env.ceremonies now key u Registering)
-              mine <- liftIO (passkeysOf env.storage u)
-              account <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.NotFound) pure
-              pure
-                RegistrationOptions
-                  { challenge = toBase64Url challenge
-                  , rpId = s.site.rpId
-                  , rpName = "Wiki"
-                  , userId = toBase64Url (encodeUtf8 u.text)
-                  , userName = account.user.login.text
-                  , displayName = account.user.displayName
-                  , exclude = map (\p -> p.id) mine
-                  }
-          , finishRegistration = \answer -> do
-              (u, s, key) <- ceremonyCaller
-              now <- liftIO getCurrentTime
-              challenge <- challengeFor now key u Registering
-              clientData <- bytesOf answer.clientDataJSON
-              attestation <- bytesOf answer.attestationObject
-              new <- either (\why -> refuse (ApiError.Invalid ("The passkey was refused: " <> why <> "."))) pure (verifyRegistration (expectedOf s challenge) clientData attestation)
-              unless (toBase64Url new.credentialId == answer.id.text) $
-                refuse (ApiError.Invalid "The passkey was refused: its id is not the one its authenticator data names.")
-              liftIO (registerPasskey env.storage now u new) >>= either (throwError . wikiError) pure
           , beginAssertion = do
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime
@@ -688,15 +761,9 @@ handlers env caller =
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime
               challenge <- challengeFor now key u Asserting
-              clientData <- bytesOf answer.clientDataJSON
-              authenticatorData <- bytesOf answer.authenticatorData
-              signature <- bytesOf answer.signature
-              liftIO (assertPasskey env.storage now u answer.id (\stored -> verifyAssertion (expectedOf s challenge) stored clientData authenticatorData signature))
+              given <- answerOf answer
+              liftIO (assertPasskey env.storage now u answer.id (\stored -> verifyAssertion (expectedOf s challenge) (Identified (handleOf u)) stored given))
                 >>= either (throwError . wikiError) pure
-          , removePasskey = \i -> do
-              u <- signedInUser
-              now <- liftIO getCurrentTime
-              liftIO (Vault.removePasskey env.storage now u i) >>= either (throwError . wikiError) pure
           }
     }
   where
@@ -713,6 +780,49 @@ handlers env caller =
       liftIO (takeCeremony env.ceremonies now key u purpose)
         >>= maybe (refuse (ApiError.Invalid "No passkey is being made or used in this session, or it took more than five minutes: start again.")) pure
     expectedOf s challenge = Expected {challenge, origins = s.site.origins, rpId = s.site.rpId}
+    -- A user's handle at the wiki, as a passkey is made for them: the
+    -- bytes of their user id.
+    handleOf :: UserId -> ByteString
+    handleOf u = encodeUtf8 u.text
+    -- The browser's answer to an assertion, as bytes.
+    answerOf :: AssertionResponse -> Handler Answer
+    answerOf answer = do
+      clientData <- bytesOf answer.clientDataJSON
+      authenticatorData <- bytesOf answer.authenticatorData
+      signature <- bytesOf answer.signature
+      userHandle <- traverse bytesOf answer.userHandle
+      pure Answer {clientData, authenticatorData, signature, userHandle}
+    -- A half-finished sign-in's ceremony is kept under its cookie's id,
+    -- hashed as a session's is.
+    pendingKey :: PendingToken -> Text
+    pendingKey held = "pending:" <> tokenHash held.text
+    -- The half-finished sign-in this browser's cookie names.
+    pendingHere s now =
+      liftIO (maybe (pure Nothing) (pendingSignIn env.pending now) s.pending) >>= \waiting -> case (s.pending, waiting) of
+        (Just held, Just p) -> pure (held, p)
+        _ -> refuse (ApiError.Invalid "This sign-in has expired, or was begun in another browser: sign in again with your password.")
+    -- Why a passkey did not sign anyone in. A passkey that is not the
+    -- user's is answered as one that does not check.
+    passkeyRefusal :: WikiError -> WikiError
+    passkeyRefusal = \case
+      NotFound -> Invalid "The passkey's answer was refused: it is not one of your passkeys."
+      e -> e
+    -- Sign a user in once their passkey checks, unless they have been
+    -- disabled meanwhile.
+    signInAs s now u =
+      liftIO (Accounts.accountOf env.storage u) >>= \case
+        Just a | not a.disabled -> do
+          token <- liftIO (writing env.storage (Accounts.startSession now u s.address))
+          startedAs s a.user token
+        _ -> refuse ApiError.Unauthenticated
+    expired :: Handler a
+    expired = refuse (ApiError.Invalid "This sign-in with a passkey took more than five minutes, or was used already: start again.")
+    tooMany :: Int -> Handler a
+    tooMany seconds =
+      throwError
+        (apiError (ApiError.TooManyRequests ("Too many failed sign-ins from here: try again in " <> waitText seconds <> ".")))
+          { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+          }
     -- Bytes the browser sent in base64url. An authenticator's answer,
     -- its attestation object included, takes a few kilobytes; one much
     -- longer is refused before it is decoded.
