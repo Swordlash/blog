@@ -5062,8 +5062,11 @@ Amended by the planning session after each work package's report.
   editor's browser tests) "loses no keystroke while the preview catches up with a long
   page" passes but CodeMirror throws "Selection points outside of document" from a
   scroll handler: the live view reads a DOM selection one typed character ahead of its
-  state. Not caused by the preview's following (it happens with that switched off);
-  whether it predates WP5.36 was being checked on `main` when the package merged.
+  state. Not caused by the preview's following (4 runs in 27 with that switched off),
+  but brought by WP5.36: the same tests on the `main` before it ran 30 times without
+  it. The likeliest cause is the side by side pane's new layout (a fixed 65vh pane
+  that scrolls, where it grew with the page), which changes when the page scrolls
+  while typing; not yet bisected.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
