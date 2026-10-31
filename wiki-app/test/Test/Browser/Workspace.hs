@@ -26,16 +26,18 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
 $( browserJS
-     ["jsbits/test-live.js", "jsbits/test-style.js"]
+     ["jsbits/test-live.js", "jsbits/test-style.js", "jsbits/test-files.js"]
      [ ("js_live_start", "wiki_test_live_start", Unsafe, [t|IO ()|])
      , ("js_live_stop", "wiki_test_live_stop", Unsafe, [t|IO ()|])
      , ("js_live_hello", "wiki_test_live_hello", Unsafe, [t|IO JSText|])
      , ("js_live_heard", "wiki_test_live_heard", Unsafe, [t|IO JSText|])
+     , ("js_live_heard_all", "wiki_test_live_heard_all", Unsafe, [t|IO JSText|])
      , ("js_live_send", "wiki_test_live_send", Unsafe, [t|JSText -> Int -> IO ()|])
      , ("js_live_close", "wiki_test_live_close", Unsafe, [t|IO ()|])
      , ("js_live_cursor", "wiki_test_live_cursor", Unsafe, [t|Int -> IO ()|])
      , ("js_scrolled", "wiki_test_live_scrolled", Unsafe, [t|JSText -> IO Double|])
      , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      ]
  )
 
@@ -97,9 +99,18 @@ spec m = do
       (field "text" =<< message, field "line" =<< message)
         `shouldBe` (Just (String "# Typed here\n\nand here"), Just (Number 3))
     find ui ".editor-detach" >>= \detach -> getAttribute detach "target" `shouldReturn` Just "wiki-live-preview"
+    -- A file uploaded: the window is told to fetch the attachments again.
+    unsafeIOToPageM (evaluate =<< js_choose_file (toJSText ".editor-attach input") (toJSText "dot.png") (toJSText "image/png") (toJSText dotPng))
+    settle
+    eventually $ (any ((== Just (Bool True)) . field "attachments") <$> heardAll) `shouldReturn` True
+    -- Typed and closed at once, within the pause the text waits for: the
+    -- text is sent before the window is told the editor has gone.
+    setMarkdown ui "# Typed here\n\nand the last words"
     unmount ui
-    -- The editor gone, the window is told.
-    eventually $ (field "closed" <=< decodeStrict . encodeUtf8) <$> unsafeIOToPageM (fromJSText <$> js_live_heard) `shouldReturn` Just (Bool True)
+    eventually $ do
+      heard <- heardAll
+      map (field "closed") (take 1 (reverse heard)) `shouldBe` [Just (Bool True)]
+      (field "text" =<< lastMay (filter (isJust . field "text") heard)) `shouldBe` Just (String "# Typed here\n\nand the last words")
     unsafeIOToPageM js_live_stop
 
   it "shows the page in a window of its own, following its editor until it goes" $ runPage $ do
@@ -123,6 +134,14 @@ spec m = do
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
     -- Sixty sections, each a heading and a paragraph: four lines each.
     long = T.concat ["## Section " <> show n <> "\n\nSome text of section " <> show n <> ".\n\n" | n <- [1 .. 60 :: Int]]
+    heardAll :: PageM s [Value]
+    heardAll =
+      unsafeIOToPageM (fromJSText <$> js_live_heard_all) <&> \raw -> case decodeStrict (encodeUtf8 raw) of
+        Just (Array messages) -> toList messages
+        _ -> []
+    -- A PNG of one pixel, as base64.
+    dotPng :: Text
+    dotPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
     scrolled :: Text -> PageM s Double
     scrolled selector = unsafeIOToPageM (js_scrolled (toJSText selector))
     -- What the application keeps in the browser's local storage, read as

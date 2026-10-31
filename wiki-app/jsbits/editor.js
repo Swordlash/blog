@@ -372,6 +372,11 @@ function wiki_live_stop(handle) {
   wikiLiveListeners.delete(handle);
 }
 
+// Tell the window of the page that a file was uploaded to it.
+function wiki_live_uploaded(host) {
+  host.wikiEditor?.uploaded();
+}
+
 // Scroll to the block of a source line in rendered Markdown with line
 // markers (span.source-line[data-line]): the last block that starts at or
 // before the line. A container that scrolls itself is scrolled; otherwise

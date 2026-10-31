@@ -35,6 +35,7 @@ module Wiki.App.Editor.Browser
   , listenLive
   , stopLive
   , followLine
+  , announceUpload
   , clearField
   , clickElement
   , EditorKey (..)
@@ -102,6 +103,7 @@ $( browserJS
      , ("js_live_listen", "wiki_live_listen", Unsafe, [t|JSText -> Callback -> IO Int|])
      , ("js_live_stop", "wiki_live_stop", Unsafe, [t|Int -> IO ()|])
      , ("js_live_follow", "wiki_live_follow", Unsafe, [t|Element -> Int -> IO ()|])
+     , ("js_live_uploaded", "wiki_live_uploaded", Unsafe, [t|Element -> IO ()|])
      , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
@@ -254,6 +256,12 @@ stopLive (LiveFeed channel callback) = liftIO $ do
 -- @renderLines@) to the block of a source line.
 followLine :: (MonadIO m) => Element -> Int -> m ()
 followLine element = liftIO . js_live_follow element
+
+-- | Tell the window of the page in the editor (the host) that a file was
+-- uploaded to the page. The window fetches the page's attachments again,
+-- so that a reference to the new file resolves there too.
+announceUpload :: (MonadIO m) => Element -> m ()
+announceUpload = liftIO . js_live_uploaded
 
 -- | Empty a form field the component does not control, such as a password
 -- once it has been sent: what was typed in it would otherwise stay there.

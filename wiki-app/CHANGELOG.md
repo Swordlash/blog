@@ -9,7 +9,9 @@ own, as tall as the text, to the block of the cursor's line (or of the text's
 top line while it is scrolled). "Detach preview" opens the preview in a window
 of its own, at the page's `live-preview` address, which the editor feeds on a
 `BroadcastChannel`: it follows what is typed and the line being written, says
-when the editor has gone, and shows the page as saved until an editor speaks.
+when the editor has gone (closed, or its tab closed, with the last words typed
+shown), fetches the page's attachments again when a file is uploaded, and
+shows the page as saved until an editor speaks.
 
 Sign in with a passkey (WP5.30): "Sign in with a passkey" in the sign-in
 form, the browser's offer of saved passkeys in the login field, and "Use a

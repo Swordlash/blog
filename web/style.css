@@ -6212,6 +6212,12 @@ a.mention {
   overflow: hidden;
 }
 
+/* In the preview's own window the page scrolls, under the sticky header: a
+   block followed there stops below the header. */
+.live-preview .source-line {
+  scroll-margin-top: calc(var(--header-height) + 0.75rem);
+}
+
 /* The preview in a window of its own: the page alone, under a line that says
    whom it follows. */
 .live-preview-state {

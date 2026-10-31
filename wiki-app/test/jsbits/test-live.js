@@ -30,6 +30,11 @@ function wiki_test_live_heard() {
   return JSON.stringify(wikiTestLive?.heard.at(-1) ?? null);
 }
 
+// Every message an editor sent, in order, as a JSON array.
+function wiki_test_live_heard_all() {
+  return JSON.stringify(wikiTestLive?.heard ?? []);
+}
+
 // Speak as the editor of the page a preview window asked about: the text and
 // the line, or that the editor has gone.
 function wiki_test_live_send(text, line) {

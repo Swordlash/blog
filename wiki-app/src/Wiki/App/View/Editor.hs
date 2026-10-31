@@ -221,6 +221,7 @@ import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
   , PickedFile (..)
+  , announceUpload
   , answerMention
   , applyCommand
   , attachEditor
@@ -1811,6 +1812,7 @@ component =
                   { attachments = filter (\b -> b.name /= a.name) w.attachments <> [a]
                   , urls = Map.insert a.id url w.urls
                   }
+              gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . announceUpload)
               insert (attachmentReference a.name.text a.mediaType.text)
 
     -- Insert text at the text's cursor. The input event that puts it in the

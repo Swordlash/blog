@@ -13,7 +13,8 @@
 -- line ('followLine'). When the editor goes (saved and closed, cancelled,
 -- its window closed), the window says so and keeps the last text. A window
 -- opened, or loaded again, while the editor is open asks it for what it
--- has, and follows it from there.
+-- has, and follows it from there. When a file is uploaded in the editor,
+-- the window fetches the page's attachments again.
 module Wiki.App.View.LivePreview
   ( Input (..)
   , component
@@ -73,22 +74,39 @@ data State = State
   , feed :: Maybe LiveFeed
   , article :: H.RefLabel
   , attachments :: [Attachment]
-  -- ^ The page's attachments as saved, and their addresses: what its
-  -- links to them are resolved with. Those the editor has not uploaded yet
-  -- are not in this window.
+  -- ^ The page's attachments, and their addresses: what its links to them
+  -- are resolved with. Fetched again each time the editor uploads a file.
   , urls :: Map AttachmentId Text
+  , fetched :: Bool
+  -- ^ Whether the saved page has been fetched: at once in the initial
+  -- state when the backend can, so that the first render matches the
+  -- server's prerender, and otherwise in 'Initialize'.
   }
 
--- | A message of the editor: the text and the line written, or that it
--- has gone.
+-- | A message of the editor: the text and the line written, that a file
+-- was uploaded to the page, or that the editor has gone.
 data Heard = Heard
   { text :: Maybe Text
   , line :: Maybe Int
+  , uploaded :: Bool
   , closed :: Bool
   }
 
 instance FromJSON Heard where
-  parseJSON = withObject "message" $ \o -> Heard <$> o .:? "text" <*> o .:? "line" <*> o .:? "closed" .!= False
+  parseJSON = withObject "message" $ \o ->
+    Heard <$> o .:? "text" <*> o .:? "line" <*> o .:? "attachments" .!= False <*> o .:? "closed" .!= False
+
+-- | The page as saved: what the window shows until the editor speaks, and
+-- the attachments its links resolve to, with their addresses.
+data Fetched = Fetched Shown [Attachment] (Map AttachmentId Text)
+
+fetchSaved :: (MonadWiki m) => Input -> m Fetched
+fetchSaved input =
+  getPage input.space.id input.path >>= \case
+    Left e -> pure (Fetched (Failed e) [] mempty)
+    Right page -> do
+      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+      pure (Fetched (Shows Saved page.title page.body) page.attachments urls)
 
 data Action = Initialize | Finalize | Receive Input | Listened Text
 
@@ -106,7 +124,10 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           article <- H.newRefLabel "live-preview"
-          pure State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty}
+          found <- atOnce (fetchSaved input)
+          pure $ case found of
+            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -145,15 +166,21 @@ component =
         void (H.subscribe (Listened <$> channel.emitter))
         feed <- H.liftEffect (listenLive (liveKey input.space.id input.path) (HS.notify channel.listener))
         modify (\st -> st {feed = Just feed})
-        loaded <- lift (getPage input.space.id input.path)
-        for_ loaded $ \page -> do
-          urls <- lift (Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments)
-          modify (\st -> st {attachments = page.attachments, urls})
-        modify $ \st -> case (st.shown, loaded) of
-          -- The editor spoke while the page was loading.
-          (Shows {}, _) -> st
-          (_, Right page) -> st {shown = Shows Saved page.title page.body}
-          (_, Left e) -> st {shown = Failed e}
+        fetched <- gets (\st -> st.fetched)
+        unless fetched $ do
+          Fetched saved attachments urls <- lift (fetchSaved input)
+          modify $ \st ->
+            st
+              { attachments
+              , urls
+              , fetched = True
+              , shown = case (st.shown, saved) of
+                  -- The editor spoke while the page was loading: its text,
+                  -- under the page's title (the editor sends no title).
+                  (Shows source _ body, Shows _ title _) -> Shows source title body
+                  (Shows {}, _) -> st.shown
+                  _ -> saved
+              }
         H.raise Loaded
       Finalize -> gets (\st -> st.feed) >>= traverse_ stopLive
       Receive input -> modify (\st -> st {input})
@@ -163,6 +190,17 @@ component =
           | heard.closed -> modify $ \st -> case st.shown of
               Shows _ title body -> st {shown = Shows Gone title body}
               _ -> st
+          | heard.uploaded -> do
+              -- The page's attachments as the server has them now. The
+              -- page as the server prerendered it is cached until the
+              -- first route; this window has no other route, so the cache
+              -- is told to fetch from now on.
+              lift endPreload
+              input <- gets (\st -> st.input)
+              lift (fetchSaved input) >>= \case
+                Fetched (Shows {}) attachments urls -> modify (\st -> st {attachments, urls})
+                -- Not fetched: the attachments as they were.
+                _ -> pass
           | otherwise -> do
               for_ heard.text $ \body -> modify $ \st ->
                 let title = case st.shown of

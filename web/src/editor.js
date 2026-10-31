@@ -593,10 +593,28 @@ function following(host) {
     timer = null;
     if (view !== null) channel?.postMessage({ key, text: view.state.doc.toString(), line });
   };
+  // The editor goes: what is typed but not sent yet is sent first, so that
+  // the window keeps the text as it was last typed.
+  const gone = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      send();
+    }
+    channel?.postMessage({ key, closed: true });
+  };
+  // Closing the editor's tab, or leaving its page, destroys no editor; the
+  // page's pagehide is the last word the window can be told. A page the
+  // browser brings back from its cache (pageshow, persisted) speaks again.
+  const hidden = () => gone();
+  const shown = (event) => {
+    if (event.persisted) send();
+  };
   if (channel !== null) {
     channel.onmessage = (event) => {
       if (event.data?.hello === key) send();
     };
+    window.addEventListener("pagehide", hidden);
+    window.addEventListener("pageshow", shown);
   }
   return {
     start: (v) => {
@@ -619,9 +637,13 @@ function following(host) {
         channel.postMessage({ key, line });
       }
     },
+    // A file was uploaded to the page: the window fetches the page's
+    // attachments again, so that the reference about to be typed resolves.
+    uploaded: () => channel?.postMessage({ key, attachments: true }),
     stop: () => {
-      clearTimeout(timer);
-      channel?.postMessage({ key, closed: true });
+      window.removeEventListener("pagehide", hidden);
+      window.removeEventListener("pageshow", shown);
+      gone();
       channel?.close();
     },
   };
@@ -788,6 +810,7 @@ export function attach(textarea, host, original, codeTokens) {
           : { effects: dropChanges.of(ids), annotations: Transaction.addToHistory.of(false) },
       );
     },
+    uploaded: () => follow.uploaded(),
     destroy: () => {
       editors.delete(editor);
       follow.stop();
