@@ -51,3 +51,4 @@ function wiki_test_live_scrolled(selector) {
   const element = selector === "" ? document.scrollingElement : document.querySelector(selector);
   return element ? element.scrollTop : -1;
 }
+

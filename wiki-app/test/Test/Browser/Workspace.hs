@@ -19,6 +19,8 @@ import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
 import Test.Browser.Text (editorText, setMarkdown)
 import Test.Hspec.Halogen
+import Web.Storage.Storage (StorageKind (..))
+import Web.Storage.Storage qualified as Storage
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -45,13 +47,12 @@ spec m = do
     find ui ".sidebar-fold" >>= click
     eventually $ computedStyle ".wiki-sidebar" "display" `shouldReturn` "none"
     find ui ".sidebar-fold" >>= (`shouldHaveText` "»")
-    unmount ui
-    -- The browser keeps it folded.
-    again <- start m (Just "user-editor") hello
-    eventually $ computedStyle ".wiki-sidebar" "display" `shouldReturn` "none"
-    find again ".sidebar-fold" >>= click
+    -- The browser keeps it folded (a mount here starts with nothing kept).
+    storedBool "sidebar-folded" `shouldReturn` Just True
+    find ui ".sidebar-fold" >>= click
     eventually $ computedStyle ".wiki-sidebar" "display" `shouldReturn` "block"
-    unmount again
+    storedBool "sidebar-folded" `shouldReturn` Just False
+    unmount ui
 
   it "makes the Markdown's font smaller and larger, and keeps its size" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
@@ -59,17 +60,16 @@ spec m = do
     computedStyle ".editor-cm .cm-scroller" "font-size" `shouldReturn` "14.4px"
     find ui ".editor-font-smaller" >>= click
     eventually $ computedStyle ".editor-cm .cm-scroller" "font-size" `shouldReturn` "13.6px"
-    unmount ui
-    again <- start m (Just "user-editor") helloEditor
-    _ <- editorText again
+    storedInt "editor-font-step" `shouldReturn` Just 3
+    -- Out of the editor and back into it: the size is the browser's.
+    find ui ".editor-cancel" >>= click
+    find ui ".page-view .actions a[href$='/edit/']" >>= click
+    _ <- editorText ui
     eventually $ computedStyle ".editor-cm .cm-scroller" "font-size" `shouldReturn` "13.6px"
-    find again ".editor-font-larger" >>= click
-    find again ".editor-font-larger" >>= click
+    find ui ".editor-font-larger" >>= click
+    find ui ".editor-font-larger" >>= click
     eventually $ computedStyle ".editor-cm .cm-scroller" "font-size" `shouldReturn` "16px"
-    -- Back to the size it starts at, for the tests after this one.
-    find again ".editor-font-smaller" >>= click
-    eventually $ computedStyle ".editor-cm .cm-scroller" "font-size" `shouldReturn` "14.4px"
-    unmount again
+    unmount ui
 
   it "scrolls the side by side preview to the block of the cursor's line" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
@@ -79,8 +79,9 @@ spec m = do
     eventually $ length <$> findAll ui ".editor-preview .page-body h2" `shouldReturn` 60
     unsafeIOToPageM (js_live_cursor (T.length long))
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (> 500))
+    -- Back at the top: the first block, under the page's title.
     unsafeIOToPageM (js_live_cursor 0)
-    eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (< 50))
+    eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (< 100))
     find ui ".editor-side-by-side input" >>= click
     unmount ui
 
@@ -124,6 +125,12 @@ spec m = do
     long = T.concat ["## Section " <> show n <> "\n\nSome text of section " <> show n <> ".\n\n" | n <- [1 .. 60 :: Int]]
     scrolled :: Text -> PageM s Double
     scrolled selector = unsafeIOToPageM (js_scrolled (toJSText selector))
+    -- What the application keeps in the browser's local storage, read as
+    -- it reads it.
+    storedBool :: Text -> PageM s (Maybe Bool)
+    storedBool key = (rightToMaybe =<<) <$> unsafeIOToPageM (runTest (Storage.getItem LocalStorage key :: m (Maybe (Either _ Bool))))
+    storedInt :: Text -> PageM s (Maybe Int)
+    storedInt key = (rightToMaybe =<<) <$> unsafeIOToPageM (runTest (Storage.getItem LocalStorage key :: m (Maybe (Either _ Int))))
     computedStyle :: Text -> Text -> PageM s Text
     computedStyle selector property = unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText selector) (toJSText property))
     field :: Text -> Value -> Maybe Value

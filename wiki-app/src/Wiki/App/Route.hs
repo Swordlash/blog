@@ -428,7 +428,7 @@ slugs :: RouteDuplex' [Slug]
 slugs = many1 slugSegment
 
 -- | A slug as a segment, with the route's own words (@p@, @edit@, @source@,
--- @history@, @slides@, @pages@, @new-page@) escaped.
+-- @live-preview@, @history@, @slides@, @pages@, @new-page@) escaped.
 slugSegment :: RouteDuplex' Slug
 slugSegment = as written readSlug segment
   where
@@ -438,7 +438,7 @@ slugSegment = as written readSlug segment
       _
         | t `elem` reserved -> Left (t <> " separates paths here")
         | otherwise -> first show (mkSlug t)
-    reserved = ["p", "edit", "source", "history", "slides", "pages", "new-page"] :: [Text]
+    reserved = ["p", "edit", "source", "live-preview", "history", "slides", "pages", "new-page"] :: [Text]
 
 -- | A route's address ends in a slash ('route' says why), and is parsed
 -- without one too.
