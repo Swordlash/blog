@@ -2009,34 +2009,18 @@ must be in before it is.
 
 ## Delegation protocol
 
-Each work package goes to one agent (Opus 5.5, high effort), one at a time within a
-phase unless two packages are independent (then in parallel, on separate branches).
-Every pull request is reviewed twice before it merges (the owner, 2026-10-29: "każdy PR
-przed wypchnięciem testuj na 6.1 sol high"): Claude Code's code review at high effort,
-and Codex with `gpt-6.1-sol` at high reasoning effort, as `AGENTS.md` says; the findings
-go to the implementing agent, and the merge follows the green push that answers them.
-On one machine only one agent builds or tests at a time (the owner, 2026-10-29, "testy są
-za wolne w ten sposób"): the brief gives a lock (`flock` on a file in the scratchpad) to
-hold around the whole gate, and the agent nearest to merging goes first, so that one
-pull request merges soon rather than several late; editing goes on in parallel.
-The brief is written from this plan and contains:
-
-1. The goal and the acceptance criteria of the work package, verbatim from above.
-2. The files and docs to read first: this plan, haskell-halogen's `AGENTS.md`, and the
-   haskell-halogen modules the package builds on (named explicitly, e.g.
-   `router/src/Halogen/Router.hs`, `examples/all/Gallery.hs`, `hooks/.../Extra/Hooks.hs`).
-3. What is already decided (the relevant items of "Decisions") so the agent does not
-   re-open them, and what it is free to choose, which it must document in its report.
-4. The verification gate before it reports done: `npm run build-native`,
-   `npm run test-native`, `npm run build-wasm` (and `npm run test-wasm` once there are
-   browser tests), fourmolu clean, no warnings on either backend.
-5. The branch to commit on and the commit-message style (short imperative subject, body
-   says why), one PR per work package, as a draft.
-
-The agent reports back with: what it built, the decisions it took, what it could not
-do and why, and what the next package should know. The plan is updated after each
-package (decisions confirmed or amended, acceptance criteria met or carried over),
-in the same PR.
+The session the owner talks to implements every work package itself, one at a time,
+without subagents (the owner, 2026-10-31: "Usuń wzmiankę o wykonywaniu zadań przez
+subagentow opus, będziesz wykonywać wszystko sam"). Before a pull request merges, it is
+reviewed with Codex, `gpt-6.1-sol` at high reasoning effort, with the owner's key, as
+`AGENTS.md` says; the session fixes the real findings and pushes. The owner merges; the
+session merges only when asked ("nie merguj sam, chyba że poproszę"). Each work package
+starts from its goal and acceptance criteria above, the decisions it builds on, and the
+haskell-halogen modules it uses, and ends with the verification gate of `AGENTS.md`
+(`npm run build-native`, `npm run test-native`, `npm run build-wasm`, `npm run test-wasm`,
+fourmolu clean, no warnings on either backend), one pull request ready for review, and a
+Progress entry: what was built, the decisions taken, what could not be done and why, and
+what the next package should know.
 
 ## Open questions for the owner
 

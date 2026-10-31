@@ -1264,8 +1264,8 @@ there with the compose file beside it.
 
 The plan of work, with the decisions taken and the work packages it was cut
 into, is [docs/PLAN.md](docs/PLAN.md). `AGENTS.md` describes how the work is
-organised: a planning session cuts the plan into work packages and delegates each
-to an implementing agent. Toolchain and conventions follow haskell-halogen's.
+organised: one session cuts the plan into work packages and implements each
+itself. Toolchain and conventions follow haskell-halogen's.
 
 ## Toolchain
 
