@@ -1881,6 +1881,33 @@ must be in before it is.
   cover the default, opt-in, attachments, access to ordinary private content,
   revocation and persistence/export compatibility.
 
+- **WP5.36 A sidebar that folds, the editor's font size, and a preview that follows
+  the text, also in a window of its own** (the owner, 2026-10-31: "z lewej na dole
+  przycisk '<<' żeby schować pasek boczny", "opcję zmniejszenia czcionki w edytorze",
+  "po prawej się odświeża dokument (przewinięty do miejsca, w którym aktualnie jesteśmy)
+  - czy byłaby opcja 'detach window' … edytor na jednym monitorze, i podgląd na
+  drugim"; one package, "ja bym nie dzielił"). Three parts. **The sidebar** gets a "«"
+  button at its bottom that folds it to a narrow strip with "»" to unfold it; the
+  choice is kept in the browser (localStorage), the page's content takes the width,
+  and the phone's menu is unchanged. **The editor's font size**: A− and A+ in the
+  toolbar (and Ctrl+− / Ctrl+= in the editor), a few steps from small to large, kept in
+  the browser; the editor's text only, the preview as it is. **The preview follows the
+  text**: the rendered blocks carry the source line they come from (the Markdown
+  parser's source positions, `data-line` on the block elements, rendered on the server
+  too and adopted without repair), and the side-by-side preview scrolls so that the
+  block of the cursor's line (or, while scrolling the editor, of its top line) is in
+  view. **"Detach preview"** opens the preview in a window of its own at a route of the
+  page (`…/p/<path>/live-preview`), which the editor feeds through a `BroadcastChannel`
+  (same origin, no server): the text as typed and the line followed; the window renders
+  it with the same renderer (islands, macros, boxes) and scrolls the same way, so it
+  can sit on another monitor. It says so when the editor closes or saves, takes up the
+  feed again after a reload of either window, and with no editor open shows the page as
+  saved. The side-by-side pane closes while a detached window is open, and comes back
+  when it closes. Tests: native (the source lines on the rendered blocks, the server's
+  HTML the same as the browser's), browser (fold and unfold kept across a reload; A−
+  and A+ kept; the side-by-side preview scrolled to the block of the cursor's line; a
+  second page in the same browser context at the live-preview route following the
+  editor's text and line, and told when the editor closes). Not started; after WP5.30.
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
