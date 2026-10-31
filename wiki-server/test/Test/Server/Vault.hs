@@ -26,16 +26,16 @@ import Test.Server.Fixture
 import Test.Server.WebAuthn (Authenticator (..), assertion, assertionFlagged, authenticator, registration)
 import Wiki.Api (AccountApi (..), AdminApi (..), AssistantApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..))
-import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
-import Wiki.Api.Types (SessionInfo (..))
-import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
-import Wiki.Server.Totp (codeAt, secretFromText)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
+import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault
 import Wiki.Core.Assistant.Vault
+import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
+import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
+import Wiki.Server.Totp (codeAt, secretFromText)
 import Wiki.Server.Vault (Site (..), siteFor)
 import Wiki.Server.WebAuthn (fromBase64Url, toBase64Url)
 

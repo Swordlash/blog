@@ -44,9 +44,9 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Assistant (ApiKey (..), Provider (..), ProviderSettings (..), Settings, defaultSettings, settingsOf, withKey, withModel)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.Access (Access (..))
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Standing (..))
 

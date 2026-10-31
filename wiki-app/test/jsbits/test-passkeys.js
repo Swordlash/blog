@@ -83,7 +83,10 @@ const wikiTestCredentials = {
       // or until the page ends it.
       await new Promise((resolve, reject) => {
         wikiTestPasskeys.offered = resolve;
-        signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+        signal?.addEventListener("abort", () => {
+          wikiTestPasskeys.offered = null;
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
       });
       wikiTestPasskeys.offered = null;
     }
