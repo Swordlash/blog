@@ -1907,7 +1907,8 @@ must be in before it is.
   HTML the same as the browser's), browser (fold and unfold kept across a reload; A−
   and A+ kept; the side-by-side preview scrolled to the block of the cursor's line; a
   second page in the same browser context at the live-preview route following the
-  editor's text and line, and told when the editor closes). Not started; after WP5.30.
+  editor's text and line, and told when the editor closes). Merged 2026-10-31, PR
+  #119; see Progress.
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
@@ -5026,6 +5027,43 @@ Amended by the planning session after each work package's report.
   wiki-app `Accounts` record now carries four passkey methods, and the assistant's
   settings always show the password field, since they do not know whether the user has
   a password.
+- **WP5.36 merged (2026-10-31, PR #119, `21385a2`).** The sidebar folds from a « button
+  at its bottom left (`sidebarFolded` in the Shell, kept under "sidebar-folded"). The
+  editor's A− and A+ step through eight sizes of the Markdown's font, 0.7 to 1.25 rem,
+  from 0.9 (`fontStep`, kept under "editor-font-step", the CSS variable
+  `--editor-font-size`); Ctrl+− and Ctrl+= were left to the browser's zoom. The parser
+  records where each top-level block starts (`Ast.parseWithLines`), and `renderLines`
+  puts an empty `span.source-line[data-line]` before each block; only the editor's
+  preview and the live preview render them, pages as read have none. The side by side
+  preview is a 65vh pane that scrolls on its own to the block of the cursor's line (or
+  the text's top line while it scrolls), and goes to it when switched on. "Detach
+  preview" opens `…/p/<path>/live-preview/` (route `LivePreview`, `live-preview` now a
+  reserved word in page paths) in a named window. CodeMirror sends it the text, the
+  title (kept on the host as `data-live-title`) and the line over a `BroadcastChannel`
+  ("wiki-live-preview", keyed by space id and path): the text after a 150 ms pause, a
+  line at once, a hello answered, the last words flushed and "closed" sent when the
+  editor goes or its tab hides (`pagehide`), and a note when a file is uploaded, on
+  which the window fetches the attachments again (after `endPreload`, past the
+  prerender's cache). The window loads the saved page at once when the backend can, so
+  hydration matches the prerender, drops reads made for a page it has left, and keeps
+  only the last attachments refresh. Plan text not met as written: the front page has
+  no "Detach preview" (no space path for the address); the side by side pane does not
+  close while a window is open (its checkbox does that); the markers are on the
+  editor's previews only, not on the server's pages, since only those previews scroll.
+  In the demo each tab keeps its wiki in memory from what was stored when it loaded,
+  so the window there does not see a file uploaded after it opened until reloaded.
+  Codex reviewed four rounds (15 findings, 14 fixed; the demo's above). Tests: native
+  (`parseWithLines`, `renderLines`), browser (`Test.Browser.Workspace`: the fold kept,
+  the font size kept, the pane following the cursor and resyncing, "Show preview" not
+  the pane, the channel's text, title, upload note and last words before "closed", the
+  window following text and title and saying when the editor went). Gate: native and
+  wasm builds without warnings, all suites, smoke tests, fourmolu clean, CI green on
+  the head. Seen while testing, not fixed: now and then (about one run in ten of the
+  editor's browser tests) "loses no keystroke while the preview catches up with a long
+  page" passes but CodeMirror throws "Selection points outside of document" from a
+  scroll handler: the live view reads a DOM selection one typed character ahead of its
+  state. Not caused by the preview's following (it happens with that switched off);
+  whether it predates WP5.36 was being checked on `main` when the package merged.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
