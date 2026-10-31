@@ -1909,6 +1909,64 @@ must be in before it is.
   second page in the same browser context at the live-preview route following the
   editor's text and line, and told when the editor closes). Merged 2026-10-31, PR
   #119; see Progress.
+- **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
+  the same evening). Cut into WP5.37 to WP5.45 below, in that order unless the owner
+  says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
+  macros and boxes cover the need); grammar checking beyond the browser's spelling,
+  which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
+  any more). Open: a multi-line `$$` block in a box that worked only on one line; the
+  parser reads every variant tried (`>` on each line or not, text before it), so the
+  fault is further on, and the owner's exact source is asked for.
+- **WP5.37 Fixes to WP5.36.** With the sidebar folded the page keeps
+  `.wiki-content`'s `max-width: 54rem`, so the editor leaves the right of the screen
+  empty and its bar takes two rows: the content takes the width while folded, and the
+  editor always. The CodeMirror error in the editor's browser tests ("Selection points
+  outside of document", about one run in ten, brought by WP5.36, not by the preview's
+  following): bisect WP5.36's other changes (first the side by side pane's fixed 65vh)
+  and fix the cause, not the symptom. The search bar's results close when it loses
+  focus or a click lands elsewhere.
+- **WP5.38 The editor's bar and the preview.** The title, Save, Save and close and
+  Cancel stay at the top with the toolbar (sticky), in editing and in "Show preview",
+  where "Back to edit" stays too. "Show preview" opens at the block being edited (the
+  line markers of WP5.36 in the full preview). Showing the preview pushes a history
+  entry: the browser's Back returns to editing, and only the next Back leaves the
+  editor (with the question about unsaved changes).
+- **WP5.39 The title is the first line's `#`.** Every page's text starts with `# ` and
+  the title; the editor anchors that `#` (it cannot be deleted or moved), and the title
+  field is greyed out and filled from what follows it. A page without it gets
+  `# <title>` put in by the editor when opened. The page is rendered with its title
+  once (the `#` line is the title, not a second heading). Before WP5.40, whose
+  numbering takes `#` as the title and `##` as sections.
+- **WP5.40 Boxes: numbers, titles, toolbar, colours.** Boxes are numbered per kind
+  (Tip 1, Tip 2; Example 1 apart). A space chooses the form: within the page only
+  (`3`), with the page's number (`2.3`: the page's position under its parent, in the
+  space's order, by hand or not), or with the section too (`2.1.3`: `##` sections).
+  `> [!TIP*]` is a box without a number, as LaTeX's `equation*`. Math in box titles
+  (`$…$`, `$$…$$`). A "Box" button in the toolbar with the space's kinds in a list,
+  and for an administrator "New kind…" there. A custom colour (a colour picker) beside
+  the theme's.
+- **WP5.41 An "Editor" tab in the settings.** The kinds of box move there from
+  "Server". The built-in macros (`\Prob` and the rest) become a server setting there:
+  a textarea filled with them on first opening, saved as typed, checked by KaTeX as
+  the space's macros are (a sample formula typed under the block is typeset with it),
+  and a warning naming the pages that use a macro being removed. In the editor, a
+  button for the space's and the page's macros, editable by whoever may edit the whole
+  space (the space's are on the space's page, "Math macros", today).
+- **WP5.42 Lines, footnotes and unclosed math.** A line break in the text is a line
+  break in the page, in quotes and boxes too, always (the owner: few pages yet). A
+  footnote's number shows the note on hover; a click goes to the note and the browser's
+  Back returns to the reference (anchors under the router's addresses). An unclosed `$`
+  or `\(` on a line is underlined red to the line's end in the editor.
+- **WP5.43 The assistant.** The text's selection stays shown while the assistant has
+  the focus. "Ask" (talk, no edits) and "Agent" (as now) modes. Model and effort chosen
+  in the editor's assistant, not only in its settings.
+- **WP5.44 Stars and help.** A user stars pages (kept by the server, per user) and goes
+  to them from a "Starred" list in the header. A help button (a "?" in a corner) opens
+  a dialog with what the README and the guide say: TikZ, Mermaid, the kinds of box
+  including the server's own.
+- **WP5.45 Images as space icons, and favicons.** A space's icon, and the home page's,
+  can be an uploaded image (with limits; SVG served only as an image) besides an
+  emoji; it is the favicon of the space's pages, and the home page's of the wiki.
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
