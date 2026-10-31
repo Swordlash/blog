@@ -65,6 +65,7 @@ module Wiki.Core.Markdown.Render
   , defaultOptions
   , defaultResolveLink
   , renderBlocks
+  , renderLines
   , renderSections
   , renderRawHtml
   , boxOf
@@ -178,6 +179,20 @@ defaultResolveLink dest = case classifyDestination dest of
 -- | The document's blocks as HTML, in order.
 renderBlocks :: Options page w i -> [Block] -> [HH.HTML w i]
 renderBlocks opts doc = concat (renderSections opts [doc])
+
+-- | The document's blocks as HTML, in order, each block of the page (not
+-- those inside another) after an empty marker of the source line it starts
+-- on (@\<span class="source-line" data-line="12">@, from
+-- 'Wiki.Core.Markdown.Ast.parseWithLines'). The editor's preview renders
+-- with it, to scroll to the block being written; a page as read has no
+-- markers. The blocks are one document, as for 'renderBlocks'.
+renderLines :: Options page w i -> [(Maybe Int, Block)] -> [HH.HTML w i]
+renderLines opts located =
+  concat (zipWith (\line html -> marker line <> html) (map fst located) (renderSections opts (map (single . snd) located)))
+  where
+    marker = \case
+      Just n -> [HH.span [classesProp ["source-line"], HP.attr (HH.AttrName "data-line") (show n), HP.attr (HH.AttrName "aria-hidden") "true"] []]
+      Nothing -> []
 
 -- | A document cut into sections, each section's blocks as HTML of its own,
 -- in order: what a page shown as slides ("Wiki.Core.Slides") is rendered

@@ -14,6 +14,16 @@ para xs = [Para xs]
 
 spec :: Spec
 spec = describe "Markdown.Ast" $ do
+  describe "the source lines of a page's blocks (parseWithLines)" $ do
+    it "gives each block of the page the line it starts on, nested ones not counted" $
+      (map fst <$> parseWithLines "# Title\n\nA paragraph\nover two lines.\n\n- one\n- two\n\n> quoted\n> more\n\n```\ncode\n```\n")
+        `shouldBe` Right [Just 1, Just 3, Just 6, Just 9, Just 12]
+    it "gives the same blocks as parseMarkdown, heading ids and all" $ do
+      let source = "# Intro\n\n# Intro\n\n. . .\n\n[[toc]]\n\nAsk @ada.\n"
+      (map snd <$> parseWithLines source) `shouldBe` parseMarkdown source
+    it "starts each piece of a paragraph split around display math on the paragraph's line" $
+      (parseWithLines "intro\n\nbefore\n$$x$$\nafter\n")
+        `shouldBe` Right [(Just 1, Para [Str "intro"]), (Just 3, Para [Str "before"]), (Just 3, MathBlock "x"), (Just 3, Para [Str "after"])]
   describe "inlines" $ do
     it "merges text into one Str" $
       "Hello, world & more." `parses` para [Str "Hello, world & more."]

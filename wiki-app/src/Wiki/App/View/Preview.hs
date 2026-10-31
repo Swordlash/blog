@@ -1,7 +1,10 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The editor's preview: a draft rendered as the page view will show it
--- once it is saved ("Wiki.App.View.Body").
+-- once it is saved ("Wiki.App.View.Body"), each block after a marker of
+-- its source line, by which the preview is scrolled to the block being
+-- written ('Body.articleLines'). The preview in a window of its own
+-- ("Wiki.App.View.LivePreview") is this component too.
 --
 -- It is a separate component so that typing does not re-render it. The
 -- editor re-renders on every keystroke, and passes its child the same
@@ -61,7 +64,7 @@ component =
     render :: State -> H.ComponentHTML Action IslandSlots m
     render State {input = Input {place, title, body}, known} =
       [hh|
-        <div class="preview">{{ Body.heading title body }}{{ Body.article FollowLink (Body.withPeople known.found place) body }}</div>
+        <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink (Body.withPeople known.found place) body }}</div>
       |]
 
     handleAction :: Action -> H.HalogenM State Action IslandSlots output m ()

@@ -221,6 +221,7 @@ import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
   , PickedFile (..)
+  , announceUpload
   , answerMention
   , applyCommand
   , attachEditor
@@ -236,6 +237,7 @@ import Wiki.App.Editor.Browser
   , guardUnload
   , insertAtCursor
   , mentionAsked
+  , paneShown
   , pastedFiles
   , pickedFiles
   , readPickedFile
@@ -252,6 +254,7 @@ import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
+import Wiki.App.View.LivePreview (liveKey)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
 import Wiki.Core.Assistant
@@ -425,6 +428,9 @@ data State = State
   , mode :: Mode
   , sideBySide :: Bool
   -- ^ Whether the preview is shown beside the Markdown on a wide screen.
+  , fontStep :: Int
+  -- ^ The size of the Markdown's font, as a step of 'fontSizes' (WP5.36
+  -- of docs/PLAN.md), which the browser keeps.
   , previewMounted :: Bool
   -- ^ Whether the preview has been shown yet: it is then mounted, and
   -- kept.
@@ -501,6 +507,7 @@ data Action
   | ShowPreview
   | BackToEditing
   | SideBySide Bool
+  | FontSize Int
   | AskCancel
   | KeepDraftAndLeave
   | DiscardAndLeave
@@ -528,6 +535,31 @@ data Action
 -- Markdown.
 sideBySideKey :: Text
 sideBySideKey = "editor-side-by-side"
+
+-- | The sizes the Markdown's font is offered in (WP5.36 of docs/PLAN.md),
+-- smallest first; 'defaultFontStep' is the one it starts at, the size it
+-- always had.
+fontSizes :: [Text]
+fontSizes = ["0.7rem", "0.75rem", "0.8rem", "0.85rem", "0.9rem", "1rem", "1.1rem", "1.25rem"]
+
+defaultFontStep :: Int
+defaultFontStep = 4
+
+-- | A step of 'fontSizes' as a CSS length.
+fontSize :: Int -> Text
+fontSize n = fromMaybe "0.9rem" (atMay fontSizes n)
+
+-- | The browser's key for the step of the Markdown's font.
+fontStepKey :: Text
+fontStepKey = "editor-font-step"
+
+-- | The address of the page's preview in a window of its own
+-- ("Wiki.App.View.LivePreview"); none for the front page, whose page has
+-- no space path to put it under.
+livePreviewHref :: Input -> Maybe Text
+livePreviewHref input
+  | homeSpace input.context input.space.id = Nothing
+  | otherwise = Just (Router.href input.context.router (LivePreview (spacePathOf input.context.spaces input.space.id) input.path))
 
 -- | How long the typing must stop before the preview follows: long enough
 -- not to re-render a long page on every keystroke, short enough to feel
@@ -582,6 +614,7 @@ component =
               , dropping = False
               , mode = Editing
               , sideBySide = False
+              , fontStep = defaultFontStep
               , previewMounted = False
               , menu = Nothing
               , host
@@ -650,6 +683,7 @@ component =
       [hh|
         <form
           class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}"
+          style={{ "--editor-font-size: " <> fontSize st.fontStep }}
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
         >
@@ -678,7 +712,7 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -978,6 +1012,13 @@ component =
               Side by side preview
             </label>
             <button type="button" class="editor-show-preview" title="Show preview (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
+            {% for href in maybeToList bar.detached %}
+              <a class="button editor-detach" href={{ href }} target="wiki-live-preview" title="The preview in a window of its own, which follows what is typed here">Detach preview</a>
+            {% end %}
+            <span class="editor-font" role="group" aria-label="Font size">
+              <button type="button" class="editor-font-smaller" title="Smaller text" aria-label="Smaller text" disabled={{ bar.textSize <= 0 }} onClick={{ const (FontSize (bar.textSize - 1)) }}>A−</button>
+              <button type="button" class="editor-font-larger" title="Larger text" aria-label="Larger text" disabled={{ bar.textSize >= length fontSizes - 1 }} onClick={{ const (FontSize (bar.textSize + 1)) }}>A+</button>
+            </span>
           </div>
         </div>
       |]
@@ -1077,6 +1118,8 @@ component =
               <div
                 class="editor-cm"
                 ref={{ st.host }}
+                data-live-key={{ liveKey st.input.space.id st.input.path }}
+                data-live-title={{ liveTitle st }}
                 {{ HE.handler' (EventType "wiki-input") typed }}
                 {{ HE.handler' (EventType "wiki-selection") (\ev -> Just $! Selected (selectedSpan ev)) }}
                 {{ HE.handler' (EventType "wiki-changes") (\ev -> Just $! ChangesLeft (changesLeft ev)) }}
@@ -1102,6 +1145,13 @@ component =
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
+
+    -- The title as typed, for the preview in a window of its own: the
+    -- editor's CodeMirror sends it with the text (web/src/editor.js).
+    liveTitle :: State -> Text
+    liveTitle st = case st.loaded of
+      Ready w -> w.title
+      _ -> ""
 
     -- CodeMirror's text after a change, taken in the event's listener.
     typed :: Event -> Maybe Action
@@ -1158,6 +1208,9 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
+        H.liftEffect (Storage.getItem LocalStorage fontStepKey) >>= \case
+          Just (Right n) | n >= 0 && n < length fontSizes -> modify (\st -> st {fontStep = n})
+          _ -> pass
         -- Also after the first render, which a prerendered page shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
@@ -1234,9 +1287,14 @@ component =
       CloseMenu -> closeMenu
       ShowPreview -> showPreview
       BackToEditing -> backToEditing
+      FontSize n -> when (n >= 0 && n < length fontSizes) $ do
+        modify (\st -> st {fontStep = n})
+        H.liftEffect (Storage.setItem LocalStorage fontStepKey n)
       SideBySide wanted -> do
         modify (\st -> st {sideBySide = wanted, previewMounted = st.previewMounted || wanted})
         if wanted then catchUp else cancelPreview
+        -- The cursor may have moved while the pane was hidden.
+        when wanted $ gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . paneShown)
         H.liftEffect (Storage.setItem LocalStorage sideBySideKey wanted)
       AskCancel -> modify (\st -> st {askingCancel = True})
       GoOnEditing -> modify (\st -> st {askingCancel = False})
@@ -1765,6 +1823,7 @@ component =
                   { attachments = filter (\b -> b.name /= a.name) w.attachments <> [a]
                   , urls = Map.insert a.id url w.urls
                   }
+              gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . announceUpload)
               insert (attachmentReference a.name.text a.mediaType.text)
 
     -- Insert text at the text's cursor. The input event that puts it in the
@@ -1925,6 +1984,10 @@ draftStatus = \case
 data Bar = Bar
   { menuOpen :: Maybe Menu
   , twoPanes :: Bool
+  , textSize :: Int
+  , detached :: Maybe Text
+  -- ^ The address of the page's preview in a window of its own, where
+  -- the page has one.
   }
   deriving stock (Eq)
 

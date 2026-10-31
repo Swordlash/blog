@@ -2182,6 +2182,7 @@ body:has(.slides-view) {
   .wiki:has(.slides-view) .wiki-sidebar,
   .wiki:has(.slides-view) .wiki-footer,
   .wiki:has(.slides-view) .leave-confirm,
+  .sidebar-fold,
   .slides-progress,
   .slides-controls {
     display: none;
@@ -2605,8 +2606,13 @@ body:has(.slides-view) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
+  /* The preview beside the text scrolls on its own, as tall as the text,
+     so that it can follow the line being written (web/src/editor.js). */
   .editor-form.side-by-side .editor-panes .editor-preview {
     display: block;
+    height: 65vh;
+    overflow-y: auto;
+    padding-right: 0.5rem;
   }
 }
 
@@ -2693,6 +2699,8 @@ body:has(.slides-view) {
 .editor-form.previewing .editor-panes .editor-preview {
   display: block;
   max-height: none;
+  height: auto;
+  overflow-y: visible;
 }
 
 .editor-panes.dropping {
@@ -2713,7 +2721,7 @@ body:has(.slides-view) {
   padding: 0.75rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: var(--editor-font-size, 0.9rem) / 1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--text);
   background: var(--background);
   resize: vertical;
@@ -2761,7 +2769,7 @@ body:has(.slides-view) {
 
 .editor-cm .cm-editor .cm-scroller {
   overflow: auto;
-  font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: var(--editor-font-size, 0.9rem) / 1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   tab-size: 2;
 }
 
@@ -6151,4 +6159,72 @@ a.mention {
   flex-basis: 100%;
   margin: 0;
   color: var(--text-muted);
+}
+
+/* ---- WP5.36: the sidebar folded, the editor's font, the preview following -- */
+
+/* The sidebar folds away on a wide screen, from a button at its bottom left;
+   on a narrow screen it is above the page, and does not fold. */
+.sidebar-fold {
+  position: fixed;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 5;
+  padding: 0.15rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.wiki-body.sidebar-folded > .wiki-sidebar {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .sidebar-fold {
+    display: none;
+  }
+
+  .wiki-body.sidebar-folded > .wiki-sidebar {
+    display: block;
+  }
+}
+
+/* The editor's font size, smaller and larger, beside the preview's controls. */
+.editor-font {
+  display: inline-flex;
+  gap: 0.15rem;
+}
+
+.editor-font button {
+  min-width: 2.2rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.editor-detach {
+  white-space: nowrap;
+}
+
+/* Where each block of a preview starts in the source: nothing to see, but a
+   place to scroll to. */
+.source-line {
+  display: block;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* In the preview's own window the page scrolls, under the sticky header: a
+   block followed there stops below the header. */
+.live-preview .source-line {
+  scroll-margin-top: calc(var(--header-height) + 0.75rem);
+}
+
+/* The preview in a window of its own: the page alone, under a line that says
+   whom it follows. */
+.live-preview-state {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
 }

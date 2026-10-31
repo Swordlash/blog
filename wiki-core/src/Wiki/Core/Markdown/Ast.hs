@@ -64,6 +64,7 @@ module Wiki.Core.Markdown.Ast
   , BoxMarker (..)
   , boxMarkers
   , parseWithMarkers
+  , parseWithLines
 
     -- * Reading the tree
   , plainText
@@ -222,8 +223,21 @@ parseMarkdown = fmap fst . parseWithMarkers
 -- the source ('boxMarkers'): one parse, for a caller that needs both.
 parseWithMarkers :: Text -> Either ParseError ([Block], [BoxMarker])
 parseWithMarkers source =
-  (\(Blocks bs ms) -> (withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs)), sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)))
+  (\(Blocks bs ms) -> (finished (map snd (toList bs)), sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)))
     <$> parsed source
+
+-- | Parse a page's Markdown, each block of the page (not those inside
+-- another) with the line of the source it starts on, from 1: what the
+-- editor's preview is scrolled by, to show the block being written
+-- ("Wiki.Core.Markdown.Render"'s 'Wiki.Core.Markdown.Render.renderLines').
+parseWithLines :: Text -> Either ParseError [(Maybe Int, Block)]
+parseWithLines source =
+  (\(Blocks bs _) -> let located = toList bs in zip (map fst located) (finished (map snd located)))
+    <$> parsed source
+
+-- | What every block of a page goes through once parsed, one for one.
+finished :: [Block] -> [Block]
+finished = withHeadingIds . map (withPauses . contentsMarker . withMentions)
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
@@ -450,10 +464,11 @@ instance Semigroup Inlines where
 instance Monoid Inlines where
   mempty = Inlines Seq.empty
 
--- | Blocks as the parser builds them, with the markers of the boxes among
--- them, nested ones too ('boxMarkers'). Every block made of other blocks
--- keeps their markers.
-data Blocks = Blocks (Seq Block) [BoxMarker]
+-- | Blocks as the parser builds them, each with the line of the source it
+-- starts on once the parser has said ('parseWithLines'), and with the
+-- markers of the boxes among them, nested ones too ('boxMarkers'). Every
+-- block made of other blocks keeps their markers.
+data Blocks = Blocks (Seq (Maybe Int, Block)) [BoxMarker]
   deriving stock (Show)
 
 instance Semigroup Blocks where
@@ -466,11 +481,11 @@ inline :: Inline -> Inlines
 inline = Inlines . Seq.singleton
 
 block :: Block -> Blocks
-block b = Blocks (Seq.singleton b) []
+block b = Blocks (Seq.singleton (Nothing, b)) []
 
 -- | One block made of others, with their markers.
 around :: ([Block] -> Block) -> Blocks -> Blocks
-around make bs = Blocks (Seq.singleton (make (blocks bs))) (markersOf bs)
+around make bs = Blocks (Seq.singleton (Nothing, make (blocks bs))) (markersOf bs)
 
 markersOf :: Blocks -> [BoxMarker]
 markersOf (Blocks _ ms) = ms
@@ -479,13 +494,19 @@ inlines :: Inlines -> [Inline]
 inlines (Inlines xs) = toList xs
 
 blocks :: Blocks -> [Block]
-blocks (Blocks xs _) = toList xs
+blocks (Blocks xs _) = map snd (toList xs)
 
 instance CM.Rangeable Inlines where
   ranged _ = identity
 
+-- | The parser says where each block is once it has made it, innermost
+-- first: a block without a line yet starts where this range does. A block
+-- the parser made several of (a paragraph split around display math) has
+-- them all start there.
 instance CM.Rangeable Blocks where
-  ranged _ = identity
+  ranged (CM.SourceRange ranges) (Blocks xs ms) = case ranges of
+    (start, _) : _ -> Blocks (first (<|> Just (CM.sourceLine start)) <$> xs) ms
+    [] -> Blocks xs ms
 
 instance CM.HasAttributes Inlines where
   addAttributes new (Inlines xs) = Inlines (add <$> xs)
@@ -497,7 +518,7 @@ instance CM.HasAttributes Inlines where
         other -> other
 
 instance CM.HasAttributes Blocks where
-  addAttributes new (Blocks xs ms) = Blocks (add <$> xs) ms
+  addAttributes new (Blocks xs ms) = Blocks (fmap add <$> xs) ms
     where
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
@@ -537,7 +558,7 @@ instance CM.IsBlock Inlines Blocks where
 
   -- A definition has done its job once the links that use it are parsed.
   referenceLinkDefinition _ _ = mempty
-  list kind _ items = Blocks (Seq.singleton (List (listKind kind) (map (ListItem Nothing . blocks) items))) (concatMap markersOf items)
+  list kind _ items = Blocks (Seq.singleton . (Nothing,) $ (List (listKind kind) (map (ListItem Nothing . blocks) items))) (concatMap markersOf items)
 
 instance CME.HasMath Inlines where
   inlineMath = inline . Math InlineMath
@@ -563,13 +584,13 @@ instance CME.HasPipeTable Inlines Blocks where
         CME.DefaultAlignedCol -> AlignDefault
 
 instance CME.HasTaskList Inlines Blocks where
-  taskList kind _ items = Blocks (Seq.singleton (List (listKind kind) [ListItem (Just done) (blocks b) | (done, b) <- items])) (concatMap (markersOf . snd) items)
+  taskList kind _ items = Blocks (Seq.singleton . (Nothing,) $ (List (listKind kind) [ListItem (Just done) (blocks b) | (done, b) <- items])) (concatMap (markersOf . snd) items)
 
 instance CME.HasFootnote Inlines Blocks where
   footnote number label = around (Footnotes . pure . Footnote number label)
   footnoteList notes =
     let all' = mconcat notes
-     in Blocks (Seq.singleton (Footnotes (concat [ns | Footnotes ns <- blocks all']))) (markersOf all')
+     in Blocks (Seq.singleton . (Nothing,) $ (Footnotes (concat [ns | Footnotes ns <- blocks all']))) (markersOf all')
 
   -- The note's contents come along for formats that show a note where it
   -- is referenced; here they are shown once, in 'Footnotes'.
@@ -628,7 +649,7 @@ alertBlockSpec =
     , CM.blockConstructor = \node -> do
         let marker = fromMaybe BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing} (fromDynamic (CM.blockData (rootLabel node)))
         inside <- mconcat <$> CM.renderChildren node
-        pure (Blocks (Seq.singleton (Alert marker.boxKind marker.boxTitle (blocks inside))) (marker : markersOf inside))
+        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind marker.boxTitle (blocks inside))) (marker : markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
 

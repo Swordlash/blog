@@ -558,6 +558,109 @@ const editors = new Set();
 // (the page was loaded again, which makes a new one) gives way to the new
 // one, which has none of its undo. `codeTokens` highlights fenced code
 // (islands.js).
+// Scroll rendered Markdown with line markers (span.source-line[data-line],
+// Wiki.Core.Markdown.Render's renderLines) to the block of a source line:
+// the last block that starts at or before it, near the top of the pane.
+function followLine(container, line) {
+  let target = null;
+  for (const marker of container.querySelectorAll(".source-line")) {
+    if (Number(marker.dataset.line) <= line) target = marker;
+    else break;
+  }
+  if (target === null) return;
+  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+  container.scrollTop = Math.max(0, top - 16);
+}
+
+// What the editor of a page tells the preview beside it and the preview in a
+// window of its own (WP5.36 of docs/PLAN.md): the line being written (the
+// cursor's, or the top one while the text is scrolled), and to the window
+// the text, on the "wiki-live-preview" channel (wiki-app/jsbits/editor.js's
+// wiki_live_listen), keyed by the page (the host's data-live-key). A window
+// that starts listening says hello, and is told what there is.
+function following(host) {
+  const key = host.dataset.liveKey ?? "";
+  const channel = typeof BroadcastChannel === "function" && key !== "" ? new BroadcastChannel("wiki-live-preview") : null;
+  let view = null;
+  let line = 1;
+  let timer = null;
+  const pane = () => host.closest(".editor-form")?.querySelector(".editor-preview");
+  const scrollPane = () => {
+    const p = pane();
+    if (p && p.offsetParent !== null) followLine(p, line);
+  };
+  const send = () => {
+    clearTimeout(timer);
+    timer = null;
+    if (view !== null) channel?.postMessage({ key, text: view.state.doc.toString(), title: host.dataset.liveTitle ?? "", line });
+  };
+  const sendSoon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(send, 150);
+  };
+  // The page's title is typed outside CodeMirror: the component keeps it on
+  // the host (data-live-title), and a change of it is sent as the text's is.
+  const titles = channel === null ? null : new MutationObserver(sendSoon);
+  titles?.observe(host, { attributes: true, attributeFilter: ["data-live-title"] });
+  // The editor goes: what is typed but not sent yet is sent first, so that
+  // the window keeps the text as it was last typed.
+  const gone = () => {
+    if (timer !== null) send();
+    channel?.postMessage({ key, closed: true });
+  };
+  // Closing the editor's tab, or leaving its page, destroys no editor; the
+  // page's pagehide is the last word the window can be told. A page the
+  // browser brings back from its cache (pageshow, persisted) speaks again.
+  const hidden = () => gone();
+  const shown = (event) => {
+    if (event.persisted) send();
+  };
+  if (channel !== null) {
+    channel.onmessage = (event) => {
+      if (event.data?.hello === key) send();
+    };
+    window.addEventListener("pagehide", hidden);
+    window.addEventListener("pageshow", shown);
+  }
+  return {
+    start: (v) => {
+      view = v;
+      line = v.state.doc.lineAt(v.state.selection.main.head).number;
+      send();
+    },
+    // The text changed, or the line followed did. The preview beside the
+    // text follows at once, and again once it has rendered the new text;
+    // the window is told when the typing pauses.
+    moved: (newLine, textToo) => {
+      line = newLine;
+      scrollPane();
+      if (textToo) setTimeout(scrollPane, 400);
+      if (channel === null) return;
+      if (textToo) {
+        sendSoon();
+      } else if (timer === null) {
+        channel.postMessage({ key, line });
+      }
+    },
+    // The preview beside the text was switched on: it goes to the line
+    // followed meanwhile, now and once it has rendered.
+    paneShown: () => {
+      scrollPane();
+      setTimeout(scrollPane, 400);
+    },
+    // A file was uploaded to the page: the window fetches the page's
+    // attachments again, so that the reference about to be typed resolves.
+    uploaded: () => channel?.postMessage({ key, attachments: true }),
+    stop: () => {
+      titles?.disconnect();
+      window.removeEventListener("pagehide", hidden);
+      window.removeEventListener("pageshow", shown);
+      gone();
+      channel?.close();
+    },
+  };
+}
+
 export function attach(textarea, host, original, codeTokens) {
   for (const editor of editors) if (!editor.host.isConnected) editor.destroy();
   if (!textarea.isConnected || !host.isConnected) return;
@@ -572,6 +675,7 @@ export function attach(textarea, host, original, codeTokens) {
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
   const completion = mentions(host);
+  const follow = following(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
   let toldSelection = "";
@@ -610,6 +714,9 @@ export function attach(textarea, host, original, codeTokens) {
         paste: (event) => Boolean(event.clipboardData?.files?.length),
       }),
       EditorView.updateListener.of((update) => {
+        if (update.docChanged || update.selectionSet) {
+          follow.moved(update.state.doc.lineAt(update.state.selection.main.head).number, update.docChanged);
+        }
         if (update.docChanged) {
           host.dispatchEvent(new CustomEvent("wiki-input", { detail: update.state.doc.toString() }));
         }
@@ -641,6 +748,12 @@ export function attach(textarea, host, original, codeTokens) {
   host.replaceChildren(view.dom);
   view.scrollDOM.scrollTop = scrolled;
   if (focused) view.focus();
+  // Scrolling the text, the preview follows its top line.
+  view.scrollDOM.addEventListener("scroll", () => {
+    const top = view.lineBlockAtHeight(view.scrollDOM.scrollTop).from;
+    follow.moved(view.state.doc.lineAt(top).number, false);
+  });
+  follow.start(view);
 
   const editor = {
     textarea,
@@ -709,8 +822,11 @@ export function attach(textarea, host, original, codeTokens) {
           : { effects: dropChanges.of(ids), annotations: Transaction.addToHistory.of(false) },
       );
     },
+    uploaded: () => follow.uploaded(),
+    paneShown: () => follow.paneShown(),
     destroy: () => {
       editors.delete(editor);
+      follow.stop();
       view.destroy();
       if (host.wikiEditor === editor) delete host.wikiEditor;
       delete view.contentDOM.wikiEditor;

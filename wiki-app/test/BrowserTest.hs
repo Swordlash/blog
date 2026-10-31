@@ -36,6 +36,7 @@ import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 import Test.Browser.Spaces qualified as Spaces
 import Test.Browser.Vault qualified as Vault
+import Test.Browser.Workspace qualified as Workspace
 #endif
 
 -- | Built as a reactor exporting @hs_start@, which the browser test runner
@@ -68,6 +69,7 @@ spec = do
   describe "One space at a time" (Spaces.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
+  describe "Room to write in" (Workspace.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
   describe "Wiki.App.View.History" (History.spec BrowserDOM)
   describe "Wiki.App.View.Slides" (Slides.spec BrowserDOM)

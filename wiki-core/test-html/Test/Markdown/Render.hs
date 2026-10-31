@@ -38,6 +38,12 @@ spec = describe "Markdown.Render" $ do
       "::: incremental\n- a\n\n. . .\n:::" `shows'` "<div class=\"incremental\"><ul><li>a</li></ul></div>"
       "> . . ." `shows'` "<blockquote><p>. . .</p></blockquote>"
 
+  describe "the source lines of a page's blocks (renderLines)" $
+    it "puts an empty marker of each block's line before the block, and nothing inside it" $ do
+      html <- renderHtml . renderLines defaultOptions =<< either (panic . show) pure (parseWithLines "# A\n\ntext\n\n- one\n  - two\n")
+      html
+        `shouldBe` "<span aria-hidden=\"true\" class=\"source-line\" data-line=\"1\"></span><h1 id=\"a\">A<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a\"></a></h1><span aria-hidden=\"true\" class=\"source-line\" data-line=\"3\"></span><p>text</p><span aria-hidden=\"true\" class=\"source-line\" data-line=\"5\"></span><ul><li>one<ul><li>two</li></ul></li></ul>"
+
   describe "mentions" $ do
     let people = defaultOptions {resolveMention = \login -> if login == "ada" then Just MentionTarget {href = "/search/?q=%40ada", name = "Ada Lovelace"} else Nothing}
     it "links a mention of a user known to the options, titled with their name" $

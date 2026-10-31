@@ -195,7 +195,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "<span>Show preview</span>"
     -- The preview is drawn the first time it is asked for.
     html `lacks` "<div class=\"preview\">"
-    html `contains` "<form class=\"editor-form\">"
+    html `contains` "<form class=\"editor-form\" style=\"--editor-font-size: 0.9rem\">"
     html `contains` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
 
   it "asks someone not signed in to choose who they are before editing" $ do

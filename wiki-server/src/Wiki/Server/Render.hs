@@ -176,6 +176,7 @@ statusOf at c = case at of
   Page s p -> ofSpace s `unlessRefused` ofPage s p
   EditPage s p -> ofSpace s `unlessRefused` ofPage s p
   PageSource s p -> ofSpace s `unlessRefused` ofPage s p
+  LivePreview s p -> ofSpace s `unlessRefused` ofPage s p
   PageHistory s p v _ -> ofSpace s `unlessRefused` ofPage s p `unlessRefused` ofVersion s p v
   PageSlides s p _ _ -> ofSpace s `unlessRefused` ofPage s p
   NewPage s _ -> ofSpace s
