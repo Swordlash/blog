@@ -187,10 +187,12 @@ changeKeys user f = sealing (plainChange user f) $ runExceptT (attempt (2 :: Int
 -- | Sync the settings with a passkey: the vault made, sealed with a new
 -- vault key wrapped for the passkey, stored on the server, and the key
 -- kept on this device. A user who has passkeys already (to sign in with,
--- or kept when syncing was turned off) uses one of them: the browser would
--- refuse to make another on the same authenticator, since the wiki names
--- them as made already. A user with none makes one; one without the PRF
--- extension is kept to sign in with, and said so ('newPasskey').
+-- or kept when syncing was turned off) is asked for one of them first: the
+-- browser would refuse to make another on the same authenticator, since
+-- the wiki names them as made already. If that fails (the dialog closed,
+-- no passkey at hand, no PRF output), a new one is made, as for a user who
+-- has none; one without the PRF extension is kept to sign in with, and
+-- said so ('newPasskey').
 turnOnSync :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> m (Either Text Keys)
 turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   record <- refreshed user =<< current user
@@ -206,10 +208,13 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   -- The new vault key can be exported, to be wrapped: the page forgets it
   -- however this ends, and keeps only a copy that cannot be.
   stored' <- withKey (lift (newVaultKey True)) $ \vaultKey -> do
+    -- A passkey the user has may be out of reach (lost, on another
+    -- device) or lack the PRF extension: then a new one is made, on
+    -- another authenticator.
     (credential, wrapping) <-
       if null existing
         then newPasskey password salt
-        else usedPasskey salt Nothing
+        else usedPasskey salt Nothing `recover` const (newPasskey password salt)
     -- A passkey made here goes again if the vault is not stored; one the
     -- user had stays, since it signs them in.
     let made = credential `notElem` map (\p -> p.id) existing

@@ -397,6 +397,19 @@ vault m = do
     map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
     closed ui
 
+  it "makes a new passkey for syncing when the one the user has is not used" $ runPage $ do
+    ui <- opened m True True
+    existing <- fromJSText <$> unsafeIOToPageM js_existing
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    -- The dialog for the passkey the user has is closed: a new one is made.
+    unsafeIOToPageM js_cancel_next
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    kept <- vaultState
+    (field ["passkeys", "0", "id"] kept, length . fromMaybe [] . (>>= arrayOf) $ field ["passkeys"] kept, isJust (field ["passkeys", "1", "wrapped", "key"] kept))
+      `shouldBe` (Just (Aeson.String existing), 2, True)
+    closed ui
+
   it "turns syncing on with a passkey the user has already, making none" $ runPage $ do
     ui <- opened m True True
     existing <- fromJSText <$> unsafeIOToPageM js_existing
