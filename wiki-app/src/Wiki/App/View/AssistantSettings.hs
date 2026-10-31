@@ -284,7 +284,7 @@ component =
                 <button type="button" class="danger assistant-sync-off" disabled={{ isJust sy.working }} onClick={{ const TurnOff }}>Turn off</button>
               </div>
               <p class="account-note assistant-type-here">or type a key here, below: it stays in this browser, and joins your synced keys once you unlock them.</p>
-              <p class="account-note assistant-locked-off">Lost every passkey? "Turn off" deletes the vault and your passkeys on the server, and needs no passkey. The keys in the vault are lost with it; keys typed in this browser stay here.</p>
+              <p class="account-note assistant-locked-off">Lost every passkey? "Turn off" deletes the vault on the server, and needs no passkey; your passkeys stay, to sign in with. The keys in the vault are lost with it; keys typed in this browser stay here.</p>
             {% else %}
               {% if sy.synced %}
                 <p class="assistant-sync-state assistant-sync-on">Sync across devices: on. Your keys are sealed in a vault this wiki's server keeps and cannot open; one of your passkeys opens it on your other devices, with one touch.</p>

@@ -608,10 +608,10 @@ registrationOptions =
     }
 
 registrationResponse :: RegistrationResponse
-registrationResponse = RegistrationResponse {id = CredentialId "Y3JlZGVudGlhbC0y", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0", attestationObject = "o2NmbXRkbm9uZQ"}
+registrationResponse = RegistrationResponse {id = CredentialId "Y3JlZGVudGlhbC0y", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0", attestationObject = "o2NmbXRkbm9uZQ", name = Just "Laptop"}
 
 assertionOptions :: AssertionOptions
 assertionOptions = AssertionOptions {challenge = "Y2hhbGxlbmdlLW9mLXRoaXJ0eS10d28tYnl0ZXMtLS0", rpId = "wiki.example.org", allow = [CredentialId "Y3JlZGVudGlhbC0x"]}
 
 assertionResponse :: AssertionResponse
-assertionResponse = AssertionResponse {id = CredentialId "Y3JlZGVudGlhbC0x", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", authenticatorData = "YXV0aGVudGljYXRvci1kYXRh", signature = "c2lnbmF0dXJl"}
+assertionResponse = AssertionResponse {id = CredentialId "Y3JlZGVudGlhbC0x", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", authenticatorData = "YXV0aGVudGljYXRvci1kYXRh", signature = "c2lnbmF0dXJl", userHandle = Just "dXNlci0x"}

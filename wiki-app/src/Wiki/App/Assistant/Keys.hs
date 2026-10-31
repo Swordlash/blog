@@ -470,8 +470,8 @@ localKey user = do
 
 -- | Make a passkey for the wiki, checked by the server, and the key that
 -- wraps the vault key for it: from its PRF output at once, or by using it
--- once. A passkey without the PRF extension is removed from the server
--- and from the person's password manager, and said so.
+-- once. A passkey without the PRF extension cannot wrap the vault key; it
+-- is kept, since it signs the user in (WP5.30), and the person is told.
 newPasskey :: (MonadAssistant m, MonadVault m) => Text -> Step m (CredentialId, KeyRef)
 newPasskey salt = do
   options <- server beginRegistration
@@ -485,10 +485,8 @@ newPasskey salt = do
     server (finishRegistration made.response)
       `recover` \why -> lift (discardPasskey options.rpId credential) >> forgetWrapping >> throwError why
   unless made.prf $ do
-    lift (void (dropPasskey credential))
-    lift (discardPasskey options.rpId credential)
     forgetWrapping
-    throwError "This passkey cannot sync the keys: it has no PRF extension, which the browser or the password manager that keeps it does not offer. It was removed. Try a passkey kept elsewhere (Google Password Manager, iCloud Keychain, Windows Hello, a security key)."
+    throwError "This passkey cannot sync the keys: it has no PRF extension, which the browser or the password manager that keeps it does not offer. It was kept to sign in with, and is listed under Passkeys in your account. Try a passkey kept elsewhere (Google Password Manager, iCloud Keychain, Windows Hello, a security key)."
   case made.wrapping of
     Just wrapping -> pure (credential, wrapping)
     Nothing ->

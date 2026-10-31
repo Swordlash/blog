@@ -15,6 +15,12 @@
 --   recovery codes come with it, shown this once, until "I have kept
 --   them". When it is on, the section says how many recovery codes are
 --   left, and it is turned off with a code.
+-- * __Passkeys.__ The user's passkeys (WP5.30 of docs/PLAN.md), each
+--   with its name, when it was added and when it was last used, and
+--   "Remove"; "Add a passkey" makes one with the name typed beside it.
+--   Each signs the user in; those the writing assistant's vault has a key
+--   for also unlock it, which the list says. A browser offers passkeys only
+--   to a secure page, so over plain HTTP the section says that instead.
 -- * __E-mail.__ The address, whether it is verified, a form to set another
 --   one (a verification link is mailed there), "Send the link again" while
 --   it is not verified, and "Remove". Without mail it is disabled, saying
@@ -58,6 +64,10 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Security (EmailState (..), RecoveryCodes (..), SecondFactorState (..), SessionRef, SessionSummary (..), TotpEnrolment (..))
+import Wiki.Api.Vault (PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..))
+import Wiki.App.Assistant (Made (..), MonadAssistant (..), PasskeyRefusal (..))
+import Wiki.App.Assistant.Sync (MonadVault (..))
+import Wiki.Core.Assistant.Vault (CredentialId)
 import Wiki.App.Account (codeErrorText, passwordErrorText)
 import Wiki.App.Backend (WikiError)
 import Wiki.App.Editor.Browser (focusElement)
@@ -91,6 +101,13 @@ data State = State
   , busy :: Bool
   , codeField :: H.RefLabel
   , emailField :: H.RefLabel
+  , keysKept :: Bool
+  -- ^ Whether a server keeps passkeys: not in the demo.
+  , keysHere :: Bool
+  -- ^ Whether the browser offers passkeys to this page.
+  , keys :: Maybe (Either WikiError [PasskeyInfo])
+  , typedKeyName :: Text
+  , keysProblem :: Maybe Text
   }
 
 -- | Which of the address's forms is open.
@@ -122,8 +139,11 @@ data Action
   | SaveEmail
   | ResendEmail
   | ClearEmail
+  | TypedKeyName Text
+  | AddKey
+  | RemoveKey CredentialId
 
-component :: forall query input output m. (MonadSecurity m, MonadUUID m, MonadIO m) => H.Component query input output m
+component :: forall query input output m. (MonadSecurity m, MonadVault m, MonadAssistant m, MonadUUID m, MonadIO m) => H.Component query input output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -153,6 +173,11 @@ component =
               , busy = False
               , codeField
               , emailField
+              , keysKept = False
+              , keysHere = False
+              , keys = Nothing
+              , typedKeyName = ""
+              , keysProblem = Nothing
               }
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.initialize = Just Initialize}
@@ -169,6 +194,10 @@ component =
           <section class="account-second-factor" aria-label="Second factor">
             <h3>Second factor</h3>
             {{ factorView st }}
+          </section>
+          <section class="account-passkeys" aria-label="Passkeys">
+            <h3>Passkeys</h3>
+            {{ keysView st }}
           </section>
           <section class="account-email" aria-label="E-mail address">
             <h3>E-mail address</h3>
@@ -204,6 +233,44 @@ component =
             {% end %}
           </div>
         |]
+
+    keysView :: State -> H.ComponentHTML Action Empty m
+    keysView st
+      | not st.keysKept = [hh|<p class="account-note">Passkeys are kept by a wiki on a server; this one has none.</p>|]
+      | not st.keysHere = [hh|<p class="account-note passkeys-unavailable">A browser offers passkeys only on a page served over HTTPS: open this wiki at its HTTPS address to add one or sign in with one.</p>|]
+      | otherwise = case st.keys of
+          Nothing -> [hh|<p class="loading">Loading…</p>|]
+          Just (Left e) -> [hh|<p class="error" role="alert">{{ errorMessage e }}</p>|]
+          Just (Right ks) ->
+            [hh|
+              <div>
+                <p class="account-note">A passkey signs you in without your password or a code, with your device's fingerprint, face or PIN.</p>
+                <ul class="passkey-list">
+                  {% for k in ks %}
+                    <li class="passkey-item">
+                      <span class="passkey-name">{{ k.name }}</span>
+                      <span class="passkey-times">{{ "Added " <> stamped k.createdAt <> maybe ", never used" (\t -> ", last used " <> stamped t) k.lastUsedAt }}</span>
+                      {% if k.unlocks %}
+                        <span class="passkey-unlocks">Also unlocks your assistant's keys</span>
+                      {% end %}
+                      <button type="button" class="passkey-remove" disabled={{ st.busy }} onClick={{ const (RemoveKey k.id) }}>Remove</button>
+                    </li>
+                  {% end %}
+                </ul>
+                <form class="passkey-add" aria-label="Add a passkey" {{ HE.preventingDefault (HE.onSubmit (const AddKey)) }}>
+                  <label class="field">
+                    <span>Name</span>
+                    <input type="text" name="passkey-name" maxlength="100" placeholder="This device" onValueInput={{ TypedKeyName }}>
+                  </label>
+                  <button type="submit" disabled={{ st.busy }}>Add a passkey</button>
+                </form>
+                <div class="sign-in-told">
+                  {% for p in maybeToList st.keysProblem %}
+                    <p class="error passkeys-error" role="alert">{{ p }}</p>
+                  {% end %}
+                </div>
+              </div>
+            |]
 
     factorView :: State -> H.ComponentHTML Action Empty m
     factorView st
@@ -384,6 +451,39 @@ component =
         modify (\st -> st {factor = Just factor})
         mailbox <- lift ownEmail
         modify (\st -> st {mailbox = Just mailbox})
+        keysKept <- lift vaultSync
+        keysHere <- lift passkeysHere
+        modify (\st -> st {keysKept, keysHere})
+        when (keysKept && keysHere) $ do
+          keys <- lift listPasskeys
+          modify (\st -> st {keys = Just keys})
+      TypedKeyName t -> modify (\st -> st {typedKeyName = t})
+      AddKey -> busily $ do
+        modify (\st -> st {keysProblem = Nothing})
+        lift beginRegistration >>= \case
+          Left e -> modify (\st -> st {keysProblem = Just (errorMessage e)})
+          Right options ->
+            -- No salt: a passkey added here signs in, and wraps no vault
+            -- key until the assistant asks it to.
+            lift (createPasskey options "" "") >>= \case
+              Left Cancelled -> pass
+              Left (PasskeyFailed why) -> modify (\st -> st {keysProblem = Just why})
+              Right made -> do
+                name <- gets (\st -> T.strip st.typedKeyName)
+                let r = made.response
+                    named = RegistrationResponse {id = r.id, clientDataJSON = r.clientDataJSON, attestationObject = r.attestationObject, name = if T.null name then Nothing else Just name}
+                lift (finishRegistration named) >>= \case
+                  Left e -> do
+                    lift (discardPasskey options.rpId made.response.id)
+                    modify (\st -> st {keysProblem = Just (errorMessage e)})
+                  Right _ -> do
+                    keys <- lift listPasskeys
+                    modify (\st -> st {keys = Just keys})
+      RemoveKey i -> busily $ do
+        modify (\st -> st {keysProblem = Nothing})
+        lift (dropPasskey i) >>= \case
+          Left e -> modify (\st -> st {keysProblem = Just (errorMessage e)})
+          Right keys -> modify (\st -> st {keys = Just (Right keys)})
       EndSession ref -> sessionsChange (endOwnSession ref)
       EndOthers -> sessionsChange endOtherSessions
       StartTotp ->

@@ -25,7 +25,15 @@ const wikiTestPasskeys = {
   cancelNext: false,
   cancelAt: null,
   touches: 0,
+  // The login field's offer of passkeys (conditional mediation) waiting
+  // for the person to pick one: its resolve, which wiki_test_passkeys_pick
+  // calls.
+  offered: null,
+  insecure: null,
 };
+
+// The user handle the stub's passkeys were made for: the test's user.
+const wikiTestUserHandle = wikiTestBytes("user-editor").buffer;
 
 function wikiTestBytes(text) {
   return new TextEncoder().encode(text);
@@ -69,12 +77,22 @@ const wikiTestCredentials = {
       getClientExtensionResults: () => (wikiTestPasskeys.prf ? { prf: { enabled: true, ...(output ? { results: { first: output } } : {}) } } : {}),
     };
   },
-  async get({ publicKey }) {
+  async get({ publicKey, mediation, signal }) {
+    if (mediation === "conditional") {
+      // The offer in the login field waits until a passkey is picked there,
+      // or until the page ends it.
+      await new Promise((resolve, reject) => {
+        wikiTestPasskeys.offered = resolve;
+        signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+      wikiTestPasskeys.offered = null;
+    }
     wikiTestTouch();
     const allowed = (publicKey.allowCredentials ?? []).map((c) => wikiTestBase64(c.id));
-    const chosen = allowed.find((id) => wikiTestPasskeys.credentials.includes(id));
+    // With none named, any passkey the stub has for the site: the first.
+    const chosen = allowed.length === 0 ? wikiTestPasskeys.credentials[0] : allowed.find((id) => wikiTestPasskeys.credentials.includes(id));
     if (chosen === undefined) throw new DOMException("No passkey for this site.", "NotAllowedError");
-    const id = (publicKey.allowCredentials ?? []).find((c) => wikiTestBase64(c.id) === chosen).id;
+    const id = Uint8Array.fromBase64(chosen, { alphabet: "base64url" }).buffer;
     const first = publicKey.extensions?.prf?.eval?.first;
     const output = wikiTestPasskeys.prf && first ? await wikiTestPrf(id, first) : undefined;
     const clientData = JSON.stringify({ type: "webauthn.get", challenge: wikiTestBase64(publicKey.challenge), origin: location.origin });
@@ -85,7 +103,7 @@ const wikiTestCredentials = {
         clientDataJSON: wikiTestBytes(clientData).buffer,
         authenticatorData: new Uint8Array(37).buffer,
         signature: new Uint8Array([0x30, 0]).buffer,
-        userHandle: null,
+        userHandle: wikiTestUserHandle,
       },
       getClientExtensionResults: () => (output ? { prf: { results: { first: output } } } : {}),
     };
@@ -98,13 +116,48 @@ const wikiTestCredentials = {
 function wiki_test_passkeys_install(prf, prfAtCreate) {
   if (wikiTestPasskeys.original === null) wikiTestPasskeys.original = Object.getOwnPropertyDescriptor(navigator, "credentials") ?? false;
   Object.defineProperty(navigator, "credentials", { value: wikiTestCredentials, configurable: true });
-  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0 });
+  if (wikiTestPasskeys.conditional === undefined) wikiTestPasskeys.conditional = Object.getOwnPropertyDescriptor(PublicKeyCredential, "isConditionalMediationAvailable") ?? null;
+  Object.defineProperty(PublicKeyCredential, "isConditionalMediationAvailable", { value: async () => true, configurable: true });
+  Object.assign(wikiTestPasskeys, { credentials: [], prf, prfAtCreate, cancelNext: false, cancelAt: null, touches: 0, offered: null });
 }
 
 function wiki_test_passkeys_uninstall() {
   delete globalThis.wikiAssistantScript;
   delete navigator.credentials;
+  delete PublicKeyCredential.isConditionalMediationAvailable;
+  if (wikiTestPasskeys.conditional) Object.defineProperty(PublicKeyCredential, "isConditionalMediationAvailable", wikiTestPasskeys.conditional);
   if (wikiTestPasskeys.original) Object.defineProperty(navigator, "credentials", wikiTestPasskeys.original);
+  if (wikiTestPasskeys.insecure !== null) {
+    delete globalThis.isSecureContext;
+    wikiTestPasskeys.insecure = null;
+  }
+}
+
+// A passkey the stub already has, as on a device where one was made
+// before: its credential id, which the vault's server keeps too.
+function wiki_test_passkeys_existing() {
+  const id = wikiTestBase64(crypto.getRandomValues(new Uint8Array(16)));
+  wikiTestPasskeys.credentials.push(id);
+  wikiTestVault.passkeys.push({ id, name: "My laptop", wrapped: null });
+  return id;
+}
+
+// Whether the login field offers passkeys now (a conditional request is
+// waiting).
+function wiki_test_passkeys_offered() {
+  return wikiTestPasskeys.offered !== null;
+}
+
+// The person picks the passkey the login field offers.
+function wiki_test_passkeys_pick() {
+  wikiTestPasskeys.offered?.();
+}
+
+// The page as one served over plain HTTP to another machine: not a secure
+// context, where a browser offers no passkeys.
+function wiki_test_passkeys_insecure() {
+  wikiTestPasskeys.insecure = true;
+  Object.defineProperty(globalThis, "isSecureContext", { value: false, configurable: true });
 }
 
 // How many times a passkey was made or used: the person's touches.
@@ -140,7 +193,7 @@ function wikiTestInfo(p) {
 }
 
 function wikiTestVaultServer(request) {
-  const path = request.url.replace(/^.*api\/v1\/assistant\//, "");
+  const path = request.url.replace(/^.*api\/v1\/(?:assistant|account)\//, "");
   if (path === request.url) return null;
   const header = (name) => Object.entries(request.headers).find(([k]) => k.toLowerCase() === name)?.[1];
   const challenge = wikiTestBase64(crypto.getRandomValues(new Uint8Array(32)));
@@ -166,7 +219,9 @@ function wikiTestVaultServer(request) {
     return wikiTestJson(200, wikiTestStored());
   }
   if (path === "vault" && request.method === "DELETE") {
-    Object.assign(wikiTestVault, { vault: null, passkeys: [] });
+    // The passkeys stay, since they sign the user in; their wrapped keys go.
+    wikiTestVault.vault = null;
+    for (const p of wikiTestVault.passkeys) p.wrapped = null;
     return { status: 204, body: "" };
   }
   if (path === "passkeys" && request.method === "GET") return wikiTestJson(200, wikiTestVault.passkeys.map(wikiTestInfo));
@@ -183,7 +238,7 @@ function wikiTestVaultServer(request) {
   }
   if (path === "passkeys/registration" && request.method === "PUT") {
     const sent = JSON.parse(request.body);
-    const p = { id: sent.id, name: `Passkey ${wikiTestVault.passkeys.length + 1}`, wrapped: null };
+    const p = { id: sent.id, name: sent.name ?? `Passkey ${wikiTestVault.passkeys.length + 1}`, wrapped: null };
     wikiTestVault.passkeys.push(p);
     return wikiTestJson(200, wikiTestInfo(p));
   }

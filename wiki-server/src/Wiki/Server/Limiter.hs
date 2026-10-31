@@ -11,6 +11,10 @@
 -- otherwise reset). Nothing is kept across a restart, nor shared between
 -- servers: whoever restarts a server to guess faster already owns it.
 --
+-- A sign-in with a passkey alone names no login until the passkey is
+-- found ('addressVerdict', 'failedAt'): a failure before that counts
+-- against the address only.
+--
 -- The stored failures are pruned whenever they are checked, and a map
 -- grown past 'maxKeys' (someone trying very many logins) has its old
 -- entries removed at once, so that memory stays bounded.
@@ -21,7 +25,9 @@ module Wiki.Server.Limiter
   , newLimiter
   , Verdict (..)
   , verdict
+  , addressVerdict
   , failed
+  , failedAt
   , succeeded
   )
 where
@@ -86,6 +92,23 @@ verdict l now login address = atomicModifyIORef' l.failures $ \m ->
         , let seconds = ceiling (diffUTCTime (addUTCTime l.limits.window oldest) now) :: Int
         ]
    in (pruned, maybe Allowed (Refused . max 1) (maximumMay waits))
+
+-- | Whether an address may try to sign in now, by its own limit alone:
+-- for an attempt that names no login yet.
+addressVerdict :: Limiter -> UTCTime -> Text -> IO Verdict
+addressVerdict l now address = atomicModifyIORef' l.failures $ \m ->
+  let pruned = prune l.limits now m
+      recent = Map.findWithDefault [] (Address address) pruned
+      answer = case lastMay (take l.limits.perAddress recent) of
+        Just oldest | length recent >= l.limits.perAddress -> Refused (max 1 (ceiling (diffUTCTime (addUTCTime l.limits.window oldest) now)))
+        _ -> Allowed
+   in (pruned, answer)
+
+-- | Count a failed attempt that named no login, against its address.
+failedAt :: Limiter -> UTCTime -> Text -> IO ()
+failedAt l now address = atomicModifyIORef' l.failures $ \m ->
+  let pruned = if Map.size m > maxKeys then prune l.limits now m else m
+   in (Map.insertWith (<>) (Address address) [now] pruned, ())
 
 -- | Count a failed attempt.
 failed :: Limiter -> UTCTime -> Text -> Text -> IO ()

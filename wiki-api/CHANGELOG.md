@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Passkeys are the account's (WP5.30): the list, the registration and the
+removal move from `assistant/passkeys` to `account/passkeys`, and
+`RegistrationResponse` gains an optional `name`. `AssertionResponse` gains
+an optional `userHandle`. New routes sign in with a passkey:
+`session/passkey`, and `session/second-factor/passkey` in place of a code.
+
 Add GET api/v1/home for the real root document. Home settings update section/public-reader switches while preserving current page content and the storage-owned reference; ordinary versioned page operations edit content. Keep Closed access for all other wiki content.
 
 Add `HomePage` to server settings and reader sessions, with directory defaults for older JSON. `PUT api/v1/admin/home-page` replaces only this public configuration. Closed-wiki anonymous sessions receive defaults instead of saved content.

@@ -4,9 +4,9 @@
 -- through the @webauthn@ package (WP5.27): the package reads what the
 -- browser sends and checks it, and this module says what the wiki asks of
 -- a passkey and turns the package's errors into sentences. A passkey is
--- registered ('verifyRegistration') and then used ('verifyAssertion') to
--- unlock the assistant's vault ("Wiki.Server.Vault"). Neither signs anyone
--- in.
+-- registered ('verifyRegistration') and then used ('verifyAssertion'):
+-- to sign its owner in (WP5.30), as the second step of a sign-in, and to
+-- unlock the assistant's vault ("Wiki.Server.Vault").
 --
 -- = Registration
 --
@@ -33,6 +33,14 @@
 -- each time, and a number that is not higher than the last suggests a
 -- copy of the passkey ('CounterWentBack'). A passkey synced across devices
 -- counts nothing, and sends 0 each time, which is accepted.
+--
+-- An assertion also names the user the passkey was made for, the user
+-- handle, which the browser passes on from the authenticator. When the
+-- wiki knows already who is asking (a signed-in user unlocking their
+-- vault, or someone half signed in with their password), the passkey must
+-- be theirs. When it does not (a sign-in with a passkey alone), the user
+-- handle is what says whose passkey it is, so it must be there, and be the
+-- passkey's owner's ('Signer').
 module Wiki.Server.WebAuthn
   ( -- * What is checked
     Expected (..)
@@ -43,7 +51,10 @@ module Wiki.Server.WebAuthn
 
     -- * Assertion
   , StoredKey (..)
+  , Answer (..)
+  , Signer (..)
   , AssertionRefusal (..)
+  , challengeOf
   , verifyAssertion
 
     -- * The parts
@@ -227,24 +238,46 @@ data AssertionRefusal
     CounterWentBack Word32 Word32
   deriving stock (Eq, Show)
 
--- | Check an assertion of a stored passkey, from its client data,
--- authenticator data and signature; the passkey's new signature counter,
--- or why it is refused.
+-- | 'Answer': the browser's answer to an assertion, as bytes: the client
+-- data, the authenticator data, the signature over both, and the user
+-- handle the authenticator gave, if any.
+data Answer = Answer
+  { clientData :: ByteString
+  , authenticatorData :: ByteString
+  , signature :: ByteString
+  , userHandle :: Maybe ByteString
+  }
+  deriving stock (Eq, Show)
+
+-- | 'Signer': whose passkey an assertion must be, by user handle (the
+-- bytes of the user's id, as a registration gives it).
+data Signer
+  = -- | The wiki knows who asks, and the passkey is theirs: a user handle in
+    -- the answer, which is optional, must be theirs too.
+    Identified ByteString
+  | -- | The wiki does not know who asks; the passkey's owner is this user,
+    -- and the answer must name them by their user handle.
+    Unnamed ByteString
+  deriving stock (Eq, Show)
+
+-- | Check an assertion of a stored passkey; the passkey's new signature
+-- counter, or why it is refused.
 --
--- The wiki looks a passkey up by its credential id, and a passkey belongs
--- to the user whose vault it unlocks, so the package is given neither: the
--- credential id and the user handle it compares are the same empty ones on
+-- The wiki looks a passkey up by its credential id itself, so the package
+-- is given none: the credential id it compares is the same empty one on
 -- both sides.
-verifyAssertion :: Expected -> StoredKey -> ByteString -> ByteString -> ByteString -> Either AssertionRefusal Word32
-verifyAssertion expected stored clientData authBytes signature = do
-  client <- first Refused (clientDataFor "webauthn.get" clientData (decodeCollectedClientData @'Authentication clientData))
-  authData <- first (const (Refused "its authenticator data is not what an authenticator writes")) (decodeAuthenticatorData @'Authentication authBytes)
+verifyAssertion :: Expected -> Signer -> StoredKey -> Answer -> Either AssertionRefusal Word32
+verifyAssertion expected signer stored answer = do
+  client <- first Refused (clientDataFor "webauthn.get" answer.clientData (decodeCollectedClientData @'Authentication answer.clientData))
+  authData <- first (const (Refused "its authenticator data is not what an authenticator writes")) (decodeAuthenticatorData @'Authentication answer.authenticatorData)
   origins <- first Refused (originsOf expected)
-  let nobody = M.UserHandle ""
+  let (owner, identified) = case signer of
+        Identified h -> (M.UserHandle h, Just (M.UserHandle h))
+        Unnamed h -> (M.UserHandle h, Nothing)
       entry =
         CredentialEntry
           { ceCredentialId = M.CredentialId ""
-          , ceUserHandle = nobody
+          , ceUserHandle = owner
           , cePublicKeyBytes = M.PublicKeyBytes (canonicalCoseKey stored.publicKey)
           , ceSignCounter = M.SignatureCounter stored.signCount
           , ceTransports = []
@@ -262,16 +295,23 @@ verifyAssertion expected stored clientData authBytes signature = do
       credential =
         M.Credential
           { cIdentifier = M.CredentialId ""
-          , cResponse = M.AuthenticatorResponseAuthentication {araClientData = client, araAuthenticatorData = authData, araSignature = M.AssertionSignature signature, araUserHandle = Nothing}
+          , cResponse = M.AuthenticatorResponseAuthentication {araClientData = client, araAuthenticatorData = authData, araSignature = M.AssertionSignature answer.signature, araUserHandle = M.UserHandle <$> answer.userHandle}
           , cAuthenticatorAttachment = Nothing
           , cClientExtensionResults = M.AuthenticationExtensionsClientOutputs {aecoCredProps = Nothing}
           }
       received = M.unSignatureCounter authData.adSignCount
-  result <- first (Refused . assertionRefusal . NonEmpty.head) (outcome (verifyAuthenticationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) (Just nobody) entry options credential))
+  result <- first (Refused . assertionRefusal . NonEmpty.head) (outcome (verifyAuthenticationResponse origins (M.RpIdHash (hashWith SHA256 (encodeUtf8 expected.rpId))) identified entry options credential))
   case result.arSignatureCounterResult of
     SignatureCounterZero -> Right 0
     SignatureCounterUpdated counter -> Right (M.unSignatureCounter counter)
     SignatureCounterPotentiallyCloned -> Left (CounterWentBack stored.signCount received)
+
+-- | The challenge a ceremony's client data answers, which a sign-in with
+-- a passkey finds its waiting challenge by: there is no session to keep it
+-- for yet. Whether it is the challenge the wiki gave is checked when the
+-- answer is ('verifyAssertion').
+challengeOf :: ByteString -> Maybe ByteString
+challengeOf raw = decodeStrict raw >>= parseMaybe (withObject "client data" (.: "challenge")) >>= fromBase64Url
 
 -- | Why an assertion is refused, as a sentence.
 assertionRefusal :: AuthenticationError -> Text
@@ -286,7 +326,7 @@ assertionRefusal = \case
   AuthenticationCredentialDisallowed _ _ -> "it is not a passkey the wiki asked for"
   AuthenticationIdentifiedUserHandleMismatch _ _ -> "it is another user's passkey"
   AuthenticationCredentialUserHandleMismatch _ _ -> "it is another user's passkey"
-  AuthenticationCannotVerifyUserHandle -> "it names no user"
+  AuthenticationCannotVerifyUserHandle -> "the authenticator did not say whose passkey it is"
 
 --------------------------------------------------------------------------------
 -- The parts

@@ -462,8 +462,9 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **Blogs**: a space shown as a blog lists its pages as posts, newest first,
   with an Atom and an RSS feed over `wiki-server`.
 - **Users, groups and permissions** to view, edit or administer a space; over
-  `wiki-server`, accounts with passwords, a second factor, sign-in with Google,
-  GitHub, Apple or any OpenID Connect provider, and invitations.
+  `wiki-server`, accounts with passwords, a second factor, passkeys
+  ([below](#passkeys)), sign-in with Google, GitHub, Apple or any OpenID
+  Connect provider, and invitations.
 - **Export** of a page or a space as Word, a web page, an e-book, a PDF, a deck
   as PowerPoint or Beamer (over `wiki-server`), and of the whole wiki as a zip
   file, which another wiki, the demo's or a server's, imports.
@@ -475,6 +476,19 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **For the operator** of `wiki-server`: backups (before every deploy, on a
   schedule, copied off the machine), an administration panel, health and
   Prometheus metrics ([below](#the-wikis-server)).
+
+### Passkeys
+
+Over `wiki-server`, a passkey signs you in without your password or a code.
+Add one under **Passkeys** in your account panel (click your name), with a
+name for the device; the list says when each was added and last used, and
+removes one. Then **Sign in with a passkey** under the sign-in form opens
+the browser's dialog, and browsers that can also offer your passkey in the
+login field as you focus it. The authenticator verifies you (fingerprint,
+face, PIN), so a passkey counts as both factors and no code is asked for.
+After a password, the second factor's form offers **Use a passkey instead**.
+The passkeys the assistant's syncing uses below are the same ones. Like
+syncing, passkeys need HTTPS (or the machine's own address).
 
 ### Keys across devices
 
@@ -490,7 +504,8 @@ across devices**:
   passkey's PRF extension gives the browser a secret no one else can compute;
   the vault key is encrypted with a key derived from it, and the server keeps
   the sealed settings and that encrypted vault key, neither of which it can
-  open. A passkey without the PRF extension is said to be one, and removed.
+  open. A passkey without the PRF extension is said to be one; it cannot
+  sync the keys, and is kept to sign in with.
 - **Unlock with passkey**, on another device: one touch, and the keys are
   there. A key typed there before unlocking stays there, and joins the
   synced keys once you unlock; it never replaces a synced one.
@@ -500,9 +515,9 @@ across devices**:
   passkey you have, then the new one), **Remove**, and **Ask for the
   passkey each time the wiki opens**, which keeps no key on the device, only
   the sealed vault.
-- **Turn off** deletes the vault and the passkeys on the server and needs no
-  passkey, which is the way back after losing every one; the keys stay in
-  your browsers.
+- **Turn off** deletes the vault on the server and needs no passkey, which
+  is the way back after losing every one; the keys stay in your browsers,
+  and the passkeys stay, to sign in with.
 
 Passkeys need HTTPS (or the machine's own address), so over plain HTTP the
 page says so instead. A browser offers no encryption to such a page either:

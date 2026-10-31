@@ -58,6 +58,7 @@ module Wiki.App.Account
   , accountErrorText
   , passwordErrorText
   , codeErrorText
+  , passkeyErrorText
   , Accounts (..)
   , accounts
   )
@@ -70,6 +71,7 @@ import Halogen.Subscription (Emitter)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, PasswordChange, SignInMethods)
 import Wiki.Api.Security (ResetToken, VerificationToken)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.User (Password (..))
 
@@ -114,6 +116,14 @@ codeErrorText :: SignInError -> Text
 codeErrorText = \case
   WrongCredentials -> "That code is not right: type the one your application shows now, or a recovery code."
   SignInFailed Forbidden -> "The server refused the code from this page. Reload it and try again."
+  e -> signInErrorText e
+
+-- | Why a passkey did not sign someone in, in words for a person to read:
+-- as for signing in, except that the credential is the passkey.
+passkeyErrorText :: SignInError -> Text
+passkeyErrorText = \case
+  WrongCredentials -> "That passkey did not sign you in: its account may be disabled."
+  SignInFailed Forbidden -> "The server refused the passkey from this page. Reload it and try again."
   e -> signInErrorText e
 
 -- | Why changing one's own password failed, in words for a person to read:
@@ -188,6 +198,31 @@ class (Monad m) => MonadAccount m where
   default confirmSecondFactor :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> m (Either SignInError Session)
   confirmSecondFactor = lift . confirmSecondFactor
 
+  -- | The options of a sign-in with a passkey alone (WP5.30 of
+  -- docs/PLAN.md), with the server's challenge, for the browser to offer
+  -- the passkeys it has for the wiki.
+  beginPasskeySignIn :: m (Either SignInError AssertionOptions)
+  default beginPasskeySignIn :: (MonadTrans t, m ~ t n, MonadAccount n) => m (Either SignInError AssertionOptions)
+  beginPasskeySignIn = lift beginPasskeySignIn
+
+  -- | Sign in with the browser's answer to those options. The result is
+  -- the new session; a passkey asks for no second factor.
+  finishPasskeySignIn :: AssertionResponse -> m (Either SignInError Session)
+  default finishPasskeySignIn :: (MonadTrans t, m ~ t n, MonadAccount n) => AssertionResponse -> m (Either SignInError Session)
+  finishPasskeySignIn = lift . finishPasskeySignIn
+
+  -- | The options of the second step of a sign-in by one of the user's
+  -- passkeys instead of a code.
+  beginSecondFactorPasskey :: m (Either SignInError AssertionOptions)
+  default beginSecondFactorPasskey :: (MonadTrans t, m ~ t n, MonadAccount n) => m (Either SignInError AssertionOptions)
+  beginSecondFactorPasskey = lift beginSecondFactorPasskey
+
+  -- | Complete that sign-in with the browser's answer, as
+  -- 'confirmSecondFactor' with a code.
+  finishSecondFactorPasskey :: AssertionResponse -> m (Either SignInError Session)
+  default finishSecondFactorPasskey :: (MonadTrans t, m ~ t n, MonadAccount n) => AssertionResponse -> m (Either SignInError Session)
+  finishSecondFactorPasskey = lift . finishSecondFactorPasskey
+
   -- | Ask for a password reset link, by login or e-mail address. It is
   -- mailed only to a verified address, and the answer is the same either
   -- way. 'TooManyAttempts' when asked too often; 'SignInFailed' with
@@ -225,6 +260,10 @@ data Accounts m = Accounts
   , unlinkIdentity :: Text -> m (Either WikiError SignInMethods)
   , changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
   , confirmSecondFactor :: Text -> m (Either SignInError Session)
+  , beginPasskeySignIn :: m (Either SignInError AssertionOptions)
+  , finishPasskeySignIn :: AssertionResponse -> m (Either SignInError Session)
+  , beginSecondFactorPasskey :: m (Either SignInError AssertionOptions)
+  , finishSecondFactorPasskey :: AssertionResponse -> m (Either SignInError Session)
   , requestPasswordReset :: Text -> m (Either SignInError ())
   , resetPassword :: ResetToken -> Password -> m (Either WikiError ())
   , verifyEmail :: VerificationToken -> m (Either WikiError ())
@@ -232,4 +271,4 @@ data Accounts m = Accounts
 
 -- | The methods, from the monad's instance.
 accounts :: (MonadAccount m) => Accounts m
-accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity, changePassword, confirmSecondFactor, requestPasswordReset, resetPassword, verifyEmail}
+accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity, changePassword, confirmSecondFactor, beginPasskeySignIn, finishPasskeySignIn, beginSecondFactorPasskey, finishSecondFactorPasskey, requestPasswordReset, resetPassword, verifyEmail}

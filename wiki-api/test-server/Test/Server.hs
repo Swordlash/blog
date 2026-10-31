@@ -41,7 +41,7 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
-import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..))
@@ -89,6 +89,16 @@ stubs =
         if body.code == "287082"
           then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
           else refuse Unauthenticated
+    , beginSecondFactorPasskey = pure Sample.assertionOptions
+    , finishSecondFactorPasskey = \answer ->
+        if answer.id == Sample.passkeyInfo.id
+          then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
+          else refuse Unauthenticated
+    , beginPasskeySignIn = pure anyPasskey
+    , finishPasskeySignIn = \answer ->
+        if answer.id == Sample.passkeyInfo.id
+          then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
+          else refuse (Invalid "This passkey is not one of this wiki's.")
     , passwordReset =
         PasswordResetApi
           { request = \body -> if body.login == "" then refuse (Invalid "Give a login.") else pure NoContent
@@ -121,6 +131,10 @@ stubs =
           , sessions = pure Sample.sessions
           , endSession = \ref -> if ref == SessionRef "4e5f6a7b" then pure (take 1 Sample.sessions) else refuse NotFound
           , endOtherSessions = pure (take 1 Sample.sessions)
+          , passkeys = pure [Sample.passkeyInfo]
+          , beginRegistration = pure Sample.registrationOptions
+          , finishRegistration = \_ -> pure Sample.passkeyInfo
+          , removePasskey = \i -> if i == Sample.passkeyInfo.id then pure [] else refuse NotFound
           , secondFactorState = pure Sample.secondFactor
           , enrolTotp = \body -> if body.password == Just (Password "the current one") then pure Sample.enrolment else refuse Unauthenticated
           , confirmTotp = \body -> if body.code == "287082" then pure RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]} else refuse Unauthenticated
@@ -307,14 +321,19 @@ stubs =
           { vault = \known -> if known == Just Sample.storedVault.tag then throwError err304 else pure (addHeader Sample.storedVault.tag Sample.storedVault)
           , storeVault = \base _ -> if base == Just Sample.storedVault.tag then pure Sample.storedVault else refuse (Conflict "The vault was changed on another device meanwhile.")
           , deleteVault = pure NoContent
-          , passkeys = pure [Sample.passkeyInfo]
-          , beginRegistration = pure Sample.registrationOptions
-          , finishRegistration = \_ -> pure Sample.passkeyInfo
           , beginAssertion = pure Sample.assertionOptions
           , finishAssertion = \_ -> pure Sample.passkeyInfo
-          , removePasskey = \i -> if i == Sample.passkeyInfo.id then pure [] else refuse NotFound
           }
     }
+
+-- | The options of a sign-in with a passkey alone: the sample's, naming
+-- no passkey.
+anyPasskey :: AssertionOptions
+anyPasskey = AssertionOptions {challenge = Sample.assertionOptions.challenge, rpId = Sample.assertionOptions.rpId, allow = []}
+
+-- | The sample answer, from a passkey the server does not know.
+otherAnswer :: AssertionResponse
+otherAnswer = let r = Sample.assertionResponse in AssertionResponse {id = CredentialId "other", clientDataJSON = r.clientDataJSON, authenticatorData = r.authenticatorData, signature = r.signature, userHandle = r.userHandle}
 
 -- | The sample invitation, made for another address.
 invitedAs :: Text -> Invited
@@ -493,8 +512,8 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (n.setSpaceWatch s) Watching {watching = True}) 200 (Watch True Chosen)
     it "fetches the assistant's vault unless the version named is the server's, and stores it over that version" $ do
       let a = links.assistant
-      (a.vault, a.storeVault, a.passkeys, a.beginRegistration, a.removePasskey Sample.passkeyInfo.id)
-        `shouldBe` ("api/v1/assistant/vault", "api/v1/assistant/vault", "api/v1/assistant/passkeys", "api/v1/assistant/passkeys/registration", "api/v1/assistant/passkeys/Y3JlZGVudGlhbC0x")
+      (a.vault, a.storeVault, a.beginAssertion)
+        `shouldBe` ("api/v1/assistant/vault", "api/v1/assistant/vault", "api/v1/assistant/passkeys/assertion")
       r <- getAt a.vault
       (status r, jsonBody r, header "ETag" r) `shouldBe` (200, Just Sample.storedVault, Just "\"3\"")
       unchanged <- request methodGet a.vault [("If-None-Match", "\"3\"")] ""
@@ -502,15 +521,25 @@ spec = describe "a server of the API's type" $ do
       answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"3\"")] (encode Sample.vault)) 200 Sample.storedVault
       answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"2\"")] (encode Sample.vault)) 409 (Conflict "The vault was changed on another device meanwhile.")
       (status <$> request methodDelete a.deleteVault [] "") `shouldReturn` 204
-    it "makes and uses a passkey in two steps each, and removes one" $ do
+    it "makes a passkey for the account and uses it for the vault in two steps each, and removes one" $ do
       let a = links.assistant
-      answers (request methodPost a.beginRegistration [] "") 200 Sample.registrationOptions
-      answers (sendJson methodPut a.finishRegistration Sample.registrationResponse) 200 Sample.passkeyInfo
+          k = links.account
+      (k.passkeys, k.beginRegistration, k.removePasskey Sample.passkeyInfo.id)
+        `shouldBe` ("api/v1/account/passkeys", "api/v1/account/passkeys/registration", "api/v1/account/passkeys/Y3JlZGVudGlhbC0x")
+      answers (request methodPost k.beginRegistration [] "") 200 Sample.registrationOptions
+      answers (sendJson methodPut k.finishRegistration Sample.registrationResponse) 200 Sample.passkeyInfo
       answers (request methodPost a.beginAssertion [] "") 200 Sample.assertionOptions
       answers (sendJson methodPut a.finishAssertion Sample.assertionResponse) 200 Sample.passkeyInfo
-      answers (getAt a.passkeys) 200 [Sample.passkeyInfo]
-      answers (request methodDelete (a.removePasskey Sample.passkeyInfo.id) [] "") 200 ([] :: [PasskeyInfo])
-      answers (request methodDelete (a.removePasskey (CredentialId "other")) [] "") 404 NotFound
+      answers (getAt k.passkeys) 200 [Sample.passkeyInfo]
+      answers (request methodDelete (k.removePasskey Sample.passkeyInfo.id) [] "") 200 ([] :: [PasskeyInfo])
+      answers (request methodDelete (k.removePasskey (CredentialId "other")) [] "") 404 NotFound
+    it "signs in with a passkey, alone or as the second step, in two steps each" $ do
+      (links.beginPasskeySignIn, links.beginSecondFactorPasskey) `shouldBe` ("api/v1/session/passkey", "api/v1/session/second-factor/passkey")
+      answers (request methodPost links.beginPasskeySignIn [] "") 200 anyPasskey
+      answers (sendJson methodPut links.finishPasskeySignIn Sample.assertionResponse) 200 Sample.sessionInfo
+      answers (sendJson methodPut links.finishPasskeySignIn otherAnswer) 400 (Invalid "This passkey is not one of this wiki's.")
+      answers (request methodPost links.beginSecondFactorPasskey [] "") 200 Sample.assertionOptions
+      answers (sendJson methodPut links.finishSecondFactorPasskey Sample.assertionResponse) 200 Sample.sessionInfo
 
     it "turns mail off with an unsubscribe link's secret" $ do
       links.unsubscribe (UnsubscribeToken "unsubscribe") `shouldBe` "api/v1/unsubscribe/unsubscribe"

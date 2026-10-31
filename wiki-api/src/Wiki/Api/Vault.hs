@@ -2,7 +2,7 @@
 
 -- | The assistant's keys across devices (WP5.21 of docs/PLAN.md): the
 -- vault the server keeps for a user ("Wiki.Core.Assistant.Vault"), and the
--- passkeys that unlock it.
+-- user's passkeys, which sign them in (WP5.30) and unlock the vault.
 --
 -- The server stores the vault as the browser sends it: the salt, the
 -- sealed settings and the vault key wrapped once per passkey. It cannot
@@ -21,24 +21,30 @@
 -- the device fetches the vault again and makes its change on that. The
 -- wrapped keys a @PUT@ carries are stored for the passkeys they name, which
 -- must be the user's; the others are kept. @DELETE assistant\/vault@ turns
--- synchronisation off: the vault and every passkey of the user go, and no
--- passkey is needed for it, so that a user who has lost every passkey can
--- start again.
+-- synchronisation off: the vault and the vault key's wrapped copies go,
+-- and no passkey is needed for it, so that a user who has lost every
+-- passkey can start again. The passkeys stay: they sign the user in.
 --
 -- = Passkeys
 --
 -- A passkey is registered with the wiki as its relying party, for the
--- signed-in user, in two steps: @POST assistant\/passkeys\/registration@
+-- signed-in user, in two steps: @POST account\/passkeys\/registration@
 -- gives the options for the browser's @navigator.credentials.create@ (a
 -- challenge the server keeps for this session, for five minutes), and @PUT@
 -- to the same address sends the browser's answer, which the server checks
--- and stores ("Wiki.Server.WebAuthn"). Using one, before unwrapping the
--- vault key with it, goes the same way under @assertion@: the server checks
--- the signature with the stored public key, and that the passkey's counter
--- has not gone back. Neither signs anyone in: they need a signed-in session.
--- @GET assistant\/passkeys@ lists the user's passkeys, and @DELETE
--- assistant\/passkeys\/\<id>@ removes one, with its wrapped copy of the
--- vault key.
+-- and stores ("Wiki.Server.WebAuthn"). @GET account\/passkeys@ lists the
+-- user's passkeys, and @DELETE account\/passkeys\/\<id>@ removes one,
+-- with its wrapped copy of the vault key.
+--
+-- Using one goes the same way, as an assertion: the server checks the
+-- signature with the stored public key, that the authenticator verified
+-- the user, and that the passkey's counter has not gone back. Under
+-- @assistant\/passkeys\/assertion@, a signed-in user uses one before
+-- unwrapping the vault key with it. Under @session\/passkey@, anyone signs
+-- in with one (WP5.30): the options name no passkey, the browser offers
+-- those it has for the wiki, and the answer's user handle says whose it
+-- is. Under @session\/second-factor\/passkey@, someone whose password was
+-- right uses one of their passkeys instead of a code.
 module Wiki.Api.Vault
   ( StoredVault (..)
   , PasskeyInfo (..)
@@ -96,37 +102,47 @@ data RegistrationOptions = RegistrationOptions
   deriving anyclass (FromJSON, ToJSON)
 
 -- | 'RegistrationResponse': the browser's answer to a registration, @PUT
--- assistant\/passkeys\/registration@: the new credential's id, and its
+-- account\/passkeys\/registration@: the new credential's id, and its
 -- client data and attestation object as the browser gives them, in
--- base64url. The PRF extension's results are not in it.
+-- base64url, with the name the user gave the passkey, if any. The PRF
+-- extension's results are not in it.
 data RegistrationResponse = RegistrationResponse
   { id :: CredentialId
   , clientDataJSON :: Text
   , attestationObject :: Text
+  , name :: Maybe Text
+  -- ^ What the passkey is called in the list; without one, the day it
+  -- was added.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | 'AssertionOptions': what the browser needs to use one of the user's
--- passkeys, @POST assistant\/passkeys\/assertion@.
+-- passkeys, @POST assistant\/passkeys\/assertion@, or any passkey for the
+-- wiki, @POST session\/passkey@.
 data AssertionOptions = AssertionOptions
   { challenge :: Text
   , rpId :: Text
   , allow :: [CredentialId]
-  -- ^ The user's passkeys, any of which may answer.
+  -- ^ The user's passkeys, any of which may answer; none for a sign-in
+  -- with a passkey alone, where any passkey for the wiki may.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | 'AssertionResponse': the browser's answer to an assertion, @PUT
--- assistant\/passkeys\/assertion@, in base64url: the passkey that answered,
--- the client data, the authenticator data and the signature over both.
--- The PRF extension's results are not in it: the browser keeps them.
+-- assistant\/passkeys\/assertion@ and the others, in base64url: the
+-- passkey that answered, the client data, the authenticator data, the
+-- signature over both, and the user handle the authenticator gave (the
+-- bytes of the passkey's owner's user id), which a sign-in with a passkey
+-- alone needs. The PRF extension's results are not in it: the browser
+-- keeps them.
 data AssertionResponse = AssertionResponse
   { id :: CredentialId
   , clientDataJSON :: Text
   , authenticatorData :: Text
   , signature :: Text
+  , userHandle :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

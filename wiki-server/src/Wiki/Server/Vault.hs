@@ -1,8 +1,10 @@
 {-# LANGUAGE MultiWayIf #-}
 
--- | The assistant's vault and the passkeys that unlock it, on the server
--- (WP5.21 of docs/PLAN.md, "Wiki.Api.Vault"): what the routes under
--- @assistant\/@ store and check.
+-- | The assistant's vault and the user's passkeys, on the server (WP5.21
+-- and WP5.30 of docs/PLAN.md, "Wiki.Api.Vault"): what the routes under
+-- @assistant\/@, @account\/passkeys\/@ and @session\/passkey@ store and
+-- check. A passkey signs its owner in, and unlocks the vault when the vault
+-- has the vault key wrapped for it.
 --
 -- The server keeps, per user, the vault as the browser sent it
 -- (@assistant_vaults@: its format, salt, nonce and ciphertext, with a
@@ -18,9 +20,11 @@
 -- A registration or an assertion takes two requests: one that gives the
 -- browser a challenge, and one that brings the browser's answer. The
 -- challenge waits in memory ('Ceremonies'), for the session that asked
--- for it, for 'ceremonyLifetime', and is used once. A restart forgets the
--- challenges waiting, which costs whoever was touching their passkey a
--- second touch.
+-- for it, for 'ceremonyLifetime', and is used once. A sign-in with a
+-- passkey has no session yet: its challenge waits under itself
+-- ('beginSignIn'), and the answer finds it by the challenge its client
+-- data names. A restart forgets the challenges waiting, which costs
+-- whoever was touching their passkey a second touch.
 module Wiki.Server.Vault
   ( -- * The site
     Site (..)
@@ -33,6 +37,7 @@ module Wiki.Server.Vault
 
     -- * Passkeys
   , passkeysOf
+  , ownerOf
   , registerPasskey
   , assertPasskey
   , removePasskey
@@ -44,6 +49,9 @@ module Wiki.Server.Vault
   , newCeremonies
   , beginCeremony
   , takeCeremony
+  , beginSignIn
+  , takeSignIn
+  , maxSignInsPerAddress
   , ceremonyLifetime
   )
 where
@@ -181,13 +189,14 @@ storeVault st now u base v
         runUpdate (update wikiDb.passkeys (\p -> (p.wrapped_nonce <-. val_ (Just w.nonce)) <> (p.wrapped_key <-. val_ (Just w.key))) (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
       maybe (Left NotFound) Right <$> vaultIn u
 
--- | Turn synchronisation off for a user: their vault and their passkeys
--- go. Nothing else is needed: a user who has lost every passkey starts
--- again this way. Nothing to delete is no error.
+-- | Turn synchronisation off for a user: their vault goes, and so do the
+-- vault key's wrapped copies. Their passkeys stay, since they also sign
+-- the user in. Nothing else is needed: a user who has lost every passkey
+-- starts again this way. Nothing to delete is no error.
 deleteVault :: Storage -> UserId -> IO ()
 deleteVault st u = writing st $ do
   runDelete (delete wikiDb.assistant_vaults (\x -> x.user_id ==. val_ u.text))
-  runDelete (delete wikiDb.passkeys (\p -> p.user_id ==. val_ u.text))
+  runUpdate (update wikiDb.passkeys (\p -> (p.wrapped_nonce <-. val_ Nothing) <> (p.wrapped_key <-. val_ Nothing)) (\p -> p.user_id ==. val_ u.text))
 
 --------------------------------------------------------------------------------
 -- Passkeys
@@ -206,6 +215,19 @@ passkeysIn u =
   map (\p -> PasskeyInfo {id = CredentialId p.credential_id, name = p.name, createdAt = p.created_at, lastUsedAt = p.last_used_at, unlocks = isJust p.wrapped_key})
     <$> runSelectReturningList (select (orderBy_ (\p -> (asc_ p.created_at, asc_ p.credential_id)) (filter_ (\p -> p.user_id ==. val_ u.text) (all_ wikiDb.passkeys))))
 
+-- | Whose passkey a credential id names, if anyone's: what a sign-in with
+-- a passkey alone learns first.
+ownerOf :: Storage -> CredentialId -> IO (Maybe UserId)
+ownerOf st i =
+  reading st $
+    runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text) (all_ wikiDb.passkeys))) <&> \case
+      [p] -> Just (UserId p.user_id)
+      _ -> Nothing
+
+-- | The longest name of a passkey, in characters.
+maxPasskeyName :: Int
+maxPasskeyName = 100
+
 -- | The longest public key of a passkey that is stored, in bytes: an
 -- RS256 key of 4096 bits takes some 550, so nothing much longer is one.
 maxPublicKey :: Int
@@ -215,15 +237,18 @@ maxPublicKey = 16 * 1024
 maxCredentialId :: Int
 maxCredentialId = 1023
 
--- | Store a passkey just registered for a user, without a wrapped key yet.
--- A credential registered already (by anyone) is a 'Conflict'; one more
--- than 'maxPasskeys', or one whose id or public key is too long, is
--- 'Invalid'.
-registerPasskey :: Storage -> UTCTime -> UserId -> NewCredential -> IO (Either WikiError PasskeyInfo)
-registerPasskey _ _ _ new
+-- | Store a passkey just registered for a user, with the name the user
+-- gave it (when the day it was added otherwise), without a wrapped key
+-- yet. A credential registered already (by anyone) is a 'Conflict'; one
+-- more than 'maxPasskeys', one whose id or public key is too long, or a
+-- name longer than 'maxPasskeyName', is 'Invalid'.
+registerPasskey :: Storage -> UTCTime -> UserId -> Maybe Text -> NewCredential -> IO (Either WikiError PasskeyInfo)
+registerPasskey _ _ _ _ new
   | BS.length new.publicKey > maxPublicKey || BS.null new.credentialId || BS.length new.credentialId > maxCredentialId =
       pure (Left (Invalid "This passkey's id or public key is longer than a passkey's."))
-registerPasskey st now u new = writingEither st $ do
+registerPasskey _ _ _ (Just given) _
+  | T.length (T.strip given) > maxPasskeyName = pure (Left (Invalid ("A passkey's name has at most " <> show maxPasskeyName <> " characters.")))
+registerPasskey st now u given new = writingEither st $ do
   let i = toBase64Url new.credentialId
   taken <- runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i) (all_ wikiDb.passkeys)))
   count' <- length <$> passkeysWhere u
@@ -239,7 +264,9 @@ registerPasskey st now u new = writingEither st $ do
                 , public_key = toBase64Url new.publicKey
                 , algorithm = fromIntegral new.algorithm
                 , sign_count = fromIntegral new.signCount
-                , name = "Added on " <> toS (formatTime defaultTimeLocale "%Y-%m-%d at %H:%M UTC" now)
+                , name = case T.strip <$> given of
+                    Just named | not (T.null named) -> named
+                    _ -> "Added on " <> toS (formatTime defaultTimeLocale "%Y-%m-%d at %H:%M UTC" now)
                 , created_at = micro now
                 , last_used_at = Nothing
                 , wrapped_nonce = Nothing
@@ -284,41 +311,84 @@ removePasskey st now u i = writingEither st $ do
 -- Ceremonies
 
 -- | 'Purpose': what a challenge was given for.
-data Purpose = Registering | Asserting
+data Purpose
+  = Registering
+  | Asserting
+  | -- | The second step of a sign-in, by passkey instead of a code: the
+    -- ceremony is kept for the half-finished sign-in rather than a session.
+    Confirming
   deriving stock (Eq, Ord, Show)
 
--- | 'Ceremonies': the challenges waiting for the browser's answer, by the
--- session (the hash of its secret) and the purpose, each with the user it
--- was given to and when it expires.
-newtype Ceremonies = Ceremonies (IORef (Map (Text, Purpose) (UserId, ByteString, UTCTime)))
+-- | 'Ceremonies': the challenges waiting for the browser's answer. Those of
+-- a signed-in session (or a half-finished sign-in) are kept by the session
+-- (the hash of its secret) and the purpose, each with the user it was given
+-- to and when it expires. Those of a sign-in with a passkey alone are kept
+-- by the challenge itself, with the address that asked for it and when it
+-- expires.
+data Ceremonies = Ceremonies
+  { held :: IORef (Map (Text, Purpose) (UserId, ByteString, UTCTime))
+  , signIns :: IORef (Map ByteString (Text, UTCTime))
+  }
 
 newCeremonies :: IO Ceremonies
-newCeremonies = Ceremonies <$> newIORef mempty
+newCeremonies = Ceremonies <$> newIORef mempty <*> newIORef mempty
 
 -- | How long a challenge waits for its answer: five minutes, which a
 -- person touching a passkey needs much less of.
 ceremonyLifetime :: NominalDiffTime
 ceremonyLifetime = 5 * 60
 
--- | The most challenges waiting; beyond it, the oldest are dropped.
+-- | The most challenges waiting, of each kind; beyond it, the oldest are
+-- dropped.
 maxCeremonies :: Int
 maxCeremonies = 10000
+
+-- | The most sign-in challenges waiting for one address. A browser asks
+-- for one each time the sign-in form opens, and anyone may ask without
+-- signing in, so one address may not take the whole of 'maxCeremonies'.
+maxSignInsPerAddress :: Int
+maxSignInsPerAddress = 50
+
+-- | The live entries of a map of challenges, bounded to one fewer than
+-- 'maxCeremonies' by dropping the oldest, so that one more fits.
+bounded :: (Ord k) => UTCTime -> (v -> UTCTime) -> Map k v -> Map k v
+bounded now expiry m =
+  let live = Map.filter (\v -> expiry v > now) m
+   in if Map.size live >= maxCeremonies then Map.fromList (drop (Map.size live - maxCeremonies + 1) (sortOn (expiry . snd) (Map.toList live))) else live
 
 -- | A new challenge (32 random bytes) for a session and a user, replacing
 -- the session's waiting one for the same purpose.
 beginCeremony :: Ceremonies -> UTCTime -> Text -> UserId -> Purpose -> IO ByteString
-beginCeremony (Ceremonies ref) now session u purpose = do
+beginCeremony ceremonies now session u purpose = do
   challenge <- getRandomBytes 32
-  atomicModifyIORef' ref $ \m ->
-    let live = Map.filter (\(_, _, expires) -> expires > now) m
-        bounded = if Map.size live >= maxCeremonies then Map.fromList (drop (Map.size live - maxCeremonies + 1) (sortOn (\(_, (_, _, e)) -> e) (Map.toList live))) else live
-     in (Map.insert (session, purpose) (u, challenge, addUTCTime ceremonyLifetime now) bounded, ())
+  atomicModifyIORef' ceremonies.held $ \m ->
+    (Map.insert (session, purpose) (u, challenge, addUTCTime ceremonyLifetime now) (bounded now (\(_, _, e) -> e) m), ())
   pure challenge
 
 -- | The challenge waiting for a session, a user and a purpose, if it has
 -- not expired; it is used up.
 takeCeremony :: Ceremonies -> UTCTime -> Text -> UserId -> Purpose -> IO (Maybe ByteString)
-takeCeremony (Ceremonies ref) now session u purpose =
-  atomicModifyIORef' ref $ \m -> case Map.lookup (session, purpose) m of
+takeCeremony ceremonies now session u purpose =
+  atomicModifyIORef' ceremonies.held $ \m -> case Map.lookup (session, purpose) m of
     Just (owner, challenge, expires) | owner == u, expires > now -> (Map.delete (session, purpose) m, Just challenge)
     _ -> (Map.delete (session, purpose) m, Nothing)
+
+-- | A new challenge for a sign-in with a passkey, asked for from an
+-- address; 'Nothing' when the address has 'maxSignInsPerAddress' waiting
+-- already.
+beginSignIn :: Ceremonies -> UTCTime -> Text -> IO (Maybe ByteString)
+beginSignIn ceremonies now address = do
+  challenge <- getRandomBytes 32
+  atomicModifyIORef' ceremonies.signIns $ \m ->
+    let live = bounded now snd m
+     in if Map.size (Map.filter ((== address) . fst) live) >= maxSignInsPerAddress
+          then (live, Nothing)
+          else (Map.insert challenge (address, addUTCTime ceremonyLifetime now) live, Just challenge)
+
+-- | Whether a sign-in challenge is waiting and has not expired; it is used
+-- up either way.
+takeSignIn :: Ceremonies -> UTCTime -> ByteString -> IO Bool
+takeSignIn ceremonies now challenge =
+  atomicModifyIORef' ceremonies.signIns $ \m -> case Map.lookup challenge m of
+    Just (_, expires) | expires > now -> (Map.delete challenge m, True)
+    _ -> (Map.delete challenge m, False)

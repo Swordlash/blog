@@ -659,6 +659,13 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   -- cookie of the wiki's.
   confirmSecondFactor code = signingIn (getResponse <$> endpoints.secondFactor OneTimeCode {code})
 
+  -- A passkey's sign-in, alone or as the second step, in two requests:
+  -- the challenge, and the browser's answer, which signs in.
+  beginPasskeySignIn = withPassword endpoints.beginPasskeySignIn
+  finishPasskeySignIn used = signingIn (getResponse <$> endpoints.finishPasskeySignIn used)
+  beginSecondFactorPasskey = withPassword endpoints.beginSecondFactorPasskey
+  finishSecondFactorPasskey used = signingIn (getResponse <$> endpoints.finishSecondFactorPasskey used)
+
   -- None of these change who is asking, or anything cached.
   requestPasswordReset login =
     call (endpoints.passwordReset.request ResetRequest {login}) <&> \answered -> case refusal answered of
@@ -682,8 +689,8 @@ instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   ownEmail = send endpoints.account.email
   setOwnEmail email password = withPassword (endpoints.account.setEmail EmailChange {email, password})
 
--- | The assistant's vault and passkeys, over the API's @assistant\/…@
--- endpoints ("Wiki.Api.Vault"). Nothing is cached: the vault is fetched
+-- | The assistant's vault, over the API's @assistant\/…@ endpoints, and
+-- the account's passkeys, over @account\/passkeys\/…@ ("Wiki.Api.Vault"). Nothing is cached: the vault is fetched
 -- with the tag of the version this device has (@If-None-Match@), and the
 -- server answers 304 when it is the same. The cookie of the session goes
 -- with each, as with every request: a passkey is made and used for the
@@ -697,12 +704,12 @@ instance (MonadIO m) => MonadVault (HttpWiki m) where
       _ -> Fetched <$> answer answered
   storeVault base v = send (endpoints.assistant.storeVault base v)
   deleteVault = send_ endpoints.assistant.deleteVault
-  listPasskeys = send endpoints.assistant.passkeys
-  beginRegistration = send endpoints.assistant.beginRegistration
-  finishRegistration r = send (endpoints.assistant.finishRegistration r)
+  listPasskeys = send endpoints.account.passkeys
+  beginRegistration = send endpoints.account.beginRegistration
+  finishRegistration r = send (endpoints.account.finishRegistration r)
   beginAssertion = send endpoints.assistant.beginAssertion
   finishAssertion r = send (endpoints.assistant.finishAssertion r)
-  dropPasskey c = send (endpoints.assistant.removePasskey c)
+  dropPasskey c = send (endpoints.account.removePasskey c)
 
 -- | A request that signs someone in (signing in, creating one's own
 -- account, accepting an invitation). The result is the new session, with

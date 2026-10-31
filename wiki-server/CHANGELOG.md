@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+A passkey signs its owner in (WP5.30): `POST`/`PUT session/passkey` for a
+passkey alone, which asks for no second factor, and `POST`/`PUT
+session/second-factor/passkey` in place of the code after a password. The
+answer's user handle must be the passkey's owner's, and the authenticator
+must have verified the user. Failures count against the address, then
+against the login once the passkey names one. Passkeys are registered,
+listed and removed under `account/passkeys`, with a name; turning the
+assistant's syncing off keeps them and drops only the vault key's wrapped
+copies.
+
 Automatically migrate existing front-page content into a real backing page on SQLite and PostgreSQL, retaining full editor uploads, drafts and history. Hide backing records from directories and search, disable root comments/structure changes, and preserve the root across full and legacy imports. Add explicit anonymous-root sharing for closed wikis with attachment ownership checks and revocation.
 
 Persist the editable shared front page in the `home-page` settings row on SQLite and PostgreSQL. Permit writes only to global administrators and the loopback operator. Include public configuration in full exports/imports; redact it for anonymous sessions shut out by a closed wiki. Record dedicated updates as `settings.home-page` in the audit log.
