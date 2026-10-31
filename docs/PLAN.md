@@ -1729,7 +1729,7 @@ must be in before it is.
   independent of how one signs in) and browsers with PRF (Chrome 116+, Safari 18+,
   recent Firefox).
 
-- **WP5.30 Sign in with a passkey** (the owner, 2026-10-29: "skoro mamy passkeys (wydaje
+- **WP5.30 Sign in with a passkey** (merged 2026-10-31, PR #118; see Progress) (the owner, 2026-10-29: "skoro mamy passkeys (wydaje
   się że działa) to może też dodajmy do password-based logowania"; WP5.21 left it as "a
   passkey sign-in is a later package on the same table"). The passkeys WP5.21 registers for
   the vault are already discoverable and user-verified (`residentKey: required`,
@@ -1770,8 +1770,7 @@ must be in before it is.
   WP5.21: the button signs in, the second-factor alternative, the Security panel's add,
   list, remove, hidden on plain HTTP), the smoke test unchanged; a real passkey in a real
   browser checked by hand and said so in the report. `docs/accounts.md` (or where sign-in
-  is documented) gains "Passkeys". Queued after WP5.29; not started until the owner says so (2026-10-29, "zatrzymaj się po
-  29 bo nam się kończy usage").
+  is documented) gains "Passkeys".
 
 - **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
   powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
@@ -4955,6 +4954,51 @@ Amended by the planning session after each work package's report.
   wiki that ran an earlier head of this branch has a `guide-installed` row of the old shape
   (delete the row and the Guide space, then `guide install`); `guide update` from the
   console cannot reach the running server's live channel; the demo's own tour is unchanged.
+
+- **WP5.30 merged (2026-10-31, PR #118, `2fce100`).** The first package the session
+  implemented itself, without a subagent (the owner, 2026-10-31). A passkey signs its
+  owner in alone (`POST`/`PUT session/passkey`: no passkey named, the challenge kept
+  under itself for five minutes, at most fifty per address, found again by the one the
+  client data names), with no second factor, or in place of the code after a password
+  (`session/second-factor/passkey`, a refusal counted as a wrong code).
+  `Wiki.Server.WebAuthn.verifyAssertion` takes a `Signer`: `Identified` where the wiki
+  knows who asks (the vault, the second step), `Unnamed` for a sign-in alone, whose
+  answer must carry the owner's user handle; the `webauthn` package checks both and the
+  UV flag. Failures count against the address (`Limiter.addressVerdict`/`failedAt`)
+  until the passkey names a login, then against it. A disabled user is refused before
+  the passkey is checked. Passkeys are the account's: listed, made (with a name, and
+  with the current password, as a second factor asks for it, since a passkey signs the
+  user in) and removed under `account/passkeys`; `assistant/passkeys/assertion` stays
+  for the vault. `AssertionResponse` gains `userHandle`, `RegistrationResponse` `name`.
+  Turning the assistant's syncing off keeps the passkeys and drops only the wrapped
+  keys; turning it on again asks for a passkey the user has, and makes a new one if
+  that is not used; a passkey without PRF is kept to sign in with. In the browser:
+  "Sign in with a passkey", the login field's offer (conditional mediation, aborted when
+  the form closes, the password is sent or the button used; a ticket in `vault.js`
+  keeps a sign-in whose challenge arrives after that from starting), "Use a passkey
+  instead" in the code's form, and the account panel's Passkeys section (hidden with a
+  sentence over plain HTTP). Plan text not met as written: "the same audit entry" (a
+  password's sign-in writes none, so neither does a passkey's) and "the same refusal for
+  a closed wiki" (a password's sign-in is not refused there either). Codex reviewed four
+  rounds, the owner's new limit: retained passkeys reused for syncing and stale field
+  offers; the password to make a passkey (P1), PRF asked for at registration, stale
+  button dialogs; password fields emptied after each attempt; a new passkey when the
+  user's cannot sync. Also fixed here, as CI would not pass without it: since WP5.35 the
+  front page took its directory of spaces down and made it again each time its page
+  loaded, so a click on a space's card meanwhile was lost; that was the demo smoke
+  test's "flakiness". The directory now stays mounted. Tests: server (a fixed ES256
+  authenticator: sign-in, cookie, counter, refusals for origin, UV, user handle,
+  unknown passkey, stale or reused challenge, disabled user, the address limit, the
+  second step, the password to make one), browser (a `navigator.credentials` stub with
+  the field's offer, the button, the second step, the panel, plain HTTP, the stale
+  races, the emptied fields), and `toolchain/test-passkeys.mjs` (Chromium's virtual
+  authenticator) now signs in with a real passkey after signing out. Gate: native and
+  wasm builds without warnings, all native suites (wiki-server-test 1905), the browser
+  suite (315), fourmolu clean, CI green on the head. A real passkey on a real device is
+  for the owner to try after deploying (HTTPS or localhost). Notes for later: the
+  wiki-app `Accounts` record now carries four passkey methods, and the assistant's
+  settings always show the password field, since they do not know whether the user has
+  a password.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
