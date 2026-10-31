@@ -136,7 +136,15 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       Initialize -> do
+        -- The channel first, so that an open editor is asked at once, and
+        -- what it says is shown whether or not the page has loaded.
         input <- gets (\st -> st.input)
+        -- On the loop, without a wait, so that the window cannot be
+        -- finalized between listening and keeping what stops it.
+        channel <- H.liftEffect (liftIO HS.create)
+        void (H.subscribe (Listened <$> channel.emitter))
+        feed <- H.liftEffect (listenLive (liveKey input.space.id input.path) (HS.notify channel.listener))
+        modify (\st -> st {feed = Just feed})
         loaded <- lift (getPage input.space.id input.path)
         for_ loaded $ \page -> do
           urls <- lift (Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments)
@@ -147,10 +155,6 @@ component =
           (_, Right page) -> st {shown = Shows Saved page.title page.body}
           (_, Left e) -> st {shown = Failed e}
         H.raise Loaded
-        channel <- liftIO HS.create
-        void (H.subscribe (Listened <$> channel.emitter))
-        feed <- listenLive (liveKey input.space.id input.path) (HS.notify channel.listener)
-        modify (\st -> st {feed = Just feed})
       Finalize -> gets (\st -> st.feed) >>= traverse_ stopLive
       Receive input -> modify (\st -> st {input})
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of
