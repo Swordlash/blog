@@ -1882,17 +1882,6 @@ must be in before it is.
   cover the default, opt-in, attachments, access to ordinary private content,
   revocation and persistence/export compatibility.
 
-- **WP5.36 No comments on the front page, for real** (the owner, 2026-10-31: "na
-  homepage miało nie być komentarzy a są"). WP5.35's acceptance asked for comments
-  disabled on the front page alone, and the owner sees them there after deploying
-  it. Not started; queued after WP5.30. Goal: the front page shows no comment
-  thread, no "Comment" on a selection, no inline quote marks, and asks the server
-  for no comments, in the server's first HTML and after hydration, under a base
-  path too, on SQLite, PostgreSQL and the demo; the server refuses a comment on
-  the front page's backing page whatever the client sends. First find why WP5.35's
-  tests passed while the deployed page shows them (which route or view renders the
-  home page without the flag, or which check is missing), and test that path.
-  Ordinary pages keep their comments.
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
