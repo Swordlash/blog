@@ -835,7 +835,8 @@ try {
   await arrive({ path: "/s/blog/p/smoke-page/edit/", view: "editor", crumb: "Edit" }, "the new page's editor");
   const fresh = page.locator(editorText);
   await fresh.waitFor({ timeout });
-  assert.equal(await markdownIn(page), "", "a new page's Markdown is not empty");
+  // Only its title line, which the editor puts in, with the cursor under it.
+  assert.equal(await markdownIn(page), "# Smoke page\n\n", "a new page's Markdown is more than its title line");
   await fresh.pressSequentially("Made through the *new* flow.");
   await fresh.press("Control+s");
   await page.locator("#app .editor-saved-notice", { hasText: "Saved" }).waitFor({ timeout });

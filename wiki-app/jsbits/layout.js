@@ -7,7 +7,7 @@
 // whenever the document changes which elements they are.
 //
 // And whether each bar that sticks under the header (the page's actions,
-// the editor's toolbar) is stuck there now, as its attribute data-stuck,
+// the editor's top, and its toolbar where that sticks alone) is stuck there now, as its attribute data-stuck,
 // which the stylesheet gives a hairline shadow: a bar where it would be
 // anyway, at the top of the page, has none.
 function wiki_keep_heights() {
@@ -22,7 +22,7 @@ function wiki_keep_heights() {
   const markStuck = () => {
     const header = document.querySelector(".wiki-header");
     const under = header ? header.getBoundingClientRect().bottom : 0;
-    for (const bar of document.querySelectorAll(".page-actions, .editor-toolbar")) {
+    for (const bar of document.querySelectorAll(".page-actions, .editor-top, .editor-toolbar")) {
       const stuck = window.scrollY > 0 && bar.getBoundingClientRect().top <= under + 1;
       if (stuck !== bar.hasAttribute("data-stuck")) bar.toggleAttribute("data-stuck", stuck);
     }

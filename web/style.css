@@ -2419,14 +2419,37 @@ body:has(.slides-view) {
   }
 }
 
-/* The toolbar: groups of icon buttons that wrap onto more lines on a narrow
-   screen, then the preview's controls at the end. */
-/* Under the header while the text scrolls, as the page's bar of actions;
-   its menus open over the text below it. */
-.editor-toolbar {
+/* The editor's top: the title, Save, Save and close, Cancel, and the
+   toolbar under them (WP5.38). It stays under the header while the text
+   scrolls, as the page's bar of actions does, so that saving or leaving
+   needs no scrolling back up; the toolbar's menus open over the text below
+   it. With the preview shown alone, the toolbar is hidden and the rest
+   stays. */
+.editor-top {
   position: sticky;
   top: var(--header-height);
   z-index: 4;
+  padding-top: 0.25rem;
+  background: var(--background);
+}
+
+/* On a phone the bar takes too much of the screen to stay: only the
+   toolbar does, as before. */
+@media (max-width: 760px) {
+  .editor-top {
+    position: static;
+  }
+
+  .editor-toolbar {
+    position: sticky;
+    top: var(--header-height);
+    z-index: 4;
+  }
+}
+
+/* The toolbar: groups of icon buttons that wrap onto more lines on a narrow
+   screen, then the preview's controls at the end. */
+.editor-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2470,7 +2493,8 @@ body:has(.slides-view) {
 }
 
 .editor-toolbar .icon,
-.editor-show-preview .icon {
+.editor-show-preview .icon,
+.editor-side-by-side .icon {
   width: 16px;
   height: 16px;
   fill: none;
@@ -2486,12 +2510,19 @@ body:has(.slides-view) {
   gap: 0.4rem;
 }
 
+/* "Side by side" is a button that stays pressed while the preview is
+   beside the text; "Show preview" shows the page alone. Each has its own
+   icon, two columns and an eye, so the two are not mistaken. */
 .editor-side-by-side {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: var(--muted);
+  gap: 0.4rem;
+}
+
+.editor-side-by-side[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--background);
 }
 
 /* The side by side preview needs the width of a wide screen. */
@@ -4924,6 +4955,7 @@ mark.comment-mark-focused {
 }
 
 .page-actions[data-stuck],
+.editor-top[data-stuck],
 .editor-toolbar[data-stuck] {
   box-shadow:
     0 1px 0 var(--border),
@@ -4932,6 +4964,7 @@ mark.comment-mark-focused {
 
 @media print {
   .page-actions,
+  .editor-top,
   .editor-toolbar {
     position: static;
     box-shadow: none;

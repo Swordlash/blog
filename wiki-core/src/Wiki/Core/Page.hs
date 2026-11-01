@@ -11,11 +11,17 @@ module Wiki.Core.Page
   , positionPage
   , pageTreeOrder
   , savedAs
+
+    -- * The title line
+  , titleLine
+  , withTitleLine
+  , retitled
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Type.Equality (type (~))
 import Protolude
@@ -182,3 +188,53 @@ savedAs time title body p =
     , position = p.position
     , template = p.template
     }
+
+-- | 'titleLine' is the title a page's Markdown gives on its first line, a
+-- level-one heading (@# Title@): the text after the @#@, without a closing
+-- run of @#@ and without the spaces around it. 'Nothing' when the first
+-- line is not a level-one heading. A page's text starts with its title
+-- line (WP5.39 of docs/PLAN.md): the editor keeps the line there, and the
+-- title it saves is this line's text.
+titleLine :: Text -> Maybe Text
+titleLine body = case T.uncons firstLine of
+  Just ('#', rest)
+    | T.null rest -> Just ""
+    | Just (c, _) <- T.uncons rest, c == ' ' || c == '\t' -> Just (unclosed (T.strip rest))
+  _ -> Nothing
+  where
+    firstLine = T.dropWhileEnd (== '\r') (T.takeWhile (/= '\n') body)
+    -- A heading may end with a run of @#@ after a space (@# Title ##@),
+    -- which is not part of its text (CommonMark's closing sequence).
+    unclosed t
+      | T.null run = t
+      | T.null before = ""
+      | isSpace (T.last before) = T.stripEnd before
+      | otherwise = t
+      where
+        run = T.takeWhileEnd (== '#') t
+        before = T.dropEnd (T.length run) t
+
+-- | A page's Markdown with a new title: its title line says the new title,
+-- and a text without one gets one ('withTitleLine'). What renaming a page
+-- writes, so that the title and the first line stay the same.
+retitled :: Text -> Text -> Text
+retitled title body = case titleLine trimmed of
+  Just _ -> "# " <> title <> T.dropWhile (/= '\n') trimmed
+  Nothing -> withTitleLine title body
+  where
+    trimmed = withTitleLine title body
+
+-- | A page's Markdown with its title line first: unchanged when it starts
+-- with one (after blank lines, which are dropped), and otherwise with
+-- @# title@ and a blank line put before it. The editor opens a page this
+-- way, so that a page written before titles were lines gets one.
+withTitleLine :: Text -> Text -> Text
+withTitleLine title body
+  | isJust (titleLine trimmed) = trimmed
+  | T.null (T.strip body) = "# " <> title <> "\n\n"
+  | otherwise = "# " <> title <> "\n\n" <> trimmed
+  where
+    trimmed = dropBlankLines body
+    dropBlankLines t =
+      let (line, rest) = T.breakOn "\n" t
+       in if not (T.null rest) && T.all isSpace line then dropBlankLines (T.drop 1 rest) else t

@@ -241,7 +241,8 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- render st {drafts = Map.singleton (hello.id, UserId "user-editor") draft} helloEditor
     html `contains` "Restored your unsaved draft from "
     html `contains` ">Discard it and go back to the saved page</button>"
-    html `contains` ">Unsaved words</textarea>"
+    -- With the draft's title as the text's first line (WP5.39).
+    html `contains` "># Hello, draft\n\nUnsaved words</textarea>"
     html `contains` "value=\"Hello, draft\""
     -- Cancel asks what becomes of the draft rather than leaving.
     html `lacks` "href=\"/s/blog/p/hello-world/\">Cancel</a>"

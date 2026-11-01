@@ -18,7 +18,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startKept, startKeptWith, startOpened)
-import Test.Browser.Text (editorText, markdown)
+import Test.Browser.Text (clearBody, editorText, markdown)
 import Test.Counting (Call (..), isRead, runCounting)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
@@ -50,7 +50,7 @@ spec m = do
     db <- fresh m "saved"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Kept for the next visit."
     find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Kept for the next visit.")
@@ -65,14 +65,14 @@ spec m = do
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- editorText ui
     original <- markdown ui
-    clear text
+    clearBody ui
     typeText text "Not saved, but kept."
     -- Quietly, a few seconds after the typing stops.
     eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
     unmount ui
     again <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     find again ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
-    markdown again `shouldReturn` "Not saved, but kept."
+    markdown again `shouldReturn` "# Hello, world\n\nNot saved, but kept."
     -- Discarded, the page is as it was saved.
     find again ".editor-draft-discard" >>= click
     eventually $ length <$> findAll again ".editor-draft-found" `shouldReturn` 0
@@ -86,7 +86,7 @@ spec m = do
     db <- fresh m "reset"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Soon gone."
     find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Soon gone.")
@@ -115,7 +115,7 @@ spec m = do
     db <- fresh m "export"
     (ui, opened) <- startKeptWith m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Exported, and brought back."
     find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Exported, and brought back.")
@@ -182,7 +182,7 @@ spec m = do
     ui <- startOpened m opened (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- editorText ui
     unsafeIOToPageM (writeIORef calls [])
-    clear text
+    clearBody ui
     typeText text "Kept as a draft only."
     eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
     written <- unsafeIOToPageM (readIORef calls)

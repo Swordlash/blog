@@ -212,12 +212,20 @@ spec m = do
     -- Its buttons still work from there.
     find ui ".page-actions .comments-toggle" >>= click
     _ <- find ui ".comments-panel"
-    -- The editor's toolbar sticks the same way.
+    -- The editor's top, its title, buttons and toolbar, sticks the same
+    -- way, and is marked stuck once the text scrolls under it.
     unsafeIOToPageM (evaluate =<< js_scroll_to 0)
     unmount ui
     editor <- start m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
-    _ <- find editor ".editor-toolbar"
-    unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText ".editor-toolbar") (toJSText "position")) `shouldReturn` "sticky"
+    _ <- find editor ".editor-top .editor-toolbar"
+    _ <- find editor ".editor-top .editor-save"
+    unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText ".editor-top") (toJSText "position")) `shouldReturn` "sticky"
+    unsafeIOToPageM (evaluate =<< js_scroll_to 100000)
+    eventually $ do
+      (_, headerBottom, _) <- box ".wiki-header"
+      (top, _, _) <- box ".editor-top"
+      top `shouldSatisfy` (\t -> abs (t - headerBottom) < 1.5)
+      getAttribute' editor ".editor-top" "data-stuck" `shouldReturn` Just ""
   where
     box :: Text -> PageM s (Double, Double, Double)
     box selector = do

@@ -562,15 +562,66 @@ const editors = new Set();
 // Wiki.Core.Markdown.Render's renderLines) to the block of a source line:
 // the last block that starts at or before it, near the top of the pane.
 function followLine(container, line) {
+  const target = markerOf(container, line);
+  if (target === null) return;
+  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+  container.scrollTop = Math.max(0, top - 16);
+}
+
+// The marker of the block a source line is in: the last block that starts
+// at or before the line, or null for rendered Markdown without markers.
+function markerOf(container, line) {
   let target = null;
   for (const marker of container.querySelectorAll(".source-line")) {
     if (Number(marker.dataset.line) <= line) target = marker;
     else break;
   }
-  if (target === null) return;
-  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
-  container.scrollTop = Math.max(0, top - 16);
+  return target;
 }
+
+// Where a page's text starts after its title line and the blank lines under
+// it: the end, for a text that is only its title line.
+function textStartOf(doc) {
+  if (!doc.startsWith("# ")) return 0;
+  let at = doc.indexOf("\n");
+  if (at < 0) return doc.length;
+  at += 1;
+  for (;;) {
+    const next = doc.indexOf("\n", at);
+    const line = next < 0 ? doc.slice(at) : doc.slice(at, next);
+    if (line.trim() !== "") return at;
+    if (next < 0) return doc.length;
+    at = next + 1;
+  }
+}
+
+// The page's title line (WP5.39 of docs/PLAN.md): the text starts with "# "
+// and the page's title, which the component reads from it. The "# " stays:
+// a change that takes it away, or adds a "#" to it, is followed by one that
+// makes the start of the first line "# " again, and a selection that would
+// start inside the "# " starts after it.
+const titleMark = "# ";
+const titleLine = [
+  EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged) return tr;
+    const first = tr.newDoc.line(1).text;
+    if (first.startsWith(titleMark)) return tr;
+    const marks = /^#*[ \t]*/.exec(first)[0];
+    return [tr, { changes: { from: 0, to: marks.length, insert: titleMark }, sequential: true }];
+  }),
+  EditorState.transactionFilter.of((tr) => {
+    const doc = tr.newDoc;
+    if (!doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
+    const sel = tr.newSelection;
+    if (!sel.ranges.some((r) => r.from < titleMark.length)) return tr;
+    const after = (at) => Math.max(at, titleMark.length);
+    const moved = EditorSelection.create(
+      sel.ranges.map((r) => EditorSelection.range(after(r.anchor), after(r.head))),
+      sel.mainIndex,
+    );
+    return [tr, { selection: moved, sequential: true }];
+  }),
+];
 
 // What the editor of a page tells the preview beside it and the preview in a
 // window of its own (WP5.36 of docs/PLAN.md): the line being written (the
@@ -584,7 +635,23 @@ function following(host) {
   let view = null;
   let line = 1;
   let timer = null;
+  // Where the window was scrolled when the preview was shown alone, to go
+  // back to with the text.
+  let windowAt = null;
   const pane = () => host.closest(".editor-form")?.querySelector(".editor-preview");
+  // The preview shown alone scrolls with the window: the block of the line
+  // goes to just under the page's header and the editor's bar, which stay
+  // at the top.
+  const scrollWindow = () => {
+    const p = pane();
+    if (!p || p.offsetParent === null) return;
+    const target = markerOf(p, line);
+    if (target === null) return;
+    const header = document.querySelector(".wiki-header");
+    const top = host.closest(".editor-form")?.querySelector(".editor-top");
+    const offset = (header?.offsetHeight ?? 0) + (top?.offsetHeight ?? 0) + 12;
+    window.scrollTo(0, Math.max(0, target.getBoundingClientRect().top + window.scrollY - offset));
+  };
   const scrollPane = () => {
     const p = pane();
     if (p && p.offsetParent !== null) followLine(p, line);
@@ -642,6 +709,20 @@ function following(host) {
         channel.postMessage({ key, line });
       }
     },
+    // The preview was shown alone: the window goes to the block being
+    // edited, now and once the preview has rendered the text.
+    previewShown: () => {
+      windowAt = window.scrollY;
+      scrollWindow();
+      setTimeout(scrollWindow, 400);
+    },
+    // The text was shown again: the window goes back to where it was.
+    textShown: () => {
+      if (windowAt === null) return;
+      const y = windowAt;
+      windowAt = null;
+      window.scrollTo(0, y);
+    },
     // The preview beside the text was switched on: it goes to the line
     // followed meanwhile, now and once it has rendered.
     paneShown: () => {
@@ -681,14 +762,22 @@ export function attach(textarea, host, original, codeTokens) {
   let toldSelection = "";
   let toldEmpty = true;
 
+  // A textarea nobody has typed in has its cursor at the start, which is
+  // the title line's "#": the cursor starts instead where the page's text
+  // does, after the title line and the blank lines under it.
+  const untyped = textarea.selectionStart === 0 && textarea.selectionEnd === 0;
+  const textStart = untyped ? clamp(textStartOf(doc)) : 0;
   const state = EditorState.create({
     doc,
-    selection: EditorSelection.single(clamp(textarea.selectionStart), clamp(textarea.selectionEnd)),
+    selection: untyped
+      ? EditorSelection.single(textStart)
+      : EditorSelection.single(clamp(textarea.selectionStart), clamp(textarea.selectionEnd)),
     extensions: [
       EditorState.lineSeparator.of("\n"),
       // Pasted text as a textarea takes it: with its line endings made "\n".
       EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
       history(),
+      titleLine,
       changes.extensions,
       completion.extension,
       // Enter is a line break and nothing more, as in the textarea, except
@@ -824,6 +913,8 @@ export function attach(textarea, host, original, codeTokens) {
     },
     uploaded: () => follow.uploaded(),
     paneShown: () => follow.paneShown(),
+    previewShown: () => follow.previewShown(),
+    textShown: () => follow.textShown(),
     destroy: () => {
       editors.delete(editor);
       follow.stop();

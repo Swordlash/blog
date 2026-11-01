@@ -437,9 +437,13 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **Pages in Markdown** ([above](#writing-pages), and
   [docs/markdown.md](docs/markdown.md)), with templates to start one from.
 - **An editor** that shows the Markdown as it will look while it is typed
-  (CodeMirror), with the preview beside it or in its place, files dropped or
-  pasted in as attachments, drafts kept a few seconds after the typing stops,
-  and a conflict shown in place when someone else saved first.
+  (CodeMirror), with the preview beside it (**Side by side**) or in its place
+  (**Show preview**, which opens at the block being edited and which the
+  browser's Back closes), files dropped or pasted in as attachments, drafts
+  kept a few seconds after the typing stops, and a conflict shown in place when
+  someone else saved first. The title, Save and Cancel stay at the top while
+  the text scrolls. A page's title is its first line, `# Title`, which the
+  editor keeps there.
   The preview beside the text scrolls to the block being written; **Detach
   preview** opens it in a window of its own (on another monitor, say), which
   follows the editor as it is typed. **A−** and **A+** set the size of the

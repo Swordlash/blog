@@ -139,7 +139,7 @@ import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
-import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
+import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
@@ -1290,9 +1290,14 @@ component =
       for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
       loadHere True
       -- The router is told last, so that the route it announces is the one
-      -- already shown, which 'Arrived' ignores.
+      -- already shown, which 'Arrived' ignores. From the editor's preview
+      -- shown alone (Save and close there), the next route takes the
+      -- preview's entry of the history, which "Show preview" pushed, so
+      -- that Back from it returns to the editor's own entry, as from the
+      -- editor shown with its text.
       router <- gets (\st -> st.router)
-      for_ next (Router.navigate router)
+      fromPreview <- H.liftEffect onPreviewEntry
+      for_ next (if fromPreview then Router.redirect router else Router.navigate router)
 
     -- Load who is signed in and the tree of spaces, on a worker thread. If
     -- they cannot be loaded, the route's content says why, with a button

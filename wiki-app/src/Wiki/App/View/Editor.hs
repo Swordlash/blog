@@ -25,17 +25,28 @@
 -- older version (someone has saved since) is only offered, since saving it
 -- would undo that save's changes.
 --
--- The Markdown is shown alone by default, at every width (decision 10 of
--- the plan, as amended). "Show preview" ('ShowPreview') replaces the
--- editing view with the rendered draft ("Wiki.App.View.Preview"), with
--- "Back to editing", Save and Cancel still there. This is a change of the
--- editor's state, not a route, since the draft is not in the address. The
--- title and the text stay mounted while hidden, so that their text, the
--- selection, the undo history and the scroll position are unchanged on the
--- way back. A "Side by side preview" checkbox brings back the two panes on
--- a wide screen. The choice is stored per browser in local storage, and
--- read in 'Initialize', after the first render, so that the first render
--- is the same in the browser as where nothing is stored (a prerender).
+-- The text starts with the page's title line, @# Title@ (WP5.39 of
+-- docs/PLAN.md). The title field only shows the line's text, greyed out;
+-- the title saved is that text. A page saved without the line gets it when
+-- opened ('workOf'), and CodeMirror keeps the line's @# @ in place
+-- (@web/src/editor.js@).
+--
+-- The title, Save, Save and close, Cancel and the toolbar stay at the top
+-- while the text scrolls (@.editor-top@ in the stylesheet, WP5.38). The
+-- Markdown is shown alone by default, at every width (decision 10 of the
+-- plan, as amended). "Show preview" ('ShowPreview') replaces the editing
+-- view with the rendered draft ("Wiki.App.View.Preview"), with "Back to
+-- editing", Save and Cancel still there, and the window at the block being
+-- edited. This is a change of the editor's state, not a route, since the
+-- draft is not in the address; it pushes an entry of the session history
+-- with the same address, so that the browser's Back returns to the text and
+-- only the next Back leaves the editor. The title and the text stay mounted
+-- while hidden, so that their text, the selection, the undo history and the
+-- scroll position are unchanged on the way back. A "Side by side" button,
+-- pressed while on, brings back the two panes on a wide screen. The choice
+-- is stored per browser in local storage, and read in 'Initialize', after
+-- the first render, so that the first render is the same in the browser as
+-- where nothing is stored (a prerender).
 --
 -- The preview is mounted the first time it is shown and kept from then
 -- on, hidden while the Markdown is shown alone: drawing a page's diagrams
@@ -196,6 +207,7 @@ import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -203,6 +215,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
@@ -221,6 +234,7 @@ import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
   , PickedFile (..)
+  , PreviewWatch
   , announceUpload
   , answerMention
   , applyCommand
@@ -234,16 +248,24 @@ import Wiki.App.Editor.Browser
   , editorKey
   , focusElement
   , focusText
+  , forgetPreviewEntry
   , guardUnload
+  , historyBack
   , insertAtCursor
   , mentionAsked
+  , onPreviewEntry
   , paneShown
   , pastedFiles
   , pickedFiles
+  , previewShown
+  , pushPreviewEntry
   , readPickedFile
   , selectedSpan
   , settleChanges
+  , textShown
   , typedText
+  , unwatchPreviewEntry
+  , watchPreviewEntry
   )
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
@@ -294,7 +316,7 @@ import Wiki.Core.Markdown.Edit
   , textColourClass
   , textColours
   )
-import Wiki.Core.Page (Page, PageSummary)
+import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
@@ -441,6 +463,10 @@ data State = State
   -- text is reached through it ("Wiki.App.Editor.Browser").
   , fileInput :: H.RefLabel
   , backButton :: H.RefLabel
+  , history :: Maybe PreviewWatch
+  -- ^ The listener for the browser's Back and Forward, which move between
+  -- the text and the preview shown alone ("Show preview" pushes an entry
+  -- of the session history).
   , loads :: Int
   -- ^ How many times the page has been loaded: the key of the title input
   -- and the textarea, which a reload replaces.
@@ -488,7 +514,6 @@ data Action
   | Finalize
   | Receive Input
   | Followed (Follow Route)
-  | TypedTitle Text
   | Typed Text
   | Key EditorKey
   | Submit
@@ -505,6 +530,7 @@ data Action
   | ToggleMenu Menu
   | CloseMenu
   | ShowPreview
+  | WentTo Bool
   | BackToEditing
   | SideBySide Bool
   | FontSize Int
@@ -620,6 +646,7 @@ component =
               , host
               , fileInput
               , backButton
+              , history = Nothing
               , loads = 1
               , watching = Nothing
               , presence = Unsaid
@@ -687,6 +714,7 @@ component =
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
         >
+          <div class="editor-top">
           <div class="editor-bar">
             {{ titleField st work }}
             <div class="editor-actions">
@@ -704,6 +732,8 @@ component =
               {% end %}
             </div>
           </div>
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input} }}
+          </div>
           <div class="editor-notices">
             {{ presenceView st }}
             {{ changedView st }}
@@ -712,7 +742,6 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -1007,11 +1036,8 @@ component =
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
-            <label class="editor-side-by-side">
-              <input type="checkbox" checked={{ bar.twoPanes }} {{ HE.onChecked SideBySide }}>
-              Side by side preview
-            </label>
-            <button type="button" class="editor-show-preview" title="Show preview (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
+            <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
+            <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
             {% for href in maybeToList bar.detached %}
               <a class="button editor-detach" href={{ href }} target="wiki-live-preview" title="The preview in a window of its own, which follows what is typed here">Detach preview</a>
             {% end %}
@@ -1077,20 +1103,23 @@ component =
         </div>
       |]
 
-    -- The title's input, keyed by the load (see the module's comment). Its
-    -- text is the @value@ attribute, which the input starts with, rather
-    -- than the property, which a quasi-quoted @value={{ … }}@ would set, so
-    -- it is written as an attribute among the others.
+    -- The title's input, keyed by the load (see the module's comment). The
+    -- title is read from the text's first line (WP5.39 of docs/PLAN.md),
+    -- and the input only shows it, greyed out and read-only. Its text is the
+    -- @value@ attribute rather than the property, which a quasi-quoted
+    -- @value={{ … }}@ would set: a prerendered page shows the attribute, and
+    -- the browser goes on showing it as it changes, since nothing sets the
+    -- property of a field nobody can type into.
     titleField :: State -> Work -> H.ComponentHTML Action Slots m
     titleField st work =
       HH.keyed
         @I.HTMLlabel
         (HH.ElemName "label")
         [HP.class_ "field editor-title"]
-        [ ("caption", [hh|<span>Title</span>|])
+        [ ("caption", [hh|<span>Title <small>(the first line, after #)</small></span>|])
         ,
           ( loadKey st
-          , [hh|<input type="text" {{ attr "value" work.loadedTitle }} onValueInput={{ TypedTitle }} required>|]
+          , [hh|<input type="text" readonly tabindex="-1" {{ attr "value" work.title }}>|]
           )
         ]
 
@@ -1211,6 +1240,14 @@ component =
         H.liftEffect (Storage.getItem LocalStorage fontStepKey) >>= \case
           Just (Right n) | n >= 0 && n < length fontSizes -> modify (\st -> st {fontStep = n})
           _ -> pass
+        -- The browser's Back and Forward between the text and the preview.
+        -- An editor opened on the preview's entry starts with the text, so
+        -- the entry is the text's.
+        H.liftEffect forgetPreviewEntry
+        moves <- H.liftEffect (liftIO HS.create)
+        void (H.subscribe (WentTo <$> moves.emitter))
+        watch <- H.liftEffect (watchPreviewEntry (HS.notify moves.listener))
+        modify (\st -> st {history = Just watch})
         -- Also after the first render, which a prerendered page shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
@@ -1234,6 +1271,7 @@ component =
       -- CodeMirror are not, so they are removed here.
       Finalize -> do
         H.liftEffect (guardUnload False)
+        gets (\st -> st.history) >>= traverse_ (H.liftEffect . unwatchPreviewEntry)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
         -- This tab no longer edits the page.
         st <- get
@@ -1243,16 +1281,21 @@ component =
       -- The work belongs to the editor: a reload of the wiki around it
       -- (after a change elsewhere, or someone signing in) leaves it alone.
       Receive input -> modify (\st -> st {input})
-      Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
-      TypedTitle t -> edit (\w -> w {title = t})
-      Typed t -> edit (\w -> w {body = t})
+      -- Cancel, from the preview shown alone, takes the preview's entry of
+      -- the history, as Save and close does (see "Wiki.App.Shell").
+      Followed f@(Router.Follow route _) -> do
+        router <- gets (\st -> st.input.context.router)
+        H.liftEffect onPreviewEntry >>= \case
+          True -> Router.redirect router route
+          False -> Router.follow router f
+      Typed t -> edit (\w -> w {body = t, title = fromMaybe w.title (titleLine t)})
       Key key -> case key of
         SaveKey -> save Stay
         IndentKey -> insert "  "
         CommandKey command -> run command
         PreviewKey ->
           gets (\st -> st.mode) >>= \case
-            Editing -> showPreview
+            Editing -> showPreview True
             Previewing -> backToEditing
         EscapeKey -> closeMenu
       Submit -> save Stay
@@ -1285,7 +1328,14 @@ component =
         gets (\st -> st.fileInput) >>= H.getRef >>= traverse_ (H.liftEffect . clickElement)
       ToggleMenu which -> modify (\st -> st {menu = if st.menu == Just which then Nothing else Just which})
       CloseMenu -> closeMenu
-      ShowPreview -> showPreview
+      ShowPreview -> showPreview True
+      -- The browser's Back or Forward reached the preview's entry, or
+      -- another: the editor shows what the entry stands for.
+      WentTo previewEntry ->
+        gets (\st -> st.mode) >>= \case
+          Editing | previewEntry -> showPreview False
+          Previewing | not previewEntry -> textAgain
+          _ -> pass
       BackToEditing -> backToEditing
       FontSize n -> when (n >= 0 && n < length fontSizes) $ do
         modify (\st -> st {fontStep = n})
@@ -1582,20 +1632,34 @@ component =
     closeMenu = whenM (gets (\st -> isJust st.menu)) $ modify (\st -> st {menu = Nothing})
 
     -- Show the work rendered on its own, as it is now, with the focus on
-    -- the button back.
-    showPreview :: H.HalogenM State Action Slots ViewOutput m ()
-    showPreview = do
+    -- the button back, and the window at the block being edited. Shown by
+    -- the editor (not by the browser's Forward), it pushes an entry of the
+    -- session history, so that the browser's Back returns to the text.
+    showPreview :: Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    showPreview pushing = do
       catchUp
       modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
+      when pushing (H.liftEffect pushPreviewEntry)
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShown)
 
-    -- Back to the Markdown, which kept its text, selection and scroll
-    -- position while hidden. The focus returns to it (to CodeMirror, once
-    -- it is there), at its selection.
+    -- Back to the Markdown. On the preview's entry of the session history,
+    -- that is the browser's Back, whose popstate shows the text
+    -- ('WentTo'); otherwise the text is shown at once.
     backToEditing :: H.HalogenM State Action Slots ViewOutput m ()
-    backToEditing = do
+    backToEditing =
+      H.liftEffect onPreviewEntry >>= \case
+        True -> H.liftEffect historyBack
+        False -> textAgain
+
+    -- The Markdown again, which kept its text, selection and scroll
+    -- position while hidden, with the window where it was. The focus
+    -- returns to it (to CodeMirror, once it is there), at its selection.
+    textAgain :: H.HalogenM State Action Slots ViewOutput m ()
+    textAgain = do
       modify (\st -> st {mode = Editing})
-      gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . focusText)
+      host <- gets (\st -> st.host) >>= H.getRef
+      for_ host $ \h -> H.liftEffect (textShown h >> focusText h)
 
     -- Make the preview show the work as it is now, without waiting for the
     -- typing to stop.
@@ -1724,6 +1788,9 @@ component =
     save after = do
       st <- get
       case st.loaded of
+        Ready w
+          | T.null (T.strip w.title) ->
+              modify (\s -> s {problem = Just (Invalid "The first line is the page's title: write it after the #.")})
         Ready w | not st.saving -> do
           -- No draft is written after this save, which discards the
           -- existing one.
@@ -1883,34 +1950,45 @@ fetchPage input =
       pure (Right (page, urls))
 
 -- | The page as it is saved, as work to edit.
+--
+-- The text starts with its title line ('withTitleLine'): a page saved
+-- without one gets it here, and its title is the line's from then on. What
+-- counts as saved is that text and title, so that opening a page and
+-- closing it again leaves nothing unsaved.
 workOf :: Page -> Map AttachmentId Text -> Work
 workOf page urls =
   Work
     { page
-    , title = page.title
-    , body = page.body
-    , savedTitle = page.title
-    , savedBody = page.body
-    , loadedTitle = page.title
-    , loadedBody = page.body
-    , shownTitle = page.title
-    , shownBody = page.body
+    , title
+    , body
+    , savedTitle = title
+    , savedBody = body
+    , loadedTitle = title
+    , loadedBody = body
+    , shownTitle = title
+    , shownBody = body
     , attachments = page.attachments
     , urls
     }
+  where
+    body = withTitleLine page.title page.body
+    title = fromMaybe page.title (titleLine body)
 
 -- | A draft's text in place of the work's, in new elements. What counts as
 -- saved stays the page's, so that the draft counts as unsaved.
 takeUp :: D.Draft -> Work -> Work
 takeUp draft w =
   w
-    { title = draft.title
-    , body = draft.body
-    , loadedTitle = draft.title
-    , loadedBody = draft.body
-    , shownTitle = draft.title
-    , shownBody = draft.body
+    { title
+    , body
+    , loadedTitle = title
+    , loadedBody = body
+    , shownTitle = title
+    , shownBody = body
     }
+  where
+    body = withTitleLine draft.title draft.body
+    title = fromMaybe draft.title (titleLine body)
 
 -- | The work as an edit of the version a conflict found saved: the next
 -- save is made against that version and compared with it, with its
@@ -2039,12 +2117,14 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
 noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"
 previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
+-- Two columns: the text and the preview beside it.
+sideBySideIcon = "M1.5 2.5h13v11h-13zM8 2.5v11"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]

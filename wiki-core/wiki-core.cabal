@@ -171,6 +171,7 @@ test-suite wiki-core-test
       Test.Slug
       Test.Space
       Test.Template
+      Test.Title
       Test.User
       Test.Vault
   build-depends:

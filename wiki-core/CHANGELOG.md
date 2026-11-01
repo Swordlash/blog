@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`Wiki.Core.Page` gains `titleLine`, the title a page's first line gives
+(`# Title`), `withTitleLine`, which puts the line before a text without one,
+and `retitled`, which rewrites it (WP5.39): a page's title is its first line.
+
 `parseWithLines` gives each block of a page with the source line it starts
 on, and `renderLines` renders the blocks each after an empty
 `span.source-line[data-line]` marker (WP5.36), by which the editor's preview is

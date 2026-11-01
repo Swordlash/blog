@@ -56,6 +56,18 @@ function wiki_test_editor_set(text) {
   editor?.replace(0, editor.text().length, text, 0, 0);
 }
 
+// Empty the open editor's text but for its title line, the line CodeMirror
+// keeps (WP5.39 of docs/PLAN.md), and a blank line after it, with the cursor
+// at the end: where a test types the page's text.
+function wiki_test_editor_clear_body() {
+  const editor = wikiTestEditor();
+  if (!editor) return;
+  const text = editor.text();
+  const end = text.indexOf("\n");
+  const kept = (end < 0 ? text : text.slice(0, end)) + "\n\n";
+  editor.replace(0, text.length, kept, kept.length, kept.length);
+}
+
 // The text of each piece of TeX math in the open editor's syntax tree, as
 // JSON: what web/src/editor.js's math parsers found.
 function wiki_test_editor_math() {
