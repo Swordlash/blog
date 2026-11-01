@@ -50,3 +50,8 @@ spec = describe "The title line" $ do
       retitled "New" "# Old" `shouldBe` "# New"
     it "puts a title line before a text without one" $
       retitled "New" "Text." `shouldBe` "# New\n\nText."
+    it "keeps a title that ends in a space and a #" $ do
+      retitled "Release #" "# Old\n\nText." `shouldBe` "# Release # #\n\nText."
+      titleLine (retitled "Release #" "# Old") `shouldBe` Just "Release #"
+      titleLine (withTitleLine "#" "") `shouldBe` Just "#"
+      titleLine (withTitleLine "C#" "") `shouldBe` Just "C#"

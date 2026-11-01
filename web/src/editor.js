@@ -733,6 +733,8 @@ function following(host) {
       const y = windowAt;
       windowAt = null;
       window.scrollTo(0, y);
+      // And once the text is laid out again, which the switch back started.
+      requestAnimationFrame(() => window.scrollTo(0, y));
     },
     // The preview beside the text was switched on: it goes to the line
     // followed meanwhile, now and once it has rendered.

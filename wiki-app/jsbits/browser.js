@@ -42,12 +42,22 @@ function wiki_set_title(title) {
 // the page is reloaded or gone back to, so that the numbers of two entries
 // tell how far apart they are, which history.go wants.
 let wikiLastEntry = 0;
+// While the router replaces the current entry (wiki_history_replacing), the
+// number the entry had: whoever asks for the entry's number meanwhile (the
+// shell, told of the route as the router replaces it) gets that one, not a
+// new one.
+let wikiReplacedEntry = null;
 
 function wiki_history_entry() {
   const state = history.state;
   if (state !== null && typeof state === "object" && Number.isInteger(state.wikiEntry)) {
     wikiLastEntry = state.wikiEntry;
     return state.wikiEntry;
+  }
+  if (wikiReplacedEntry !== null) {
+    const kept = state !== null && typeof state === "object" ? state : {};
+    history.replaceState({ ...kept, wikiEntry: wikiReplacedEntry }, "");
+    return wikiReplacedEntry;
   }
   const entry = wikiLastEntry + 1;
   const kept = state !== null && typeof state === "object" ? state : {};
@@ -56,13 +66,20 @@ function wiki_history_entry() {
   return entry;
 }
 
-// Give the current entry this number again: an entry replaced by the
-// router has none, and is the same entry of the history as before.
-function wiki_history_set_entry(entry) {
+// The router is about to replace the current entry, numbered `entry`
+// (wiki_history_entry's number), and has replaced it: the replacement is
+// the same entry of the history, and keeps the number.
+function wiki_history_replacing(entry) {
+  wikiReplacedEntry = entry;
+}
+
+function wiki_history_replaced() {
+  const entry = wikiReplacedEntry;
+  wikiReplacedEntry = null;
+  if (entry === null) return;
   const state = history.state;
   const kept = state !== null && typeof state === "object" ? state : {};
   history.replaceState({ ...kept, wikiEntry: entry }, "");
-  wikiLastEntry = Math.max(wikiLastEntry, entry);
 }
 
 function wiki_history_go(delta) {

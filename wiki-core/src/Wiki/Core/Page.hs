@@ -219,10 +219,20 @@ titleLine body = case T.uncons firstLine of
 -- writes, so that the title and the first line stay the same.
 retitled :: Text -> Text -> Text
 retitled title body = case titleLine trimmed of
-  Just _ -> "# " <> title <> T.dropWhile (/= '\n') trimmed
+  Just _ -> headingOf title <> T.dropWhile (/= '\n') trimmed
   Nothing -> withTitleLine title body
   where
     trimmed = withTitleLine title body
+
+-- | The title line for a title: @# Title@, and a closing @#@ after a title
+-- that ends in a space and @#@ (@Release #@, or @#@ alone), which
+-- 'titleLine' would otherwise read as a closing run, not as the title's.
+headingOf :: Text -> Text
+headingOf title
+  | titleLine plain == Just title = plain
+  | otherwise = plain <> " #"
+  where
+    plain = "# " <> title
 
 -- | A page's Markdown with its title line first: unchanged when it starts
 -- with one (after blank lines, which are dropped), and otherwise with
@@ -231,8 +241,8 @@ retitled title body = case titleLine trimmed of
 withTitleLine :: Text -> Text -> Text
 withTitleLine title body
   | isJust (titleLine trimmed) = trimmed
-  | T.null (T.strip body) = "# " <> title <> "\n\n"
-  | otherwise = "# " <> title <> "\n\n" <> trimmed
+  | T.null (T.strip body) = headingOf title <> "\n\n"
+  | otherwise = headingOf title <> "\n\n" <> trimmed
   where
     trimmed = dropBlankLines body
     dropBlankLines t =

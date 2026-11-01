@@ -1544,7 +1544,11 @@ component =
       modify (\st -> st {closing = True, askingCancel = False})
       syncGuard
       st <- get
-      Router.navigate st.input.context.router (leaving st.input)
+      -- From the preview shown alone, the page takes the preview's entry of
+      -- the history, as Save and close does (see "Wiki.App.Shell").
+      H.liftEffect onPreviewEntry >>= \case
+        True -> H.liftEffect (replacingEntry (Router.redirect st.input.context.router (leaving st.input)))
+        False -> Router.navigate st.input.context.router (leaving st.input)
 
     -- Put CodeMirror in place of the textarea rendered last, with the text
     -- it was created with. CodeMirror arrives once the page has loaded it,
@@ -1655,10 +1659,12 @@ component =
     showPreview pushing = do
       catchUp
       gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShowing)
-      modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
+      -- Pushed before the switch: the browser keeps the text's entry with
+      -- the window where it is now, and puts it back there on Back.
       when pushing $ do
         H.liftEffect pushPreviewEntry
         H.raise Entered
+      modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
       gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShown)
 
@@ -1678,7 +1684,8 @@ component =
     textAgain = do
       modify (\st -> st {mode = Editing})
       host <- gets (\st -> st.host) >>= H.getRef
-      for_ host $ \h -> H.liftEffect (textShown h >> focusText h)
+      -- The focus first: focusing the text can scroll the window to it.
+      for_ host $ \h -> H.liftEffect (focusText h >> textShown h)
 
     -- Make the preview show the work as it is now, without waiting for the
     -- typing to stop.
