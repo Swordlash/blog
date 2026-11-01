@@ -230,6 +230,7 @@ import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
+import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
@@ -257,6 +258,7 @@ import Wiki.App.Editor.Browser
   , paneShown
   , pastedFiles
   , pickedFiles
+  , previewShowing
   , previewShown
   , pushPreviewEntry
   , readPickedFile
@@ -1297,7 +1299,7 @@ component =
       Followed f@(Router.Follow route _) -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect onPreviewEntry >>= \case
-          True -> Router.redirect router route
+          True -> H.liftEffect (replacingEntry (Router.redirect router route))
           False -> Router.follow router f
       -- A template's title is its name, typed in the title field; its first
       -- line is the heading of the pages made from it, @# {{title}}@.
@@ -1652,6 +1654,7 @@ component =
     showPreview :: Bool -> H.HalogenM State Action Slots ViewOutput m ()
     showPreview pushing = do
       catchUp
+      gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShowing)
       modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
       when pushing $ do
         H.liftEffect pushPreviewEntry

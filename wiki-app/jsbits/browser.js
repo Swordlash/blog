@@ -56,6 +56,15 @@ function wiki_history_entry() {
   return entry;
 }
 
+// Give the current entry this number again: an entry replaced by the
+// router has none, and is the same entry of the history as before.
+function wiki_history_set_entry(entry) {
+  const state = history.state;
+  const kept = state !== null && typeof state === "object" ? state : {};
+  history.replaceState({ ...kept, wikiEntry: entry }, "");
+  wikiLastEntry = Math.max(wikiLastEntry, entry);
+}
+
 function wiki_history_go(delta) {
   history.go(delta);
 }

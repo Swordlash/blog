@@ -137,7 +137,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
@@ -1300,7 +1300,7 @@ component =
       -- editor shown with its text.
       router <- gets (\st -> st.router)
       fromPreview <- H.liftEffect onPreviewEntry
-      for_ next (if fromPreview then Router.redirect router else Router.navigate router)
+      for_ next (if fromPreview then H.liftEffect . replacingEntry . Router.redirect router else Router.navigate router)
 
     -- Load who is signed in and the tree of spaces, on a worker thread. If
     -- they cannot be loaded, the route's content says why, with a button

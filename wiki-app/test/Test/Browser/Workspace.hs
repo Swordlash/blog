@@ -150,18 +150,21 @@ spec m = do
     _ <- editorText ui
     setMarkdown ui titled
     unsafeIOToPageM (js_live_cursor (T.length titled))
+    -- Where the window is with the text (the cursor, at the end, in view).
+    settle
+    before <- scrolled ""
     find ui ".editor-show-preview" >>= click
     form <- find ui ".editor-form"
     eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (T.isInfixOf "previewing"))
-    -- The window at the last block, not at the top of the page.
-    eventually $ scrolled "" >>= (`shouldSatisfy` (> 500))
+    -- The window at the last block, far down the rendered page.
+    eventually $ scrolled "" >>= (`shouldSatisfy` (> before + 500))
     -- Save and the way back stay at the top, under the header.
     find ui ".editor-top .editor-back" >>= shouldBeVisible
     find ui ".editor-top .editor-save" >>= shouldBeVisible
-    -- The browser's Back returns to the text, at the top where it was.
+    -- The browser's Back returns to the text, with the window where it was.
     unsafeIOToPageM js_history_back
     eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (not . T.isInfixOf "previewing"))
-    eventually $ scrolled "" >>= (`shouldSatisfy` (< 100))
+    eventually $ scrolled "" >>= (`shouldSatisfy` (\y -> abs (y - before) < 50))
     -- "Back to editing" does the same, and leaves the history as it was.
     find ui ".editor-show-preview" >>= click
     eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (T.isInfixOf "previewing"))

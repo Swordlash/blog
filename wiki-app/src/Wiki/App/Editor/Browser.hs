@@ -44,6 +44,7 @@ module Wiki.App.Editor.Browser
   , onPreviewEntry
   , forgetPreviewEntry
   , historyBack
+  , previewShowing
   , previewShown
   , textShown
   , clearField
@@ -121,6 +122,7 @@ $( browserJS
      , ("js_history_back", "wiki_history_back", Unsafe, [t|IO ()|])
      , ("js_preview_watch", "wiki_preview_watch", Unsafe, [t|Callback -> IO Int|])
      , ("js_preview_unwatch", "wiki_preview_unwatch", Unsafe, [t|Int -> IO ()|])
+     , ("js_preview_showing", "wiki_editor_preview_showing", Unsafe, [t|Element -> IO ()|])
      , ("js_preview_shown", "wiki_editor_preview_shown", Unsafe, [t|Element -> IO ()|])
      , ("js_text_shown", "wiki_editor_text_shown", Unsafe, [t|Element -> IO ()|])
      , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
@@ -326,6 +328,11 @@ forgetPreviewEntry = when inBrowser (liftIO js_preview_forget)
 -- | Go back one entry in the session history, as the browser's Back does.
 historyBack :: (MonadIO m) => m ()
 historyBack = when inBrowser (liftIO js_history_back)
+
+-- | Keep where the window is, with the text, before the preview is shown
+-- alone: where 'textShown' returns it.
+previewShowing :: (MonadIO m) => Element -> m ()
+previewShowing = liftIO . js_preview_showing
 
 -- | Scroll the window to the block of the line the editor (the host)
 -- follows, in the preview shown alone.

@@ -713,8 +713,13 @@ function following(host) {
     },
     // The preview was shown alone: the window goes to the block being
     // edited, now and once the preview has rendered the text.
-    previewShown: () => {
+    // The preview is about to be shown alone: where the window is, with
+    // the text, is kept for the way back. Taken before the switch, since the
+    // page's height changes with it.
+    previewShowing: () => {
       windowAt = window.scrollY;
+    },
+    previewShown: () => {
       scrollWindow();
       clearTimeout(windowTimer);
       windowTimer = setTimeout(scrollWindow, 400);
@@ -895,7 +900,15 @@ export function attach(textarea, host, original, codeTokens) {
     // The assistant's edit: from..to replaced with `insert`, tracked as the
     // change `id`, taking in the changes `absorbed` (the ones it touches),
     // as one step of the undo, shown where it is.
-    propose: (from, to, insert, id, absorbed) => {
+    propose: (proposedFrom, to, proposedInsert, id, absorbed) => {
+      // An edit that starts inside the title line's "# " starts after it,
+      // without the "# " the new text may start with, so that the change
+      // tracked, and what rejecting it puts back, leave the "# " alone.
+      const inMark = titled && proposedFrom < titleMark.length && view.state.sliceDoc(0, titleMark.length) === titleMark;
+      const from = inMark ? titleMark.length : proposedFrom;
+      const markLeft = titleMark.slice(proposedFrom);
+      const insert = inMark && proposedInsert.startsWith(markLeft) ? proposedInsert.slice(markLeft.length) : proposedInsert;
+      to = Math.max(to, from);
       const removed = view.state.sliceDoc(from, to);
       view.dispatch({
         changes: { from, to, insert },
@@ -921,6 +934,7 @@ export function attach(textarea, host, original, codeTokens) {
     },
     uploaded: () => follow.uploaded(),
     paneShown: () => follow.paneShown(),
+    previewShowing: () => follow.previewShowing(),
     previewShown: () => follow.previewShown(),
     textShown: () => follow.textShown(),
     destroy: () => {

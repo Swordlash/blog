@@ -426,6 +426,10 @@ function wiki_preview_unwatch(handle) {
 
 // The preview was shown alone: the window goes to the block being
 // edited. The text was shown again: the window goes back to where it was.
+function wiki_editor_preview_showing(host) {
+  host.wikiEditor?.previewShowing();
+}
+
 function wiki_editor_preview_shown(host) {
   host.wikiEditor?.previewShown();
 }
