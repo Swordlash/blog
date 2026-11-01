@@ -514,6 +514,7 @@ data Action
   | Finalize
   | Receive Input
   | Followed (Follow Route)
+  | TypedTitle Text
   | Typed Text
   | Key EditorKey
   | Submit
@@ -1116,10 +1117,12 @@ component =
         @I.HTMLlabel
         (HH.ElemName "label")
         [HP.class_ "field editor-title"]
-        [ ("caption", [hh|<span>Title <small>(the first line, after #)</small></span>|])
+        [ ("caption", if work.page.template then [hh|<span>Title</span>|] else [hh|<span>Title <small>(the first line, after #)</small></span>|])
         ,
           ( loadKey st
-          , [hh|<input type="text" readonly tabindex="-1" {{ attr "value" work.title }}>|]
+          , if work.page.template
+              then [hh|<input type="text" {{ attr "value" work.loadedTitle }} onValueInput={{ TypedTitle }} required>|]
+              else [hh|<input type="text" readonly tabindex="-1" {{ attr "value" work.title }}>|]
           )
         ]
 
@@ -1148,6 +1151,7 @@ component =
                 class="editor-cm"
                 ref={{ st.host }}
                 data-live-key={{ liveKey st.input.space.id st.input.path }}
+                data-title-line={{ if templateWork st then "false" else "true" :: Text }}
                 data-live-title={{ liveTitle st }}
                 {{ HE.handler' (EventType "wiki-input") typed }}
                 {{ HE.handler' (EventType "wiki-selection") (\ev -> Just $! Selected (selectedSpan ev)) }}
@@ -1174,6 +1178,13 @@ component =
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
+
+    -- Whether the page edited is a template, whose first line is not its
+    -- title and is not kept as one.
+    templateWork :: State -> Bool
+    templateWork st = case st.loaded of
+      Ready w -> w.page.template
+      _ -> False
 
     -- The title as typed, for the preview in a window of its own: the
     -- editor's CodeMirror sends it with the text (web/src/editor.js).
@@ -1288,7 +1299,10 @@ component =
         H.liftEffect onPreviewEntry >>= \case
           True -> Router.redirect router route
           False -> Router.follow router f
-      Typed t -> edit (\w -> w {body = t, title = fromMaybe w.title (titleLine t)})
+      -- A template's title is its name, typed in the title field; its first
+      -- line is the heading of the pages made from it, @# {{title}}@.
+      TypedTitle t -> edit (\w -> if w.page.template then w {title = t} else w)
+      Typed t -> edit (\w -> w {body = t, title = if w.page.template then w.title else fromMaybe w.title (titleLine t)})
       Key key -> case key of
         SaveKey -> save Stay
         IndentKey -> insert "  "
@@ -1639,7 +1653,9 @@ component =
     showPreview pushing = do
       catchUp
       modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
-      when pushing (H.liftEffect pushPreviewEntry)
+      when pushing $ do
+        H.liftEffect pushPreviewEntry
+        H.raise Entered
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
       gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShown)
 
@@ -1789,7 +1805,8 @@ component =
       st <- get
       case st.loaded of
         Ready w
-          | T.null (T.strip w.title) ->
+          | not w.page.template
+          , T.null (T.strip w.title) ->
               modify (\s -> s {problem = Just (Invalid "The first line is the page's title: write it after the #.")})
         Ready w | not st.saving -> do
           -- No draft is written after this save, which discards the
@@ -1971,8 +1988,10 @@ workOf page urls =
     , urls
     }
   where
-    body = withTitleLine page.title page.body
-    title = fromMaybe page.title (titleLine body)
+    -- A template keeps its text as it is: its first line is the heading
+    -- of the pages made from it (@# {{title}}@), not its own name.
+    body = if page.template then page.body else withTitleLine page.title page.body
+    title = if page.template then page.title else fromMaybe page.title (titleLine body)
 
 -- | A draft's text in place of the work's, in new elements. What counts as
 -- saved stays the page's, so that the draft counts as unsaved.
@@ -1987,8 +2006,8 @@ takeUp draft w =
     , shownBody = body
     }
   where
-    body = withTitleLine draft.title draft.body
-    title = fromMaybe draft.title (titleLine body)
+    body = if w.page.template then draft.body else withTitleLine draft.title draft.body
+    title = if w.page.template then draft.title else fromMaybe draft.title (titleLine body)
 
 -- | The work as an edit of the version a conflict found saved: the next
 -- save is made against that version and compared with it, with its

@@ -613,8 +613,10 @@ component =
           case mode of
             -- The title is the text's first line too (WP5.39 of
             -- docs/PLAN.md): the line says the new title.
+            -- A template's first line is the heading of the pages made from
+            -- it, @# {{title}}@, which stays.
             Renaming title ->
-              savePage page.id page.updatedAt title (retitled title page.body) >>= done (const Nothing)
+              savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done (const Nothing)
             Moving chosen ps parent -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
               movePage page.id target.id parent
                 >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (pagePathOf ps) parent <> [moved.slug])))

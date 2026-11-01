@@ -97,6 +97,10 @@ data ViewOutput
     -- page in the document's head with it (a link preview), since the
     -- space's list of pages has no bodies.
     Showing Page
+  | -- | The view pushed an entry of the session history for the route
+    -- shown (the editor's "Show preview"): the shell numbers it as the
+    -- route's entry, the one to return to after staying ('historyEntry').
+    Entered
 
 principalOf :: Context -> Maybe Principal
 principalOf ctx = sessionPrincipal ctx.session

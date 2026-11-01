@@ -1201,6 +1201,9 @@ component =
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
       FromView (Showing page) -> modify (\st -> st {shown = Just page})
+      FromView Entered -> do
+        now <- H.liftEffect historyEntry
+        modify (\st -> st {entry = now})
       -- Someone signed in or out: reload everything, as the new user.
       FromAccount (SignInView.AccountChanged s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})

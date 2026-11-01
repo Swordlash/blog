@@ -638,6 +638,7 @@ function following(host) {
   // Where the window was scrolled when the preview was shown alone, to go
   // back to with the text.
   let windowAt = null;
+  let windowTimer = null;
   const pane = () => host.closest(".editor-form")?.querySelector(".editor-preview");
   // The preview shown alone scrolls with the window: the block of the line
   // goes to just under the page's header and the editor's bar, which stay
@@ -645,6 +646,7 @@ function following(host) {
   const scrollWindow = () => {
     const p = pane();
     if (!p || p.offsetParent === null) return;
+    if (!host.closest(".editor-form")?.classList.contains("previewing")) return;
     const target = markerOf(p, line);
     if (target === null) return;
     const header = document.querySelector(".wiki-header");
@@ -714,10 +716,14 @@ function following(host) {
     previewShown: () => {
       windowAt = window.scrollY;
       scrollWindow();
-      setTimeout(scrollWindow, 400);
+      clearTimeout(windowTimer);
+      windowTimer = setTimeout(scrollWindow, 400);
     },
-    // The text was shown again: the window goes back to where it was.
+    // The text was shown again: the window goes back to where it was, and
+    // the preview's second scroll, if not done yet, is not done.
     textShown: () => {
+      clearTimeout(windowTimer);
+      windowTimer = null;
       if (windowAt === null) return;
       const y = windowAt;
       windowAt = null;
@@ -765,7 +771,9 @@ export function attach(textarea, host, original, codeTokens) {
   // A textarea nobody has typed in has its cursor at the start, which is
   // the title line's "#": the cursor starts instead where the page's text
   // does, after the title line and the blank lines under it.
-  const untyped = textarea.selectionStart === 0 && textarea.selectionEnd === 0;
+  // A template's first line is not its title (WP5.39): the host says so.
+  const titled = host.dataset.titleLine !== "false";
+  const untyped = titled && textarea.selectionStart === 0 && textarea.selectionEnd === 0;
   const textStart = untyped ? clamp(textStartOf(doc)) : 0;
   const state = EditorState.create({
     doc,
@@ -777,7 +785,7 @@ export function attach(textarea, host, original, codeTokens) {
       // Pasted text as a textarea takes it: with its line endings made "\n".
       EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
       history(),
-      titleLine,
+      titled ? titleLine : [],
       changes.extensions,
       completion.extension,
       // Enter is a line break and nothing more, as in the textarea, except

@@ -129,6 +129,22 @@ spec m = do
     markdown ui `shouldReturn` "# Back again"
     unmount ui
 
+  it "leaves a template its own name, and the heading it gives the pages made from it" $ runPage $ do
+    ui <- start m (Just "user-admin") (EditPage (slugs ["team"]) (slugs ["weekly-sync"]))
+    text <- editorText ui
+    markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# {{title}}\n")
+    -- The title field is the template's name, typed there.
+    title <- find ui ".editor-title input"
+    getAttribute title "readonly" `shouldReturn` Nothing
+    getProperty title "value" `shouldReturn` "Weekly sync"
+    focus text
+    press "Control+End"
+    typeText text "\n\nMore."
+    find ui ".editor-save-close" >>= click
+    find ui ".page-view" >>= shouldBeVisible
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Weekly sync")
+    unmount ui
+
   it "shows the preview alone at the block being edited, the bar still there, and Back returns to the text" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
     _ <- editorText ui

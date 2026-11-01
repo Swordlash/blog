@@ -2434,10 +2434,11 @@ body:has(.slides-view) {
 }
 
 /* On a phone the bar takes too much of the screen to stay: only the
-   toolbar does, as before. */
+   toolbar does, as before. The top's own box goes (display: contents), so
+   that the toolbar sticks within the whole form, not within the top. */
 @media (max-width: 760px) {
   .editor-top {
-    position: static;
+    display: contents;
   }
 
   .editor-toolbar {
