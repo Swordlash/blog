@@ -5952,7 +5952,8 @@ a.mention {
   font: inherit;
 }
 
-/* The model and the effort, a compact row under the message. */
+/* The mode, the model and the effort, a compact row under the panel's
+   header. */
 .assistant-choices {
   display: flex;
   flex-wrap: wrap;
@@ -5976,6 +5977,32 @@ a.mention {
 
 .assistant-model-other {
   width: 11rem;
+}
+
+/* Ask or Agent: two buttons joined, the mode in force pressed. */
+.assistant-mode {
+  display: inline-flex;
+}
+
+.assistant-mode-choice {
+  padding: 0.1rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 0;
+}
+
+.assistant-mode-choice:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.assistant-mode-choice:last-child {
+  border-radius: 0 6px 6px 0;
+  margin-left: -1px;
+}
+
+.assistant-mode-choice[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
 }
 
 .assistant-send-row {
@@ -6004,6 +6031,12 @@ a.mention {
   text-decoration: line-through;
   text-decoration-color: var(--caution);
   white-space: pre-wrap;
+}
+
+/* The text's selection while the focus is elsewhere, in the assistant
+   (web/src/editor.js): shown as the browser shows one. */
+.editor-cm .cm-wiki-kept-selection {
+  background: color-mix(in srgb, Highlight 35%, transparent);
 }
 
 /* Inline math left open on its line (web/src/editor.js): a wavy red

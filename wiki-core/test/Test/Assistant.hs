@@ -115,6 +115,24 @@ settingsSpec = describe "settings" $ do
     let listed = withBaseUrl OpenAI "https://models.github.ai/inference" (withModels Anthropic anthropicList today s)
     decode (encode listed) `shouldBe` Just listed
 
+  it "keep the mode, Agent unless Ask was chosen, and read settings kept before the modes as Agent" $ do
+    defaultSettings.chatMode `shouldBe` Agent
+    let asking = withMode Ask (withKey Anthropic (Just "sk-a") defaultSettings)
+    decode (encode asking) `shouldBe` Just asking
+    toJSON asking `shouldSatisfy` \case
+      Object o -> KM.lookup "mode" o == Just (String "ask")
+      _ -> False
+    toJSON defaultSettings `shouldSatisfy` \case
+      Object o -> isNothing (KM.lookup "mode" o)
+      _ -> False
+    (\o -> o.chatMode) <$> (decode "{\"provider\":\"anthropic\"}" :: Maybe Settings) `shouldBe` Just Agent
+    -- A mode is a choice of the user's: a blank setting no longer, and
+    -- kept when the provider changes.
+    blankSettings (withMode Ask defaultSettings) `shouldBe` False
+    blankSettings (withMode Agent (withMode Ask defaultSettings)) `shouldBe` True
+    (chooseProvider OpenAI asking).chatMode `shouldBe` Ask
+    map modeLabel [minBound .. maxBound] `shouldBe` ["Ask", "Agent"]
+
 modelsSpec :: Spec
 modelsSpec = describe "the models offered" $ do
   it "group Anthropic's list: each family's newest undated model, Opus first, then the others, newest first" $ do
@@ -349,20 +367,20 @@ promptSpec = describe "the page's context" $ do
     let long = T.replicate (bodyCap + 10) "a"
         context = pageContext "Long" long Nothing
     context `shouldBe` Whole "Long" (T.take bodyCap long) (Just (bodyCap + 10))
-    userTurn [] context "Shorten it." `shouldSatisfy` T.isInfixOf ("Only the first " <> show bodyCap <> " of its " <> show (bodyCap + 10) <> " characters")
+    userTurn Agent [] context "Shorten it." `shouldSatisfy` T.isInfixOf ("Only the first " <> show bodyCap <> " of its " <> show (bodyCap + 10) <> " characters")
 
   it "puts the title, the page's text and the request in a message" $ do
-    let turn = userTurn [] (pageContext "Hello" page (Just (spanOf "Third."))) "Fix it."
+    let turn = userTurn Agent [] (pageContext "Hello" page (Just (spanOf "Third."))) "Fix it."
     turn `shouldSatisfy` T.isPrefixOf "The page is titled \"Hello\"."
     turn `shouldSatisfy` T.isInfixOf "<selection>\nThird.\n</selection>"
     turn `shouldSatisfy` T.isInfixOf "line 8"
     turn `shouldSatisfy` T.isSuffixOf "<request>\nFix it.\n</request>"
-    userTurn [] (pageContext "Hello" page Nothing) "Hi" `shouldSatisfy` T.isInfixOf ("<page>\n" <> page <> "\n</page>")
+    userTurn Agent [] (pageContext "Hello" page Nothing) "Hi" `shouldSatisfy` T.isInfixOf ("<page>\n" <> page <> "\n</page>")
 
   it "says which of the model's changes the user rejected or undid since its last message" $ do
     let context = pageContext "Hello" page Nothing
         thanks = "Inserted \8220## Thanks\8221 at the end"
-        turn = userTurn [(thanks, Rejected), ("Replaced \8220a\8221 with \8220b\8221", Accepted), ("Removed \8220c\8221", Undone)] context "And now?"
+        turn = userTurn Agent [(thanks, Rejected), ("Replaced \8220a\8221 with \8220b\8221", Accepted), ("Removed \8220c\8221", Undone)] context "And now?"
     turn `shouldSatisfy` T.isInfixOf ("Since your last message, the user decided on your changes")
     turn `shouldSatisfy` T.isInfixOf ("- Rejected (what it replaced is back): " <> thanks)
     turn `shouldSatisfy` T.isInfixOf "- Accepted: Replaced \8220a\8221 with \8220b\8221"
@@ -371,11 +389,20 @@ promptSpec = describe "the page's context" $ do
     fst (T.breakOn "Since your last message" turn) `shouldSatisfy` T.isPrefixOf "The page is titled"
     snd (T.breakOn "Since your last message" turn) `shouldSatisfy` T.isInfixOf "<page>"
 
+  it "tells the model, in Ask mode, that the user wants an answer and no edit" $ do
+    let context = pageContext "Hello" page Nothing
+        asked = userTurn Ask [] context "What does it say?"
+    asked `shouldSatisfy` T.isInfixOf "Ask mode"
+    asked `shouldSatisfy` T.isInfixOf "do not edit"
+    -- Before the request, which stays last.
+    asked `shouldSatisfy` T.isSuffixOf "<request>\nWhat does it say?\n</request>"
+    userTurn Agent [] context "Hi" `shouldNotSatisfy` T.isInfixOf "Ask mode"
+
   it "says nothing of decisions when there were none, or only acceptances" $ do
     let context = pageContext "Hello" page Nothing
-    userTurn [] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
-    userTurn [("Replaced \8220a\8221 with \8220b\8221", Accepted)] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
-    userTurn [] context "Hi" `shouldBe` userTurn [("x", Accepted)] context "Hi"
+    userTurn Agent [] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
+    userTurn Agent [("Replaced \8220a\8221 with \8220b\8221", Accepted)] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
+    userTurn Agent [] context "Hi" `shouldBe` userTurn Agent [("x", Accepted)] context "Hi"
 
   it "has a shortcut for each of the plan's actions" $ do
     map shortcutLabel shortcuts `shouldBe` ["Improve", "Fix grammar", "Shorten", "Expand", "Summarise", "Continue", "Translate"]
@@ -396,7 +423,7 @@ requestSpec = describe "the requests" $ do
     markdownReference `shouldSatisfy` T.isInfixOf "[[toc]]"
 
   it "put the reference first in Anthropic's system prompt, marked for caching, and nothing that changes" $ do
-    let request = anthropicRequest (ModelName "claude-opus-5-5") "low"
+    let request = anthropicRequest Agent (ModelName "claude-opus-5-5") "low"
     field "model" request `shouldBe` Just (String "claude-opus-5-5")
     case field "system" request of
       Just (Array blocks) -> do
@@ -404,16 +431,28 @@ requestSpec = describe "the requests" $ do
       other -> expectationFailure ("no system blocks: " <> show other)
     field "tools" request `shouldBe` Just anthropicTools
     -- The same for every request with the same model: what is cached.
-    encode (anthropicRequest (ModelName "claude-opus-5-5") "low") `shouldBe` encode request
+    encode (anthropicRequest Agent (ModelName "claude-opus-5-5") "low") `shouldBe` encode request
     field "messages" request `shouldBe` Nothing
     -- Adaptive thinking, with its summary shown, and no budget.
     field "thinking" request `shouldBe` Just (object ["type" .= ("adaptive" :: Text), "display" .= ("summarized" :: Text)])
     -- The effort, as Anthropic takes it.
     field "output_config" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
-    field "output_config" (anthropicRequest (ModelName "claude-opus-5-5") "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
+    field "output_config" (anthropicRequest Agent (ModelName "claude-opus-5-5") "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
+
+  it "turn the tools off in Ask mode, keeping them and everything cached as it is" $ do
+    let anthropic = anthropicRequest Ask (ModelName "claude-opus-5-5") "low"
+        anthropicAgent = anthropicRequest Agent (ModelName "claude-opus-5-5") "low"
+        openAi = openAiRequest Ask (ModelName "gpt-6.1-sol") "low"
+        openAiAgent = openAiRequest Agent (ModelName "gpt-6.1-sol") "low"
+    field "tool_choice" anthropic `shouldBe` Just (object ["type" .= ("none" :: Text)])
+    field "tool_choice" openAi `shouldBe` Just (String "none")
+    field "tool_choice" anthropicAgent `shouldBe` Nothing
+    field "tool_choice" openAiAgent `shouldBe` Nothing
+    for_ ["tools", "system"] $ \k -> field k anthropic `shouldBe` field k anthropicAgent
+    for_ ["tools", "instructions"] $ \k -> field k openAi `shouldBe` field k openAiAgent
 
   it "start OpenAI's instructions with the reference, keep nothing at OpenAI, and change nothing" $ do
-    let request = openAiRequest (ModelName "gpt-6.1-sol") "low"
+    let request = openAiRequest Agent (ModelName "gpt-6.1-sol") "low"
     case field "instructions" request of
       Just (String text) -> do
         text `shouldSatisfy` T.isPrefixOf markdownReference
@@ -422,10 +461,10 @@ requestSpec = describe "the requests" $ do
     field "store" request `shouldBe` Just (Bool False)
     -- The effort, and a summary of the reasoning, for the panel.
     field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text), "summary" .= ("auto" :: Text)])
-    field "reasoning" (openAiRequest (ModelName "gpt-6.1-sol") "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text), "summary" .= ("auto" :: Text)])
+    field "reasoning" (openAiRequest Agent (ModelName "gpt-6.1-sol") "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text), "summary" .= ("auto" :: Text)])
     field "max_output_tokens" request `shouldBe` Nothing
     field "tools" request `shouldBe` Just openAiTools
-    encode (openAiRequest (ModelName "gpt-6.1-sol") "low") `shouldBe` encode request
+    encode (openAiRequest Agent (ModelName "gpt-6.1-sol") "low") `shouldBe` encode request
 
   it "offer the two tools, every field required, as OpenAI's strict mode wants" $ do
     let names = \case

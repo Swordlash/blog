@@ -368,6 +368,29 @@ const texMath = {
 // The wiki's Markdown: CodeMirror's (GFM) with the math above.
 const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure(texMath), [], "markdown");
 
+// The selection, kept in sight while the text does not have the focus
+// (issue #120): the browser shows a selection only where the focus is, so
+// selecting lines and then writing to the assistant about them would hide
+// them, though the assistant still has them. While the editor is not
+// focused, each selected range is marked, and the style sheet gives it the
+// look of a selection; with the focus back, the browser's own shows again.
+const keptMark = Decoration.mark({ class: "cm-wiki-kept-selection" });
+
+const keptSelectionOf = (view) =>
+  view.hasFocus ? Decoration.none : Decoration.set(view.state.selection.ranges.filter((range) => !range.empty).map((range) => keptMark.range(range.from, range.to)));
+
+const keptSelection = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = keptSelectionOf(view);
+    }
+    update(update) {
+      if (update.focusChanged || update.selectionSet || update.docChanged) this.decorations = keptSelectionOf(update.view);
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 // Inline math left open on its line (issue #120): a $ or a \( that nothing
 // closes on the same line is underlined in red from there to the line's
 // end, as a misspelt word is, with a title that says why. The wiki's parser
@@ -912,6 +935,7 @@ export function attach(textarea, host, original, codeTokens) {
       syntaxHighlighting(highlighter),
       decorations(codeTokens),
       unclosedMath,
+      keptSelection,
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",

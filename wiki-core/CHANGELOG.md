@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The assistant has two modes (WP5.43, issue #120): `Settings` gains `chatMode`
+(`Mode`, `Ask` or `Agent`, `withMode`, `modeLabel`), stored as `"mode": "ask"`
+and absent in Agent mode, so settings stored before read as Agent. The vault
+seals it with the rest of the user's choices. `anthropicRequest`,
+`openAiRequest` and `userTurn` take the mode first: in Ask mode the request
+keeps its tools and adds `tool_choice` none, and the message tells the model
+that the user wants an answer and no edit.
+
 A line break in a page's text is a line break on the page (WP5.42, issue
 #120): the renderer writes a soft break, a line ended plainly, as a `<br>`,
 as it writes a hard one, in paragraphs, list items, quotations, boxes and

@@ -80,7 +80,7 @@ import Data.Map.Strict qualified as Map
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
-import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), defaultSettings)
+import Wiki.Core.Assistant (Mode (..), Provider (..), ProviderSettings (..), Settings (..), defaultSettings)
 
 --------------------------------------------------------------------------------
 -- The vault
@@ -216,16 +216,17 @@ wrappingInfo = "wiki-assistant-vault/1 wrapping key"
 --------------------------------------------------------------------------------
 -- What is sealed
 
--- | The part of the settings the vault seals: the chosen provider, and
--- each provider's key, model, effort and base URL. What was learnt from a
--- provider (its model list, whether it could be reached) is left out.
+-- | The part of the settings the vault seals: the chosen provider, the
+-- mode, and each provider's key, model, effort and base URL. What was
+-- learnt from a provider (its model list, whether it could be reached) is
+-- left out.
 secretsOf :: Settings -> Settings
 secretsOf s = s {byProvider = Map.map (\(ProviderSettings k m e b _ _) -> ProviderSettings k m e b Nothing False) s.byProvider}
 
 -- | The part of the settings a device keeps in the clear: what was learnt
 -- from each provider, and nothing a user typed.
 learntOf :: Settings -> Settings
-learntOf s = Settings {provider = Anthropic, byProvider = Map.map (\(ProviderSettings _ _ _ _ f u) -> ProviderSettings Nothing Nothing Nothing Nothing f u) s.byProvider}
+learntOf s = Settings {provider = Anthropic, chatMode = Agent, byProvider = Map.map (\(ProviderSettings _ _ _ _ f u) -> ProviderSettings Nothing Nothing Nothing Nothing f u) s.byProvider}
 
 -- | The settings made whole again: the sealed part, with what was learnt
 -- from each provider, which only applies while the provider's key and

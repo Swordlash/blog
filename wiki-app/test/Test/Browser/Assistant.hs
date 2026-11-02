@@ -18,7 +18,11 @@
 -- reached, said so and tried again; OpenAI's API at another address
 -- without a key; and the settings page: keys kept per user, forgotten,
 -- and tested, the list of models fetched with a key, and the default
--- effort per provider. The
+-- effort per provider; the two modes, Ask, whose request has the tools
+-- turned off and whose model's edit is refused, and Agent, kept in the
+-- settings and chosen above the conversation with the model and the
+-- effort; and the text's selection kept in sight while the message box
+-- has the focus. The
 -- providers themselves cannot be reached from here (the script answers
 -- for all of them on a test's page): they are tested over their SDKs by
 -- toolchain/test-assistant.mjs.
@@ -44,7 +48,7 @@ import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (ApiKey (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
+import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode)
 import Wiki.Core.Id (UserId (..))
 
 $( browserJS
@@ -135,6 +139,61 @@ spec m = do
     fromMaybe "" (fieldText ["user"] request) `shouldSatisfy` T.isInfixOf "<page>\n# Hello, world"
     find ui ".assistant-reject-all" >>= click
     eventually $ markdown ui `shouldReturn` original
+
+  it "answers in Ask mode without changing the page: its tools are off, and an edit asked for anyway is refused" $ runPage $ do
+    script [[replace "## Why a wiki" "## Why", text "I would retitle it."]]
+    (ui, original) <- openAssistantWith m
+    -- Agent mode at first. The mode is chosen above the conversation, with
+    -- the model and the effort, and the settings keep it.
+    _ <- find ui ".assistant-head + .assistant-choices .assistant-effort"
+    find ui ".assistant-mode-choice[data-mode='agent']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui ".assistant-mode-choice[data-mode='ask']" >>= click
+    eventually $ find ui ".assistant-mode-choice[data-mode='ask']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui ".assistant-mode-choice[data-mode='agent']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+    eventually $ (\s -> s.chatMode) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Ask)
+    find ui ".assistant-input" >>= (`getProperty` "placeholder") >>= (`shouldBe` "Ask a question about the page")
+    send ui "Is the heading good?"
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "I would retitle it.")
+    find ui ".assistant-not-made" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "edits are off in Ask mode")
+    -- Nothing in the page changed, and the model was told why.
+    length <$> findAll ui ".cm-wiki-inserted" `shouldReturn` 0
+    markdown ui `shouldReturn` original
+    [answered] <- answers
+    fieldBool "ok" answered `shouldBe` Just False
+    fieldText ["text"] answered `shouldSatisfy` maybe False (T.isInfixOf "Ask mode")
+    -- The request keeps its tools but lets the model call none, and the
+    -- message says what the user wants.
+    [request] <- requests
+    fieldText ["request", "tool_choice", "type"] request `shouldBe` Just "none"
+    at ["request", "tools"] request `shouldSatisfy` isJust
+    fromMaybe "" (fieldText ["user"] request) `shouldSatisfy` T.isInfixOf "Ask mode"
+
+  it "opens in the mode the settings keep, and back in Agent mode sends the tools on" $ runPage $ do
+    keep m (UserId "user-editor") (withMode Ask (chooseProvider Scripted defaultSettings))
+    script [[text "Fine."]]
+    ui <- openAssistantKept m
+    find ui ".assistant-mode-choice[data-mode='ask']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui ".assistant-mode-choice[data-mode='agent']" >>= click
+    eventually $ find ui ".assistant-mode-choice[data-mode='agent']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    eventually $ (\s -> s.chatMode) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Agent)
+    find ui ".assistant-input" >>= (`getProperty` "placeholder") >>= (`shouldBe` "Ask for a change, or a question about the page")
+    send ui "Hello."
+    eventually $ length <$> requests `shouldReturn` 1
+    [request] <- requests
+    at ["request", "tool_choice"] request `shouldBe` Nothing
+    fromMaybe "" (fieldText ["user"] request) `shouldNotSatisfy'` T.isInfixOf "Ask mode"
+
+  it "keeps the text's selection in sight while the message box has the focus" $ runPage $ do
+    ui <- openAssistant m
+    _ <- unsafeIOToPageM (js_select 16 38)
+    find ui ".assistant-input" >>= focus
+    eventually $ find ui ".cm-wiki-kept-selection" >>= (`shouldHaveText` "This is the first post")
+    find ui ".assistant-scope .assistant-chip" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "line 3")
+    -- Back in the text, the browser shows the selection itself.
+    editorText ui >>= focus
+    eventually $ length <$> findAll ui ".cm-wiki-kept-selection" `shouldReturn` 0
+    find ui ".assistant-input" >>= focus
+    eventually $ length <$> findAll ui ".cm-wiki-kept-selection" `shouldReturn` 1
 
   it "answers a replacement of text the page does not have with why, and the model goes on" $ runPage $ do
     script [[replace "a sentence nowhere" "anything", text "Sorry, I could not find it."]]
@@ -273,7 +332,7 @@ spec m = do
     eventually $ (\s -> s.provider) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Anthropic)
     find ui ".cm-wiki-inserted" >>= (`shouldHaveText` "## Why")
     find ui ".assistant-pending" >>= (`shouldHaveText` "1 suggested change to accept or reject")
-    -- Claude's models and efforts are offered under the message.
+    -- Claude's models and efforts are offered at the top of the panel.
     findAll ui ".assistant-effort option" >>= traverse textContent >>= (`shouldBe` ["low", "medium", "high", "xhigh", "max"])
     find ui ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
     -- The next message goes to Claude, with its key.

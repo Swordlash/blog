@@ -438,7 +438,10 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   Claude or OpenAI, or any service that speaks OpenAI's API (GitHub Models,
   OpenRouter, Ollama on your own machine): a chat beside the Markdown, whose
   model edits the page through tools, each edit shown as a change you accept or
-  reject, with the models the provider lists for your key. The key stays in
+  reject (**Agent** mode), or only answers and changes nothing (**Ask** mode),
+  with the models the provider lists for your key. The mode, the model and the
+  effort are chosen at the top of the chat, and the text selected stays shown
+  while you write to it. The key stays in
   your browser, sealed, and goes to its provider only; every request sends
   [docs/markdown.md](docs/markdown.md) first, cached by the provider, so the
   model writes this wiki's Markdown. Over `wiki-server`, the keys follow you
