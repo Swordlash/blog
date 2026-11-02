@@ -1430,7 +1430,13 @@ sessionTx :: Tx Session
 sessionTx = do
   ctx <- ask
   pure $ case (,) <$> ctx.user <*> ctx.principal of
-    Nothing -> (anonymousIn ctx.grants.access) {B.homePage = if ctx.grants.access == Closed && not ctx.server.homePage.showAnonymous then defaultHomePage else ctx.server.homePage}
+    -- Someone not signed in sets formulas with the built-in macros too: a
+    -- public page's formulas use them.
+    Nothing ->
+      (anonymousIn ctx.grants.access)
+        { B.homePage = if ctx.grants.access == Closed && not ctx.server.homePage.showAnonymous then defaultHomePage else ctx.server.homePage
+        , B.mathMacros = ctx.server.mathMacros
+        }
     Just (u, p) ->
       Session
         { user = Just u
