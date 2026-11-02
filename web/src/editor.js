@@ -379,7 +379,7 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // where a formula may start: not before a blank or a digit ($5 and $10
 // are prices), not in $$, and not in code, a link's address or HTML (the
 // nodes of notMentions). Display math, $$ and \[, may take several lines,
-// and is left alone. Only the lines on screen are looked at.
+// and is left alone. Only the lines on screen are looked at, each whole.
 const unclosedMark = Decoration.mark({ class: "cm-wiki-unclosed-math", attributes: { title: "This formula is not closed on its line." } });
 
 const unclosedMathOf = (view) => {
@@ -392,7 +392,12 @@ const unclosedMathOf = (view) => {
     marked.add(line.number);
     ranges.push(unclosedMark.range(at, line.to));
   };
-  for (const { from, to } of view.visibleRanges) {
+  for (const visible of view.visibleRanges) {
+    // Whole lines: a range on screen can start or end inside a long wrapped
+    // line, and the scan for a lone $ below reads whole lines, so the nodes
+    // it skips must be collected over the same whole lines.
+    const from = state.doc.lineAt(visible.from).from;
+    const to = state.doc.lineAt(visible.to).to;
     const skipped = [];
     syntaxTree(state).iterate({
       from,

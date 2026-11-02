@@ -285,6 +285,15 @@ spec = describe "Markdown.Render" $ do
                      <> "<li id=\"fn-2\"><p>One.</p><ul><li>two</li><li>three</li></ul><a class=\"footnote-back\" href=\"#fnref-2\">↩</a></li></ol></section>"
                  )
 
+    it "titles each section's reference with that section's own note, as comments shown together number theirs" $ do
+      let doc t = either (const []) identity (parseMarkdown t)
+      htmls <- traverse (renderHtml :: [Html] -> IO Text) (renderSections defaultOptions [doc "A[^n]\n\n[^n]: First.", doc "B[^n]\n\n[^n]: Second."])
+      htmls `shouldSatisfy` \case
+        [a, b] -> "title=\"First.\"" `T.isInfixOf` a && "title=\"Second.\"" `T.isInfixOf` b
+        _ -> False
+    it "titles a reference with the text of a note written in HTML" $
+      markdown "A[^n]\n\n[^n]: <p>The note.</p>" >>= (`shouldSatisfy` T.isInfixOf "title=\"The note.\"")
+
   describe "boxes" $ do
     it "writes an alert with its title" $
       "> [!WARNING]\n> Hot." `shows'` "<div class=\"alert alert-warning\"><p class=\"alert-title\">Warning</p><p>Hot.</p></div>"

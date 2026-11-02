@@ -49,6 +49,11 @@ spec = describe "Slides.renderDeck" $ do
                      <> "<section class=\"footnotes\"><ol start=\"2\"><li id=\"fn-2\"><p>Note b. <a class=\"footnote-back\" href=\"#fnref-2\">↩</a></p></li></ol></section>"
                  ]
 
+  it "titles a reference with its note when a pause puts the notes in a later step" $ do
+    let slides = rendered defaultOptions "A[^a].\n\n. . .\n\nB.\n\n[^a]: Note a.\n"
+    bodies <- traverse (\s -> renderHtml s.body) slides
+    bodies `shouldSatisfy` any (T.isInfixOf "title=\"Note a.\"")
+
   it "renders a slide's steps in place, the later ones in the class that hides them" $ do
     let deck = either (panic . show) deckOf (parseMarkdown "One\n\n. . .\n\n::: incremental\n- a\n- b\n:::\n")
         shown k = deck {slides = map (showingStep k) deck.slides}

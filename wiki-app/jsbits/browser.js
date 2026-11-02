@@ -50,11 +50,18 @@ function wiki_clicked_note(event) {
 // wiki_history_entry numbers entries, the one after the entry left, and
 // the router hears nothing of it, as of a push of its own. Under a router
 // that keeps the route in the fragment (#/s/..., the browser tests'), the
-// fragment is the router's, and the note is only scrolled to.
+// fragment is the router's, and the note is only scrolled to; so it is in
+// the editor's preview.
 function wiki_follow_note(note, reference) {
   const element = document.getElementById(note);
   if (element === null) return;
-  if (!location.hash.startsWith("#/")) {
+  // The editor's "Show preview" has an entry of its own (wikiPreview), which
+  // its "Back to edit" goes back from, one entry. A note's entry pushed on
+  // top of it would take that Back, so in the preview a note is only
+  // scrolled to.
+  const state = history.state;
+  const inPreview = state !== null && typeof state === "object" && state.wikiPreview === true;
+  if (!location.hash.startsWith("#/") && !inPreview) {
     const here = location.pathname + location.search;
     const entry = wiki_history_entry();
     if (reference !== "") history.replaceState(history.state, "", here + "#" + encodeURIComponent(reference));
