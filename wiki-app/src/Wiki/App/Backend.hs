@@ -381,6 +381,12 @@ class (Monad m) => MonadWiki m where
   -- them; what does not pass is 'Invalid'. An image is uploaded with
   -- 'uploadSpaceIcon'. An image the space had, which the new profile does
   -- not keep, is removed from the space.
+  --
+  -- The space behind the wiki's home page ('getHomeDocument') takes only
+  -- an icon (WP5.45 of docs/PLAN.md): it is the wiki's own icon, and the
+  -- favicon of the pages outside any space. Only an administrator of the
+  -- wiki sets it, and the rest of the profile given is ignored: the home's
+  -- description, home page and blog are its own.
   setSpaceProfile :: SpaceId -> SpaceProfile -> m (Either WikiError Space)
   default setSpaceProfile :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> SpaceProfile -> m (Either WikiError Space)
   setSpaceProfile s = lift . setSpaceProfile s
@@ -388,7 +394,8 @@ class (Monad m) => MonadWiki m where
   -- | Set a space's icon to an image: its media type and its bytes, checked
   -- as 'Wiki.Core.Space.checkIconUpload' checks them ('Invalid' if they do
   -- not pass). The bytes are stored as an attachment's are, and the image
-  -- replaces any image the space had before.
+  -- replaces any image the space had before. For the wiki's home it takes
+  -- an administrator of the wiki, as 'setSpaceProfile' does.
   uploadSpaceIcon :: SpaceId -> Text -> ByteString -> m (Either WikiError Space)
   default uploadSpaceIcon :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> ByteString -> m (Either WikiError Space)
   uploadSpaceIcon s t = lift . uploadSpaceIcon s t

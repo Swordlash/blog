@@ -1,8 +1,9 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The optional Spaces and Recently visited sections under the home page.
--- Administrators change each section independently. The shell renders the
--- ordinary page view above these navigation sections.
+-- Administrators change each section independently, and the wiki's icon
+-- ("Wiki.App.View.HomeIcon"). The shell renders the ordinary page view
+-- above these navigation sections.
 module Wiki.App.View.Directory
   ( Input (..)
   , component
@@ -10,7 +11,7 @@ module Wiki.App.View.Directory
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Row (Empty)
+import Data.Row (type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -25,6 +26,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Recent (readRecent)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.App.View.HomeIcon qualified as HomeIcon
 import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Path (childrenOf)
@@ -50,7 +52,9 @@ data State = State
   , problem :: Maybe WikiError
   }
 
-data Action = Initialize | Receive Input | Followed (Follow Route) | Spaces Bool | Recent Bool | Anonymous Bool
+type Slots = ("homeIcon" .== H.Slot (Const Void) ViewOutput ())
+
+data Action = Initialize | Receive Input | Followed (Follow Route) | Spaces Bool | Recent Bool | Anonymous Bool | FromHomeIcon ViewOutput
 
 component :: forall query m. (MonadLoad m, MonadAdmin m, MonadBrowserDOM m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -62,7 +66,7 @@ component =
     render
     [H.onAction handleAction, H.onInitialize (handleAction Initialize), H.onReceive (handleAction . Receive)]
   where
-    render :: State -> H.ComponentHTML Action Empty m
+    render :: State -> H.ComponentHTML Action Slots m
     render st =
       [hh|
         <section class="directory">
@@ -74,6 +78,7 @@ component =
                 <label><input class="home-anonymous" type="checkbox" checked={{ home.showAnonymous }} onChecked={{ Anonymous }}/> Show to signed-out visitors</label>
                 <p>Shares this home page, its attachments, source and history. Other wiki pages still require sign-in.</p>
               {% end %}
+              {{ HH.slot "homeIcon" () HomeIcon.component HomeIcon.Input {context = ctx} FromHomeIcon }}
             </div>
           {% end %}
           {% for e in maybeToList st.problem %}{{ errorView e }}{% end %}
@@ -89,7 +94,7 @@ component =
         ctx = st.input.context
         home = ctx.session.homePage
 
-    recentSection :: State -> H.ComponentHTML Action Empty m
+    recentSection :: State -> H.ComponentHTML Action Slots m
     recentSection st =
       [hh|
         <section class="recent-spaces" aria-label="Recently visited" hidden={{ null shown }}>
@@ -112,7 +117,7 @@ component =
         -- follows it.
         shown = [s | sid <- st.recent, Just s <- [find (\x -> x.id == sid) ctx.spaces], mayView ctx s.id]
 
-    cards :: State -> H.ComponentHTML Action Empty m
+    cards :: State -> H.ComponentHTML Action Slots m
     cards st = case filter (not . homeSpace ctx . (\s -> s.id)) (subspacesOf ctx.spaces Nothing) of
       [] -> [hh|<p class="empty">There are no spaces you can see.</p>|]
       roots ->
@@ -125,7 +130,7 @@ component =
       where
         ctx = st.input.context
 
-    card :: State -> Space -> H.ComponentHTML Action Empty m
+    card :: State -> Space -> H.ComponentHTML Action Slots m
     card st s
       | mayView ctx s.id =
           [hh|
@@ -167,12 +172,12 @@ component =
             ]
 
     -- A link to a new top-level space, for someone who may create one.
-    newSpace :: Context -> Maybe (H.ComponentHTML Action Empty m)
+    newSpace :: Context -> Maybe (H.ComponentHTML Action Slots m)
     newSpace ctx =
       guard (mayCreateSpace (principalOf ctx) (grantsOf ctx) Nothing)
         $> [hh|<a class="button new-space" {{ Router.linkProps ctx.router Followed (NewSpace Nothing) }}>New space</a>|]
 
-    handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
+    handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       Initialize -> do
         recent <- H.liftEffect readRecent
@@ -186,6 +191,7 @@ component =
       Spaces value -> change (\h -> h {showSpaces = value})
       Recent value -> change (\h -> h {showRecent = value})
       Anonymous value -> change (\h -> h {showAnonymous = value})
+      FromHomeIcon out -> H.raise out
 
     change f = do
       home <- gets (\st -> st.input.context.session.homePage)

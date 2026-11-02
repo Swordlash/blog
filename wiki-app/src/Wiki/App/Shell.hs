@@ -140,9 +140,10 @@ import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
+import Wiki.App.Favicon (Favicon (..), defaultFavicon, homeFavicon, spaceFavicon)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
@@ -320,7 +321,10 @@ data State m = State
   , spaces :: [Space]
   , icons :: Map SpaceId Text
   -- ^ The URLs of the spaces' icon images, for spaces whose icon is an
-  -- image.
+  -- image, the wiki home's too.
+  , home :: Maybe Space
+  -- ^ The space behind the wiki's home page, whose icon is the wiki's
+  -- ("Wiki.App.Favicon").
   , here :: Here
   , switcherOpen :: Bool
   -- ^ Whether the sidebar's menu of spaces to switch to is open.
@@ -432,7 +436,7 @@ component =
             world <- fetchWorld demo
             here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
-          let (Around signedIn users spaces icons kept, here) = fromMaybe (Around anonymous [] [] mempty False, NoSpace) loaded
+          let (Around signedIn users spaces home icons kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty False, NoSpace) loaded
           pure
             State
               { router
@@ -447,6 +451,7 @@ component =
               , session = signedIn
               , users
               , spaces
+              , home
               , icons
               , here
               , switcherOpen = False
@@ -1332,7 +1337,7 @@ component =
     loadWorld = do
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
-        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, icons = w.icons, kept = w.kept, world = WorldReady})
+        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, kept = w.kept, world = WorldReady})
         Left e -> modify (\st -> st {world = WorldFailed e})
 
     -- Load the space the route is in, unless it is the one loaded already
@@ -1373,6 +1378,8 @@ component =
         _ -> pass
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
+      let icon = faviconOf st
+      H.liftEffect (setFavicon icon.href icon.mediaType)
       -- A space shown counts as visited, for the directory to offer again.
       case st.here of
         InSpace _ space _ | not (homeSpace (context st) space.id) -> H.liftEffect (rememberVisit space.id)
@@ -1388,12 +1395,14 @@ component =
       pure (Just (reply (if st.settled then Just (headOf st) else Nothing)))
 
 -- | The context every route shows: who is signed in, who else one may be
--- in the demo, the tree of spaces, the URLs of the spaces' icon images,
--- and whether the demo saves its changes.
+-- in the demo, the tree of spaces, the space behind the wiki's home page,
+-- the URLs of the spaces' icon images, and whether the demo saves its
+-- changes.
 data Around = Around
   { asking :: Session
   , users :: [User]
   , spaces :: [Space]
+  , home :: Maybe Space
   , icons :: Map SpaceId Text
   , kept :: Bool
   }
@@ -1407,9 +1416,12 @@ fetchWorld demo = do
   asking <- session
   users <- maybe (pure []) (\d -> d.listUsers) demo
   spaces <- if shutOut asking then pure [] else listSpaces
-  icons <- Map.fromList <$> sequence [(x.id,) <$> spaceIconUrl x | x <- spaces, Just (IconImage _ _) <- [x.icon]]
+  -- The home's space is not among the spaces listed. Its icon is the
+  -- wiki's favicon away from the spaces (WP5.45 of docs/PLAN.md).
+  home <- if shutOut asking then pure Nothing else either (const Nothing) (Just . fst) <$> getHomeDocument
+  icons <- Map.fromList <$> sequence [(x.id,) <$> spaceIconUrl x | x <- spaces <> toList home, Just (IconImage _ _) <- [x.icon]]
   kept <- maybe (pure False) (\d -> d.demoKept) demo
-  pure Around {asking, users, spaces, icons, kept}
+  pure Around {asking, users, spaces, home, icons, kept}
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
@@ -1615,7 +1627,7 @@ documentTitle st = case reverse (map fst (crumbs st)) of
 -- page), what a link preview shows; and on every page of a public blog,
 -- where its feeds are.
 headOf :: State m -> Head
-headOf st = Head {title = documentTitle st, preview, feeds}
+headOf st = Head {title = documentTitle st, preview, feeds, icon = faviconOf st}
   where
     ctx = context st
     public space = canView Nothing st.session.grants (chainOf ctx space.id)
@@ -1679,6 +1691,19 @@ headOf st = Head {title = documentTitle st, preview, feeds}
     spaceImage space = case space.icon of
       Just (IconImage _ _) -> Just (SpaceImage space)
       _ -> Nothing
+
+-- | The tab's icon for what is shown ("Wiki.App.Favicon", WP5.45 of
+-- docs/PLAN.md): a space's own on its routes, and the wiki's elsewhere.
+-- A closed wiki shows its logo to someone who has not signed in: the home's
+-- icon is not theirs to fetch.
+faviconOf :: State m -> Favicon
+faviconOf st
+  | isShut st = defaultFavicon
+  | otherwise = case st.here of
+      InSpace _ space _ | not (homeSpace ctx space.id) -> spaceFavicon st.icons space
+      _ -> homeFavicon st.icons st.home
+  where
+    ctx = context st
 
 -- | How much an archive holds, in words for a person to read.
 archiveSummary :: Archive -> Text

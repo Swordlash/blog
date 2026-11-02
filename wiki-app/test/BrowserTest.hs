@@ -13,6 +13,7 @@ import Test.Browser.Comments qualified as Comments
 import Test.Browser.Contents qualified as Contents
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Export qualified as Export
+import Test.Browser.Favicon qualified as Favicon
 import Test.Browser.History qualified as History
 import Test.Browser.HomePage qualified as HomePage
 import Test.Browser.Http qualified as Http
@@ -94,6 +95,7 @@ spec = do
   describe "Keeping an account safe" (Security.spec BrowserDOM)
   describe "Mentions, watching and notifications" (Notifications.spec BrowserDOM)
   describe "Stars and help" (Stars.spec BrowserDOM)
+  describe "Wiki.App.Favicon" (Favicon.spec BrowserDOM)
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)

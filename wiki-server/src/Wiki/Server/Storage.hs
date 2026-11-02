@@ -1669,9 +1669,11 @@ createSpaceTx parent name = do
 
 -- | Give a space a profile, checked against its pages.
 setSpaceProfileTx :: SpaceId -> SpaceProfile -> Tx Space
-setSpaceProfileTx sid p = do
+setSpaceProfileTx sid given = do
   (s, c) <- findSpace sid
-  requireAdminister c
+  home <- requireIconAdminister sid c
+  -- The wiki home's space takes only an icon: the rest is its own.
+  let p = if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given
   nodes <- db (pageNodes sid)
   checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
   let s' = withProfile checked s
@@ -1707,7 +1709,7 @@ profileChanges nodes old new =
 uploadSpaceIconTx :: SpaceId -> Text -> Integer -> (FilePath -> IO BlobId) -> Tx Space
 uploadSpaceIconTx sid mediaType size store = do
   (s, c) <- findSpace sid
-  requireAdminister c
+  _ <- requireIconAdminister sid c
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
@@ -1717,6 +1719,18 @@ uploadSpaceIconTx sid mediaType size store = do
   -- because it carries bytes.
   record "space.profile" (spaceSubject s') [("icon", "an uploaded image")]
   pure s'
+
+-- | Check that the caller may change a space's icon, and say whether the
+-- space is the one behind the wiki's home page (WP5.45 of docs/PLAN.md).
+-- An ordinary space's icon takes whoever administers the space. The home's
+-- icon is the wiki's own, so it takes an administrator of the wiki, as the
+-- home page's other settings do; the home is never restructured
+-- otherwise ('requireOrdinary').
+requireIconAdminister :: SpaceId -> [Space] -> Tx Bool
+requireIconAdminister sid c =
+  asks (\x -> Home.isHomeSpace x.server.homePage sid) >>= \case
+    True -> requireView c >> requireAdministrator $> True
+    False -> requireAdminister c $> False
 
 -- | Change a space, as someone who administers it.
 adjustSpace :: SpaceId -> (Space -> Tx Space) -> Tx Space

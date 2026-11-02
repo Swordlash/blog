@@ -87,6 +87,7 @@ library
       Wiki.App.Demo
       Wiki.App.Guide
       Wiki.App.DemoUsers
+      Wiki.App.Favicon
       Wiki.App.Head
       Wiki.App.Help
       Wiki.App.Import
@@ -137,6 +138,7 @@ library
       Wiki.App.View.SignIn
       Wiki.App.View.Slides
       Wiki.App.View.History
+      Wiki.App.View.HomeIcon
       Wiki.App.View.Source
       Wiki.App.View.Space
       Wiki.App.View.SpaceSettings
@@ -296,6 +298,7 @@ test-suite wiki-app-test
         Test.Guide
         Test.Help
         Test.Export
+        Test.Favicon
         Test.Hydrate
         Test.Import
         Test.Islands
@@ -356,6 +359,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Contents
       Test.Browser.Editor
       Test.Browser.Export
+      Test.Browser.Favicon
       Test.Browser.History
       Test.Browser.HomePage
       Test.Browser.Http

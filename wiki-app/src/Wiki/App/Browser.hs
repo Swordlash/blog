@@ -14,6 +14,7 @@ module Wiki.App.Browser
   , articleLink
   , followArticleLink
   , setDocumentTitle
+  , setFavicon
   , historyEntry
   , historyGo
   , replacingEntry
@@ -70,6 +71,7 @@ $( browserJS
      , ("js_scroll_to", "wiki_scroll_to", Safe, [t|JSText -> IO ()|])
      , ("js_follow_note", "wiki_follow_note", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Safe, [t|JSText -> IO ()|])
+     , ("js_set_favicon", "wiki_set_favicon", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_history_entry", "wiki_history_entry", Safe, [t|IO Int|])
      , ("js_history_go", "wiki_history_go", Safe, [t|Int -> IO ()|])
      , ("js_history_replacing", "wiki_history_replacing", Safe, [t|Int -> IO ()|])
@@ -167,6 +169,12 @@ closeDialog = liftIO . js_dialog_close
 -- | Set the title of the browser's tab and of its history entry.
 setDocumentTitle :: (MonadIO m) => Text -> m ()
 setDocumentTitle = liftIO . js_set_title . toJSText
+
+-- | Set the favicon of the browser's tab ("Wiki.App.Favicon"): the page's
+-- @\<link rel="icon">@, given its address and its media type. Natively
+-- nothing happens.
+setFavicon :: (MonadIO m) => Text -> Text -> m ()
+setFavicon href mediaType = liftIO (js_set_favicon (toJSText href) (toJSText mediaType))
 
 -- | The number of the session history's current entry. The entries the
 -- shell has seen are numbered in order, so that 'historyGo' can return to
