@@ -340,7 +340,7 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39 are done, the rest
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39 and WP5.42 are done, the rest
   follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
@@ -361,11 +361,6 @@ In the order to do it, unless the owner says otherwise.
   and a warning naming the pages that use a macro being removed. In the editor, a
   button for the space's and the page's macros, editable by whoever may edit the whole
   space (the space's are on the space's page, "Math macros", today).
-- **WP5.42 Lines, footnotes and unclosed math.** A line break in the text is a line
-  break in the page, in quotes and boxes too, always (the owner: few pages yet). A
-  footnote's number shows the note on hover; a click goes to the note and the browser's
-  Back returns to the reference (anchors under the router's addresses). An unclosed `$`
-  or `\(` on a line is underlined red to the line's end in the editor.
 - **WP5.43 The assistant.** The text's selection stays shown while the assistant has
   the focus. "Ask" (talk, no edits) and "Agent" (as now) modes. Model and effort chosen
   in the editor's assistant, not only in its settings.
@@ -617,6 +612,13 @@ needs. Each was true when its package merged; check before relying on one.
 - With the sidebar folded the editor should take the screen's width. In Chromium at
   1600px it does (1272px to 1528px); the owner saw it stay narrow, and the browser and
   window width are not known yet (WP5.37).
+- Footnotes (WP5.42): in the editor's "Show preview" a footnote's number only scrolls
+  to the note, with no history entry, since an entry there would take the Back that
+  "Back to edit" makes. The hover is a native `title` with the note's plain text.
+- Unclosed math in the editor (WP5.42): `$` before a number is read as a price when a
+  word, punctuation or the line's end follows the number (`$5 each`, `$3.50`), so a
+  formula such as `$5.` left open is not underlined. Multi-line `$$` or `\[` blocks are
+  never checked.
 - The server could cache `template.html` (optional, WP5.14).
 - A second deployment (`--name`) on one machine cannot share port 443 and should use
   `--http` (WP4.18).
