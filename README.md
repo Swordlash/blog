@@ -38,6 +38,10 @@ it links to that page, where it renders. The complete reference for authors is
 the same, written in what it describes (open any page's "Source" to see its
 Markdown).
 
+One thing differs from plain Markdown: a line break in the text is a line break
+on the page, in quotations and boxes too, so a paragraph is written on one line,
+however long, and a line is broken where a break is meant.
+
 ### Mathematics, with KaTeX
 
 Formulas are set in the browser by [KaTeX](https://katex.org), between dollars
@@ -45,8 +49,7 @@ or between LaTeX's own delimiters (`\(…\)` inline, `\[…\]` on a line of thei
 own), or in a `math` fence:
 
 ```markdown
-Between single dollars inline, $e^{i\pi} + 1 = 0$, and between double
-dollars on a line of their own:
+Between single dollars inline, $e^{i\pi} + 1 = 0$, and between double dollars on a line of their own:
 
 $$
 \begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1}
@@ -72,9 +75,7 @@ They are on [Docs' pages and settings](https://swordlash.github.io/blog/s/docs/p
 and every page of the space and of its subspaces may use them:
 
 ```markdown
-This space has its own, in its settings, which its pages and its
-subspaces' pages may use: $\vect{v} \in V$, $f \in \Hom(V, W)$; and
-here $\eps$ is $\epsilon$, where the built-in one is $\varepsilon$.
+This space has its own, in its settings, which its pages and its subspaces' pages may use: $\vect{v} \in V$, $f \in \Hom(V, W)$; and here $\eps$ is $\epsilon$, where the built-in one is $\varepsilon$.
 ```
 
 A bold vector, an upright Hom, and the space's `\eps` set over the built-in one:
@@ -96,8 +97,7 @@ The triangle inequality, and the macro used again further down:
 Chemistry is mhchem's `\ce`, which KaTeX comes with:
 
 ```markdown
-`\ce` writes chemical formulas and equations (mhchem): $\ce{H2O}$,
-$\ce{SO4^2-}$, and
+`\ce` writes chemical formulas and equations (mhchem): $\ce{H2O}$, $\ce{SO4^2-}$, and
 
 $$\ce{CO2 + C -> 2 CO}$$
 ```
@@ -171,11 +171,7 @@ GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
 
 ```markdown
 > [!NOTE]
-> Your edits are kept in this browser, so a reload finds them. On the
-> **Administration** page, linked at the top right for an administrator,
-> under **Backups and data**, **Export the wiki** saves all of it as a zip
-> file, **Import a wiki** brings such a file back, and **Reset the demo
-> content** puts back the pages you see now.
+> Your edits are kept in this browser, so a reload finds them. On the **Administration** page, linked at the top right for an administrator, under **Backups and data**, **Export the wiki** saves all of it as a zip file, **Import a wiki** brings such a file back, and **Reset the demo content** puts back the pages you see now.
 ```
 
 A note, marked as one, at the top of the
@@ -195,8 +191,7 @@ page instead:
 ```markdown
 # Team handbook
 
-Private to the team: only people granted a permission on this space, or
-on the wiki as a whole, can read it.
+Private to the team: only people granted a permission on this space, or on the wiki as a whole, can read it.
 
 [[toc]]
 
@@ -239,10 +234,7 @@ A link to another page is its path, from this page or (with a leading `/`)
 from the wiki's root, and a wiki link is shorter still:
 
 ```markdown
-Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~,
-`inline code` and links, to the web (<https://commonmark.org>) or to other
-pages by their path from this one: [diagrams](markdown-guide/diagrams), or
-the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]
+Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~, `inline code` and links, to the web (<https://commonmark.org>) or to other pages by their path from this one: [diagrams](markdown-guide/diagrams), or the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]
 ```
 
 Links to the guide's subpage and to the tour, a wiki link with a label of its
@@ -265,12 +257,10 @@ whole:
 ::: {.slides theme=beamer aspect=16:9}
 :::
 
-Any page can be a slide deck. Press **Present** above the page: this one is
-a deck, and its slides tell you how it is written.
+Any page can be a slide deck. Press **Present** above the page: this one is a deck, and its slides tell you how it is written.
 
 ::: notes
-These are the speaker's notes: on the page they are a box like this one;
-on the slides they are hidden until you press **n**.
+These are the speaker's notes: on the page they are a box like this one; on the slides they are hidden until you press **n**.
 :::
 
 ---
@@ -278,14 +268,12 @@ on the slides they are hidden until you press **n**.
 ## Slides
 
 - A line with `---` alone on it, after a blank line, starts the next slide.
-- The first heading on a slide is its title; a `#` heading makes a title
-  slide, like this deck's first.
+- The first heading on a slide is its title; a `#` heading makes a title slide, like this deck's first.
 - A `::: notes` box holds what only the speaker sees.
 - Everything a page shows, a slide shows: tables, code, formulas, diagrams.
 
 ::: notes
-Mention that a page with no `---` is one slide, and is not offered as a
-deck.
+Mention that a page with no `---` is one slide, and is not offered as a deck.
 :::
 
 ---
@@ -335,16 +323,13 @@ deckOf :: [Block] -> Deck
 | n | the speaker's notes |
 | o | every slide, to pick one |
 
-On a touch screen, swipe. **Print** puts one slide on each page: choose
-"Save as PDF" to keep the deck as a file.
+On a touch screen, swipe. **Print** puts one slide on each page: choose "Save as PDF" to keep the deck as a file.
 
 ---
 
 ## Steps
 
-A slide can show its content a step at a time. Three dots, `. . .`, alone
-on a line between blank lines, are a pause: what follows waits for the next
-press of → or Space.
+A slide can show its content a step at a time. Three dots, `. . .`, alone on a line between blank lines, are a pause: what follows waits for the next press of → or Space.
 
 . . .
 
@@ -352,9 +337,7 @@ Like this line, which waited for you. ← hides it again.
 
 . . .
 
-On the page itself a pause shows nothing. Printed, each slide is whole,
-unless you tick "each step on its own page"; a Beamer PDF has a page for
-each step.
+On the page itself a pause shows nothing. Printed, each slide is whole, unless you tick "each step on its own page"; a Beamer PDF has a page for each step.
 
 ::: notes
 The pauses are pandoc's, so the Beamer export shows the same steps.
@@ -383,8 +366,7 @@ A `slides` box anywhere in the page says how the slides look:
 :::
 ```
 
-Themes are `beamer` (the default), `light` and `dark`; slides are `16:9`
-(the default) or `4:3`.
+Themes are `beamer` (the default), `light` and `dark`; slides are `16:9` (the default) or `4:3`.
 ````
 
 It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/slides/)
@@ -435,7 +417,9 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   space has a description, an icon and a home page of its own. Pages are listed
   by name, by date or in an order put by hand.
 - **Pages in Markdown** ([above](#writing-pages), and
-  [docs/markdown.md](docs/markdown.md)), with templates to start one from.
+  [docs/markdown.md](docs/markdown.md)), with templates to start one from. A
+  footnote's number shows its note when the pointer rests on it; following it
+  goes to the note, and the browser's Back returns to the number.
 - **An editor** that shows the Markdown as it will look while it is typed
   (CodeMirror), with the preview beside it (**Side by side**) or in its place
   (**Show preview**, which opens at the block being edited and which the
@@ -443,7 +427,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   kept a few seconds after the typing stops, and a conflict shown in place when
   someone else saved first. The title, Save and Cancel stay at the top while
   the text scrolls. A page's title is its first line, `# Title`, which the
-  editor keeps there.
+  editor keeps there. Inline math left open on its line, a `$` or a `\(` that
+  nothing closes there, is underlined in red to the line's end.
   The preview beside the text scrolls to the block being written; **Detach
   preview** opens it in a window of its own (on another monitor, say), which
   follows the editor as it is typed. **A−** and **A+** set the size of the

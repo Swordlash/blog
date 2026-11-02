@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Lines, footnotes and unclosed math (WP5.42, issue #120). A line break in the
+text is a line break on the page, in quotations and boxes too. The guide's
+and the demo's pages are kept with each paragraph on one line
+(`Wiki.App.Guide.unwrapped` joins the lines the source wraps), so a server
+writes its guide's pages anew, as with any new release of it. A footnote's
+number shows its note on hover; following it adds an entry to the browser's
+history, so Back returns to the reference. The editor underlines in red,
+from its opening to the line's end, inline math that nothing closes on its
+line: a `$` or a `\(`.
+
 The editor's bar and the title line (WP5.38, WP5.39). The title, Save, Save
 and close, Cancel and the toolbar stay at the top while the text scrolls, in
 "Show preview" too, with "Back to editing". "Show preview" opens at the block

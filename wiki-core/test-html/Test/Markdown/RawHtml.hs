@@ -61,7 +61,7 @@ spec = describe "Markdown.Render, raw HTML" $ do
     it "renders the colours the toolbar writes, line by line, in lists and headings" $ do
       let coloured command source = fst (apply command source (Selection 0 (T.length source)))
       coloured (TextColour (Just Red)) "one\ntwo"
-        `shows'` "<p><span class=\"c-red\">one</span>\n<span class=\"c-red\">two</span></p>"
+        `shows'` "<p><span class=\"c-red\">one</span><br>\n<span class=\"c-red\">two</span></p>"
       coloured (Highlight (Just Yellow)) "- a\n- b"
         `shows'` "<ul><li><mark class=\"h-yellow\">a</mark></li><li><mark class=\"h-yellow\">b</mark></li></ul>"
       coloured (TextColour (Just Blue)) "# Title"

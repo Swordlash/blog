@@ -178,7 +178,9 @@ data Output
 -- own reader reads ("Wiki.Core.Markdown.Ast"), and no others: in
 -- particular no raw TeX, no Markdown inside HTML, and no divs or spans
 -- made of HTML, so that every piece of HTML stays raw for the allowlist.
--- Nor @alerts@: the boxes are the wiki parser's ('withBoxes').
+-- Nor @alerts@: the boxes are the wiki parser's ('withBoxes'). With
+-- @hard_line_breaks@, since every line break of a page is one on the page
+-- ("Wiki.Core.Markdown.Render").
 wikiExtensions :: Extensions
 wikiExtensions =
   extensionsFromList
@@ -193,6 +195,7 @@ wikiExtensions =
     , Ext_footnotes
     , Ext_gfm_auto_identifiers
     , Ext_auto_identifiers
+    , Ext_hard_line_breaks
     , Ext_header_attributes
     , Ext_inline_code_attributes
     , Ext_intraword_underscores

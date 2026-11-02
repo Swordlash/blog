@@ -125,6 +125,13 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     [() | P.Table {} <- bs] `shouldBe` [()]
     query (\case P.Emph xs -> [xs]; _ -> []) bs `shouldBe` [[P.Str "text"]]
 
+  it "breaks a line wherever the page does: in paragraphs, items, quotations and boxes" $ do
+    let breaks = query (\case P.LineBreak -> ["hard" :: Text]; P.SoftBreak -> ["soft"]; _ -> [])
+    paragraph <- blocksOf ToOther place "a\nb\n"
+    paragraph `shouldBe` [P.Para [P.Str "a", P.LineBreak, P.Str "b"]]
+    others <- blocksOf ToOther place "- c\n  d\n\n> e\n> f\n\n> [!NOTE]\n> g\n> h\n"
+    breaks others `shouldBe` ["hard", "hard", "hard"]
+
   it "reads math between each of the wiki's delimiters, and a math fence" $ do
     bs <- blocksOf ToOther place "$a$ and \\(b\\)\n\n\\[c\\]\n\n$$d$$\n\n```math\ne\n```\n"
     maths bs `shouldBe` [(P.InlineMath, "a"), (P.InlineMath, "b"), (P.DisplayMath, "c"), (P.DisplayMath, "d"), (P.DisplayMath, "e")]

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+A line break in a page's text is a line break on the page (WP5.42, issue
+#120): the renderer writes a soft break, a line ended plainly, as a `<br>`,
+as it writes a hard one, in paragraphs, list items, quotations, boxes and
+footnotes. Pages written with their paragraphs wrapped over several lines
+now show a break at each wrap; join such lines to read as before. The tree
+still tells the two kinds apart. A footnote's reference is titled with the
+note's text, which the browser shows when the pointer rests on the number.
+The assistant's instructions and `docs/markdown.md`, its reference, say to
+write each paragraph on one line.
+
 `Wiki.Core.Page` gains `titleLine`, the title a page's first line gives
 (`# Title`), `withTitleLine`, which puts the line before a text without one,
 and `retitled`, which rewrites it (WP5.39): a page's title is its first line.

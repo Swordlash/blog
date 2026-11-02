@@ -23,6 +23,7 @@ module Wiki.App.Guide
   , guideSlug
   , guideMacros
   , guideProfile
+  , unwrapped
 
     -- * What its pages show
   , treePng
@@ -66,7 +67,7 @@ insertGuide which sid ago = do
   pure tourPage
   where
     page parent title daysAgo body = state $ \st ->
-      let (st', p) = insertPage sid parent title (T.unlines body) (ago daysAgo) st in (p.id, st')
+      let (st', p) = insertPage sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
 
 -- | The name of the space a server keeps the guide in.
 guideSpaceName :: Text
@@ -324,6 +325,11 @@ markdownGuide =
   , "`inline code` and links, to the web (<https://commonmark.org>) or to other"
   , "pages by their path from this one: [diagrams](markdown-guide/diagrams), or"
   , "the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]"
+  , ""
+  , "A line break in the text is a line break on the page, in quotations and"
+  , "boxes too: write a paragraph on one line, however long, and break a line"
+  , "where you mean a break. A footnote's number shows its note when the"
+  , "pointer rests on it."
   , ""
   , "### Lists"
   , ""
@@ -677,3 +683,97 @@ mathematics =
   , ""
   , "and `\\pu` quantities with their units: $\\pu{123 kJ/mol}$."
   ]
+
+--------------------------------------------------------------------------------
+-- Wrapped lines
+
+-- | 'unwrapped' is a page's lines as this module writes them, wrapped to
+-- keep the source short, with each paragraph joined into one line, as an
+-- author writes it in the editor. A line break in a page is a line break
+-- on the page (WP5.42 of docs/PLAN.md), so a page left wrapped would show
+-- a break at every place the source wraps.
+--
+-- A line is joined to the line before it, after a space, when both hold
+-- the text of one paragraph, list item, footnote or quotation. That is
+-- when neither line is blank, both are as deep in quotations, the line
+-- before is not one that ends its block (a heading, a table's row, a
+-- box's marker, a div's fence, HTML, display math, a break, a pause or a
+-- line that ends in a break of its own: two spaces or a backslash), and
+-- the line does not start a block of its own (the same, and a list's
+-- item, a quotation, a code fence or a footnote). A quotation's line is
+-- joined without its @>@, and an indented line without its indent. Code
+-- fences, display math over several lines and blocks of HTML are kept as
+-- written.
+unwrapped :: [Text] -> [Text]
+unwrapped = go Prose []
+  where
+    go :: Region -> [Text] -> [Text] -> [Text]
+    go _ done [] = reverse done
+    go region done (l : rest) = case region of
+      Fenced marker -> go (if closesFence marker l then Prose else region) (l : done) rest
+      Display closer -> go (if closer `T.isInfixOf` l then Prose else region) (l : done) rest
+      Html -> go (if blank l then Prose else Html) (l : done) rest
+      Prose
+        | Just marker <- fenceOf (inner l) -> go (Fenced marker) (l : done) rest
+        | Just closer <- opensDisplay (inner l) -> go (Display closer) (l : done) rest
+        | "<" `T.isPrefixOf` inner l, maybe True blank (head done) -> go Html (l : done) rest
+        | p : before <- done, joins p l -> go Prose ((T.stripEnd p <> " " <> inner l) : before) rest
+        | otherwise -> go Prose (l : done) rest
+
+    joins p l =
+      not (blank p || blank l)
+        && depth p == depth l
+        && not (endsBlock (inner p) || "  " `T.isSuffixOf` p || "\\" `T.isSuffixOf` p)
+        && not (startsBlock (inner l))
+
+    endsBlock c =
+      heading c
+        || any (`T.isPrefixOf` c) ["|", "[!", ":::", "<", "$$", "\\[", "[[toc]]", "[[TOC]]"]
+        || thematic c
+        || T.words c == [".", ".", "."]
+
+    startsBlock c =
+      endsBlock c
+        || item c
+        || any (`T.isPrefixOf` c) [">", "```", "~~~"]
+        || ("[^" `T.isPrefixOf` c && "]:" `T.isInfixOf` c)
+        || (not (T.null c) && T.all (== '=') c)
+
+    heading c = case T.span (== '#') c of
+      (marks, after) -> not (T.null marks) && T.length marks <= 6 && (T.null after || " " `T.isPrefixOf` after)
+    item c =
+      any (`T.isPrefixOf` c) ["- ", "* ", "+ "]
+        || c `elem` ["-", "*", "+"]
+        || case T.span isDigit c of
+          (digits, after) -> not (T.null digits) && T.length digits <= 9 && (any (`T.isPrefixOf` after) [". ", ") "] || after `elem` [".", ")"])
+    thematic c = case T.filter (not . isSpace) c of
+      marks -> T.length marks >= 3 && any (\m -> T.all (== m) marks) ['-', '*', '_']
+
+    -- A code fence's opening, the fence's characters; a fence is closed
+    -- by a line of as many of them or more, and nothing else.
+    fenceOf c = find (`T.isPrefixOf` c) ["```", "~~~"] $> T.takeWhile (\x -> T.singleton x == T.take 1 c) c
+    closesFence marker l =
+      let c = T.stripEnd (inner l)
+       in T.length c >= T.length marker && T.all (\x -> T.singleton x == T.take 1 marker) c
+
+    -- Display math that a line opens and does not close: what closes it.
+    opensDisplay c
+      | odd (T.count "$$" c) = Just "$$"
+      | "\\[" `T.isPrefixOf` c, not ("\\]" `T.isInfixOf` c) = Just "\\]"
+      | otherwise = Nothing
+
+    blank = T.all isSpace
+    depth = fst . quoted
+    inner = snd . quoted
+
+    -- How deep a line is in quotations, and its text inside them, without
+    -- the spaces before it.
+    quoted :: Text -> (Int, Text)
+    quoted t = case T.uncons (T.stripStart t) of
+      Just ('>', after) -> first (+ 1) (quoted after)
+      _ -> (0, T.stripStart t)
+
+-- | Where 'unwrapped' is in a page: in text, whose lines it joins, or in
+-- what it keeps as written: a code fence (with its fence's characters),
+-- display math (with what closes it), or a block of HTML.
+data Region = Prose | Fenced Text | Display Text | Html

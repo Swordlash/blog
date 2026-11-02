@@ -39,7 +39,7 @@ import Web.Storage.IndexedDB (Database)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
-import Wiki.App.Guide (Tour (..), earthUrl, exerciseBox, guideMacros, guideProfile, insertGuide, treePng)
+import Wiki.App.Guide (Tour (..), earthUrl, exerciseBox, guideMacros, guideProfile, insertGuide, treePng, unwrapped)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
@@ -127,7 +127,7 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
       let (st', s) = insertSpace parent name public (ago daysAgo) st in (s.id, st')
 
     page sid parent title daysAgo body = state $ \st ->
-      let (st', p) = insertPage sid parent title (T.unlines body) (ago daysAgo) st in (p.id, st')
+      let (st', p) = insertPage sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
 
     attach pid name mediaType bytes = modify (fst . attachBytes pid (FileName name) (MimeType mediaType) bytes)
 
@@ -144,7 +144,7 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
             pid
             "thread-hello-1"
             29
-            (Just (Anchor "a blog that is also a wiki" "This is the first post of " ". Every page is\nMarkdown, wri"))
+            (Just (Anchor "a blog that is also a wiki" "This is the first post of " ". Every page is Markdown, wri"))
             [ (readerId, 29, "Is there a list of every post somewhere, newest first?")
             , (editorId, 28, "The blog's space lists its pages; its administrator can order them *newest first*.")
             ]

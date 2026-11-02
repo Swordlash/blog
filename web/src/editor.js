@@ -368,6 +368,80 @@ const texMath = {
 // The wiki's Markdown: CodeMirror's (GFM) with the math above.
 const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure(texMath), [], "markdown");
 
+// Inline math left open on its line (issue #120): a $ or a \( that nothing
+// closes on the same line is underlined in red from there to the line's
+// end, as a misspelt word is, with a title that says why. The wiki's parser
+// reads such a formula on to a dollar on a later line of the paragraph,
+// taking the text between as TeX, or else leaves the delimiter as text;
+// neither is what was meant. In the syntax tree that is a TeXMath node that
+// opens with $ or \( and ends on a later line, an Escape node that is a
+// lone \( (one that no \) closes), or a $ in text that starts no node,
+// where a formula may start: not before a blank or a digit ($5 and $10
+// are prices), not in $$, and not in code, a link's address or HTML (the
+// nodes of notMentions). Display math, $$ and \[, may take several lines,
+// and is left alone. Only the lines on screen are looked at.
+const unclosedMark = Decoration.mark({ class: "cm-wiki-unclosed-math", attributes: { title: "This formula is not closed on its line." } });
+
+const unclosedMathOf = (view) => {
+  const { state } = view;
+  const ranges = [];
+  const marked = new Set();
+  const mark = (at) => {
+    const line = state.doc.lineAt(at);
+    if (marked.has(line.number) || line.to <= at) return;
+    marked.add(line.number);
+    ranges.push(unclosedMark.range(at, line.to));
+  };
+  for (const { from, to } of view.visibleRanges) {
+    const skipped = [];
+    syntaxTree(state).iterate({
+      from,
+      to,
+      enter: (node) => {
+        if (node.name === "TeXMath") {
+          const opener = state.sliceDoc(node.from, node.from + 2);
+          const display = opener === "$$" || opener === "\\[";
+          if (!display && state.doc.lineAt(node.from).number !== state.doc.lineAt(node.to).number) mark(node.from);
+        } else if (node.name === "Escape") {
+          if (state.sliceDoc(node.from, node.to) === "\\(") mark(node.from);
+        } else if (!notMentions.has(node.name)) return undefined;
+        skipped.push([node.from, node.to]);
+        return false;
+      },
+    });
+    for (let pos = from; pos <= to; ) {
+      const line = state.doc.lineAt(pos);
+      const text = line.text;
+      for (let i = 0; i < text.length && !marked.has(line.number); i++) {
+        if (text[i] !== "$") continue;
+        if (text[i + 1] === "$") {
+          i++;
+          continue;
+        }
+        const at = line.from + i;
+        if (skipped.some(([start, end]) => at >= start && at < end)) continue;
+        if (i + 1 < text.length && !/[\s\d]/.test(text[i + 1])) mark(at);
+      }
+      pos = line.to + 1;
+    }
+  }
+  return Decoration.set(ranges, true);
+};
+
+const unclosedMath = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = unclosedMathOf(view);
+    }
+    update(update) {
+      if (update.docChanged || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+        this.decorations = unclosedMathOf(update.view);
+      }
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 // The completion of mentions. Wiki.Core.Markdown.Mention says what a
 // mention is: an @ that starts a word (not after a letter, a digit, a mark
 // or one of . _ - + / @), followed by a login's characters (letters,
@@ -813,6 +887,7 @@ export function attach(textarea, host, original, codeTokens) {
       new LanguageSupport(wikiMarkdown),
       syntaxHighlighting(highlighter),
       decorations(codeTokens),
+      unclosedMath,
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",

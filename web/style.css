@@ -6006,6 +6006,14 @@ a.mention {
   white-space: pre-wrap;
 }
 
+/* Inline math left open on its line (web/src/editor.js): a wavy red
+   underline to the line's end, as the browser marks a misspelt word. */
+.editor-cm .cm-wiki-unclosed-math {
+  text-decoration: underline wavy var(--danger);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.2em;
+}
+
 .editor-cm .cm-wiki-change-controls {
   display: inline-flex;
   gap: 0.15rem;
