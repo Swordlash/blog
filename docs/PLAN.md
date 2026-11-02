@@ -349,7 +349,7 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39 and WP5.42 are done, the rest
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39, WP5.42 and WP5.43 are done, the rest
   follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
@@ -370,9 +370,6 @@ In the order to do it, unless the owner says otherwise.
   and a warning naming the pages that use a macro being removed. In the editor, a
   button for the space's and the page's macros, editable by whoever may edit the whole
   space (the space's are on the space's page, "Math macros", today).
-- **WP5.43 The assistant.** The text's selection stays shown while the assistant has
-  the focus. "Ask" (talk, no edits) and "Agent" (as now) modes. Model and effort chosen
-  in the editor's assistant, not only in its settings.
 - **WP5.44 Stars and help.** A user stars pages (kept by the server, per user) and goes
   to them from a "Starred" list in the header. A help button (a "?" in a corner) opens
   a dialog with what the README and the guide say: TikZ, Mermaid, the kinds of box
