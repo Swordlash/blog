@@ -37,7 +37,7 @@ import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad, MonadWiki (..), Session (mathMacros), WikiError)
 import Wiki.App.Islands (MonadIslands (..))
 import Wiki.App.View.Common
-import Wiki.Core.Math (Macros (..), spaceMacros)
+import Wiki.Core.Math (Macros (..), onlyDefinitions, spaceMacros)
 import Wiki.Core.Space (Space (id, mathMacros, name, parent))
 
 data Input = Input
@@ -199,5 +199,13 @@ component =
       let ctx = st.input.context
           above = wikiMacrosOf ctx.session <> maybe mempty (spaceMacros ctx.spaces) st.input.space.parent
       spaceError <- H.liftEffect (checkMacros above st.spaceTyped)
-      pageError <- H.liftEffect (checkMacros (above <> Macros [st.spaceTyped]) st.pageTyped)
+      katexError <- H.liftEffect (checkMacros (above <> Macros [st.spaceTyped]) st.pageTyped)
+      -- The page's block is found again by holding nothing but
+      -- definitions ('Wiki.Core.Markdown.Edit.pageMacros'): one that would
+      -- show something is refused here, or the next Apply would write a
+      -- second block instead of replacing it.
+      let pageError
+            | isJust katexError = katexError
+            | T.all isSpace st.pageTyped || onlyDefinitions st.pageTyped = Nothing
+            | otherwise = Just "This block may hold only definitions (\\newcommand, \\renewcommand, \\def): anything else would show on the page. Put a formula that shows something in the page's text."
       modify (\s -> s {spaceError, pageError})

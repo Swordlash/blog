@@ -554,6 +554,7 @@ data Action
   | FromMacros MacrosPanel.Output
   | NewKind
   | FromNewKind NewKindDialog.Output
+  | PanelSubmitted
   | ShowPreview
   | WentTo Bool
   | BackToEditing
@@ -728,7 +729,9 @@ component =
     -- form's classes, so that what is hidden stays mounted. What appears
     -- and disappears above them (a draft found, Cancel's question, an
     -- error, the math macros' panel, the "New kind…" dialog) is in a holder
-    -- element of its own, which is always there. An element appearing or
+    -- element of its own, which is always there. The panels' holder stops
+    -- the submit events of their own forms, which would otherwise reach
+    -- the page's form and save the page. An element appearing or
     -- disappearing among the form's children would shift the ones after
     -- it, and Halogen, which matches unkeyed children by position, would
     -- recreate the Markdown's view, losing CodeMirror's text and undo
@@ -770,7 +773,7 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          <div class="editor-panels">
+          <div class="editor-panels" {{ HE.stoppingPropagation (HE.handler (EventType "submit") (const PanelSubmitted)) }}>
             {% if st.macrosOpen %}
               {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
             {% end %}
@@ -1409,6 +1412,9 @@ component =
       -- The space's macros changed: the shell reloads the wiki, and the
       -- preview sets the formulas with them.
       FromMacros MacrosPanel.SpaceMacrosSaved -> H.raise (Changed Nothing)
+      -- A panel's own form was submitted: the panel has handled it, and
+      -- the event goes no further, to the page's form, which would save.
+      PanelSubmitted -> pass
       NewKind -> closeMenu >> modify (\st -> st {kindDialogOpen = True})
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})
       -- A kind was defined in the dialog: a box of it goes into the text,

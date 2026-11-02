@@ -542,6 +542,10 @@ spec m = do
     markdown ui >>= (`shouldSatisfy` T.isInfixOf "> [!LEMMA]")
     find ui ".editor-toolbar button[aria-label='Box']" >>= click
     eventually (find ui ".box-menu button[data-kind='LEMMA']" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Lemma"))
+    -- The dialog's form, refused or saved, did not save the page.
+    blog <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getSpace (slugs ["blog"])))
+    stored <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])))
+    stored.body `shouldSatisfy` (not . T.isInfixOf "[!LEMMA]")
 
   it "offers no new kind of box to someone who is not an administrator" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
@@ -559,8 +563,14 @@ spec m = do
     _ <- find ui ".editor-macros"
     -- The page's block, applied into the text under the title.
     page <- find ui ".editor-macros-page .macros-source"
+    -- A block that would show something is refused: the page could not
+    -- find it again as its block of definitions.
+    typeText page "\\newcommand{\\half}{\\frac{1}{2}}x"
+    eventually (find ui ".editor-macros-page .macros-error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "only definitions"))
+    find ui ".editor-macros-page button[type=submit]" >>= (`getProperty` "disabled") >>= (`shouldBe` "true")
+    clear page
     typeText page "\\newcommand{\\half}{\\frac{1}{2}}"
-    length <$> findAll ui ".editor-macros-page .macros-error" `shouldReturn` 0
+    eventually (length <$> findAll ui ".editor-macros-page .macros-error" `shouldReturn` 0)
     find ui ".editor-macros-page button[type=submit]" >>= click
     markdown ui `shouldReturn` "# Hello, world\n\n```math\n\\newcommand{\\half}{\\frac{1}{2}}\n```\n\nHalf: $\\half + \\twice$"
     -- The block shows nothing in the preview; the formula has the macro.
@@ -572,6 +582,10 @@ spec m = do
     eventually (find ui ".editor-macros-space .settings-saved" >>= (`shouldHaveText` "Saved"))
     blog <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getSpace (slugs ["blog"])))
     blog.mathMacros `shouldBe` "\\newcommand{\\twice}{2}"
+    -- Neither panel's form saved the page: the text with the page's block
+    -- is still only in the editor.
+    stored <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])))
+    stored.body `shouldSatisfy` (not . T.isInfixOf "\\half")
 
   it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
