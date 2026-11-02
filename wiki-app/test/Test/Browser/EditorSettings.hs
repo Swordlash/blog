@@ -135,10 +135,10 @@ spec m = describe "over the demo's wiki" $ do
     ui <- start m (Just "user-admin") (Admin R.EditorSettings)
     source <- find ui ".editor-macros-form .macros-source"
     eventually (find ui ".editor-macros-form .settings-saved" >>= (`shouldHaveText` "Saved"))
-    -- The guide's Mathematics page uses \\abs.
-    shipped <- getProperty source "value"
+    -- The guide's Mathematics page uses \\abs, which a block of one other
+    -- macro takes out.
     clear source
-    typeText source (T.unlines (filter (not . T.isInfixOf "{\\abs}") (T.lines shipped)))
+    typeText source "\\newcommand{\\Prob}{\\mathbb{P}}"
     find ui ".editor-macros-form button[type=submit]" >>= click
     removal <- find ui ".editor-macros-removal"
     removal `shouldContainText` "\\abs"

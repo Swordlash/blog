@@ -1454,8 +1454,9 @@ sessionTx = do
           -- API adds them as well.
           boxes = []
         , homePage = ctx.server.homePage
-        , -- Nor the built-in macros, which are the server's settings too.
-          mathMacros = Nothing
+        , -- The built-in macros are the server's settings too, but no
+          -- secret: every session has them, whoever asks.
+          mathMacros = ctx.server.mathMacros
         }
 
 listSpacesTx :: Tx [Space]
