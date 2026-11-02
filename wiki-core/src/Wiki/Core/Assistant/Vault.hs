@@ -217,8 +217,9 @@ wrappingInfo = "wiki-assistant-vault/1 wrapping key"
 -- What is sealed
 
 -- | The part of the settings the vault seals: the chosen provider, the
--- mode, and each provider's key, model, effort and base URL. What was learnt from a
--- provider (its model list, whether it could be reached) is left out.
+-- mode, and each provider's key, model, effort and base URL. What was
+-- learnt from a provider (its model list, whether it could be reached) is
+-- left out.
 secretsOf :: Settings -> Settings
 secretsOf s = s {byProvider = Map.map (\(ProviderSettings k m e b _ _) -> ProviderSettings k m e b Nothing False) s.byProvider}
 

@@ -292,8 +292,8 @@ data State = State
   -- calls in its answer are made or refused.
   , effortChoice :: Maybe Text
   -- ^ The effort picked in the panel for the current conversation, if
-  -- any. 'Nothing' means the settings' default ('effortNow'). A new conversation with another provider starts with
-  -- 'Nothing'.
+  -- any. 'Nothing' means the settings' default ('effortNow'). A new
+  -- conversation with another provider starts with 'Nothing'.
   , now :: Maybe UTCTime
   -- ^ The time the ticker last read while the model is working. The
   -- seconds counter counts up to it.
