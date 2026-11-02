@@ -654,6 +654,10 @@ spec m = do
     -- Closed, the line is no longer underlined.
     setMarkdown ui "# Cases\n\nOpen $x + y$ here"
     eventually $ underlined `shouldReturn` ""
+    -- A formula that starts with a number is not a price, and a dollar in
+    -- a link's title is not math.
+    setMarkdown ui "# Cases\n\nCompute $2x + y here\n\nSee [this](other \"Amount: $USD\") and $3.50."
+    eventually $ underlined `shouldReturn` "$2x + y here"
 
   it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor

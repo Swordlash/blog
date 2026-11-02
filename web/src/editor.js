@@ -376,10 +376,18 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // neither is what was meant. In the syntax tree that is a TeXMath node that
 // opens with $ or \( and ends on a later line, an Escape node that is a
 // lone \( (one that no \) closes), or a $ in text that starts no node,
-// where a formula may start: not before a blank or a digit ($5 and $10
-// are prices), not in $$, and not in code, a link's address or HTML (the
-// nodes of notMentions). Display math, $$ and \[, may take several lines,
+// where a formula may start: not before a blank or a price ($5 and $10,
+// but not $2x), not in $$, and not in code, a link's address or title or
+// HTML (the nodes of notMentions, and LinkTitle). Display math, $$ and \[, may take several lines,
 // and is left alone. Only the lines on screen are looked at, each whole.
+// An amount of money after a dollar: a number with nothing after it that
+// would make it a formula's start ($5, $10.50, $1,000 and then a space, a
+// punctuation mark or the line's end). $2x + y is a formula.
+const isPrice = (rest) => {
+  const number = /^\d(?:[\d,]|\.(?=\d))*/.exec(rest);
+  return number !== null && /^($|[\s.,;:!?)\]])/.test(rest.slice(number[0].length));
+};
+
 const unclosedMark = Decoration.mark({ class: "cm-wiki-unclosed-math", attributes: { title: "This formula is not closed on its line." } });
 
 const unclosedMathOf = (view) => {
@@ -409,11 +417,15 @@ const unclosedMathOf = (view) => {
           if (!display && state.doc.lineAt(node.from).number !== state.doc.lineAt(node.to).number) mark(node.from);
         } else if (node.name === "Escape") {
           if (state.sliceDoc(node.from, node.to) === "\\(") mark(node.from);
-        } else if (!notMentions.has(node.name)) return undefined;
+        } else if (!notMentions.has(node.name) && node.name !== "LinkTitle") return undefined;
         skipped.push([node.from, node.to]);
         return false;
       },
     });
+    // The skipped nodes come in document order and do not overlap (the
+    // traversal does not enter them), as the dollars below do: one cursor
+    // walks both, so a long line full of formulas is read once.
+    let next = 0;
     for (let pos = from; pos <= to; ) {
       const line = state.doc.lineAt(pos);
       const text = line.text;
@@ -424,8 +436,9 @@ const unclosedMathOf = (view) => {
           continue;
         }
         const at = line.from + i;
-        if (skipped.some(([start, end]) => at >= start && at < end)) continue;
-        if (i + 1 < text.length && !/[\s\d]/.test(text[i + 1])) mark(at);
+        while (next < skipped.length && skipped[next][1] <= at) next++;
+        if (next < skipped.length && skipped[next][0] <= at) continue;
+        if (i + 1 < text.length && !/\s/.test(text[i + 1]) && !isPrice(text.slice(i + 1, i + 40))) mark(at);
       }
       pos = line.to + 1;
     }
