@@ -67,9 +67,9 @@ import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettings
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
-import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
+import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Core.Access (Access (..))

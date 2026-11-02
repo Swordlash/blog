@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Stars (WP5.44): `GET stars` lists the signed-in user's starred pages, each a
+`StarredPage` with its title and where it is now, and `PUT
+stars/pages/<page>` with `Starring` stars a page or takes the star away and
+answers with the list after. A user has at most `maxStars` (50).
+
 A space and its profile carry `boxNumbering` (WP5.40): `none`, `in-page`,
 `with-page` or `with-section`, read as `in-page` when missing. A kind of
 box's `colour` may be a hex code, `#rrggbb`, besides the theme's names.

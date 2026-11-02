@@ -137,7 +137,7 @@ following = describe "a starred page" $ do
     run reader starred
       >>= ok
       >>= (`shouldBe` [(plans.id, docs.id, path "docs", path "plans"), (notes.id, blog.id, path "blog", path "notes-on-haskell")])
-        . map (\s -> (s.page, s.space, s.location.space, s.location.page))
+      . map (\s -> (s.page, s.space, s.location.space, s.location.page))
     _ <- run admin (movePage plans.id blog.id (Just notes.id)) >>= ok
     map (\s -> s.location.page) <$> (run reader starred >>= ok) `shouldReturn` [path "notes-on-haskell/plans", path "notes-on-haskell"]
     _ <- run admin (deletePage plans.id) >>= ok

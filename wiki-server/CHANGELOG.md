@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Stars (WP5.44): migration `0005-stars` adds the `stars` table, a user's
+starred pages in order, deleted with the user or the page. The API's
+`stars` endpoints read and write it; someone not signed in and the operator
+are refused, and a page the user may not view is not found.
+
 Migration `0004-space-box-numbering` adds `spaces.box_numbering`, how a
 space numbers its boxes (WP5.40), `in-page` for every space. The export
 numbers boxes as the page does, reads a box's title as Markdown in the

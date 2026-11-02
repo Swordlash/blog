@@ -183,10 +183,10 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound, searchable)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
-import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
-import Wiki.Api.Stars qualified as Star
 import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkHomePage, checkServerSettings, defaultHomePage, kindName, secretState, securityName)
 import Wiki.Api.ServerSettings qualified as SS
+import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
+import Wiki.Api.Stars qualified as Star
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))

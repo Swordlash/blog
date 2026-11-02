@@ -98,9 +98,9 @@ import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
-import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
 import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
@@ -109,8 +109,8 @@ import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttach
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
-import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id

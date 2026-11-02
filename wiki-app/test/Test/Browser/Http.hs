@@ -61,8 +61,8 @@ import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
-import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous), ServerSettings, ServerSettingsOf (homePage), noServerSettings)
+import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
 import Wiki.Api.Types qualified as Api
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
@@ -78,6 +78,7 @@ import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), allUsers)
@@ -350,7 +351,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 #endif
 
 -- | A program against the server, through the page's fetch.
-overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n) => n a) -> PageM s a
+overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n, MonadStars n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -908,6 +909,8 @@ views m = describe "the application over it" $ do
           threads <- fromRight [] <$> listThreads p.id
           _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
           watching (WatchPage p.id)
+        -- The page's "Star" button's and the header's "Starred".
+        _ <- starred
         _ <- notifications
         pure ((\p -> p.id) <$> rightToMaybe page)
     carried <- unsafeIOToPageM (cacheOf reading)
@@ -1018,9 +1021,10 @@ comments m = describe "a page's comments" $ do
       _ <- listPages blog.id
       page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
       threads <- either (panic . show) identity <$> listThreads page.id
-      -- The bell's, and the page's "Watch" button's.
+      -- The bell's, the page's "Watch" button's, and its "Star" button's.
       _ <- notifications
       _ <- watching (WatchPage page.id)
+      _ <- starred
       pure (page, threads)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops

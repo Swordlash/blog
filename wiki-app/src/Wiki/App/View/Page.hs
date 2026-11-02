@@ -89,6 +89,7 @@ import Wiki.Api.Links (pageExportUrl)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
+import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal, revealFragment)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
@@ -98,6 +99,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
+import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
@@ -131,7 +133,7 @@ data Input = Input
   -- ^ The tab's live channel, on a backend that has one.
   }
 
-type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ())
+type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ())
 
 -- | The page's threads, as far as they have been loaded.
 data Threads
@@ -210,7 +212,7 @@ data Action
   | SetTemplate Bool
   | ShowChanged
 
-component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -272,7 +274,7 @@ component =
             -- It has its own class too: the bar stays under the header
             -- while the page scrolls (web/style.css), so that a long page
             -- can be edited without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ liveNote st }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> toList (templateNote page)

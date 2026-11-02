@@ -53,6 +53,7 @@ module Wiki.App.View.Body
   , startsWithHeading
   , slides
   , followingLinks
+  , islandOptions
   )
 where
 

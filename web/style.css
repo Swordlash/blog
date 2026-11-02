@@ -5179,6 +5179,233 @@ mark.comment-mark-focused {
   color: var(--accent);
 }
 
+/* Stars (WP5.44): a page's "Star" toggle, and the header's "Starred" list,
+   which opens under its button as the bell's list does. */
+.star {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.star-toggle.starred {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.star-problem {
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.starred {
+  position: relative;
+}
+
+.starred-toggle {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.starred-toggle:hover,
+.starred-toggle[aria-expanded="true"] {
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.starred-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 20;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: calc(100vh - var(--header-height, 4rem) - 1rem);
+  overflow-y: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.starred-panel h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+
+.starred-empty {
+  margin: 0.3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.starred-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.starred-item + .starred-item {
+  border-top: 1px solid var(--border);
+}
+
+.starred-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem;
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.starred-link:hover {
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.starred-title {
+  color: var(--accent);
+}
+
+.starred-space {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Help (WP5.44): a round red "?" in the bottom right corner of every page,
+   under the editor's "Saved" when that shows, and its dialog in the middle
+   of the window, as the administration's "Manage" dialog is. */
+.help-toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 15;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--danger);
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+}
+
+.help-toggle:hover,
+.help-toggle:focus-visible {
+  filter: brightness(1.1);
+}
+
+.help-dialog {
+  width: min(48rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
+}
+
+.help-dialog::backdrop {
+  background: var(--dialog-backdrop);
+}
+
+.help-dialog-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.help-dialog-header,
+.help-dialog-footer {
+  position: sticky;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 1.25rem;
+  background: var(--dialog);
+}
+
+.help-dialog-header {
+  top: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-dialog-footer {
+  bottom: 0;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+}
+
+.help-dialog-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.help-dialog-close {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+}
+
+.help-dialog-close:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.help-dialog-sections {
+  padding: 0 1.25rem 1rem;
+}
+
+.help-dialog-intro {
+  color: var(--muted);
+}
+
+.help-section + .help-section {
+  border-top: 1px solid var(--border);
+}
+
+.help-section h3 {
+  margin: 1rem 0 0.4rem;
+}
+
+.help-source {
+  margin: 0.4rem 0 0.8rem;
+}
+
+.help-source summary {
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.help-source pre {
+  overflow-x: auto;
+  padding: 0.6rem;
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+@media print {
+  .starred,
+  .star,
+  .help {
+    display: none;
+  }
+}
+
 .account-notifications h3 {
   margin: 0.4rem 0;
   font-size: 0.95rem;

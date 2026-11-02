@@ -172,10 +172,10 @@ import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Notifications (NotificationSettings (NotificationSettings), NotificationSettingsChange, Notifications (Notifications), ReadMark)
 import Wiki.Api.Notifications qualified as N
-import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
-import Wiki.Api.Stars qualified as Star
 import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkHomePage, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.ServerSettings qualified as SS
+import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
+import Wiki.Api.Stars qualified as Star
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))

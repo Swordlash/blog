@@ -111,9 +111,9 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
-import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
+import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
