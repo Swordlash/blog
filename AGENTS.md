@@ -26,7 +26,10 @@ opened ready for review, not as a draft, on its own branch.
 Before a pull request merges, the session reviews it with Codex on the pushed head
 (`codex exec review --base <merge-base> -m gpt-6.1-sol -c model_reasoning_effort=high`,
 in a detached checkout of the head, with the owner's key given on standard input and the
-saved credential removed afterwards; a model or effort below that is not a review). The
+saved credential removed afterwards; a model or effort below that is not a review). A
+session without the key, or whose key has run out of quota, asks the GitHub Codex bot
+instead, with a comment of `@codex review` on the pull request, and waits for its answer
+(the owner, 2026-11-02); its review counts as a round. The
 session verifies each finding, fixes the real ones and pushes; a second round follows
 large fixes. Every pull request, every time. Three rounds at most (the owner,
 2026-11-02, down from four): the fixes after the third are made and described in the
