@@ -397,13 +397,14 @@ In the order to do it, unless the owner says otherwise.
     three kinds and writes the `HasField` instances, with the JavaScript inline in the
     import, so no `.js` file is needed. `Object "navigator" Window Navigator`: an object
     that does not change, read purely, so `w.navigator.onLine` chains with
-    `OverloadedRecordDot`. A value that changes is a record of two actions (the owner,
-    on the issue): `data Field a = Field {get :: IO a, set :: a -> IO ()}`, so
-    `w.document.title.get` and `w.document.title.set "x"`; one the page cannot write
-    is the read itself, with no `.get` (the owner): `w.navigator.onLine :: IO Bool`. A method is a field holding the call,
+    `OverloadedRecordDot`. A value that changes is read as an `IO` action,
+    `w.navigator.onLine :: IO Bool`, and one the page can write also has a setter named
+    with `_set` (the owner, on the issue): `w.document.title_set "x"`. No Web API name
+    has `_set` in it, so the two cannot clash, and a read-only value is simply one
+    without the setter. A method is a field holding the call,
     `crypto.randomUUID :: IO UUID` or `history.go :: Int -> IO ()`, and a method
     returning a Promise awaits it (`Safe`; forced on wasm). Each field and method is also
-    a plain function (`randomUUID :: Crypto -> IO UUID`), in a module per type meant to
+    a plain function (`randomUUID :: Crypto -> IO UUID`, `setTitle`), in a module per type meant to
     be imported qualified (`History.go`), as purescript-web does, since names like `go`,
     `back` and `focus` clash. Natively each instance is inert, as
     `browserJS`'s bindings are. Core's existing newtypes get their instances in core
