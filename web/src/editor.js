@@ -381,11 +381,17 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // HTML (the nodes of notMentions, and LinkTitle). Display math, $$ and \[, may take several lines,
 // and is left alone. Only the lines on screen are looked at, each whole.
 // An amount of money after a dollar: a number with nothing after it that
-// would make it a formula's start ($5, $10.50, $1,000 and then a space, a
-// punctuation mark or the line's end). $2x + y is a formula.
+// would make it a formula's start ($5, $10.50, $1,000 and then a word, a
+// punctuation mark or the line's end). $2x + y and $2 + x are formulas.
 const isPrice = (rest) => {
   const number = /^\d(?:[\d,]|\.(?=\d))*/.exec(rest);
-  return number !== null && /^($|[\s.,;:!?)\]])/.test(rest.slice(number[0].length));
+  if (number === null) return false;
+  const after = rest.slice(number[0].length);
+  // Straight after the number: the end, or punctuation ($5, $5.).
+  if (/^($|[.,;:!?)\]])/.test(after)) return true;
+  // After spaces: a word goes on the sentence ($5 and $10), an operator, a
+  // command or a digit goes on a formula ($2 + x, $2 \times x).
+  return /^\s+($|[^\s+\-*/=<>^_\\\d(|])/.test(after);
 };
 
 const unclosedMark = Decoration.mark({ class: "cm-wiki-unclosed-math", attributes: { title: "This formula is not closed on its line." } });

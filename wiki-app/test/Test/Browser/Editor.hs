@@ -656,8 +656,8 @@ spec m = do
     eventually $ underlined `shouldReturn` ""
     -- A formula that starts with a number is not a price, and a dollar in
     -- a link's title is not math.
-    setMarkdown ui "# Cases\n\nCompute $2x + y here\n\nSee [this](other \"Amount: $USD\") and $3.50."
-    eventually $ underlined `shouldReturn` "$2x + y here"
+    setMarkdown ui "# Cases\n\nCompute $2x + y here\n\nThen $2 + x\n\nSee [this](other \"Amount: $USD\") and $3.50 or $5 each."
+    eventually $ underlined `shouldReturn` "$2x + y here$2 + x"
 
   it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor
