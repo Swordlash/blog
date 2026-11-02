@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+A click on a space's card on the front page, made while the home page was
+still loading, is no longer lost now and then: the home page sits in an
+element of its own (`home-document`), so the directory keeps its place.
+
 Favicons (WP5.45). The browser tab shows a space's icon on the space's
 pages (its image, its emoji, or its letter on its colour, drawn as SVG in a
 `data:` URL) and the wiki's own icon everywhere else (`Wiki.App.Favicon`);

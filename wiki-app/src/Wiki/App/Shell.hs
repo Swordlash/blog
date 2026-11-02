@@ -1044,18 +1044,30 @@ component =
     -- from the editor), so that a click on a space's card made meanwhile is
     -- not lost with a directory taken down and made again, and the cards
     -- do not go away and come back.
+    --
+    -- The page, its loading note or its error sits in a holder element of
+    -- its own ("home-document"). Without the holder, a change from the
+    -- page to "Loading…" and back changes the first child of "wiki-home",
+    -- and the renderer moves the directory's element out of the tree and
+    -- back in to keep the children in order. A press on a space's card
+    -- while that render runs (it can run in the press's own pointerdown,
+    -- whose listeners call into the program) then has its element taken
+    -- away under it, and the browser sends no click.
     homeContent :: State m -> H.ComponentHTML Action Slots m
     homeContent st = case st.here of
       NoSpace -> notFound st
       here ->
         HH.div
           [HP.class_ "wiki-home"]
-          [ case here of
-              InSpace _ space pages ->
-                let path = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
-                 in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
-              SpaceFailed _ e -> failureView e RetryHere
-              _ -> loading
+          [ HH.div
+              [HP.class_ "home-document"]
+              [ case here of
+                  InSpace _ space pages ->
+                    let path = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
+                     in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+                  SpaceFailed _ e -> failureView e RetryHere
+                  _ -> loading
+              ]
           , HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
           ]
 
