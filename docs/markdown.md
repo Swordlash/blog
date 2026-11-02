@@ -287,14 +287,26 @@ The five are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`. Any other word
 > [!EXERCISE]
 > Prove that the sum of two even numbers is even.
 
-An administrator can define a kind, in the administration's Server section, under "Boxes": the title its boxes show, a colour of the theme (blue, green, purple, amber, red, teal, orange, pink or grey) and an icon (info, lightbulb, pencil, question, check, star, book, flag, or none). A kind nobody defined is a plain box. The five keep their own look and cannot be defined.
+An administrator can define a kind, in the administration's Server section, under "Boxes": the title its boxes show, a colour of the theme (blue, green, purple, amber, red, teal, orange, pink or grey) or a custom one picked with a colour picker, and an icon (info, lightbulb, pencil, question, check, star, book, flag, or none). The theme's colours change with the light and the dark scheme; a custom colour is the same in both. A kind nobody defined is a plain box. The five keep their own look and cannot be defined. In the editor, the toolbar's **Box** button lists the five and the kinds defined, and writes the first line of the box chosen (around the lines selected, if any); for an administrator it ends with **New kind…**, which opens the kinds of box in another tab.
 
-Text after the kind, on the same line, after a space, is that box's title, for any kind, the five too. The title is plain text, shown as written: Markdown in it is not read.
+Boxes are numbered, each kind on its own: a page's tips are Tip 1, Tip 2, and its first exercise is Exercise 1. A space chooses how, in its settings, under "Numbers of boxes":
 
-> [!TIP] Before you start
+- within the page: `Tip 3`, the default;
+- after the page's number, its place under its parent in the space's order (by hand or not): `Tip 2.3`;
+- after the page's and the section's numbers: `Tip 2.1.3`. A section starts at each `##` heading (the page's title is its `#` line), the boxes of each section are counted from 1, and those before the first `##` are in section 0;
+- no numbers.
+
+A star after the kind makes a box without a number, which is not counted, as LaTeX's `equation*`:
+
+> [!NOTE*]
+> This note has no number.
+
+Text after the kind, on the same line, after a space, is that box's title, for any kind, the five too. It comes after the box's label and number (`Tip 3: Before you start`); a box without a number shows the title alone. The title is read as a line of Markdown text: emphasis, code and math in it are shown as such, and `$$…$$` is set in display style on the title's line.
+
+> [!TIP] Before you start, mind $\varepsilon$
 > Read the whole page once.
 
-Exported, the five are pandoc's own alerts, and any other kind a box with its title, so a Word document, a web page or a PDF shows it as a box.
+Exported, the five are pandoc's own alerts, and any other kind a box with its title and number, so a Word document, a web page or a PDF shows it as a box. A box in a footnote has no number in a document.
 
 A box of any other sort is a fenced div with a class, which the wiki's style sheet may give a look:
 

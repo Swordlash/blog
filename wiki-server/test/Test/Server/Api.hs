@@ -34,7 +34,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Storage (administratorUser)
 
@@ -640,7 +640,7 @@ profiles backing = describe "a space's profile and icon over HTTP" $ do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     blog :: Space <- spaceNamed r [session] "blog"
-    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage, blog = blog.blog}
+    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage, blog = blog.blog, boxNumbering = blog.boxNumbering}
     -- The editor edits the blog, and does not administer it.
     (.status) <$> setProfile r [editor] blog.id profile `shouldReturn` 403
     (.status) <$> setProfile r [] blog.id profile `shouldReturn` 403
@@ -649,7 +649,7 @@ profiles backing = describe "a space's profile and icon over HTTP" $ do
     (set.description, set.icon) `shouldBe` ("Posts.", Just (IconEmoji "📝"))
     seen :: Space <- spaceNamed r [] "blog"
     (seen.description, seen.icon, seen.homePage) `shouldBe` ("Posts.", Just (IconEmoji "📝"), blog.homePage)
-    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere"), blog = False} >>= jsonAs 400 >>= \case
+    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere"), blog = False, boxNumbering = InPage} >>= jsonAs 400 >>= \case
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
 

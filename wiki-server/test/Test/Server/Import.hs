@@ -41,7 +41,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), withProfile)
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
@@ -90,6 +90,7 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 -- | A page of an archive: its id, its space's, its parent's, its slug, and
@@ -322,17 +323,17 @@ roundTrip backing = describe "an export" $ do
 profiled :: Archive
 profiled =
   docs
-    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = True} s else s | s <- docs.spaces]
+    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = True, boxNumbering = WithSection} s else s | s <- docs.spaces]
     , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
     }
 
 profiles :: Backing -> Spec
 profiles backing = describe "a space's profile" $ do
-  it "comes in with a new space: its description, its icon's image, and its home page as the page it became" $ withRunning backing $ \r -> do
+  it "comes in with a new space: its description, its icon's image, its home page as the page it became, and its numbering of boxes" $ withRunning backing $ \r -> do
     _ <- apply r profiled importEverything
     made <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]
-    (made.description, made.homePage, made.blog) `shouldBe` ("Guides.", Just tour.id, True)
+    (made.description, made.homePage, made.blog, made.boxNumbering) `shouldBe` ("Guides.", Just tour.id, True, WithSection)
     case made.icon of
       Just (IconImage b mediaType) -> (b, mediaType.text) `shouldBe` (blobOf "ICON", "image/png")
       other -> expectationFailure ("not an image: " <> show other)
@@ -341,7 +342,7 @@ profiles backing = describe "a space's profile" $ do
     -- And goes out again with an export, the image among the files.
     exported <- getUrl r (admin r links.archive.export)
     back <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict exported.body) >>= readArchive)
-    [(s.description, isJust s.homePage, s.blog, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, True, Just "ICON")]
+    [(s.description, isJust s.homePage, s.blog, s.boxNumbering, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, True, WithSection, Just "ICON")]
 
   it "fills in what a merged space has none of, and keeps what it has" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"
@@ -349,9 +350,10 @@ profiles backing = describe "a space's profile" $ do
     merged <- spaceAt r ["docs"]
     -- Its own home page, made with it; the archive's description and icon,
     -- which it had none of.
-    (merged.homePage, merged.description, merged.blog) `shouldBe` (ours.homePage, "Guides.", True)
+    -- A space's numbering has no "none of its own": the server's stays.
+    (merged.homePage, merged.description, merged.blog, merged.boxNumbering) `shouldBe` (ours.homePage, "Guides.", True, InPage)
     (\case Just (IconImage _ _) -> True; _ -> False) merged.icon `shouldBe` True
-    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing, blog = False})
+    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing, blog = False, boxNumbering = InPage})
     _ <- apply r profiled importEverything
     again <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]

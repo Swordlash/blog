@@ -494,6 +494,36 @@ spec m = do
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "mark" "here"
 
+  it "makes the lines selected a box from the Box menu, numbered in the preview, and changes its kind" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clearBody ui
+    typeText text "Read this first"
+    press "Shift+Home"
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    -- GitHub's five, then the demo's own kind; no "New kind…" for an editor.
+    labels <- traverse textContent =<< findAll ui ".box-menu button"
+    labels `shouldBe` ["Note[!NOTE]", "Tip[!TIP]", "Important[!IMPORTANT]", "Warning[!WARNING]", "Caution[!CAUTION]", "Exercise[!EXERCISE]"]
+    length <$> findAll ui ".box-menu-new" `shouldReturn` 0
+    clickButton ui ".box-menu button" "Tip[!TIP]"
+    markdown ui `shouldReturn` "# Hello, world\n\n> [!TIP]\n> Read this first"
+    length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
+    previewHas ui ".alert-tip .alert-title" "Tip 1"
+    -- On the marker's line, another kind replaces the box's.
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    clickButton ui ".box-menu button" "Exercise[!EXERCISE]"
+    markdown ui `shouldReturn` "# Hello, world\n\n> [!EXERCISE]\n> Read this first"
+    previewHas ui ".alert-exercise .alert-title" "Exercise 1"
+
+  it "offers an administrator a new kind of box, in the administration's kinds, in another tab" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-admin") helloEditor
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    new <- find ui ".box-menu .box-menu-new"
+    new `shouldHaveText` "New kind…"
+    getAttribute new "target" `shouldReturn` Just "_blank"
+    getAttribute new "href" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "/admin/server/"))
+
   it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui

@@ -104,18 +104,35 @@ demo m = describe "over the demo's wiki" $ do
     eventually (length <$> findAll ui ".server-box[data-name=fun-fact]" `shouldReturn` 0)
     unmount ui
 
+  it "gives a kind of box a custom colour from a colour picker" $ runPage $ do
+    ui <- start m (Just "user-admin") (Admin R.Server)
+    find ui ".server-box[data-name=exercise] .server-box-edit" >>= click
+    length <$> findAll ui ".server-box-form input[type=color]" `shouldReturn` 0
+    -- After the theme's nine, "custom…".
+    choose ui ".server-box-form select[name=colour]" 9
+    picker <- find ui ".server-box-form input[type=color]"
+    getProperty picker "value" `shouldReturn` "#0a6d69"
+    preview <- find ui ".server-box-form .server-box-preview .alert"
+    getAttribute preview "style" >>= (`shouldSatisfy` maybe False (T.isInfixOf "--box-colour: #0a6d69"))
+    find ui ".server-box-form button[type=submit]" >>= click
+    eventually (find ui ".server-box[data-name=exercise] .server-box-written" >>= (`shouldContainText` "#0a6d69, pencil icon"))
+    unmount ui
+
   it "draws a page's box of a defined kind in its colour with its icon, and one of another kind plain" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
     box <- find ui ".page-body .alert.alert-exercise"
     getAttribute box "style" >>= (`shouldSatisfy` maybe False (T.isInfixOf "--box-colour: var(--c-teal)"))
-    find ui ".page-body .alert-exercise .alert-title" >>= (`shouldHaveText` "Exercise")
+    find ui ".page-body .alert-exercise .alert-title" >>= (`shouldHaveText` "Exercise 1")
     -- Teal, the editor's palette's, in the light scheme.
     computed ".page-body .alert.alert-exercise" "border-left-color" `shouldReturn` "rgb(10, 109, 105)"
     computed ".page-body .alert-exercise .alert-title" "color" `shouldReturn` "rgb(10, 109, 105)"
     computed ".page-body .alert-exercise .alert-icon" "mask-image" >>= (`shouldSatisfy` T.isInfixOf "data:image/svg+xml")
-    -- The second box of the kind gives its own title.
+    -- The boxes of the kind are numbered, and the second gives its own
+    -- title, with math in it.
     titles <- traverse textContent =<< findAll ui ".page-body .alert-exercise .alert-title"
-    titles `shouldBe` ["Exercise", "Exercise 2"]
+    take 1 titles `shouldBe` ["Exercise 1"]
+    map (T.isPrefixOf "Exercise 2: The area of a circle") (drop 1 titles) `shouldBe` [True]
+    length <$> findAll ui ".page-body .alert-exercise .alert-title .wiki-math-inline" `shouldReturn` 1
     -- GitHub's five keep their look.
     computed ".page-body .alert.alert-tip" "border-left-color" `shouldReturn` "rgb(26, 127, 55)"
     unmount ui

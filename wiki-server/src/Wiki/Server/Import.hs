@@ -325,6 +325,9 @@ importSpace blobs a discussions choices progress m
               , icon = Nothing
               , description = ""
               , blog = False
+              , -- How the archive's space numbered its boxes: a setting
+                -- without a "none of its own" for 'fillProfile' to fill.
+                boxNumbering = m.archived.boxNumbering
               }
           pure i
       let placed =
@@ -355,7 +358,7 @@ fillProfile blobs a m target progress =
             (own, _) -> pure own
           let description = if T.null theirs.description then m.archived.description else theirs.description
               homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
-              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog} theirs
+              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog, boxNumbering = theirs.boxNumbering} theirs
           when (filled /= theirs) (updateSpace filled)
       )
 

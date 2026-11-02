@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Boxes are numbered, and their titles hold Markdown (WP5.40). `Alert` is now
+`Alert AlertKind BoxHead [Block]`: `BoxHead` holds the title, read with the
+page's inline parser as a heading's text is (so `$x$` in it is math, and a
+mention in it is a `Mention`), and whether the box is numbered, which it is
+unless its marker has a star (`> [!TIP*]`). `BoxMarker` gains
+`boxNumbered`. `Wiki.Core.Markdown.Box` gains `BoxNumbering` (no numbers,
+within the page, after the page's number, after the page's and the
+section's, written `none`, `in-page`, `with-page`, `with-section`;
+`in-page` when missing), `Numbering` (a way and the page's number),
+`BoxCounter` with `startCounting`, `countSection` and `countBox`, and
+`boxCaption`, the label and number a box's title starts with. The
+renderer's `Options` gain `numbering`, none by default: each kind is
+counted on its own, a `##` heading starts a section, and a title's display
+math is set inline in display style. `BoxColour` gains `CustomColour`, a
+`#rrggbb` hex code (`readHexColour`), and loses `Enum` and `Bounded`:
+`themeColours` lists the others. `Space` and `SpaceProfile` gain
+`boxNumbering`, which the archive writes when it is not `in-page`.
+`Wiki.Core.Page.pageNumber` is a page's place under its parent in the
+space's order. The editor's commands gain `Box`, which makes the touched
+lines a box of a kind, or changes a box's kind.
+
 The assistant has two modes (WP5.43, issue #120): `Settings` gains `chatMode`
 (`Mode`, `Ask` or `Agent`, `withMode`, `modeLabel`), stored as `"mode": "ask"`
 and absent in Agent mode, so settings stored before read as Agent. The vault

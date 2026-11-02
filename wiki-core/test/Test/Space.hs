@@ -33,10 +33,11 @@ space i name parent =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 profile :: Text -> Maybe Icon -> Maybe PageId -> SpaceProfile
-profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False}
+profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False, boxNumbering = InPage}
 
 none :: SpaceProfile
 none = profile "" Nothing Nothing

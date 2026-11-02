@@ -101,6 +101,7 @@ makeHomeDocument d slug time h =
       , S.icon = Nothing
       , S.description = ""
       , S.blog = False
+      , S.boxNumbering = S.InPage
       }
   , P.Page
       { P.id = d.page

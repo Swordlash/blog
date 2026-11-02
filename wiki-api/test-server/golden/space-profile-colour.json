@@ -1,5 +1,6 @@
 {
   "blog": true,
+  "boxNumbering": "with-section",
   "description": "",
   "homePage": null,
   "icon": {

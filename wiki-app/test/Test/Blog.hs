@@ -57,7 +57,7 @@ withTwelve st = foldl' add st [1 .. 12 :: Int]
 
 -- | The demo's blog with a home page: its second post.
 withHome :: MemState -> MemState
-withHome st = st {spaces = Map.adjust (\s -> S.withProfile S.SpaceProfile {S.description = s.description, S.icon = s.icon, S.homePage = (\p -> p.id) <$> notes, S.blog = s.blog} s) (blogOf st).id st.spaces}
+withHome st = st {spaces = Map.adjust (\s -> S.withProfile S.SpaceProfile {S.description = s.description, S.icon = s.icon, S.homePage = (\p -> p.id) <$> notes, S.blog = s.blog, S.boxNumbering = s.boxNumbering} s) (blogOf st).id st.spaces}
   where
     notes = find (\p -> p.title == "Notes on Haskell") (Map.elems st.pages) :: Maybe P.Page
 

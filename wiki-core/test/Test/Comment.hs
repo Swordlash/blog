@@ -14,7 +14,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Space (..))
 import Wiki.Core.Version (Author (..))
 
 time :: UTCTime
@@ -37,6 +37,7 @@ blog =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 ada, eve, rita :: Principal

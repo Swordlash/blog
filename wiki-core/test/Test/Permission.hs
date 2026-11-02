@@ -33,6 +33,7 @@ space s parent public =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 -- | Two private trees and a public one:

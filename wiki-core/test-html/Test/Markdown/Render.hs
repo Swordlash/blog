@@ -11,7 +11,7 @@ import Protolude
 import Test.Hspec
 import Test.Markdown.Html
 import Wiki.Core.Markdown
-import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..))
 import Wiki.Core.Math (Macros (..))
 
 shows' :: Text -> Text -> Expectation
@@ -312,6 +312,36 @@ spec = describe "Markdown.Render" $ do
           <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Exercise 3</p><p>Prove it.</p></div>"
       showsWith defined "> [!ASIDE]\n> By the way." $
         "<div class=\"alert alert-aside\" style=\"--box-colour: var(--muted)\"><p class=\"alert-title\">Aside</p><p>By the way.</p></div>"
+    it "writes a custom colour as its hex code"
+      $ showsWith defaultOptions {boxes = [BoxKind {name = "aside", label = "Aside", colour = CustomColour "#1a7f37", icon = NoIcon}]} "> [!ASIDE]\n> x"
+      $ "<div class=\"alert alert-aside\" style=\"--box-colour: #1a7f37\"><p class=\"alert-title\">Aside</p><p>x</p></div>"
+    it "numbers each kind of box apart, within the page, and none written with a star" $ do
+      let withNumbers form = defaultOptions {numbering = Numbering {form, number = Just 2}}
+          source = "> [!TIP]\n> a\n\n> [!TIP*]\n> b\n\n> [!NOTE] First\n> c\n\n> [!TIP]\n> d"
+      showsWith (withNumbers InPage) source $
+        "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip 1</p><p>a</p></div>"
+          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>b</p></div>"
+          <> "<div class=\"alert alert-note\"><p class=\"alert-title\">Note 1: First</p><p>c</p></div>"
+          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip 2</p><p>d</p></div>"
+      showsWith (withNumbers NoNumbers) source $
+        "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>a</p></div>"
+          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>b</p></div>"
+          <> "<div class=\"alert alert-note\"><p class=\"alert-title\">First</p><p>c</p></div>"
+          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>d</p></div>"
+    it "numbers boxes after the page's number, and the section's, a section starting at each ## heading" $ do
+      let titles opts md = map (T.takeWhile (/= '<')) . drop 1 . T.splitOn "<p class=\"alert-title\">" <$> markdownWith opts md
+          withNumbers form page = defaultOptions {numbering = Numbering {form, number = page}, headingAnchors = False}
+          source = "# Page\n\n> [!TIP]\n> a\n\n## One\n\n> [!TIP]\n> b\n\n> [!TIP]\n> > [!TIP]\n> > c\n\n### Deeper\n\n> [!TIP]\n> d\n\n## Two\n\n> [!TIP]\n> e"
+      titles (withNumbers WithPage (Just 3)) source `shouldReturn` ["Tip 3.1", "Tip 3.2", "Tip 3.3", "Tip 3.4", "Tip 3.5", "Tip 3.6"]
+      titles (withNumbers WithSection (Just 3)) source `shouldReturn` ["Tip 3.0.1", "Tip 3.1.1", "Tip 3.1.2", "Tip 3.1.3", "Tip 3.1.4", "Tip 3.2.1"]
+      -- Without the page's number, the page's own numbers.
+      titles (withNumbers WithSection Nothing) source `shouldReturn` ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5", "Tip 6"]
+    it "writes a title's math as math, and its display math on the title's line" $
+      "> [!TIP] Use $x$ and $$y$$\n> a"
+        `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">Use <span class=\"math inline\">x</span> and <span class=\"math inline\">\\displaystyle y</span></p><p>a</p></div>"
+    it "writes display math inside emphasis in a title on the title's line too" $
+      "> [!TIP] *$$y$$*\n> a"
+        `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\"><em><span class=\"math inline\">\\displaystyle y</span></em></p><p>a</p></div>"
     it "keeps the five kinds' own look whatever is defined"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
       $ "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>x</p></div>"

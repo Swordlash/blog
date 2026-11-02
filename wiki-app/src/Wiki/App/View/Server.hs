@@ -63,7 +63,7 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
-import Wiki.Core.Markdown.Box (AlertKind (Custom), BoxColour (..), BoxIcon (..), BoxKind (..), colourName, iconName, kindTitle, readColour, readIcon)
+import Wiki.Core.Markdown.Box (AlertKind (Custom), BoxColour (..), BoxIcon (..), BoxKind (..), colourName, iconName, kindTitle, readColour, readHexColour, readIcon, themeColours)
 import Wiki.Core.Markdown.Render qualified as Md
 import Wiki.Core.Url (Url (..))
 
@@ -183,6 +183,7 @@ data Action
   | TypedKind Text
   | TypedLabel Text
   | ChoseColour Text
+  | PickedColour Text
   | ChoseIcon Text
   | SaveBox
 
@@ -378,11 +379,19 @@ component =
           <label class="field">
             <span>Colour</span>
             <select name="colour" onValueChange={{ ChoseColour }}>
-              {% for c in [minBound .. maxBound :: BoxColour] %}
+              {% for c in themeColours %}
                 <option value={{ colourName c }} selected={{ c == form.chosenColour }}>{{ colourName c }}</option>
               {% end %}
+              <option value="custom" selected={{ isCustom form.chosenColour }}>custom…</option>
             </select>
           </label>
+          {% if isCustom form.chosenColour %}
+            <label class="field server-box-custom-colour">
+              <span>Custom colour</span>
+              <input type="color" name="custom-colour" value={{ colourName form.chosenColour }} onValueInput={{ PickedColour }}>
+            </label>
+            <p class="field-hint">The theme's colours change with the light and the dark scheme; a custom one does not, so choose one that reads on both.</p>
+          {% end %}
           <label class="field">
             <span>Icon</span>
             <select name="icon" onValueChange={{ ChoseIcon }}>
@@ -751,7 +760,10 @@ component =
       RemoveBox name -> save (\s -> (unchanged s) {boxes = filter (\b -> b.name /= name) s.boxes})
       TypedKind t -> onBox (\f -> f {typedKind = T.toLower t})
       TypedLabel t -> onBox (\f -> f {typedLabel = t})
-      ChoseColour t -> onBox (\f -> f {chosenColour = fromMaybe f.chosenColour (readColour t)})
+      ChoseColour t
+        | t == "custom" -> onBox (\f -> f {chosenColour = if isCustom f.chosenColour then f.chosenColour else CustomColour defaultCustomColour})
+        | otherwise -> onBox (\f -> f {chosenColour = fromMaybe f.chosenColour (readColour t)})
+      PickedColour t -> onBox (\f -> f {chosenColour = maybe f.chosenColour CustomColour (readHexColour t)})
       ChoseIcon t -> onBox (\f -> f {chosenIcon = fromMaybe f.chosenIcon (readIcon t)})
       SaveBox ->
         gets (\st -> st.editing) >>= \case
@@ -836,6 +848,18 @@ boxFormOf :: State -> Maybe BoxForm
 boxFormOf st = case st.editing of
   EditingBox (Just _) form -> Just form
   _ -> Nothing
+
+-- | Whether a colour is a custom one, which the form picks with a colour
+-- picker rather than from the list.
+isCustom :: BoxColour -> Bool
+isCustom = \case
+  CustomColour _ -> True
+  _ -> False
+
+-- | The colour the picker starts at when "custom" is chosen: the theme's
+-- teal, as it is in the light scheme.
+defaultCustomColour :: Text
+defaultCustomColour = "#0a6d69"
 
 newBox :: BoxForm
 newBox = BoxForm {typedKind = "", typedLabel = "", chosenColour = Blue, chosenIcon = NoIcon}

@@ -128,12 +128,13 @@ import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor,
 import Wiki.Core.Comment qualified as C
 import Wiki.Core.HomePage (HomeDocument (..), HomePage (document), checkHomePage)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (readNumbering)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
 import Wiki.Core.Version (Author (..), Version (..))
 
@@ -908,8 +909,10 @@ parseNamed = withObject "author" $ \o -> do
 -- none if missing), @icon@ (@{"emoji": …}@, @{"colour": …}@, or
 -- @{"image": blob, "mediaType": …, "file": …}@, the file being where the
 -- image's bytes are; the default if missing, or of a kind this program
--- does not know), @description@ (empty if missing) and @blog@ (whether it
--- is shown as a blog, "Wiki.Core.Blog"; false if missing).
+-- does not know), @description@ (empty if missing), @blog@ (whether it
+-- is shown as a blog, "Wiki.Core.Blog"; false if missing) and
+-- @boxNumbering@ (how its boxes are numbered, "Wiki.Core.Markdown.Box";
+-- within the page if missing, or of a way this program does not know).
 --
 -- This is the record of version 1 and of the demo's IndexedDB, where an
 -- image's file is @icons\/\<space id>@. In version 2, @space.json@ is the
@@ -936,6 +939,7 @@ spaceFields iconFile s =
     <> ["icon" .= encodeIcon iconFile icon | Just icon <- [s.icon]]
     <> ["description" .= s.description | not (T.null s.description)]
     <> ["blog" .= True | s.blog]
+    <> ["boxNumbering" .= s.boxNumbering | s.boxNumbering /= InPage]
 
 -- | A space's icon as its record writes it: an image names the archive
 -- file its bytes are in.
@@ -962,7 +966,8 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   icon <- (>>= parseMaybe parseJSON) <$> (o .:? "icon" :: Parser (Maybe Value))
   description <- o .:? "description" .!= ""
   blog <- o .:? "blog" .!= False
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
+  boxNumbering <- fromMaybe InPage . (>>= readNumbering) <$> o .:? "boxNumbering"
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

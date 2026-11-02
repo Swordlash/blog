@@ -23,7 +23,6 @@ import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
-import Text.Pandoc.Builder qualified as B
 import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Walk (query)
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -36,7 +35,7 @@ import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
-import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
@@ -84,6 +83,7 @@ place =
     , idPrefix = ""
     , macros = Macros []
     , boxes = []
+    , numbering = noNumbers
     }
   where
     docsPages = [p | p <- demoArchive.pages, Just s <- [find (\s -> s.id == p.space) demoArchive.spaces], s.slug == slug "docs"]
@@ -209,9 +209,10 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     -- In code, a marker is code.
     fenced <- blocksOf ToOther place "```\n> [!NOTE]\n```\n"
     boxClasses fenced `shouldBe` []
-    -- The title is the text written, as the page shows it, not Markdown.
-    written <- blocksOf ToOther place "> [!NOTE] Read *this* &amp; that\n> Body.\n"
-    titles written `shouldBe` [B.toList (B.text "Read *this* &amp; that")]
+    -- The title is read as the page reads it, as Markdown text, with its
+    -- math; display math is set on the title's line.
+    written <- blocksOf ToOther place "> [!NOTE] Read *this* &amp; $x^2$ $$y$$\n> Body.\n"
+    titles written `shouldBe` [[P.Str "Read", P.Space, P.Emph [P.Str "this"], P.Space, P.Str "&", P.Space, P.Math P.InlineMath "x^2", P.Space, P.Math P.InlineMath "\\displaystyle y"]]
     -- Nested in a list, and the second of two, each where the page has it.
     nested <- blocksOf ToOther place "- item\n\n  > [!TIP] One\n  > a\n\n> [!EXERCISE] Two\n> b\n"
     boxClasses nested `shouldBe` [["tip", "alert"], ["alert-exercise"]]
@@ -233,6 +234,32 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     listed <- blocksOf ToOther place "1. > [!NOTE] T\n   > x\n"
     [length items | P.OrderedList _ items <- listed] `shouldBe` [1]
     boxClasses listed `shouldBe` [["note", "alert"]]
+
+  it "numbers the boxes as the page does: each kind apart, after the page's and the section's numbers, none for a starred one" $ do
+    let words' = query (\case P.Str t -> [t]; _ -> [])
+        titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [T.unwords (words' xs)]; _ -> [])
+        source = "> [!TIP]\n> a\n\n## One\n\n> [!TIP] First\n> b\n\n> [!NOTE*]\n> c\n\n- > [!NOTE]\n  > d\n\n## Two\n\n> [!TIP]\n> e\n"
+    inPage <- blocksOf ToOther place {numbering = Numbering {form = InPage, number = Just 2}} source
+    titles inPage `shouldBe` ["Tip 1", "Tip 2: First", "Note", "Note 1", "Tip 3"]
+    withPage <- blocksOf ToOther place {numbering = Numbering {form = WithPage, number = Just 2}} source
+    titles withPage `shouldBe` ["Tip 2.1", "Tip 2.2: First", "Note", "Note 2.1", "Tip 2.3"]
+    withSection <- blocksOf ToOther place {numbering = Numbering {form = WithSection, number = Just 2}} source
+    titles withSection `shouldBe` ["Tip 2.0.1", "Tip 2.1.1: First", "Note", "Note 2.1.1", "Tip 2.2.1"]
+    none <- blocksOf ToOther place {numbering = Numbering {form = NoNumbers, number = Just 2}} source
+    titles none `shouldBe` ["Tip", "First", "Note", "Note", "Tip"]
+
+  it "reads a box's title as part of the page: a reference link and a footnote in it find their definitions, and its display math stays on its line" $ do
+    let titleOf bs = [xs | P.Div (_, ["tip", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
+    blocks <- blocksOf ToOther place "> [!TIP] See [the guide][g][^n] and *$$x$$*\n> Text.\n\n[g]: https://example.com\n\n[^n]: The note.\n"
+    [title] <- pure (titleOf blocks)
+    query (\case P.Link _ _ (url, _) -> [url]; _ -> []) title `shouldBe` ["https://example.com"]
+    length (query (\case P.Note _ -> [()]; _ -> []) title) `shouldBe` 1
+    query (\case P.Math kind tex -> [(kind, tex)]; _ -> []) title `shouldBe` [(P.InlineMath, "\\displaystyle x")]
+    query (\case P.Str t -> [t]; _ -> []) title `shouldNotContain` ["[the", "guide][g]"]
+    -- A footnote's display math is not the title's: it stays a block.
+    noted <- blocksOf ToOther place "> [!TIP] See[^n]\n> Text.\n\n[^n]: $$x^2$$\n"
+    [notedTitle] <- pure (titleOf noted)
+    query (\case P.Math kind tex -> [(kind, tex)]; _ -> []) notedTitle `shouldBe` [(P.DisplayMath, "x^2")]
 
   it "reads a box whatever the page's line endings" $ do
     let boxTitles bs = [xs | P.Div (_, ["note", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]

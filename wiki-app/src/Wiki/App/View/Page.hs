@@ -115,7 +115,7 @@ import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, spa
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (blog, description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Space (Space (blog, boxNumbering, description, homePage, icon, id, name), SpaceProfile (..))
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author)
@@ -682,7 +682,7 @@ component =
       ShowChanged -> H.raise (Changed Nothing)
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
-        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog} >>= done (const Nothing)
+        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog, boxNumbering = space.boxNumbering} >>= done (const Nothing)
       SetTemplate template -> withPage $ \page -> setPageTemplate page.id template >>= done (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)

@@ -88,6 +88,11 @@ spec = describe "Slides" $ do
           notesOn s = [n | Footnotes ns <- s.body, Footnote n _ _ <- ns]
       map notesOn d.slides `shouldBe` [[1], [2], []]
 
+    it "puts a footnote referred to only in a box's title with the slide" $ do
+      let d = deck "## A\n\n> [!TIP] See[^n]\n> Text.\n\n---\n\n## B\n\n[^n]: The note.\n"
+          notesOn s = [n | Footnotes ns <- s.body, Footnote n _ _ <- ns]
+      map notesOn d.slides `shouldBe` [[1], []]
+
     it "puts a footnote referred to only in the notes with the slide" $ do
       let d = deck "## A\n\n::: notes\nSee[^n].\n:::\n\n---\n\n## B\n\n[^n]: The note.\n"
       [n | s <- d.slides, Footnotes ns <- s.body, Footnote n _ _ <- ns] `shouldBe` [1]

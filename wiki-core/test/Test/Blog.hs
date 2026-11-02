@@ -15,7 +15,7 @@ import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (PageSummary (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Space (..))
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -55,6 +55,7 @@ blogSpace home =
     , icon = Nothing
     , description = ""
     , blog = True
+    , boxNumbering = InPage
     }
 
 ids :: [PageSummary] -> [Text]

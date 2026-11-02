@@ -47,7 +47,7 @@ import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -109,9 +109,9 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
   -- posts. Projects has a colour for its icon, as a space whose
   -- administrator chose no emoji does.
   modify $
-    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Nothing, blog = True}
-      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False}
-      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki, blog = False}
+    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Nothing, blog = True, boxNumbering = InPage}
+      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False, boxNumbering = InPage}
+      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki, blog = False, boxNumbering = InPage}
       . setProfile docs (guideProfile tourPage)
   -- The kind of box the Markdown guide shows, as an administrator would
   -- define it.

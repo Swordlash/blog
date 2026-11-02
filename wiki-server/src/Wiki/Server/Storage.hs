@@ -205,6 +205,7 @@ import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
+import Wiki.Core.Markdown.Box (numberingName)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
@@ -230,7 +231,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
@@ -1616,6 +1617,7 @@ createSpaceTx parent name = do
           , icon = Nothing
           , description = ""
           , blog = False
+          , boxNumbering = InPage
           }
   db (insertSpace space)
   for_ ctx.creator $ \u ->
@@ -1637,7 +1639,7 @@ createSpaceTx parent name = do
           , position = 0
           , template = False
           }
-      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} space
+      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} space
   author <- asks (\x -> x.author)
   db (insertPage home >> insertVersion home author >> updateSpace withHome)
   pure withHome
@@ -1658,13 +1660,15 @@ setSpaceProfileTx sid p = do
   pure s'
 
 -- | What a change of a space's profile changed, in words: the description
--- as it is now, the icon as what it is, the home page by its title.
+-- as it is now, the icon as what it is, the home page by its title, the
+-- numbering of boxes by its name (@with-section@).
 profileChanges :: [PageNode] -> Space -> Space -> [(Text, Text)]
 profileChanges nodes old new =
   [("description", if T.null new.description then "none" else new.description) | old.description /= new.description]
     <> [("icon", maybe "the default" iconText new.icon) | old.icon /= new.icon]
     <> [("home page", maybe "none" titleOf new.homePage) | old.homePage /= new.homePage]
     <> [("blog", yesNo new.blog) | old.blog /= new.blog]
+    <> [("numbers of boxes", numberingName new.boxNumbering) | old.boxNumbering /= new.boxNumbering]
   where
     iconText = \case
       IconEmoji e -> e
@@ -1684,7 +1688,7 @@ uploadSpaceIconTx sid mediaType size store = do
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
-  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
+  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
   db (updateSpace s')
   -- The icon is part of the profile; it has its own operation only
   -- because it carries bytes.
@@ -1769,6 +1773,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , icon = s.icon
       , description = s.description
       , blog = s.blog
+      , boxNumbering = s.boxNumbering
       }
 
 -- | Math macros as they are kept: as written, but for blank lines at the
@@ -1837,6 +1842,7 @@ respace parent slug position s =
     , icon = s.icon
     , description = s.description
     , blog = s.blog
+    , boxNumbering = s.boxNumbering
     }
 
 --------------------------------------------------------------------------------
@@ -2932,11 +2938,11 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- step, as PostgreSQL checks them.
           let spaces =
                 [ case sp.icon of
-                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog} sp
+                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog, boxNumbering = sp.boxNumbering} sp
                     _ -> sp
                 | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
                 ]
-          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp | sp <- spaces]
+          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog, boxNumbering = sp.boxNumbering} sp | sp <- spaces]
           -- A grant on a space names the space, so the grants come after.
           insertGrants a.grants
           for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do

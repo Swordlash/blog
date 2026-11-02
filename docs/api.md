@@ -172,7 +172,7 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 
 A `Space` is `{"id", "name", "slug", "parent", "public", "mathMacros",
 "createdAt", "position", "subspaceOrder", "pageOrder", "homePage", "icon",
-"description"}`. Its `homePage` is the id of the page it opens at, one of its
+"description", "blog", "boxNumbering"}`. Its `homePage` is the id of the page it opens at, one of its
 own, or `null`; a space made through the API comes with one, a page titled
 "Home" whose first version is its creator's, and a page that is deleted, or
 moved to another space, leaves its space without one. Its `icon` is `null`
@@ -182,7 +182,11 @@ id), `{"emoji": "📘"}`, `{"colour": "teal"}` (one of
 purple, indigo, slate) or `{"image": <blob>, "mediaType": "image/png"}`, an
 uploaded image, fetched at the address above (`Wiki.Api.Links.spaceIconUrl`),
 which names the blob so that a new image is at a new address. Its
-`description` is plain text, empty for none, at most 500 characters.
+`description` is plain text, empty for none, at most 500 characters. Its
+`boxNumbering` (WP5.40) is how its pages' boxes are numbered: `"none"`,
+`"in-page"`, `"with-page"` (after the page's place under its parent) or
+`"with-section"` (after the page's and the section's), part of its profile;
+a space or a profile without it reads as `"in-page"`.
 
 A space's profile and icon are set by whoever administers it, checked as
 `Wiki.Core.Space.checkProfile` checks them, after the permission: a home page
@@ -1002,7 +1006,7 @@ and dashes, starting with a letter, at most 32 characters, neither one of
 GitHub's five kinds nor `title`), the `label` its boxes are titled with (at
 most 60 characters; an empty one is made from the name), a `colour` of the
 theme (`blue`, `green`, `purple`, `amber`, `red`, `teal`, `orange`, `pink`,
-`grey`) and an `icon` (`none`, `info`, `lightbulb`, `pencil`, `question`,
+`grey`) or a custom one, a hex code `#rrggbb` (WP5.40), and an `icon` (`none`, `info`, `lightbulb`, `pencil`, `question`,
 `check`, `star`, `book`, `flag`). Two kinds with one name, or a name that
 cannot be one, are refused (400). They are stored as JSON in the setting
 `boxes`, and every session carries them. Settings without the field read

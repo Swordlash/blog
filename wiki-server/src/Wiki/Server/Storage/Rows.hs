@@ -224,13 +224,14 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (numberingName, readNumbering)
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
-import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
@@ -460,6 +461,9 @@ spaceOf r =
       icon = r.icon >>= decodeStrict' . encodeUtf8
     , description = r.description
     , blog = r.blog
+    , -- A way of numbering this program does not know (one written by a
+      -- later program) is read as the default.
+      boxNumbering = fromMaybe InPage (readNumbering r.box_numbering)
     }
 
 spaceRow :: Space -> S.Spaces Identity
@@ -479,6 +483,7 @@ spaceRow s =
     , icon = decodeUtf8 . BSL.toStrict . encode <$> s.icon
     , description = s.description
     , blog = s.blog
+    , box_numbering = numberingName s.boxNumbering
     }
 
 -- | Every space, by id. A wiki has tens of them, and every permission is
@@ -1340,6 +1345,7 @@ updateSpace s =
                 , x.icon <-. val_ r.icon
                 , x.description <-. val_ r.description
                 , x.blog <-. val_ r.blog
+                , x.box_numbering <-. val_ r.box_numbering
                 ]
           )
           (\x -> x.id ==. val_ r.id)

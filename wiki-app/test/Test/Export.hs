@@ -41,7 +41,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -82,7 +82,7 @@ edited = do
     _ <- ok' =<< uploadAttachment tour.id "bytes.bin" "application/octet-stream" (BS.pack [0 .. 255])
     space <- ok' =<< createSpace (Just docs.id) "Exported"
     -- Profiles: a description and an emoji, and an image.
-    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage, blog = False}
+    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage, blog = False, boxNumbering = InPage}
     _ <- ok' =<< uploadSpaceIcon space.id "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"

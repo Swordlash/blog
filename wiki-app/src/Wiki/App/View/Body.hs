@@ -14,7 +14,9 @@
 --
 -- A formula is typeset with the macros of the space and its ancestors,
 -- and of the formulas before it on the page ("Wiki.Core.Math"), so the
--- page and its preview typeset it the same way.
+-- page and its preview typeset it the same way. Boxes are numbered as the
+-- space says, with the page's number ('Wiki.Core.Page.pageNumber'); a
+-- comment's boxes have no numbers.
 --
 -- Links in the Markdown are resolved here, against the 'Place' the page
 -- is in: a path becomes a route ('resolvePageLink'), an @attachment:@ name
@@ -76,12 +78,13 @@ import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
+import Wiki.Core.Markdown.Box (Numbering (..), noNumbers)
 import Wiki.Core.Math (spaceMacros)
 import Wiki.Core.Notification (mentionedIn)
-import Wiki.Core.Page (PageSummary)
+import Wiki.Core.Page (PageSummary, pageNumber)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (boxNumbering, id, pageOrder))
 import Wiki.Core.Version (Author (..))
 
 -- | The place a page's Markdown is read in: what its links and
@@ -224,7 +227,7 @@ commentBodies
   => Place
   -> [Text]
   -> [[H.ComponentHTML action slots m]]
-commentBodies place = Md.renderSections (options place) . map parsed
+commentBodies place = Md.renderSections (options place) {Md.numbering = noNumbers} . map parsed
   where
     parsed body = either (const [Md.Para [Md.Str body]]) identity (Md.parseMarkdown body)
 
@@ -262,6 +265,7 @@ options place =
     , Md.resolveMention = \login ->
         (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
           <$> Map.lookup login place.people
+    , Md.numbering = Numbering {form = place.space.boxNumbering, number = pageNumber place.space.pageOrder place.pages place.path}
     }
 
 -- | Renderer options shared by page bodies, previews and the front page.

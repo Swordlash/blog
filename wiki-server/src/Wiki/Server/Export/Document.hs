@@ -28,8 +28,11 @@
 --   pandoc's own alerts, a div with the kind's class and @alert@ that
 --   starts with a @title@ div, and any other kind a div of the same shape
 --   with the class @alert-@ and its name. So HTML, DOCX and a PDF show a
---   box with its title (the one written after the marker, else the kind's
---   label) whatever its kind.
+--   box with its title whatever its kind: its kind's label and its number,
+--   as the page numbers it (@Tip 2.3@), then the one written after the
+--   marker, read as Markdown, so its math is math. A box in a footnote
+--   has no number in a document: pandoc keeps a note inside the text that
+--   refers to it, where the page shows it at the end.
 -- * __Math macros__ ("Wiki.Core.Math"): pandoc's writers typeset each
 --   formula on its own, so the macros it uses in the wiki (its space's,
 --   and those defined by the formulas before it on the page) are expanded
@@ -117,7 +120,7 @@ import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
 import Wiki.Core.Markdown.Ast (Block, BoxMarker (..), ParseError, parseWithMarkers)
-import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind, alertKindName, boxLabel, definedKind)
+import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
@@ -157,6 +160,9 @@ data Place = Place
   -- ^ The math macros of the page's space and its ancestors.
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administrator defined, for their labels.
+  , numbering :: Numbering
+  -- ^ How the page's boxes are numbered: its space's way, and the page's
+  -- number.
   }
 
 -- | The kind of document being written, as far as reading a page cares.
@@ -224,7 +230,7 @@ mediaPath a = toS ("attachments/" <> a.id.text <> "/" <> T.map safe a.name.text)
 -- | A page's Markdown as blocks, with everything the wiki adds applied.
 pageBlocks :: Output -> Place -> PageRead -> Either PandocError [P.Block]
 pageBlocks output place page = do
-  read' <- withBoxesRead place.boxes page
+  read' <- withBoxesRead place.boxes place.numbering page
   pure
     . expandMacros place.macros
     . walk (resolveInlines place)
@@ -352,13 +358,13 @@ normalLines = T.replace "\r" "\n" . T.replace "\r\n" "\n"
 -- that makes pandoc read code) is not replaced, and the page is read
 -- again without it, so the document shows the marker as written, and no
 -- placeholder.
-withBoxesRead :: [BoxKind] -> PageRead -> Either PandocError [P.Block]
-withBoxesRead defined page = go page.markers
+withBoxesRead :: [BoxKind] -> Numbering -> PageRead -> Either PandocError [P.Block]
+withBoxesRead defined numbering page = go page.markers
   where
     go markers = do
       let (marked, boxes) = withBoxes page.source markers
       P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} marked)
-      let boxed = walk (boxesOf defined boxes) read'
+      let boxed = walk (boxesOf defined boxes (numbersOf numbering boxes read')) read'
           stray = Set.fromList (concatMap (\t -> [m | (placeholder, (m, _)) <- Map.toList boxes, placeholder `T.isInfixOf` t]) (texts boxed))
       if Set.null stray then pure boxed else go (filter (`Set.notMember` stray) markers)
     -- Every text a document holds where a placeholder could end up.
@@ -372,13 +378,15 @@ withBoxesRead defined page = go page.markers
 -- it, and the text the placeholder replaced.
 type Boxes = Map Text (BoxMarker, Text)
 
--- | A page's source with the marker of each of these boxes (@[!KIND]@ and
--- the title after it) replaced by a placeholder, and the boxes by their
--- placeholders. Pandoc reads each such box as a quotation that starts with
--- its placeholder, which 'boxesOf' makes the box. So pandoc never decides
--- what is a box: a marker the wiki reads as text (escaped, in code, with
--- no space before a title) is text in the document too, and a title is the
--- text the page shows.
+-- | A page's source with the marker of each of these boxes (@[!KIND]@)
+-- replaced by a placeholder, and the boxes by their placeholders. Pandoc
+-- reads each such box as a quotation that starts with its placeholder,
+-- which 'boxesOf' makes the box. So pandoc never decides what is a box: a
+-- marker the wiki reads as text (escaped, in code, with no space before a
+-- title) is text in the document too. The title stays after the
+-- placeholder, on its line, so pandoc reads it as part of the page: a
+-- reference link or a footnote in it finds its definition elsewhere in the
+-- page, as on the page.
 --
 -- The placeholder line is followed by a line of the quotation marks of
 -- its prefix and nothing else, a blank line inside the quotation, so that what follows
@@ -406,7 +414,7 @@ withBoxes source markers = case family of
             , Just start <- [markerStart m text]
             ]
         rewrite n text = case Map.lookup n placed of
-          Just (placeholder, _, start, _) -> [T.take start text <> placeholder, quoteOnly (T.take start text)]
+          Just (placeholder, m, start, _) -> [T.take start text <> placeholder <> maybe "" (" " <>) m.boxTitle, quoteOnly (T.take start text)]
           Nothing -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
@@ -429,30 +437,75 @@ withBoxes source markers = case family of
           (_, "") -> Nothing
           (before, _) -> Just (T.length before)
 
+-- | The number of each numbered box of a page ('withBoxes'), by its
+-- placeholder, as the page's renderer numbers it ("Wiki.Core.Markdown.Box"):
+-- in the order the boxes come in the document, each @##@ heading starting a
+-- section. A box in a footnote is not reached, and has no number.
+numbersOf :: Numbering -> Boxes -> [P.Block] -> Map Text Text
+numbersOf numbering boxes read' = snd (execState (traverse_ go read') (startCounting numbering, mempty))
+  where
+    go :: P.Block -> State (BoxCounter, Map Text Text) ()
+    go = \case
+      P.Header 2 _ _ -> modify (first countSection)
+      P.BlockQuote (P.Para (P.Str placeholder : _) : rest)
+        | Just (m, _) <- Map.lookup placeholder boxes -> do
+            when m.boxNumbered $ do
+              (counter, numbers) <- get
+              let (number, counter') = countBox m.boxKind counter
+              put (counter', maybe numbers (\n -> Map.insert placeholder n numbers) number)
+            traverse_ go rest
+      P.BlockQuote bs -> traverse_ go bs
+      P.Div _ bs -> traverse_ go bs
+      P.BulletList items -> traverse_ (traverse_ go) items
+      P.OrderedList _ items -> traverse_ (traverse_ go) items
+      P.DefinitionList items -> traverse_ (traverse_ (traverse_ go) . snd) items
+      _ -> pass
+
 -- | A quotation that starts with a box's placeholder ('withBoxes') as the
 -- box: GitHub's five kinds as pandoc's alerts are made (a div with the
 -- kind's class and @alert@), any other kind as a div with the class
 -- @alert-@ and its name, each starting with a @title@ div that holds the
--- box's title (the one written after the marker, else the kind's label).
--- Any other block is left as it is.
-boxesOf :: [BoxKind] -> Boxes -> P.Block -> P.Block
-boxesOf defined boxes = \case
+-- box's title: the kind's label and the box's number ('numbersOf') if it
+-- has one, then the title written after the marker, read as Markdown, as
+-- the page shows them ('boxCaption'). Any other block is left as it is.
+boxesOf :: [BoxKind] -> Boxes -> Map Text Text -> P.Block -> P.Block
+boxesOf defined boxes numbers = \case
   P.BlockQuote (P.Para (P.Str placeholder : after) : rest)
     | Just (m, _) <- Map.lookup placeholder boxes ->
-        let label = fromMaybe (boxLabel (definedKind defined m.boxKind) m.boxKind) m.boxTitle
+        let caption = boxCaption (definedKind defined m.boxKind) m.boxKind (Map.lookup placeholder numbers) (isJust m.boxTitle)
+            -- The title is what pandoc read after the placeholder, up to
+            -- the end of its line ('withBoxes').
+            (onLine, more) = break lineBreak after
+            title = map displayInline (dropWhile (== P.Space) onLine)
+            label = B.toList (B.text caption) <> title
             classes = case m.boxKind of
               Custom name -> ["alert-" <> name]
               builtIn -> [alertKindName builtIn, "alert"]
-            firstPara = case after of
-              b : more | lineBreak b -> more
-              more -> more
-         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para (B.toList (B.text label))] : [P.Para firstPara | not (null firstPara)] <> rest)
+            firstPara = drop 1 more
+         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para label] : [P.Para firstPara | not (null firstPara)] <> rest)
   b -> b
   where
     lineBreak = \case
       P.SoftBreak -> True
       P.LineBreak -> True
       _ -> False
+    -- Display math in a title is set on the title's line, as the page sets
+    -- it, wherever it is in the title's text: in emphasis and links too.
+    -- A footnote's body is not the title's text, so its math stays as the
+    -- page shows it.
+    displayInline = \case
+      P.Math P.DisplayMath tex -> P.Math P.InlineMath ("\\displaystyle " <> tex)
+      P.Emph xs -> P.Emph (map displayInline xs)
+      P.Strong xs -> P.Strong (map displayInline xs)
+      P.Strikeout xs -> P.Strikeout (map displayInline xs)
+      P.Underline xs -> P.Underline (map displayInline xs)
+      P.Superscript xs -> P.Superscript (map displayInline xs)
+      P.Subscript xs -> P.Subscript (map displayInline xs)
+      P.SmallCaps xs -> P.SmallCaps (map displayInline xs)
+      P.Quoted q xs -> P.Quoted q (map displayInline xs)
+      P.Span attrs xs -> P.Span attrs (map displayInline xs)
+      P.Link attrs xs target -> P.Link attrs (map displayInline xs) target
+      other -> other
 
 ----------------------------------------------------------------------
 -- Raw HTML, through the allowlist

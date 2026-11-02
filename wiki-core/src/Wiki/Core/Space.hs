@@ -23,6 +23,7 @@ module Wiki.Core.Space
 
     -- * Its profile
   , SpaceProfile (..)
+  , BoxNumbering (..)
   , profileOf
   , withProfile
   , checkProfile
@@ -42,6 +43,7 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Attachment (MimeType (..), mimeEssence)
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
@@ -87,6 +89,11 @@ data Space = Space
   -- ^ Whether it is shown as a blog ("Wiki.Core.Blog"): it opens at its
   -- posts, the newest first, under its home page if it has one, and a
   -- public one has feeds.
+  , boxNumbering :: BoxNumbering
+  -- ^ How the boxes of its pages are numbered ("Wiki.Core.Markdown.Box"):
+  -- within each page by default. A space written without it (by an older
+  -- client, or in a demo's stored state) reads as numbering within the
+  -- page ('BoxNumbering''s @omittedField@).
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -231,8 +238,8 @@ checkIconUpload mediaType size
 
 -- | 'SpaceProfile': what a space's administrator sets in its settings
 -- besides its name, its permissions and its orders: its description, its
--- icon, its home page and whether it is shown as a blog
--- ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
+-- icon, its home page, whether it is shown as a blog and how its boxes are
+-- numbered ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
 -- uploaded ('Wiki.App.Backend.uploadSpaceIcon'): a profile names an image
 -- only to keep the one the space has.
 data SpaceProfile = SpaceProfile
@@ -240,17 +247,18 @@ data SpaceProfile = SpaceProfile
   , icon :: Maybe Icon
   , homePage :: Maybe PageId
   , blog :: Bool
+  , boxNumbering :: BoxNumbering
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | A space's current profile.
 profileOf :: Space -> SpaceProfile
-profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage, blog = s.blog}
+profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering}
 
 -- | A space with another profile. (A function, since a record update of
--- @icon@, @description@, @homePage@ or @blog@ cannot tell a space's field
--- from a profile's where both are in scope.)
+-- @icon@, @description@, @homePage@, @blog@ or @boxNumbering@ cannot tell
+-- a space's field from a profile's where both are in scope.)
 withProfile :: SpaceProfile -> Space -> Space
 withProfile p s =
   Space
@@ -268,6 +276,7 @@ withProfile p s =
     , icon = p.icon
     , description = p.description
     , blog = p.blog
+    , boxNumbering = p.boxNumbering
     }
 
 -- | The longest description a space may have, in characters.
@@ -288,7 +297,7 @@ checkProfile space pages p = do
   for_ p.homePage $ \h ->
     unless (h `elem` pages) $
       Left "A space's home page has to be one of its own pages."
-  pure SpaceProfile {description, icon, homePage = p.homePage, blog = p.blog}
+  pure SpaceProfile {description, icon, homePage = p.homePage, blog = p.blog, boxNumbering = p.boxNumbering}
   where
     checkIcon = \case
       IconEmoji e -> do

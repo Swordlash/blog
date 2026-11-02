@@ -10,7 +10,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Space (..))
 
 space :: Text -> Maybe Space -> Space
 space s parent =
@@ -29,6 +29,7 @@ space s parent =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 -- | @eng ── backend@ and @ops@.
