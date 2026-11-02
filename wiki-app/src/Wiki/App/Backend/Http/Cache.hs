@@ -148,6 +148,7 @@ module Wiki.App.Backend.Http.Cache
   , withNotice
   , forgetNotices
   , withWatch
+  , withStars
   , cachedPeople
   , afterComment
   , afterEvent
@@ -167,6 +168,7 @@ import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (ServerSettings)
+import Wiki.Api.Stars (StarredPage)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
@@ -248,6 +250,9 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Notifications.notifications'.
   , watches :: Map WatchTarget (Either WikiError Watch)
   -- ^ 'Wiki.App.Backend.Notifications.watching', by page or space.
+  , stars :: Maybe (Either WikiError [StarredPage])
+  -- ^ 'Wiki.App.Backend.Stars.starred': the user's starred pages, which
+  -- the header's list and every page's star button read.
   }
   deriving stock (Eq, Show)
 
@@ -308,6 +313,7 @@ emptyCache =
     , people = mempty
     , notices = Nothing
     , watches = mempty
+    , stars = Nothing
     }
 
 -- | Whether a response is cached. A successful one is, and so are the
@@ -440,6 +446,9 @@ forgetNotices c = c {notices = Nothing}
 
 withWatch :: WatchTarget -> Either WikiError Watch -> Cache -> Cache
 withWatch t w c = c {watches = Map.insert t w c.watches}
+
+withStars :: Either WikiError [StarredPage] -> Cache -> Cache
+withStars s c = c {stars = Just s}
 
 -- | The cache after a write to a page's comments. If the write succeeded,
 -- its event is applied to the page's cached threads, if any are cached.

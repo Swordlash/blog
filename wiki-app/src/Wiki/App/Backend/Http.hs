@@ -111,6 +111,7 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
+import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
@@ -127,6 +128,7 @@ import Wiki.App.Backend.Http.Cache qualified as Cache
 import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noResponse, prepare, refusal, sessionInfo, withBoundary)
 import Wiki.App.Backend.Http.Transport
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
@@ -617,6 +619,17 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   -- so every cached watch is removed.
   setNotificationSettings change = send (endpoints.notifications.setSettings change) <* modifyCache (\c -> c {watches = mempty})
   unsubscribe token = send_ (endpoints.unsubscribe token)
+
+-- | Stars, over the API's @stars…@ endpoints. The list is cached, so that
+-- a page the server prerendered with its star button is also the
+-- program's first render, and the header's list opens at once. Starring
+-- changes only the list, so the response takes its place in the cache.
+instance (MonadIO m) => MonadStars (HttpWiki m) where
+  starred = cached (\c -> c.stars) endpoints.stars.list withStars
+  setStarred p wanted = do
+    result <- send (endpoints.stars.setPage p Starring {starred = wanted})
+    when (kept result) (modifyCache (withStars result))
+    pure result
 
 -- | The tab's live channel: one per backend, made with it, and opened when
 -- the first page is watched.

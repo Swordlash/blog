@@ -98,6 +98,7 @@ import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
+import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
 import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
@@ -108,6 +109,7 @@ import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttach
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
@@ -735,6 +737,12 @@ handlers env caller =
           , setPageWatch = \p w -> wiki (setWatching (WatchPage p) w.watching)
           , spaceWatch = wiki . watching . WatchSpace
           , setSpaceWatch = \sid w -> wiki (setWatching (WatchSpace sid) w.watching)
+          }
+    , -- The storage checks who may: the stars are the user's own.
+      stars =
+        StarsApi
+          { list = wiki starred
+          , setPage = \p starring -> wiki (setStarred p starring.starred)
           }
     , unsubscribe = \token -> wiki (Notifications.unsubscribe token) $> NoContent
     , assistant =

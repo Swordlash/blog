@@ -52,7 +52,7 @@ import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
-import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
 import Wiki.Api.Admin (Directory, ServerStatus (..), UserQuery (..), firstUsers, pageOfDirectory)
@@ -61,6 +61,7 @@ import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
+import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous), ServerSettings, ServerSettingsOf (homePage), noServerSettings)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
 import Wiki.Api.Types qualified as Api
@@ -208,7 +209,8 @@ serveDemo = do
       counts <- pageCounts
       pure (me, home, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
-  -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body").
+  -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body"),
+  -- and the stars ("Wiki.App.View.Star"): none.
   (named, watched) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
@@ -221,6 +223,7 @@ serveDemo = do
           <*> for spaces (\s -> (endpointUrl (\e -> e.notifications.spaceWatch s.id),) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
       pure (named, watched)
   answerWith "GET" (endpointUrl (\e -> e.notifications.list)) 200 Notifications {unread = 0, items = []}
+  answerWith "GET" (endpointUrl (\e -> e.stars.list)) 200 ([] :: [StarredPage])
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts

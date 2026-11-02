@@ -36,7 +36,7 @@ import Test.Hspec
 import Test.Scripted (jsonResponse, methodOf)
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
-import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..), UserQuery (..))
@@ -58,6 +58,7 @@ import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections)
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
@@ -342,6 +343,7 @@ apiOver providers seed = do
       spaceWatch <- watching (WatchSpace s.id)
       pure ([(endpointUrl (\e -> e.spaces.atPath (spacePath s.id)), answerOf space), (endpointUrl (\e -> e.spaces.listPages s.id), answerOf pages), (endpointUrl (\e -> e.spaces.postDetails s.id), answerOf details), (endpointUrl (\e -> e.notifications.spaceWatch s.id), answerOf spaceWatch)] <> concat perPage)
     told <- notifications
+    stars <- starred
     pure
       ( Map.fromList
           ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = [], homePage = me.homePage} :: Either WikiError SessionInfo))
@@ -356,6 +358,7 @@ apiOver providers seed = do
               : (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing), answerOf logged)
               : (endpointUrl (\e -> e.admin.status), answerOf (Right status :: Either WikiError ServerStatus))
               : (endpointUrl (\e -> e.notifications.list), answerOf told)
+              : (endpointUrl (\e -> e.stars.list), answerOf stars)
               : (endpointUrl (\e -> e.invitations.details (InvitationToken "valid")), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : usersPages
                 <> concat perSpace

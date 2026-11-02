@@ -138,6 +138,10 @@ module Wiki.App.Backend.Mem.State
   , notificationSettingsIn
   , setNotificationSettingsIn
   , insertNotification
+
+    -- * Stars
+  , starredIn
+  , setStarredIn
   )
 where
 
@@ -168,6 +172,8 @@ import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Notifications (NotificationSettings (NotificationSettings), NotificationSettingsChange, Notifications (Notifications), ReadMark)
 import Wiki.Api.Notifications qualified as N
+import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
+import Wiki.Api.Stars qualified as Star
 import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkHomePage, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
@@ -293,6 +299,10 @@ data MemState = MemState
   -- ^ What each user chose to watch, or not.
   , choices :: Map UserId Choices
   -- ^ How each user wants to be notified, where they have chosen.
+  , stars :: Map UserId [PageId]
+  -- ^ The pages each user starred, in the order they were starred. A
+  -- page deleted since is left here until the user next stars or unstars
+  -- a page, and is never listed ('starredIn').
   , threads :: Map PageId [Thread]
   -- ^ Each page's comments ("Wiki.Core.Comment"), its threads in the order
   -- they were opened. The authors' names stored are those they had when
@@ -334,6 +344,7 @@ emptyState =
     , notices = mempty
     , watches = mempty
     , choices = mempty
+    , stars = mempty
     , current = Nothing
     , counter = 1
     }
@@ -1458,6 +1469,7 @@ removeUserIn uid st = do
         , notices = map (map keptNotice) (Map.delete uid st.notices)
         , watches = Map.delete uid st.watches
         , choices = Map.delete uid st.choices
+        , stars = Map.delete uid st.stars
         , threads = Map.map (map (\t -> t {C.comments = map keptComment t.comments})) st.threads
         }
     , ()
@@ -1976,3 +1988,39 @@ setNotificationSettingsIn change st = do
   u <- signedIn st
   let st' = st {choices = Map.insert u Choices {mail = Just change.mail, watchOwn = change.watchOwn} st.choices}
   (st',) <$> notificationSettingsIn st'
+
+--------------------------------------------------------------------------------
+-- Stars
+
+-- | The current user's starred pages that exist and that they may view, in
+-- the order they were starred, each with its title and where it is now.
+starredIn :: MemState -> Either WikiError [StarredPage]
+starredIn st = do
+  u <- signedIn st
+  pure (mapMaybe listed (Map.findWithDefault [] u st.stars))
+  where
+    listed pid = do
+      p <- Map.lookup pid st.pages
+      let c = chainOf st p.space
+      guard (isRight (requireView st c))
+      pagePath <- pathOf (`Map.lookup` st.pages) p.id
+      pure StarredPage {Star.page = p.id, Star.space = p.space, Star.title = p.title, Star.location = PageLocation {space = map (\x -> x.slug) c, page = pagePath}}
+
+-- | Star a page the current user may view, or take its star away. A page
+-- starred already keeps its place in the list. The stars of pages deleted
+-- since are dropped on the way, so that they do not count towards
+-- 'maxStars'.
+setStarredIn :: PageId -> Bool -> Write [StarredPage]
+setStarredIn pid wanted st = do
+  p <- findPage st pid
+  requireView st (chainOf st p.space)
+  u <- signedIn st
+  let kept = filter (`Map.member` st.pages) (Map.findWithDefault [] u st.stars)
+      after
+        | not wanted = filter (/= pid) kept
+        | pid `elem` kept = kept
+        | otherwise = kept <> [pid]
+  when (length after > maxStars) $
+    Left (Invalid ("You have starred " <> show maxStars <> " pages, the most there can be: take the star from one first."))
+  let st' = st {stars = if null after then Map.delete u st.stars else Map.insert u after st.stars}
+  (st',) <$> starredIn st'

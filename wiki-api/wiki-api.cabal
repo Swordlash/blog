@@ -75,6 +75,7 @@ library
       Wiki.Api.Notifications
       Wiki.Api.Security
       Wiki.Api.ServerSettings
+      Wiki.Api.Stars
       Wiki.Api.Types
       Wiki.Api.Upload
       Wiki.Api.Vault

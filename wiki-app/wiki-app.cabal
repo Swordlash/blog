@@ -82,6 +82,7 @@ library
       Wiki.App.Backend.Mem.Persist
       Wiki.App.Backend.Mem.State
       Wiki.App.Backend.Notifications
+      Wiki.App.Backend.Stars
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.Guide
@@ -207,6 +208,7 @@ library contract
         Wiki.App.Backend.Contract.Admin
         Wiki.App.Backend.Contract.Comments
         Wiki.App.Backend.Contract.Notifications
+        Wiki.App.Backend.Contract.Stars
     build-depends:
         HUnit,
         bytestring,

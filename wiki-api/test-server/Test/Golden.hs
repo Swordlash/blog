@@ -25,6 +25,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Info (Capabilities (..), Health (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Notifications (NotificationSettingsChange (..), ReadMark (..), Watching (..))
+import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
@@ -99,6 +100,7 @@ spec = describe "golden JSON" $ do
     golden "comment" Sample.reply
     golden "notifications" Sample.notifications
     golden "notification-settings" Sample.notificationSettings
+    golden "starred-pages" [Sample.starredPage]
     golden "watch" [Watch True Chosen, Watch True (FromSpace (SpaceId "s1")), Watch True OwnPage, Watch False Unchosen]
     golden "people" (Map.fromList [("bea" :: Text, Sample.author)])
   describe "the live channel's messages" $ do
@@ -145,6 +147,7 @@ spec = describe "golden JSON" $ do
     golden "read-mark" ReadMark {ids = [NotificationId "n1"], everything = False}
     golden "notification-settings-change" NotificationSettingsChange {mail = MailOff, watchOwn = False}
     golden "watching" Watching {watching = True}
+    golden "starring" Starring {starred = True}
     golden "shift" ShiftBy {shift = ShiftToTop}
     golden "draft-edit" DraftEdit {base = Sample.time, title = "Tour", body = "# Tour, unsaved"}
     golden "import-choices" Sample.importChoices

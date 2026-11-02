@@ -37,6 +37,7 @@ import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..),
 import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
+import Wiki.Api.Stars (StarredPage (..), Starring (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), SecondFactorState (..), SessionRef (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
@@ -315,6 +316,11 @@ stubs =
           , spaceWatch = \_ -> pure (Watch False Unchosen)
           , setSpaceWatch = \_ w -> pure (Watch w.watching Chosen)
           }
+    , stars =
+        StarsApi
+          { list = pure [Sample.starredPage]
+          , setPage = \pid starring -> if pid == Sample.page.id then pure [Sample.starredPage | starring.starred] else refuse NotFound
+          }
     , unsubscribe = \t -> if t == UnsubscribeToken "unsubscribe" then pure NoContent else refuse NotFound
     , assistant =
         AssistantApi
@@ -510,6 +516,12 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (n.setPageWatch p) Watching {watching = False}) 200 (Watch False Chosen)
       answers (getAt (n.spaceWatch s)) 200 (Watch False Unchosen)
       answers (sendJson methodPut (n.setSpaceWatch s) Watching {watching = True}) 200 (Watch True Chosen)
+    it "lists the starred pages and stars a page, answering with the list after" $ do
+      let st = links.stars
+      (st.list, st.setPage p) `shouldBe` ("api/v1/stars", "api/v1/stars/pages/p1")
+      answers (getAt st.list) 200 [Sample.starredPage]
+      answers (sendJson methodPut (st.setPage p) Starring {starred = False}) 200 ([] :: [StarredPage])
+      answers (sendJson methodPut (st.setPage (PageId "p9")) Starring {starred = True}) 404 NotFound
     it "fetches the assistant's vault unless the version named is the server's, and stores it over that version" $ do
       let a = links.assistant
       (a.vault, a.storeVault, a.beginAssertion)

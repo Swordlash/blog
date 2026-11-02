@@ -45,6 +45,7 @@ module Test.Sample
   , notification
   , notifications
   , notificationSettings
+  , starredPage
   , vault
   , storedVault
   , passkeyInfo
@@ -66,6 +67,7 @@ import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettings
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
+import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
@@ -577,6 +579,10 @@ notifications =
 
 notificationSettings :: NotificationSettings
 notificationSettings = NotificationSettings {mail = MailDaily, watchOwn = True, verifiedEmail = True, mailing = True}
+
+-- | The sample page, starred, where it is in the sample space.
+starredPage :: StarredPage
+starredPage = StarredPage {page = page.id, space = space.id, title = "Tour", location = PageLocation {space = [slug "docs"], page = [slug "tour"]}}
 
 -- | A user's vault of the assistant's settings, with the vault key
 -- wrapped for one passkey. Every part is made-up base64url: nothing here

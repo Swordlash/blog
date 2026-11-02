@@ -27,8 +27,8 @@
 -- Every version of every page ("Wiki.Core.Version") is a record: one full
 -- title and body per save, so a page saved a hundred times takes a hundred
 -- times its size. A user's notifications, what they watch,
--- and how they want to be notified ("Wiki.Core.Notification") are one
--- record, under the user's id.
+-- how they want to be notified ("Wiki.Core.Notification") and the pages
+-- they starred ("Wiki.Api.Stars") are one record, under the user's id.
 --
 -- Everything here is pure. "Wiki.App.Backend.Mem" reads and writes the
 -- database, and works out what to write by comparing two sets of
@@ -158,9 +158,10 @@ versionsStore = "versions"
 -- comments.
 threadsStore = "threads"
 
--- | A user's notifications, the marks of what they watch, and their
--- choices, as one record under their id. A database from before this
--- store existed has none: nobody has been notified, or chosen anything.
+-- | A user's notifications, the marks of what they watch, their choices
+-- and their stars, as one record under their id. A database from before
+-- this store existed has none: nobody has been notified, or chosen
+-- anything. A record from before stars existed has no stars.
 notificationsStore = "notifications"
 
 -- | Every store of 'memDatabase'.
@@ -237,7 +238,7 @@ records st =
           )
       )
     , (threadsStore, encoded [(page.text, encodeJson (toJSON ts)) | (page, ts) <- Map.toList st.threads])
-    , (notificationsStore, encoded [(u.text, encodeJson (encodeNotified st u)) | u <- Set.toList (Map.keysSet st.notices <> Map.keysSet st.watches <> Map.keysSet st.choices)])
+    , (notificationsStore, encoded [(u.text, encodeJson (encodeNotified st u)) | u <- Set.toList (Map.keysSet st.notices <> Map.keysSet st.watches <> Map.keysSet st.choices <> Map.keysSet st.stars)])
     ]
   where
     encoded = Map.fromList . map (second Just)
@@ -270,6 +271,7 @@ touched old new = do
   notices <- same (\x -> x.notices)
   watches <- same (\x -> x.watches)
   choices <- same (\x -> x.choices)
+  stars <- same (\x -> x.stars)
   homePage <- same (\x -> x.server.homePage)
   pure
     [ store
@@ -284,7 +286,7 @@ touched old new = do
         , (draftsStore, drafts)
         , (versionsStore, versions && unreadVersions)
         , (threadsStore, threads)
-        , (notificationsStore, notices && watches && choices)
+        , (notificationsStore, notices && watches && choices && stars)
         ]
     , not unchanged
     ]
@@ -295,7 +297,7 @@ touched old new = do
     same field = (==) <$> (makeStableName =<< evaluate (field old)) <*> (makeStableName =<< evaluate (field new))
 
 -- | A user's record of notifications: what they were notified of, what
--- they marked to watch or not, and their choices.
+-- they marked to watch or not, their choices, and the pages they starred.
 encodeNotified :: MemState -> UserId -> Value
 encodeNotified st u =
   object
@@ -304,6 +306,7 @@ encodeNotified st u =
     , "watches" .= [object [targetField t .= targetId t, "watching" .= w] | (t, w) <- Map.toList (Map.findWithDefault mempty u st.watches)]
     , "mail" .= (Map.lookup u st.choices >>= \c -> c.mail)
     , "watchOwn" .= maybe True (\c -> c.watchOwn) (Map.lookup u st.choices)
+    , "stars" .= Map.findWithDefault [] u st.stars
     ]
   where
     targetField = \case
@@ -314,15 +317,17 @@ encodeNotified st u =
       WatchSpace s -> s.text
 
 -- | Parse a user's record of notifications: whose it is, their
--- notifications, their marks, and their choices if they have made any.
-parseNotified :: Value -> Parser (UserId, [Notification], Mark, Maybe Choices)
+-- notifications, their marks, their choices if they have made any, and
+-- their stars.
+parseNotified :: Value -> Parser (UserId, [Notification], Mark, Maybe Choices, [PageId])
 parseNotified = withObject "notifications" $ \o -> do
   u <- o .: "user"
   ns <- o .:? "notifications" .!= []
   marks <- o .:? "watches" .!= [] >>= traverse (withObject "watch" (\w -> (,) <$> target w <*> w .: "watching"))
   mail <- o .:? "mail"
   watchOwn <- o .:? "watchOwn" .!= True
-  pure (u, ns, Map.fromList marks, if isNothing mail && watchOwn then Nothing else Just Choices {mail, watchOwn})
+  starredPages <- o .:? "stars" .!= []
+  pure (u, ns, Map.fromList marks, if isNothing mail && watchOwn then Nothing else Just Choices {mail, watchOwn}, starredPages)
   where
     target w =
       (w .:? "page") >>= \case
@@ -494,7 +499,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
       if all (\t -> t.page.text == key) ts
         then Right (PageId key, ts)
         else Left (failure threadsStore key "has threads of another page")
-    notified <- keyed notificationsStore parseNotified (\(u, _, _, _) -> u.text) UserId
+    notified <- keyed notificationsStore parseNotified (\(u, _, _, _, _) -> u.text) UserId
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
@@ -517,9 +522,10 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , unreadVersions = Map.intersection (Map.fromListWith (<>) [(page, Set.singleton at) | (page, at) <- unread]) pages
         , -- Like versions: deleting a page deletes its threads.
           threads = Map.intersection discussed pages
-        , notices = Map.filter (not . null) (map (\(_, ns, _, _) -> ns) notified)
-        , watches = Map.filter (not . null) (map (\(_, _, marks, _) -> marks) notified)
-        , choices = Map.mapMaybe (\(_, _, _, cs) -> cs) notified
+        , notices = Map.filter (not . null) (map (\(_, ns, _, _, _) -> ns) notified)
+        , watches = Map.filter (not . null) (map (\(_, _, marks, _, _) -> marks) notified)
+        , choices = Map.mapMaybe (\(_, _, _, cs, _) -> cs) notified
+        , stars = Map.filter (not . null) (map (\(_, _, _, _, ps) -> ps) notified)
         , -- Whom the demo is open to is not saved: it is open whenever it
           -- starts, as its prerendered pages are.
           grants = Grants {global, spaces = grants, access = Open}
