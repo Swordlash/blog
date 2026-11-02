@@ -75,6 +75,7 @@ import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
+import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Head (Head (..), Site, escapeHtml, headTags, untitled)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
@@ -214,7 +215,7 @@ startServed how env base at container =
 -- for, and an action that disposes of the application.
 startApp
   :: forall m
-   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

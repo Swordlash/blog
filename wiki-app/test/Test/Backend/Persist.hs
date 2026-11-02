@@ -32,6 +32,7 @@ import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
 import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Contract.Notifications qualified as Notifications
+import Wiki.App.Backend.Contract.Stars qualified as Stars
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -465,6 +466,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
   -- attachments and the versions not read yet.
   Contract.spec (type (MemWiki IO)) reopenedFixture
   Notifications.spec (type (MemWiki IO)) reopenedFixture
+  Stars.spec (type (MemWiki IO)) reopenedFixture
   Comments.spec (type (MemWiki IO)) reopenedFixture
   Contract.spec (type (MemWiki IO)) keptFixture
   -- The administration's changes are kept too: its groups, their members
@@ -472,6 +474,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
   Admin.spec (type (MemWiki IO)) keptFixture
   Comments.spec (type (MemWiki IO)) keptFixture
   Notifications.spec (type (MemWiki IO)) keptFixture
+  Stars.spec (type (MemWiki IO)) keptFixture
   where
     unreadable = \case
       Unreadable _ -> True

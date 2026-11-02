@@ -13,6 +13,7 @@ import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
 import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Contract.Notifications qualified as Notifications
+import Wiki.App.Backend.Contract.Stars qualified as Stars
 import Wiki.Server.Storage (StoredWiki, runStoredWiki)
 
 spec :: Backing -> Spec
@@ -22,6 +23,7 @@ spec backing =
     Admin.spec (type (StoredWiki IO)) fixture
     Comments.spec (type (StoredWiki IO)) fixture
     Notifications.spec (type (StoredWiki IO)) fixture
+    Stars.spec (type (StoredWiki IO)) fixture
   where
     fixture example =
       withDemo backing $ \st ->

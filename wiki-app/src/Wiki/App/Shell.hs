@@ -4,8 +4,10 @@
 -- | The shell: the application's frame around whatever the route shows.
 -- It has a header with the site's name, breadcrumbs, the search box
 -- ("Wiki.App.View.Search"), a link to the administration for an
--- administrator, and the demo's user switcher; a sidebar; the content of
--- the route; and a footer saying what the wiki is built with.
+-- administrator, the signed-in user's starred pages
+-- ("Wiki.App.View.Starred"), and the demo's user switcher; a sidebar; the
+-- content of the route; a footer saying what the wiki is built with; and
+-- the help button in a corner ("Wiki.App.View.Help").
 --
 -- The front page is the directory of spaces ("Wiki.App.View.Directory").
 -- Inside a space (any route under @\/s\/\<space>@) the sidebar shows that
@@ -137,6 +139,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
+import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
@@ -159,6 +162,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.Groups qualified as GroupsView
+import Wiki.App.View.Help qualified as HelpView
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.Invite qualified as InviteView
@@ -176,6 +180,7 @@ import Wiki.App.View.SignIn qualified as SignInView
 import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
+import Wiki.App.View.Starred qualified as StarredView
 import Wiki.App.View.Status qualified as StatusView
 import Wiki.App.View.Unsubscribe qualified as UnsubscribeView
 import Wiki.App.View.Users qualified as UsersView
@@ -270,6 +275,8 @@ data ViewSlot
 data PartSlot
   = SearchBoxSlot
   | BellSlot
+  | StarredSlot
+  | HelpSlot
   | OfflineCopySlot
   | DemoAccountSlot
   | DemoNotificationsSlot
@@ -401,7 +408,7 @@ data Action
 
 component
   :: forall output m
-   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -492,6 +499,7 @@ component =
               {{ content st }}
             </main>
           </div>
+          {{ HH.slot_ "part" HelpSlot HelpView.component HelpView.Input {context = context st} }}
           {{ footer }}
           {% if st.offline && overNetwork st %}
             {{ offlineNotice }}
@@ -559,6 +567,7 @@ component =
           {{ searchBox }}
           {{ adminLink st }}
           {{ installButton st }}
+          {{ starredList st }}
           {{ bell st }}
           {{ whoIsAsking st }}
         </header>
@@ -616,6 +625,13 @@ component =
     bell st =
       guard (st.world == WorldReady && notified (context st))
         $> HH.slot_ "part" BellSlot BellView.component BellView.Input {context = context st, feed = st.feed}
+
+    -- The signed-in user's starred pages (WP5.44 of docs/PLAN.md), beside
+    -- the bell, for whoever has notifications: a user of the wiki.
+    starredList :: State m -> Maybe (H.ComponentHTML Action Slots m)
+    starredList st =
+      guard (st.world == WorldReady && notified (context st))
+        $> HH.slot_ "part" StarredSlot StarredView.component StarredView.Input {context = context st}
 
     -- Who is signed in: the demo's menu to switch between its users, or,
     -- where people do not switch, their name, once it is known, with a

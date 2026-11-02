@@ -113,6 +113,7 @@ import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
+import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
@@ -127,6 +128,7 @@ import Wiki.App.Backend.Http.Cache qualified as Cache
 import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noResponse, prepare, refusal, sessionInfo, withBoundary)
 import Wiki.App.Backend.Http.Transport
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
@@ -617,6 +619,22 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   -- so every cached watch is removed.
   setNotificationSettings change = send (endpoints.notifications.setSettings change) <* modifyCache (\c -> c {watches = mempty})
   unsubscribe token = send_ (endpoints.unsubscribe token)
+
+-- | Stars, over the API's @stars…@ endpoints. The list holds pages'
+-- titles and places, which change when anyone renames, moves or deletes a
+-- page, so it is cached as page content is ('pageContent'): while the page
+-- the server prerendered is shown, so that the page's star button is the
+-- program's first render, and fetched on every read after that, so that
+-- the header's list shows the pages as they are now. Starring changes only
+-- the list, so a successful answer takes the list's place in the cache. A
+-- refusal is about the one page asked for, not the list, and leaves the
+-- cache as it was.
+instance (MonadIO m) => MonadStars (HttpWiki m) where
+  starred = pageContent (\c -> c.stars) endpoints.stars.list withStars
+  setStarred p wanted = do
+    result <- send (endpoints.stars.setPage p Starring {starred = wanted})
+    when (isRight result) (modifyCache (withStars result))
+    pure result
 
 -- | The tab's live channel: one per backend, made with it, and opened when
 -- the first page is watched.

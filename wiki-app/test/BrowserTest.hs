@@ -35,6 +35,7 @@ import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 import Test.Browser.Spaces qualified as Spaces
+import Test.Browser.Stars qualified as Stars
 import Test.Browser.Vault qualified as Vault
 import Test.Browser.Workspace qualified as Workspace
 #endif
@@ -90,6 +91,7 @@ spec = do
   describe "Wiki.App.View.Export" (Export.spec BrowserDOM)
   describe "Keeping an account safe" (Security.spec BrowserDOM)
   describe "Mentions, watching and notifications" (Notifications.spec BrowserDOM)
+  describe "Stars and help" (Stars.spec BrowserDOM)
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)

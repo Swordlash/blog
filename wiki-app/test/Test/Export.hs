@@ -135,6 +135,7 @@ withoutHistory st = imported {counter = nextCounter imported}
           , notices = mempty
           , watches = mempty
           , choices = mempty
+          , stars = mempty
           , server = noServerSettings {SS.homePage = st.server.homePage}
           , threads = map (map (\t -> t {comments = map named t.comments})) st.threads
           }

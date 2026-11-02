@@ -99,6 +99,7 @@ tableRows st = reading st rows
         , dump "threads" wikiDb.threads
         , dump "comments" wikiDb.comments
         , dump "watches" wikiDb.watches
+        , dump "stars" wikiDb.stars
         , dump "notifications" wikiDb.notifications
         , dump "settings" wikiDb.settings
         , dump "sign_in_providers" wikiDb.sign_in_providers

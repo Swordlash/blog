@@ -45,6 +45,7 @@ wikiTables =
   , "sign_in_providers"
   , "space_grants"
   , "spaces"
+  , "stars"
   , "threads"
   , "totp"
   , "users"

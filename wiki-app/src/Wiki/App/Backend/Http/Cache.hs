@@ -28,7 +28,8 @@
 -- Page content is cached only until the reader first goes to another
 -- route (WP5.14 of docs/PLAN.md). Page content is the pages, the lists of
 -- a space's pages, the details of a blog's posts, the version lists, the
--- searches and the directory's page counts ('forgetPageContent'). Until
+-- searches, the directory's page counts and the starred pages
+-- ('forgetPageContent'). Until
 -- then, the cache holds what the server prerendered the page with, and
 -- the program's first render matches that page. When the route changes,
 -- the backend drops the page content ('Wiki.App.Backend.endPreload') and
@@ -148,6 +149,7 @@ module Wiki.App.Backend.Http.Cache
   , withNotice
   , forgetNotices
   , withWatch
+  , withStars
   , cachedPeople
   , afterComment
   , afterEvent
@@ -167,6 +169,7 @@ import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (ServerSettings)
+import Wiki.Api.Stars (StarredPage)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
@@ -248,6 +251,9 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Notifications.notifications'.
   , watches :: Map WatchTarget (Either WikiError Watch)
   -- ^ 'Wiki.App.Backend.Notifications.watching', by page or space.
+  , stars :: Maybe (Either WikiError [StarredPage])
+  -- ^ 'Wiki.App.Backend.Stars.starred': the user's starred pages, which
+  -- the header's list and every page's star button read.
   }
   deriving stock (Eq, Show)
 
@@ -308,6 +314,7 @@ emptyCache =
     , people = mempty
     , notices = Nothing
     , watches = mempty
+    , stars = Nothing
     }
 
 -- | Whether a response is cached. A successful one is, and so are the
@@ -441,6 +448,9 @@ forgetNotices c = c {notices = Nothing}
 withWatch :: WatchTarget -> Either WikiError Watch -> Cache -> Cache
 withWatch t w c = c {watches = Map.insert t w c.watches}
 
+withStars :: Either WikiError [StarredPage] -> Cache -> Cache
+withStars s c = c {stars = Just s}
+
 -- | The cache after a write to a page's comments. If the write succeeded,
 -- its event is applied to the page's cached threads, if any are cached.
 -- If it failed or was refused, its outcome is not known, so the page's
@@ -455,12 +465,13 @@ afterComment pid outcome c = case outcome of
 -- to the page's comments is applied to its threads ('afterComment'). A
 -- save of the page, by anyone and in any tab, removes every cached page,
 -- and the other entries a save changes: the lists of pages (they show
--- titles), the searches (they match the text) and the version lists. The
+-- titles), the searches (they match the text), the version lists and the
+-- starred pages (they show titles too). The
 -- session, the spaces, the drafts (someone else's save does not change
 -- this user's draft) and the threads stay.
 afterEvent :: PageId -> PageEvent -> Cache -> Cache
 afterEvent pid = \case
-  PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty}
+  PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty, stars = Nothing}
   event -> afterComment pid (Right event)
 
 -- | The cache without a page's threads: they have changed, or may have.
@@ -468,8 +479,8 @@ forgetThreads :: PageId -> Cache -> Cache
 forgetThreads pid c = c {threads = Map.delete pid c.threads}
 
 -- | The cache without page content: the pages, the lists of a space's
--- pages, the details of a blog's posts, the version lists, the searches
--- and the directory's page counts. These change whenever anyone saves,
+-- pages, the details of a blog's posts, the version lists, the searches,
+-- the directory's page counts and the starred pages. These change whenever anyone saves,
 -- creates, moves or deletes a page. The backend drops them when the
 -- reader first goes to another route, and caches them no more after that
 -- ('Wiki.App.Backend.endPreload').
@@ -483,6 +494,7 @@ forgetPageContent c =
     , searches = []
     , homeDocument = Nothing
     , pageCounts = Nothing
+    , stars = Nothing
     }
 
 -- | The cache after a write that changed the wiki: nothing in it can be

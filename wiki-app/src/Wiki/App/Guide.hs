@@ -24,6 +24,7 @@ module Wiki.App.Guide
   , guideMacros
   , guideProfile
   , unwrapped
+  , markdownGuide
 
     -- * What its pages show
   , treePng
@@ -225,6 +226,10 @@ demoTour =
   , "none chosen opens the page of every result. Search finds only what you"
   , "may read: search for *on-call* as `admin`, then as nobody."
   , ""
+  , "Signed in, star a page with its **Star** button to keep it under"
+  , "**Starred**, at the top of every page, one click away. The red **?** in"
+  , "the bottom right corner shows, in short, what a page can hold."
+  , ""
   , "## On a server"
   , ""
   , "The same wiki runs on a server of its own, `wiki-server`, which keeps the"
@@ -304,6 +309,11 @@ serverTour =
   , "Press `/` anywhere outside a text field, or click the search box at the"
   , "top, and type: the best pages show as you type. Search finds only what you"
   , "may read."
+  , ""
+  , "Star a page with its **Star** button to keep it under **Starred**, at the"
+  , "top of every page, one click away. The red **?** in the bottom right"
+  , "corner shows, in short, what a page can hold: formulas, diagrams, pictures"
+  , "and the kinds of box, this wiki's own too."
   , ""
   , "## This guide"
   , ""

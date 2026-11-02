@@ -22,6 +22,7 @@ import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeUser, setCreateSpaces))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), WrappedKey (..), vaultFormat)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id (UserId (..))
@@ -46,13 +47,13 @@ spec backing = describe "removing an account" $ do
     editor <- userNamed st "editor"
     adminId <- (\u -> u.id) <$> userNamed st "admin"
     let u = editor.id
-        asEditor :: (forall m. (MonadWiki m, MonadComments m, MonadNotifications m) => m a) -> IO a
+        asEditor :: (forall m. (MonadWiki m, MonadComments m, MonadNotifications m, MonadStars m) => m a) -> IO a
         asEditor program = runStoredWiki st (AsUser u) program
         asAdmin :: (forall m. (MonadWiki m, MonadAdmin m, MonadComments m, MonadNotifications m) => m a) -> IO a
         asAdmin program = runStoredWiki st (AsUser adminId) program
     now <- getCurrentTime
     -- Everything a user can have: a session, a second factor, a passkey
-    -- and the vault it opens, a draft, a watch and its notification, a
+    -- and the vault it opens, a draft, a watch and its notification, a star, a
     -- membership (the demo's writers) and grants of their own. And the
     -- administrator watches the blog, for notifications of what the user
     -- did there.
@@ -69,6 +70,7 @@ spec backing = describe "removing an account" $ do
     void (ok =<< asEditor (saveDraft saved.id saved.updatedAt "Field notes" "Words not saved yet."))
     void (ok =<< asEditor (openThread saved.id Nothing "A note on these notes."))
     void (ok =<< asEditor (setWatching (WatchSpace blog.id) True))
+    void (ok =<< asEditor (setStarred saved.id True))
     latest <- ok =<< asAdmin (savePage saved.id saved.updatedAt "Field notes" "The administrator's words.")
     void (ok =<< asAdmin (setSpaceGrant blog.id (SubjectUser u) AdministerSpace True))
     void (ok =<< asAdmin (setCreateSpaces u True))
@@ -84,6 +86,7 @@ spec backing = describe "removing an account" $ do
                      , "passkeys"
                      , "sessions"
                      , "space_grants"
+                     , "stars"
                      , "totp"
                      , "users"
                      , "watches"

@@ -82,11 +82,13 @@ library
       Wiki.App.Backend.Mem.Persist
       Wiki.App.Backend.Mem.State
       Wiki.App.Backend.Notifications
+      Wiki.App.Backend.Stars
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.Guide
       Wiki.App.DemoUsers
       Wiki.App.Head
+      Wiki.App.Help
       Wiki.App.Import
       Wiki.App.Islands
       Wiki.App.Islands.Monad
@@ -112,6 +114,7 @@ library
       Wiki.App.View.Directory
       Wiki.App.View.Editor
       Wiki.App.View.Groups
+      Wiki.App.View.Help
       Wiki.App.View.Export
       Wiki.App.View.Import
       Wiki.App.View.NewPage
@@ -133,6 +136,8 @@ library
       Wiki.App.View.Source
       Wiki.App.View.Space
       Wiki.App.View.SpaceSettings
+      Wiki.App.View.Star
+      Wiki.App.View.Starred
       Wiki.App.View.Status
       Wiki.App.View.Unsubscribe
       Wiki.App.View.UserDialog
@@ -207,6 +212,7 @@ library contract
         Wiki.App.Backend.Contract.Admin
         Wiki.App.Backend.Contract.Comments
         Wiki.App.Backend.Contract.Notifications
+        Wiki.App.Backend.Contract.Stars
     build-depends:
         HUnit,
         bytestring,
@@ -284,6 +290,7 @@ test-suite wiki-app-test
         Test.Counting
         Test.Demo
         Test.Guide
+        Test.Help
         Test.Export
         Test.Hydrate
         Test.Import
@@ -367,6 +374,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Slides
       Test.Browser.Source
       Test.Browser.Spaces
+      Test.Browser.Stars
       Test.Browser.Text
       Test.Browser.Vault
       Test.Browser.Workspace

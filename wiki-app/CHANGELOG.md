@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Stars and help (WP5.44). A page's **Star** button keeps the page under
+**Starred** in the header, for the signed-in user, in the order starred; the
+backends implement `MonadStars` (the demo keeps the stars in each user's
+IndexedDB record, the HTTP backend caches the list). A red **?** in the
+bottom right corner opens a dialog of what a page can hold, sections of the
+guide's Markdown guide rendered with their Markdown (`Wiki.App.Help`), and the
+wiki's own kinds of box.
+
 Boxes are numbered (WP5.40): each kind on its own, as the space's settings
 say under "Numbers of boxes": within the page (`Tip 3`), after the page's
 number, its place under its parent (`Tip 2.3`), after the section's too

@@ -100,12 +100,13 @@ fromArchive a =
         , invitations = mempty
         , server = noServerSettings {SS.homePage = fromMaybe noServerSettings.homePage a.homePage}
         , threads = threadsAmong a.users a
-        , -- Nor notifications, watches or notification choices: they
-          -- belong to each user, and are about the pages of the wiki that
-          -- was exported.
+        , -- Nor notifications, watches, notification choices or stars:
+          -- they belong to each user, and are about the pages of the wiki
+          -- that was exported.
           notices = mempty
         , watches = mempty
         , choices = mempty
+        , stars = mempty
         , current = Nothing
         , counter = 1
         }

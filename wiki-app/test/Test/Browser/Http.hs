@@ -52,7 +52,7 @@ import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
-import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
 import Wiki.Api.Admin (Directory, ServerStatus (..), UserQuery (..), firstUsers, pageOfDirectory)
@@ -62,6 +62,7 @@ import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, Pa
 import Wiki.Api.Events qualified as Events
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
 import Wiki.Api.ServerSettings (HomePage (showAnonymous), ServerSettings, ServerSettingsOf (homePage), noServerSettings)
+import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
 import Wiki.Api.Types qualified as Api
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
@@ -77,6 +78,7 @@ import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), allUsers)
@@ -208,7 +210,8 @@ serveDemo = do
       counts <- pageCounts
       pure (me, home, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
-  -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body").
+  -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body"),
+  -- and the stars ("Wiki.App.View.Star"): none.
   (named, watched) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
@@ -221,6 +224,7 @@ serveDemo = do
           <*> for spaces (\s -> (endpointUrl (\e -> e.notifications.spaceWatch s.id),) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
       pure (named, watched)
   answerWith "GET" (endpointUrl (\e -> e.notifications.list)) 200 Notifications {unread = 0, items = []}
+  answerWith "GET" (endpointUrl (\e -> e.stars.list)) 200 ([] :: [StarredPage])
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
@@ -347,7 +351,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 #endif
 
 -- | A program against the server, through the page's fetch.
-overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n) => n a) -> PageM s a
+overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n, MonadStars n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -905,6 +909,8 @@ views m = describe "the application over it" $ do
           threads <- fromRight [] <$> listThreads p.id
           _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
           watching (WatchPage p.id)
+        -- The page's "Star" button's and the header's "Starred".
+        _ <- starred
         _ <- notifications
         pure ((\p -> p.id) <$> rightToMaybe page)
     carried <- unsafeIOToPageM (cacheOf reading)
@@ -1015,9 +1021,10 @@ comments m = describe "a page's comments" $ do
       _ <- listPages blog.id
       page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
       threads <- either (panic . show) identity <$> listThreads page.id
-      -- The bell's, and the page's "Watch" button's.
+      -- The bell's, the page's "Watch" button's, and its "Star" button's.
       _ <- notifications
       _ <- watching (WatchPage page.id)
+      _ <- starred
       pure (page, threads)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops

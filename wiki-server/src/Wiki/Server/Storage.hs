@@ -185,11 +185,14 @@ import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsCh
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkHomePage, checkServerSettings, defaultHomePage, kindName, secretState, securityName)
 import Wiki.Api.ServerSettings qualified as SS
+import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
+import Wiki.Api.Stars qualified as Star
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
@@ -249,6 +252,7 @@ import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Postgres (PgPrograms, defaultPgPrograms, holdDatabaseShared, openPostgres)
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
+import Wiki.Server.Storage.Stars qualified as Stars
 
 --------------------------------------------------------------------------------
 -- The storage
@@ -2898,6 +2902,60 @@ instance (MonadIO m) => MonadNotifications (StoredWiki m) where
   setNotificationSettings = run Writes . setNotificationSettingsTx
   unsubscribe token =
     run Writes (db (Notifications.unsubscribeUser token) >>= \found -> unless found (failWith NotFound))
+
+--------------------------------------------------------------------------------
+-- Stars
+
+-- | The user's starred pages that exist and that they may view, in the
+-- order they were starred, each with its title and where it is now. A
+-- user has at most 'maxStars', each read by its id, so the cost does not
+-- grow with the wiki.
+starredTx :: Tx [StarredPage]
+starredTx = do
+  u <- notified
+  pids <- db (Stars.loadStars u)
+  catMaybes <$> traverse starredPageTx pids
+
+-- | One starred page as the list shows it, if it is there and the user may
+-- view it. A page the user may not view is left out without an error, and
+-- its star is kept.
+starredPageTx :: PageId -> Tx (Maybe StarredPage)
+starredPageTx pid =
+  db (pageNode pid) >>= \case
+    Nothing -> pure Nothing
+    Just p -> do
+      chain <- chainOfPage p
+      viewable <- (requireView chain $> True) `catchError` const (pure False)
+      if not viewable
+        then pure Nothing
+        else do
+          nodes <- lineageOf p.id
+          pure $
+            (\pagePath -> StarredPage {Star.page = p.id, Star.space = p.space, Star.title = p.title, Star.location = PageLocation {space = map (\x -> x.slug) chain, page = pagePath}})
+              <$> pathOf (`Map.lookup` nodes) p.id
+
+-- | Star a page the user may view, or take its star away, as the class's
+-- Haddock says ("Wiki.App.Backend.Stars"). The result is the list after.
+setStarredTx :: PageId -> Bool -> Tx [StarredPage]
+setStarredTx pid wanted = do
+  p <- findNode pid
+  chainOfPage p >>= requireView
+  u <- notified
+  if wanted
+    then do
+      already <- db (Stars.hasStar u pid)
+      unless already $ do
+        count <- db (Stars.countStars u)
+        when (count >= maxStars) $
+          invalid ("You have starred " <> show maxStars <> " pages, the most there can be: take the star from one first.")
+        db (Stars.insertStar u pid)
+    else db (Stars.deleteStar u pid)
+  starredTx
+
+-- | The signed-in user's starred pages. Each operation is one transaction.
+instance (MonadIO m) => MonadStars (StoredWiki m) where
+  starred = run Reads starredTx
+  setStarred pid = run Writes . setStarredTx pid
 
 --------------------------------------------------------------------------------
 -- Whole wikis

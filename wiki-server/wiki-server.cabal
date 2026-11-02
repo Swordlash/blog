@@ -109,6 +109,7 @@ library
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema
         Wiki.Server.Storage.Sqlite
+        Wiki.Server.Storage.Stars
         Wiki.Server.Totp
         Wiki.Server.Vault
         Wiki.Server.WebAuthn

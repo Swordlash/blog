@@ -450,6 +450,23 @@ wiki too) and only turns the mail off. Everything else here is the signed-in
 user's own: someone not signed in, and the operator on the admin listener,
 are refused (403); `people` names nobody to someone not signed in.
 
+### Stars
+
+| Method | Path | Body | Response | Errors | `MonadStars` |
+| ------ | ---- | ---- | -------- | ------ | ------------ |
+| GET | `api/v1/stars` | | `[StarredPage]` `{"page", "space", "title", "location"}` | 403 | `starred` |
+| PUT | `api/v1/stars/pages/<page>` | `Starring` `{"starred": bool}` | `[StarredPage]`, the list after the change | 404, 403, 400 | `setStarred` |
+
+A user's starred pages (WP5.44 of the plan, `Wiki.Api.Stars`): bookmarks the
+server keeps for each user, which the header's "Starred" list shows. The list
+is in the order the pages were starred, and holds only pages that exist and
+that the user may still read, each with its title and its `location` now
+(`{"space": [slug], "page": [slug]}`, as a notification's). Someone not signed
+in, and the operator, are refused with 403. A page that does not exist, or that
+the user may not read, is 404. Starring a page already starred, or taking the
+star from a page without one, changes nothing. A 51st star is refused with 400:
+a user has at most 50 (`maxStars`).
+
 ### Search
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |

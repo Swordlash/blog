@@ -13,7 +13,7 @@
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
 -- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', a page's 'CommentsApi', and
--- the user's 'NotificationsApi'). Each field is one endpoint, named after
+-- the user's 'NotificationsApi' and 'StarsApi'). Each field is one endpoint, named after
 -- the @MonadWiki@ method it implements. 'WikiApi' collects them, together
 -- with signing in and out and reading the session. docs/api.md lists every
 -- endpoint with its method, path, body, response and errors.
@@ -69,6 +69,7 @@ module Wiki.Api
   , PasswordResetApi (..)
   , CommentsApi (..)
   , NotificationsApi (..)
+  , StarsApi (..)
   , AssistantApi (..)
 
     -- * Sessions
@@ -100,6 +101,7 @@ import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Notifications (NotificationsApi (..))
 import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
 import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
+import Wiki.Api.Stars (StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
@@ -215,6 +217,8 @@ data WikiApi form mode = WikiApi
   , notifications :: mode :- "notifications" :> NamedRoutes NotificationsApi
   -- ^ The signed-in user's notifications, the pages they watch, and how
   -- they are notified ("Wiki.Api.Notifications").
+  , stars :: mode :- "stars" :> NamedRoutes StarsApi
+  -- ^ The pages the signed-in user starred ("Wiki.Api.Stars").
   , unsubscribe :: mode :- "unsubscribe" :> Capture "token" UnsubscribeToken :> PostNoContent
   -- ^ Follow the unsubscribe link in a notification mail: notification
   -- mail is turned off for the user the link names, without signing in. An

@@ -87,6 +87,7 @@ import Wiki.App.Backend.Mem.Archive (replaceFromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, changes, changesIn, lazyStores, readVersion, records, restore, storeNames, touched, versionKey, versionsStore)
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive)
@@ -387,6 +388,12 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
   notificationSettings = query notificationSettingsIn
   setNotificationSettings = write . setNotificationSettingsIn
   unsubscribe _ = pure (Left (Invalid "The demo sends no mail, so there is none to turn off."))
+
+-- | Stars, on the same wiki, saved like every other write (each user's
+-- are in their record of notifications, "Wiki.App.Backend.Mem.Persist").
+instance (MonadIO m) => MonadStars (MemWiki m) where
+  starred = query starredIn
+  setStarred pid = write . setStarredIn pid
 
 -- | Everything is in memory: every read answers at once (synchronously,
 -- without waiting for a network), and the wiki is never unreachable.

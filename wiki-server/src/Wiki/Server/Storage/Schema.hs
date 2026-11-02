@@ -56,6 +56,7 @@ module Wiki.Server.Storage.Schema
   , Threads (..)
   , Comments (..)
   , Watches (..)
+  , Stars (..)
   , Notifications (..)
 
     -- * Settings and the log
@@ -528,6 +529,22 @@ instance Table Watches where
     deriving anyclass (Beamable)
   primaryKey r = WatchKey r.user_id r.page_id r.space_id
 
+-- | A page a user starred (@stars@, migration @0005-stars@), at its
+-- place in the user's list.
+data Stars f = StarRow
+  { user_id :: Columnar f Text
+  , page_id :: Columnar f Text
+  , position :: Columnar f Int32
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table Stars where
+  data PrimaryKey Stars f = StarKey (Columnar f Text) (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = StarKey r.user_id r.page_id
+
 -- | A notification (@notifications@). @seq@ is its place among all
 -- notifications; the database numbers a new one.
 data Notifications f = NotificationRow
@@ -723,6 +740,10 @@ deriving stock instance Eq (Watches Identity)
 
 deriving stock instance Show (Watches Identity)
 
+deriving stock instance Eq (Stars Identity)
+
+deriving stock instance Show (Stars Identity)
+
 deriving stock instance Eq (Notifications Identity)
 
 deriving stock instance Show (Notifications Identity)
@@ -770,6 +791,7 @@ data WikiDb f = WikiDb
   , threads :: f (TableEntity Threads)
   , comments :: f (TableEntity Comments)
   , watches :: f (TableEntity Watches)
+  , stars :: f (TableEntity Stars)
   , notifications :: f (TableEntity Notifications)
   , settings :: f (TableEntity Settings)
   , sign_in_providers :: f (TableEntity SignInProviders)
