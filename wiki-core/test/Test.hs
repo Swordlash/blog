@@ -29,6 +29,7 @@ import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
 import Test.Space qualified as Space
 import Test.Template qualified as Template
+import Test.Title qualified as Title
 import Test.User qualified as User
 import Test.Vault qualified as Vault
 
@@ -59,6 +60,7 @@ main = hspec . parallel $ do
   Blog.spec
   Toc.spec
   Template.spec
+  Title.spec
   Assistant.spec
   Export.spec
   User.spec

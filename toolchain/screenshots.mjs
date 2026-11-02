@@ -233,12 +233,13 @@ try {
   });
   await shoot(page, "page.png");
 
-  // The editor, with the preview beside the Markdown: "Side by side
-  // preview", which a wide window offers.
+  // The editor, with the preview beside the Markdown: the "Side by side"
+  // button, which a wide window offers, pressed.
   const editor = await newPage();
   await editor.goto(url("/s/docs/p/markdown-guide/mathematics/edit/"));
   await editor.locator("#app .editor-cm .cm-content").waitFor({ timeout });
-  await editor.locator("#app .editor-side-by-side input").check();
+  await editor.locator("#app .editor-side-by-side").click();
+  await editor.locator("#app .editor-side-by-side[aria-pressed='true']").waitFor({ timeout });
   await editor.locator("#app .editor-preview .wiki-math .katex").first().waitFor({ timeout });
   await formulasSet(editor, "#app .editor-preview");
   await shoot(editor, "editor.png");

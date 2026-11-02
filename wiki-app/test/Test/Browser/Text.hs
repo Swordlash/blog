@@ -13,6 +13,7 @@ module Test.Browser.Text
   , movedBy
   , completing
   , setMarkdown
+  , clearBody
   , mathIn
   )
 where
@@ -30,6 +31,7 @@ $( browserJS
      , ("js_jump", "wiki_test_editor_jump", Unsafe, [t|IO JSText|])
      , ("js_completing", "wiki_test_editor_completing", Unsafe, [t|IO JSText|])
      , ("js_set", "wiki_test_editor_set", Unsafe, [t|JSText -> IO ()|])
+     , ("js_clear_body", "wiki_test_editor_clear_body", Unsafe, [t|IO ()|])
      , ("js_math", "wiki_test_editor_math", Unsafe, [t|IO JSText|])
      ]
  )
@@ -72,6 +74,16 @@ setMarkdown :: Mounted s q o m -> Text -> PageM s ()
 setMarkdown ui text = do
   _ <- editorText ui
   unsafeIOToPageM (js_set (toJSText text))
+  settle
+
+-- | Empty the editor's text but for its title line and a blank line after
+-- it, with the cursor at the end: what a test types the page's text after.
+-- The title line stays (WP5.39 of docs/PLAN.md), so a test no longer
+-- clears the whole text.
+clearBody :: Mounted s q o m -> PageM s ()
+clearBody ui = do
+  _ <- editorText ui
+  unsafeIOToPageM js_clear_body
   settle
 
 -- | The pieces of TeX math the editor's syntax tree has, each with its

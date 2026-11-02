@@ -18,7 +18,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
-import Test.Browser.Text (completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
+import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -58,9 +58,9 @@ spec m = do
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     sideBySide ui
     text <- editorText ui
-    clear text
-    typeText text "# Hello again\n\nEuler: $e^{i\\pi} + 1 = 0$"
-    find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Hello again")
+    clearBody ui
+    typeText text "Euler: $e^{i\\pi} + 1 = 0$"
+    find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Hello, world")
     formula <- find ui ".editor-preview .wiki-math-inline .katex"
     findIn formula "annotation" >>= (`shouldHaveText` "e^{i\\pi} + 1 = 0")
     -- More typing redraws the preview, but not a formula it has not touched.
@@ -69,10 +69,10 @@ spec m = do
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "And more.")
     find ui ".editor-preview .wiki-math-inline" >>= (`shouldBeSameElement` island)
     find ui ".editor-save-close" >>= click
-    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello again")
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
     _ <- find ui ".page-view .wiki-math-inline .katex"
     saved <- readPage wiki ["blog"] ["hello-world"]
-    saved.body `shouldBe` "# Hello again\n\nEuler: $e^{i\\pi} + 1 = 0$\n\nAnd more."
+    saved.body `shouldBe` "# Hello, world\n\nEuler: $e^{i\\pi} + 1 = 0$\n\nAnd more."
 
   it "saves with Ctrl+S and stays, saying Saved for a while, and indents with Tab" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
@@ -80,21 +80,21 @@ spec m = do
     notice <- find ui ".editor-saved-notice"
     getAttribute notice "role" `shouldReturn` Just "status"
     notice `shouldHaveText` ""
-    clear text
+    clearBody ui
     typeText text "- a list"
     press "Enter"
     press "Tab"
     typeText text "- nested"
-    markdown ui `shouldReturn` "- a list\n  - nested"
+    markdown ui `shouldReturn` "# Hello, world\n\n- a list\n  - nested"
     press "Control+s"
     notice `shouldHaveText` "Saved"
     -- The focus is still in the text after the save.
     press "x"
-    markdown ui `shouldReturn` "- a list\n  - nestedx"
+    markdown ui `shouldReturn` "# Hello, world\n\n- a list\n  - nestedx"
     press "Backspace"
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     saved <- readPage wiki ["blog"] ["hello-world"]
-    saved.body `shouldBe` "- a list\n  - nested"
+    saved.body `shouldBe` "# Hello, world\n\n- a list\n  - nested"
     -- Still the same text, with the cursor where it was.
     editorText ui >>= (`shouldBeSameElement` text)
     typeText text "\n- more"
@@ -105,19 +105,19 @@ spec m = do
     notice `shouldHaveText` "Saved"
     length <$> findAll ui ".error-conflict" `shouldReturn` 0
     again <- readPage wiki ["blog"] ["hello-world"]
-    again.body `shouldBe` "- a list\n  - nested\n- more"
+    again.body `shouldBe` "# Hello, world\n\n- a list\n  - nested\n- more"
     again.updatedAt `shouldSatisfy` (> saved.updatedAt)
 
   it "saves, saves again, and shows the page after Save and close" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "One."
     find ui ".editor-save" >>= click
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
     typeText text " Two."
     find ui ".editor-save" >>= click
-    eventually $ (\p -> p.body) <$> readPage wiki ["blog"] ["hello-world"] >>= (`shouldBe` "One. Two.")
+    eventually $ (\p -> p.body) <$> readPage wiki ["blog"] ["hello-world"] >>= (`shouldBe` "# Hello, world\n\nOne. Two.")
     typeText text " Three."
     find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "One. Two. Three.")
@@ -137,13 +137,15 @@ spec m = do
     editorText ui >>= (`typeText` "Some **news**.")
     -- Shown on its own, the preview has the draft at once; Save is there.
     find ui ".editor-show-preview" >>= click
-    find ui ".editor-preview .page-title" >>= (`shouldHaveText` "Third post")
+    -- The title line is the page's title, shown once.
+    find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Third post")
+    length <$> findAll ui ".editor-preview .page-title" `shouldReturn` 0
     find ui ".editor-preview .page-body strong" >>= (`shouldHaveText` "news")
     find ui ".editor-save-close" >>= click
-    find ui ".page-view .page-title" >>= (`shouldHaveText` "Third post")
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Third post")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Third post")
     created <- readPage wiki ["blog"] ["third-post"]
-    created.body `shouldBe` "Some **news**."
+    created.body `shouldBe` "# Third post\n\nSome **news**."
 
   it "writes a new page under another from its New subpage" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
@@ -153,9 +155,10 @@ spec m = do
     find ui ".new-page-view button.primary" >>= click
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Follow-up")
     find ui ".editor-save-close" >>= click
-    find ui ".page-view .page-title" >>= (`shouldHaveText` "Follow-up")
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Follow-up")
     created <- readPage wiki ["blog"] ["hello-world", "follow-up"]
     created.title `shouldBe` "Follow-up"
+    created.body `shouldBe` "# Follow-up\n\n"
 
   it "attaches a file to a new page before anything is saved" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (NewPage (slugs ["blog"]) Nothing)
@@ -167,7 +170,7 @@ spec m = do
     _ <- editorText ui
     unsafeIOToPageM (chooseFile ".editor-attach input" "dot.png" "image/png" dotPng)
     settle
-    eventually $ markdown ui `shouldReturn` "![dot.png](attachment:dot.png)"
+    eventually $ markdown ui `shouldReturn` "# With a picture\n\n![dot.png](attachment:dot.png)"
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
     find ui ".editor-hint" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "first"))
     attached <- readPage wiki ["blog"] ["with-a-picture"]
@@ -179,14 +182,14 @@ spec m = do
   it "asks on Cancel with changes whether to keep the draft, and keeps it or not as told" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Kept for later."
     find ui ".editor-cancel" >>= click
     _ <- find ui ".editor-cancel-confirm"
     -- Going on editing leaves everything as it was.
     clickButton ui ".editor-cancel-confirm button" "Go on editing"
     length <$> findAll ui ".editor-cancel-confirm" `shouldReturn` 0
-    markdown ui `shouldReturn` "Kept for later."
+    markdown ui `shouldReturn` "# Hello, world\n\nKept for later."
     editorText ui >>= (`shouldBeSameElement` text)
     find ui ".editor-cancel" >>= click
     clickButton ui ".editor-cancel-confirm button" "Keep the draft"
@@ -198,7 +201,7 @@ spec m = do
     unchanged.body `shouldSatisfy` T.isPrefixOf "# Hello, world"
     find ui ".page-view .actions a[href$='/edit/']" >>= click
     find ui ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
-    markdown ui `shouldReturn` "Kept for later."
+    markdown ui `shouldReturn` "# Hello, world\n\nKept for later."
     -- This time the changes are let go, and the draft with them.
     find ui ".editor-cancel" >>= click
     clickButton ui ".editor-cancel-confirm button" "Discard my changes"
@@ -216,13 +219,13 @@ spec m = do
   it "asks before leaving unsaved changes, and stays or leaves as told" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Draft"
     find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     _ <- find ui ".leave-confirm"
     clickButton ui ".leave-confirm button" "Stay"
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
-    markdown ui `shouldReturn` "Draft"
+    markdown ui `shouldReturn` "# Hello, world\n\nDraft"
     -- Again, and leaving goes there; the work is lost.
     find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click
@@ -234,7 +237,7 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
     page <- someoneElseSaves wiki
-    clear text
+    clearBody ui
     typeText text "My words."
     find ui ".editor-save" >>= click
     -- Their version, compared with the author's text, beside it.
@@ -245,25 +248,25 @@ spec m = do
     find ui ".editor-conflict-pane .diff-added .diff-text" >>= (`shouldHaveText` "Someone else's words.")
     length <$> findAll ui ".error-conflict" `shouldReturn` 0
     -- Nothing is lost meanwhile: the text is in the editor and in the draft.
-    markdown ui `shouldReturn` "My words."
-    eventually $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "My words."
+    markdown ui `shouldReturn` "# Hello, world\n\nMy words."
+    eventually $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "# Hello, world\n\nMy words."
     clickButton ui ".editor-conflict button" "Keep mine"
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
     length <$> findAll ui ".editor-conflict" `shouldReturn` 0
     length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
     saved <- readPage wiki ["blog"] ["hello-world"]
-    saved.body `shouldBe` "My words."
+    saved.body `shouldBe` "# Hello, world\n\nMy words."
     draftOf wiki page `shouldReturn` Nothing
 
   it "takes theirs in place of the author's text when told to" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
     _ <- someoneElseSaves wiki
-    clear text
+    clearBody ui
     typeText text "My words."
     find ui ".editor-save" >>= click
     clickButton ui ".editor-conflict button" "Take theirs"
-    eventually (markdown ui `shouldReturn` "Someone else's words.")
+    eventually (markdown ui `shouldReturn` "# Hello, world\n\nSomeone else's words.")
     length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-body p" >>= (`shouldHaveText` "Someone else's words.")
@@ -271,9 +274,9 @@ spec m = do
     -- what was there before.
     find ui ".editor-back" >>= click
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    markdown ui `shouldReturn` "**bold text**Someone else's words."
+    markdown ui `shouldReturn` "# Hello, world\n\n**bold text**Someone else's words."
     press "Control+z"
-    markdown ui `shouldReturn` "Someone else's words."
+    markdown ui `shouldReturn` "# Hello, world\n\nSomeone else's words."
     -- And the next save is made over theirs.
     find ui ".editor-save" >>= click
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
@@ -283,25 +286,25 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
     page <- someoneElseSaves wiki
-    clear text
+    clearBody ui
     typeText text "My words."
     find ui ".editor-save" >>= click
     clickButton ui ".editor-conflict button" "Merge by hand"
     find ui ".editor-conflict-pane h2" >>= (`shouldHaveText` "Their changes since you began")
     -- What their save changed in the version the edit began from.
     find ui ".editor-conflict-pane .diff-added .diff-text" >>= (`shouldHaveText` "Someone else's words.")
-    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "# Hello, world")
-    markdown ui `shouldReturn` "My words."
+    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "This is the first post of a blog that is also a wiki. Every page is")
+    markdown ui `shouldReturn` "# Hello, world\n\nMy words."
     focus text
     press "Control+End"
     typeText text " And theirs: someone else's words."
     -- The draft follows, as an edit of their version.
-    eventuallyWithin 8000 $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "My words. And theirs: someone else's words."
+    eventuallyWithin 8000 $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "# Hello, world\n\nMy words. And theirs: someone else's words."
     find ui ".editor-save" >>= click
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
     length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
     saved <- readPage wiki ["blog"] ["hello-world"]
-    saved.body `shouldBe` "My words. And theirs: someone else's words."
+    saved.body `shouldBe` "# Hello, world\n\nMy words. And theirs: someone else's words."
 
   it "loses no keystroke while the preview catches up with a long page" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
@@ -319,18 +322,19 @@ spec m = do
         pieces = [" w" <> show i | i <- [1 .. 24 :: Int]]
         sentence = " the quick brown fox jumps over the lazy dog"
         long = T.replicate 3 sentence
+    -- Each key a few milliseconds after the one before, still far faster
+    -- than anyone types: keys sent back to back, as fast as Playwright can,
+    -- set off a race in CodeMirror itself (its scroller's scroll handler
+    -- reading the browser's selection a key ahead of its state, "Selection
+    -- points outside of document"; docs/PLAN.md, "Known gaps and notes").
+    let typeKeys = traverse_ (\c -> press (T.singleton c) >> unsafeIOToPageM (threadDelay 12000)) . T.unpack
     for_ (zip pieces pauses) $ \(word, pause) -> do
-      typeText text word
+      typeKeys word
       unsafeIOToPageM (threadDelay (pause * 1000))
-    -- One word to a call, one call after another with no pause between
-    -- them: one call may take at most five seconds (Playwright's default,
-    -- which hspec-halogen's typeText keeps), and the test build types
-    -- slower than the real one, slower still on a busy machine. A call of a
-    -- whole sentence timed out on CI, then one of five words now and then,
-    -- then one of three words on a busy runner. The run is still typed
-    -- without pauses, so the preview of the long page is drawn as it goes.
+    -- The run is typed without pauses between words, so the preview of the
+    -- long page is drawn as it goes.
     for_ (T.words long) $ \word ->
-      typeText text (" " <> word)
+      typeKeys (" " <> word)
     let expected = original <> mconcat pieces <> long
     eventually $ markdown ui `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
@@ -344,11 +348,11 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Look: "
     unsafeIOToPageM (dropFile ".editor-cm .cm-content" "dot.png" "image/png" dotPng)
     settle
-    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)"
+    eventually $ markdown ui `shouldReturn` "# Hello, world\n\nLook: ![dot.png](attachment:dot.png)"
     image <- find ui ".editor-preview .page-body img[alt='dot.png']"
     getAttribute image "src" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
@@ -361,14 +365,14 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Look: "
     -- With the file's name as text beside it, as a file manager copies a
     -- file: the file is attached, and its name is not put in.
     prevented <- unsafeIOToPageM (pasteFile ".editor-cm .cm-content" "dot.png" "dot.png" "image/png" dotPng)
     prevented `shouldBe` True
     settle
-    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)"
+    eventually $ markdown ui `shouldReturn` "# Hello, world\n\nLook: ![dot.png](attachment:dot.png)"
     image <- find ui ".editor-preview .page-body img[alt='dot.png']"
     getAttribute image "src" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
@@ -377,35 +381,35 @@ spec m = do
     inTextarea <- unsafeIOToPageM (pasteFile ".editor-text" "notes.txt" "notes.txt" "text/plain" "aGVsbG8K")
     inTextarea `shouldBe` True
     settle
-    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
+    eventually $ markdown ui `shouldReturn` "# Hello, world\n\nLook: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
     findAll ui ".editor-attachments li a" >>= traverse textContent >>= (`shouldBe` ["dot.png", "notes.txt"])
     find ui ".editor-save-close" >>= click
     _ <- find ui ".page-view .page-body img[alt='dot.png']"
     saved <- readPage wiki ["blog"] ["hello-world"]
     map (\a -> a.name.text) saved.attachments `shouldBe` ["dot.png", "notes.txt"]
-    saved.body `shouldBe` "Look: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
+    saved.body `shouldBe` "# Hello, world\n\nLook: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
 
   it "puts pasted text in unchanged but for its line endings, attaching nothing" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
     attached <- length <$> findAll ui ".editor-attachments li"
-    clear text
+    clearBody ui
     typeText text "Say: "
     _ <- unsafeIOToPageM (pasteText ".editor-cm .cm-content" "*Hello*, <b>world</b>\r\n\n- [x] one\r\n")
     settle
-    eventually $ markdown ui `shouldReturn` "Say: *Hello*, <b>world</b>\n\n- [x] one\n"
+    eventually $ markdown ui `shouldReturn` "# Hello, world\n\nSay: *Hello*, <b>world</b>\n\n- [x] one\n"
     previewHas ui "b" "world"
     length <$> findAll ui ".editor-attachments li" `shouldReturn` attached
 
   it "attaches a chosen file as a link, its name with spaces in angle brackets" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- editorText ui
-    clear text
+    _ <- editorText ui
+    clearBody ui
     unsafeIOToPageM (chooseFile ".editor-attach input" "meeting notes.txt" "text/plain" "aGVsbG8K")
     settle
-    eventually $ markdown ui `shouldReturn` "[meeting notes.txt](<attachment:meeting notes.txt>)"
+    eventually $ markdown ui `shouldReturn` "# Hello, world\n\n[meeting notes.txt](<attachment:meeting notes.txt>)"
     download <- find ui ".editor-preview .page-body a[download='meeting notes.txt']"
     getAttribute download "href" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
 
@@ -413,53 +417,56 @@ spec m = do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Some words"
     press "Control+Shift+ArrowLeft"
-    editorSelection ui `shouldReturn` (5, 10)
+    editorSelection ui `shouldReturn` (21, 26)
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    markdown ui `shouldReturn` "Some **words**"
-    editorSelection ui `shouldReturn` (7, 12)
+    markdown ui `shouldReturn` "# Hello, world\n\nSome **words**"
+    editorSelection ui `shouldReturn` (23, 28)
     previewHas ui "strong" "words"
     -- Again, and the word is plain again.
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    markdown ui `shouldReturn` "Some words"
+    markdown ui `shouldReturn` "# Hello, world\n\nSome words"
 
   it "makes every line selected a list item from the toolbar, and another list from a shortcut" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "one\ntwo\nthree"
-    press "Control+a"
+    -- The three lines, under the title line, which is not one of them.
+    press "Shift+ArrowUp"
+    press "Shift+ArrowUp"
+    press "Shift+Home"
     find ui ".editor-toolbar button[aria-label='Numbered list']" >>= click
-    markdown ui `shouldReturn` "1. one\n2. two\n3. three"
+    markdown ui `shouldReturn` "# Hello, world\n\n1. one\n2. two\n3. three"
     press "Control+Shift+8"
-    markdown ui `shouldReturn` "- one\n- two\n- three"
+    markdown ui `shouldReturn` "# Hello, world\n\n- one\n- two\n- three"
     find ui ".editor-toolbar button[aria-label='Bulleted list']" >>= click
-    markdown ui `shouldReturn` "one\ntwo\nthree"
+    markdown ui `shouldReturn` "# Hello, world\n\none\ntwo\nthree"
 
   it "leaves Ctrl+B's placeholder selected, for the typing to replace" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Hi "
     press "Control+b"
-    markdown ui `shouldReturn` "Hi **bold text**"
-    editorSelection ui `shouldReturn` (5, 14)
+    markdown ui `shouldReturn` "# Hello, world\n\nHi **bold text**"
+    editorSelection ui `shouldReturn` (21, 30)
     typeText text "there"
-    markdown ui `shouldReturn` "Hi **there**"
+    markdown ui `shouldReturn` "# Hello, world\n\nHi **there**"
 
   it "keeps Ctrl+K from the browser, and puts in a link the browser's undo takes back" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    text <- editorText ui
-    clear text
+    _ <- editorText ui
+    clearBody ui
     unsafeIOToPageM js_watch_keys
     press "Control+k"
     unsafeIOToPageM js_last_key_prevented `shouldReturn` True
-    markdown ui `shouldReturn` "[link text](https://)"
-    editorSelection ui `shouldReturn` (1, 10)
+    markdown ui `shouldReturn` "# Hello, world\n\n[link text](https://)"
+    editorSelection ui `shouldReturn` (17, 26)
     press "Control+z"
-    markdown ui `shouldReturn` ""
+    markdown ui `shouldReturn` "# Hello, world\n\n"
     -- A key the editor does not answer to is the browser's.
     press "x"
     unsafeIOToPageM js_last_key_prevented `shouldReturn` False
@@ -468,12 +475,12 @@ spec m = do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Look here"
     press "Control+Shift+ArrowLeft"
     find ui ".editor-toolbar button[aria-label='HTML']" >>= click
     clickButton ui ".toolbar-menu button" "Mark<mark>"
-    markdown ui `shouldReturn` "Look <mark>here</mark>"
+    markdown ui `shouldReturn` "# Hello, world\n\nLook <mark>here</mark>"
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "mark" "here"
 
@@ -481,15 +488,15 @@ spec m = do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Look here"
     press "Control+Shift+ArrowLeft"
     let pick swatch = do
           find ui ".editor-toolbar button[aria-label='Colour']" >>= click
           find ui (".colour-menu button[aria-label='" <> swatch <> "']") >>= click
     pick "Red text"
-    markdown ui `shouldReturn` "Look <span class=\"c-red\">here</span>"
-    editorSelection ui `shouldReturn` (25, 29)
+    markdown ui `shouldReturn` "# Hello, world\n\nLook <span class=\"c-red\">here</span>"
+    editorSelection ui `shouldReturn` (41, 45)
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "span.c-red" "here"
     -- The style sheet draws the class, in a colour of its own.
@@ -499,25 +506,26 @@ spec m = do
     red `shouldNotBe` ""
     -- Another colour replaces the first, rather than going inside it.
     pick "Blue text"
-    markdown ui `shouldReturn` "Look <span class=\"c-blue\">here</span>"
+    markdown ui `shouldReturn` "# Hello, world\n\nLook <span class=\"c-blue\">here</span>"
     previewHas ui "span.c-blue" "here"
     pick "Yellow highlight"
-    markdown ui `shouldReturn` "Look <span class=\"c-blue\"><mark class=\"h-yellow\">here</mark></span>"
+    markdown ui `shouldReturn` "# Hello, world\n\nLook <span class=\"c-blue\"><mark class=\"h-yellow\">here</mark></span>"
     pick "No text colour"
-    markdown ui `shouldReturn` "Look <mark class=\"h-yellow\">here</mark>"
+    markdown ui `shouldReturn` "# Hello, world\n\nLook <mark class=\"h-yellow\">here</mark>"
     previewHas ui "mark.h-yellow" "here"
     pick "No highlight"
-    markdown ui `shouldReturn` "Look here"
+    markdown ui `shouldReturn` "# Hello, world\n\nLook here"
 
   it "shows the Markdown as it will look while it is typed, its markers dimmed" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
-    typeText text "# h\n\nSome **bold** and _it_.\n\n```python\ndef f():\n```"
-    let typed = "# h\n\nSome **bold** and _it_.\n\n```python\ndef f():\n```"
+    clearBody ui
+    typeText text "Some **bold** and _it_.\n\n```python\ndef f():\n```"
+    let typed = "# Hello, world\n\nSome **bold** and _it_.\n\n```python\ndef f():\n```"
         -- The text of every element of a class, in order.
         classed cls = mconcat <$> (findAll ui (".editor-cm ." <> cls) >>= traverse textContent)
-    eventually $ classed "cm-md-h1" `shouldReturn` "# h"
+    -- The title line is a level-one heading.
+    eventually $ classed "cm-md-h1" `shouldReturn` "# Hello, world"
     classed "cm-md-h1.cm-md-syntax" `shouldReturn` "#"
     classed "cm-md-strong" `shouldReturn` "**bold**"
     classed "cm-md-strong.cm-md-syntax" `shouldReturn` "****"
@@ -544,20 +552,20 @@ spec m = do
   it "takes back a toolbar command as one step of the undo, and the typing after it as another" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Some words"
     press "Control+Shift+ArrowLeft"
     -- A colour rewrites more than the selection, still one step.
     find ui ".editor-toolbar button[aria-label='Colour']" >>= click
     find ui ".colour-menu button[aria-label='Red text']" >>= click
-    markdown ui `shouldReturn` "Some <span class=\"c-red\">words</span>"
+    markdown ui `shouldReturn` "# Hello, world\n\nSome <span class=\"c-red\">words</span>"
     press "ArrowRight"
     typeText text "!"
-    markdown ui `shouldReturn` "Some <span class=\"c-red\">words!</span>"
+    markdown ui `shouldReturn` "# Hello, world\n\nSome <span class=\"c-red\">words!</span>"
     press "Control+z"
-    markdown ui `shouldReturn` "Some <span class=\"c-red\">words</span>"
+    markdown ui `shouldReturn` "# Hello, world\n\nSome <span class=\"c-red\">words</span>"
     press "Control+z"
-    markdown ui `shouldReturn` "Some words"
+    markdown ui `shouldReturn` "# Hello, world\n\nSome words"
 
   it "shows the preview on its own, and comes back to the Markdown as it was left" $ runPage $ do
     (ui, _) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
@@ -598,7 +606,7 @@ spec m = do
     -- Out of the editor and back into it: the choice is the browser's.
     find ui ".editor-cancel" >>= click
     find ui ".page-view .actions a[href$='/edit/']" >>= click
-    find ui ".editor-side-by-side input" >>= \box -> getProperty box "checked" `shouldReturn` "true"
+    find ui ".editor-side-by-side" >>= \button -> getAttribute button "aria-pressed" `shouldReturn` Just "true"
     find ui ".editor-preview" >>= shouldBeVisible
 
   it "finds TeX math in the text where the wiki's own parser does" $ runPage $ do
@@ -628,15 +636,16 @@ spec m = do
           , "`$x$` $y$"
           , "$x @an y$ @an"
           ]
+    -- Each under a title line, which the editor keeps.
     for_ cases $ \source -> do
-      setMarkdown ui source
+      setMarkdown ui ("# Cases\n\n" <> source)
       found <- map stripDelimiters <$> mathIn ui
       (source, found) `shouldBe` (source, wikiMath source)
 
   it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor
     text <- editorText ui
-    clear text
+    clearBody ui
     typeText text "Ask @an"
     -- Anna by her login and Annabel by her display name, display name
     -- first and the login after it, in the order of their display names;
@@ -645,60 +654,60 @@ spec m = do
     (findAllIn shown ".cm-completionLabel" >>= traverse textContent) `shouldReturn` ["Anna Nowak", "Annabel Smith"]
     (findAllIn shown ".cm-completionDetail" >>= traverse textContent) `shouldReturn` ["@anna", "@jsmith"]
     press "Enter"
-    markdown ui `shouldReturn` "Ask @anna "
+    markdown ui `shouldReturn` "# Hello, world\n\nAsk @anna "
     eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
     -- The arrows choose another, and Tab takes it rather than indenting.
     typeText text "and @AN"
     _ <- listShown ui
     press "ArrowDown"
     press "Tab"
-    markdown ui `shouldReturn` "Ask @anna and @jsmith "
+    markdown ui `shouldReturn` "# Hello, world\n\nAsk @anna and @jsmith "
     -- Escape closes the list and leaves the text as typed.
     typeText text "or @an"
     _ <- listShown ui
     press "Escape"
     eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
-    markdown ui `shouldReturn` "Ask @anna and @jsmith or @an"
+    markdown ui `shouldReturn` "# Hello, world\n\nAsk @anna and @jsmith or @an"
     -- Chosen with a space after the cursor already: no second space.
-    clear text
+    clearBody ui
     typeText text "Ask  now"
     typeAfter 4 ["@", "a", "n"]
     _ <- listShown ui
     press "Enter"
-    markdown ui `shouldReturn` "Ask @anna now"
+    markdown ui `shouldReturn` "# Hello, world\n\nAsk @anna now"
     -- Brackets with no link defined are text, where a mention counts.
-    clear text
+    clearBody ui
     typeText text "[note ]"
     typeAfter 6 ["@", "a", "n"]
     _ <- listShown ui
     press "Escape"
     eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
     -- Not in a code fence, where a mention does not count.
-    clear text
+    clearBody ui
     typeText text "```\n@an"
     noCompletion ui
     -- Nor in a link's text: typed between the brackets of one.
-    clear text
+    clearBody ui
     typeText text "[see ](https://example.org)"
     typeAfter 5 ["@", "a", "n"]
-    markdown ui `shouldReturn` "[see @an](https://example.org)"
+    markdown ui `shouldReturn` "# Hello, world\n\n[see @an](https://example.org)"
     noCompletion ui
     -- Nor in a link to a page of the wiki, [[page]].
-    clear text
+    clearBody ui
     typeText text "[[Plans ]]"
     typeAfter 8 ["@", "a", "n"]
-    markdown ui `shouldReturn` "[[Plans @an]]"
+    markdown ui `shouldReturn` "# Hello, world\n\n[[Plans @an]]"
     noCompletion ui
     -- Nor in math, between dollars or TeX's own delimiters.
-    clear text
+    clearBody ui
     typeText text "$x y$"
     typeAfter 2 [" ", "@", "a", "n"]
-    markdown ui `shouldReturn` "$x @an y$"
+    markdown ui `shouldReturn` "# Hello, world\n\n$x @an y$"
     noCompletion ui
-    clear text
+    clearBody ui
     typeText text "\\(\\)"
     typeAfter 2 ["@", "a", "n"]
-    markdown ui `shouldReturn` "\\(@an\\)"
+    markdown ui `shouldReturn` "# Hello, world\n\n\\(@an\\)"
     noCompletion ui
     -- After the formula, where a mention counts again, it opens.
     press "End"
@@ -756,7 +765,8 @@ spec m = do
 -- typing beside the Markdown.
 sideBySide :: Mounted s q o m -> PageM s ()
 sideBySide ui = do
-  find ui ".editor-side-by-side input" >>= click
+  find ui ".editor-side-by-side" >>= click
+  find ui ".editor-side-by-side" >>= \b -> getAttribute b "aria-pressed" `shouldReturn` Just "true"
   find ui ".editor-preview" >>= shouldBeVisible
 
 -- | Wait for the preview to have an element with this text, finding it
@@ -783,7 +793,7 @@ someoneElseSaves wiki = do
   unsafeIOToPageM $ do
     editing <- (\st -> st.current) <$> readIORef wiki
     modifyIORef' wiki (\st -> st {current = Just (UserId "user-admin")})
-    runMemWiki wiki (savePage page.id page.updatedAt page.title "Someone else's words.") >>= either (panic . show) (const pass)
+    runMemWiki wiki (savePage page.id page.updatedAt page.title "# Hello, world\n\nSomeone else's words.") >>= either (panic . show) (const pass)
     modifyIORef' wiki (\st -> st {current = editing})
   pure page
 

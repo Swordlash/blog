@@ -16,6 +16,7 @@ module Wiki.App.Browser
   , setDocumentTitle
   , historyEntry
   , historyGo
+  , replacingEntry
   , copyText
   , absoluteUrl
   , zipFiles
@@ -68,6 +69,8 @@ $( browserJS
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
      , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
      , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
+     , ("js_history_replacing", "wiki_history_replacing", Unsafe, [t|Int -> IO ()|])
+     , ("js_history_replaced", "wiki_history_replaced", Unsafe, [t|IO ()|])
      , ("js_copy_text", "wiki_copy_text", Safe, [t|Element -> JSText -> IO Bool|])
      , ("js_archive_new", "wiki_archive_new", Unsafe, [t|IO JSVal|])
      , ("js_archive_add", "wiki_archive_add", Unsafe, [t|JSVal -> JSText -> JSVal -> IO ()|])
@@ -153,6 +156,21 @@ setDocumentTitle = liftIO . js_set_title . toJSText
 -- entry. Natively always 0.
 historyEntry :: (MonadIO m) => m Int
 historyEntry = liftIO js_history_entry
+
+-- | Run something that replaces the current entry of the session history
+-- (the router's redirect), keeping the entry's number: the entry is the
+-- same one, at the same place in the history, which 'historyGo' counts
+-- by, also to whoever asks for the entry's number while the router
+-- replaces it (the shell, which the router tells at once). Natively there
+-- is no history, and the action only runs.
+replacingEntry :: (MonadIO m) => m () -> m ()
+replacingEntry replacement
+  | inBrowser = do
+      entry <- historyEntry
+      liftIO (js_history_replacing entry)
+      replacement
+      liftIO js_history_replaced
+  | otherwise = replacement
 
 -- | Go this many entries forward in the session history (back, if
 -- negative), as the browser's buttons do: the router receives it as it

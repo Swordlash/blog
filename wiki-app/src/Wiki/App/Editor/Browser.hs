@@ -37,6 +37,16 @@ module Wiki.App.Editor.Browser
   , followLine
   , announceUpload
   , paneShown
+  , PreviewWatch
+  , watchPreviewEntry
+  , unwatchPreviewEntry
+  , pushPreviewEntry
+  , onPreviewEntry
+  , forgetPreviewEntry
+  , historyBack
+  , previewShowing
+  , previewShown
+  , textShown
   , clearField
   , clickElement
   , EditorKey (..)
@@ -106,6 +116,15 @@ $( browserJS
      , ("js_live_follow", "wiki_live_follow", Unsafe, [t|Element -> Int -> IO ()|])
      , ("js_live_uploaded", "wiki_live_uploaded", Unsafe, [t|Element -> IO ()|])
      , ("js_live_pane_shown", "wiki_live_pane_shown", Unsafe, [t|Element -> IO ()|])
+     , ("js_preview_push", "wiki_preview_push", Unsafe, [t|IO ()|])
+     , ("js_preview_entry", "wiki_preview_entry", Unsafe, [t|IO Bool|])
+     , ("js_preview_forget", "wiki_preview_forget", Unsafe, [t|IO ()|])
+     , ("js_history_back", "wiki_history_back", Unsafe, [t|IO ()|])
+     , ("js_preview_watch", "wiki_preview_watch", Unsafe, [t|Callback -> IO Int|])
+     , ("js_preview_unwatch", "wiki_preview_unwatch", Unsafe, [t|Int -> IO ()|])
+     , ("js_preview_showing", "wiki_editor_preview_showing", Unsafe, [t|Element -> IO ()|])
+     , ("js_preview_shown", "wiki_editor_preview_shown", Unsafe, [t|Element -> IO ()|])
+     , ("js_text_shown", "wiki_editor_text_shown", Unsafe, [t|Element -> IO ()|])
      , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
@@ -269,6 +288,60 @@ announceUpload = liftIO . js_live_uploaded
 -- switched on, to the line the editor follows.
 paneShown :: (MonadIO m) => Element -> m ()
 paneShown = liftIO . js_live_pane_shown
+
+-- | 'PreviewWatch' is the editor's listener for the browser's Back and
+-- Forward (popstate), which say whether the entry reached is the
+-- preview's (WP5.38 of docs/PLAN.md): the listener's number in
+-- @jsbits/editor.js@ and its callback, freed when it stops.
+data PreviewWatch = PreviewWatch Int (Maybe Callback)
+
+-- | Watch the session history: the handler is told, on each Back or
+-- Forward, whether the entry is the preview's. Natively there is no
+-- history, and nothing is told.
+watchPreviewEntry :: (MonadIO m) => (Bool -> IO ()) -> m PreviewWatch
+watchPreviewEntry told
+  | inBrowser = liftIO $ do
+      callback <- mkSyncCallback (told . (== "1") . jsValText)
+      listener <- js_preview_watch callback
+      pure (PreviewWatch listener (Just callback))
+  | otherwise = pure (PreviewWatch 0 Nothing)
+
+-- | Stop watching, and free the callback.
+unwatchPreviewEntry :: (MonadIO m) => PreviewWatch -> m ()
+unwatchPreviewEntry (PreviewWatch listener callback) = liftIO $ do
+  when inBrowser (js_preview_unwatch listener)
+  traverse_ freeCallback callback
+
+-- | Push the preview's entry onto the session history, with the editor's
+-- address, so that Back returns to the text.
+pushPreviewEntry :: (MonadIO m) => m ()
+pushPreviewEntry = when inBrowser (liftIO js_preview_push)
+
+-- | Whether the session history's current entry is the preview's.
+onPreviewEntry :: (MonadIO m) => m Bool
+onPreviewEntry = if inBrowser then liftIO js_preview_entry else pure False
+
+-- | Take the preview's mark off the current entry.
+forgetPreviewEntry :: (MonadIO m) => m ()
+forgetPreviewEntry = when inBrowser (liftIO js_preview_forget)
+
+-- | Go back one entry in the session history, as the browser's Back does.
+historyBack :: (MonadIO m) => m ()
+historyBack = when inBrowser (liftIO js_history_back)
+
+-- | Keep where the window is, with the text, before the preview is shown
+-- alone: where 'textShown' returns it.
+previewShowing :: (MonadIO m) => Element -> m ()
+previewShowing = liftIO . js_preview_showing
+
+-- | Scroll the window to the block of the line the editor (the host)
+-- follows, in the preview shown alone.
+previewShown :: (MonadIO m) => Element -> m ()
+previewShown = liftIO . js_preview_shown
+
+-- | Scroll the window back to where it was before the preview was shown.
+textShown :: (MonadIO m) => Element -> m ()
+textShown = liftIO . js_text_shown
 
 -- | Empty a form field the component does not control, such as a password
 -- once it has been sent: what was typed in it would otherwise stay there.

@@ -52,7 +52,7 @@
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
 import { acceptCompletion, autocompletion, closeCompletion, completionKeymap, completionStatus, insertCompletionText, pickedCompletion } from "@codemirror/autocomplete";
-import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
 import { Language, LanguageSupport, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from "@codemirror/language";
@@ -562,15 +562,75 @@ const editors = new Set();
 // Wiki.Core.Markdown.Render's renderLines) to the block of a source line:
 // the last block that starts at or before it, near the top of the pane.
 function followLine(container, line) {
+  const target = markerOf(container, line);
+  if (target === null) return;
+  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+  container.scrollTop = Math.max(0, top - 16);
+}
+
+// The marker of the block a source line is in: the last block that starts
+// at or before the line, or null for rendered Markdown without markers.
+function markerOf(container, line) {
   let target = null;
   for (const marker of container.querySelectorAll(".source-line")) {
     if (Number(marker.dataset.line) <= line) target = marker;
     else break;
   }
-  if (target === null) return;
-  const top = target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
-  container.scrollTop = Math.max(0, top - 16);
+  return target;
 }
+
+// Where a page's text starts after its title line and the blank lines under
+// it: the end, for a text that is only its title line.
+function textStartOf(doc) {
+  if (!doc.startsWith("# ")) return 0;
+  let at = doc.indexOf("\n");
+  if (at < 0) return doc.length;
+  at += 1;
+  for (;;) {
+    const next = doc.indexOf("\n", at);
+    const line = next < 0 ? doc.slice(at) : doc.slice(at, next);
+    if (line.trim() !== "") return at;
+    if (next < 0) return doc.length;
+    at = next + 1;
+  }
+}
+
+// The page's title line (WP5.39 of docs/PLAN.md): the text starts with "# "
+// and the page's title, which the component reads from it. The "# " stays:
+// a change that takes it away, or adds a "#" to it, is followed by one that
+// makes the start of the first line "# " again, and a selection that would
+// start inside the "# " starts after it.
+const titleMark = "# ";
+const titleLine = [
+  EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged) return tr;
+    const first = tr.newDoc.line(1).text;
+    if (first.startsWith(titleMark)) return tr;
+    const marks = /^#*[ \t]*/.exec(first)[0];
+    // The selection is put right in the same step: the filter that keeps it
+    // out of the "# " has already seen this transaction, without the "# ".
+    const repair = ChangeSet.of([{ from: 0, to: marks.length, insert: titleMark }], tr.newDoc.length);
+    const after = (at) => Math.max(at, titleMark.length);
+    const mapped = tr.newSelection.map(repair);
+    const selection = EditorSelection.create(
+      mapped.ranges.map((r) => EditorSelection.range(after(r.anchor), after(r.head))),
+      mapped.mainIndex,
+    );
+    return [tr, { changes: repair, selection, sequential: true }];
+  }),
+  EditorState.transactionFilter.of((tr) => {
+    const doc = tr.newDoc;
+    if (!doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
+    const sel = tr.newSelection;
+    if (!sel.ranges.some((r) => r.from < titleMark.length)) return tr;
+    const after = (at) => Math.max(at, titleMark.length);
+    const moved = EditorSelection.create(
+      sel.ranges.map((r) => EditorSelection.range(after(r.anchor), after(r.head))),
+      sel.mainIndex,
+    );
+    return [tr, { selection: moved, sequential: true }];
+  }),
+];
 
 // What the editor of a page tells the preview beside it and the preview in a
 // window of its own (WP5.36 of docs/PLAN.md): the line being written (the
@@ -584,7 +644,25 @@ function following(host) {
   let view = null;
   let line = 1;
   let timer = null;
+  // Where the window was scrolled when the preview was shown alone, to go
+  // back to with the text.
+  let windowAt = null;
+  let windowTimer = null;
   const pane = () => host.closest(".editor-form")?.querySelector(".editor-preview");
+  // The preview shown alone scrolls with the window: the block of the line
+  // goes to just under the page's header and the editor's bar, which stay
+  // at the top.
+  const scrollWindow = () => {
+    const p = pane();
+    if (!p || p.offsetParent === null) return;
+    if (!host.closest(".editor-form")?.classList.contains("previewing")) return;
+    const target = markerOf(p, line);
+    if (target === null) return;
+    const header = document.querySelector(".wiki-header");
+    const top = host.closest(".editor-form")?.querySelector(".editor-top");
+    const offset = (header?.offsetHeight ?? 0) + (top?.offsetHeight ?? 0) + 12;
+    window.scrollTo(0, Math.max(0, target.getBoundingClientRect().top + window.scrollY - offset));
+  };
   const scrollPane = () => {
     const p = pane();
     if (p && p.offsetParent !== null) followLine(p, line);
@@ -642,6 +720,31 @@ function following(host) {
         channel.postMessage({ key, line });
       }
     },
+    // The preview was shown alone: the window goes to the block being
+    // edited, now and once the preview has rendered the text.
+    // The preview is about to be shown alone: where the window is, with
+    // the text, is kept for the way back. Taken before the switch, since the
+    // page's height changes with it.
+    previewShowing: () => {
+      windowAt = window.scrollY;
+    },
+    previewShown: () => {
+      scrollWindow();
+      clearTimeout(windowTimer);
+      windowTimer = setTimeout(scrollWindow, 400);
+    },
+    // The text was shown again: the window goes back to where it was, and
+    // the preview's second scroll, if not done yet, is not done.
+    textShown: () => {
+      clearTimeout(windowTimer);
+      windowTimer = null;
+      if (windowAt === null) return;
+      const y = windowAt;
+      windowAt = null;
+      window.scrollTo(0, y);
+      // And once the text is laid out again, which the switch back started.
+      requestAnimationFrame(() => window.scrollTo(0, y));
+    },
     // The preview beside the text was switched on: it goes to the line
     // followed meanwhile, now and once it has rendered.
     paneShown: () => {
@@ -681,14 +784,24 @@ export function attach(textarea, host, original, codeTokens) {
   let toldSelection = "";
   let toldEmpty = true;
 
+  // A textarea nobody has typed in has its cursor at the start, which is
+  // the title line's "#": the cursor starts instead where the page's text
+  // does, after the title line and the blank lines under it.
+  // A template's first line is not its title (WP5.39): the host says so.
+  const titled = host.dataset.titleLine !== "false";
+  const untyped = titled && textarea.selectionStart === 0 && textarea.selectionEnd === 0;
+  const textStart = untyped ? clamp(textStartOf(doc)) : 0;
   const state = EditorState.create({
     doc,
-    selection: EditorSelection.single(clamp(textarea.selectionStart), clamp(textarea.selectionEnd)),
+    selection: untyped
+      ? EditorSelection.single(textStart)
+      : EditorSelection.single(clamp(textarea.selectionStart), clamp(textarea.selectionEnd)),
     extensions: [
       EditorState.lineSeparator.of("\n"),
       // Pasted text as a textarea takes it: with its line endings made "\n".
       EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
       history(),
+      titled ? titleLine : [],
       changes.extensions,
       completion.extension,
       // Enter is a line break and nothing more, as in the textarea, except
@@ -798,7 +911,15 @@ export function attach(textarea, host, original, codeTokens) {
     // The assistant's edit: from..to replaced with `insert`, tracked as the
     // change `id`, taking in the changes `absorbed` (the ones it touches),
     // as one step of the undo, shown where it is.
-    propose: (from, to, insert, id, absorbed) => {
+    propose: (proposedFrom, to, proposedInsert, id, absorbed) => {
+      // An edit that starts inside the title line's "# " starts after it,
+      // without the "# " the new text may start with, so that the change
+      // tracked, and what rejecting it puts back, leave the "# " alone.
+      const inMark = titled && proposedFrom < titleMark.length && view.state.sliceDoc(0, titleMark.length) === titleMark;
+      const from = inMark ? titleMark.length : proposedFrom;
+      const markLeft = titleMark.slice(proposedFrom);
+      const insert = inMark && proposedInsert.startsWith(markLeft) ? proposedInsert.slice(markLeft.length) : proposedInsert;
+      to = Math.max(to, from);
       const removed = view.state.sliceDoc(from, to);
       view.dispatch({
         changes: { from, to, insert },
@@ -824,6 +945,9 @@ export function attach(textarea, host, original, codeTokens) {
     },
     uploaded: () => follow.uploaded(),
     paneShown: () => follow.paneShown(),
+    previewShowing: () => follow.previewShowing(),
+    previewShown: () => follow.previewShown(),
+    textShown: () => follow.textShown(),
     destroy: () => {
       editors.delete(editor);
       follow.stop();

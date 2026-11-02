@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The editor's bar and the title line (WP5.38, WP5.39). The title, Save, Save
+and close, Cancel and the toolbar stay at the top while the text scrolls, in
+"Show preview" too, with "Back to editing". "Show preview" opens at the block
+being edited, and pushes an entry of the browser's history: Back returns to
+the text, and only the next Back leaves the editor. "Side by side" is a button
+that stays pressed while on, with an icon of its own, beside "Show preview".
+A page's title is its text's first line, `# Title`: the title field only shows
+it, greyed out, CodeMirror keeps the line's `#` in place, the cursor starts
+under it, and a page without the line gets it when opened. Saving with an
+empty title is refused. Renaming a page from its actions rewrites the line.
+
 The room to write in (WP5.36). The sidebar folds away from a « button at its
 bottom left, and the browser keeps it folded. The editor's A− and A+ set the
 size of the Markdown's font, kept too. The side by side preview scrolls on its

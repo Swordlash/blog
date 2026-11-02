@@ -17,7 +17,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
-import Test.Browser.Text (editorText, setMarkdown)
+import Test.Browser.Text (editorText, markdown, setMarkdown)
 import Test.Hspec.Halogen
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
@@ -35,6 +35,7 @@ $( browserJS
      , ("js_live_send", "wiki_test_live_send", Unsafe, [t|JSText -> JSText -> Int -> IO ()|])
      , ("js_live_close", "wiki_test_live_close", Unsafe, [t|IO ()|])
      , ("js_live_cursor", "wiki_test_live_cursor", Unsafe, [t|Int -> IO ()|])
+     , ("js_history_back", "wiki_test_history_back", Unsafe, [t|IO ()|])
      , ("js_scrolled", "wiki_test_live_scrolled", Unsafe, [t|JSText -> IO Double|])
      , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
      , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
@@ -75,24 +76,109 @@ spec m = do
 
   it "scrolls the side by side preview to the block of the cursor's line" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
-    find ui ".editor-side-by-side input" >>= click
+    find ui ".editor-side-by-side" >>= click
     find ui ".editor-preview" >>= shouldBeVisible
-    setMarkdown ui long
+    setMarkdown ui titled
     eventually $ length <$> findAll ui ".editor-preview .page-body h2" `shouldReturn` 60
-    unsafeIOToPageM (js_live_cursor (T.length long))
+    unsafeIOToPageM (js_live_cursor (T.length titled))
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (> 500))
-    -- Back at the top: the first block, under the page's title.
+    -- Back at the top: the title's block.
     unsafeIOToPageM (js_live_cursor 0)
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (< 100))
     -- The cursor moved while the pane is hidden: shown again, the pane
     -- goes to its line.
-    find ui ".editor-side-by-side input" >>= click
-    unsafeIOToPageM (js_live_cursor (T.length long))
-    find ui ".editor-side-by-side input" >>= click
+    find ui ".editor-side-by-side" >>= click
+    find ui ".editor-side-by-side" >>= \b -> getAttribute b "aria-pressed" `shouldReturn` Just "false"
+    unsafeIOToPageM (js_live_cursor (T.length titled))
+    find ui ".editor-side-by-side" >>= click
     eventually $ scrolled ".editor-preview" >>= (`shouldSatisfy` (> 500))
     -- "Show preview" shows the whole page, not the pane beside the text.
     find ui ".editor-show-preview" >>= click
     eventually $ computedStyle ".editor-preview" "overflow-y" `shouldReturn` "visible"
+    unmount ui
+
+  it "keeps the title on the text's first line, with its # in place" $ runPage $ do
+    ui <- start m (Just "user-editor") helloEditor
+    text <- editorText ui
+    title <- find ui ".editor-title input"
+    getAttribute title "readonly" `shouldReturn` Just ""
+    getAttribute title "value" `shouldReturn` Just "Hello, world"
+    -- Typed on the first line, the title changes with it.
+    setMarkdown ui "# Hello, world\n\nText."
+    unsafeIOToPageM (js_live_cursor 14)
+    typeText text " again"
+    markdown ui `shouldReturn` "# Hello, world again\n\nText."
+    eventually $ getAttribute title "value" `shouldReturn` Just "Hello, world again"
+    -- The # stays: Backspace just after it does nothing, the cursor
+    -- cannot go before it, and all of the text deleted leaves it.
+    unsafeIOToPageM (js_live_cursor 2)
+    press "Backspace"
+    press "Backspace"
+    markdown ui `shouldReturn` "# Hello, world again\n\nText."
+    press "Home"
+    press "x"
+    markdown ui `shouldReturn` "# xHello, world again\n\nText."
+    press "Backspace"
+    -- A word deleted back over the "# " leaves it, and the cursor after it.
+    unsafeIOToPageM (js_live_cursor 2)
+    press "Control+Backspace"
+    press "y"
+    markdown ui `shouldReturn` "# yHello, world again\n\nText."
+    press "Backspace"
+    press "Control+a"
+    press "Delete"
+    markdown ui `shouldReturn` "# "
+    -- A page needs a title: an empty one is not saved.
+    find ui ".editor-save" >>= click
+    find ui ".editor-notices .error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "write it after the #")
+    typeText text "Back again"
+    markdown ui `shouldReturn` "# Back again"
+    unmount ui
+
+  it "leaves a template its own name, and the heading it gives the pages made from it" $ runPage $ do
+    ui <- start m (Just "user-admin") (EditPage (slugs ["team"]) (slugs ["weekly-sync"]))
+    text <- editorText ui
+    markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# {{title}}\n")
+    -- The title field is the template's name, typed there.
+    title <- find ui ".editor-title input"
+    getAttribute title "readonly" `shouldReturn` Nothing
+    getProperty title "value" `shouldReturn` "Weekly sync"
+    focus text
+    press "Control+End"
+    typeText text "\n\nMore."
+    find ui ".editor-save-close" >>= click
+    find ui ".page-view" >>= shouldBeVisible
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Weekly sync")
+    unmount ui
+
+  it "shows the preview alone at the block being edited, the bar still there, and Back returns to the text" $ runPage $ do
+    ui <- start m (Just "user-editor") helloEditor
+    _ <- editorText ui
+    setMarkdown ui titled
+    unsafeIOToPageM (js_live_cursor (T.length titled))
+    -- Where the window is with the text. The preview is asked for with its
+    -- key, which, unlike a click, does not scroll the window first.
+    settle
+    before <- scrolled ""
+    press "Control+Alt+p"
+    form <- find ui ".editor-form"
+    eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (T.isInfixOf "previewing"))
+    -- The window at the last block, far down the rendered page.
+    eventually $ scrolled "" >>= (`shouldSatisfy` (> before + 500))
+    -- Save and the way back stay at the top, under the header.
+    find ui ".editor-top .editor-back" >>= shouldBeVisible
+    find ui ".editor-top .editor-save" >>= shouldBeVisible
+    -- The browser's Back returns to the text, with the window where it was:
+    -- give or take a line, since the text, focused again, brings its cursor
+    -- fully into view.
+    unsafeIOToPageM js_history_back
+    eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (not . T.isInfixOf "previewing"))
+    eventually $ scrolled "" >>= \y -> (before, y) `shouldSatisfy` (\(b, a) -> abs (a - b) < 100)
+    -- "Back to editing" does the same, and leaves the history as it was.
+    find ui ".editor-show-preview" >>= click
+    eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (T.isInfixOf "previewing"))
+    find ui ".editor-back" >>= click
+    eventually $ getAttribute form "class" >>= (`shouldSatisfy` maybe False (not . T.isInfixOf "previewing"))
     unmount ui
 
   it "tells the window of its page what is typed and where" $ runPage $ do
@@ -107,9 +193,9 @@ spec m = do
       (field "text" =<< message, field "line" =<< message)
         `shouldBe` (Just (String "# Typed here\n\nand here"), Just (Number 3))
     find ui ".editor-detach" >>= \detach -> getAttribute detach "target" `shouldReturn` Just "wiki-live-preview"
-    -- The title, typed outside the Markdown, goes with it.
-    find ui ".editor-title input" >>= clear
-    find ui ".editor-title input" >>= (`typeText` "Retitled")
+    -- The title, which is the first line's, goes with it.
+    eventually $ (field "title" =<<) . lastMay <$> heardAll `shouldReturn` Just (String "Typed here")
+    setMarkdown ui "# Retitled\n\nand here"
     eventually $ (field "title" =<<) . lastMay <$> heardAll `shouldReturn` Just (String "Retitled")
     -- A file uploaded: the window is told to fetch the attachments again.
     unsafeIOToPageM (evaluate =<< js_choose_file (toJSText ".editor-attach input") (toJSText "dot.png") (toJSText "image/png") (toJSText dotPng))
@@ -147,6 +233,8 @@ spec m = do
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
     -- Sixty sections, each a heading and a paragraph: four lines each.
     long = T.concat ["## Section " <> show n <> "\n\nSome text of section " <> show n <> ".\n\n" | n <- [1 .. 60 :: Int]]
+    -- The same under the page's title line, which the editor keeps.
+    titled = "# Hello, world\n\n" <> long
     heardAll :: PageM s [Value]
     heardAll =
       unsafeIOToPageM (fromJSText <$> js_live_heard_all) <&> \raw -> case decodeStrict (encodeUtf8 raw) of

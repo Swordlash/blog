@@ -28,3 +28,9 @@ function wiki_test_drag_out(from, to) {
   document.querySelector(from).dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
   document.querySelector(to).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }
+
+// A press of the pointer on the page's body, outside every box: what a
+// click on the page around the search box starts with.
+function wiki_test_press_outside() {
+  document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+}

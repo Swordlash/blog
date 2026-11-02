@@ -115,7 +115,7 @@ spec m = do
       ui <- start m (Just "user-admin") (NewPage (slugs ["docs"]) Nothing)
       find ui ".new-page-title" >>= (`typeText` "Macros")
       find ui ".new-page-view button.primary" >>= click
-      find ui ".editor-side-by-side input" >>= click
+      find ui ".editor-side-by-side" >>= click
       text <- editorText ui
       typeText text "First $\\vect{v} + \\twice{x}$"
       early <- find ui ".editor-preview .wiki-math .katex"
@@ -135,7 +135,7 @@ spec m = do
       ui <- start m (Just "user-admin") (NewPage (slugs ["docs"]) Nothing)
       find ui ".new-page-title" >>= (`typeText` "Delimiters")
       find ui ".new-page-view button.primary" >>= click
-      find ui ".editor-side-by-side input" >>= click
+      find ui ".editor-side-by-side" >>= click
       text <- editorText ui
       typeText text "Inline \\(\\abs{x}\\) then \\[\\vect{w}\\] ends."
       formulas <- eventually $ do

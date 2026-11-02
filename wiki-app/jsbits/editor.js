@@ -377,6 +377,67 @@ function wiki_live_pane_shown(host) {
   host.wikiEditor?.paneShown();
 }
 
+// The preview's entry in the session history (WP5.38 of docs/PLAN.md).
+// "Show preview" pushes an entry with the editor's own address, marked
+// wikiPreview, so that the browser's Back returns to the text rather than
+// leaving the editor. The shell sees the same route and only notes the
+// entry; the editor, watching popstate, shows the text or the preview as
+// the entry says.
+function wiki_preview_push() {
+  history.pushState({ wikiPreview: true }, "", location.href);
+}
+
+// Whether the session history's current entry is the preview's.
+function wiki_preview_entry() {
+  return history.state?.wikiPreview === true;
+}
+
+// Take the mark off the current entry: an editor opened on the preview's
+// entry (after a reload, or back from another page) starts with the text.
+function wiki_preview_forget() {
+  const state = history.state;
+  if (state?.wikiPreview !== true) return;
+  const { wikiPreview: _, ...kept } = state;
+  history.replaceState(kept, "");
+}
+
+function wiki_history_back() {
+  history.back();
+}
+
+const wikiPreviewWatches = new Map();
+let wikiPreviewNext = 0;
+
+// Call back on each popstate with whether the entry is the preview's ("1")
+// or not (""). The number to stop with.
+function wiki_preview_watch(callback) {
+  const handler = () => callback(wiki_preview_entry() ? "1" : "");
+  window.addEventListener("popstate", handler);
+  const handle = ++wikiPreviewNext;
+  wikiPreviewWatches.set(handle, handler);
+  return handle;
+}
+
+function wiki_preview_unwatch(handle) {
+  const handler = wikiPreviewWatches.get(handle);
+  if (handler) window.removeEventListener("popstate", handler);
+  wikiPreviewWatches.delete(handle);
+}
+
+// The preview was shown alone: the window goes to the block being
+// edited. The text was shown again: the window goes back to where it was.
+function wiki_editor_preview_showing(host) {
+  host.wikiEditor?.previewShowing();
+}
+
+function wiki_editor_preview_shown(host) {
+  host.wikiEditor?.previewShown();
+}
+
+function wiki_editor_text_shown(host) {
+  host.wikiEditor?.textShown();
+}
+
 // Tell the window of the page that a file was uploaded to it.
 function wiki_live_uploaded(host) {
   host.wikiEditor?.uploaded();

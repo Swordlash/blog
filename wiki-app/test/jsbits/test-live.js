@@ -45,6 +45,11 @@ function wiki_test_live_close() {
   wikiTestLive?.channel.postMessage({ key: wikiTestLive.hello, closed: true });
 }
 
+// The browser's Back, as its button does.
+function wiki_test_history_back() {
+  history.back();
+}
+
 // Put the open editor's cursor at a character.
 function wiki_test_live_cursor(at) {
   const editor = document.querySelector(".editor-cm .cm-content")?.wikiEditor;

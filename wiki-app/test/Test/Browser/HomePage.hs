@@ -10,7 +10,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged, startKept, startWith)
-import Test.Browser.Text (editorText, markdown, setMarkdown)
+import Test.Browser.Text (clearBody, editorText, markdown, setMarkdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -33,23 +33,25 @@ spec m = do
   it "opens the full editor, formats text, previews islands, saves and stays, then saves and closes" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") Home
     find ui ".edit-home" >>= click
-    title <- find ui ".editor-title input"
-    clear title
-    typeText title "Knowledge"
+    -- The title is the text's first line, which the title field shows.
+    setMarkdown ui "# Knowledge"
+    clearBody ui
+    find ui ".editor-title input" >>= \t -> getProperty t "value" `shouldReturn` "Knowledge"
     text <- editorText ui
     typeText text "welcome"
-    press "Control+a"
+    press "Shift+Home"
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    markdown ui `shouldReturn` "**welcome**"
-    clear text
+    markdown ui `shouldReturn` "# Knowledge\n\n**welcome**"
+    clearBody ui
     typeText text "one\ntwo"
-    press "Control+a"
+    press "Shift+ArrowUp"
+    press "Shift+Home"
     find ui ".editor-toolbar button[aria-label='Numbered list']" >>= click
-    markdown ui `shouldReturn` "1. one\n2. two"
+    markdown ui `shouldReturn` "# Knowledge\n\n1. one\n2. two"
     find ui ".editor-toolbar button[aria-label='Table']" >>= click
     markdown ui >>= (`shouldSatisfy` T.isInfixOf "|")
-    setMarkdown ui "Shared **welcome**.\n\n> [!exercise]\n> Try this.\n\n$x^2$"
-    find ui ".editor-side-by-side input" >>= click
+    setMarkdown ui "# Knowledge\n\nShared **welcome**.\n\n> [!exercise]\n> Try this.\n\n$x^2$"
+    find ui ".editor-side-by-side" >>= click
     find ui ".editor-preview strong" >>= (`shouldHaveText` "welcome")
     _ <- find ui ".editor-preview .katex"
     _ <- find ui ".editor-preview .alert-exercise"
@@ -65,6 +67,7 @@ spec m = do
     typeText renamed "Knowledge renamed"
     find ui ".inline-form button.primary" >>= click
     find ui ".page-view h1" >>= (`shouldHaveText` "Knowledge renamed")
+    length <$> findAll ui ".page-view h1" `shouldReturn` 1
     saved <- unsafeIOToPageM (readIORef wiki)
     saved.server.homePage.title `shouldBe` "Knowledge renamed"
     length <$> findAll ui ".comments-toggle, .comments-panel, .page-comments" `shouldReturn` 0
@@ -79,7 +82,7 @@ spec m = do
     ui <- startKept m db (Just "user-admin") EditHome
     _ <- editorText ui
     unsafeIOToPageM (js_choose_file (toJSText ".editor-attach input") (toJSText "home.txt") (toJSText "text/plain") (toJSText "aGVsbG8K"))
-    eventually $ markdown ui `shouldReturn` "[home.txt](attachment:home.txt)"
+    eventually $ markdown ui `shouldReturn` "# Spaces\n\n[home.txt](attachment:home.txt)"
     find ui ".editor-save-close" >>= click
     _ <- find ui ".attachments a[download='home.txt']"
     unmount ui
@@ -101,12 +104,12 @@ spec m = do
     find ui ".wiki-brand" >>= click
     _ <- find ui ".leave-confirm"
     clickButton ui ".leave-confirm button" "Stay"
-    markdown ui `shouldReturn` "A recovered home draft."
+    markdown ui `shouldReturn` "# Spaces\n\nA recovered home draft."
     eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
     unmount ui
     again <- startKept m db (Just "user-admin") EditHome
     _ <- find again ".editor-draft-found"
-    markdown again `shouldReturn` "A recovered home draft."
+    markdown again `shouldReturn` "# Spaces\n\nA recovered home draft."
     find again ".editor-save-close" >>= click
     find again ".page-body p" >>= (`shouldHaveText` "A recovered home draft.")
     unmount again
@@ -114,10 +117,10 @@ spec m = do
 
   it "reads source and history and restores a previous root version at canonical home routes" $ runPage $ do
     ui <- start m (Just "user-admin") EditHome
-    setMarkdown ui "First version."
+    setMarkdown ui "# Spaces\n\nFirst version."
     find ui ".editor-save" >>= click
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
-    setMarkdown ui "Second version."
+    setMarkdown ui "# Spaces\n\nSecond version."
     find ui ".editor-save-close" >>= click
     clickButton ui ".page-actions a" "History"
     find ui ".version-list li:nth-child(2) > a" >>= click

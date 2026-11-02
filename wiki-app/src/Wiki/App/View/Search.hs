@@ -14,7 +14,9 @@
 -- From the keyboard: @/@ anywhere outside a field focuses the input (see
 -- @jsbits/search.js@), the arrows move through the hits, Enter opens the
 -- selected hit or, with none selected, the search results page, and
--- Escape closes the list. Whatever navigates away (a hit, the results
+-- Escape closes the list, and so does a press anywhere outside the box,
+-- even one that leaves the focus in the input (@jsbits/search.js@). Whatever
+-- navigates away (a hit, the results
 -- page) closes the list and takes focus out of the box, so that @/@ works
 -- again wherever the reader lands.
 module Wiki.App.View.Search
@@ -160,6 +162,7 @@ component =
           role="search"
           onFocusIn={{ const FocusIn }}
           onFocusOut={{ FocusOut }}
+          {{ HE.handler' (EventType "wiki-search-outside") (const (Just Close)) }}
           {{ HE.handler' (EventType "keydown") closeKey }}
         >
           <div class="search-bar">

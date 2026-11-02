@@ -37,14 +37,30 @@ function wiki_search_bind_shortcut(input) {
     input.focus();
     input.select();
   };
+  // A press anywhere outside the box closes its list, told to the box as
+  // "wiki-search-outside": the box's focusout does too, but a press on
+  // something that keeps the focus where it is (a toolbar button that
+  // prevents its mousedown's default) takes no focus from the input.
+  const outside = (event) => {
+    const box = input.closest('[role="search"]');
+    if (!box || !input.isConnected) return;
+    if (event.target instanceof Node && box.contains(event.target)) return;
+    box.dispatchEvent(new CustomEvent("wiki-search-outside"));
+  };
   wiki_search_unbind_shortcut(input);
   input.wikiSearchShortcut = listener;
+  input.wikiSearchOutside = outside;
   document.addEventListener("keydown", listener);
+  document.addEventListener("pointerdown", outside, true);
 }
 
 function wiki_search_unbind_shortcut(input) {
   if (input.wikiSearchShortcut !== undefined) {
     document.removeEventListener("keydown", input.wikiSearchShortcut);
     delete input.wikiSearchShortcut;
+  }
+  if (input.wikiSearchOutside !== undefined) {
+    document.removeEventListener("pointerdown", input.wikiSearchOutside, true);
+    delete input.wikiSearchOutside;
   }
 }
