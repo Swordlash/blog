@@ -357,7 +357,7 @@ In the order to do it, unless the owner says otherwise.
   works (the owner tried again; the parser reads every variant tried).
 - **WP5.40 Boxes: numbers, titles, toolbar, colours.** Boxes are numbered per kind
   (Tip 1, Tip 2; Example 1 apart). A space chooses the form: within the page only
-  (`3`), with the page's number (`2.3`: the page's position under its parent, in the
+  (`3`, the default, the owner, 2026-11-02), with the page's number (`2.3`: the page's position under its parent, in the
   space's order, by hand or not), or with the section too (`2.1.3`: `##` sections).
   `> [!TIP*]` is a box without a number, as LaTeX's `equation*`. Math in box titles
   (`$…$`, `$$…$$`). A "Box" button in the toolbar with the space's kinds in a list,
@@ -369,7 +369,11 @@ In the order to do it, unless the owner says otherwise.
   the space's macros are (a sample formula typed under the block is typeset with it),
   and a warning naming the pages that use a macro being removed. In the editor, a
   button for the space's and the page's macros, editable by whoever may edit the whole
-  space (the space's are on the space's page, "Math macros", today).
+  space (the space's are on the space's page, "Math macros", today). The Box menu's
+  "New kind…" opens a dialog in the editor with the same form as the kinds of box in
+  the Editor tab (one form, used in both), instead of the administration in another
+  tab (WP5.40): a kind saved there is in the menu at once, and nothing is left or
+  reloaded (the owner, 2026-11-02).
 - **WP5.44 Stars and help.** A user stars pages (kept by the server, per user) and goes
   to them from a "Starred" list in the header. A help button (a "?" in a corner) opens
   a dialog with what the README and the guide say: TikZ, Mermaid, the kinds of box
