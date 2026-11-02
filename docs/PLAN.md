@@ -320,8 +320,8 @@ The session the owner talks to implements every work package itself, one at a ti
 without subagents (the owner, 2026-10-31: "Usuń wzmiankę o wykonywaniu zadań przez
 subagentow opus, będziesz wykonywać wszystko sam"). Before a pull request merges, it is
 reviewed with Codex, `gpt-6.1-sol` at high reasoning effort, with the owner's key, as
-`AGENTS.md` says; the session fixes the real findings and pushes, for four rounds at
-most (the owner, 2026-10-31: "4 rundy review wystarczą"). The owner merges; the session
+`AGENTS.md` says; the session fixes the real findings and pushes, for three rounds at
+most (the owner, 2026-11-02: "Zmniejsz max liczbe przebiegów do 3"; four before). The owner merges; the session
 merges only when asked ("nie merguj sam, chyba że poproszę"). The session may hand a
 commit it has good reason to trust to CI rather than run the whole gate locally first,
 when nothing else is waiting on CI (the owner, 2026-10-31).
