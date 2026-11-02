@@ -632,8 +632,11 @@ serverSide = describe "serverSettings and setServerSettings" $ do
     -- still needs the built-in macro. A name in code is no use.
     shown <- run admin (createPage blog.id Nothing "Shown" "# Shown\n\n```tex\n\\newcommand{\\Likely}{P}\n```\n\n$\\Likely$") >>= ok
     _ <- run admin (createPage blog.id Nothing "Code" "# Code\n\n`\\Likely` is a macro.") >>= ok
+    -- A formula before the page's own definition still needs the built-in
+    -- macro, as the page sets each formula with the definitions before it.
+    late <- run admin (createPage blog.id Nothing "Late" "# Late\n\n$\\Likely$\n\n$$\\newcommand{\\Likely}{P}$$") >>= ok
     found <- run admin (macroUses ["\\Likely", "\\nowhere"]) >>= ok
-    [(u.usedOn, u.pageTitle, u.uses) | u <- found] `shouldMatchList` [(used.id, "Chances", ["\\Likely"]), (shown.id, "Shown", ["\\Likely"])]
+    [(u.usedOn, u.pageTitle, u.uses) | u <- found] `shouldMatchList` [(used.id, "Chances", ["\\Likely"]), (shown.id, "Shown", ["\\Likely"]), (late.id, "Late", ["\\Likely"])]
     for_ [Anonymous, editor, reader] $ \who -> run who (macroUses ["\\Likely"]) >>= (`shouldFailWith` Forbidden)
   it "reuses page saves, attachments, drafts and versions for the home document" $ \(Fixture run) -> do
     (space, page) <- run admin getHomeDocument >>= ok
