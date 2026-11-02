@@ -191,7 +191,7 @@ spec = describe "Markdown.Render" $ do
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\a\\b</div>"
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\renewcommand{\\a}{3}\n</div>"
           <> "<p>Last <span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">y</span>"
-          <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup></p>"
+          <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"z\">1</a></sup></p>"
           <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">z</span>"
           <> " <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
 
