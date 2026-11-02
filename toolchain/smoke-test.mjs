@@ -694,9 +694,38 @@ try {
   await arrive({ path: "/", view: "wiki-home" }, "the front page");
   // A space from anywhere: the directory, by the site's name, and the
   // space's card there; the space opens at its home page.
+  //
+  // The directory's element must stay where it is from the moment its
+  // cards show until the front page has loaded. A render that takes the
+  // element out and puts it back (a move) under a press on a card makes
+  // the browser send no click, which lost the click here now and then.
+  // A removed element that is connected again by the time the observer
+  // is told was moved. The watch starts once the cards show, because
+  // the element is put in place once as it is first built.
   const toSpace = async (href) => {
+    const card = page.locator(`#app .space-card-link[href='${at(href)}']`);
     await page.locator("#app .wiki-brand").click();
-    await page.locator(`#app .space-card-link[href='${at(href)}']`).click();
+    await card.waitFor({ timeout });
+    await page.evaluate(() => {
+      window.smokeDirectoryMoves = 0;
+      window.smokeCountMoves = (records) => {
+        for (const record of records) {
+          for (const node of record.removedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE && node.matches(".directory") && node.isConnected) window.smokeDirectoryMoves += 1;
+          }
+        }
+      };
+      window.smokeDirectoryWatch = new MutationObserver(window.smokeCountMoves);
+      window.smokeDirectoryWatch.observe(document.getElementById("app"), { subtree: true, childList: true });
+    });
+    await page.locator("#app .wiki-home .page-view h1", { hasText: "Spaces" }).waitFor({ timeout });
+    const moves = await page.evaluate(() => {
+      window.smokeCountMoves(window.smokeDirectoryWatch.takeRecords());
+      window.smokeDirectoryWatch.disconnect();
+      return window.smokeDirectoryMoves;
+    });
+    assert.equal(moves, 0, "the directory's element was moved while the front page loaded");
+    await card.click();
     await page.locator(`#app .sidebar-space[href='${at(href)}']`).waitFor({ timeout });
   };
   // The spaces the sidebar's menu offers to switch to.
