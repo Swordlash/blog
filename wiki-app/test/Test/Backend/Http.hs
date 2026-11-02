@@ -29,6 +29,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Links (searchUrl)
 import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (StoredVault (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
@@ -40,6 +41,7 @@ import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..))
 import Wiki.Core.Draft (Draft (..))
@@ -373,6 +375,24 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (searchPages (searchQuery "hello")) `shouldReturn` []
     length <$> readIORef asked `shouldReturn` asked' + 4
     (\c -> (Map.null c.pageAt, Map.null c.pages, c.searches)) <$> cacheOf env `shouldReturn` (True, True, [])
+
+  it "caches the starred pages as page content, and keeps the list when a star is refused" $ do
+    (env, asked) <- backend $ \r ->
+      if methodOf r == "GET" then ok ([] :: [StarredPage]) else status 404 "{\"error\":\"NotFound\"}"
+    runHttpWiki env starred `shouldReturn` Right []
+    -- A star refused for one page leaves the list as it was read.
+    runHttpWiki env (setStarred (PageId "gone") True) `shouldReturn` Left NotFound
+    runHttpWiki env (atOnce starred) `shouldReturn` Just (Right [])
+    -- A page saved anywhere, and the route left, drop the list: its pages'
+    -- titles and places may have changed.
+    read' <- cacheOf env
+    (afterEvent hello.id (PageChanged demoNow) read').stars `shouldBe` Nothing
+    runHttpWiki env endPreload
+    runHttpWiki env (atOnce starred) `shouldReturn` Nothing
+    sofar <- length <$> readIORef asked
+    runHttpWiki env starred `shouldReturn` Right []
+    runHttpWiki env starred `shouldReturn` Right []
+    length <$> readIORef asked `shouldReturn` sofar + 2
 
   it "lets everything go after a write" $ do
     (env, _) <- backend answering

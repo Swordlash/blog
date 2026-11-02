@@ -28,7 +28,8 @@
 -- Page content is cached only until the reader first goes to another
 -- route (WP5.14 of docs/PLAN.md). Page content is the pages, the lists of
 -- a space's pages, the details of a blog's posts, the version lists, the
--- searches and the directory's page counts ('forgetPageContent'). Until
+-- searches, the directory's page counts and the starred pages
+-- ('forgetPageContent'). Until
 -- then, the cache holds what the server prerendered the page with, and
 -- the program's first render matches that page. When the route changes,
 -- the backend drops the page content ('Wiki.App.Backend.endPreload') and
@@ -464,12 +465,13 @@ afterComment pid outcome c = case outcome of
 -- to the page's comments is applied to its threads ('afterComment'). A
 -- save of the page, by anyone and in any tab, removes every cached page,
 -- and the other entries a save changes: the lists of pages (they show
--- titles), the searches (they match the text) and the version lists. The
+-- titles), the searches (they match the text), the version lists and the
+-- starred pages (they show titles too). The
 -- session, the spaces, the drafts (someone else's save does not change
 -- this user's draft) and the threads stay.
 afterEvent :: PageId -> PageEvent -> Cache -> Cache
 afterEvent pid = \case
-  PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty}
+  PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty, stars = Nothing}
   event -> afterComment pid (Right event)
 
 -- | The cache without a page's threads: they have changed, or may have.
@@ -477,8 +479,8 @@ forgetThreads :: PageId -> Cache -> Cache
 forgetThreads pid c = c {threads = Map.delete pid c.threads}
 
 -- | The cache without page content: the pages, the lists of a space's
--- pages, the details of a blog's posts, the version lists, the searches
--- and the directory's page counts. These change whenever anyone saves,
+-- pages, the details of a blog's posts, the version lists, the searches,
+-- the directory's page counts and the starred pages. These change whenever anyone saves,
 -- creates, moves or deletes a page. The backend drops them when the
 -- reader first goes to another route, and caches them no more after that
 -- ('Wiki.App.Backend.endPreload').
@@ -492,6 +494,7 @@ forgetPageContent c =
     , searches = []
     , homeDocument = Nothing
     , pageCounts = Nothing
+    , stars = Nothing
     }
 
 -- | The cache after a write that changed the wiki: nothing in it can be

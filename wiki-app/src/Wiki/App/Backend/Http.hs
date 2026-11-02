@@ -620,15 +620,20 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   setNotificationSettings change = send (endpoints.notifications.setSettings change) <* modifyCache (\c -> c {watches = mempty})
   unsubscribe token = send_ (endpoints.unsubscribe token)
 
--- | Stars, over the API's @stars…@ endpoints. The list is cached, so that
--- a page the server prerendered with its star button is also the
--- program's first render, and the header's list opens at once. Starring
--- changes only the list, so the response takes its place in the cache.
+-- | Stars, over the API's @stars…@ endpoints. The list holds pages'
+-- titles and places, which change when anyone renames, moves or deletes a
+-- page, so it is cached as page content is ('pageContent'): while the page
+-- the server prerendered is shown, so that the page's star button is the
+-- program's first render, and fetched on every read after that, so that
+-- the header's list shows the pages as they are now. Starring changes only
+-- the list, so a successful answer takes the list's place in the cache. A
+-- refusal is about the one page asked for, not the list, and leaves the
+-- cache as it was.
 instance (MonadIO m) => MonadStars (HttpWiki m) where
-  starred = cached (\c -> c.stars) endpoints.stars.list withStars
+  starred = pageContent (\c -> c.stars) endpoints.stars.list withStars
   setStarred p wanted = do
     result <- send (endpoints.stars.setPage p Starring {starred = wanted})
-    when (kept result) (modifyCache (withStars result))
+    when (isRight result) (modifyCache (withStars result))
     pure result
 
 -- | The tab's live channel: one per backend, made with it, and opened when
