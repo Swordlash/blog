@@ -24,8 +24,8 @@ import Wiki.App.Route (Route (..))
 -- Selecting text as a reader does: test/jsbits/test-select.js.
 $( browserJS
      ["jsbits/test-select.js"]
-     [ ("js_select", "wiki_test_select", Unsafe, [t|JSText -> JSText -> JSText -> IO Bool|])
-     , ("js_unselect", "wiki_test_unselect", Unsafe, [t|JSText -> IO ()|])
+     [ ("js_select", "wiki_test_select", Safe, [t|JSText -> JSText -> JSText -> IO Bool|])
+     , ("js_unselect", "wiki_test_unselect", Safe, [t|JSText -> IO ()|])
      ]
  )
 

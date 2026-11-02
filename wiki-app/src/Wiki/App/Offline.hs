@@ -27,25 +27,33 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, inBrowser)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.Query.Event.Window qualified as Window
 import Halogen.Subscription (Emitter)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude
+import Protolude hiding (wait)
 import Web.Event.Event (EventType (..))
 
 -- Installing waits for the reader's answer to the browser's question, and
 -- deleting the stored pages waits for the browser's caches, so those two
--- are safe imports, which wait for their promises; the rest return at once.
+-- return promises, which the wrappers below the splice wait for; the rest
+-- return at once.
 $( browserJS
      ["jsbits/offline.js"]
-     [ ("js_offline_copy", "wiki_offline_copy", Unsafe, [t|IO JSText|])
-     , ("js_browser_online", "wiki_browser_online", Unsafe, [t|IO Bool|])
-     , ("js_install_available", "wiki_install_available", Unsafe, [t|IO Bool|])
-     , ("js_install", "wiki_install", Safe, [t|IO Bool|])
-     , ("js_forget_reads", "wiki_forget_reads", Safe, [t|IO ()|])
+     [ ("js_offline_copy", "wiki_offline_copy", Safe, [t|IO JSText|])
+     , ("js_browser_online", "wiki_browser_online", Safe, [t|IO Bool|])
+     , ("js_install_available", "wiki_install_available", Safe, [t|IO Bool|])
+     , ("js_installPromise", "wiki_install", Safe, [t|IO (Promise Bool)|])
+     , ("js_forget_readsPromise", "wiki_forget_reads", Safe, [t|IO (Promise ())|])
      ]
  )
+
+js_install :: IO Bool
+js_install = if inBrowser then wait =<< js_installPromise else pure inert
+
+js_forget_reads :: IO ()
+js_forget_reads = if inBrowser then wait =<< js_forget_readsPromise else pure inert
 
 -- | When the page was stored, if the service worker served it from its
 -- stored copy because there was no network: the time it put in the page's
@@ -72,8 +80,8 @@ installAvailable = liftIO js_install_available
 -- off its loop ('lift' in 'Halogen.HalogenM', not 'Halogen.liftEffect').
 install :: (MonadIO m) => m Bool
 install =
-  -- On wasm a safe import's result is a thunk that waits for the promise
-  -- only when forced.
+  -- The binding waits for the JavaScript promise ('wait'); 'evaluate'
+  -- forces the answer here, on this thread.
   liftIO (evaluate =<< js_install)
 
 -- | An event whenever the browser's offer arrives or goes away

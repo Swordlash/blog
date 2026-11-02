@@ -13,9 +13,10 @@ import Data.Aeson (Value (..), decodeStrict)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, start)
 import Test.Browser.Text (editorText, markdown, setMarkdown)
 import Test.Hspec.Halogen
@@ -27,20 +28,23 @@ import Wiki.App.Route (Route (..))
 
 $( browserJS
      ["jsbits/test-live.js", "jsbits/test-style.js", "jsbits/test-files.js"]
-     [ ("js_live_start", "wiki_test_live_start", Unsafe, [t|IO ()|])
-     , ("js_live_stop", "wiki_test_live_stop", Unsafe, [t|IO ()|])
-     , ("js_live_hello", "wiki_test_live_hello", Unsafe, [t|IO JSText|])
-     , ("js_live_heard", "wiki_test_live_heard", Unsafe, [t|IO JSText|])
-     , ("js_live_heard_all", "wiki_test_live_heard_all", Unsafe, [t|IO JSText|])
-     , ("js_live_send", "wiki_test_live_send", Unsafe, [t|JSText -> JSText -> Int -> IO ()|])
-     , ("js_live_close", "wiki_test_live_close", Unsafe, [t|IO ()|])
-     , ("js_live_cursor", "wiki_test_live_cursor", Unsafe, [t|Int -> IO ()|])
-     , ("js_history_back", "wiki_test_history_back", Unsafe, [t|IO ()|])
-     , ("js_scrolled", "wiki_test_live_scrolled", Unsafe, [t|JSText -> IO Double|])
-     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
-     , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
+     [ ("js_live_start", "wiki_test_live_start", Safe, [t|IO ()|])
+     , ("js_live_stop", "wiki_test_live_stop", Safe, [t|IO ()|])
+     , ("js_live_hello", "wiki_test_live_hello", Safe, [t|IO JSText|])
+     , ("js_live_heard", "wiki_test_live_heard", Safe, [t|IO JSText|])
+     , ("js_live_heard_all", "wiki_test_live_heard_all", Safe, [t|IO JSText|])
+     , ("js_live_send", "wiki_test_live_send", Safe, [t|JSText -> JSText -> Int -> IO ()|])
+     , ("js_live_close", "wiki_test_live_close", Safe, [t|IO ()|])
+     , ("js_live_cursor", "wiki_test_live_cursor", Safe, [t|Int -> IO ()|])
+     , ("js_history_back", "wiki_test_history_back", Safe, [t|IO ()|])
+     , ("js_scrolled", "wiki_test_live_scrolled", Safe, [t|JSText -> IO Double|])
+     , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      ]
  )
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do

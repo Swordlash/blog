@@ -47,12 +47,12 @@ import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
 -- 'renderMermaid'.
 $( browserJS
      ["jsbits/islands.js"]
-     [ ("js_render_math", "wiki_islands_render_math", Unsafe, [t|Element -> JSText -> Bool -> JSText -> IO ()|])
-     , ("js_check_macros", "wiki_islands_check_macros", Unsafe, [t|JSText -> JSText -> IO JSText|])
-     , ("js_render_mermaid", "wiki_islands_render_mermaid", Unsafe, [t|Element -> JSText -> IO ()|])
-     , ("js_render_tikz", "wiki_islands_render_tikz", Unsafe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
-     , ("js_highlight", "wiki_islands_highlight", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
-     , ("js_set_text", "wiki_islands_set_text", Unsafe, [t|Element -> JSText -> IO ()|])
+     [ ("js_render_math", "wiki_islands_render_math", Safe, [t|Element -> JSText -> Bool -> JSText -> IO ()|])
+     , ("js_check_macros", "wiki_islands_check_macros", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_render_tikz", "wiki_islands_render_tikz", Safe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
+     , ("js_highlight", "wiki_islands_highlight", Safe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_set_text", "wiki_islands_set_text", Safe, [t|Element -> JSText -> IO ()|])
      ]
  )
 

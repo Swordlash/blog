@@ -6,9 +6,10 @@ module Test.Browser.HomePage (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.IORef (readIORef)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged, startKept, startWith)
 import Test.Browser.Text (clearBody, editorText, markdown, setMarkdown)
 import Test.Hspec.Halogen
@@ -25,8 +26,11 @@ import Wiki.Core.Permission qualified as Permission
 
 $( browserJS
      ["jsbits/test-files.js"]
-     [("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])]
+     [("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])]
  )
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do

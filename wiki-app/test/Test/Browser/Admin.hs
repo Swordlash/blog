@@ -37,11 +37,11 @@ import Wiki.Core.User (Login (..), User (..))
 
 $( browserJS
      ["jsbits/test-location.js", "jsbits/test-focus.js"]
-     [ ("js_location_hash", "wiki_test_location_hash", Unsafe, [t|IO JSText|])
-     , ("js_focused_matches", "wiki_test_focused_matches", Unsafe, [t|JSText -> IO Bool|])
-     , ("js_go_to_fragment", "wiki_test_go_to_fragment", Unsafe, [t|JSText -> IO ()|])
-     , ("js_click_itself", "wiki_test_click_itself", Unsafe, [t|JSText -> IO ()|])
-     , ("js_drag_out", "wiki_test_drag_out", Unsafe, [t|JSText -> JSText -> IO ()|])
+     [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
+     , ("js_focused_matches", "wiki_test_focused_matches", Safe, [t|JSText -> IO Bool|])
+     , ("js_go_to_fragment", "wiki_test_go_to_fragment", Safe, [t|JSText -> IO ()|])
+     , ("js_click_itself", "wiki_test_click_itself", Safe, [t|JSText -> IO ()|])
+     , ("js_drag_out", "wiki_test_drag_out", Safe, [t|JSText -> JSText -> IO ()|])
      ]
  )
 

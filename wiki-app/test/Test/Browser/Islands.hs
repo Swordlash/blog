@@ -18,8 +18,8 @@ import Wiki.App.Islands qualified as Islands
 
 $( browserJS
      ["jsbits/test-resources.js"]
-     [ ("js_fetched", "wiki_test_fetched", Unsafe, [t|JSText -> IO Int|])
-     , ("js_font_loaded", "wiki_test_font_loaded", Unsafe, [t|JSText -> IO Bool|])
+     [ ("js_fetched", "wiki_test_fetched", Safe, [t|JSText -> IO Int|])
+     , ("js_font_loaded", "wiki_test_font_loaded", Safe, [t|JSText -> IO Bool|])
      ]
  )
 

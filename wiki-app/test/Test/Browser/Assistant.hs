@@ -49,13 +49,13 @@ import Wiki.Core.Id (UserId (..))
 
 $( browserJS
      ["jsbits/test-assistant.js"]
-     [ ("js_script", "wiki_test_assistant_script", Unsafe, [t|JSText -> IO ()|])
-     , ("js_forget", "wiki_test_assistant_forget", Unsafe, [t|IO ()|])
-     , ("js_requests", "wiki_test_assistant_requests", Unsafe, [t|IO JSText|])
-     , ("js_answers", "wiki_test_assistant_answers", Unsafe, [t|IO JSText|])
-     , ("js_select", "wiki_test_editor_select", Unsafe, [t|Int -> Int -> IO Bool|])
-     , ("js_choose", "wiki_test_choose", Unsafe, [t|JSText -> JSText -> IO Bool|])
-     , ("js_lists", "wiki_test_assistant_lists", Unsafe, [t|JSText -> IO Bool|])
+     [ ("js_script", "wiki_test_assistant_script", Safe, [t|JSText -> IO ()|])
+     , ("js_forget", "wiki_test_assistant_forget", Safe, [t|IO ()|])
+     , ("js_requests", "wiki_test_assistant_requests", Safe, [t|IO JSText|])
+     , ("js_answers", "wiki_test_assistant_answers", Safe, [t|IO JSText|])
+     , ("js_select", "wiki_test_editor_select", Safe, [t|Int -> Int -> IO Bool|])
+     , ("js_choose", "wiki_test_choose", Safe, [t|JSText -> JSText -> IO Bool|])
+     , ("js_lists", "wiki_test_assistant_lists", Safe, [t|JSText -> IO Bool|])
      ]
  )
 

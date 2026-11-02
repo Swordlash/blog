@@ -26,9 +26,10 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -52,34 +53,55 @@ import Wiki.Core.User (Standing (..))
 
 $( browserJS
      ["jsbits/test-passkeys.js"]
-     [ ("js_install", "wiki_test_passkeys_install", Unsafe, [t|Bool -> Bool -> IO ()|])
-     , ("js_uninstall", "wiki_test_passkeys_uninstall", Unsafe, [t|IO ()|])
-     , ("js_touches", "wiki_test_passkeys_touches", Unsafe, [t|IO Int|])
-     , ("js_vault_server", "wiki_test_vault_server_start", Unsafe, [t|IO ()|])
-     , ("js_vault_state", "wiki_test_vault_server_state", Unsafe, [t|IO JSText|])
-     , ("js_leave", "wiki_test_device_leave", Safe, [t|JSText -> IO ()|])
-     , ("js_new_device", "wiki_test_device_new", Safe, [t|IO ()|])
-     , ("js_return", "wiki_test_device_return", Safe, [t|JSText -> IO ()|])
-     , ("js_reload", "wiki_test_device_reload", Unsafe, [t|IO ()|])
-     , ("js_stores_key", "wiki_test_device_stores_key", Safe, [t|JSText -> IO Bool|])
-     , ("js_record", "wiki_test_device_record", Safe, [t|JSText -> IO JSText|])
-     , ("js_scripted", "wiki_test_passkeys_scripted", Unsafe, [t|IO ()|])
-     , ("js_cancel_after", "wiki_test_passkeys_cancel_after", Unsafe, [t|Int -> IO ()|])
-     , ("js_cancel_next", "wiki_test_passkeys_cancel_next", Unsafe, [t|IO ()|])
-     , ("js_stash", "wiki_test_vault_server_stash", Unsafe, [t|IO ()|])
-     , ("js_unstash", "wiki_test_vault_server_unstash", Unsafe, [t|IO ()|])
-     , ("js_add_unwrapped", "wiki_test_vault_server_add_unwrapped", Unsafe, [t|IO ()|])
-     , ("js_save_page_keys", "wiki_test_page_keys_save", Unsafe, [t|IO ()|])
-     , ("js_restore_page_keys", "wiki_test_page_keys_restore", Unsafe, [t|IO ()|])
-     , ("js_other_tab_drops", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO ()|])
-     , ("js_exportable", "wiki_test_exportable_keys_left", Safe, [t|IO Int|])
-     , ("js_existing", "wiki_test_passkeys_existing", Unsafe, [t|IO JSText|])
-     , ("js_offered", "wiki_test_passkeys_offered", Unsafe, [t|IO Bool|])
-     , ("js_pick", "wiki_test_passkeys_pick", Unsafe, [t|IO ()|])
-     , ("js_offers", "wiki_test_passkeys_offers", Unsafe, [t|IO Int|])
-     , ("js_insecure", "wiki_test_passkeys_insecure", Unsafe, [t|IO ()|])
+     [ ("js_install", "wiki_test_passkeys_install", Safe, [t|Bool -> Bool -> IO ()|])
+     , ("js_uninstall", "wiki_test_passkeys_uninstall", Safe, [t|IO ()|])
+     , ("js_touches", "wiki_test_passkeys_touches", Safe, [t|IO Int|])
+     , ("js_vault_server", "wiki_test_vault_server_start", Safe, [t|IO ()|])
+     , ("js_vault_state", "wiki_test_vault_server_state", Safe, [t|IO JSText|])
+     , ("js_leavePromise", "wiki_test_device_leave", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_new_devicePromise", "wiki_test_device_new", Safe, [t|IO (Promise ())|])
+     , ("js_returnPromise", "wiki_test_device_return", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_reload", "wiki_test_device_reload", Safe, [t|IO ()|])
+     , ("js_stores_keyPromise", "wiki_test_device_stores_key", Safe, [t|JSText -> IO (Promise Bool)|])
+     , ("js_recordPromise", "wiki_test_device_record", Safe, [t|JSText -> IO (Promise JSText)|])
+     , ("js_scripted", "wiki_test_passkeys_scripted", Safe, [t|IO ()|])
+     , ("js_cancel_after", "wiki_test_passkeys_cancel_after", Safe, [t|Int -> IO ()|])
+     , ("js_cancel_next", "wiki_test_passkeys_cancel_next", Safe, [t|IO ()|])
+     , ("js_stash", "wiki_test_vault_server_stash", Safe, [t|IO ()|])
+     , ("js_unstash", "wiki_test_vault_server_unstash", Safe, [t|IO ()|])
+     , ("js_add_unwrapped", "wiki_test_vault_server_add_unwrapped", Safe, [t|IO ()|])
+     , ("js_save_page_keys", "wiki_test_page_keys_save", Safe, [t|IO ()|])
+     , ("js_restore_page_keys", "wiki_test_page_keys_restore", Safe, [t|IO ()|])
+     , ("js_other_tab_dropsPromise", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_exportablePromise", "wiki_test_exportable_keys_left", Safe, [t|IO (Promise Int)|])
+     , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
+     , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
+     , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
+     , ("js_offers", "wiki_test_passkeys_offers", Safe, [t|IO Int|])
+     , ("js_insecure", "wiki_test_passkeys_insecure", Safe, [t|IO ()|])
      ]
  )
+
+js_leave :: JSText -> IO ()
+js_leave a1 = if inBrowser then wait =<< js_leavePromise a1 else pure inert
+
+js_new_device :: IO ()
+js_new_device = if inBrowser then wait =<< js_new_devicePromise else pure inert
+
+js_return :: JSText -> IO ()
+js_return a1 = if inBrowser then wait =<< js_returnPromise a1 else pure inert
+
+js_stores_key :: JSText -> IO Bool
+js_stores_key a1 = if inBrowser then wait =<< js_stores_keyPromise a1 else pure inert
+
+js_record :: JSText -> IO JSText
+js_record a1 = if inBrowser then wait =<< js_recordPromise a1 else pure inert
+
+js_other_tab_drops :: JSText -> IO ()
+js_other_tab_drops a1 = if inBrowser then wait =<< js_other_tab_dropsPromise a1 else pure inert
+
+js_exportable :: IO Int
+js_exportable = if inBrowser then wait =<< js_exportablePromise else pure inert
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 

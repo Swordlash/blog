@@ -18,9 +18,10 @@ import Data.ByteString.Base64 qualified as Base64
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
-import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Http (Asked (..), answerWith, asked, offline, serveDemo, serverStarts, serverStops, startServerWith)
 import Test.Browser.Mount (slugs)
 import Test.Hspec.Halogen
@@ -40,9 +41,12 @@ import Wiki.Core.Space qualified as S
 
 $( browserJS
      ["jsbits/test-files.js"]
-     [ ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
+     [ ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      ]
  )
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
 
 type Constraints m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m, MonadUnliftIO m)
 

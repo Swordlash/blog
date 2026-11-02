@@ -59,11 +59,11 @@ import Wiki.Core.Space (Space (id, name))
 -- it, and the event does not change meanwhile, so that binding is pure.
 $( browserJS
      ["jsbits/search.js"]
-     [ ("js_search_key", "wiki_search_key", Unsafe, [t|Event -> JSText|])
-     , ("js_search_focus_leaves", "wiki_search_focus_leaves", Unsafe, [t|Element -> Event -> IO Bool|])
-     , ("js_search_blur", "wiki_search_blur", Unsafe, [t|Element -> IO ()|])
-     , ("js_search_bind_shortcut", "wiki_search_bind_shortcut", Unsafe, [t|Element -> IO ()|])
-     , ("js_search_unbind_shortcut", "wiki_search_unbind_shortcut", Unsafe, [t|Element -> IO ()|])
+     [ ("js_search_key", "wiki_search_key", Safe, [t|Event -> JSText|])
+     , ("js_search_focus_leaves", "wiki_search_focus_leaves", Safe, [t|Element -> Event -> IO Bool|])
+     , ("js_search_blur", "wiki_search_blur", Safe, [t|Element -> IO ()|])
+     , ("js_search_bind_shortcut", "wiki_search_bind_shortcut", Safe, [t|Element -> IO ()|])
+     , ("js_search_unbind_shortcut", "wiki_search_unbind_shortcut", Safe, [t|Element -> IO ()|])
      ]
  )
 

@@ -71,9 +71,10 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime, getCurrentTime)
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
-import Protolude
+import Protolude hiding (wait)
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
@@ -104,12 +105,15 @@ import Wiki.Core.User (User (..))
 -- nothing: there the tests check what 'openMemWiki' found instead.
 $( browserJS
      ["jsbits/object-url.js", "jsbits/console.js", "jsbits/databases.js"]
-     [ ("js_object_url", "wiki_object_url", Unsafe, [t|JSText -> JSText -> IO JSText|])
-     , ("js_revoke_object_url", "wiki_revoke_object_url", Unsafe, [t|JSText -> IO ()|])
-     , ("js_warn", "wiki_warn", Unsafe, [t|JSText -> IO ()|])
-     , ("js_database_exists", "wiki_database_exists", Safe, [t|JSText -> IO Bool|])
+     [ ("js_object_url", "wiki_object_url", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_revoke_object_url", "wiki_revoke_object_url", Safe, [t|JSText -> IO ()|])
+     , ("js_warn", "wiki_warn", Safe, [t|JSText -> IO ()|])
+     , ("js_database_existsPromise", "wiki_database_exists", Safe, [t|JSText -> IO (Promise Bool)|])
      ]
  )
+
+js_database_exists :: JSText -> IO Bool
+js_database_exists a1 = if inBrowser then wait =<< js_database_existsPromise a1 else pure inert
 
 -- | The in-memory backend over a base monad.
 newtype MemWiki m a = MemWiki (ReaderT MemEnv m a)

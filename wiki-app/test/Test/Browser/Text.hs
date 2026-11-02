@@ -25,14 +25,14 @@ import Test.Hspec.Halogen
 
 $( browserJS
      ["jsbits/test-editor.js"]
-     [ ("js_text", "wiki_test_editor_text", Unsafe, [t|IO JSText|])
-     , ("js_selection_start", "wiki_test_editor_selection_start", Unsafe, [t|IO Int|])
-     , ("js_selection_end", "wiki_test_editor_selection_end", Unsafe, [t|IO Int|])
-     , ("js_jump", "wiki_test_editor_jump", Unsafe, [t|IO JSText|])
-     , ("js_completing", "wiki_test_editor_completing", Unsafe, [t|IO JSText|])
-     , ("js_set", "wiki_test_editor_set", Unsafe, [t|JSText -> IO ()|])
-     , ("js_clear_body", "wiki_test_editor_clear_body", Unsafe, [t|IO ()|])
-     , ("js_math", "wiki_test_editor_math", Unsafe, [t|IO JSText|])
+     [ ("js_text", "wiki_test_editor_text", Safe, [t|IO JSText|])
+     , ("js_selection_start", "wiki_test_editor_selection_start", Safe, [t|IO Int|])
+     , ("js_selection_end", "wiki_test_editor_selection_end", Safe, [t|IO Int|])
+     , ("js_jump", "wiki_test_editor_jump", Safe, [t|IO JSText|])
+     , ("js_completing", "wiki_test_editor_completing", Safe, [t|IO JSText|])
+     , ("js_set", "wiki_test_editor_set", Safe, [t|JSText -> IO ()|])
+     , ("js_clear_body", "wiki_test_editor_clear_body", Safe, [t|IO ()|])
+     , ("js_math", "wiki_test_editor_math", Safe, [t|IO JSText|])
      ]
  )
 
