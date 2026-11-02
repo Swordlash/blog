@@ -52,7 +52,7 @@
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
 import { acceptCompletion, autocompletion, closeCompletion, completionKeymap, completionStatus, insertCompletionText, pickedCompletion } from "@codemirror/autocomplete";
-import { EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
 import { Language, LanguageSupport, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from "@codemirror/language";
@@ -607,7 +607,16 @@ const titleLine = [
     const first = tr.newDoc.line(1).text;
     if (first.startsWith(titleMark)) return tr;
     const marks = /^#*[ \t]*/.exec(first)[0];
-    return [tr, { changes: { from: 0, to: marks.length, insert: titleMark }, sequential: true }];
+    // The selection is put right in the same step: the filter that keeps it
+    // out of the "# " has already seen this transaction, without the "# ".
+    const repair = ChangeSet.of([{ from: 0, to: marks.length, insert: titleMark }], tr.newDoc.length);
+    const after = (at) => Math.max(at, titleMark.length);
+    const mapped = tr.newSelection.map(repair);
+    const selection = EditorSelection.create(
+      mapped.ranges.map((r) => EditorSelection.range(after(r.anchor), after(r.head))),
+      mapped.mainIndex,
+    );
+    return [tr, { changes: repair, selection, sequential: true }];
   }),
   EditorState.transactionFilter.of((tr) => {
     const doc = tr.newDoc;

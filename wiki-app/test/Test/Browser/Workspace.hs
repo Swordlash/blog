@@ -119,6 +119,12 @@ spec m = do
     press "x"
     markdown ui `shouldReturn` "# xHello, world again\n\nText."
     press "Backspace"
+    -- A word deleted back over the "# " leaves it, and the cursor after it.
+    unsafeIOToPageM (js_live_cursor 2)
+    press "Control+Backspace"
+    press "y"
+    markdown ui `shouldReturn` "# yHello, world again\n\nText."
+    press "Backspace"
     press "Control+a"
     press "Delete"
     markdown ui `shouldReturn` "# "

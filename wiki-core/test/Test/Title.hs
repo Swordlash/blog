@@ -55,3 +55,7 @@ spec = describe "The title line" $ do
       titleLine (retitled "Release #" "# Old") `shouldBe` Just "Release #"
       titleLine (withTitleLine "#" "") `shouldBe` Just "#"
       titleLine (withTitleLine "C#" "") `shouldBe` Just "C#"
+    it "keeps the heading's attributes, which are not the title" $ do
+      titleLine "# Old {#stable .lead}\nText" `shouldBe` Just "Old"
+      retitled "New" "# Old {#stable .lead}\n\nText." `shouldBe` "# New {#stable .lead}\n\nText."
+      titleLine "# Braces {not attributes" `shouldBe` Just "Braces {not attributes"

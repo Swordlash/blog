@@ -199,7 +199,7 @@ titleLine :: Text -> Maybe Text
 titleLine body = case T.uncons firstLine of
   Just ('#', rest)
     | T.null rest -> Just ""
-    | Just (c, _) <- T.uncons rest, c == ' ' || c == '\t' -> Just (unclosed (T.strip rest))
+    | Just (c, _) <- T.uncons rest, c == ' ' || c == '\t' -> Just (unclosed (T.stripEnd (fst (withoutAttributes (T.strip rest)))))
   _ -> Nothing
   where
     firstLine = T.dropWhileEnd (== '\r') (T.takeWhile (/= '\n') body)
@@ -219,10 +219,24 @@ titleLine body = case T.uncons firstLine of
 -- writes, so that the title and the first line stay the same.
 retitled :: Text -> Text -> Text
 retitled title body = case titleLine trimmed of
-  Just _ -> headingOf title <> T.dropWhile (/= '\n') trimmed
+  Just _ -> headingOf title <> attributes <> T.dropWhile (/= '\n') trimmed
   Nothing -> withTitleLine title body
   where
     trimmed = withTitleLine title body
+    -- The heading's attributes (@{#id .class}@), kept: links to its id
+    -- go on working.
+    attributes = snd (withoutAttributes (T.strip (T.takeWhile (/= '\n') trimmed)))
+
+-- | A heading's text without the attributes at its end (@Old {#stable
+-- .lead}@), and those attributes with the space before them, or nothing.
+withoutAttributes :: Text -> (Text, Text)
+withoutAttributes t
+  | Just inner <- T.stripSuffix "}" t
+  , (before, block) <- T.breakOnEnd " {" inner
+  , not (T.null before)
+  , not (T.any (`elem` ['{', '}']) block) =
+      (T.dropEnd 2 before, " {" <> block <> "}")
+  | otherwise = (t, "")
 
 -- | The title line for a title: @# Title@, and a closing @#@ after a title
 -- that ends in a space and @#@ (@Release #@, or @#@ alone), which
