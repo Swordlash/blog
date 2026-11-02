@@ -98,7 +98,7 @@ spec = describe "Wiki.App.Route" $ do
       print route (Admin (Users (UserListing "ada lo" 3 OnlyAdministrators))) `shouldBe` "/admin/users/?q=ada%20lo&page=3&show=administrators"
       print route (Admin (Users (UserListing "" 1 OnlyDisabled))) `shouldBe` "/admin/users/?show=disabled"
       map (print route . Admin) adminSections
-        `shouldBe` ["/admin/overview/", "/admin/users/", "/admin/groups/", "/admin/permissions/", "/admin/server/", "/admin/backups/", "/admin/activity/"]
+        `shouldBe` ["/admin/overview/", "/admin/users/", "/admin/groups/", "/admin/permissions/", "/admin/server/", "/admin/editor/", "/admin/backups/", "/admin/activity/"]
       print route (NewPage (slugs ["docs"]) Nothing) `shouldBe` "/s/docs/new-page/"
       print route (NewPage (slugs ["team", "projects"]) (Just (slugs ["the-wiki"]))) `shouldBe` "/s/team/projects/new-page/the-wiki/"
       print route (Search Nothing Nothing True) `shouldBe` "/search/"

@@ -192,7 +192,8 @@ spec = describe "Markdown.Render" $ do
         "<p><span title=\"\">\\newcommand{\\a}{1}</span> <span title=\"\\newcommand{\\a}{1}\">x</span></p>"
           <> "<table><thead><tr><th><span title=\"\\newcommand{\\a}{1}\">\\def\\b{2}</span></th></tr></thead></table>"
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\a\\b</div>"
-          <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\renewcommand{\\a}{3}\n</div>"
+          -- A display formula of nothing but definitions shows nothing; its
+          -- definitions hold for the formulas after it.
           <> "<p>Last <span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">y</span>"
           <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"z\">1</a></sup></p>"
           <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">z</span>"
