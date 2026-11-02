@@ -40,6 +40,7 @@ import Protolude
 import Test.QuickCheck
 import Wiki.Core.Attachment
 import Wiki.Core.Id
+import Wiki.Core.Markdown.Box (numberings)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page
 import Wiki.Core.Permission
@@ -124,7 +125,8 @@ genSpace = do
   icon <- oneof [pure Nothing, Just <$> genIcon]
   description <- oneof [pure "", genText]
   blog <- arbitrary
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
+  boxNumbering <- elements numberings
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 genIcon :: Gen Icon
 genIcon =
@@ -210,7 +212,7 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False}
+    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

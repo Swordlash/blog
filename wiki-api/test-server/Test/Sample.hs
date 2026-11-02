@@ -87,7 +87,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
@@ -120,6 +120,7 @@ space =
     , icon = Just (IconEmoji "📘")
     , description = "How to write here."
     , blog = False
+    , boxNumbering = InPage
     }
 
 attachment :: Attachment

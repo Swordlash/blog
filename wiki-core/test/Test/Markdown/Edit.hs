@@ -100,6 +100,18 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
     Quote `turns` "a‸" `into` "> a‸"
     Quote `turns` "«> a\nb»" `into` "«> a\n> b»"
 
+  describe "Box" $ do
+    it "puts an empty box after the cursor's line, its text selected" $
+      run (Box "TIP") "pa‸ra\nnext" `shouldBe` "para\n\n> [!TIP]\n> «Text»\n\nnext"
+    it "makes the lines touched a box, quoting those not quoted yet" $ do
+      run (Box "EXERCISE") "«a\n\nb»" `shouldBe` "«> [!EXERCISE]\n> a\n>\n> b»"
+      run (Box "NOTE") "«> a\nb»" `shouldBe` "«> [!NOTE]\n> a\n> b»"
+    it "keeps a line after the box out of it" $
+      run (Box "TIP") "«a»\nb" `shouldBe` "«> [!TIP]\n> a»\n\nb"
+    it "changes the kind of a box whose marker it is on, keeping its title and star" $ do
+      run (Box "WARNING") "> [!TIP] Ti‸tle\n> a" `shouldBe` "> [!WARNING] Ti‸tle\n> a"
+      run (Box "NOTE") "«>[!fun-fact*]\n> a»" `shouldBe` "«>[!NOTE*]\n> a»"
+
   describe "CodeBlock" $ do
     it "puts an empty block in with the cursor where the language goes" $
       run CodeBlock "‸" `shouldBe` "```‸\n\n```"

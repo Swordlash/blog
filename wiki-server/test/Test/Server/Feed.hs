@@ -31,7 +31,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..), SpaceProfile (..), profileOf)
+import Wiki.Core.Space (BoxNumbering (..), Space (..), SpaceProfile (..), profileOf)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Feed
 
@@ -197,6 +197,7 @@ html = describe "a post's HTML" $
             , icon = Nothing
             , description = ""
             , blog = True
+            , boxNumbering = InPage
             }
         pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False}
         tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
@@ -287,7 +288,7 @@ served backing = describe "served" $ do
       ((.status) <$> getUrl r (r.public <> path)) `shouldReturn` 404
 
 asBlog :: SpaceProfile -> SpaceProfile
-asBlog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog = True}
+asBlog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog = True, boxNumbering = InPage}
 
 --------------------------------------------------------------------------------
 -- Heads

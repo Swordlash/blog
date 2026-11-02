@@ -92,7 +92,7 @@ reading backing = describe "reading and writing them" $ do
     page <- getUrl r (r.public <> "/s/docs/p/markdown-guide/")
     page.status `shouldBe` 200
     decodeUtf8 (BSL.toStrict page.body)
-      `shouldSatisfy` T.isInfixOf "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\"><p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it</p>"
+      `shouldSatisfy` T.isInfixOf "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\"><p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it 1</p>"
 
   it "answers the operator and an administrator's session, and nobody else" $ withAdminSession backing identity $ \r admin -> do
     (getUrlWith r (onPublic r links.admin.server) [admin] >>= jsonAs 200)

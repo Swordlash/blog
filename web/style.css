@@ -2570,6 +2570,25 @@ body:has(.slides-view) {
   color: var(--muted);
 }
 
+/* The kinds of box, and for an administrator the link to define another,
+   set apart below them. */
+.box-menu {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.toolbar-menu .box-menu-new {
+  display: block;
+  margin-top: 0.25rem;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  text-decoration: none;
+}
+
+.toolbar-menu .box-menu-new:hover {
+  background: var(--surface);
+}
+
 /* The palette: a row of text colours, a row of highlights. */
 .colour-menu {
   gap: 0.25rem;

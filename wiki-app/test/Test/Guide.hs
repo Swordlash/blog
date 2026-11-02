@@ -2,9 +2,10 @@
 -- the server's tour, and the same pages in the demo's Docs, with the
 -- demo's own tour. Every page parses, every link between them leads to a
 -- page of the guide, and the Markdown guide shows the boxes
--- ("Wiki.Core.Markdown.Box"): the five kinds, one of its own and a title.
--- The guide's source is wrapped, and its pages are not: each paragraph is
--- one line ('unwrapped'), since a line break in a page is one on the page.
+-- ("Wiki.Core.Markdown.Box"): the five kinds, one of its own, one without
+-- a number and a title with math. The guide's source is wrapped, and its
+-- pages are not: each paragraph is one line ('unwrapped'), since a line
+-- break in a page is one on the page.
 module Test.Guide (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -18,7 +19,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Guide
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
-import Wiki.Core.Markdown.Ast (Block (..), Footnote (..), Inline (Emph, Link, SoftBreak, Strikeout, Strong), ListItem (..), parseMarkdown)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Link, SoftBreak, Strikeout, Strong), ListItem (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -39,10 +40,15 @@ linkTargets body = map (T.takeWhile (/= ')')) (drop 1 (T.splitOn "](" body))
 
 -- | Every box of a document, nested ones too, with its kind and title.
 boxes :: [Block] -> [(AlertKind, Maybe Text)]
-boxes = concatMap $ \case
-  Alert kind title bs -> (kind, title) : boxes bs
-  BlockQuote bs -> boxes bs
-  Div _ bs -> boxes bs
+boxes = map (\(kind, title, _) -> (kind, title)) . boxHeads
+
+-- | Every box of a document, nested ones too, with its kind, its title and
+-- whether it is numbered.
+boxHeads :: [Block] -> [(AlertKind, Maybe Text, Bool)]
+boxHeads = concatMap $ \case
+  Alert kind box bs -> (kind, plainText <$> box.title, box.numbered) : boxHeads bs
+  BlockQuote bs -> boxHeads bs
+  Div _ bs -> boxHeads bs
   _ -> []
 
 -- | How many soft line breaks some blocks hold: lines of a paragraph, an
@@ -131,11 +137,13 @@ spec = describe "Wiki.App.Guide" $ do
       ((\p -> p.body) <$> titled demo t) `shouldBe` ((\p -> p.body) <$> titled guide t)
     (\s -> (guideProfile (maybe (panic "no tour") (\p -> p.id) tour)).description == s.description) <$> docs `shouldBe` Just True
 
-  it "shows the boxes in the Markdown guide: the five, a kind of its own and a title" $ do
-    let shown = either (const []) boxes . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")
+  it "shows the boxes in the Markdown guide: the five, a kind of its own, one without a number and a title with math" $ do
+    let parsed = either (const []) identity . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")
+        shown = boxes parsed
     for_ [Note, Tip, Important, Warning, Caution, Custom "exercise"] $ \k ->
       (k, k `elem` map fst shown) `shouldBe` (k, True)
-    shown `shouldSatisfy` elem (Custom "exercise", Just "Exercise 2")
+    shown `shouldSatisfy` elem (Custom "exercise", Just "The area of a circle, \\pi r^2")
+    boxHeads parsed `shouldSatisfy` elem (Note, Nothing, False)
 
   it "has the demo define the kind of box the Markdown guide shows" $ do
     (demoState demoNow).server.boxes `shouldBe` [exerciseBox]

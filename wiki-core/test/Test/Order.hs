@@ -14,7 +14,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order
 import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..), spaceTreeOrder, subspaceOrderOf, subspacesOf)
+import Wiki.Core.Space (BoxNumbering (..), Space (..), spaceTreeOrder, subspaceOrderOf, subspacesOf)
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -59,6 +59,7 @@ space i name parent made position subspaceOrder =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 titles :: [Page] -> [Text]

@@ -36,7 +36,7 @@ import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
 import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (VersionsQuery), latestVersions)
 
@@ -1307,10 +1307,10 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
 -- | A profile with these fields.
 -- | A profile with the blog's switch as given.
 asBlog :: Bool -> SpaceProfile -> SpaceProfile
-asBlog blog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog}
+asBlog blog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog, boxNumbering = p.boxNumbering}
 
 profile :: Text -> Maybe Icon -> Maybe PageId -> SpaceProfile
-profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False}
+profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False, boxNumbering = InPage}
 
 -- | A 1×1 PNG, as an icon's bytes.
 png :: ByteString
@@ -1562,7 +1562,7 @@ neverThrown = describe "errors" $ do
           , void <$> renameSpace s "X"
           , void <$> setSpacePublic s True
           , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
-          , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing, blog = False}
+          , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing, blog = False, boxNumbering = InPage}
           , void <$> uploadSpaceIcon s "image/png" png
           , void <$> moveSpace s Nothing
           , deleteSpace s

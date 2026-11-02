@@ -13,7 +13,7 @@ import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Math
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Space (..))
 
 space :: Text -> Maybe Text -> Text -> Space
 space i parent mathMacros =
@@ -32,6 +32,7 @@ space i parent mathMacros =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 -- | A tree: @maths@ defines two macros; @algebra@ under it defines one of

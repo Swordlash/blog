@@ -230,7 +230,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
@@ -1616,6 +1616,7 @@ createSpaceTx parent name = do
           , icon = Nothing
           , description = ""
           , blog = False
+          , boxNumbering = InPage
           }
   db (insertSpace space)
   for_ ctx.creator $ \u ->
@@ -1637,7 +1638,7 @@ createSpaceTx parent name = do
           , position = 0
           , template = False
           }
-      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} space
+      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} space
   author <- asks (\x -> x.author)
   db (insertPage home >> insertVersion home author >> updateSpace withHome)
   pure withHome
@@ -1684,7 +1685,7 @@ uploadSpaceIconTx sid mediaType size store = do
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
-  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
+  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
   db (updateSpace s')
   -- The icon is part of the profile; it has its own operation only
   -- because it carries bytes.
@@ -1769,6 +1770,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , icon = s.icon
       , description = s.description
       , blog = s.blog
+      , boxNumbering = s.boxNumbering
       }
 
 -- | Math macros as they are kept: as written, but for blank lines at the
@@ -1837,6 +1839,7 @@ respace parent slug position s =
     , icon = s.icon
     , description = s.description
     , blog = s.blog
+    , boxNumbering = s.boxNumbering
     }
 
 --------------------------------------------------------------------------------
@@ -2932,11 +2935,11 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- step, as PostgreSQL checks them.
           let spaces =
                 [ case sp.icon of
-                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog} sp
+                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog, boxNumbering = sp.boxNumbering} sp
                     _ -> sp
                 | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
                 ]
-          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog} sp | sp <- spaces]
+          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog, boxNumbering = sp.boxNumbering} sp | sp <- spaces]
           -- A grant on a space names the space, so the grants come after.
           insertGrants a.grants
           for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do

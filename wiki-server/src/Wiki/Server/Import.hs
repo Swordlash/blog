@@ -87,7 +87,7 @@ import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -325,6 +325,7 @@ importSpace blobs a discussions choices progress m
               , icon = Nothing
               , description = ""
               , blog = False
+              , boxNumbering = InPage
               }
           pure i
       let placed =
@@ -355,7 +356,7 @@ fillProfile blobs a m target progress =
             (own, _) -> pure own
           let description = if T.null theirs.description then m.archived.description else theirs.description
               homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
-              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog} theirs
+              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog, boxNumbering = theirs.boxNumbering} theirs
           when (filled /= theirs) (updateSpace filled)
       )
 

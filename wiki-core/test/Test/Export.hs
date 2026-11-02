@@ -28,7 +28,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
@@ -64,6 +64,7 @@ spaceOf i parent s =
     , icon = Nothing
     , description = ""
     , blog = False
+    , boxNumbering = InPage
     }
 
 pageOf :: Text -> Text -> Maybe Text -> Text -> Text -> Page

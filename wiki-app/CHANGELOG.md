@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Boxes are numbered (WP5.40): each kind on its own, as the space's settings
+say under "Numbers of boxes": within the page (`Tip 3`), after the page's
+number, its place under its parent (`Tip 2.3`), after the section's too
+(`Tip 2.1.3`, a section starting at each `##` heading), or not at all. A
+star after the kind, `> [!TIP*]`, makes a box without a number. A box's
+title follows its number (`Tip 3: Title`) and may hold math, `$…$` and
+`$$…$$`, emphasis and code. Comments number no boxes. The editor's toolbar
+has a **Box** menu with GitHub's five kinds and the kinds the
+administration defined, which writes the box's marker (around the lines
+selected, or as an empty box); for an administrator it ends with **New
+kind…**, which opens the kinds of box in another tab. A kind of box may
+have a custom colour, picked with a colour picker, besides the theme's.
+
 The assistant (WP5.43, issue #120). The mode, **Ask** (the model answers and
 changes nothing; an edit it asks for anyway is refused) or **Agent** (it edits
 the page, as before), is chosen at the top of the panel, with the model and

@@ -5,7 +5,8 @@
 -- sidebar of one space and switching to another, a subspace and the way up
 -- from it, a page made the space's home page, the space's settings with an
 -- emoji and an uploaded image for its icon; a space shown as a blog
--- (WP4.14), its posts and a post's neighbours; and the page's actions, which
+-- (WP4.14), its posts and a post's neighbours; how its boxes are numbered
+-- (WP5.40); and the page's actions, which
 -- stay under the header while a long page scrolls (the owner's request).
 module Test.Browser.Spaces (spec) where
 
@@ -185,6 +186,38 @@ spec m = do
     find ui ".wiki-sidebar .sidebar-space" >>= click
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Tour")
     length <$> findAll ui ".blog-view" `shouldReturn` 0
+
+  it "numbers a space's boxes as its settings say: with the page's and the section's numbers, then none" $ runPage $ do
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["docs"]))
+    find ui ".space-settings-toggle" >>= click
+    numbering <- find ui ".space-settings .space-numbering-field"
+    getProperty numbering "selectedIndex" `shouldReturn` "1"
+    -- The fourth way, from the keyboard: with the page's and the section's.
+    focus numbering
+    press "Home"
+    replicateM_ 3 (press "ArrowDown")
+    find ui ".space-profile-form button.primary" >>= click
+    find ui ".settings-saved" >>= (`shouldHaveText` "Saved")
+    find ui ".wiki-sidebar a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    _ <- find ui ".page-body .alert-exercise"
+    titles <- traverse textContent =<< findAll ui ".page-body .alert-exercise .alert-title"
+    -- The page's number, the section's, and the box's in the section.
+    let numberOf t = T.splitOn "." (T.takeWhile (/= ':') (T.drop (T.length "Exercise ") t))
+    map numberOf titles `shouldSatisfy` \case
+      [[p, s, "1"], [p', s', "2"]] -> p == p' && s == s' && all (T.all isDigit) [p, s] && not (T.null p)
+      _ -> False
+    -- A box with a star has no number.
+    notes <- traverse textContent =<< findAll ui ".page-body .alert-note .alert-title"
+    notes `shouldSatisfy` elem "Note"
+    -- No numbers at all.
+    find ui ".space-pages-link" >>= click
+    find ui ".space-settings-toggle" >>= click
+    find ui ".space-settings .space-numbering-field" >>= focus
+    press "Home"
+    find ui ".space-profile-form button.primary" >>= click
+    find ui ".settings-saved" >>= (`shouldHaveText` "Saved")
+    find ui ".wiki-sidebar a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    eventually (find ui ".page-body .alert-exercise .alert-title" >>= (`shouldHaveText` "Exercise"))
 
   it "renames a space in its settings, keeping its address" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["blog"]))

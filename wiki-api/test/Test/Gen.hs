@@ -56,7 +56,7 @@ import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
-import Wiki.Core.Markdown.Box (BoxKind (..))
+import Wiki.Core.Markdown.Box (BoxColour (..), BoxKind (..), themeColours)
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
@@ -130,7 +130,7 @@ genSessionInfo = do
   standing <- elements [NotSignedIn, SignedIn, Operator]
   providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
   exports <- sublistOf [minBound .. maxBound]
-  boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements [minBound .. maxBound] <*> elements [minBound .. maxBound]))
+  boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements (CustomColour "#1a7f37" : themeColours) <*> elements [minBound .. maxBound]))
   pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage}
 
 genCredentials :: Gen Credentials

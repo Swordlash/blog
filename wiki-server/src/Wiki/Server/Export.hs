@@ -96,9 +96,10 @@ import Wiki.App.Backend (MonadWiki (listSpaces), WikiError (..))
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), MediaKind (..), MimeType (..), Source (..), attachmentKind)
 import Wiki.Core.Id
-import Wiki.Core.Markdown.Box (BoxKind)
+import Wiki.Core.Markdown.Box (BoxKind, BoxNumbering (..), Numbering (..))
 import Wiki.Core.Math (Macros (..), spaceMacros)
-import Wiki.Core.Page (Page (..), pageTreeOrder)
+import Wiki.Core.Order (ChildOrder (..))
+import Wiki.Core.Page (Page (..), pageNumber, pageTreeOrder, summaryOf)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf, isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
@@ -277,6 +278,11 @@ placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
     , idPrefix
     , macros = Macros [katexOwn, builtinMacros] <> spaceMacros spaces page.space
     , boxes
+    , numbering =
+        Numbering
+          { form = maybe InPage (\s -> s.boxNumbering) (find (\s -> s.id == page.space) spaces)
+          , number = pageNumber (maybe ByName (\s -> s.pageOrder) (find (\s -> s.id == page.space) spaces)) (map summaryOf pages) (pagePathOf pages page.id)
+          }
     }
 
 -- | The macros every page has, before its space's: the wiki's built-in

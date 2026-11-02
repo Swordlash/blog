@@ -17,8 +17,9 @@
 --   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@);
 -- * boxes, @> [!KIND]@: GitHub's alerts (@> [!NOTE]@ and its four
 --   others), and any other kind (@> [!EXERCISE]@), with an optional title
---   after the marker (@> [!TIP] Before you start@), read by the wiki's own
---   block syntax ('alertSpec');
+--   after the marker (@> [!TIP] Before you start@), and a star for a box
+--   without a number (@> [!TIP*]@), read by the wiki's own block syntax
+--   ('alertSpec');
 -- * heading identifiers made from the heading's text ('headingSlug'),
 --   unique in the document: a heading with an @id@ of its own keeps it,
 --   and the others get theirs in document order (the second @Intro@ gets
@@ -55,6 +56,7 @@ module Wiki.Core.Markdown.Ast
   , Footnote (..)
   , Alignment (..)
   , AlertKind (..)
+  , BoxHead (..)
   , MathKind (..)
   , Attributes
 
@@ -137,11 +139,11 @@ data Block
   | -- | A fenced div, with its attributes (@::: warning@ gives the class
     -- @warning@).
     Div Attributes [Block]
-  | -- | A box, @> [!KIND]@: its kind, the title written after the marker
-    -- if there is one, and its blocks. GitHub's five kinds are its alerts
-    -- (@> [!NOTE]@ and friends); "Wiki.Core.Markdown.Box" says what any
-    -- other kind is.
-    Alert AlertKind (Maybe Text) [Block]
+  | -- | A box, @> [!KIND]@: its kind, its title and whether it has a
+    -- number ('BoxHead'), and its blocks. GitHub's five kinds are its
+    -- alerts (@> [!NOTE]@ and friends); "Wiki.Core.Markdown.Box" says what
+    -- any other kind is.
+    Alert AlertKind BoxHead [Block]
   | -- | The footnotes, in the order they were defined. Comes once, last in
     -- the document, when it has any.
     Footnotes [Footnote]
@@ -194,6 +196,16 @@ data Inline
 data MathKind = InlineMath | DisplayMath
   deriving stock (Eq, Show)
 
+-- | 'BoxHead' is what a box's marker line says besides its kind: the title
+-- written after the marker, read as Markdown text (so @$x^2$@ in it is
+-- math), if there is one; and whether the box is numbered, which it is
+-- unless its kind has a star (@> [!TIP*]@).
+data BoxHead = BoxHead
+  { title :: Maybe [Inline]
+  , numbered :: Bool
+  }
+  deriving stock (Eq, Show)
+
 -- | A bulleted list, or a numbered one with the number it starts at.
 data ListKind = BulletList | OrderedList Int
   deriving stock (Eq, Show)
@@ -241,8 +253,9 @@ finished = withHeadingIds . map (withPauses . contentsMarker . withMentions)
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
--- columns, as CommonMark counts it), with the box's kind and its title as
--- the parser read them. The export rewrites the source at these places
+-- columns, as CommonMark counts it), with the box's kind, its title as
+-- written and whether it is numbered (no star after the kind), as the
+-- parser read them. The export rewrites the source at these places
 -- before pandoc reads it ("Wiki.Server.Export.Document"), so that a
 -- document has a box exactly where the page has one.
 data BoxMarker = BoxMarker
@@ -250,6 +263,7 @@ data BoxMarker = BoxMarker
   , markerColumn :: Int
   , boxKind :: AlertKind
   , boxTitle :: Maybe Text
+  , boxNumbered :: Bool
   }
   deriving stock (Eq, Ord, Show)
 
@@ -348,7 +362,7 @@ mentions = foldMap block'
       List _ items -> foldMap (\(ListItem _ bs) -> mentions bs) items
       Table _ header rows -> foldMap inlines' header <> foldMap (foldMap inlines') rows
       Div _ bs -> mentions bs
-      Alert _ _ bs -> mentions bs
+      Alert _ box bs -> foldMap inlines' box.title <> mentions bs
       Footnotes notes -> foldMap (\(Footnote _ _ bs) -> mentions bs) notes
       _ -> mempty
     inlines' = foldMap $ \case
@@ -437,7 +451,7 @@ withMentions = \case
   List kind items -> List kind [ListItem task (map withMentions bs) | ListItem task bs <- items]
   Table aligns header rows -> Table aligns (map mentioning header) (map (map mentioning) rows)
   Div attrs bs -> Div attrs (map withMentions bs)
-  Alert kind title bs -> Alert kind title (map withMentions bs)
+  Alert kind box bs -> Alert kind box {title = mentioning <$> box.title} (map withMentions bs)
   Footnotes notes -> Footnotes [Footnote n label (map withMentions bs) | Footnote n label bs <- notes]
   other -> other
   where
@@ -605,14 +619,20 @@ instance CME.HasDiv Blocks where
 -- commonmark-extensions reads GitHub's alerts (@alertSpec@), but only its
 -- five kinds, and only with nothing after the marker: its kinds are a
 -- closed type, and so is pandoc's reader's. So the wiki has its own block
--- syntax, the library's with those two differences. The marker is @[!@,
--- a name of letters and dashes in any case, and @]@ ('readAlertKind'); a
--- marker with any other name leaves the block an ordinary quotation. What
--- follows it on the line, after a space, is the box's title, as written:
--- plain text, in which Markdown is not read (@> [!TIP] *Read* this@ is
--- titled with the asterisks).
+-- syntax, the library's with those differences. The marker is @[!@, a
+-- name of letters and dashes in any case, an optional star, and @]@
+-- ('readAlertKind'); a marker with any other name leaves the block an
+-- ordinary quotation. The star (@[!TIP*]@) makes a box without a number.
+-- What follows the marker on the line, after a space, is the box's title.
+-- It is read as the text of a paragraph is (math, emphasis, code), with
+-- the inline parser the rest of the page is read with, as a heading's
+-- text is; so @> [!TIP] Use $x^2$@ has math in its title.
 alertSpec :: CM.SyntaxSpec Identity Inlines Blocks
 alertSpec = mempty {CM.syntaxBlockSpecs = [alertBlockSpec]}
+
+-- | What 'alertBlockSpec' keeps of a box's marker line until the box is
+-- made: the marker, and the tokens of the title.
+data MarkerLine = MarkerLine BoxMarker [CM.Tok]
 
 alertBlockSpec :: CM.BlockSpec Identity Inlines Blocks
 alertBlockSpec =
@@ -628,14 +648,18 @@ alertBlockSpec =
         _ <- CM.symbol '!'
         name <- many1 (CM.satisfyTok (\t -> CM.hasType CM.WordChars t || CM.hasType (CM.Symbol '-') t))
         kind <- maybe mzero pure (readAlertKind (CM.untokenize name))
+        starred <- option False (True <$ CM.symbol '*')
         _ <- CM.symbol ']'
         rest <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
         -- A title is set off from the marker by a space: @[!NOTE]s@ is
         -- not a box.
         guard (maybe True (CM.hasType CM.Spaces) (head rest))
-        let title = mfilter (not . T.null) (Just (T.strip (CM.untokenize rest)))
+        let titleToks = reverse (dropWhile isSpaces (reverse (dropWhile isSpaces rest)))
+            isSpaces = CM.hasType CM.Spaces
+            title = mfilter (not . T.null) (Just (T.strip (CM.untokenize rest)))
+            marker = BoxMarker {markerLine = Parsec.sourceLine at, markerColumn = Parsec.sourceColumn at, boxKind = kind, boxTitle = title, boxNumbered = not starred}
         CM.addNodeToStack $
-          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn BoxMarker {markerLine = Parsec.sourceLine at, markerColumn = Parsec.sourceColumn at, boxKind = kind, boxTitle = title}, CM.blockStartPos = [pos]} []
+          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn (MarkerLine marker titleToks), CM.blockStartPos = [pos]} []
         pure CM.BlockStartMatch
     , CM.blockCanContain = const True
     , CM.blockContainsLines = False
@@ -647,9 +671,13 @@ alertBlockSpec =
         _ <- CM.gobbleUpToSpaces 1
         pure (pos, n)
     , CM.blockConstructor = \node -> do
-        let marker = fromMaybe BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing} (fromDynamic (CM.blockData (rootLabel node)))
+        let MarkerLine marker titleToks =
+              fromMaybe
+                (MarkerLine BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing, boxNumbered = True} [])
+                (fromDynamic (CM.blockData (rootLabel node)))
+        title <- if null titleToks then pure Nothing else Just . inlines <$> CM.runInlineParser titleToks
         inside <- mconcat <$> CM.renderChildren node
-        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind marker.boxTitle (blocks inside))) (marker : markersOf inside))
+        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered} (blocks inside))) (marker : markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
 

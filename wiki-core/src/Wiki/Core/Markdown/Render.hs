@@ -47,9 +47,11 @@
 -- link back to its first reference. Table cells
 -- are aligned with a @text-align@ style. A box, @> [!KIND]@, is
 -- @\<div class=\"alert alert-note\">@ (its kind's name after @alert-@)
--- with a @\<p class=\"alert-title\">@ that holds its title: the one
--- written after the marker, or else its kind's label
--- ("Wiki.Core.Markdown.Box"). A box of a kind the administrator defined
+-- with a @\<p class=\"alert-title\">@ that holds its title: its kind's
+-- label and its number ('numbering'; @Tip 3@), then the title written
+-- after the marker, if there is one, with its math (@Tip 3: Title@). A box
+-- without a number shows the title written after the marker, or else its
+-- kind's label ("Wiki.Core.Markdown.Box"). A box of a kind the administrator defined
 -- ('boxes') carries the kind's colour and icon as CSS custom properties in
 -- its @style@, and its title starts with an empty
 -- @\<span class=\"alert-icon\">@ when the kind has an icon, which the
@@ -90,7 +92,7 @@ import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
-import Wiki.Core.Markdown.Box (BoxIcon (..), BoxKind (..), alertKindName, boxLabel, boxStyle, definedKind)
+import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering, alertKindName, boxCaption, boxStyle, countBox, countSection, definedKind, noNumbers, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
@@ -133,6 +135,10 @@ data Options page w i = Options
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administrator defined, with their labels,
   -- colours and icons ("Wiki.Core.Markdown.Box").
+  , numbering :: Numbering
+  -- ^ How the document's boxes are numbered: its space's way, and the
+  -- page's number. None by default: a page's view sets it, and nothing
+  -- else that renders Markdown (a comment, the front page) numbers boxes.
   }
 
 -- | The user a mention names, as its link shows them.
@@ -176,6 +182,7 @@ defaultOptions =
     , resolveMention = const Nothing
     , headingAnchors = True
     , boxes = []
+    , numbering = noNumbers
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -213,7 +220,7 @@ renderLines opts located =
 -- are numbered across them, as they would be if the sections were one
 -- page.
 renderSections :: forall page w i. Options page w i -> [[Block]] -> [[HH.HTML w i]]
-renderSections opts sections = evalState (traverse section sections) (Counts M.empty M.empty [] M.empty)
+renderSections opts sections = evalState (traverse section sections) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering))
   where
     -- A section's own notes are read first, the others' after: comments
     -- shown together are sections each numbering its notes from 1, and a
@@ -230,6 +237,9 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       Para xs -> single . HH.p_ <$> renderInlines xs
       Plain xs -> renderInlines xs
       Heading level attrs xs -> do
+        -- A level-two heading starts a section, which a box's number may
+        -- count ("Wiki.Core.Markdown.Box").
+        when (level == 2) $ modify (\c -> c {boxCounter = countSection c.boxCounter})
         inner <- renderInlines xs
         pure [headingOf level (idAndClasses attrs []) (inner <> (if opts.headingAnchors then headingAnchor attrs else []))]
       ThematicBreak -> pure [HH.hr_]
@@ -244,9 +254,12 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
-      Alert kind title bs -> do
+      Alert kind box bs -> do
+        number <- if box.numbered then state (\c -> second (\b -> c {boxCounter = b}) (countBox kind c.boxCounter)) else pure Nothing
+        let defined = definedKind opts.boxes kind
+        title <- withPieces [PText (boxCaption defined kind number (isJust box.title))] (maybe [] (map displayInline) box.title) []
         inner <- renderBlocks' bs
-        pure [boxOf (definedKind opts.boxes kind) kind title inner]
+        pure [boxWith defined kind title inner]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -427,14 +440,16 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
        in (ident, c {footnoteRefs = M.insert n (seen + 1) c.footnoteRefs})
 
 -- | The counters rendering keeps as it goes: islands by source (for their
--- keys), references to each footnote (for their ids), and the formulas so
--- far that define macros, the latest first.
+-- keys), references to each footnote (for their ids), the formulas so
+-- far that define macros, the latest first, and the boxes so far, for
+-- their numbers.
 data Counts = Counts
   { islands :: Map Text Int
   , footnoteRefs :: Map Int Int
   , definitions :: [Text]
   , sectionNotes :: Map Int Text
   -- ^ The footnotes of the section being rendered, by number, as titles.
+  , boxCounter :: BoxCounter
   }
 
 type R = State Counts
@@ -491,7 +506,7 @@ noteText = T.unwords . T.words . T.unwords . map blockText
       List _ items -> T.unwords [noteText bs | ListItem _ bs <- items]
       Table _ header rows -> T.unwords (map plainText (header <> concat rows))
       Div _ bs -> noteText bs
-      Alert _ title bs -> T.unwords (maybeToList title <> [noteText bs])
+      Alert _ box bs -> T.unwords (maybe [] (pure . plainText) box.title <> [noteText bs])
       RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
       _ -> ""
 
@@ -542,17 +557,30 @@ alignment = \case
 classesProp :: (HasType "class" Text r) => [Text] -> HP.IProp r i
 classesProp = HP.class_ . HH.ClassName . T.unwords
 
--- | A box, @> [!KIND]@: its kind's definition among the administrator's
--- ('definedKind'), its kind, the title written after its marker if there
--- is one, and what it holds. The administration's preview of a kind is
--- drawn by this too ("Wiki.App.View.Server").
+-- | A box, @> [!KIND]@, without a number: its kind's definition among the
+-- administrator's ('definedKind'), its kind, the title written after its
+-- marker if there is one, as text, and what it holds. The
+-- administration's preview of a kind is drawn by this ("Wiki.App.View.Server").
 boxOf :: Maybe BoxKind -> AlertKind -> Maybe Text -> [HH.HTML w i] -> HH.HTML w i
-boxOf defined kind title inner =
+boxOf defined kind title = boxWith defined kind [HH.text (fromMaybe (boxCaption defined kind Nothing False) title)]
+
+-- | A box: its kind's definition, its kind, what its title holds (after
+-- the icon), and what it holds.
+boxWith :: Maybe BoxKind -> AlertKind -> [HH.HTML w i] -> [HH.HTML w i] -> HH.HTML w i
+boxWith defined kind title inner =
   HH.div
     (classesProp ["alert", "alert-" <> alertKindName kind] : [HP.styleText (boxStyle k) | Just k <- [defined]])
-    (HH.p [classesProp ["alert-title"]] (icon <> [HH.text (fromMaybe (boxLabel defined kind) title)]) : inner)
+    (HH.p [classesProp ["alert-title"]] (icon <> title) : inner)
   where
     icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]
+
+-- | Display math in a box's title, @$$…$$@, set on the title's line in
+-- display style: a title is one line, and a block of display math in it
+-- would break the line.
+displayInline :: Inline -> Inline
+displayInline = \case
+  Math DisplayMath tex -> Math InlineMath ("\\displaystyle " <> tex)
+  other -> other
 
 -- | The @id@ and the classes of some attributes, after classes of the
 -- element's own.

@@ -89,7 +89,11 @@
 -- step. The edit fires an input event as typing would, so the draft and
 -- the preview receive it like any keystroke ("Wiki.App.Editor.Browser").
 -- The toolbar's colour palette writes classes, never a @style@ attribute,
--- which a page may not have. The editor's keys are recognised in the
+-- which a page may not have. Its "Box" menu lists GitHub's five kinds of
+-- box and the kinds the administration defined ("Wiki.Core.Markdown.Box"),
+-- and writes the chosen kind's marker; for an administrator it ends with
+-- "New kind…", which opens the administration's kinds of box in another
+-- tab, so that the work here stays as it is. The editor's keys are recognised in the
 -- keydown's listener, which stops the browser's own action for them
 -- (Ctrl+K and Ctrl+E have defaults of their own) while the event is
 -- dispatched, whatever the component is busy with. Drag and drop events
@@ -273,7 +277,8 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (AdminSection, Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
@@ -307,6 +312,7 @@ import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id (AttachmentId, PageId, UserId)
 import Wiki.Core.Markdown (attachmentReference)
+import Wiki.Core.Markdown.Box (BoxKind (label, name), alertKindName, builtInKinds, kindTitle)
 import Wiki.Core.Markdown.Edit
   ( Command (..)
   , HtmlTag (..)
@@ -322,6 +328,7 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
+import Wiki.Core.Permission (GlobalPermission (Administer), hasGlobalPermission)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.User (User (id))
@@ -735,7 +742,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = newKindHref st.input.context} }}
           </div>
           <div class="editor-notices">
             {{ presenceView st }}
@@ -1037,7 +1044,7 @@ component =
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
-          <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
+          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
             <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
@@ -1060,6 +1067,26 @@ component =
     imageButton :: H.ComponentHTML Action Slots m
     imageButton =
       [hh|<button type="button" class="tool" title="Image or attachment: upload a file" aria-label="Image or attachment" onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
+
+    -- The kinds of box, each writing its marker ('Box'), and for an
+    -- administrator the way to define another.
+    boxMenu :: Bar -> H.ComponentHTML Action Slots m
+    boxMenu bar =
+      [hh|
+        <div class="toolbar-menu-holder">
+          <button type="button" class="tool" title="Box" aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
+          {% if bar.menuOpen == Just BoxMenu %}
+            <div class="toolbar-menu box-menu" role="menu" aria-label="Box">
+              {% for (marker, label) in bar.kinds %}
+                <button type="button" role="menuitem" data-kind={{ marker }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
+              {% end %}
+              {% for href in maybeToList bar.newKind %}
+                <a role="menuitem" class="box-menu-new" href={{ href }} target="_blank" rel="noopener" onClick={{ const CloseMenu }}>New kind…</a>
+              {% end %}
+            </div>
+          {% end %}
+        </div>
+      |]
 
     htmlMenu :: Bar -> H.ComponentHTML Action Slots m
     htmlMenu bar =
@@ -2095,12 +2122,35 @@ data Bar = Bar
   , detached :: Maybe Text
   -- ^ The address of the page's preview in a window of its own, where
   -- the page has one.
+  , kinds :: [(Text, Text)]
+  -- ^ The kinds of box the "Box" menu offers ('boxChoices').
+  , newKind :: Maybe Text
+  -- ^ For an administrator, the address of the administration's kinds of
+  -- box ('newKindHref').
   }
   deriving stock (Eq)
 
--- | The toolbar's menus: the HTML elements, and the palette.
-data Menu = HtmlMenu | ColourMenu
+-- | The toolbar's menus: the HTML elements, the palette and the kinds of
+-- box.
+data Menu = HtmlMenu | ColourMenu | BoxMenu
   deriving stock (Eq)
+
+-- | The kinds of box the toolbar offers, each as its marker writes it
+-- (@TIP@) and as its boxes are titled: GitHub's five, then the kinds the
+-- administration defined, in the order they were defined.
+boxChoices :: [BoxKind] -> [(Text, Text)]
+boxChoices defined =
+  [(T.toUpper (alertKindName k), kindTitle (alertKindName k)) | k <- builtInKinds]
+    <> [(T.toUpper k.name, k.label) | k <- defined]
+
+-- | Where an administrator defines kinds of box: the administration's
+-- section that has them. 'Nothing' for anyone else.
+newKindHref :: Context -> Maybe Text
+newKindHref ctx = Router.href ctx.router (Admin boxesSection) <$ guard (hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer)
+
+-- | The administration's section that holds the kinds of box.
+boxesSection :: AdminSection
+boxesSection = R.Server
 
 -- | A toolbar button: the command it runs, its name, the shortcut that
 -- also runs it, and its icon (an SVG path in a 16 by 16 box, drawn as a
@@ -2146,7 +2196,7 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
@@ -2154,6 +2204,8 @@ noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"
 previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 -- Two columns: the text and the preview beside it.
 sideBySideIcon = "M1.5 2.5h13v11h-13zM8 2.5v11"
+-- A box with a bar down its left side and a title line, as a page draws one.
+boxIcon = "M2.5 2.5h11v11h-11zM2.5 2.5v11M5 5.5h6M5 8.5h6M5 11h4"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]

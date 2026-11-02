@@ -36,7 +36,7 @@ import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (summaryOf)
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
-import Wiki.Core.Space (Icon (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), SpaceProfile (..))
 import Wiki.Core.User (Password (..))
 import Wiki.Core.Version (VersionInfo (..))
 
@@ -130,8 +130,8 @@ spec = describe "golden JSON" $ do
     golden "space-name" SpaceName {name = "Guides"}
     golden "space-public" SpacePublic {public = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
-    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = False}
-    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True}
+    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = False, boxNumbering = InPage}
+    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True, boxNumbering = WithSection}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}

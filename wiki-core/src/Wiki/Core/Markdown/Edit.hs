@@ -31,6 +31,11 @@
 -- * Templates ('Table', 'HorizontalRule') go after the line the selection
 --   ends on.
 --
+-- * 'Box' makes the touched lines a box of a kind, @> [!KIND]@: it quotes
+--   them, with the marker's line above them, or changes the kind of the
+--   box whose marker is on the first of them. With nothing selected it puts
+--   an empty box after the cursor's line.
+--
 -- * Colours ('TextColour', 'Highlight') wrap the selection in an element
 --   whose class names a colour of the palette: @<span class="c-red">@ for
 --   the text's colour, @<mark class="h-yellow">@ for a highlight. A class,
@@ -72,6 +77,7 @@ module Wiki.Core.Markdown.Edit
   )
 where
 
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List (findIndex, lookup, span, zip3)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
@@ -118,6 +124,9 @@ data Command
     TextColour (Maybe Colour)
   | -- | A highlight in a colour, or, for 'Nothing', none.
     Highlight (Maybe Colour)
+  | -- | A box of a kind, by the name written in its marker (@TIP@,
+    -- @EXERCISE@; "Wiki.Core.Markdown.Box").
+    Box Text
   deriving stock (Eq, Show)
 
 -- | The HTML the toolbar offers: elements of the allowlist
@@ -208,6 +217,7 @@ apply command text selection = case command of
   HorizontalRule -> template "---" Nothing text sel
   TextColour c -> colour textWrapper (textColourClass <$> c) text sel
   Highlight c -> colour highlightWrapper (highlightClass <$> c) text sel
+  Box kind -> box kind text sel
   where
     sel = normalise text selection
     inline :: Markers -> Text -> (Text, Selection)
@@ -441,6 +451,51 @@ quote text sel = (replace reps text, afterLines sel reps)
     reps
       | all quoted ls = [Replacement l.at (if T.isPrefixOf "> " l.line then 2 else 1) "" | l <- ls]
       | otherwise = [Replacement l.at 0 (if T.all isSpace l.line then ">" else "> ") | l <- ls, not (quoted l)]
+
+-- | Make the touched lines a box of a kind ('Box'). Lines already quoted
+-- stay as they are and the others are quoted, under a new line with the
+-- marker; a line after them that has text gets a blank line before it, or
+-- it would continue the box. When the first touched line is a box's marker
+-- already, only its kind changes. With nothing selected, an empty box goes
+-- after the cursor's line, with its text selected.
+box :: Text -> Text -> Selection -> (Text, Selection)
+box kind text sel@(Selection s e) = case touched text sel of
+  firstLine : _
+    | Just (offset, len) <- markerName firstLine.line ->
+        let reps = [Replacement (firstLine.at + offset) len kind]
+         in (replace reps text, afterLines sel reps)
+  ls@(firstLine : _)
+    | s /= e ->
+        let lastLine = fromMaybe firstLine (lastMay ls)
+            end = lastLine.at + T.length lastLine.line
+            next = T.takeWhile (/= '\n') (T.drop (end + 1) text)
+            quoted l = T.isPrefixOf ">" l.line
+            prefix l
+              | quoted l = ""
+              | T.all isSpace l.line = ">"
+              | otherwise = "> "
+            reps =
+              Replacement firstLine.at 0 (marker <> "\n" <> prefix firstLine)
+                : [Replacement l.at 0 (prefix l) | l <- drop 1 ls, not (quoted l)]
+                  <> [Replacement end 0 "\n" | end < T.length text, not (T.all isSpace next)]
+         in (replace reps text, Selection (moved Before reps s) (moved Before reps e))
+  _ -> template (marker <> "\n> " <> placeholder) (Just (T.length marker + 3, T.length placeholder)) text sel
+  where
+    marker = "> [!" <> kind <> "]"
+    placeholder = "Text"
+
+-- | Where the kind's name is on a box's marker line (@> [!TIP] Title@):
+-- its offset in the line and its length. A star after the name (a box
+-- without a number) is kept.
+markerName :: Text -> Maybe (Int, Int)
+markerName l = do
+  rest <- T.stripPrefix ">" l
+  let spaced = T.isPrefixOf " " rest
+  named <- T.stripPrefix "[!" (if spaced then T.drop 1 rest else rest)
+  let name = T.takeWhile (\c -> isAsciiLower c || isAsciiUpper c || c == '-') named
+      after = T.drop (T.length name) named
+  guard (not (T.null name) && (T.isPrefixOf "]" after || T.isPrefixOf "*]" after))
+  pure ((if spaced then 2 else 1) + 2, T.length name)
 
 -- | Set every touched line to the heading level after the first line's:
 -- none, one, two, three, then none again.

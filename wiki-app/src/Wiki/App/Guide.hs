@@ -43,7 +43,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.Url (Url (..))
 
 -- | 'Tour' is which tour the guide starts with: the demo's or a server's.
@@ -97,6 +97,7 @@ guideProfile tourPage =
     , icon = Just (IconEmoji "📘")
     , homePage = Just tourPage
     , blog = False
+    , boxNumbering = InPage
     }
 
 -- | The kind of box the demo defines, which the Markdown guide shows: an
@@ -419,17 +420,30 @@ markdownGuide =
   , "> `> [!CAUTION]`: what could go wrong if done."
   , ""
   , "Any other word makes a box too, titled with the word: `> [!EXERCISE]`"
-  , "below. An administrator can give a kind a title, a colour and an icon,"
-  , "under **Boxes** in the administration's **Server** section; the demo"
-  , "defines `exercise` this way. A kind nobody defined is a plain box."
+  , "below. An administrator can give a kind a title, a colour (one of the"
+  , "theme's, or any other from a colour picker) and an icon, under **Boxes**"
+  , "in the administration's **Server** section; the demo defines `exercise`"
+  , "this way. A kind nobody defined is a plain box. The editor's **Box**"
+  , "button lists the kinds and writes the first line for you."
   , ""
   , "> [!EXERCISE]"
   , "> Write a box of your own kind, such as `> [!FUN-FACT]`."
   , ""
-  , "Text after the kind, on the same line, is that box's title, for any kind:"
+  , "Boxes are numbered, each kind on its own: the boxes above are Note 1,"
+  , "Tip 1 and so on, and this page's exercises Exercise 1 and Exercise 2. A"
+  , "space's settings choose how: within the page, after the page's number"
+  , "(`2.3`, the page being the second under its parent), after the page's"
+  , "and the section's (`2.1.3`, a section starting at each `##` heading), or"
+  , "no numbers at all. A star after the kind makes a box without a number:"
   , ""
-  , "> [!EXERCISE] Exercise 2"
-  , "> `> [!EXERCISE] Exercise 2` titles this box *Exercise 2*."
+  , "> [!NOTE*]"
+  , "> `> [!NOTE*]` is not counted, as LaTeX's `equation*`."
+  , ""
+  , "Text after the kind, on the same line, is that box's title, for any"
+  , "kind, after its number. It is read as text, so it can hold math:"
+  , ""
+  , "> [!EXERCISE] The area of a circle, $\\pi r^2$"
+  , "> `> [!EXERCISE] The area of a circle, $\\pi r^2$` titles this box."
   , ""
   , "## Images, video and attachments"
   , ""

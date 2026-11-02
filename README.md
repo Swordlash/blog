@@ -176,10 +176,15 @@ GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
 
 A note, marked as one, at the top of the
 [Tour](https://swordlash.github.io/blog/s/docs/p/tour/). Any other word makes
-a box too, `> [!EXERCISE]`, titled with the word or with what follows it on the
-line (`> [!EXERCISE] Exercise 3`); an administrator gives a kind a title, a
-colour and an icon under "Boxes" in the administration's Server section, and the
-demo defines `exercise` this way: the Markdown guide's
+a box too, `> [!EXERCISE]`, titled with the word, with a title of its own after
+it on the line if you like (`> [!EXERCISE] Area of $\pi r^2$`, math and all);
+an administrator gives a kind a title, a colour (the theme's or any other) and
+an icon under "Boxes" in the administration's Server section, and the demo
+defines `exercise` this way. Boxes are numbered, each kind on its own (Tip 1,
+Tip 2, Exercise 1), within the page, after the page's number (`Tip 2.3`) or
+after the section's too (`Tip 2.1.3`), as the space's settings say; a star,
+`> [!TIP*]`, makes a box without one. The editor's **Box** button writes the
+marker for you. See the Markdown guide's
 [Notes and boxes](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#notes-and-boxes).
 
 ### A table of contents
@@ -1018,7 +1023,8 @@ to the demo, keeping `data/`.
     the redirect URI to register with it and a "Check" that asks the provider how to
     sign in;
   - *boxes*, the kinds of `> [!KIND]` box the wiki's pages may hold besides GitHub's
-    five, each with the title its boxes show, a colour of the theme and an icon
+    five, each with the title its boxes show, a colour (one of the theme's, or a
+    custom one from a colour picker) and an icon
     ([docs/markdown.md](docs/markdown.md#notes-and-boxes)).
 
   The mail password and the providers' client secrets are typed once, kept in the

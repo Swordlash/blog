@@ -72,10 +72,10 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), find
 import Wiki.Core.Blog (excerpt, posts)
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown qualified as Md
-import Wiki.Core.Markdown.Box (BoxKind)
+import Wiki.Core.Markdown.Box (BoxKind, Numbering (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id))
 import Wiki.Core.Path (TreeNode (..), pathOf)
-import Wiki.Core.Space (Space (blog, createdAt, description, id, name))
+import Wiki.Core.Space (Space (blog, boxNumbering, createdAt, description, id, name))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
 import Wiki.Server.Storage (Storage, Who (..), feedPosts, readServerSettings, readSettings, runStoredWiki, sitemapPages)
@@ -268,7 +268,9 @@ sitemap storage cache base =
 -- attachments under the wiki's public address (a feed is read away from
 -- the wiki), and its formulas, diagrams and code as the plain text the
 -- islands start from, since a feed reader runs no script. Its boxes have
--- the titles the administration's kinds of box give them.
+-- the titles the administration's kinds of box give them, and are numbered
+-- as the space says, within the post: a post read in a feed is read on
+-- its own, so its number among the space's pages is left out.
 postHtml :: (TreeNode page, NodeId page ~ PageId) => Text -> [BoxKind] -> [Space] -> Space -> [page] -> Page -> IO Text
 postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
   Left _ -> pure ("<pre>" <> xmlText p.body <> "</pre>")
@@ -284,6 +286,7 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
         , -- A feed reader has no stylesheet to show them on hover.
           Md.headingAnchors = False
         , Md.boxes = boxes
+        , Md.numbering = Numbering {form = space.boxNumbering, number = Nothing}
         }
     resolve destination = case Md.classifyDestination destination of
       Md.ToAttachment name -> case findAttachment name p.attachments of

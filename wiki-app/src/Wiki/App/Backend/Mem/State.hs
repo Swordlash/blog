@@ -213,7 +213,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
@@ -516,6 +516,7 @@ insertSpace parent name public now st0 =
           , icon = Nothing
           , description = ""
           , blog = False
+          , boxNumbering = InPage
           }
    in (st {spaces = Map.insert space.id space st.spaces}, space)
 
@@ -642,7 +643,7 @@ clearHomes :: Set PageId -> MemState -> MemState
 clearHomes gone st = st {spaces = Map.map clear st.spaces}
   where
     clear s
-      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing, blog = s.blog} s
+      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing, blog = s.blog, boxNumbering = s.boxNumbering} s
       | otherwise = s
 
 -- | Delete the bytes behind every attachment of these pages.
@@ -737,6 +738,7 @@ respace parent slug position s =
     , icon = s.icon
     , description = s.description
     , blog = s.blog
+    , boxNumbering = s.boxNumbering
     }
 
 -- | A page moved to another place, possibly in another space, at a
@@ -888,7 +890,7 @@ createSpaceIn parent name now st = do
       -- Its home page, whose first version is its creator's, as for a page
       -- they created.
       (st3, home) = insertPage made.id Nothing homeTitle (homeBody n) now st2
-      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} made
+      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} made
   pure (recordVersion (currentUserId st) home st3 {spaces = Map.insert space.id space st3.spaces}, space)
   where
     who = currentPrincipal st
@@ -921,6 +923,7 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , icon = s.icon
       , description = s.description
       , blog = s.blog
+      , boxNumbering = s.boxNumbering
       }
 
 -- | Make a space public or private.
@@ -958,7 +961,7 @@ uploadSpaceIconIn sid mediaType bytes st = do
   mt <- first Invalid (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
   let (b, st1) = newId "blob" (dropIcon s st)
       blob = BlobId b
-      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
+      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
   pure (st1 {blobs = Map.insert blob bytes st1.blobs, spaces = Map.insert sid s' st1.spaces}, s')
 
 -- | Move a space under another or to the top level.

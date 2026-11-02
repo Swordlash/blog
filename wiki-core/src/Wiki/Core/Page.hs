@@ -10,6 +10,7 @@ module Wiki.Core.Page
   , childPages
   , positionPage
   , pageTreeOrder
+  , pageNumber
   , savedAs
 
     -- * The title line
@@ -20,6 +21,7 @@ module Wiki.Core.Page
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.List (findIndex)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -28,7 +30,7 @@ import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
-import Wiki.Core.Path (TreeNode (..))
+import Wiki.Core.Path (TreeNode (..), findChild)
 import Wiki.Core.Slug
 
 -- | 'Page': a page. Pages form a tree within one space, so a page's parent,
@@ -146,6 +148,18 @@ childPages = childrenInOrder
 -- it, in the space's page order.
 pageTreeOrder :: (Sibling p, NodeId p ~ PageId) => ChildOrder -> [p] -> [p]
 pageTreeOrder order = treeOrder (const order)
+
+-- | 'pageNumber' is a page's number, by its path among the pages of its
+-- space: its position under its parent, from 1, in the space's page order,
+-- whether that order is by hand or not. A box's number may start with it
+-- ("Wiki.Core.Markdown.Box"). Templates are numbered among the templates
+-- under the same parent, and the other pages without them. 'Nothing' when
+-- no page has the path.
+pageNumber :: ChildOrder -> [PageSummary] -> [Slug] -> Maybe Int
+pageNumber order pages path = do
+  page <- foldM (\parent slug -> Just <$> findChild pages ((\p -> p.id) <$> parent) slug) Nothing path
+  p <- page
+  (+ 1) <$> findIndex (\s -> s.id == p.id) [s | s <- childPages order pages p.parent, s.template == p.template]
 
 -- | The page at another position among its siblings. (A function, since a
 -- record update of @position@ cannot tell a page's field from a space's

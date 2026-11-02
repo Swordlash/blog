@@ -42,7 +42,7 @@ import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Storage
@@ -68,7 +68,7 @@ spec backing = describe "the permission context kept in memory" $ do
           , ("renameSpace", True, void (admin (renameSpace space.id "Renamed") >>= ok))
           , ("setSpacePublic", True, void (admin (setSpacePublic space.id True) >>= ok))
           , ("setSpaceMathMacros", True, void (admin (setSpaceMathMacros space.id "\\R: \\mathbb{R}") >>= ok))
-          , ("setSpaceProfile", True, void (admin (setSpaceProfile space.id SpaceProfile {description = "Kept.", icon = Just (IconEmoji "x"), homePage = Nothing, blog = False}) >>= ok))
+          , ("setSpaceProfile", True, void (admin (setSpaceProfile space.id SpaceProfile {description = "Kept.", icon = Just (IconEmoji "x"), homePage = Nothing, blog = False, boxNumbering = InPage}) >>= ok))
           , ("uploadSpaceIcon", True, void (admin (uploadSpaceIcon space.id "image/png" "png bytes") >>= ok))
           , ("setSpaceGrant", True, void (admin (setSpaceGrant space.id (SubjectUser ritaId) View True) >>= ok))
           , ("setSpaceOrder", True, void (admin (setSpaceOrder space.id ChildPages ByHand) >>= ok))
@@ -87,7 +87,7 @@ spec backing = describe "the permission context kept in memory" $ do
           , ("movePage within its space", False, void (admin (movePage other.id space.id (Just page.id)) >>= ok))
           , ("movePage to another space", False, void (admin (movePage other.id docs.id Nothing) >>= ok))
           , ("deletePage", False, void (admin (deletePage other.id) >>= ok))
-          , ("setSpaceProfile with a home page", True, void (admin (setSpaceProfile space.id SpaceProfile {description = "", icon = Nothing, homePage = Just page.id, blog = False}) >>= ok))
+          , ("setSpaceProfile with a home page", True, void (admin (setSpaceProfile space.id SpaceProfile {description = "", icon = Nothing, homePage = Just page.id, blog = False, boxNumbering = InPage}) >>= ok))
           , ("deletePage of a home page", True, void (admin (deletePage page.id) >>= ok))
           , ("createGroup", False, void (admin (createGroup "Another group") >>= ok))
           , ("renameGroup", False, void (admin (renameGroup crew.id "Renamed group") >>= ok))
@@ -163,7 +163,7 @@ spec backing = describe "the permission context kept in memory" $ do
     docs <- runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok
     -- Twice, so that the second read is from memory.
     replicateM_ 2 $ runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> s.description `shouldBe` docs.description
-    _ <- runStoredWiki st Administrator (setSpaceProfile docs.id SpaceProfile {description = "Changed.", icon = Just (IconEmoji "x"), homePage = docs.homePage, blog = docs.blog}) >>= ok
+    _ <- runStoredWiki st Administrator (setSpaceProfile docs.id SpaceProfile {description = "Changed.", icon = Just (IconEmoji "x"), homePage = docs.homePage, blog = docs.blog, boxNumbering = docs.boxNumbering}) >>= ok
     runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> (s.description, s.icon) `shouldBe` ("Changed.", Just (IconEmoji "x"))
     byHand st "UPDATE spaces SET description = 'By hand.' WHERE slug = 'docs'"
     runStoredWiki st Anonymous (getSpace (path "docs")) >>= ok >>= \s -> s.description `shouldBe` "By hand."

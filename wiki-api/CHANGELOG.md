@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+A space and its profile carry `boxNumbering` (WP5.40): `none`, `in-page`,
+`with-page` or `with-section`, read as `in-page` when missing. A kind of
+box's `colour` may be a hex code, `#rrggbb`, besides the theme's names.
+
 Passkeys are the account's (WP5.30): the list, the registration and the
 removal move from `assistant/passkeys` to `account/passkeys`, and
 `RegistrationResponse` gains an optional `name`. `AssertionResponse` gains

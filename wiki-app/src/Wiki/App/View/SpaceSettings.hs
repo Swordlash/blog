@@ -4,7 +4,8 @@
 -- opened from the space's list of pages ("Wiki.App.View.Space"). It edits
 -- the space's name, description and icon, which the directory of spaces
 -- shows; the page it opens at; whether it is shown as a blog
--- ("Wiki.Core.Blog"); and, below them, its permissions
+-- ("Wiki.Core.Blog"); how the boxes of its pages are numbered
+-- ("Wiki.Core.Markdown.Box"); and, below them, its permissions
 -- ("Wiki.App.View.Permissions", which has the public switch).
 --
 -- The profile is one form, saved with one button: the name, if it changed
@@ -36,10 +37,12 @@ import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Id (PageId)
+import Wiki.Core.Markdown.Box (numberingLabel, numberings)
 import Wiki.Core.Page (PageSummary (id, title), pageTreeOrder)
 import Wiki.Core.Space
-  ( Icon (..)
-  , Space (blog, description, homePage, icon, id, name, pageOrder)
+  ( BoxNumbering (..)
+  , Icon (..)
+  , Space (blog, boxNumbering, description, homePage, icon, id, name, pageOrder)
   , SpaceProfile (..)
   , defaultColour
   , iconColourName
@@ -70,6 +73,7 @@ data Fields = Fields
   , emoji :: Text
   , home :: Maybe PageId
   , blog :: Bool
+  , boxNumbering :: BoxNumbering
   }
   deriving stock (Eq)
 
@@ -94,6 +98,7 @@ data Action
   | TypedEmoji Text
   | ChoseHome Int
   | ShowAsBlog Bool
+  | ChoseNumbering Int
   | ImageChosen Event
   | Save
   | FromPermissions ViewOutput
@@ -168,6 +173,17 @@ component =
               The space then opens at its posts, its top-level pages, the newest first, under its home page;
               each post shows its date and links to the posts before and after it. A public blog has feeds.
             </p>
+            <label class="field">
+              <span>Numbers of boxes</span>
+              <select class="space-numbering-field" onSelectedIndexChange={{ ChoseNumbering }}>
+                {% for n in numberings %}<option selected={{ n == f.boxNumbering }}>{{ numberingLabel n }}</option>{% end %}
+              </select>
+            </label>
+            <p class="field-hint">
+              Each kind of box, such as <code>{{ "> [!TIP]" :: Text }}</code>, is counted on its own. The page's number is its place
+              under its parent, in the space's order; a section starts at each <code>##</code> heading.
+              A box written with a star, <code>{{ "> [!TIP*]" :: Text }}</code>, has no number.
+            </p>
             {{ errorView <$> st.problem }}
             <div class="actions">
               <button type="submit" class="primary" disabled={{ st.busy }}>Save settings</button>
@@ -202,6 +218,7 @@ component =
       ChoseColour n -> for_ (atMay iconColours n) $ \colour -> edit (\f -> f {colour})
       TypedEmoji emoji -> edit (\f -> f {emoji})
       ShowAsBlog blog -> edit (asBlog blog)
+      ChoseNumbering n -> for_ (atMay numberings n) $ \numbering -> edit (numberedAs numbering)
       ChoseHome n -> do
         input <- gets (\st -> st.input)
         for_ (atMay (homeChoices input) n) $ \(home, _) -> edit (\f -> f {home})
@@ -228,7 +245,7 @@ component =
             modify (\s -> s {busy = True, problem = Nothing, saved = False})
             result <- runExceptT $ do
               when (T.strip f.typedName /= space.name) $ void (ExceptT (renameSpace space.id f.typedName))
-              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home, blog = f.blog})
+              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home, blog = f.blog, boxNumbering = f.boxNumbering})
             case result of
               Left e -> modify (\s -> s {busy = False, problem = Just e})
               Right updated -> do
@@ -260,12 +277,18 @@ fieldsOf s =
         _ -> ""
     , home = s.homePage
     , blog = s.blog
+    , boxNumbering = s.boxNumbering
     }
 
 -- | The form with the blog switch set as given. (A function, since a
 -- record update of @blog@ cannot tell the form's field from a space's.)
 asBlog :: Bool -> Fields -> Fields
-asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog}
+asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog, boxNumbering = f.boxNumbering}
+
+-- | The form with the way of numbering boxes set as given, for the same
+-- reason as 'asBlog'.
+numberedAs :: BoxNumbering -> Fields -> Fields
+numberedAs boxNumbering f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog = f.blog, boxNumbering}
 
 -- | The icon the form chooses, or why it chooses none that can be saved:
 -- an image must be the one the space has, already uploaded.
@@ -286,7 +309,7 @@ isImage = \case
 -- | The space with the icon the form chooses, for the preview; an emoji
 -- not typed yet is shown as the default icon.
 previewed :: State -> Space
-previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage, blog = space.blog} space
+previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage, blog = space.blog, boxNumbering = space.boxNumbering} space
   where
     space = st.input.space
     icon = case iconOf space st.fields of

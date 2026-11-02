@@ -347,6 +347,8 @@ data Spaces f = SpaceRow
   , icon :: Columnar f (Maybe Text)
   , description :: Columnar f Text
   , blog :: Columnar f Bool
+  , box_numbering :: Columnar f Text
+  -- ^ How its boxes are numbered, by 'Wiki.Core.Markdown.Box.numberingName'.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
