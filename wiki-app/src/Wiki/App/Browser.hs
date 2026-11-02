@@ -147,7 +147,7 @@ followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
   ToFragment fragment -> liftIO (js_scroll_to (toJSText fragment))
-  ToNote note reference -> liftIO (js_follow_note (toJSText note) (toJSText reference))
+  ToNote footnote reference -> liftIO (js_follow_note (toJSText footnote) (toJSText reference))
 
 -- | Show a @\<dialog>@ element as a modal dialog (@showModal@): above the
 -- page, with a backdrop, the rest of the page inert, closed by Escape, and
