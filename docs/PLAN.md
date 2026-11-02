@@ -361,7 +361,10 @@ In the order to do it, unless the owner says otherwise.
   the space's macros are (a sample formula typed under the block is typeset with it),
   and a warning naming the pages that use a macro being removed. In the editor, a
   button for the space's and the page's macros, editable by whoever may edit the whole
-  space (the space's are on the space's page, "Math macros", today). The Box menu's
+  space (the space's are on the space's page, "Math macros", today). The page's own
+  block is a `math` block of definitions under the title, which the page does not show
+  (a formula with nothing to show shows nothing, the owner, 2026-11-02); an empty one
+  is not written. The Box menu's
   "New kind…" opens a dialog in the editor with the same form as the kinds of box in
   the Editor tab (one form, used in both), instead of the administration in another
   tab (WP5.40, which numbers boxes within the page by default, the owner, 2026-11-02):
