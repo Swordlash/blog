@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The server's settings keep the built-in math macros (WP5.41) in the
+setting `math-macros`, which every session carries and the export uses in
+place of the shipped ones once set; a change of them is in the audit log.
+`GET admin/macro-uses` finds the pages that use macros, for an
+administrator. A space's macros may be set by whoever may edit the whole
+space, not only by its administrators.
+
 Stars (WP5.44): migration `0005-stars` adds the `stars` table, a user's
 starred pages in order, deleted with the user or the page. The API's
 `stars` endpoints read and write it; someone not signed in and the operator

@@ -26,7 +26,8 @@
 -- the top and to the bottom, for someone who may edit the space.
 --
 -- __Math macros__ ("Wiki.Core.Math") are edited as a block of TeX in a
--- textarea. KaTeX parses the block, on top of the macros of the space's
+-- textarea, by whoever may edit the whole space (WP5.41 of docs/PLAN.md;
+-- the editor's "Math macros" panel edits them too, "Wiki.App.View.MacrosPanel"). KaTeX parses the block, on top of the macros of the space's
 -- ancestors, as it is typed, and its error, if it cannot parse all of it,
 -- is shown under the block. A formula typed under it is typeset with the
 -- block as it stands, so the author sees what the macros produce. A block
@@ -172,7 +173,7 @@ component =
         <> [ [hh|<button type="button" class="space-settings-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const ToggleSettings }}>Space settings</button>|]
            | admin
            ]
-        <> [button "Math macros" EditMacros | admin]
+        <> [button "Math macros" EditMacros | mayEdit ctx space.id]
         <> [button "Order" EditOrder | admin]
         <> [button "Move" (Open (Moving 0)) | admin, not (null (destinations ctx space))]
         <> [button "Delete" (Open ConfirmingDelete) | admin]
@@ -390,7 +391,7 @@ kindClass = \case
 -- | The macros the space's own macros are read on top of: those of the
 -- spaces above it.
 parentMacros :: Context -> Space -> Macros
-parentMacros ctx space = maybe mempty (spaceMacros ctx.spaces) space.parent
+parentMacros ctx space = wikiMacrosOf ctx.session <> maybe mempty (spaceMacros ctx.spaces) space.parent
 
 -- | Where the space may be moved: the top level, or under another space,
 -- where the rules allow it and the move would not put the space inside

@@ -61,9 +61,11 @@ Euler's identity in the line, and a matrix's inverse set on its own:
 [Mathematics](https://swordlash.github.io/blog/s/docs/p/markdown-guide/mathematics/).
 
 KaTeX has no `\usepackage`; macros take its place, in three layers. Some are
-built in for every page (`\abs`, `\norm`, `\dv`, `\E`, `\Var` and more). A
-space's administrator gives the space its own, one `\newcommand` a line, under
-"Math macros" in its settings; these are the demo's `Docs` space's:
+built in for every page (`\abs`, `\norm`, `\dv`, `\E`, `\Var` and more), which
+an administrator may change in the administration's Editor section. Whoever may
+edit a space gives it its own, one `\newcommand` a line, under "Math macros" in its
+settings or from the editor's "Math macros" button, which also edits the page's
+own; these are the demo's `Docs` space's:
 
 ```tex
 \newcommand{\vect}[1]{\boldsymbol{#1}}
@@ -179,7 +181,7 @@ A note, marked as one, at the top of the
 a box too, `> [!EXERCISE]`, titled with the word, with a title of its own after
 it on the line if you like (`> [!EXERCISE] Area of $\pi r^2$`, math and all);
 an administrator gives a kind a title, a colour (the theme's or any other) and
-an icon under "Boxes" in the administration's Server section, and the demo
+an icon under "Boxes" in the administration's Editor section, and the demo
 defines `exercise` this way. Boxes are numbered, each kind on its own (Tip 1,
 Tip 2, Exercise 1), within the page, after the page's number (`Tip 2.3`) or
 after the section's too (`Tip 2.1.3`), as the space's settings say; a star,
@@ -1028,11 +1030,16 @@ to the demo, keeping `data/`.
     test mail" checks it;
   - *sign-in providers*, added, changed and removed one at a time (below), each with
     the redirect URI to register with it and a "Check" that asks the provider how to
-    sign in;
-  - *boxes*, the kinds of `> [!KIND]` box the wiki's pages may hold besides GitHub's
-    five, each with the title its boxes show, a colour (one of the theme's, or a
-    custom one from a colour picker) and an icon
-    ([docs/markdown.md](docs/markdown.md#notes-and-boxes)).
+    sign in.
+
+  The administration's "Editor" section holds what every page's editor and every page
+  share: *boxes*, the kinds of `> [!KIND]` box the wiki's pages may hold besides
+  GitHub's five, each with the title its boxes show, a colour (one of the theme's, or a
+  custom one from a colour picker) and an icon
+  ([docs/markdown.md](docs/markdown.md#notes-and-boxes)); and the *built-in math
+  macros*, copied from the ones the wiki ships with the first time the section is
+  opened, then edited there, with KaTeX's check as they are typed and, before macros
+  are taken out, the pages that use them.
 
   The mail password and the providers' client secrets are typed once, kept in the
   wiki's database (beside the password and session hashes it holds already, so as

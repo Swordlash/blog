@@ -70,6 +70,7 @@ module Wiki.Core.Markdown.Ast
 
     -- * Reading the tree
   , plainText
+  , formulasOf
   , attribute
   , classes
   , mentions
@@ -308,6 +309,34 @@ syntax =
     <> CME.attributesSpec
     <> CM.defaultSyntaxSpec
     <> CME.pipeTableSpec
+
+-- | The formulas of some blocks, inline and display alike, in the order
+-- of the document: what KaTeX sets, and so where a page's own macro
+-- definitions are and where its macros are used. Code, a TikZ picture and
+-- raw HTML are not formulas, even when they show TeX.
+formulasOf :: [Block] -> [Text]
+formulasOf = concatMap ofBlock
+  where
+    ofBlock = \case
+      Para xs -> ofInlines xs
+      Plain xs -> ofInlines xs
+      Heading _ _ xs -> ofInlines xs
+      BlockQuote bs -> formulasOf bs
+      MathBlock tex -> [tex]
+      List _ items -> concat [formulasOf bs | ListItem _ bs <- items]
+      Table _ header rows -> concatMap ofInlines (header <> concat rows)
+      Div _ bs -> formulasOf bs
+      Alert _ box bs -> foldMap ofInlines box.title <> formulasOf bs
+      Footnotes notes -> concat [formulasOf bs | Footnote _ _ bs <- notes]
+      _ -> []
+    ofInlines = concatMap $ \case
+      Math _ tex -> [tex]
+      Emph xs -> ofInlines xs
+      Strong xs -> ofInlines xs
+      Strikeout xs -> ofInlines xs
+      Link _ _ _ xs -> ofInlines xs
+      Image _ _ _ xs -> ofInlines xs
+      _ -> []
 
 -- | The text of some inlines, without their markup: what a heading's
 -- identifier is made from, and an image's @alt@ text.

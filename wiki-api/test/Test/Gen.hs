@@ -131,7 +131,8 @@ genSessionInfo = do
   providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
   exports <- sublistOf [minBound .. maxBound]
   boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements (CustomColour "#1a7f37" : themeColours) <*> elements [minBound .. maxBound]))
-  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage}
+  mathMacros <- oneof [pure Nothing, Just <$> genText]
+  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> (Password <$> genText)

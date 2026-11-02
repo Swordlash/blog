@@ -45,14 +45,14 @@ spec m = do
 
 -- | Nobody, in a wiki of this access.
 nobodyIn :: Access -> SessionInfo
-nobodyIn access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = if access == Closed then defaultHomePage else (demoState demoNow).server.homePage}
+nobodyIn access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = if access == Closed then defaultHomePage else (demoState demoNow).server.homePage, mathMacros = Nothing}
 
 -- | One of the demo's users, signed in.
 signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing}
 
 registering :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 registering m = describe "making an account" $ do

@@ -14,12 +14,13 @@ module Wiki.App.Backend.Contract.Admin (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Activity (Activity (..), firstPage)
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), defaultSettings, pageOfDirectory)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), MacroUse (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), defaultSettings, pageOfDirectory)
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (HomePage (..), MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), defaultHomePage, noServerSettings)
@@ -598,18 +599,45 @@ serverWith user password secret =
     , assistantHosts = []
     , boxes = []
     , homePage = defaultHomePage
+    , mathMacros = Nothing
     }
 
 -- | Settings as they are, with no kinds of box.
 withoutBoxes :: ServerSettingsOf s -> ServerSettingsOf s
-withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = [], homePage = defaultHomePage}
+withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
 -- | Settings with nothing set but these kinds of box.
 boxesOnly :: [BoxKind] -> ServerSettingsChange
-boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes, homePage = defaultHomePage}
+boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes, homePage = defaultHomePage, mathMacros = Nothing}
 
 serverSide :: (MonadAdmin m, MonadWiki m, MonadComments m) => SpecWith (Fixture m)
 serverSide = describe "serverSettings and setServerSettings" $ do
+  it "keeps the built-in math macros as written, and every session carries them (WP5.41)" $ \(Fixture run) -> do
+    (run admin serverSettings >>= ok) >>= \s -> s.mathMacros `shouldBe` Nothing
+    let block = "\\newcommand{\\Prob}{\\operatorname{P}}\n\\newcommand{\\eps}{\\varepsilon}"
+    set <- run admin (setServerSettings (boxesOnly []) {SS.mathMacros = Just ("\n" <> block <> "\n\n")}) >>= ok
+    set.mathMacros `shouldBe` Just block
+    for_ [Anonymous, editor] $ \who -> run who session >>= \s -> s.mathMacros `shouldBe` Just block
+    -- An empty block is a block: the shipped macros do not come back.
+    emptied <- run admin (setServerSettings (boxesOnly []) {SS.mathMacros = Just ""}) >>= ok
+    emptied.mathMacros `shouldBe` Just ""
+    run admin (setServerSettings (boxesOnly []) {SS.mathMacros = Just (T.replicate 20001 "x")}) >>= shouldBeInvalid
+
+  it "finds the pages that use macros, for an administrator only (WP5.41)" $ \(Fixture run) -> do
+    blog <- run admin (getSpace [slug "blog"]) >>= ok
+    used <- run admin (createPage blog.id Nothing "Chances" "# Chances\n\n$\\Likely(A) + \\Likelyhood$") >>= ok
+    _ <- run admin (createPage blog.id Nothing "Own" "# Own\n\n$$\\newcommand{\\Likely}{P}$$ $\\Likely$") >>= ok
+    _ <- run admin (createPage blog.id Nothing "Other" "# Other\n\n$\\Likelier$") >>= ok
+    -- A definition shown in a code example defines nothing: the formula
+    -- still needs the built-in macro. A name in code is no use.
+    shown <- run admin (createPage blog.id Nothing "Shown" "# Shown\n\n```tex\n\\newcommand{\\Likely}{P}\n```\n\n$\\Likely$") >>= ok
+    _ <- run admin (createPage blog.id Nothing "Code" "# Code\n\n`\\Likely` is a macro.") >>= ok
+    -- A formula before the page's own definition still needs the built-in
+    -- macro, as the page sets each formula with the definitions before it.
+    late <- run admin (createPage blog.id Nothing "Late" "# Late\n\n$\\Likely$\n\n$$\\newcommand{\\Likely}{P}$$") >>= ok
+    found <- run admin (macroUses ["\\Likely", "\\nowhere"]) >>= ok
+    [(u.usedOn, u.pageTitle, u.uses) | u <- found] `shouldMatchList` [(used.id, "Chances", ["\\Likely"]), (shown.id, "Shown", ["\\Likely"]), (late.id, "Late", ["\\Likely"])]
+    for_ [Anonymous, editor, reader] $ \who -> run who (macroUses ["\\Likely"]) >>= (`shouldFailWith` Forbidden)
   it "reuses page saves, attachments, drafts and versions for the home document" $ \(Fixture run) -> do
     (space, page) <- run admin getHomeDocument >>= ok
     spaces <- run admin listSpaces

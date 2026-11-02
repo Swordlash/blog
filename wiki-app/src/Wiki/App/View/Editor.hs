@@ -92,8 +92,10 @@
 -- which a page may not have. Its "Box" menu lists GitHub's five kinds of
 -- box and the kinds the administration defined ("Wiki.Core.Markdown.Box"),
 -- and writes the chosen kind's marker; for an administrator it ends with
--- "New kind…", which opens the administration's kinds of box in another
--- tab, so that the work here stays as it is. The editor's keys are recognised in the
+-- "New kind…", which opens a dialog with the administration's form for a
+-- kind of box ("Wiki.App.View.NewKindDialog"), so that the work here stays
+-- as it is; the kind saved there is written into the text and is in the
+-- menu at once. The editor's keys are recognised in the
 -- keydown's listener, which stops the browser's own action for them
 -- (Ctrl+K and Ctrl+E have defaults of their own) while the event is
 -- dispatched, whatever the component is busy with. Drag and drop events
@@ -233,6 +235,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
 import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
@@ -277,13 +280,14 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (AdminSection, Route (..))
-import Wiki.App.Route qualified as R
+import Wiki.App.Route (Route (..))
 import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.LivePreview (liveKey)
+import Wiki.App.View.MacrosPanel qualified as MacrosPanel
+import Wiki.App.View.NewKindDialog qualified as NewKindDialog
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
 import Wiki.Core.Assistant
@@ -321,6 +325,7 @@ import Wiki.Core.Markdown.Edit
   , highlightColours
   , htmlTagLabel
   , htmlTagName
+  , pageMacros
   , textColourClass
   , textColours
   )
@@ -353,6 +358,8 @@ type Slots =
   ("preview" .== H.Slot (Const Void) Void ())
     .+ ("time" .== H.Slot (Const Void) Void Int)
     .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
+    .+ ("macros" .== H.Slot (Const Void) MacrosPanel.Output ())
+    .+ ("newKind" .== H.Slot (Const Void) NewKindDialog.Output ())
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -489,6 +496,10 @@ data State = State
   , conflict :: Maybe Clash
   , assistantOpen :: Bool
   -- ^ Whether the writing assistant's panel is shown.
+  , macrosOpen :: Bool
+  -- ^ Whether the math macros' panel is shown ("Wiki.App.View.MacrosPanel").
+  , kindDialogOpen :: Bool
+  -- ^ Whether the "New kind…" dialog is shown ("Wiki.App.View.NewKindDialog").
   , assistantMounted :: Bool
   -- ^ Whether the panel has been shown yet: it is then mounted, and kept.
   , hostElement :: Maybe Element
@@ -539,6 +550,11 @@ data Action
   | AttachOrImage
   | ToggleMenu Menu
   | CloseMenu
+  | ToggleMacros
+  | FromMacros MacrosPanel.Output
+  | NewKind
+  | FromNewKind NewKindDialog.Output
+  | PanelSubmitted
   | ShowPreview
   | WentTo Bool
   | BackToEditing
@@ -617,7 +633,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadAdmin m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -664,6 +680,8 @@ component =
               , changedSince = Nothing
               , conflict = Nothing
               , assistantOpen = False
+              , macrosOpen = False
+              , kindDialogOpen = False
               , assistantMounted = False
               , hostElement = Nothing
               , selection = Nothing
@@ -710,11 +728,14 @@ component =
     -- stylesheet shows one of them (or both side by side) through the
     -- form's classes, so that what is hidden stays mounted. What appears
     -- and disappears above them (a draft found, Cancel's question, an
-    -- error) is in its own holder element, which is always there. An
-    -- element appearing or disappearing among the form's children would
-    -- shift the ones after it, and Halogen, which matches unkeyed children
-    -- by position, would recreate the Markdown's view, losing CodeMirror's
-    -- text and undo history.
+    -- error, the math macros' panel, the "New kind…" dialog) is in a holder
+    -- element of its own, which is always there. The panels' holder stops
+    -- the submit events of their own forms, which would otherwise reach
+    -- the page's form and save the page. An element appearing or
+    -- disappearing among the form's children would shift the ones after
+    -- it, and Halogen, which matches unkeyed children by position, would
+    -- recreate the Markdown's view, losing CodeMirror's text and undo
+    -- history.
     editing :: State -> Work -> H.ComponentHTML Action Slots m
     editing st work =
       [hh|
@@ -742,7 +763,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = newKindHref st.input.context} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen} }}
           </div>
           <div class="editor-notices">
             {{ presenceView st }}
@@ -751,6 +772,14 @@ component =
             {{ foundView st }}
             {{ cancelQuestion st }}
             {{ problemView st }}
+          </div>
+          <div class="editor-panels" {{ HE.stoppingPropagation (HE.handler (EventType "submit") (const PanelSubmitted)) }}>
+            {% if st.macrosOpen %}
+              {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
+            {% end %}
+            {% if st.kindDialogOpen %}
+              {{ HH.slot "newKind" () NewKindDialog.component NewKindDialog.Input {context = st.input.context} FromNewKind }}
+            {% end %}
           </div>
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
@@ -1044,7 +1073,7 @@ component =
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
-          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ htmlMenu bar }}</div>
+          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ macrosButton bar }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
             <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
@@ -1080,13 +1109,18 @@ component =
               {% for (marker, label) in bar.kinds %}
                 <button type="button" role="menuitem" data-kind={{ marker }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
               {% end %}
-              {% for href in maybeToList bar.newKind %}
-                <a role="menuitem" class="box-menu-new" href={{ href }} target="_blank" rel="noopener" onClick={{ const CloseMenu }}>New kind…</a>
+              {% if bar.newKind %}
+                <button type="button" role="menuitem" class="box-menu-new" onClick={{ const NewKind }}>New kind…</button>
               {% end %}
             </div>
           {% end %}
         </div>
       |]
+
+    -- The math macros' panel, shown under the toolbar while pressed.
+    macrosButton :: Bar -> H.ComponentHTML Action Slots m
+    macrosButton bar =
+      [hh|<button type="button" class="tool editor-macros-toggle" title="Math macros: the space's and the page's" aria-label="Math macros" aria-pressed={{ ariaBool bar.macrosShown }} onClick={{ const ToggleMacros }}>{{ icon macrosIcon }}</button>|]
 
     htmlMenu :: Bar -> H.ComponentHTML Action Slots m
     htmlMenu bar =
@@ -1371,6 +1405,25 @@ component =
         gets (\st -> st.fileInput) >>= H.getRef >>= traverse_ (H.liftEffect . clickElement)
       ToggleMenu which -> modify (\st -> st {menu = if st.menu == Just which then Nothing else Just which})
       CloseMenu -> closeMenu
+      ToggleMacros -> closeMenu >> modify (\st -> st {macrosOpen = not st.macrosOpen})
+      -- The page's block is written into the text as a toolbar command
+      -- writes, one edit that undo takes back.
+      FromMacros (MacrosPanel.PageMacrosSet block) -> run (PageMacros block)
+      -- The space's macros changed: the shell reloads the wiki, and the
+      -- preview sets the formulas with them.
+      FromMacros MacrosPanel.SpaceMacrosSaved -> H.raise (Changed Nothing)
+      -- A panel's own form was submitted: the panel has handled it, and
+      -- the event goes no further, to the page's form, which would save.
+      PanelSubmitted -> pass
+      NewKind -> closeMenu >> modify (\st -> st {kindDialogOpen = True})
+      FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})
+      -- A kind was defined in the dialog: a box of it goes into the text,
+      -- as if chosen from the menu, and the shell reads the session again,
+      -- which has the new kind, for the menu and the preview.
+      FromNewKind (NewKindDialog.Saved kind) -> do
+        modify (\st -> st {kindDialogOpen = False})
+        run (Box (T.toUpper kind.name))
+        H.raise (Changed Nothing)
       ShowPreview -> showPreview True
       -- The browser's Back or Forward reached the preview's entry, or
       -- another: the editor shows what the entry stands for.
@@ -2124,9 +2177,11 @@ data Bar = Bar
   -- the page has one.
   , kinds :: [(Text, Text)]
   -- ^ The kinds of box the "Box" menu offers ('boxChoices').
-  , newKind :: Maybe Text
-  -- ^ For an administrator, the address of the administration's kinds of
-  -- box ('newKindHref').
+  , newKind :: Bool
+  -- ^ Whether the "Box" menu offers "New kind…", which only an
+  -- administrator may use ('mayDefineKinds').
+  , macrosShown :: Bool
+  -- ^ Whether the math macros' panel is shown.
   }
   deriving stock (Eq)
 
@@ -2143,14 +2198,10 @@ boxChoices defined =
   [(T.toUpper (alertKindName k), kindTitle (alertKindName k)) | k <- builtInKinds]
     <> [(T.toUpper k.name, k.label) | k <- defined]
 
--- | Where an administrator defines kinds of box: the administration's
--- section that has them. 'Nothing' for anyone else.
-newKindHref :: Context -> Maybe Text
-newKindHref ctx = Router.href ctx.router (Admin boxesSection) <$ guard (hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer)
-
--- | The administration's section that holds the kinds of box.
-boxesSection :: AdminSection
-boxesSection = R.Server
+-- | Whether the one asking may define kinds of box: an administrator of
+-- the wiki, who writes the server's settings.
+mayDefineKinds :: Context -> Bool
+mayDefineKinds ctx = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
 
 -- | A toolbar button: the command it runs, its name, the shortcut that
 -- also runs it, and its icon (an SVG path in a 16 by 16 box, drawn as a
@@ -2196,7 +2247,7 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
@@ -2206,6 +2257,8 @@ previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 sideBySideIcon = "M1.5 2.5h13v11h-13zM8 2.5v11"
 -- A box with a bar down its left side and a title line, as a page draws one.
 boxIcon = "M2.5 2.5h11v11h-11zM2.5 2.5v11M5 5.5h6M5 8.5h6M5 11h4"
+-- A backslash and braces, as a macro's definition is written.
+macrosIcon = "M2 3l4 10M9.5 3c-1.5 0-1.5 1-1.5 2.5S7 8 6.5 8c.5 0 1.5.5 1.5 2.5S8 13 9.5 13M12 3c1.5 0 1.5 1 1.5 2.5S14.5 8 15 8c-.5 0-1.5.5-1.5 2.5S13.5 13 12 13"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]

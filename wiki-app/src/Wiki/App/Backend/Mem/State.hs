@@ -58,6 +58,7 @@ module Wiki.App.Backend.Mem.State
   , renameSpaceIn
   , setSpacePublicIn
   , setSpaceMathMacrosIn
+  , macroUsesInState
   , setSpaceProfileIn
   , uploadSpaceIconIn
   , moveSpaceIn
@@ -160,12 +161,14 @@ import Wiki.Api.Admin
   , Invitation (Invitation)
   , Invitations (Invitations)
   , Invited (Invited)
+  , MacroUse
   , ServerStatus
   , UserPage
   , UserQuery
   , WikiSettings (WikiSettings)
   , checkUserQuery
   , invitationLifetime
+  , macroUsesIn
   , pageOfDirectory
   )
 import Wiki.Api.Admin qualified as A
@@ -219,7 +222,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withMathMacros, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
@@ -533,7 +536,7 @@ insertSpace parent name public now st0 =
 
 -- | Give a space math macros, checking nothing.
 setMathMacros :: SpaceId -> Text -> MemState -> MemState
-setMathMacros sid macros st = st {spaces = Map.adjust (\s -> s {mathMacros = macros}) sid st.spaces}
+setMathMacros sid macros st = st {spaces = Map.adjust (withMathMacros macros) sid st.spaces}
 
 -- | Give a space a profile, checking nothing: for the demo's content.
 setProfile :: SpaceId -> SpaceProfile -> MemState -> MemState
@@ -777,7 +780,7 @@ repage space parent slug position p =
 -- box the settings define, which everyone's pages are rendered with.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.homePage = if st.grants.access == Closed && not st.server.homePage.showAnonymous then SS.defaultHomePage else st.server.homePage}
+  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.mathMacros = st.server.mathMacros, B.homePage = if st.grants.access == Closed && not st.server.homePage.showAnonymous then SS.defaultHomePage else st.server.homePage}
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -796,6 +799,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
         B.exports = []
       , B.homePage = st.server.homePage
       , B.boxes = st.server.boxes
+      , B.mathMacros = st.server.mathMacros
       }
 
 -- | The spaces the current user may view, with their ancestors.
@@ -947,7 +951,13 @@ setSpacePublicIn sid public = adjustSpace sid (\s -> pure s {public})
 -- it is edited, and a block KaTeX cannot parse never stops a page from
 -- rendering ("Wiki.Core.Math").
 setSpaceMathMacrosIn :: SpaceId -> Text -> Write Space
-setSpaceMathMacrosIn sid macros = adjustSpace sid (\s -> pure s {mathMacros = trimLines macros})
+setSpaceMathMacrosIn sid macros st = do
+  -- Whoever may edit the whole space may set its macros (WP5.41 of
+  -- docs/PLAN.md), from the editor as from the space's page.
+  (s, c) <- findSpace st sid
+  requireEdit st c
+  let s' = withMathMacros (trimLines macros) s
+  pure (st {spaces = Map.insert sid s' st.spaces}, s')
   where
     trimLines = T.intercalate "\n" . reverse . dropWhile blank . reverse . dropWhile blank . T.lines
     blank = T.null . T.strip
@@ -1630,6 +1640,13 @@ serverSettingsIn :: MemState -> Either WikiError ServerSettings
 serverSettingsIn st = do
   requireAdministrator st
   pure (secretState <$> st.server)
+
+-- | The pages that use any of these math macros, among all the wiki's
+-- pages, for an administrator ('Wiki.Api.Admin.macroUsesIn').
+macroUsesInState :: [Text] -> MemState -> Either WikiError [MacroUse]
+macroUsesInState names st = do
+  requireAdministrator st
+  pure (macroUsesIn names (Map.elems st.pages))
 
 -- | Apply a change to the server's settings, checked as a server checks
 -- them.

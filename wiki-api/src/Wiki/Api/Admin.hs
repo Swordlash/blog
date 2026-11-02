@@ -48,6 +48,10 @@ module Wiki.Api.Admin
   , NewInvitation (..)
   , Invited (..)
   , invitationLifetime
+
+    -- * Macros the pages use
+  , MacroUse (..)
+  , macroUsesIn
   )
 where
 
@@ -60,7 +64,10 @@ import Protolude
 import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Id (GroupId, InvitationId, UserId)
+import Wiki.Core.Id (GroupId, InvitationId, PageId, SpaceId, UserId)
+import Wiki.Core.Markdown.Ast (formulasOf, parseMarkdown)
+import Wiki.Core.Math (definedMacros, usesMacro)
+import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.User (Email, Group (..), Login (..), Membership, User (..))
 
 -- | 'ServerStatus': the response to @GET \/api\/v1\/admin\/status@.
@@ -439,3 +446,49 @@ data Invited = Invited
 -- forgotten in a mailbox does not stay valid.
 invitationLifetime :: NominalDiffTime
 invitationLifetime = 7 * 24 * 60 * 60
+
+--------------------------------------------------------------------------------
+-- Macros the pages use
+
+-- | 'MacroUse' is a page that uses some of the built-in math macros an
+-- administrator is about to remove (WP5.41 of docs/PLAN.md): the editor's
+-- settings name it in their warning, so that the administrator knows which
+-- pages the removal breaks.
+data MacroUse = MacroUse
+  { usedOn :: PageId
+  , inSpace :: SpaceId
+  , pageTitle :: Text
+  , uses :: [Text]
+  -- ^ The macros of those asked about that the page uses, in the order
+  -- asked.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The pages among these that use any of these macros ('usesMacro'),
+-- each with the macros it uses, in the order of the pages. Only a page's
+-- formulas are read ('formulasOf'): a definition shown in a code example
+-- defines nothing, and a name in prose uses nothing. They are read in the
+-- order of the page, as the page sets them: a formula has the definitions
+-- of the formulas before it and its own, so a use before the page defines
+-- a macro still needs the built-in one. A page that cannot be parsed is
+-- read whole, defining nothing, so that a use is never missed.
+macroUsesIn :: [Text] -> [Page] -> [MacroUse]
+macroUsesIn names pages =
+  [ MacroUse {usedOn = p.id, inSpace = p.space, pageTitle = p.title, uses}
+  | p <- pages
+  , let formulas = either (const [p.body]) formulasOf (parseMarkdown p.body)
+        used = usedBefore formulas
+        uses = filter (`elem` used) names
+  , not (null uses)
+  ]
+  where
+    -- The names asked about that a formula uses before the page has
+    -- defined them, walking the formulas in order.
+    usedBefore = go []
+      where
+        go _ [] = []
+        go defined (tex : rest) =
+          let own = definedMacros tex
+              here = [n | n <- names, n `notElem` defined, n `notElem` own, usesMacro n tex]
+           in here <> go (defined <> own) rest

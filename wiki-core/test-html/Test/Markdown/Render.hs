@@ -154,6 +154,9 @@ spec = describe "Markdown.Render" $ do
       "So $x^2$ holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
     it "writes display math in a div, out of the paragraph" $
       "Then $$a+b$$ ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"
+    it "writes nothing for a display formula of nothing but definitions, a page's block of macros" $ do
+      "# T\n\n```math\n\\newcommand{\\a}{1}\n```\n\nText." `shows'` "<h1 id=\"t\">T<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#t\"></a></h1><p>Text.</p>"
+      "$$\\newcommand{\\a}{1} \\a$$" `shows'` "<div class=\"math display\">\\newcommand{\\a}{1} \\a</div>"
     it "writes math between LaTeX's delimiters as it writes math between dollars" $ do
       "So \\(x^2\\) holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
       "Then \\[a+b\\] ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"
@@ -189,7 +192,8 @@ spec = describe "Markdown.Render" $ do
         "<p><span title=\"\">\\newcommand{\\a}{1}</span> <span title=\"\\newcommand{\\a}{1}\">x</span></p>"
           <> "<table><thead><tr><th><span title=\"\\newcommand{\\a}{1}\">\\def\\b{2}</span></th></tr></thead></table>"
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\a\\b</div>"
-          <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\renewcommand{\\a}{3}\n</div>"
+          -- A display formula of nothing but definitions shows nothing; its
+          -- definitions hold for the formulas after it.
           <> "<p>Last <span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">y</span>"
           <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"z\">1</a></sup></p>"
           <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">z</span>"

@@ -701,6 +701,7 @@ handlers env caller =
           , server = wiki serverSettings
           , setHomePage = wiki . setHomePage
           , setServer = wiki . setServerSettings
+          , macroUses = wiki . macroUses
           , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
           , testMail = \body -> administrator >> liftIO (sendingTestMail env body) >>= either refuse pure
           , -- The storage keeps the settings and checks who may; the
@@ -845,7 +846,7 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO availableFormats
       settings <- liftIO (readServerSettings env.storage)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage}
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.

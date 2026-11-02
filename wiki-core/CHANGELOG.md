@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The built-in math macros may be the server's own copy (WP5.41):
+`Wiki.Core.Math` gains `wikiMacros`, which marks that block (a TeX comment,
+`wikiMacrosMarker`) so that the islands read it in place of the shipped
+ones, and `definedMacros`, `removedMacros`, `usesMacro` and
+`onlyDefinitions`, which read what a block of TeX defines and whether a
+text uses a macro. A display formula of nothing but definitions renders as
+nothing, as the export already leaves it out, so a page may keep its macros
+in a `math` block under its title: the editor's command `PageMacros` sets
+that block, and `pageMacros` reads it. `Wiki.Core.Space.withMathMacros`
+sets a space's macros.
+
 Boxes are numbered, and their titles hold Markdown (WP5.40). `Alert` is now
 `Alert AlertKind BoxHead [Block]`: `BoxHead` holds the title, read with the
 page's inline parser as a heading's text is (so `$x$` in it is math, and a

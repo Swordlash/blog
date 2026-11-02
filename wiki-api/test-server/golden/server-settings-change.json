@@ -4,7 +4,7 @@
   ],
   "boxes": [
     {
-      "colour": "grey",
+      "colour": "#1a7f37",
       "icon": "none",
       "label": "By the way",
       "name": "aside"
@@ -24,6 +24,7 @@
     "security": "tls",
     "user": "wiki"
   },
+  "mathMacros": null,
   "providers": [
     {
       "clientId": "id.apps.example",

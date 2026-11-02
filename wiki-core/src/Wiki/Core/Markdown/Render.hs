@@ -26,7 +26,8 @@
 -- that define macros ("Wiki.Core.Math"), in order. So a page's macro
 -- definitions apply to every formula after them, as in a LaTeX document,
 -- and how a formula is typeset depends on the page alone, not on the
--- order in which the islands are drawn.
+-- order in which the islands are drawn. A display formula that does
+-- nothing but define macros shows nothing.
 --
 -- __Embeds.__ @![caption](destination)@ shows what the destination resolves
 -- to, according to its media type: for an attachment, the type the wiki
@@ -96,7 +97,7 @@ import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
-import Wiki.Core.Math (Macros (..), definesMacros)
+import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
 
 -- | 'Options' are the parts of rendering that the caller decides: how
 -- islands are drawn, and how links and mentions are resolved.
@@ -250,7 +251,11 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
-      MathBlock tex -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
+      -- A block of nothing but definitions (a page's macros, WP5.41) shows
+      -- nothing; its macros hold for the formulas after it all the same.
+      MathBlock tex
+        | onlyDefinitions tex -> [] <$ formula tex
+        | otherwise -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs

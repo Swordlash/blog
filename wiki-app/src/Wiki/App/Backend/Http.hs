@@ -507,6 +507,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   setHomePage new = write (endpoints.admin.setHomePage new)
   serverSettings = cached (\c -> c.server) endpoints.admin.server withServerSettings
   setServerSettings new = write (endpoints.admin.setServer new)
+  macroUses names = send (endpoints.admin.macroUses names)
   checkProvider name given = send (endpoints.admin.checkProvider name given)
   sendTestMail address = send (endpoints.admin.testMail MailTest {to = address})
 

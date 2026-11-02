@@ -503,15 +503,18 @@ mathMacros = describe "setSpaceMathMacros" $ do
     moved <- run admin (moveSpace projects.id Nothing) >>= ok
     moved.mathMacros `shouldBe` "\\def\\x{1}"
 
-  it "takes AdministerSpace" $ \(Fixture run) -> do
+  it "takes Edit on the whole space, as the editor's macros panel does (WP5.41)" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
+    docs <- spaceAt run admin "docs"
     team <- spaceAt run admin "team"
-    run editor (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
+    edited <- run editor (setSpaceMathMacros blog.id "\\def\\x{1}") >>= ok
+    edited.mathMacros `shouldBe` "\\def\\x{1}"
+    run editor (setSpaceMathMacros docs.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
     run Anonymous (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
     run reader (setSpaceMathMacros team.id "\\def\\x{1}") >>= (`shouldFailWith` NotFound)
     run admin (setSpaceMathMacros (SpaceId "no-such-space") "") >>= (`shouldFailWith` NotFound)
-    unchanged <- spaceAt run admin "blog"
-    unchanged.mathMacros `shouldBe` ""
+    unchanged <- spaceAt run admin "docs"
+    unchanged.mathMacros `shouldBe` docs.mathMacros
 
 --------------------------------------------------------------------------------
 -- Moving spaces

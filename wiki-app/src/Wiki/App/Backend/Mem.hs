@@ -346,6 +346,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   setHomePage = write . setHomePageIn
   serverSettings = query serverSettingsIn
   setServerSettings = write . setServerSettingsIn
+  macroUses = query . macroUsesInState
   checkProvider name = query . checkProviderIn name
   sendTestMail = query . sendTestMailIn
 

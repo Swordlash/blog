@@ -31,6 +31,10 @@
 -- * Templates ('Table', 'HorizontalRule') go after the line the selection
 --   ends on.
 --
+-- * 'PageMacros' sets the page's block of macros ('pageMacros'): a
+--   @math@ fence of nothing but definitions under the title line, which a
+--   page shows as nothing. An empty block removes it.
+--
 -- * 'Box' makes the touched lines a box of a kind, @> [!KIND]@: it quotes
 --   them, with the marker's line above them, or changes the kind of the
 --   box whose marker is on the first of them. With nothing selected it puts
@@ -74,6 +78,7 @@ module Wiki.Core.Markdown.Edit
   , textColourClass
   , highlightClass
   , apply
+  , pageMacros
   )
 where
 
@@ -82,6 +87,7 @@ import Data.List (findIndex, lookup, span, zip3)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
+import Wiki.Core.Math (onlyDefinitions)
 
 -- | 'Selection': what is selected, from 'start' to 'end', in characters
 -- from the start of the text. Nothing is selected when the two are equal;
@@ -127,6 +133,8 @@ data Command
   | -- | A box of a kind, by the name written in its marker (@TIP@,
     -- @EXERCISE@; "Wiki.Core.Markdown.Box").
     Box Text
+  | -- | The page's block of macros set to this text ('pageMacros').
+    PageMacros Text
   deriving stock (Eq, Show)
 
 -- | The HTML the toolbar offers: elements of the allowlist
@@ -218,6 +226,7 @@ apply command text selection = case command of
   TextColour c -> colour textWrapper (textColourClass <$> c) text sel
   Highlight c -> colour highlightWrapper (highlightClass <$> c) text sel
   Box kind -> box kind text sel
+  PageMacros block -> setPageMacros block text sel
   where
     sel = normalise text selection
     inline :: Markers -> Text -> (Text, Selection)
@@ -1000,3 +1009,61 @@ blockPrefix l = T.length l - T.length (afterMarker (afterQuotes l))
             hashes = T.takeWhile (== '#') r
             rest = T.drop (T.length hashes) r
          in if T.length hashes `elem` [1 .. 6] && T.isPrefixOf " " rest then T.drop 1 rest else t
+
+-- The page's macros
+
+-- | The page's block of macros (WP5.41 of docs/PLAN.md), if it has one: a
+-- @math@ fence right under the title line (blank lines between them
+-- allowed) that holds nothing but definitions. Its definitions hold for
+-- every formula of the page, which come after it, and the page shows
+-- nothing for it ("Wiki.Core.Markdown.Render"). The editor's "Macros"
+-- panel edits it.
+pageMacros :: Text -> Maybe Text
+pageMacros text = (\(_, _, inside) -> inside) <$> pageMacrosBlock text
+
+-- | Where the page's block of macros is: the offset of its opening fence,
+-- its length up to the end of its closing fence, and what it holds.
+pageMacrosBlock :: Text -> Maybe (Int, Int, Text)
+pageMacrosBlock text = do
+  let ls = allLines text
+      afterTitle = case ls of
+        l : rest | isTitleLine l.line -> rest
+        _ -> ls
+  open : rest <- Just (dropWhile (T.all isSpace . (\l -> l.line)) afterTitle)
+  guard (T.strip open.line == "```math")
+  let (inside, after) = span ((/= "```") . T.strip . (\l -> l.line)) rest
+      content = T.intercalate "\n" (map (\l -> l.line) inside)
+  close <- head after
+  guard (T.all isSpace content || onlyDefinitions content)
+  pure (open.at, close.at + T.length close.line - open.at, content)
+
+-- | Whether a line is a page's title line, a level-one heading.
+isTitleLine :: Text -> Bool
+isTitleLine l = l == "#" || "# " `T.isPrefixOf` l
+
+-- | Set the page's block of macros ('pageMacros'): replace the one the page
+-- has, put one under the title line (or at the top of a page without one),
+-- or, for an empty block, remove it, with the blank line after it. The
+-- selection stays on the same text.
+setPageMacros :: Text -> Text -> Selection -> (Text, Selection)
+setPageMacros block text (Selection s e) = (replace [rep] text, Selection (moved Before [rep] s) (moved Before [rep] e))
+  where
+    new = T.intercalate "\n" (reverse (dropWhile blank (reverse (dropWhile blank (T.lines block)))))
+    blank = T.all isSpace
+    fence = "```math\n" <> new <> "\n```"
+    rep = case pageMacrosBlock text of
+      Just (at, len, _)
+        | T.null new -> Replacement at (len + T.length (T.take 2 (T.takeWhile (== '\n') (T.drop (at + len) text)))) ""
+        | otherwise -> Replacement at len fence
+      Nothing
+        | T.null new -> Replacement 0 0 ""
+        | otherwise -> case allLines text of
+            l : _
+              | isTitleLine l.line ->
+                  let at = T.length l.line
+                      rest = T.drop at text
+                      after
+                        | T.null rest || "\n\n" `T.isPrefixOf` rest = ""
+                        | otherwise = "\n"
+                   in Replacement at 0 ("\n\n" <> fence <> after)
+            _ -> Replacement 0 0 (fence <> (if T.null text then "" else "\n\n"))

@@ -108,15 +108,18 @@ library
       Wiki.App.View.Bell
       Wiki.App.View.Blog
       Wiki.App.View.Body
+      Wiki.App.View.BoxKindForm
       Wiki.App.View.Comments
       Wiki.App.View.Common
       Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
+      Wiki.App.View.EditorSettings
       Wiki.App.View.Groups
       Wiki.App.View.Help
       Wiki.App.View.Export
       Wiki.App.View.Import
+      Wiki.App.View.NewKindDialog
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
       Wiki.App.View.NotificationSettings
@@ -124,6 +127,7 @@ library
       Wiki.App.View.Permissions
       Wiki.App.View.Preview
       Wiki.App.View.LivePreview
+      Wiki.App.View.MacrosPanel
       Wiki.App.View.ProviderIcons
       Wiki.App.View.Reset
       Wiki.App.View.Search
@@ -370,6 +374,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Search
       Test.Browser.Security
       Test.Browser.Server
+      Test.Browser.EditorSettings
       Test.Browser.Shell
       Test.Browser.Slides
       Test.Browser.Source

@@ -84,7 +84,7 @@ reading backing = describe "reading and writing them" $ do
 
   it "gives the kinds of box to every reader's session, and the pages the server renders draw them" $ withDemoRunning backing identity $ \r -> do
     let exercise = BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}
-    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise], homePage = defaultHomePage}
+    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise], homePage = defaultHomePage, mathMacros = Nothing}
     set.boxes `shouldBe` [exercise]
     session <- getUrl r (onPublic r links.session) >>= jsonAs 200
     (session :: Types.SessionInfo).boxes `shouldBe` [exercise]

@@ -171,7 +171,7 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
           deck = either (const False) isDeck read'.blocks
           looks = either (const (deckOf [])) deckOf read'.blocks
           output = outputOf format
-          place = placeOf settings.publicUrl settings.boxes spaces pages page (\_ _ -> Nothing) ""
+          place = placeOf settings.publicUrl settings.boxes settings.mathMacros spaces pages page (\_ _ -> Nothing) ""
       if forDecks format && not deck
         then pure (Left (ApiError.Invalid "Only a page written as slides exports as a presentation."))
         else do
@@ -212,7 +212,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
           let pageOf p =
                 let anchor = Map.findWithDefault "" p.id anchors
                  in DocumentPage p (length (pagePathOf pages p.id) - 1) anchor
-                      <$> pageBlocks output (placeOf settings.publicUrl settings.boxes spaces pages p inDocument (anchor <> "-") stored) (readPage p.body)
+                      <$> pageBlocks output (placeOf settings.publicUrl settings.boxes settings.mathMacros spaces pages p inDocument (anchor <> "-") stored) (readPage p.body)
           case traverse pageOf ordered of
             Left e -> pure (Left (ApiError.Invalid ("A page could not be read: " <> renderError e)))
             Right documentPages -> do
@@ -263,8 +263,8 @@ refusalOf = \case
   Unreachable t -> ApiError.Invalid t
 
 -- | Where a page is, for reading it.
-placeOf :: Maybe Url -> [BoxKind] -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
-placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
+placeOf :: Maybe Url -> [BoxKind] -> Maybe Text -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
+placeOf publicUrl boxes ownMacros spaces pages page inDocument idPrefix stored =
   Place
     { spaces
     , spacePath = spacePathOf spaces page.space
@@ -276,7 +276,7 @@ placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
     , publicUrl
     , inDocument
     , idPrefix
-    , macros = Macros [katexOwn, builtinMacros] <> spaceMacros spaces page.space
+    , macros = Macros [katexOwn, fromMaybe builtinMacros ownMacros] <> spaceMacros spaces page.space
     , boxes
     , numbering =
         Numbering
@@ -285,9 +285,11 @@ placeOf publicUrl boxes spaces pages page inDocument idPrefix stored =
           }
     }
 
--- | The macros every page has, before its space's: the wiki's built-in
--- ones, which KaTeX reads in the browser (@web/src/katex-macros.tex@,
--- embedded here as it is bundled there, so that the two cannot differ).
+-- | The macros every page has, before its space's, until an administrator
+-- keeps the wiki's own copy in the server's settings (WP5.41 of
+-- docs/PLAN.md), which then replaces them: the wiki's built-in ones, which
+-- KaTeX reads in the browser (@web/src/katex-macros.tex@, embedded here as
+-- it is bundled there, so that the two cannot differ).
 builtinMacros :: Text
 builtinMacros = $(makeRelativeToProject "../web/src/katex-macros.tex" >>= embedStringFile)
 

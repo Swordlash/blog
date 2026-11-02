@@ -49,6 +49,7 @@ $( browserJS
      ["jsbits/islands.js"]
      [ ("js_render_math", "wiki_islands_render_math", Safe, [t|Element -> JSText -> Bool -> JSText -> IO ()|])
      , ("js_check_macros", "wiki_islands_check_macros", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_builtin_macros", "wiki_islands_builtin_macros", Safe, [t|IO JSText|])
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_render_tikz", "wiki_islands_render_tikz", Safe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Safe, [t|Element -> JSText -> JSText -> IO ()|])
@@ -94,6 +95,14 @@ class (Monad m) => MonadIslands m where
   default checkMacros :: (MonadTrans t, MonadIslands n, m ~ t n) => Macros -> Text -> m (Maybe Text)
   checkMacros macros = lift . checkMacros macros
 
+  -- | The built-in macros the wiki ships with (@web/src/katex-macros.tex@),
+  -- as written: what the editor's settings start the server's own copy
+  -- from (WP5.41 of docs/PLAN.md). Natively, and in a page without the
+  -- islands' script, there are none to read, and the text is empty.
+  builtinMacros :: m Text
+  default builtinMacros :: (MonadTrans t, MonadIslands n, m ~ t n) => m Text
+  builtinMacros = lift builtinMacros
+
   renderMermaid :: Text -> Element -> m ()
   default renderMermaid :: (MonadTrans t, MonadIslands n, m ~ t n) => Text -> Element -> m ()
   renderMermaid source = lift . renderMermaid source
@@ -129,6 +138,8 @@ instance MonadIslands BrowserDOM where
     message <- fromJSText <$> js_check_macros (macrosJSON macros) (toJSText block)
     pure (if T.null message then Nothing else Just message)
 
+  builtinMacros = liftIO (fromJSText <$> js_builtin_macros)
+
   renderMermaid source element = liftIO $ js_render_mermaid element (toJSText source)
 
   renderTikz source TikzDocument {preamble, picture} element =
@@ -150,6 +161,7 @@ macrosJSON (Macros blocks) = toJSText (decodeUtf8 (BSL.toStrict (encode blocks))
 instance MonadIslands MemDOM where
   renderMath _ _ = asText
   checkMacros _ _ = pure Nothing
+  builtinMacros = pure ""
   renderMermaid = asText
   renderTikz source _ = asText source
   highlightCode _ = asText

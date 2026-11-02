@@ -194,7 +194,7 @@ Chemistry is mhchem's `\ce`, which KaTeX comes with: $\ce{2 H2 + O2 -> 2 H2O}$, 
 
 KaTeX extends with macros instead, in three layers; the nearest wins.
 
-1. **Built in**, for every page (`web/src/katex-macros.tex`):
+1. **Built in**, for every page (`web/src/katex-macros.tex`). An administrator keeps them in the administration's Editor section, under "Built-in math macros": the first time the section is opened it copies the shipped ones below, and from then on the block there is what every formula has, to add to or take from. Before a block that takes macros out is saved, the section names the pages that use them. The shipped ones are:
 
    | Macro | Is | Example |
    | --- | --- | --- |
@@ -209,7 +209,7 @@ KaTeX extends with macros instead, in three layers; the nearest wins.
    | `\eps`, `\bigO`, `\defeq` | $\eps$, $\bigO(n)$, $\defeq$ | |
 
    KaTeX itself has `\N`, `\R`, `\Z`, `\set{x \mid x > 0}`, `\argmin`, `\argmax`, `\bra`, `\ket` and `\braket`, among others.
-2. **A space's**: in a space's settings, "Math macros" (for whoever may administer the space) takes a block of definitions, one `\newcommand` a line, which every page of the space and of its subspaces has. A subspace has its parent's and its own, its own winning. The form shows KaTeX's error for a block it cannot read, and does not save it; a formula typed under the block shows what the macros make. Everyone sees a space's macros, and its ancestors', under "Math macros" on the space.
+2. **A space's**: in a space's settings, "Math macros" (for whoever may edit the whole space), or the editor's "Math macros" button, takes a block of definitions, one `\newcommand` a line, which every page of the space and of its subspaces has. A subspace has its parent's and its own, its own winning. The form shows KaTeX's error for a block it cannot read, and does not save it; a formula typed under the block shows what the macros make. Everyone sees a space's macros, and its ancestors', under "Math macros" on the space.
 3. **A page's**: a definition in one formula holds in every later formula of the page, in the order of the page, as in a LaTeX document:
 
    $$
@@ -217,7 +217,7 @@ KaTeX extends with macros instead, in three layers; the nearest wins.
    \dist{x}{z} \le \dist{x}{y} + \dist{y}{z}
    $$
 
-   and from here on $\dist{x}{x} = 0$. A definition inside braces holds only inside them, as in TeX. The editor's preview sets a page the same way.
+   and from here on $\dist{x}{x} = 0$. A definition inside braces holds only inside them, as in TeX. The editor's preview sets a page the same way. A display formula of nothing but definitions shows nothing, so a page may keep its macros in one `math` block under its title; the editor's "Math macros" button edits that block as "This page's".
 
 A nearer layer may define a macro of a farther one again with `\newcommand`, without an error: a page's `\newcommand{\eps}{\epsilon}` replaces the built-in `\eps` on that page, from that formula on. `\renewcommand` works too. KaTeX's own commands (`\R`, `\vec`, `\set` and the rest) are another matter: one of those is changed with `\renewcommand` only, as in LaTeX. `\def`, `\gdef` and `\let` are read too.
 
@@ -287,7 +287,7 @@ The five are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`. Any other word
 > [!EXERCISE]
 > Prove that the sum of two even numbers is even.
 
-An administrator can define a kind, in the administration's Server section, under "Boxes": the title its boxes show, a colour of the theme (blue, green, purple, amber, red, teal, orange, pink or grey) or a custom one picked with a colour picker, and an icon (info, lightbulb, pencil, question, check, star, book, flag, or none). The theme's colours change with the light and the dark scheme; a custom colour is the same in both. A kind nobody defined is a plain box. The five keep their own look and cannot be defined. In the editor, the toolbar's **Box** button lists the five and the kinds defined, and writes the first line of the box chosen (around the lines selected, if any); for an administrator it ends with **New kind…**, which opens the kinds of box in another tab.
+An administrator can define a kind, in the administration's Editor section, under "Boxes": the title its boxes show, a colour of the theme (blue, green, purple, amber, red, teal, orange, pink or grey) or a custom one picked with a colour picker, and an icon (info, lightbulb, pencil, question, check, star, book, flag, or none). The theme's colours change with the light and the dark scheme; a custom colour is the same in both. A kind nobody defined is a plain box. The five keep their own look and cannot be defined. In the editor, the toolbar's **Box** button lists the five and the kinds defined, and writes the first line of the box chosen (around the lines selected, if any); for an administrator it ends with **New kind…**, which opens a dialog with the same form as the administration's, and writes a box of the kind saved there.
 
 Boxes are numbered, each kind on its own: a page's tips are Tip 1, Tip 2, and its first exercise is Exercise 1. A space chooses how, in its settings, under "Numbers of boxes":
 

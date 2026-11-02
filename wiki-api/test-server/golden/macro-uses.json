@@ -1,0 +1,10 @@
+[
+  {
+    "inSpace": "s1",
+    "pageTitle": "Chances",
+    "usedOn": "p1",
+    "uses": [
+      "\\Prob"
+    ]
+  }
+]

@@ -37,6 +37,7 @@ module Test.Sample
   , emailState
   , serverSettings
   , serverChange
+  , macroUse
   , providerCheck
   , backups
   , backupChange
@@ -62,7 +63,7 @@ import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), MacroUse (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
@@ -211,6 +212,7 @@ sessionInfo =
     , exports = [Docx, Html, Pdf]
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     , homePage = defaultHomePage
+    , mathMacros = Just "\\newcommand{\\Prob}{\\operatorname{P}}"
     }
 
 -- | A user's account, as the administration sees it.
@@ -422,7 +424,12 @@ serverSettings =
     , assistantHosts = ["http://localhost:11434"]
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     , homePage = defaultHomePage
+    , mathMacros = Just "\\newcommand{\\Prob}{\\operatorname{P}}"
     }
+
+-- | A page that uses a built-in macro being removed.
+macroUse :: MacroUse
+macroUse = MacroUse {usedOn = PageId "p1", inSpace = SpaceId "s1", pageTitle = "Chances", uses = ["\\Prob"]}
 
 -- | A change of them: the mail's password kept (left out), one provider's
 -- secret replaced, another's cleared.
@@ -436,8 +443,9 @@ serverChange =
         , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
         ]
     , assistantHosts = ["https://openrouter.ai"]
-    , boxes = [BoxKind {name = "aside", label = "By the way", colour = Grey, icon = NoIcon}]
+    , boxes = [BoxKind {name = "aside", label = "By the way", colour = CustomColour "#1a7f37", icon = NoIcon}]
     , homePage = defaultHomePage
+    , mathMacros = Nothing
     }
 
 -- | The backups of a server that makes them every six hours, keeping a

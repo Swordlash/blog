@@ -92,7 +92,7 @@ import Servant.API hiding (Vault)
 import Servant.Multipart.API (MultipartForm, Tmp)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, UserPage, WikiSettings)
+import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
@@ -504,6 +504,11 @@ data AdminApi mode = AdminApi
   -- ^ @serverSettings@: the settings, with each secret shown only as whether it is set.
   , setHomePage :: mode :- "home-page" :> ReqBody '[JSON] HomePage :> Put '[JSON] HomePage
   -- ^ Replace the shared front page, leaving other server settings unchanged.
+  , macroUses :: mode :- "macro-uses" :> QueryParams "name" Text :> Get '[JSON] [MacroUse]
+  -- ^ @macroUses@: the pages that use any of these math macros
+  -- ('Wiki.Api.Admin.macroUsesIn'), among all the wiki's pages, for an
+  -- administrator about to remove them from the built-in ones (WP5.41 of
+  -- docs/PLAN.md).
   , setServer :: mode :- "server" :> ReqBody '[JSON] ServerSettingsChange :> Put '[JSON] ServerSettings
   -- ^ @setServerSettings@: replace the settings, each secret kept,
   -- replaced or cleared; the response is the settings after the change.

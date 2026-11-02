@@ -161,6 +161,7 @@ import Wiki.App.View.Blog qualified as BlogView
 import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
+import Wiki.App.View.EditorSettings qualified as EditorSettingsView
 import Wiki.App.View.Groups qualified as GroupsView
 import Wiki.App.View.Help qualified as HelpView
 import Wiki.App.View.History qualified as HistoryView
@@ -265,6 +266,7 @@ data ViewSlot
   | ImporterSlot
   | AccessSlot
   | ServerSlot
+  | EditorSettingsSlot
   | UsersSlot
   | GroupsSlot
   | StatusSlot
@@ -736,6 +738,7 @@ component =
       R.Groups -> HH.slot "view" GroupsSlot GroupsView.component GroupsView.Input {context = ctx} FromView
       R.Permissions -> HH.slot "view" AccessSlot AccessView.component AccessView.Input {context = ctx} FromView
       R.Server -> HH.slot "view" ServerSlot ServerView.component ServerView.Input {context = ctx} FromView
+      R.EditorSettings -> HH.slot "view" EditorSettingsSlot EditorSettingsView.component EditorSettingsView.Input {context = ctx} FromView
       R.Backups ->
         [hh|
           <div class="admin-backups-and-data">

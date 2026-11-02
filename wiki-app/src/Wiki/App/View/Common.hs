@@ -17,6 +17,7 @@ module Wiki.App.View.Common
   , mayAdminister
   , notified
   , homeSpace
+  , wikiMacrosOf
   , documentRoute
 
     -- * Paths
@@ -56,11 +57,12 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend (Session (grants, homePage, standing, user), WikiError (..), sessionPrincipal)
+import Wiki.App.Backend (Session (grants, homePage, mathMacros, standing, user), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.HomePage (HomePage (showAnonymous))
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id (PageId, SpaceId, UserId)
+import Wiki.Core.Math (Macros (..), wikiMacros)
 import Wiki.Core.Order (ChildOrder, Shift (..))
 import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
@@ -101,6 +103,13 @@ data ViewOutput
     -- shown (the editor's "Show preview"): the shell numbers it as the
     -- route's entry, the one to return to after staying ('historyEntry').
     Entered
+
+-- | The wiki's built-in math macros as the administration keeps them, as
+-- the first block of a formula's macros, marked so that the islands read
+-- them in place of the ones the wiki ships with ("Wiki.Core.Math"); none
+-- while the administration keeps none, and the shipped ones hold.
+wikiMacrosOf :: Session -> Macros
+wikiMacrosOf s = Macros (maybe [] (pure . wikiMacros) s.mathMacros)
 
 principalOf :: Context -> Maybe Principal
 principalOf ctx = sessionPrincipal ctx.session

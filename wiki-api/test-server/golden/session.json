@@ -43,6 +43,7 @@
     "showSpaces": true,
     "title": "Spaces"
   },
+  "mathMacros": "\\newcommand{\\Prob}{\\operatorname{P}}",
   "providers": [
     {
       "label": "GitHub",

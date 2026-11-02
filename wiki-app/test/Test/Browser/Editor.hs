@@ -21,8 +21,10 @@ import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
 import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
 import Test.Hspec.Halogen
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), insertUser)
 import Wiki.App.Islands (MonadIslands)
@@ -31,8 +33,9 @@ import Wiki.Core.Attachment (Attachment (name), FileName (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown)
+import Wiki.Core.Markdown.Box (BoxKind (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (id, mathMacros))
 import Wiki.Core.User (Login (..), User (..))
 
 -- The page has no file dialog the harness can answer, so a test hands the
@@ -516,13 +519,73 @@ spec m = do
     markdown ui `shouldReturn` "# Hello, world\n\n> [!EXERCISE]\n> Read this first"
     previewHas ui ".alert-exercise .alert-title" "Exercise 1"
 
-  it "offers an administrator a new kind of box, in the administration's kinds, in another tab" $ runPage $ do
-    (ui, _) <- startWith m (Just "user-admin") helloEditor
+  it "defines a new kind of box in a dialog, without leaving the page, writes a box of it, and lists it at once" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") helloEditor
     find ui ".editor-toolbar button[aria-label='Box']" >>= click
-    new <- find ui ".box-menu .box-menu-new"
-    new `shouldHaveText` "New kind…"
-    getAttribute new "target" `shouldReturn` Just "_blank"
-    getAttribute new "href" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "/admin/server/"))
+    find ui ".box-menu .box-menu-new" >>= (`shouldHaveText` "New kind…")
+    find ui ".box-menu .box-menu-new" >>= click
+    -- The administration's form, in a dialog over the editor. One of
+    -- GitHub's five is refused, and the dialog stays with what was typed.
+    kind <- find ui ".new-kind-dialog .server-box-form input[name=kind]"
+    typeText kind "note"
+    find ui ".new-kind-dialog .server-box-form button[type=submit]" >>= click
+    find ui ".new-kind-dialog .error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "one of GitHub's five")
+    clear kind
+    typeText kind "lemma"
+    find ui ".new-kind-dialog .server-box-form input[name=label]" >>= (`typeText` "Lemma")
+    find ui ".new-kind-dialog .server-box-form button[type=submit]" >>= click
+    eventually (length <$> findAll ui ".new-kind-dialog" `shouldReturn` 0)
+    -- The server keeps it, a box of it is in the text, and the menu lists
+    -- it without a reload.
+    kinds <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) (\s -> s.boxes) <$> serverSettings))
+    map (\k -> k.name) kinds `shouldSatisfy` elem "lemma"
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "> [!LEMMA]")
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    eventually (find ui ".box-menu button[data-kind='LEMMA']" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Lemma"))
+    -- The dialog's form, refused or saved, did not save the page.
+    blog <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getSpace (slugs ["blog"])))
+    stored <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])))
+    stored.body `shouldSatisfy` (not . T.isInfixOf "[!LEMMA]")
+
+  it "offers no new kind of box to someone who is not an administrator" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    _ <- find ui ".box-menu button[data-kind='TIP']"
+    length <$> findAll ui ".box-menu .box-menu-new" `shouldReturn` 0
+
+  it "edits the page's block of macros and the space's from the Math macros panel" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clearBody ui
+    typeText text "Half: $\\half + \\twice$"
+    find ui ".editor-toolbar .editor-macros-toggle" >>= click
+    _ <- find ui ".editor-macros"
+    -- The page's block, applied into the text under the title.
+    page <- find ui ".editor-macros-page .macros-source"
+    -- A block that would show something is refused: the page could not
+    -- find it again as its block of definitions.
+    typeText page "\\newcommand{\\half}{\\frac{1}{2}}x"
+    eventually (find ui ".editor-macros-page .macros-error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "only definitions"))
+    find ui ".editor-macros-page button[type=submit]" >>= (`getProperty` "disabled") >>= (`shouldBe` "true")
+    clear page
+    typeText page "\\newcommand{\\half}{\\frac{1}{2}}"
+    eventually (length <$> findAll ui ".editor-macros-page .macros-error" `shouldReturn` 0)
+    find ui ".editor-macros-page button[type=submit]" >>= click
+    markdown ui `shouldReturn` "# Hello, world\n\n```math\n\\newcommand{\\half}{\\frac{1}{2}}\n```\n\nHalf: $\\half + \\twice$"
+    -- The block shows nothing in the preview; the formula has the macro.
+    eventually (length <$> findAll ui ".editor-preview .wiki-math-display" `shouldReturn` 0)
+    -- The space's, which an editor of the whole space saves at once.
+    space <- find ui ".editor-macros-space .macros-source"
+    typeText space "\\newcommand{\\twice}{2}"
+    find ui ".editor-macros-space button[type=submit]" >>= click
+    eventually (find ui ".editor-macros-space .settings-saved" >>= (`shouldHaveText` "Saved"))
+    blog <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getSpace (slugs ["blog"])))
+    blog.mathMacros `shouldBe` "\\newcommand{\\twice}{2}"
+    -- Neither panel's form saved the page: the text with the page's block
+    -- is still only in the editor.
+    stored <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])))
+    stored.body `shouldSatisfy` (not . T.isInfixOf "\\half")
 
   it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
