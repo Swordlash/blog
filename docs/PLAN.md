@@ -586,10 +586,16 @@ needs. Each was true when its package merged; check before relying on one.
   `--http` (WP4.18).
 
 **Tests and CI**
-- Seen once each, not reproduced (WP5.44): the PostgreSQL test "restore keeps the
-  database it replaces" failed with `DataDirInUse` in a full local run, and CI's smoke
-  test once found a click on a space's card on the front page not followed within 30
-  seconds. Both passed on every run after.
+- Seen once, not reproduced (WP5.44): the PostgreSQL test "restore keeps the database
+  it replaces" failed with `DataDirInUse` in a full local run. It passed on every run
+  after.
+- A press is lost when a render moves the pressed element's ancestor out of the tree
+  and back during the press: the browser then sends no click. On wasm a render can run
+  inside the press, since a `pointerdown` listener that calls into the program (the
+  search box's) also runs the work waiting for it. Unkeyed children move when an
+  earlier sibling changes between a component and an element; #130 gave the front
+  page's document a holder of its own for this. Other views with a slot after a child
+  that changes kind can lose a press the same way.
 - The editor's browser test "loses no keystroke while the preview catches up with a long
   page" types its keys 12 ms apart. Typed with no pause, about one run in ten
   CodeMirror (`@codemirror/view` 6.43.15) throws "Selection points outside of document"
