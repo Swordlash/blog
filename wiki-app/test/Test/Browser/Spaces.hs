@@ -11,9 +11,10 @@ module Test.Browser.Spaces (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
@@ -26,12 +27,18 @@ import Wiki.App.Route (Route (..))
 -- test/jsbits/test-style.js).
 $( browserJS
      ["jsbits/test-files.js", "jsbits/test-layout.js", "jsbits/test-style.js"]
-     [ ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
-     , ("js_scroll_to", "wiki_test_scroll_to", Safe, [t|Int -> IO ()|])
-     , ("js_box", "wiki_test_box", Unsafe, [t|JSText -> IO JSText|])
-     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
+     [ ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_scroll_toPromise", "wiki_test_scroll_to", Safe, [t|Int -> IO (Promise ())|])
+     , ("js_box", "wiki_test_box", Safe, [t|JSText -> IO JSText|])
+     , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      ]
  )
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
+
+js_scroll_to :: Int -> IO ()
+js_scroll_to a1 = if inBrowser then wait =<< js_scroll_toPromise a1 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do

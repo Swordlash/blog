@@ -74,9 +74,10 @@ import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, objec
 import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
-import Halogen.JSBits (Callback, JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Numeric.Natural (Natural)
-import Protolude
+import Protolude hiding (wait)
 import System.IO.Error qualified as IOError
 -- With their constructors: the FFI passes the value inside each newtype.
 import Web.DOM.Internal.Types (Element (..))
@@ -86,59 +87,62 @@ import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.User (Login (..), User (..))
 
--- Reading a file waits for the browser, so that binding is a safe import,
--- which waits for the promise; the rest return at once. The key, and a
+-- Reading a file waits for the browser: its function returns a promise,
+-- which the wrapper below the splice waits for; the rest return at once. The key, and a
 -- drop's or a paste's files, are read in the event's listener, and the
 -- event does not change while it is dispatched, so those bindings are
 -- pure.
 $( browserJS
      ["jsbits/editor.js"]
-     [ ("js_drop_files", "wiki_editor_drop_files", Unsafe, [t|Event -> JSVal|])
-     , ("js_paste_files", "wiki_editor_paste_files", Unsafe, [t|Event -> JSVal|])
-     , ("js_paste_file_count", "wiki_editor_paste_file_count", Unsafe, [t|Event -> Int|])
-     , ("js_chosen_files", "wiki_editor_chosen_files", Unsafe, [t|Event -> IO JSVal|])
-     , ("js_file_count", "wiki_editor_file_count", Unsafe, [t|JSVal -> IO Int|])
-     , ("js_file_name", "wiki_editor_file_name", Unsafe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_file_type", "wiki_editor_file_type", Unsafe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_file_size", "wiki_editor_file_size", Unsafe, [t|JSVal -> Int -> IO Double|])
-     , ("js_read_file", "wiki_editor_read_file", Safe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_attach", "wiki_editor_attach", Unsafe, [t|Element -> JSText -> IO ()|])
-     , ("js_detach", "wiki_editor_detach", Unsafe, [t|Element -> IO ()|])
-     , ("js_typed", "wiki_editor_typed", Unsafe, [t|Event -> JSText|])
-     , ("js_value", "wiki_editor_value", Unsafe, [t|Element -> IO JSText|])
-     , ("js_selection_start", "wiki_editor_selection_start", Unsafe, [t|Element -> IO Int|])
-     , ("js_selection_end", "wiki_editor_selection_end", Unsafe, [t|Element -> IO Int|])
-     , ("js_write", "wiki_editor_write", Unsafe, [t|Element -> JSText -> Int -> Int -> IO ()|])
-     , ("js_key", "wiki_editor_key", Unsafe, [t|Event -> JSText|])
-     , ("js_focus", "wiki_editor_focus", Unsafe, [t|Element -> IO ()|])
-     , ("js_live_listen", "wiki_live_listen", Unsafe, [t|JSText -> Callback -> IO Int|])
-     , ("js_live_stop", "wiki_live_stop", Unsafe, [t|Int -> IO ()|])
-     , ("js_live_follow", "wiki_live_follow", Unsafe, [t|Element -> Int -> IO ()|])
-     , ("js_live_uploaded", "wiki_live_uploaded", Unsafe, [t|Element -> IO ()|])
-     , ("js_live_pane_shown", "wiki_live_pane_shown", Unsafe, [t|Element -> IO ()|])
-     , ("js_preview_push", "wiki_preview_push", Unsafe, [t|IO ()|])
-     , ("js_preview_entry", "wiki_preview_entry", Unsafe, [t|IO Bool|])
-     , ("js_preview_forget", "wiki_preview_forget", Unsafe, [t|IO ()|])
-     , ("js_history_back", "wiki_history_back", Unsafe, [t|IO ()|])
-     , ("js_preview_watch", "wiki_preview_watch", Unsafe, [t|Callback -> IO Int|])
-     , ("js_preview_unwatch", "wiki_preview_unwatch", Unsafe, [t|Int -> IO ()|])
-     , ("js_preview_showing", "wiki_editor_preview_showing", Unsafe, [t|Element -> IO ()|])
-     , ("js_preview_shown", "wiki_editor_preview_shown", Unsafe, [t|Element -> IO ()|])
-     , ("js_text_shown", "wiki_editor_text_shown", Unsafe, [t|Element -> IO ()|])
-     , ("js_clear_field", "wiki_editor_clear_field", Unsafe, [t|Element -> IO ()|])
-     , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
-     , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
-     , ("js_guard_unload", "wiki_editor_guard_unload", Unsafe, [t|Bool -> IO ()|])
-     , ("js_selected", "wiki_editor_selected", Unsafe, [t|Event -> JSText|])
-     , ("js_change_count", "wiki_editor_change_count", Unsafe, [t|Event -> Int|])
-     , ("js_decided", "wiki_editor_decided", Unsafe, [t|Event -> JSText|])
-     , ("js_changes", "wiki_editor_changes", Unsafe, [t|Element -> IO JSText|])
-     , ("js_propose", "wiki_editor_propose", Unsafe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
-     , ("js_settle", "wiki_editor_settle", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
-     , ("js_mention_asked", "wiki_editor_mention_asked", Unsafe, [t|Event -> JSText|])
-     , ("js_mentioned", "wiki_editor_mentioned", Unsafe, [t|Element -> Int -> JSText -> IO ()|])
+     [ ("js_drop_files", "wiki_editor_drop_files", Safe, [t|Event -> JSVal|])
+     , ("js_paste_files", "wiki_editor_paste_files", Safe, [t|Event -> JSVal|])
+     , ("js_paste_file_count", "wiki_editor_paste_file_count", Safe, [t|Event -> Int|])
+     , ("js_chosen_files", "wiki_editor_chosen_files", Safe, [t|Event -> IO JSVal|])
+     , ("js_file_count", "wiki_editor_file_count", Safe, [t|JSVal -> IO Int|])
+     , ("js_file_name", "wiki_editor_file_name", Safe, [t|JSVal -> Int -> IO JSText|])
+     , ("js_file_type", "wiki_editor_file_type", Safe, [t|JSVal -> Int -> IO JSText|])
+     , ("js_file_size", "wiki_editor_file_size", Safe, [t|JSVal -> Int -> IO Double|])
+     , ("js_read_filePromise", "wiki_editor_read_file", Safe, [t|JSVal -> Int -> IO (Promise JSText)|])
+     , ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_detach", "wiki_editor_detach", Safe, [t|Element -> IO ()|])
+     , ("js_typed", "wiki_editor_typed", Safe, [t|Event -> JSText|])
+     , ("js_value", "wiki_editor_value", Safe, [t|Element -> IO JSText|])
+     , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
+     , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
+     , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
+     , ("js_key", "wiki_editor_key", Safe, [t|Event -> JSText|])
+     , ("js_focus", "wiki_editor_focus", Safe, [t|Element -> IO ()|])
+     , ("js_live_listen", "wiki_live_listen", Safe, [t|JSText -> Callback -> IO Int|])
+     , ("js_live_stop", "wiki_live_stop", Safe, [t|Int -> IO ()|])
+     , ("js_live_follow", "wiki_live_follow", Safe, [t|Element -> Int -> IO ()|])
+     , ("js_live_uploaded", "wiki_live_uploaded", Safe, [t|Element -> IO ()|])
+     , ("js_live_pane_shown", "wiki_live_pane_shown", Safe, [t|Element -> IO ()|])
+     , ("js_preview_push", "wiki_preview_push", Safe, [t|IO ()|])
+     , ("js_preview_entry", "wiki_preview_entry", Safe, [t|IO Bool|])
+     , ("js_preview_forget", "wiki_preview_forget", Safe, [t|IO ()|])
+     , ("js_history_back", "wiki_history_back", Safe, [t|IO ()|])
+     , ("js_preview_watch", "wiki_preview_watch", Safe, [t|Callback -> IO Int|])
+     , ("js_preview_unwatch", "wiki_preview_unwatch", Safe, [t|Int -> IO ()|])
+     , ("js_preview_showing", "wiki_editor_preview_showing", Safe, [t|Element -> IO ()|])
+     , ("js_preview_shown", "wiki_editor_preview_shown", Safe, [t|Element -> IO ()|])
+     , ("js_text_shown", "wiki_editor_text_shown", Safe, [t|Element -> IO ()|])
+     , ("js_clear_field", "wiki_editor_clear_field", Safe, [t|Element -> IO ()|])
+     , ("js_focus_text", "wiki_editor_focus_text", Safe, [t|Element -> IO ()|])
+     , ("js_click", "wiki_editor_click", Safe, [t|Element -> IO ()|])
+     , ("js_guard_unload", "wiki_editor_guard_unload", Safe, [t|Bool -> IO ()|])
+     , ("js_selected", "wiki_editor_selected", Safe, [t|Event -> JSText|])
+     , ("js_change_count", "wiki_editor_change_count", Safe, [t|Event -> Int|])
+     , ("js_decided", "wiki_editor_decided", Safe, [t|Event -> JSText|])
+     , ("js_changes", "wiki_editor_changes", Safe, [t|Element -> IO JSText|])
+     , ("js_propose", "wiki_editor_propose", Safe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
+     , ("js_settle", "wiki_editor_settle", Safe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_mention_asked", "wiki_editor_mention_asked", Safe, [t|Event -> JSText|])
+     , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
      ]
  )
+
+js_read_file :: JSVal -> Int -> IO JSText
+js_read_file a1 a2 = if inBrowser then wait =<< js_read_filePromise a1 a2 else pure inert
 
 -- | The files an event brought, not yet read.
 newtype Files = Files JSVal
@@ -190,8 +194,8 @@ pickedFiles (Files files) = liftIO $ do
 -- component calls it with 'lift', off its loop.
 readPickedFile :: (MonadIO m) => PickedFile -> m ByteString
 readPickedFile file = liftIO $ do
-  -- On wasm a safe import's result is a thunk that waits for the promise
-  -- only when forced.
+  -- The binding waits for the JavaScript promise ('wait'); 'evaluate'
+  -- forces the answer here, on this thread.
   base64 <- evaluate . fromJSText =<< js_read_file file.files file.index
   either (\e -> throwIO (IOError.userError ("the browser read a file as malformed base64: " <> e))) pure (Base64.decode (encodeUtf8 base64))
 

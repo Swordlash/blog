@@ -26,7 +26,7 @@ import Wiki.App.Route (Route (..))
 
 $( browserJS
      ["jsbits/test-markup.js"]
-     [("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])]
+     [("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])]
  )
 
 -- | Every element of the shell, but what is inside an island, which its

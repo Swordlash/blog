@@ -45,11 +45,12 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
+import Halogen.JSBits (Inert (..), JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (decodeComponent)
-import Protolude
+import Protolude hiding (wait)
 -- With its constructor: the FFI passes the value inside the newtype.
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..))
@@ -64,39 +65,42 @@ import Wiki.Core.Id (CommentThreadId (..))
 -- is pure.
 $( browserJS
      ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
-     [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
-     , ("js_clicked_note", "wiki_clicked_note", Unsafe, [t|Event -> JSText|])
-     , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
-     , ("js_follow_note", "wiki_follow_note", Unsafe, [t|JSText -> JSText -> IO ()|])
-     , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
-     , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
-     , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
-     , ("js_history_replacing", "wiki_history_replacing", Unsafe, [t|Int -> IO ()|])
-     , ("js_history_replaced", "wiki_history_replaced", Unsafe, [t|IO ()|])
-     , ("js_copy_text", "wiki_copy_text", Safe, [t|Element -> JSText -> IO Bool|])
-     , ("js_archive_new", "wiki_archive_new", Unsafe, [t|IO JSVal|])
-     , ("js_archive_add", "wiki_archive_add", Unsafe, [t|JSVal -> JSText -> JSVal -> IO ()|])
-     , ("js_archive_zip", "wiki_archive_zip", Unsafe, [t|JSVal -> IO JSVal|])
-     , ("js_archive_unzip", "wiki_archive_unzip", Unsafe, [t|JSVal -> IO JSVal|])
-     , ("js_archive_error", "wiki_archive_error", Unsafe, [t|JSVal -> IO JSText|])
-     , ("js_archive_count", "wiki_archive_count", Unsafe, [t|JSVal -> IO Int|])
-     , ("js_archive_path", "wiki_archive_path", Unsafe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_archive_bytes", "wiki_archive_bytes", Unsafe, [t|JSVal -> Int -> IO JSVal|])
-     , ("js_download", "wiki_download", Unsafe, [t|JSText -> JSText -> JSVal -> IO ()|])
-     , ("js_local_time", "wiki_local_time", Unsafe, [t|Double -> IO JSText|])
-     , ("js_page_backend", "wiki_page_backend", Unsafe, [t|IO JSText|])
-     , ("js_console_warn", "wiki_console_warn", Unsafe, [t|JSText -> IO ()|])
-     , ("js_absolute_url", "wiki_absolute_url", Unsafe, [t|JSText -> IO JSText|])
-     , ("js_comment_selection", "wiki_comment_selection", Unsafe, [t|Element -> IO JSText|])
-     , ("js_clicked_thread", "wiki_clicked_thread", Unsafe, [t|Event -> JSText|])
-     , ("js_reveal", "wiki_reveal", Unsafe, [t|JSText -> IO ()|])
-     , ("js_keep_heights", "wiki_keep_heights", Unsafe, [t|IO ()|])
-     , ("js_keep_contents", "wiki_keep_contents", Unsafe, [t|IO ()|])
-     , ("js_reveal_fragment", "wiki_reveal_fragment", Unsafe, [t|IO ()|])
-     , ("js_dialog_show", "wiki_dialog_show", Unsafe, [t|Element -> IO ()|])
-     , ("js_dialog_close", "wiki_dialog_close", Unsafe, [t|Element -> IO ()|])
+     [ ("js_clicked_href", "wiki_clicked_href", Safe, [t|Event -> JSText|])
+     , ("js_clicked_note", "wiki_clicked_note", Safe, [t|Event -> JSText|])
+     , ("js_scroll_to", "wiki_scroll_to", Safe, [t|JSText -> IO ()|])
+     , ("js_follow_note", "wiki_follow_note", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_set_title", "wiki_set_title", Safe, [t|JSText -> IO ()|])
+     , ("js_history_entry", "wiki_history_entry", Safe, [t|IO Int|])
+     , ("js_history_go", "wiki_history_go", Safe, [t|Int -> IO ()|])
+     , ("js_history_replacing", "wiki_history_replacing", Safe, [t|Int -> IO ()|])
+     , ("js_history_replaced", "wiki_history_replaced", Safe, [t|IO ()|])
+     , ("js_copy_textPromise", "wiki_copy_text", Safe, [t|Element -> JSText -> IO (Promise Bool)|])
+     , ("js_archive_new", "wiki_archive_new", Safe, [t|IO JSVal|])
+     , ("js_archive_add", "wiki_archive_add", Safe, [t|JSVal -> JSText -> JSVal -> IO ()|])
+     , ("js_archive_zip", "wiki_archive_zip", Safe, [t|JSVal -> IO JSVal|])
+     , ("js_archive_unzip", "wiki_archive_unzip", Safe, [t|JSVal -> IO JSVal|])
+     , ("js_archive_error", "wiki_archive_error", Safe, [t|JSVal -> IO JSText|])
+     , ("js_archive_count", "wiki_archive_count", Safe, [t|JSVal -> IO Int|])
+     , ("js_archive_path", "wiki_archive_path", Safe, [t|JSVal -> Int -> IO JSText|])
+     , ("js_archive_bytes", "wiki_archive_bytes", Safe, [t|JSVal -> Int -> IO JSVal|])
+     , ("js_download", "wiki_download", Safe, [t|JSText -> JSText -> JSVal -> IO ()|])
+     , ("js_local_time", "wiki_local_time", Safe, [t|Double -> IO JSText|])
+     , ("js_page_backend", "wiki_page_backend", Safe, [t|IO JSText|])
+     , ("js_console_warn", "wiki_console_warn", Safe, [t|JSText -> IO ()|])
+     , ("js_absolute_url", "wiki_absolute_url", Safe, [t|JSText -> IO JSText|])
+     , ("js_comment_selection", "wiki_comment_selection", Safe, [t|Element -> IO JSText|])
+     , ("js_clicked_thread", "wiki_clicked_thread", Safe, [t|Event -> JSText|])
+     , ("js_reveal", "wiki_reveal", Safe, [t|JSText -> IO ()|])
+     , ("js_keep_heights", "wiki_keep_heights", Safe, [t|IO ()|])
+     , ("js_keep_contents", "wiki_keep_contents", Safe, [t|IO ()|])
+     , ("js_reveal_fragment", "wiki_reveal_fragment", Safe, [t|IO ()|])
+     , ("js_dialog_show", "wiki_dialog_show", Safe, [t|Element -> IO ()|])
+     , ("js_dialog_close", "wiki_dialog_close", Safe, [t|Element -> IO ()|])
      ]
  )
+
+js_copy_text :: Element -> JSText -> IO Bool
+js_copy_text a1 a2 = if inBrowser then wait =<< js_copy_textPromise a1 a2 else pure inert
 
 -- | Where a click on a link leads, in HTML the application did not build
 -- element by element (a page's Markdown, rendered by
@@ -200,8 +204,8 @@ historyGo = liftIO . js_history_go
 -- copied.
 copyText :: (MonadIO m) => Element -> Text -> m Bool
 copyText element text =
-  -- On wasm a safe import's result is a thunk that waits for the promise
-  -- only when forced.
+  -- The binding waits for the JavaScript promise ('wait'); 'evaluate'
+  -- forces the answer here, on this thread.
   liftIO (evaluate =<< js_copy_text element (toJSText text))
 
 -- | An application address (as 'Router.href' writes it) as a full URL,

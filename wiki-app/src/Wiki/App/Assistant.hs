@@ -79,10 +79,11 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Type.Equality (type (~))
-import Halogen.JSBits (Callback, JSText, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits (Callback, Inert (..), JSText, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
-import Protolude
+import Protolude hiding (wait)
 import Web.Event.Event (Event (..))
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -95,49 +96,95 @@ import Wiki.Core.Url (Url (..))
 
 -- The chat's bindings return immediately: a turn reports its events
 -- through the callback. "Test the key" and the model list wait for the
--- provider's response, so they are safe imports, whose result on wasm is
--- a thunk until it is forced. The vault's (jsbits/vault.js) answer with
--- WebCrypto's and WebAuthn's promises, so most are safe imports too; their
+-- provider's response: their functions return promises, which the
+-- wrappers below the splice wait for (haskell-halogen's 'Promise'). The
+-- vault's (jsbits/vault.js) answer with WebCrypto's and WebAuthn's
+-- promises, so most are waited for the same way; their
 -- results are JSON, or a key's handle (0 for none). One splice holds both
 -- files: a module has room for one.
 $( browserJS
      ["jsbits/assistant.js", "jsbits/vault.js"]
-     [ ("js_open", "wiki_assistant_open", Unsafe, [t|JSText -> Callback -> IO Int|])
-     , ("js_send", "wiki_assistant_send", Unsafe, [t|Int -> JSText -> JSText -> IO ()|])
-     , ("js_answer", "wiki_assistant_answer", Unsafe, [t|Int -> Int -> JSText -> Bool -> IO ()|])
-     , ("js_stop", "wiki_assistant_stop", Unsafe, [t|Int -> IO ()|])
-     , ("js_close", "wiki_assistant_close", Unsafe, [t|Int -> IO ()|])
-     , ("js_check", "wiki_assistant_check", Safe, [t|JSText -> IO JSText|])
-     , ("js_models", "wiki_assistant_models", Safe, [t|JSText -> IO JSText|])
-     , ("js_scripted", "wiki_assistant_scripted", Unsafe, [t|IO Bool|])
-     , ("js_secure", "wiki_assistant_secure", Unsafe, [t|IO Bool|])
-     , ("js_prepare", "wiki_assistant_prepare", Unsafe, [t|IO ()|])
-     , ("js_send_key", "wiki_assistant_send_key", Unsafe, [t|Event -> Bool|])
-     , ("js_close_key", "wiki_assistant_close_key", Unsafe, [t|Event -> Bool|])
-     , ("js_clock", "wiki_assistant_clock", Unsafe, [t|Double -> IO JSText|])
-     , ("js_page_policy", "wiki_assistant_page_policy", Unsafe, [t|IO JSText|])
-     , ("js_page_origin", "wiki_assistant_page_origin", Unsafe, [t|IO JSText|])
-     , ("js_new_key", "wiki_vault_new_key", Safe, [t|Bool -> IO Int|])
-     , ("js_seal", "wiki_vault_seal", Safe, [t|Int -> JSText -> JSText -> IO JSText|])
-     , ("js_open_sealed", "wiki_vault_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO JSText|])
-     , ("js_forget_key", "wiki_vault_forget_key", Unsafe, [t|Int -> IO ()|])
-     , ("js_salt", "wiki_vault_salt", Unsafe, [t|IO JSText|])
-     , ("js_keep_key", "wiki_vault_keep_key", Safe, [t|JSText -> Int -> Bool -> IO JSText|])
-     , ("js_device_key", "wiki_vault_device_key", Safe, [t|JSText -> IO Int|])
-     , ("js_drop_key", "wiki_vault_drop_key", Safe, [t|JSText -> IO ()|])
-     , ("js_passkeys_here", "wiki_vault_passkeys_here", Unsafe, [t|IO Bool|])
-     , ("js_sealing_here", "wiki_vault_sealing_here", Unsafe, [t|IO Bool|])
-     , ("js_create", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
-     , ("js_get", "wiki_vault_get", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
-     , ("js_wrap", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO JSText|])
-     , ("js_unwrap", "wiki_vault_unwrap", Safe, [t|Int -> JSText -> JSText -> JSText -> Bool -> IO JSText|])
-     , ("js_discard", "wiki_vault_discard", Safe, [t|JSText -> JSText -> IO ()|])
-     , ("js_conditional_here", "wiki_passkey_conditional_here", Safe, [t|IO Bool|])
-     , ("js_passkey_sign_in", "wiki_passkey_sign_in", Safe, [t|JSText -> Bool -> Int -> IO JSText|])
-     , ("js_passkey_offer_ticket", "wiki_passkey_offer_ticket", Unsafe, [t|IO Int|])
-     , ("js_passkey_abort", "wiki_passkey_abort", Unsafe, [t|IO ()|])
+     [ ("js_open", "wiki_assistant_open", Safe, [t|JSText -> Callback -> IO Int|])
+     , ("js_send", "wiki_assistant_send", Safe, [t|Int -> JSText -> JSText -> IO ()|])
+     , ("js_answer", "wiki_assistant_answer", Safe, [t|Int -> Int -> JSText -> Bool -> IO ()|])
+     , ("js_stop", "wiki_assistant_stop", Safe, [t|Int -> IO ()|])
+     , ("js_close", "wiki_assistant_close", Safe, [t|Int -> IO ()|])
+     , ("js_checkPromise", "wiki_assistant_check", Safe, [t|JSText -> IO (Promise JSText)|])
+     , ("js_modelsPromise", "wiki_assistant_models", Safe, [t|JSText -> IO (Promise JSText)|])
+     , ("js_scripted", "wiki_assistant_scripted", Safe, [t|IO Bool|])
+     , ("js_secure", "wiki_assistant_secure", Safe, [t|IO Bool|])
+     , ("js_prepare", "wiki_assistant_prepare", Safe, [t|IO ()|])
+     , ("js_send_key", "wiki_assistant_send_key", Safe, [t|Event -> Bool|])
+     , ("js_close_key", "wiki_assistant_close_key", Safe, [t|Event -> Bool|])
+     , ("js_clock", "wiki_assistant_clock", Safe, [t|Double -> IO JSText|])
+     , ("js_page_policy", "wiki_assistant_page_policy", Safe, [t|IO JSText|])
+     , ("js_page_origin", "wiki_assistant_page_origin", Safe, [t|IO JSText|])
+     , ("js_new_keyPromise", "wiki_vault_new_key", Safe, [t|Bool -> IO (Promise Int)|])
+     , ("js_sealPromise", "wiki_vault_seal", Safe, [t|Int -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_open_sealedPromise", "wiki_vault_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_forget_key", "wiki_vault_forget_key", Safe, [t|Int -> IO ()|])
+     , ("js_salt", "wiki_vault_salt", Safe, [t|IO JSText|])
+     , ("js_keep_keyPromise", "wiki_vault_keep_key", Safe, [t|JSText -> Int -> Bool -> IO (Promise JSText)|])
+     , ("js_device_keyPromise", "wiki_vault_device_key", Safe, [t|JSText -> IO (Promise Int)|])
+     , ("js_drop_keyPromise", "wiki_vault_drop_key", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_passkeys_here", "wiki_vault_passkeys_here", Safe, [t|IO Bool|])
+     , ("js_sealing_here", "wiki_vault_sealing_here", Safe, [t|IO Bool|])
+     , ("js_createPromise", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_getPromise", "wiki_vault_get", Safe, [t|JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_wrapPromise", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO (Promise JSText)|])
+     , ("js_unwrapPromise", "wiki_vault_unwrap", Safe, [t|Int -> JSText -> JSText -> JSText -> Bool -> IO (Promise JSText)|])
+     , ("js_discardPromise", "wiki_vault_discard", Safe, [t|JSText -> JSText -> IO (Promise ())|])
+     , ("js_conditional_herePromise", "wiki_passkey_conditional_here", Safe, [t|IO (Promise Bool)|])
+     , ("js_passkey_sign_inPromise", "wiki_passkey_sign_in", Safe, [t|JSText -> Bool -> Int -> IO (Promise JSText)|])
+     , ("js_passkey_offer_ticket", "wiki_passkey_offer_ticket", Safe, [t|IO Int|])
+     , ("js_passkey_abort", "wiki_passkey_abort", Safe, [t|IO ()|])
      ]
  )
+
+js_check :: JSText -> IO JSText
+js_check a1 = if inBrowser then wait =<< js_checkPromise a1 else pure inert
+
+js_models :: JSText -> IO JSText
+js_models a1 = if inBrowser then wait =<< js_modelsPromise a1 else pure inert
+
+js_new_key :: Bool -> IO Int
+js_new_key a1 = if inBrowser then wait =<< js_new_keyPromise a1 else pure inert
+
+js_seal :: Int -> JSText -> JSText -> IO JSText
+js_seal a1 a2 a3 = if inBrowser then wait =<< js_sealPromise a1 a2 a3 else pure inert
+
+js_open_sealed :: Int -> JSText -> JSText -> JSText -> IO JSText
+js_open_sealed a1 a2 a3 a4 = if inBrowser then wait =<< js_open_sealedPromise a1 a2 a3 a4 else pure inert
+
+js_keep_key :: JSText -> Int -> Bool -> IO JSText
+js_keep_key a1 a2 a3 = if inBrowser then wait =<< js_keep_keyPromise a1 a2 a3 else pure inert
+
+js_device_key :: JSText -> IO Int
+js_device_key a1 = if inBrowser then wait =<< js_device_keyPromise a1 else pure inert
+
+js_drop_key :: JSText -> IO ()
+js_drop_key a1 = if inBrowser then wait =<< js_drop_keyPromise a1 else pure inert
+
+js_create :: JSText -> JSText -> JSText -> IO JSText
+js_create a1 a2 a3 = if inBrowser then wait =<< js_createPromise a1 a2 a3 else pure inert
+
+js_get :: JSText -> JSText -> JSText -> IO JSText
+js_get a1 a2 a3 = if inBrowser then wait =<< js_getPromise a1 a2 a3 else pure inert
+
+js_wrap :: Int -> Int -> JSText -> IO JSText
+js_wrap a1 a2 a3 = if inBrowser then wait =<< js_wrapPromise a1 a2 a3 else pure inert
+
+js_unwrap :: Int -> JSText -> JSText -> JSText -> Bool -> IO JSText
+js_unwrap a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_unwrapPromise a1 a2 a3 a4 a5 else pure inert
+
+js_discard :: JSText -> JSText -> IO ()
+js_discard a1 a2 = if inBrowser then wait =<< js_discardPromise a1 a2 else pure inert
+
+js_conditional_here :: IO Bool
+js_conditional_here = if inBrowser then wait =<< js_conditional_herePromise else pure inert
+
+js_passkey_sign_in :: JSText -> Bool -> Int -> IO JSText
+js_passkey_sign_in a1 a2 a3 = if inBrowser then wait =<< js_passkey_sign_inPromise a1 a2 a3 else pure inert
 
 -- | 'KeyRef': a key the page holds (a vault key, or the key that wraps it
 -- for a passkey), by its number in @jsbits\/vault.js@. Its bytes stay in
@@ -532,7 +579,7 @@ instance MonadAssistant BrowserDOM where
       blockedBy r >>= \case
         Just e -> pure (Just e)
         Nothing -> do
-          -- On wasm a safe import's result waits for its promise only when forced.
+          -- The binding waits for the promise ('wait'), and 'evaluate' forces the answer.
           answer <- evaluate . fromJSText =<< js_check (toJSText (json (endpointJSON r ["model" .= r.model])))
           pure $
             if T.null answer

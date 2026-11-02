@@ -32,8 +32,8 @@ import Wiki.Core.Url (Url (..))
 -- style sheet draws an element (test/jsbits/test-style.js).
 $( browserJS
      ["jsbits/test-layout.js", "jsbits/test-style.js"]
-     [ ("js_one_column", "wiki_test_one_column", Unsafe, [t|JSText -> IO JSText|])
-     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
+     [ ("js_one_column", "wiki_test_one_column", Safe, [t|JSText -> IO JSText|])
+     , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      ]
  )
 

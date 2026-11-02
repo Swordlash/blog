@@ -17,9 +17,10 @@ module Test.Browser.Offline (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
@@ -33,15 +34,24 @@ import Wiki.Core.User (Standing (..))
 
 $( browserJS
      ["jsbits/test-offline.js"]
-     [ ("js_offline_copy", "wiki_test_offline_copy", Unsafe, [t|JSText -> IO ()|])
-     , ("js_navigator_online", "wiki_test_navigator_online", Unsafe, [t|Int -> IO ()|])
-     , ("js_offer_install", "wiki_test_offer_install", Unsafe, [t|JSText -> IO ()|])
-     , ("js_install_prompts", "wiki_test_install_prompts", Unsafe, [t|IO Int|])
-     , ("js_keep_reads", "wiki_test_keep_reads", Safe, [t|IO ()|])
-     , ("js_kept_kinds", "wiki_test_kept_kinds", Safe, [t|IO JSText|])
-     , ("js_forget_kept", "wiki_test_forget_kept", Safe, [t|IO ()|])
+     [ ("js_offline_copy", "wiki_test_offline_copy", Safe, [t|JSText -> IO ()|])
+     , ("js_navigator_online", "wiki_test_navigator_online", Safe, [t|Int -> IO ()|])
+     , ("js_offer_install", "wiki_test_offer_install", Safe, [t|JSText -> IO ()|])
+     , ("js_install_prompts", "wiki_test_install_prompts", Safe, [t|IO Int|])
+     , ("js_keep_readsPromise", "wiki_test_keep_reads", Safe, [t|IO (Promise ())|])
+     , ("js_kept_kindsPromise", "wiki_test_kept_kinds", Safe, [t|IO (Promise JSText)|])
+     , ("js_forget_keptPromise", "wiki_test_forget_kept", Safe, [t|IO (Promise ())|])
      ]
  )
+
+js_keep_reads :: IO ()
+js_keep_reads = if inBrowser then wait =<< js_keep_readsPromise else pure inert
+
+js_kept_kinds :: IO JSText
+js_kept_kinds = if inBrowser then wait =<< js_kept_kindsPromise else pure inert
+
+js_forget_kept :: IO ()
+js_forget_kept = if inBrowser then wait =<< js_forget_keptPromise else pure inert
 
 -- | The page as the worker serves it offline: kept at this time, with the
 -- browser offline; or, given 'Nothing', from the network, online.

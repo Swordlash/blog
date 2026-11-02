@@ -17,7 +17,7 @@ import Wiki.App.Route (Route (..))
 
 $( browserJS
      ["jsbits/test-focus.js"]
-     [("js_press_outside", "wiki_test_press_outside", Unsafe, [t|IO ()|])]
+     [("js_press_outside", "wiki_test_press_outside", Safe, [t|IO ()|])]
  )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec

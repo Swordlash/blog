@@ -14,9 +14,10 @@ module Test.Browser.Editor (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.IORef (IORef, modifyIORef', readIORef)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
 import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
 import Test.Hspec.Halogen
@@ -41,15 +42,24 @@ import Wiki.Core.User (Login (..), User (..))
 -- test/jsbits/test-style.js.
 $( browserJS
      ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js"]
-     [ ("js_drop_file", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
-     , ("js_paste", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO Bool|])
-     , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
-     , ("js_watch_keys", "wiki_test_watch_keys", Unsafe, [t|IO ()|])
-     , ("js_last_key_prevented", "wiki_test_last_key_prevented", Unsafe, [t|IO Bool|])
-     , ("js_computed_colour", "wiki_test_computed_colour", Unsafe, [t|JSText -> IO JSText|])
-     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
+     [ ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
+     , ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_watch_keys", "wiki_test_watch_keys", Safe, [t|IO ()|])
+     , ("js_last_key_prevented", "wiki_test_last_key_prevented", Safe, [t|IO Bool|])
+     , ("js_computed_colour", "wiki_test_computed_colour", Safe, [t|JSText -> IO JSText|])
+     , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      ]
  )
+
+js_drop_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_drop_file a1 a2 a3 a4 = if inBrowser then wait =<< js_drop_filePromise a1 a2 a3 a4 else pure inert
+
+js_paste :: JSText -> JSText -> JSText -> JSText -> JSText -> IO Bool
+js_paste a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_pastePromise a1 a2 a3 a4 a5 else pure inert
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do

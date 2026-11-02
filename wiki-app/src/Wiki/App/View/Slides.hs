@@ -100,13 +100,13 @@ import Wiki.Core.Version (Author)
 -- those bindings are pure; the rest return at once.
 $( browserJS
      ["jsbits/slides.js"]
-     [ ("js_slides_key", "wiki_slides_key", Unsafe, [t|Event -> JSText|])
-     , ("js_slides_touch_x", "wiki_slides_touch_x", Unsafe, [t|Event -> Double|])
-     , ("js_slides_touch_y", "wiki_slides_touch_y", Unsafe, [t|Event -> Double|])
-     , ("js_slides_toggle_fullscreen", "wiki_slides_toggle_fullscreen", Unsafe, [t|Element -> IO ()|])
-     , ("js_slides_exit_fullscreen", "wiki_slides_exit_fullscreen", Unsafe, [t|IO ()|])
-     , ("js_slides_focus", "wiki_slides_focus", Unsafe, [t|Element -> IO ()|])
-     , ("js_slides_print", "wiki_slides_print", Unsafe, [t|IO ()|])
+     [ ("js_slides_key", "wiki_slides_key", Safe, [t|Event -> JSText|])
+     , ("js_slides_touch_x", "wiki_slides_touch_x", Safe, [t|Event -> Double|])
+     , ("js_slides_touch_y", "wiki_slides_touch_y", Safe, [t|Event -> Double|])
+     , ("js_slides_toggle_fullscreen", "wiki_slides_toggle_fullscreen", Safe, [t|Element -> IO ()|])
+     , ("js_slides_exit_fullscreen", "wiki_slides_exit_fullscreen", Safe, [t|IO ()|])
+     , ("js_slides_focus", "wiki_slides_focus", Safe, [t|Element -> IO ()|])
+     , ("js_slides_print", "wiki_slides_print", Safe, [t|IO ()|])
      ]
  )
 

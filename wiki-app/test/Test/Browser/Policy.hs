@@ -20,8 +20,9 @@ import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
-import Protolude hiding (find)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
+import Protolude hiding (find, wait)
 import Test.Hspec.Halogen
 import Wiki.Api.ContentPolicy (basePolicy)
 import Wiki.App.Assistant (MonadAssistant (..))
@@ -31,15 +32,24 @@ import Wiki.Core.Url (Url (..))
 
 $( browserJS
      ["jsbits/test-policy.js"]
-     [ ("js_policy", "wiki_test_policy_text", Unsafe, [t|IO JSText|])
-     , ("js_violations", "wiki_test_policy_violations", Unsafe, [t|IO JSText|])
-     , ("js_forget", "wiki_test_policy_forget", Unsafe, [t|JSText -> IO ()|])
-     , ("js_evaluates", "wiki_test_policy_evaluates", Safe, [t|IO Bool|])
-     , ("js_raw_ran", "wiki_test_raw_ran", Unsafe, [t|IO JSText|])
-     , ("js_refuses", "wiki_test_policy_refuses", Safe, [t|JSText -> IO Bool|])
-     , ("js_sdk", "wiki_test_policy_sdk", Safe, [t|IO JSText|])
+     [ ("js_policy", "wiki_test_policy_text", Safe, [t|IO JSText|])
+     , ("js_violations", "wiki_test_policy_violations", Safe, [t|IO JSText|])
+     , ("js_forget", "wiki_test_policy_forget", Safe, [t|JSText -> IO ()|])
+     , ("js_evaluatesPromise", "wiki_test_policy_evaluates", Safe, [t|IO (Promise Bool)|])
+     , ("js_raw_ran", "wiki_test_raw_ran", Safe, [t|IO JSText|])
+     , ("js_refusesPromise", "wiki_test_policy_refuses", Safe, [t|JSText -> IO (Promise Bool)|])
+     , ("js_sdkPromise", "wiki_test_policy_sdk", Safe, [t|IO (Promise JSText)|])
      ]
  )
+
+js_evaluates :: IO Bool
+js_evaluates = if inBrowser then wait =<< js_evaluatesPromise else pure inert
+
+js_refuses :: JSText -> IO Bool
+js_refuses a1 = if inBrowser then wait =<< js_refusesPromise a1 else pure inert
+
+js_sdk :: IO JSText
+js_sdk = if inBrowser then wait =<< js_sdkPromise else pure inert
 
 spec :: forall m -> (MonadBrowserTest m, MonadAssistant m) => Spec
 spec m = do

@@ -15,9 +15,10 @@ import Data.IORef (IORef)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, utctDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, start, startWith)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
@@ -32,11 +33,17 @@ import Wiki.Core.Space (Space (id))
 -- Where things are in the window (test/jsbits/test-layout.js).
 $( browserJS
      ["jsbits/test-layout.js"]
-     [ ("js_scroll_to", "wiki_test_scroll_to", Safe, [t|Int -> IO ()|])
-     , ("js_scroll_into_view", "wiki_test_scroll_into_view", Safe, [t|JSText -> IO ()|])
-     , ("js_box", "wiki_test_box", Unsafe, [t|JSText -> IO JSText|])
+     [ ("js_scroll_toPromise", "wiki_test_scroll_to", Safe, [t|Int -> IO (Promise ())|])
+     , ("js_scroll_into_viewPromise", "wiki_test_scroll_into_view", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_box", "wiki_test_box", Safe, [t|JSText -> IO JSText|])
      ]
  )
+
+js_scroll_to :: Int -> IO ()
+js_scroll_to a1 = if inBrowser then wait =<< js_scroll_toPromise a1 else pure inert
+
+js_scroll_into_view :: JSText -> IO ()
+js_scroll_into_view a1 = if inBrowser then wait =<< js_scroll_into_viewPromise a1 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do

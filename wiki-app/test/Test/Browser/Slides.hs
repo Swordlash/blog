@@ -20,8 +20,8 @@ import Wiki.App.Route (Route (..))
 
 $( browserJS
      ["jsbits/test-location.js", "jsbits/test-keys.js"]
-     [ ("js_location_hash", "wiki_test_location_hash", Unsafe, [t|IO JSText|])
-     , ("js_dispatch_key", "wiki_test_dispatch_key", Unsafe, [t|JSText -> IO Bool|])
+     [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
+     , ("js_dispatch_key", "wiki_test_dispatch_key", Safe, [t|JSText -> IO Bool|])
      ]
  )
 

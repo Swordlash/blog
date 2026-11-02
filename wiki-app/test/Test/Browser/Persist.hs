@@ -14,9 +14,10 @@ import Control.Monad.UUID (MonadUUID)
 import Data.ByteString.Base64 qualified as Base64
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, startKept, startKeptWith, startOpened)
 import Test.Browser.Text (clearBody, editorText, markdown)
 import Test.Counting (Call (..), isRead, runCounting)
@@ -39,10 +40,13 @@ import Wiki.Core.Space (Space (..))
 
 $( browserJS
      ["jsbits/test-files.js"]
-     [ ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
-     , ("js_downloads", "wiki_test_downloads", Unsafe, [t|IO JSText|])
+     [ ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_downloads", "wiki_test_downloads", Safe, [t|IO JSText|])
      ]
  )
+
+js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
