@@ -349,7 +349,7 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.40, WP5.42 and WP5.43 are done, the rest
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.40 and WP5.42 to WP5.44 are done, the rest
   follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
@@ -370,10 +370,6 @@ In the order to do it, unless the owner says otherwise.
   tab (WP5.40, which numbers boxes within the page by default, the owner, 2026-11-02):
   a kind saved there is in the menu at once, and nothing is left or reloaded (the
   owner, 2026-11-02).
-- **WP5.44 Stars and help.** A user stars pages (kept by the server, per user) and goes
-  to them from a "Starred" list in the header. A help button (a "?" in a corner) opens
-  a dialog with what the README and the guide say: TikZ, Mermaid, the kinds of box
-  including the server's own.
 - **WP5.45 Favicons from space icons, and an icon for the home page.** A space's icon
   can already be an uploaded image besides an emoji (`IconImage`, recorded in the audit
   log as "an uploaded image"). What is left: the home page gets an icon too, and the
@@ -606,6 +602,10 @@ needs. Each was true when its package merged; check before relying on one.
   `--http` (WP4.18).
 
 **Tests and CI**
+- Seen once each, not reproduced (WP5.44): the PostgreSQL test "restore keeps the
+  database it replaces" failed with `DataDirInUse` in a full local run, and CI's smoke
+  test once found a click on a space's card on the front page not followed within 30
+  seconds. Both passed on every run after.
 - The editor's browser test "loses no keystroke while the preview catches up with a long
   page" types its keys 12 ms apart. Typed with no pause, about one run in ten
   CodeMirror (`@codemirror/view` 6.43.15) throws "Selection points outside of document"
