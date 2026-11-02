@@ -1,9 +1,12 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | The search box in the shell's header, in a browser, over the demo's wiki:
 -- typing, the space selector, the keyboard, and following a hit.
 module Test.Browser.Search (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
+import Halogen.JSBits (Safety (..), browserJS)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
@@ -11,6 +14,11 @@ import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+
+$( browserJS
+     ["jsbits/test-focus.js"]
+     [("js_press_outside", "wiki_test_press_outside", Unsafe, [t|IO ()|])]
+ )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -93,6 +101,17 @@ spec m = do
     eventually $ hitTitles ui >>= (`shouldSatisfy` elem "Tour")
     press "Escape"
     eventually $ length <$> findAll ui ".search-results" `shouldReturn` 0
+
+  it "closes its list when a press lands outside the box" $ runPage $ do
+    ui <- start m Nothing Home
+    press "/"
+    traverse_ press ["t", "o", "u", "r"]
+    eventually $ hitTitles ui >>= (`shouldSatisfy` elem "Tour")
+    -- A press on the page around it, which here leaves the focus in the
+    -- input, as a toolbar's button does.
+    unsafeIOToPageM js_press_outside
+    eventually $ length <$> findAll ui ".search-results" `shouldReturn` 0
+    find ui ".wiki-search .search-input" >>= \box -> getProperty box "value" `shouldReturn` "tour"
 
 -- | The titles of the hits the box lists now.
 hitTitles :: Mounted s q o m -> PageM s [Text]
