@@ -322,18 +322,19 @@ spec m = do
         pieces = [" w" <> show i | i <- [1 .. 24 :: Int]]
         sentence = " the quick brown fox jumps over the lazy dog"
         long = T.replicate 3 sentence
+    -- Each key a few milliseconds after the one before, still far faster
+    -- than anyone types: keys sent back to back, as fast as Playwright can,
+    -- set off a race in CodeMirror itself (its scroller's scroll handler
+    -- reading the browser's selection a key ahead of its state, "Selection
+    -- points outside of document"; docs/PLAN.md, "Known gaps and notes").
+    let typeKeys = traverse_ (\c -> press (T.singleton c) >> unsafeIOToPageM (threadDelay 12000)) . T.unpack
     for_ (zip pieces pauses) $ \(word, pause) -> do
-      typeText text word
+      typeKeys word
       unsafeIOToPageM (threadDelay (pause * 1000))
-    -- One word to a call, one call after another with no pause between
-    -- them: one call may take at most five seconds (Playwright's default,
-    -- which hspec-halogen's typeText keeps), and the test build types
-    -- slower than the real one, slower still on a busy machine. A call of a
-    -- whole sentence timed out on CI, then one of five words now and then,
-    -- then one of three words on a busy runner. The run is still typed
-    -- without pauses, so the preview of the long page is drawn as it goes.
+    -- The run is typed without pauses between words, so the preview of the
+    -- long page is drawn as it goes.
     for_ (T.words long) $ \word ->
-      typeText text (" " <> word)
+      typeKeys (" " <> word)
     let expected = original <> mconcat pieces <> long
     eventually $ markdown ui `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
