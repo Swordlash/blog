@@ -65,17 +65,18 @@ starring m = describe "stars" $ do
     ui <- start m Nothing hello
     find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
     length <$> findAll ui ".star-toggle" `shouldReturn` 0
-    length <$> findAll ui ".starred" `shouldReturn` 0
+    length <$> findAll ui ".starred-menu" `shouldReturn` 0
     unmount ui
 
 helping :: forall m -> (Specs m) => Spec
 helping m = describe "help" $ do
   it "opens a dialog with the guide's sections and this wiki's kinds of box, and closes it" $ runPage $ do
     ui <- start m Nothing Home
-    length <$> findAll ui ".help-dialog" `shouldReturn` 0
+    let dialogOpen = find ui "dialog.help-dialog" >>= (`getProperty` "open")
+    dialogOpen `shouldReturn` "false"
+    length <$> findAll ui ".help-section" `shouldReturn` 0
     find ui ".help-toggle" >>= click
-    dialog <- find ui "dialog.help-dialog"
-    getProperty dialog "open" `shouldReturn` "true"
+    eventually (dialogOpen `shouldReturn` "true")
     titles <- traverse textContent =<< findAll ui ".help-section h3"
     titles `shouldSatisfy` \ts -> all (`elem` ts) ["Mathematics", "Diagrams", "Pictures", "Notes and boxes", "This wiki's kinds of box"]
     -- The guide's boxes, rendered, and the demo's own kind.
@@ -86,5 +87,6 @@ helping m = describe "help" $ do
     -- The link to the whole guide leads to the demo's Docs.
     find ui ".help-guide-link" >>= (`getAttribute` "href") >>= (`shouldSatisfy` maybe False (T.isInfixOf "/s/docs/p/markdown-guide/"))
     find ui ".help-dialog-close" >>= click
-    eventually (length <$> findAll ui ".help-dialog" `shouldReturn` 0)
+    eventually (dialogOpen `shouldReturn` "false")
+    length <$> findAll ui ".help-section" `shouldReturn` 0
     unmount ui

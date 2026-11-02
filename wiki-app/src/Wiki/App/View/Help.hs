@@ -11,8 +11,9 @@
 -- the administration's "Manage" dialog is ("Wiki.App.View.UserDialog"):
 -- the browser draws a backdrop, keeps the focus in the dialog, closes it
 -- on Escape, and gives the focus back to the "?" when it closes. A click
--- that starts on the backdrop closes it too. Its sections are rendered
--- only while it is open: a closed dialog is not displayed, and Mermaid and
+-- that starts on the backdrop closes it too. The dialog element is always
+-- there, and its sections are rendered only once it is shown, and taken
+-- away when it closes: a closed dialog is not displayed, and Mermaid and
 -- TikZ measure the elements they draw in.
 --
 -- A link in a section leads to the guide's own page ("Wiki.App.Guide"),
@@ -95,9 +96,7 @@ component =
           >
             ?
           </button>
-          {% if st.open %}
-            {{ dialog st }}
-          {% end %}
+          {{ dialog st }}
         </div>
       |]
 
@@ -122,19 +121,21 @@ component =
               <button type="button" class="help-dialog-close" aria-label="Close" onClick={{ const Close }}>×</button>
             </header>
             <div class="help-dialog-sections" {{ followingLinks ctx }}>
-              <p class="help-dialog-intro">
-                A page is Markdown. Each part below is shown as a page shows it, with the Markdown that writes it under it.
-                {{ guideLink }}
-              </p>
-              {% for (section, nodes) in zip sections (Md.renderSections (options ctx) (map parsed sections)) %}
-                <section class="help-section">
-                  <h3>{{ section.title }}</h3>
-                  <div class="page-body">{{ nodes }}</div>
-                  <details class="help-source">
-                    <summary>The Markdown</summary>
-                    <pre>{{ section.body }}</pre>
-                  </details>
-                </section>
+              {% if st.open %}
+                <p class="help-dialog-intro">
+                  A page is Markdown. Each part below is shown as a page shows it, with the Markdown that writes it under it.
+                  {{ guideLink }}
+                </p>
+                {% for (section, nodes) in zip sections (Md.renderSections (options ctx) (map parsed sections)) %}
+                  <section class="help-section">
+                    <h3>{{ section.title }}</h3>
+                    <div class="page-body">{{ nodes }}</div>
+                    <details class="help-source">
+                      <summary>The Markdown</summary>
+                      <pre>{{ section.body }}</pre>
+                    </details>
+                  </section>
+                {% end %}
               {% end %}
             </div>
             <footer class="help-dialog-footer">
@@ -160,9 +161,11 @@ component =
     handleAction :: Action -> H.HalogenM State Action IslandSlots output m ()
     handleAction = \case
       Receive input -> modify (\st -> st {input})
+      -- The dialog is shown first, and its sections rendered into it
+      -- after: the islands draw into elements that are displayed.
       Open -> do
-        modify (\st -> st {open = True})
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . showDialog)
+        modify (\st -> st {open = True})
       Close -> do
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
         modify (\st -> st {open = False})

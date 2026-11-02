@@ -5197,7 +5197,7 @@ mark.comment-mark-focused {
   font-size: 0.85rem;
 }
 
-.starred {
+.starred-menu {
   position: relative;
 }
 
@@ -5399,7 +5399,7 @@ mark.comment-mark-focused {
 }
 
 @media print {
-  .starred,
+  .starred-menu,
   .star,
   .help {
     display: none;

@@ -56,7 +56,7 @@ component =
     render :: State -> H.ComponentHTML Action Empty m
     render st =
       [hh|
-        <div class="starred">
+        <div class="starred-menu">
           <button
             type="button"
             class="starred-toggle"
