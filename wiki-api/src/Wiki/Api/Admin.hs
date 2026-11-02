@@ -65,6 +65,7 @@ import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (GroupId, InvitationId, PageId, SpaceId, UserId)
+import Wiki.Core.Markdown.Ast (formulasOf, parseMarkdown)
 import Wiki.Core.Math (definedMacros, usesMacro)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.User (Email, Group (..), Login (..), Membership, User (..))
@@ -466,12 +467,18 @@ data MacroUse = MacroUse
 
 -- | The pages among these that use any of these macros ('usesMacro'),
 -- each with the macros it uses, in the order of the pages. A page that
--- defines a macro itself does not count as using the built-in one.
+-- defines a macro itself does not count as using the built-in one. Both
+-- are read in the page's formulas only ('formulasOf'): a definition shown
+-- in a code example defines nothing, and a name in prose uses nothing. A
+-- page that cannot be parsed is read whole, defining nothing, so that a
+-- use is never missed.
 macroUsesIn :: [Text] -> [Page] -> [MacroUse]
 macroUsesIn names pages =
   [ MacroUse {usedOn = p.id, inSpace = p.space, pageTitle = p.title, uses}
   | p <- pages
-  , let own = definedMacros p.body
-        uses = [n | n <- names, n `notElem` own, usesMacro n p.body]
+  , let (own, math) = case parseMarkdown p.body of
+          Right blocks -> let tex = T.unlines (formulasOf blocks) in (definedMacros tex, tex)
+          Left _ -> ([], p.body)
+        uses = [n | n <- names, n `notElem` own, usesMacro n math]
   , not (null uses)
   ]

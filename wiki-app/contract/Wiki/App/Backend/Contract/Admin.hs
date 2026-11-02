@@ -628,8 +628,12 @@ serverSide = describe "serverSettings and setServerSettings" $ do
     used <- run admin (createPage blog.id Nothing "Chances" "# Chances\n\n$\\Likely(A) + \\Likelyhood$") >>= ok
     _ <- run admin (createPage blog.id Nothing "Own" "# Own\n\n$$\\newcommand{\\Likely}{P}$$ $\\Likely$") >>= ok
     _ <- run admin (createPage blog.id Nothing "Other" "# Other\n\n$\\Likelier$") >>= ok
+    -- A definition shown in a code example defines nothing: the formula
+    -- still needs the built-in macro. A name in code is no use.
+    shown <- run admin (createPage blog.id Nothing "Shown" "# Shown\n\n```tex\n\\newcommand{\\Likely}{P}\n```\n\n$\\Likely$") >>= ok
+    _ <- run admin (createPage blog.id Nothing "Code" "# Code\n\n`\\Likely` is a macro.") >>= ok
     found <- run admin (macroUses ["\\Likely", "\\nowhere"]) >>= ok
-    [(u.usedOn, u.pageTitle, u.uses) | u <- found] `shouldBe` [(used.id, "Chances", ["\\Likely"])]
+    [(u.usedOn, u.pageTitle, u.uses) | u <- found] `shouldMatchList` [(used.id, "Chances", ["\\Likely"]), (shown.id, "Shown", ["\\Likely"])]
     for_ [Anonymous, editor, reader] $ \who -> run who (macroUses ["\\Likely"]) >>= (`shouldFailWith` Forbidden)
   it "reuses page saves, attachments, drafts and versions for the home document" $ \(Fixture run) -> do
     (space, page) <- run admin getHomeDocument >>= ok
