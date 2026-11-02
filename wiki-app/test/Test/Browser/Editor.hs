@@ -293,7 +293,7 @@ spec m = do
     find ui ".editor-conflict-pane h2" >>= (`shouldHaveText` "Their changes since you began")
     -- What their save changed in the version the edit began from.
     find ui ".editor-conflict-pane .diff-added .diff-text" >>= (`shouldHaveText` "Someone else's words.")
-    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "This is the first post of a blog that is also a wiki. Every page is")
+    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "This is the first post of a blog that is also a wiki. Every page is Markdown, written in a split view with the page rendered next to it as you type.")
     markdown ui `shouldReturn` "# Hello, world\n\nMy words."
     focus text
     press "Control+End"
@@ -641,6 +641,23 @@ spec m = do
       setMarkdown ui ("# Cases\n\n" <> source)
       found <- map stripDelimiters <$> mathIn ui
       (source, found) `shouldBe` (source, wikiMath source)
+
+  it "underlines inline math left open on its line, from its opening to the line's end, and nothing else" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    let underlined = T.concat <$> (findAll ui ".cm-wiki-unclosed-math" >>= traverse textContent)
+    -- Open: a $ closed by nothing, a \( and a $ closed on the next line
+    -- only. Closed or not math: a formula, \(…\), a price, display math
+    -- over lines, code and an escaped $.
+    setMarkdown ui "# Cases\n\nOpen $x + y here\n\nClosed $x$ and \\(y\\), a price of $5, and $$\nz\n$$\n\nLate \\(a\nb\\) and $c\nd$\n\nCode `$x` and \\$x"
+    eventually $ underlined `shouldReturn` "$x + y here\\(a$c"
+    find ui ".cm-wiki-unclosed-math" >>= (`getAttribute` "title") >>= (`shouldBe` Just "This formula is not closed on its line.")
+    -- Closed, the line is no longer underlined.
+    setMarkdown ui "# Cases\n\nOpen $x + y$ here"
+    eventually $ underlined `shouldReturn` ""
+    -- A formula that starts with a number is not a price, and a dollar in
+    -- a link's title is not math.
+    setMarkdown ui "# Cases\n\nCompute $2x + y here\n\nThen $2 + x\n\nSee [this](other \"Amount: $USD\") and $3.50 or $5 each."
+    eventually $ underlined `shouldReturn` "$2x + y here$2 + x"
 
   it "completes a mention with the users whose names start with what is typed, but not in code, a link or math" $ runPage $ do
     ui <- startChanged m withMentionable (Just "user-editor") helloEditor

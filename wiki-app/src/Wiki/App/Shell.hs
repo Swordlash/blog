@@ -137,7 +137,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, setDocumentTitle, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
@@ -1127,10 +1127,14 @@ component =
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
         if r == before
-          then -- The route shown, at an entry of its own: one the shell
-          -- pushed itself after a change ('reload'), or the editor's entry,
-          -- gone back to after staying.
+          then do
+            -- The route shown, at an entry of its own: one the shell
+            -- pushed itself after a change ('reload'), the editor's entry,
+            -- gone back to after staying, or a place on the page, such as
+            -- a footnote's reference that Back returns to
+            -- ('Wiki.App.Browser.followArticleLink'), which is scrolled to.
             modify (\st -> st {entry = now})
+            H.liftEffect revealFragment
           else do
             dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
             if dirty

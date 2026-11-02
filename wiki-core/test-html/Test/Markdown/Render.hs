@@ -25,8 +25,8 @@ spec = describe "Markdown.Render" $ do
   describe "text" $ do
     it "writes a paragraph's text as one text node" $
       "Hello, *world* & `code`." `shows'` "<p>Hello, <em>world</em> &amp; <code>code</code>.</p>"
-    it "keeps soft breaks and writes hard ones as br" $
-      "a\nb  \nc" `shows'` "<p>a\nb<br>\nc</p>"
+    it "writes every line break as br, a line ended plainly as one ended with two spaces" $
+      "a\nb  \nc" `shows'` "<p>a<br>\nb<br>\nc</p>"
     it "writes strong emphasis and strikethrough" $
       "**a** ~~b~~" `shows'` "<p><strong>a</strong> <del>b</del></p>"
     it "writes emoji with their shortcode as a title" $
@@ -37,6 +37,31 @@ spec = describe "Markdown.Render" $ do
       "a\n\n. . .\n\nb" `shows'` "<p>a</p><p>b</p>"
       "::: incremental\n- a\n\n. . .\n:::" `shows'` "<div class=\"incremental\"><ul><li>a</li></ul></div>"
       "> . . ." `shows'` "<blockquote><p>. . .</p></blockquote>"
+
+  describe "line breaks (issue #120: a line broken on purpose is meant)" $ do
+    it "breaks a quotation's lines, and a box's" $ do
+      "> a\n> b" `shows'` "<blockquote><p>a<br>\nb</p></blockquote>"
+      "> [!NOTE]\n> a\n> b" `shows'` "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>a<br>\nb</p></div>"
+      "> [!TIP] A title\n> a\n> b" `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">A title</p><p>a<br>\nb</p></div>"
+    it "breaks a list item's lines, and leaves the items apart" $ do
+      "- a\n  b\n- c" `shows'` "<ul><li>a<br>\nb</li><li>c</li></ul>"
+      "1. a\nb" `shows'` "<ol><li>a<br>\nb</li></ol>"
+    it "breaks a footnote's lines" $
+      "A[^n]\n\n[^n]: a\n    b"
+        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"a b\">1</a></sup></p>"
+                     <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p>a<br>\nb <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
+                 )
+    it "adds nothing to a heading, the title line, a table, code or display math" $ do
+      "# Title\nText" `shows'` "<h1 id=\"title\">Title<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#title\"></a></h1><p>Text</p>"
+      "| a |\n|---|\n| 1 |\n| 2 |" `shows'` "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr><tr><td>2</td></tr></tbody></table>"
+      "```\nx\ny\n```" `shows'` "<pre><code>x\ny\n</code></pre>"
+      "$$\na\nb\n$$" `shows'` "<div class=\"math display\">\na\nb\n</div>"
+    it "puts no break between a formula on its own lines and the text around it" $
+      "a\n$$x$$\nb" `shows'` "<p>a</p><div class=\"math display\">x</div><p>b</p>"
+    it "keeps a paragraph's source line in the editor's markers" $ do
+      html <- renderHtml . renderLines defaultOptions =<< either (panic . show) pure (parseWithLines "a\nb\n\n> c\n> d\n")
+      html
+        `shouldBe` "<span aria-hidden=\"true\" class=\"source-line\" data-line=\"1\"></span><p>a<br>\nb</p><span aria-hidden=\"true\" class=\"source-line\" data-line=\"4\"></span><blockquote><p>c<br>\nd</p></blockquote>"
 
   describe "the source lines of a page's blocks (renderLines)" $
     it "puts an empty marker of each block's line before the block, and nothing inside it" $ do
@@ -166,7 +191,7 @@ spec = describe "Markdown.Render" $ do
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\a\\b</div>"
           <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\renewcommand{\\a}{3}\n</div>"
           <> "<p>Last <span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">y</span>"
-          <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup></p>"
+          <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"z\">1</a></sup></p>"
           <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">z</span>"
           <> " <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
 
@@ -240,17 +265,34 @@ spec = describe "Markdown.Render" $ do
       "![pic](javascript:alert(1)) ![pic2](data:image/png;base64,AA)" `shows'` "<p>pic pic2</p>"
 
   describe "footnotes" $ do
-    it "links references and notes both ways" $
+    it "links references and notes both ways, each reference titled with its note" $
       "A[^n] B[^n].\n\n[^n]: Note."
-        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup>"
-                     <> " B<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-2\">1</a></sup>.</p>"
+        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"Note.\">1</a></sup>"
+                     <> " B<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1-2\" title=\"Note.\">1</a></sup>.</p>"
                      <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p>Note. <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
                  )
     it "puts the link back after a note that does not end in a paragraph" $
       "A[^n]\n\n[^n]:\n    ```\n    x\n    ```"
-        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup></p>"
+        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"x\">1</a></sup></p>"
                      <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><pre><code>x\n</code></pre><a class=\"footnote-back\" href=\"#fnref-1\">↩</a></li></ol></section>"
                  )
+
+    it "titles a reference with its note's text as plain text, formulas as written" $
+      "A[^1] B[^2]\n\n[^1]: *Very* [important](x), $e^x$.\n\n[^2]: One.\n\n    - two\n    - three"
+        `shows'` ( "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"Very important, e^x.\">1</a></sup>"
+                     <> " B<sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\" title=\"One. two three\">2</a></sup></p>"
+                     <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><em>Very</em> <a href=\"x\">important</a>, <span class=\"math inline\">e^x</span>. <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li>"
+                     <> "<li id=\"fn-2\"><p>One.</p><ul><li>two</li><li>three</li></ul><a class=\"footnote-back\" href=\"#fnref-2\">↩</a></li></ol></section>"
+                 )
+
+    it "titles each section's reference with that section's own note, as comments shown together number theirs" $ do
+      let doc t = either (const []) identity (parseMarkdown t)
+      htmls <- traverse (renderHtml :: [Html] -> IO Text) (renderSections defaultOptions [doc "A[^n]\n\n[^n]: First.", doc "B[^n]\n\n[^n]: Second."])
+      htmls `shouldSatisfy` \case
+        [a, b] -> "title=\"First.\"" `T.isInfixOf` a && "title=\"Second.\"" `T.isInfixOf` b
+        _ -> False
+    it "titles a reference with the text of a note written in HTML" $
+      markdown "A[^n]\n\n[^n]: <p>The note.</p>" >>= (`shouldSatisfy` T.isInfixOf "title=\"The note.\"")
 
   describe "boxes" $ do
     it "writes an alert with its title" $

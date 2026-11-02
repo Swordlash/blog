@@ -3,6 +3,8 @@
 -- demo's own tour. Every page parses, every link between them leads to a
 -- page of the guide, and the Markdown guide shows the boxes
 -- ("Wiki.Core.Markdown.Box"): the five kinds, one of its own and a title.
+-- The guide's source is wrapped, and its pages are not: each paragraph is
+-- one line ('unwrapped'), since a line break in a page is one on the page.
 module Test.Guide (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -16,7 +18,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Guide
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
-import Wiki.Core.Markdown.Ast (Block (..), parseMarkdown)
+import Wiki.Core.Markdown.Ast (Block (..), Footnote (..), Inline (Emph, Link, SoftBreak, Strikeout, Strong), ListItem (..), parseMarkdown)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -43,8 +45,52 @@ boxes = concatMap $ \case
   Div _ bs -> boxes bs
   _ -> []
 
+-- | How many soft line breaks some blocks hold: lines of a paragraph, an
+-- item, a quotation or a footnote that are not its last, which a page
+-- shows as breaks.
+softBreaks :: [Block] -> Int
+softBreaks = sum . map block
+  where
+    block = \case
+      Para xs -> inlines xs
+      Plain xs -> inlines xs
+      Heading _ _ xs -> inlines xs
+      BlockQuote bs -> softBreaks bs
+      List _ items -> sum [softBreaks bs | ListItem _ bs <- items]
+      Table _ header rows -> sum (map inlines (header <> concat rows))
+      Div _ bs -> softBreaks bs
+      Alert _ _ bs -> softBreaks bs
+      Footnotes notes -> sum [softBreaks bs | Footnote _ _ bs <- notes]
+      _ -> 0
+    inlines = sum . map inline
+    inline = \case
+      SoftBreak -> 1
+      Emph xs -> inlines xs
+      Strong xs -> inlines xs
+      Strikeout xs -> inlines xs
+      Link _ _ _ xs -> inlines xs
+      _ -> 0
+
 spec :: Spec
 spec = describe "Wiki.App.Guide" $ do
+  describe "unwrapped" $ do
+    it "joins the lines of a paragraph, an item, a quotation and a footnote" $
+      unwrapped ["One", "two", "", "- a", "  b", "- c", "  - d", "", "1. e", "   f", "", "> g", "> h", "", "[^n]: i", "    j"]
+        `shouldBe` ["One two", "", "- a b", "- c", "  - d", "", "1. e f", "", "> g h", "", "[^n]: i j"]
+    it "keeps a box's marker, a heading, a table, a div's fences, a break and a pause on their own lines" $
+      unwrapped ["> [!NOTE] Title", "> text", "> more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "::: notes", "x", "y", ":::", "", "---", "", ". . ."]
+        `shouldBe` ["> [!NOTE] Title", "> text more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "::: notes", "x y", ":::", "", "---", "", ". . ."]
+    it "keeps code, display math and HTML as written" $ do
+      let kept = ["```", "a", "b", "```", "$$", "c", "d", "$$", "\\[", "e", "f", "\\]", "", "<div>", "g", "h", "</div>"]
+      unwrapped kept `shouldBe` kept
+      unwrapped ["- x", "  ```", "  y", "  z", "  ```"] `shouldBe` ["- x", "  ```", "  y", "  z", "  ```"]
+    it "keeps a line that ends in a break of its own, and does not join quotations of different depths" $ do
+      unwrapped ["a\\", "b", "", "c  ", "d"] `shouldBe` ["a\\", "b", "", "c  ", "d"]
+      unwrapped ["> a", "> > b", "c"] `shouldBe` ["> a", "> > b", "c"]
+    it "leaves no page of the guide or the demo wrapped" $
+      for_ (pages <> Map.elems (demoState demoNow).pages) $ \p ->
+        (p.title, softBreaks <$> parseMarkdown p.body) `shouldBe` (p.title, Right 0)
+
   it "is one public space, Guide, that opens at the server's tour" $ do
     [(s.name, s.public) | s <- Map.elems guide.spaces] `shouldBe` [("Guide", True)]
     let tour = titled guide "Tour"

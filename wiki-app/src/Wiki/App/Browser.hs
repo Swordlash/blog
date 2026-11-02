@@ -65,7 +65,9 @@ import Wiki.Core.Id (CommentThreadId (..))
 $( browserJS
      ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
+     , ("js_clicked_note", "wiki_clicked_note", Unsafe, [t|Event -> JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
+     , ("js_follow_note", "wiki_follow_note", Unsafe, [t|JSText -> JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
      , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
      , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
@@ -103,9 +105,12 @@ $( browserJS
 data ArticleLink
   = -- | One of the router's own addresses, followed without loading a page.
     ToRoute Route
-  | -- | A place on the page (@#fn-1@), by its id. Without this, the page's
-    -- @\<base href>@ would send the browser to the base address.
+  | -- | A place on the page (@#intro@), by its id. Without this, the
+    -- page's @\<base href>@ would send the browser to the base address.
     ToFragment Text
+  | -- | A footnote, from a reference to it: the note's id (@fn-1@) and the
+    -- reference's own (@fnref-1@), which the browser's Back returns to.
+    ToNote Text Text
 
 -- | Which of the application's links a click landed on, given an element
 -- around them, if any. 'Nothing' for anything the browser follows itself
@@ -122,18 +127,27 @@ articleLink :: Router Route -> Event -> Maybe ArticleLink
 articleLink router event = case (routeOfHref router href, T.stripPrefix "#" href) of
   _ | T.null href -> Nothing
   (Just r, _) -> Just (ToRoute r)
-  (Nothing, Just fragment) -> Just (ToFragment (decodeComponent fragment))
+  (Nothing, Just fragment)
+    | T.null reference -> Just (ToFragment (decodeComponent fragment))
+    | otherwise -> Just (ToNote (decodeComponent fragment) reference)
   (Nothing, Nothing) -> Nothing
   where
     href = fromJSText (js_clicked_href event)
+    reference = fromJSText (js_clicked_note event)
 
 -- | Follow a link 'articleLink' found: through the router, or by scrolling
--- to the place on the page. Preventing the click's default is the
--- listener's job.
+-- to the place on the page. A footnote's reference also adds an entry to
+-- the session history, as a link to a place on an ordinary page does, so
+-- that the browser's Back returns to the reference (issue #120): the entry
+-- left gets the reference's address (@#fnref-1@), and the shell scrolls
+-- to the place an address names when Back or Forward arrives at an entry
+-- of the page it shows ('revealFragment'). Preventing the click's default
+-- is the listener's job.
 followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
   ToFragment fragment -> liftIO (js_scroll_to (toJSText fragment))
+  ToNote footnote reference -> liftIO (js_follow_note (toJSText footnote) (toJSText reference))
 
 -- | Show a @\<dialog>@ element as a modal dialog (@showModal@): above the
 -- page, with a backdrop, the rest of the page inert, closed by Escape, and

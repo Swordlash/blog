@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+An export reads a page with pandoc's `hard_line_breaks` (WP5.42), so a line
+break in the page is one in the document, as on the page.
+
 A passkey signs its owner in (WP5.30): `POST`/`PUT session/passkey` for a
 passkey alone, which asks for no second factor, and `POST`/`PUT
 session/second-factor/passkey` in place of the code after a password. The

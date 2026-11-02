@@ -41,8 +41,10 @@
 -- on hover. @[[toc]]@ is the document's table of contents
 -- ("Wiki.Core.Markdown.Toc"), a @\<nav class=\"toc\">@. Task list items start with a
 -- disabled checkbox. Footnote references are @\<sup class=\"footnote-ref\">@
--- links to @#fn-N@, and the notes are a @\<section class=\"footnotes\">@ at
--- the end, each ending with a link back to its first reference. Table cells
+-- links to @#fn-N@, titled with the note's text, which the browser shows
+-- as a tooltip when the pointer rests on the number ('noteText'). The notes
+-- are a @\<section class=\"footnotes\">@ at the end, each ending with a
+-- link back to its first reference. Table cells
 -- are aligned with a @text-align@ style. A box, @> [!KIND]@, is
 -- @\<div class=\"alert alert-note\">@ (its kind's name after @alert-@)
 -- with a @\<p class=\"alert-title\">@ that holds its title: the one
@@ -54,6 +56,14 @@
 -- stylesheet draws.
 -- Only @id@ and @class@ attributes from braces reach the HTML (and @width@
 -- and @height@ in pixels on an embed): any other could be an event handler.
+--
+-- __Line breaks.__ A line break in the source is a line break on the page,
+-- a @\<br>@, wherever text is: in paragraphs, list items, quotations,
+-- boxes and footnotes (the owner, issue #120: a line broken on purpose is
+-- meant). Markdown would join the lines into one (a soft break) and break
+-- only after two spaces or a backslash; here both kinds of break are the
+-- same. The tree keeps them apart ("Wiki.Core.Markdown.Ast"), since it
+-- records what was written.
 --
 -- __Mentions.__ @\@login@ is a link, @\<a class=\"mention\">@, to wherever
 -- 'resolveMention' says the user is, titled with their name; a login it
@@ -203,8 +213,18 @@ renderLines opts located =
 -- are numbered across them, as they would be if the sections were one
 -- page.
 renderSections :: forall page w i. Options page w i -> [[Block]] -> [[HH.HTML w i]]
-renderSections opts sections = evalState (traverse renderBlocks' sections) (Counts M.empty M.empty [])
+renderSections opts sections = evalState (traverse section sections) (Counts M.empty M.empty [] M.empty)
   where
+    -- A section's own notes are read first, the others' after: comments
+    -- shown together are sections each numbering its notes from 1, and a
+    -- slide's notes come in a section after its references.
+    section bs = modify (\c -> c {sectionNotes = noteTexts [bs]}) >> renderBlocks' bs
+
+    -- Each footnote's text, by its number, for the title of its
+    -- references: the notes come last, after the references.
+    allNotes :: Map Int Text
+    allNotes = noteTexts sections
+
     renderBlock :: Block -> R [HH.HTML w i]
     renderBlock = \case
       Para xs -> single . HH.p_ <$> renderInlines xs
@@ -313,7 +333,7 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
     renderInline :: Bool -> Inline -> R [Piece w i]
     renderInline inLink = \case
       Str t -> pure [PText t]
-      SoftBreak -> pure [PText "\n"]
+      SoftBreak -> pure [PNode HH.br_, PText "\n"]
       LineBreak -> pure [PNode HH.br_, PText "\n"]
       Emph xs -> node HH.em_ . fromPieces <$> inlinePieces inLink xs
       Strong xs -> node HH.strong_ . fromPieces <$> inlinePieces inLink xs
@@ -326,7 +346,9 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       Math DisplayMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathDisplay k ms tex)]
       FootnoteRef n _ -> do
         ident <- footnoteRefId n
-        pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a [HP.href ("#fn-" <> show n), HP.id ident] [HH.text (show n)]])]
+        own <- gets (.sectionNotes)
+        let noteTitle = fromMaybe "" (M.lookup n own <|> M.lookup n allNotes)
+        pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a ([HP.href ("#fn-" <> show n), HP.id ident] <> titleProp noteTitle) [HH.text (show n)]])]
       Emoji keyword emoji -> pure [PNode (HH.span [classesProp ["emoji"], HP.title (":" <> keyword <> ":")] [HH.text emoji])]
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
@@ -411,6 +433,8 @@ data Counts = Counts
   { islands :: Map Text Int
   , footnoteRefs :: Map Int Int
   , definitions :: [Text]
+  , sectionNotes :: Map Int Text
+  -- ^ The footnotes of the section being rendered, by number, as titles.
   }
 
 type R = State Counts
@@ -437,6 +461,39 @@ single = pure
 
 nonEmptyOr :: Text -> Text -> Text
 nonEmptyOr fallback t = if T.null t then fallback else t
+
+-- | Each footnote's text in these sections, by its number, wherever its
+-- notes are: at the end, or wrapped in a div (a slide's step) or a quote.
+noteTexts :: [[Block]] -> Map Int Text
+noteTexts sections = M.fromList [(n, noteText bs) | Footnote n _ bs <- concatMap notesIn (concat sections)]
+  where
+    notesIn = \case
+      Footnotes ns -> ns
+      Div _ bs -> concatMap notesIn bs
+      BlockQuote bs -> concatMap notesIn bs
+      Alert _ _ bs -> concatMap notesIn bs
+      _ -> []
+
+-- | A footnote's text, as the title of a reference to it shows it: the
+-- words of its blocks without their markup, formulas and code as written,
+-- on one line. A title is plain text, so this is the note as far as plain
+-- text can show it.
+noteText :: [Block] -> Text
+noteText = T.unwords . T.words . T.unwords . map blockText
+  where
+    blockText = \case
+      Para xs -> plainText xs
+      Plain xs -> plainText xs
+      Heading _ _ xs -> plainText xs
+      BlockQuote bs -> noteText bs
+      CodeBlock _ _ code -> code
+      MathBlock tex -> tex
+      List _ items -> T.unwords [noteText bs | ListItem _ bs <- items]
+      Table _ header rows -> T.unwords (map plainText (header <> concat rows))
+      Div _ bs -> noteText bs
+      Alert _ title bs -> T.unwords (maybeToList title <> [noteText bs])
+      RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
+      _ -> ""
 
 firstNote :: [Footnote] -> Int
 firstNote = \case

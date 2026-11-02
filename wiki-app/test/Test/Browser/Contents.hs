@@ -6,7 +6,8 @@
 -- folded; @[[toc]]@ placing the list in the page instead; a heading's link
 -- to itself; a page made a template, listed apart from the tree; and "New
 -- page" from a template, the space's and a built-in one, with its
--- placeholders filled in.
+-- placeholders filled in. And a footnote's number, titled with its note,
+-- which scrolls to the note when followed.
 module Test.Browser.Contents (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -14,7 +15,7 @@ import Data.IORef (IORef)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime, utctDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start, startWith)
@@ -33,6 +34,7 @@ $( browserJS
      ["jsbits/test-layout.js"]
      [ ("js_scroll_to", "wiki_test_scroll_to", Safe, [t|Int -> IO ()|])
      , ("js_scroll_into_view", "wiki_test_scroll_into_view", Safe, [t|JSText -> IO ()|])
+     , ("js_box", "wiki_test_box", Unsafe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -100,6 +102,20 @@ spec m = do
     click anchor
     eventually $ current ui `shouldReturn` ["#code"]
 
+  -- Back to the reference is the browser's, under the application's
+  -- router (Wiki.App.Browser.followArticleLink); the test router keeps the
+  -- route in the fragment, where no entry for the note can go.
+  it "titles a footnote's number with its note, and scrolls to the note when the number is followed" $ runPage $ do
+    ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    reference <- find ui ".page-body sup.footnote-ref a[href='#fn-1']"
+    getAttribute reference "id" `shouldReturn` Just "fnref-1"
+    getAttribute reference "title" `shouldReturn` Just "A path without a leading slash is read from this page's own address, as a browser reads a relative link."
+    -- The note is at the end of a long page, out of sight from the top.
+    scrollTop 0
+    noteBox >>= (`shouldSatisfy` \(top, _, window) -> top > window)
+    click reference
+    eventually $ noteBox >>= (`shouldSatisfy` \(top, _, window) -> top >= 0 && top < window)
+
   it "makes a page a template, listed apart from the tree, and an ordinary page again" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]))
     _ <- find ui ".page-actions .use-as-template"
@@ -157,6 +173,13 @@ spec m = do
       ordNub . catMaybes <$> traverse (`getAttribute` "href") marked
     scrollTo selector = unsafeIOToPageM (evaluate =<< js_scroll_into_view (toJSText selector))
     scrollTop y = unsafeIOToPageM (evaluate =<< js_scroll_to y)
+    -- Where the first footnote is in the window: its top, its bottom and
+    -- the window's height.
+    noteBox = do
+      found <- unsafeIOToPageM (fromJSText <$> js_box (toJSText ("#fn-1" :: Text)))
+      case mapMaybe (readMaybe . T.unpack) (T.words found) of
+        [top, bottom, window] -> pure (top, bottom, window :: Double)
+        _ -> expectationFailure "no footnote" >> pure (0, 0, 0)
     chooseStart ui label = do
       choices <- findAll ui ".new-page-choice"
       labelled <- filterM (fmap (T.isPrefixOf label . T.strip) . textContent) choices

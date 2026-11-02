@@ -368,6 +368,104 @@ const texMath = {
 // The wiki's Markdown: CodeMirror's (GFM) with the math above.
 const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure(texMath), [], "markdown");
 
+// Inline math left open on its line (issue #120): a $ or a \( that nothing
+// closes on the same line is underlined in red from there to the line's
+// end, as a misspelt word is, with a title that says why. The wiki's parser
+// reads such a formula on to a dollar on a later line of the paragraph,
+// taking the text between as TeX, or else leaves the delimiter as text;
+// neither is what was meant. In the syntax tree that is a TeXMath node that
+// opens with $ or \( and ends on a later line, an Escape node that is a
+// lone \( (one that no \) closes), or a $ in text that starts no node,
+// where a formula may start: not before a blank or a price ($5 and $10,
+// but not $2x), not in $$, and not in code, a link's address or title or
+// HTML (the nodes of notMentions, and LinkTitle). Display math, $$ and \[, may take several lines,
+// and is left alone. Only the lines on screen are looked at, each whole.
+// An amount of money after a dollar: a number with nothing after it that
+// would make it a formula's start ($5, $10.50, $1,000 and then a word, a
+// punctuation mark or the line's end). $2x + y and $2 + x are formulas.
+const isPrice = (rest) => {
+  const number = /^\d(?:[\d,]|\.(?=\d))*/.exec(rest);
+  if (number === null) return false;
+  const after = rest.slice(number[0].length);
+  // Straight after the number: the end, or punctuation ($5, $5.).
+  if (/^($|[.,;:!?)\]])/.test(after)) return true;
+  // After spaces: a word goes on the sentence ($5 and $10), an operator, a
+  // command or a digit goes on a formula ($2 + x, $2 \times x).
+  return /^\s+($|[^\s+\-*/=<>^_\\\d(|])/.test(after);
+};
+
+const unclosedMark = Decoration.mark({ class: "cm-wiki-unclosed-math", attributes: { title: "This formula is not closed on its line." } });
+
+const unclosedMathOf = (view) => {
+  const { state } = view;
+  const ranges = [];
+  const marked = new Set();
+  const mark = (at) => {
+    const line = state.doc.lineAt(at);
+    if (marked.has(line.number) || line.to <= at) return;
+    marked.add(line.number);
+    ranges.push(unclosedMark.range(at, line.to));
+  };
+  for (const visible of view.visibleRanges) {
+    // Whole lines: a range on screen can start or end inside a long wrapped
+    // line, and the scan for a lone $ below reads whole lines, so the nodes
+    // it skips must be collected over the same whole lines.
+    const from = state.doc.lineAt(visible.from).from;
+    const to = state.doc.lineAt(visible.to).to;
+    const skipped = [];
+    syntaxTree(state).iterate({
+      from,
+      to,
+      enter: (node) => {
+        if (node.name === "TeXMath") {
+          const opener = state.sliceDoc(node.from, node.from + 2);
+          const display = opener === "$$" || opener === "\\[";
+          if (!display && state.doc.lineAt(node.from).number !== state.doc.lineAt(node.to).number) mark(node.from);
+        } else if (node.name === "Escape") {
+          if (state.sliceDoc(node.from, node.to) === "\\(") mark(node.from);
+        } else if (!notMentions.has(node.name) && node.name !== "LinkTitle") return undefined;
+        skipped.push([node.from, node.to]);
+        return false;
+      },
+    });
+    // The skipped nodes come in document order and do not overlap (the
+    // traversal does not enter them), as the dollars below do: one cursor
+    // walks both, so a long line full of formulas is read once.
+    let next = 0;
+    for (let pos = from; pos <= to; ) {
+      const line = state.doc.lineAt(pos);
+      const text = line.text;
+      for (let i = 0; i < text.length && !marked.has(line.number); i++) {
+        if (text[i] !== "$") continue;
+        if (text[i + 1] === "$") {
+          i++;
+          continue;
+        }
+        const at = line.from + i;
+        while (next < skipped.length && skipped[next][1] <= at) next++;
+        if (next < skipped.length && skipped[next][0] <= at) continue;
+        if (i + 1 < text.length && !/\s/.test(text[i + 1]) && !isPrice(text.slice(i + 1, i + 40))) mark(at);
+      }
+      pos = line.to + 1;
+    }
+  }
+  return Decoration.set(ranges, true);
+};
+
+const unclosedMath = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = unclosedMathOf(view);
+    }
+    update(update) {
+      if (update.docChanged || update.viewportChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+        this.decorations = unclosedMathOf(update.view);
+      }
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 // The completion of mentions. Wiki.Core.Markdown.Mention says what a
 // mention is: an @ that starts a word (not after a letter, a digit, a mark
 // or one of . _ - + / @), followed by a login's characters (letters,
@@ -813,6 +911,7 @@ export function attach(textarea, host, original, codeTokens) {
       new LanguageSupport(wikiMarkdown),
       syntaxHighlighting(highlighter),
       decorations(codeTokens),
+      unclosedMath,
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",

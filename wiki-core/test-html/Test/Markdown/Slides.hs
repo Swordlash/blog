@@ -43,11 +43,16 @@ spec = describe "Slides.renderDeck" $ do
     let slides = rendered defaultOptions "A[^a].\n\n---\n\nB[^b].\n\n[^a]: Note a.\n\n[^b]: Note b.\n"
     bodies <- traverse (\s -> renderHtml s.body) slides
     bodies
-      `shouldBe` [ "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup>.</p>"
+      `shouldBe` [ "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"Note a.\">1</a></sup>.</p>"
                      <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p>Note a. <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
-                 , "<p>B<sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\">2</a></sup>.</p>"
+                 , "<p>B<sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\" title=\"Note b.\">2</a></sup>.</p>"
                      <> "<section class=\"footnotes\"><ol start=\"2\"><li id=\"fn-2\"><p>Note b. <a class=\"footnote-back\" href=\"#fnref-2\">↩</a></p></li></ol></section>"
                  ]
+
+  it "titles a reference with its note when a pause puts the notes in a later step" $ do
+    let slides = rendered defaultOptions "A[^a].\n\n. . .\n\nB.\n\n[^a]: Note a.\n"
+    bodies <- traverse (\s -> renderHtml s.body) slides
+    bodies `shouldSatisfy` any (T.isInfixOf "title=\"Note a.\"")
 
   it "renders a slide's steps in place, the later ones in the class that hides them" $ do
     let deck = either (panic . show) deckOf (parseMarkdown "One\n\n. . .\n\n::: incremental\n- a\n- b\n:::\n")
