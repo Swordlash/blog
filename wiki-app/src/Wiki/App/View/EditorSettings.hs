@@ -8,7 +8,9 @@
 -- __Kinds of box__ ("Wiki.Core.Markdown.Box"): the kinds an administrator
 -- defined, each shown as a box of its kind looks, with its title, its
 -- colour (one of the theme's, or a custom one from a colour picker) and its
--- icon. One kind is edited at a time, in a form that replaces its row.
+-- icon. One kind is edited at a time, in a form that replaces its row
+-- ("Wiki.App.View.BoxKindForm", the form the editor's "New kind…" dialog
+-- shows too).
 --
 -- __Built-in math macros__ ("Wiki.Core.Math"): the macros every formula
 -- of the wiki is set with, which the wiki ships with
@@ -35,7 +37,7 @@ module Wiki.App.View.EditorSettings
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Row (type (.==))
+import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -49,16 +51,20 @@ import Wiki.App.Backend (MonadLoad (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
+import Wiki.App.View.BoxKindForm (boxPreview)
+import Wiki.App.View.BoxKindForm qualified as BoxKindForm
 import Wiki.App.View.Common
-import Wiki.Core.Markdown.Box (AlertKind (Custom), BoxColour (..), BoxIcon (..), BoxKind (..), colourName, iconName, kindTitle, readColour, readHexColour, readIcon, themeColours)
-import Wiki.Core.Markdown.Render qualified as Md
+import Wiki.Core.Markdown.Box (BoxIcon (..), BoxKind (..), colourName, iconName)
 import Wiki.Core.Math (Macros (..), removedMacros, wikiMacros)
 import Wiki.Core.Space (Space (id, name))
 
 newtype Input = Input {context :: Context}
 
--- | The formula the macros are tried on, set as every page's are.
-type Slots = ("island" .== H.Slot (Const Void) Void ())
+-- | The formula the macros are tried on, set as every page's are, and the
+-- form of the kind of box being edited.
+type Slots =
+  ("island" .== H.Slot (Const Void) Void ())
+    .+ ("kindForm" .== H.Slot (Const Void) BoxKindForm.Output ())
 
 data Loaded
   = Loading
@@ -70,18 +76,9 @@ data Loaded
 data Editing
   = NotEditing
   | -- | A kind of box, by the name it had ('Nothing' for a new one).
-    EditingBox (Maybe Text) BoxForm
+    EditingBox (Maybe Text)
 
--- | A kind of box's form, as typed.
-data BoxForm = BoxForm
-  { typedKind :: Text
-  , typedLabel :: Text
-  , chosenColour :: BoxColour
-  , chosenIcon :: BoxIcon
-  }
-
--- | The built-in macros' form: the block as typed, KaTeX's error for it,
--- the formula they are tried on, and what saving it waits for.
+-- | The built-in macros' form, as typed.
 data MacrosForm = MacrosForm
   { typed :: Text
   , macroError :: Maybe Text
@@ -119,13 +116,7 @@ data Action
   | AddBox
   | EditBox Text
   | RemoveBox Text
-  | TypedKind Text
-  | TypedLabel Text
-  | ChoseColour Text
-  | PickedColour Text
-  | ChoseIcon Text
-  | SaveBox
-  | Cancel
+  | FromKindForm BoxKindForm.Output
   | TypedMacros Text
   | TypedSample Text
   | SaveMacros
@@ -198,7 +189,7 @@ component =
               {% for b in settings.boxes %}
                 <li class="server-box" data-name={{ b.name }}>
                   {% if editedBox st == Just b.name %}
-                    {{ boxForm st <$> boxFormOf st }}
+                    {{ kindForm st (Just b) }}
                   {% else %}
                     {{ boxRow st b }}
                   {% end %}
@@ -211,7 +202,7 @@ component =
       |]
       where
         adding = case st.editing of
-          EditingBox Nothing form -> [hh|<div class="server-box-new">{{ boxForm st form }}</div>|]
+          EditingBox Nothing -> [hh|<div class="server-box-new">{{ kindForm st Nothing }}</div>|]
           _ ->
             [hh|
               <div class="actions">
@@ -232,51 +223,9 @@ component =
         </div>
       |]
 
-    boxForm :: State -> BoxForm -> H.ComponentHTML Action Slots m
-    boxForm st form =
-      [hh|
-        <form class="server-box-form" aria-label="A kind of box" {{ HE.preventingDefault (HE.onSubmit (const SaveBox)) }}>
-          <label class="field">
-            <span>Name, as written after [!</span>
-            <input type="text" name="kind" autocomplete="off" required pattern={{ "[a-z][a-z\\-]*" :: Text }} placeholder="exercise" readonly={{ isJust (editedBox st) }} value={{ form.typedKind }} onValueInput={{ TypedKind }}>
-          </label>
-          <p class="field-hint">Lower-case letters and dashes. A page may write it in capitals: <code>{{ "> [!EXERCISE]" :: Text }}</code>.</p>
-          <label class="field">
-            <span>Title its boxes show</span>
-            <input type="text" name="label" autocomplete="off" placeholder={{ kindTitle (T.strip form.typedKind) }} value={{ form.typedLabel }} onValueInput={{ TypedLabel }}>
-          </label>
-          <p class="field-hint">A box may give its own after the kind, <code>{{ "> [!EXERCISE] A circle's area" :: Text }}</code>, after its number.</p>
-          <label class="field">
-            <span>Colour</span>
-            <select name="colour" onValueChange={{ ChoseColour }}>
-              {% for c in themeColours %}
-                <option value={{ colourName c }} selected={{ c == form.chosenColour }}>{{ colourName c }}</option>
-              {% end %}
-              <option value="custom" selected={{ isCustom form.chosenColour }}>custom…</option>
-            </select>
-          </label>
-          {% if isCustom form.chosenColour %}
-            <label class="field server-box-custom-colour">
-              <span>Custom colour</span>
-              <input type="color" name="custom-colour" value={{ colourName form.chosenColour }} onValueInput={{ PickedColour }}>
-            </label>
-            <p class="field-hint">The theme's colours change with the light and the dark scheme; a custom one does not, so choose one that reads on both.</p>
-          {% end %}
-          <label class="field">
-            <span>Icon</span>
-            <select name="icon" onValueChange={{ ChoseIcon }}>
-              {% for i in [minBound .. maxBound :: BoxIcon] %}
-                <option value={{ iconName i }} selected={{ i == form.chosenIcon }}>{{ iconName i }}</option>
-              {% end %}
-            </select>
-          </label>
-          {{ boxPreview (boxOf form) }}
-          <div class="actions">
-            <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
-            <button type="button" class="server-cancel" onClick={{ const Cancel }}>Cancel</button>
-          </div>
-        </form>
-      |]
+    -- The form of a kind of box: the kind being changed, or a new one.
+    kindForm :: State -> Maybe BoxKind -> H.ComponentHTML Action Slots m
+    kindForm st kind = HH.slot "kindForm" () BoxKindForm.component BoxKindForm.Input {kind, busy = st.busy} FromKindForm
 
     -- The built-in macros, in their form, with KaTeX's error, a formula to
     -- try them on and, when saving removes macros that pages use, those
@@ -343,24 +292,14 @@ component =
         old <- gets (\st -> st.input.context.revision)
         modify (\st -> st {input})
         when (old /= input.context.revision) load
-      Cancel -> modify (\st -> st {editing = NotEditing, refusal = Nothing})
-      AddBox -> modify (\st -> st {editing = EditingBox Nothing newBox, refusal = Nothing})
-      EditBox name -> withSettings $ \s ->
-        for_ (find (\b -> b.name == name) s.boxes) $ \b ->
-          modify (\st -> st {editing = EditingBox (Just name) (boxFormOf' b), refusal = Nothing})
+      FromKindForm BoxKindForm.Cancelled -> modify (\st -> st {editing = NotEditing, refusal = Nothing})
+      AddBox -> modify (\st -> st {editing = EditingBox Nothing, refusal = Nothing})
+      EditBox name -> modify (\st -> st {editing = EditingBox (Just name), refusal = Nothing})
       RemoveBox name -> save (\s -> (unchanged s) {boxes = filter (\b -> b.name /= name) s.boxes})
-      TypedKind t -> onBox (\f -> f {typedKind = T.toLower t})
-      TypedLabel t -> onBox (\f -> f {typedLabel = t})
-      ChoseColour t
-        | t == "custom" -> onBox (\f -> f {chosenColour = if isCustom f.chosenColour then f.chosenColour else CustomColour defaultCustomColour})
-        | otherwise -> onBox (\f -> f {chosenColour = fromMaybe f.chosenColour (readColour t)})
-      PickedColour t -> onBox (\f -> f {chosenColour = maybe f.chosenColour CustomColour (readHexColour t)})
-      ChoseIcon t -> onBox (\f -> f {chosenIcon = fromMaybe f.chosenIcon (readIcon t)})
-      SaveBox ->
+      FromKindForm (BoxKindForm.Submitted kind) ->
         gets (\st -> st.editing) >>= \case
-          EditingBox was form -> do
-            let kind = boxOf form
-                replaced s = case was of
+          EditingBox was -> do
+            let replaced s = case was of
                   Just name -> [if b.name == name then kind else b | b <- s.boxes]
                   Nothing -> s.boxes <> [kind]
             save (\s -> (unchanged s) {boxes = replaced s})
@@ -396,11 +335,6 @@ component =
       gets (\st -> st.loaded) >>= \case
         Ready s -> f s
         _ -> pass
-
-    onBox :: (BoxForm -> BoxForm) -> H.HalogenM State Action Slots ViewOutput m ()
-    onBox f = modify $ \st -> case st.editing of
-      EditingBox was form -> st {editing = EditingBox was (f form)}
-      _ -> st
 
     onMacros :: (MacrosForm -> MacrosForm) -> H.HalogenM State Action Slots ViewOutput m ()
     onMacros f = modify (\st -> st {macros = f <$> st.macros})
@@ -474,40 +408,5 @@ editingSomething st = case st.editing of
 -- | The name of the kind of box being changed, if one is.
 editedBox :: State -> Maybe Text
 editedBox st = case st.editing of
-  EditingBox (Just name) _ -> Just name
+  EditingBox (Just name) -> Just name
   _ -> Nothing
-
-boxFormOf :: State -> Maybe BoxForm
-boxFormOf st = case st.editing of
-  EditingBox (Just _) form -> Just form
-  _ -> Nothing
-
--- | Whether a colour is a custom one, which the form picks with a colour
--- picker rather than from the list.
-isCustom :: BoxColour -> Bool
-isCustom = \case
-  CustomColour _ -> True
-  _ -> False
-
--- | The colour the picker starts at when "custom" is chosen: the theme's
--- teal, as it is in the light scheme.
-defaultCustomColour :: Text
-defaultCustomColour = "#0a6d69"
-
-newBox :: BoxForm
-newBox = BoxForm {typedKind = "", typedLabel = "", chosenColour = Blue, chosenIcon = NoIcon}
-
-boxFormOf' :: BoxKind -> BoxForm
-boxFormOf' b = BoxForm {typedKind = b.name, typedLabel = b.label, chosenColour = b.colour, chosenIcon = b.icon}
-
--- | The kind of box the form describes. The server checks it
--- ('Wiki.Core.Markdown.Box.checkBoxKinds'), and gives an empty label the
--- kind's name.
-boxOf :: BoxForm -> BoxKind
-boxOf f = BoxKind {name = T.strip f.typedKind, label = T.strip f.typedLabel, colour = f.chosenColour, icon = f.chosenIcon}
-
--- | A box of a kind as a page shows it, with its title and nothing in it
--- ("Wiki.Core.Markdown.Render"'s 'Md.boxOf'), in a @page-body@, whose
--- rules draw it.
-boxPreview :: BoxKind -> HH.HTML w i
-boxPreview b = HH.div [HP.class_ (HH.ClassName "page-body server-box-preview")] [Md.boxOf (Just b) (Custom b.name) Nothing []]

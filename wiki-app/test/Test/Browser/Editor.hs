@@ -21,8 +21,10 @@ import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
 import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
 import Test.Hspec.Halogen
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), insertUser)
 import Wiki.App.Islands (MonadIslands)
@@ -31,6 +33,7 @@ import Wiki.Core.Attachment (Attachment (name), FileName (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown)
+import Wiki.Core.Markdown.Box (BoxKind (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
 import Wiki.Core.Space (Space (id, mathMacros))
 import Wiki.Core.User (Login (..), User (..))
@@ -516,13 +519,35 @@ spec m = do
     markdown ui `shouldReturn` "# Hello, world\n\n> [!EXERCISE]\n> Read this first"
     previewHas ui ".alert-exercise .alert-title" "Exercise 1"
 
-  it "offers an administrator a new kind of box, in the administration's kinds, in another tab" $ runPage $ do
-    (ui, _) <- startWith m (Just "user-admin") helloEditor
+  it "defines a new kind of box in a dialog, without leaving the page, writes a box of it, and lists it at once" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") helloEditor
     find ui ".editor-toolbar button[aria-label='Box']" >>= click
-    new <- find ui ".box-menu .box-menu-new"
-    new `shouldHaveText` "New kind…"
-    getAttribute new "target" `shouldReturn` Just "_blank"
-    getAttribute new "href" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "/admin/editor/"))
+    find ui ".box-menu .box-menu-new" >>= (`shouldHaveText` "New kind…")
+    find ui ".box-menu .box-menu-new" >>= click
+    -- The administration's form, in a dialog over the editor. One of
+    -- GitHub's five is refused, and the dialog stays with what was typed.
+    kind <- find ui ".new-kind-dialog .server-box-form input[name=kind]"
+    typeText kind "note"
+    find ui ".new-kind-dialog .server-box-form button[type=submit]" >>= click
+    find ui ".new-kind-dialog .error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "one of GitHub's five")
+    clear kind
+    typeText kind "lemma"
+    find ui ".new-kind-dialog .server-box-form input[name=label]" >>= (`typeText` "Lemma")
+    find ui ".new-kind-dialog .server-box-form button[type=submit]" >>= click
+    eventually (length <$> findAll ui ".new-kind-dialog" `shouldReturn` 0)
+    -- The server keeps it, a box of it is in the text, and the menu lists
+    -- it without a reload.
+    kinds <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) (\s -> s.boxes) <$> serverSettings))
+    map (\k -> k.name) kinds `shouldSatisfy` elem "lemma"
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "> [!LEMMA]")
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    eventually (find ui ".box-menu button[data-kind='LEMMA']" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Lemma"))
+
+  it "offers no new kind of box to someone who is not an administrator" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    find ui ".editor-toolbar button[aria-label='Box']" >>= click
+    _ <- find ui ".box-menu button[data-kind='TIP']"
+    length <$> findAll ui ".box-menu .box-menu-new" `shouldReturn` 0
 
   it "edits the page's block of macros and the space's from the Math macros panel" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor

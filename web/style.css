@@ -3769,6 +3769,64 @@ body:has(.slides-view) {
   background: var(--dialog-backdrop);
 }
 
+/* The editor's "New kind…" dialog (Wiki.App.View.NewKindDialog): the
+   administration's form for a kind of box, over the page being written,
+   drawn as the user dialog is. */
+.new-kind-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
+}
+
+.new-kind-dialog::backdrop {
+  background: var(--dialog-backdrop);
+}
+
+.new-kind-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 1.25rem 1.25rem;
+}
+
+.new-kind-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 -1.25rem;
+  padding: 1rem 1.25rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.new-kind-dialog-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.new-kind-dialog-close {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+}
+
+.new-kind-dialog-close:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
 /* A dialog stands above the page: as white as the page in the light
    scheme, and a step lighter than it in the dark one. */
 :root {

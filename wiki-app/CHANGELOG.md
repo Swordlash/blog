@@ -13,8 +13,11 @@ button: a panel with the layers a page's formulas are set with, the
 space's block editable by whoever may edit the whole space (as the space's
 "Math macros" now is too), and the page's own block, a `math` block of
 definitions under the title that the page does not show, applied into the
-text as one undoable edit. "New kind…" in the Box menu opens the Editor
-tab. `MonadAdmin` gains `macroUses`, and `MonadIslands` `builtinMacros`.
+text as one undoable edit. "New kind…" in the Box menu opens a dialog
+over the editor with the Editor tab's form for a kind of box
+(`Wiki.App.View.BoxKindForm`, used by both): a kind saved there is written
+into the text and is in the menu at once, with nothing left or reloaded.
+`MonadAdmin` gains `macroUses`, and `MonadIslands` `builtinMacros`.
 
 Stars and help (WP5.44). A page's **Star** button keeps the page under
 **Starred** in the header, for the signed-in user, in the order starred; the
