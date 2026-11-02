@@ -576,10 +576,17 @@ boxWith defined kind title inner =
 
 -- | Display math in a box's title, @$$…$$@, set on the title's line in
 -- display style: a title is one line, and a block of display math in it
--- would break the line.
+-- would break the line. Math inside emphasis or a link's text is set the
+-- same way, since a block there would also sit inside the title's
+-- paragraph.
 displayInline :: Inline -> Inline
 displayInline = \case
   Math DisplayMath tex -> Math InlineMath ("\\displaystyle " <> tex)
+  Emph xs -> Emph (map displayInline xs)
+  Strong xs -> Strong (map displayInline xs)
+  Strikeout xs -> Strikeout (map displayInline xs)
+  Link attrs dest title xs -> Link attrs dest title (map displayInline xs)
+  Image attrs dest title xs -> Image attrs dest title (map displayInline xs)
   other -> other
 
 -- | The @id@ and the classes of some attributes, after classes of the

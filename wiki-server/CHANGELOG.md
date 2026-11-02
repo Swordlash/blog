@@ -4,8 +4,12 @@
 
 Migration `0004-space-box-numbering` adds `spaces.box_numbering`, how a
 space numbers its boxes (WP5.40), `in-page` for every space. The export
-numbers boxes as the page does, reads a box's title as Markdown (its math
-is math), and a feed's post numbers its boxes within the post.
+numbers boxes as the page does, reads a box's title as Markdown in the
+page's context (its math is math, a reference link or a footnote in it
+finds its definition), and a feed's post numbers its boxes within the
+post. A change of a space's numbering is recorded in the audit log
+(`numbers of boxes`), and an import makes a new space with the archive's
+numbering; a space the import merges into keeps its own.
 
 An export reads a page with pandoc's `hard_line_breaks` (WP5.42), so a line
 break in the page is one in the document, as on the page.

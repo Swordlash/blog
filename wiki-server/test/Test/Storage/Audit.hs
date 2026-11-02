@@ -103,13 +103,16 @@ eachWrite backing = describe "has one entry for each write of the administration
     docs <- spaceNamed st "Docs"
     pages <- as st "admin" (listPages docs.id) >>= ok
     guide <- maybe (assertFailure "the docs have no Markdown guide") pure (find (\p -> slugText p.slug == "markdown-guide") pages)
-    let profile b = SpaceProfile {description = "How to write here, and why.", icon = Just (IconColour "teal"), homePage = Just guide.id, blog = b, boxNumbering = InPage}
+    let numberedAs n b = SpaceProfile {description = "How to write here, and why.", icon = Just (IconColour "teal"), homePage = Just guide.id, blog = b, boxNumbering = n}
+        profile = numberedAs InPage
     changed <- recordsOne st (as st "admin" (setSpaceProfile docs.id (profile docs.blog)))
     summary changed `shouldBe` ("space.profile", "space", "Docs", [("description", "How to write here, and why."), ("home page", guide.title), ("icon", "colour teal")])
     blog <- recordsOne st (as st "admin" (setSpaceProfile docs.id (profile (not docs.blog))))
     summary blog `shouldBe` ("space.profile", "space", "Docs", [("blog", if docs.blog then "no" else "yes")])
+    numbered <- recordsOne st (as st "admin" (setSpaceProfile docs.id (numberedAs WithSection (not docs.blog))))
+    summary numbered `shouldBe` ("space.profile", "space", "Docs", [("numbers of boxes", "with-section")])
     already <- length <$> logged st
-    _ <- as st "admin" (setSpaceProfile docs.id (profile (not docs.blog))) >>= ok
+    _ <- as st "admin" (setSpaceProfile docs.id (numberedAs WithSection (not docs.blog))) >>= ok
     length <$> logged st `shouldReturn` already
     uploaded <- recordsOne st (as st "admin" (uploadSpaceIcon docs.id "image/png" "not really a picture"))
     summary uploaded `shouldBe` ("space.profile", "space", "Docs", [("icon", "an uploaded image")])

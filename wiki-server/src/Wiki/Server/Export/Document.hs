@@ -378,13 +378,15 @@ withBoxesRead defined numbering page = go page.markers
 -- it, and the text the placeholder replaced.
 type Boxes = Map Text (BoxMarker, Text)
 
--- | A page's source with the marker of each of these boxes (@[!KIND]@ and
--- the title after it) replaced by a placeholder, and the boxes by their
--- placeholders. Pandoc reads each such box as a quotation that starts with
--- its placeholder, which 'boxesOf' makes the box. So pandoc never decides
--- what is a box: a marker the wiki reads as text (escaped, in code, with
--- no space before a title) is text in the document too, and a title is the
--- text the page shows.
+-- | A page's source with the marker of each of these boxes (@[!KIND]@)
+-- replaced by a placeholder, and the boxes by their placeholders. Pandoc
+-- reads each such box as a quotation that starts with its placeholder,
+-- which 'boxesOf' makes the box. So pandoc never decides what is a box: a
+-- marker the wiki reads as text (escaped, in code, with no space before a
+-- title) is text in the document too. The title stays after the
+-- placeholder, on its line, so pandoc reads it as part of the page: a
+-- reference link or a footnote in it finds its definition elsewhere in the
+-- page, as on the page.
 --
 -- The placeholder line is followed by a line of the quotation marks of
 -- its prefix and nothing else, a blank line inside the quotation, so that what follows
@@ -412,7 +414,7 @@ withBoxes source markers = case family of
             , Just start <- [markerStart m text]
             ]
         rewrite n text = case Map.lookup n placed of
-          Just (placeholder, _, start, _) -> [T.take start text <> placeholder, quoteOnly (T.take start text)]
+          Just (placeholder, m, start, _) -> [T.take start text <> placeholder <> maybe "" (" " <>) m.boxTitle, quoteOnly (T.take start text)]
           Nothing -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
@@ -471,13 +473,15 @@ boxesOf defined boxes numbers = \case
   P.BlockQuote (P.Para (P.Str placeholder : after) : rest)
     | Just (m, _) <- Map.lookup placeholder boxes ->
         let caption = boxCaption (definedKind defined m.boxKind) m.boxKind (Map.lookup placeholder numbers) (isJust m.boxTitle)
-            label = B.toList (B.text caption) <> maybe [] titleInlines m.boxTitle
+            -- The title is what pandoc read after the placeholder, up to
+            -- the end of its line ('withBoxes').
+            (onLine, more) = break lineBreak after
+            title = walk displayInline (dropWhile (== P.Space) onLine)
+            label = B.toList (B.text caption) <> title
             classes = case m.boxKind of
               Custom name -> ["alert-" <> name]
               builtIn -> [alertKindName builtIn, "alert"]
-            firstPara = case after of
-              b : more | lineBreak b -> more
-              more -> more
+            firstPara = drop 1 more
          in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para label] : [P.Para firstPara | not (null firstPara)] <> rest)
   b -> b
   where
@@ -485,14 +489,9 @@ boxesOf defined boxes numbers = \case
       P.SoftBreak -> True
       P.LineBreak -> True
       _ -> False
-    -- The title as the page reads it: a line of Markdown text. A title
-    -- pandoc reads as anything but one paragraph (@1. First@, a list) is
-    -- its text.
-    titleInlines title = case runPure (readMarkdown def {readerExtensions = wikiExtensions} title) of
-      Right (P.Pandoc _ [P.Para xs]) -> map displayInline xs
-      _ -> B.toList (B.text title)
     -- Display math in a title is set on the title's line, as the page sets
-    -- it.
+    -- it, wherever it is in the title ('walk' reaches into emphasis and
+    -- links).
     displayInline = \case
       P.Math P.DisplayMath tex -> P.Math P.InlineMath ("\\displaystyle " <> tex)
       other -> other

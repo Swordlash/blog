@@ -269,7 +269,7 @@ footnoteRefs = concatMap ofBlock
       List _ items -> concat [footnoteRefs bs | ListItem _ bs <- items]
       Table _ header rows -> concatMap ofInlines header <> concatMap (concatMap ofInlines) rows
       Div _ bs -> footnoteRefs bs
-      Alert _ _ bs -> footnoteRefs bs
+      Alert _ box bs -> foldMap ofInlines box.title <> footnoteRefs bs
       _ -> []
     ofInlines = concatMap $ \case
       FootnoteRef n _ -> [n]

@@ -205,6 +205,7 @@ import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
+import Wiki.Core.Markdown.Box (numberingName)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
@@ -1659,13 +1660,15 @@ setSpaceProfileTx sid p = do
   pure s'
 
 -- | What a change of a space's profile changed, in words: the description
--- as it is now, the icon as what it is, the home page by its title.
+-- as it is now, the icon as what it is, the home page by its title, the
+-- numbering of boxes by its name (@with-section@).
 profileChanges :: [PageNode] -> Space -> Space -> [(Text, Text)]
 profileChanges nodes old new =
   [("description", if T.null new.description then "none" else new.description) | old.description /= new.description]
     <> [("icon", maybe "the default" iconText new.icon) | old.icon /= new.icon]
     <> [("home page", maybe "none" titleOf new.homePage) | old.homePage /= new.homePage]
     <> [("blog", yesNo new.blog) | old.blog /= new.blog]
+    <> [("numbers of boxes", numberingName new.boxNumbering) | old.boxNumbering /= new.boxNumbering]
   where
     iconText = \case
       IconEmoji e -> e

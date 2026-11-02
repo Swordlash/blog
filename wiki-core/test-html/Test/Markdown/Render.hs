@@ -339,6 +339,9 @@ spec = describe "Markdown.Render" $ do
     it "writes a title's math as math, and its display math on the title's line" $
       "> [!TIP] Use $x$ and $$y$$\n> a"
         `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">Use <span class=\"math inline\">x</span> and <span class=\"math inline\">\\displaystyle y</span></p><p>a</p></div>"
+    it "writes display math inside emphasis in a title on the title's line too" $
+      "> [!TIP] *$$y$$*\n> a"
+        `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\"><em><span class=\"math inline\">\\displaystyle y</span></em></p><p>a</p></div>"
     it "keeps the five kinds' own look whatever is defined"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
       $ "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>x</p></div>"

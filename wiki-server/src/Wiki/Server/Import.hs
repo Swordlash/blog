@@ -87,7 +87,7 @@ import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -325,7 +325,9 @@ importSpace blobs a discussions choices progress m
               , icon = Nothing
               , description = ""
               , blog = False
-              , boxNumbering = InPage
+              , -- How the archive's space numbered its boxes: a setting
+                -- without a "none of its own" for 'fillProfile' to fill.
+                boxNumbering = m.archived.boxNumbering
               }
           pure i
       let placed =

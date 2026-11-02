@@ -248,6 +248,15 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     none <- blocksOf ToOther place {numbering = Numbering {form = NoNumbers, number = Just 2}} source
     titles none `shouldBe` ["Tip", "First", "Note", "Note", "Tip"]
 
+  it "reads a box's title as part of the page: a reference link and a footnote in it find their definitions, and its display math stays on its line" $ do
+    let titleOf bs = [xs | P.Div (_, ["tip", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
+    blocks <- blocksOf ToOther place "> [!TIP] See [the guide][g][^n] and *$$x$$*\n> Text.\n\n[g]: https://example.com\n\n[^n]: The note.\n"
+    [title] <- pure (titleOf blocks)
+    query (\case P.Link _ _ (url, _) -> [url]; _ -> []) title `shouldBe` ["https://example.com"]
+    length (query (\case P.Note _ -> [()]; _ -> []) title) `shouldBe` 1
+    query (\case P.Math kind tex -> [(kind, tex)]; _ -> []) title `shouldBe` [(P.InlineMath, "\\displaystyle x")]
+    query (\case P.Str t -> [t]; _ -> []) title `shouldNotContain` ["[the", "guide][g]"]
+
   it "reads a box whatever the page's line endings" $ do
     let boxTitles bs = [xs | P.Div (_, ["note", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
     crlf <- blocksOf ToOther place "> [!NOTE] T\r\n> x\r\n"
