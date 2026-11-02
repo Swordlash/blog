@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The server's settings and the session carry `mathMacros` (WP5.41), the
+built-in math macros as the administration keeps them, `null` until an
+administrator first opens the Editor section; at most 20,000 characters.
+`AdminApi` gains `macroUses`, `GET api/v1/admin/macro-uses?name=...`, the
+pages that use any of the macros named (`MacroUse`, `macroUsesIn`).
+
 Stars (WP5.44): `GET stars` lists the signed-in user's starred pages, each a
 `StarredPage` with its title and where it is now, and `PUT
 stars/pages/<page>` with `Starring` stars a page or takes the star away and

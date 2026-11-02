@@ -159,7 +159,7 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | POST | `api/v1/spaces` | `NewSpace` `{"parent": id or null, "name"}` | 201 `Space`, with its home page made | 404, 403, 400 | `createSpace` |
 | PUT | `api/v1/spaces/<space>/name` | `SpaceName` `{"name"}` | `Space` | 404, 403, 400 | `renameSpace` |
 | PUT | `api/v1/spaces/<space>/public` | `SpacePublic` `{"public": bool}` | `Space` | 404, 403 | `setSpacePublic` |
-| PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 | `setSpaceMathMacros` |
+| PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 (for whoever may not edit the whole space, WP5.41) | `setSpaceMathMacros` |
 | PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "homePage": page id or null}` | `Space` | 404, 403, 400 | `setSpaceProfile` |
 | POST | `api/v1/spaces/<space>/icon` | multipart form, one file part named `file`: its `Content-Type` the image's media type, its file name not looked at | `Space`, its icon the image | 404, 403, 400 (not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `uploadSpaceIcon` |
 | GET, HEAD | `api/v1/spaces/<space>/icon/<blob>` | | the image's bytes, with its media type | 404 | `spaceIconUrl` gives this address |
@@ -989,7 +989,8 @@ The activity log records option changes as `settings.home-page`.
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts", "boxes"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts", "boxes", "homePage", "mathMacros"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| GET | `api/v1/admin/macro-uses?name=<macro>&name=…` | | `[MacroUse]` `{"usedOn", "inSpace", "pageTitle", "uses"}`: every page that uses one of the macros (`\Prob`, by its whole name) without defining it, with the ones it uses | 403 | `macroUses` |
 | PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
 | POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
 | POST | `api/v1/admin/server/mail/test` | `MailTest` `{"to"}` | `MailTestResult` `{"failure"}`, `null` when sent | 403, 400 (no mail server or public address, or not an address) | `sendTestMail` |
@@ -1028,6 +1029,18 @@ theme (`blue`, `green`, `purple`, `amber`, `red`, `teal`, `orange`, `pink`,
 cannot be one, are refused (400). They are stored as JSON in the setting
 `boxes`, and every session carries them. Settings without the field read
 as having none.
+
+`mathMacros` (WP5.41) is the wiki's built-in math macros as the
+administration keeps them, one definition a line: `null` until an
+administrator first opens the administration's Editor section, which fills
+it from the macros the wiki ships with (`web/src/katex-macros.tex`) and
+saves it. From then on every formula is set with this block in place of the
+shipped one, and so is the export. Blank lines at its ends are dropped, and
+a block longer than 20,000 characters is refused (400); whether KaTeX reads
+it is checked in the browser. It is stored in the setting `math-macros`,
+and every session carries it (`SessionInfo`'s `mathMacros`). Before a block
+that takes macros out is saved, the Editor section asks `macro-uses` which
+pages use them, and names them.
 
 `assistantHosts` (WP5.21) are the addresses the writing assistant may reach
 from the browser besides Anthropic's and OpenAI's APIs, as origins: every

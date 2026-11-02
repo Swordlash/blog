@@ -32,7 +32,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (id, mathMacros))
 import Wiki.Core.User (Login (..), User (..))
 
 -- The page has no file dialog the harness can answer, so a test hands the
@@ -522,7 +522,31 @@ spec m = do
     new <- find ui ".box-menu .box-menu-new"
     new `shouldHaveText` "New kind…"
     getAttribute new "target" `shouldReturn` Just "_blank"
-    getAttribute new "href" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "/admin/server/"))
+    getAttribute new "href" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "/admin/editor/"))
+
+  it "edits the page's block of macros and the space's from the Math macros panel" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clearBody ui
+    typeText text "Half: $\\half + \\twice$"
+    find ui ".editor-toolbar .editor-macros-toggle" >>= click
+    _ <- find ui ".editor-macros"
+    -- The page's block, applied into the text under the title.
+    page <- find ui ".editor-macros-page .macros-source"
+    typeText page "\\newcommand{\\half}{\\frac{1}{2}}"
+    length <$> findAll ui ".editor-macros-page .macros-error" `shouldReturn` 0
+    find ui ".editor-macros-page button[type=submit]" >>= click
+    markdown ui `shouldReturn` "# Hello, world\n\n```math\n\\newcommand{\\half}{\\frac{1}{2}}\n```\n\nHalf: $\\half + \\twice$"
+    -- The block shows nothing in the preview; the formula has the macro.
+    eventually (length <$> findAll ui ".editor-preview .wiki-math-display" `shouldReturn` 0)
+    -- The space's, which an editor of the whole space saves at once.
+    space <- find ui ".editor-macros-space .macros-source"
+    typeText space "\\newcommand{\\twice}{2}"
+    find ui ".editor-macros-space button[type=submit]" >>= click
+    eventually (find ui ".editor-macros-space .settings-saved" >>= (`shouldHaveText` "Saved"))
+    blog <- unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getSpace (slugs ["blog"])))
+    blog.mathMacros `shouldBe` "\\newcommand{\\twice}{2}"
 
   it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor

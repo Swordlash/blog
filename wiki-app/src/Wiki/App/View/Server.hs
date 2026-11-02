@@ -3,16 +3,18 @@
 -- | The administration's section on the server itself (WP4.4 of
 -- docs/PLAN.md, "Wiki.Api.ServerSettings"): the wiki's public address,
 -- the mail server invitations are sent through, and the sign-in
--- providers, the assistant's hosts and the kinds of box pages may hold;
--- and, not a setting but a property of the server's machine, whether it
+-- providers and the assistant's hosts; and, not a setting but a
+-- property of the server's machine, whether it
 -- exports PDFs. This is the only place they are set (the
 -- owner's decision of 2026-10-25): the server's admin listener serves it
 -- before anyone can sign in, and a change takes effect with the next
 -- request, without a restart. It is one component over the
 -- administration's backend ("Wiki.App.Backend.Admin"), which the shell
--- shows as the administration's "Server" section. The server's status and
--- its backups are sections of their own ("Wiki.App.View.Status",
--- "Wiki.App.View.Backups").
+-- shows as the administration's "Server" section. The server's status, its
+-- backups and the editor's settings (the kinds of box and the built-in
+-- math macros, which are server settings too) are sections of their own
+-- ("Wiki.App.View.Status", "Wiki.App.View.Backups",
+-- "Wiki.App.View.EditorSettings").
 --
 -- Everything it shows comes from one read, as in the other sections: at
 -- once where the backend answers at once (the demo, and a page the server
@@ -20,7 +22,7 @@
 -- initializer.
 --
 -- One thing is edited at a time (the address, the mail server, one
--- provider, the hosts or one kind of box), in a form that replaces what it
+-- provider or the hosts), in a form that replaces what it
 -- edits. Saving writes all the
 -- settings at once, with everything not being edited as it was read. A
 -- secret (the mail account's password, a provider's client secret) is
@@ -55,7 +57,6 @@ import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
-import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Export (ExportFormat, formatLabel, needsTeX)
@@ -63,8 +64,6 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
-import Wiki.Core.Markdown.Box (AlertKind (Custom), BoxColour (..), BoxIcon (..), BoxKind (..), colourName, iconName, kindTitle, readColour, readHexColour, readIcon, themeColours)
-import Wiki.Core.Markdown.Render qualified as Md
 import Wiki.Core.Url (Url (..))
 
 newtype Input = Input {context :: Context}
@@ -86,16 +85,6 @@ data Editing
     EditingProvider (Maybe Text) ProviderForm
   | -- | The assistant's hosts, as typed: one per line.
     EditingHosts Text
-  | -- | A kind of box, by the name it had ('Nothing' for a new one).
-    EditingBox (Maybe Text) BoxForm
-
--- | A kind of box's form, as typed.
-data BoxForm = BoxForm
-  { typedKind :: Text
-  , typedLabel :: Text
-  , chosenColour :: BoxColour
-  , chosenIcon :: BoxIcon
-  }
 
 -- | The mail server's form, as typed.
 data MailForm = MailForm
@@ -177,15 +166,6 @@ data Action
   | EditHosts
   | TypedHosts Text
   | SaveHosts
-  | AddBox
-  | EditBox Text
-  | RemoveBox Text
-  | TypedKind Text
-  | TypedLabel Text
-  | ChoseColour Text
-  | PickedColour Text
-  | ChoseIcon Text
-  | SaveBox
 
 component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
 component =
@@ -231,7 +211,6 @@ component =
           {{ mailView st settings }}
           {{ providersView st settings }}
           {{ hostsView st settings }}
-          {{ boxesView st settings }}
           {{ exportView st.input.context.session.exports }}
         </div>
       |]
@@ -306,107 +285,6 @@ component =
                 </div>
               </div>
             |]
-
-    -- The kinds of box the administrator defined ("Wiki.Core.Markdown.Box"),
-    -- each shown as a box of its kind looks, and the form of the one being
-    -- edited.
-    boxesView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
-    boxesView st settings =
-      [hh|
-        <div class="server-part server-boxes">
-          <h3>Boxes</h3>
-          <p class="admin-intro">
-            A page holds a box as a quotation whose first line is a kind in brackets, such as <code>{{ "> [!NOTE]" :: Text }}</code>.
-            GitHub's five kinds (note, tip, important, warning, caution) have their own look.
-            Any other kind, such as <code>{{ "> [!EXERCISE]" :: Text }}</code>, is a plain box titled with its name;
-            define it here to give its boxes a title, a colour and an icon.
-          </p>
-          {% if null settings.boxes %}
-            <p class="empty server-boxes-none">No kind of box defined: other kinds are plain boxes.</p>
-          {% else %}
-            <ul class="server-box-list">
-              {% for b in settings.boxes %}
-                <li class="server-box" data-name={{ b.name }}>
-                  {% if editedBox st == Just b.name %}
-                    {{ boxForm st <$> boxFormOf st }}
-                  {% else %}
-                    {{ boxRow st b }}
-                  {% end %}
-                </li>
-              {% end %}
-            </ul>
-          {% end %}
-          {{ adding }}
-        </div>
-      |]
-      where
-        adding = case st.editing of
-          EditingBox Nothing form -> [hh|<div class="server-box-new">{{ boxForm st form }}</div>|]
-          _ ->
-            [hh|
-              <div class="actions">
-                <button type="button" class="server-box-add" disabled={{ editingSomething st }} onClick={{ const AddBox }}>Add a kind of box</button>
-              </div>
-            |]
-
-    boxRow :: State -> BoxKind -> H.ComponentHTML Action Slots m
-    boxRow st b =
-      [hh|
-        <div class="server-box-row">
-          {{ boxPreview b }}
-          <p class="server-box-written">Written <code>{{ "> [!" <> T.toUpper b.name <> "]" }}</code>; {{ colourName b.colour }}, {{ if b.icon == NoIcon then "no icon" else iconName b.icon <> " icon" :: Text }}.</p>
-          <div class="actions">
-            <button type="button" class="server-box-edit" disabled={{ editingSomething st }} onClick={{ const (EditBox b.name) }}>Change</button>
-            <button type="button" class="server-box-remove" disabled={{ editingSomething st || st.busy }} onClick={{ const (RemoveBox b.name) }}>Remove</button>
-          </div>
-        </div>
-      |]
-
-    boxForm :: State -> BoxForm -> H.ComponentHTML Action Slots m
-    boxForm st form =
-      [hh|
-        <form class="server-box-form" aria-label="A kind of box" {{ HE.preventingDefault (HE.onSubmit (const SaveBox)) }}>
-          <label class="field">
-            <span>Name, as written after [!</span>
-            <input type="text" name="kind" autocomplete="off" required pattern={{ "[a-z][a-z\\-]*" :: Text }} placeholder="exercise" readonly={{ isJust (editedBox st) }} value={{ form.typedKind }} onValueInput={{ TypedKind }}>
-          </label>
-          <p class="field-hint">Lower-case letters and dashes. A page may write it in capitals: <code>{{ "> [!EXERCISE]" :: Text }}</code>.</p>
-          <label class="field">
-            <span>Title its boxes show</span>
-            <input type="text" name="label" autocomplete="off" placeholder={{ kindTitle (T.strip form.typedKind) }} value={{ form.typedLabel }} onValueInput={{ TypedLabel }}>
-          </label>
-          <p class="field-hint">A box may give its own after the kind, <code>{{ "> [!EXERCISE] Exercise 3" :: Text }}</code>.</p>
-          <label class="field">
-            <span>Colour</span>
-            <select name="colour" onValueChange={{ ChoseColour }}>
-              {% for c in themeColours %}
-                <option value={{ colourName c }} selected={{ c == form.chosenColour }}>{{ colourName c }}</option>
-              {% end %}
-              <option value="custom" selected={{ isCustom form.chosenColour }}>custom…</option>
-            </select>
-          </label>
-          {% if isCustom form.chosenColour %}
-            <label class="field server-box-custom-colour">
-              <span>Custom colour</span>
-              <input type="color" name="custom-colour" value={{ colourName form.chosenColour }} onValueInput={{ PickedColour }}>
-            </label>
-            <p class="field-hint">The theme's colours change with the light and the dark scheme; a custom one does not, so choose one that reads on both.</p>
-          {% end %}
-          <label class="field">
-            <span>Icon</span>
-            <select name="icon" onValueChange={{ ChoseIcon }}>
-              {% for i in [minBound .. maxBound :: BoxIcon] %}
-                <option value={{ iconName i }} selected={{ i == form.chosenIcon }}>{{ iconName i }}</option>
-              {% end %}
-            </select>
-          </label>
-          {{ boxPreview (boxOf form) }}
-          <div class="actions">
-            <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
-            <button type="button" class="server-cancel" onClick={{ const Cancel }}>Cancel</button>
-          </div>
-        </form>
-      |]
 
     -- The public address.
     urlView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
@@ -753,27 +631,6 @@ component =
         gets (\st -> st.editing) >>= \case
           EditingHosts typed -> save (\s -> (unchanged s) {assistantHosts = filter (not . T.null) (map T.strip (T.lines typed))})
           _ -> pass
-      AddBox -> modify (\st -> st {editing = EditingBox Nothing newBox, refusal = Nothing})
-      EditBox name -> withSettings $ \s ->
-        for_ (find (\b -> b.name == name) s.boxes) $ \b ->
-          modify (\st -> st {editing = EditingBox (Just name) (boxFormOf' b), refusal = Nothing})
-      RemoveBox name -> save (\s -> (unchanged s) {boxes = filter (\b -> b.name /= name) s.boxes})
-      TypedKind t -> onBox (\f -> f {typedKind = T.toLower t})
-      TypedLabel t -> onBox (\f -> f {typedLabel = t})
-      ChoseColour t
-        | t == "custom" -> onBox (\f -> f {chosenColour = if isCustom f.chosenColour then f.chosenColour else CustomColour defaultCustomColour})
-        | otherwise -> onBox (\f -> f {chosenColour = fromMaybe f.chosenColour (readColour t)})
-      PickedColour t -> onBox (\f -> f {chosenColour = maybe f.chosenColour CustomColour (readHexColour t)})
-      ChoseIcon t -> onBox (\f -> f {chosenIcon = fromMaybe f.chosenIcon (readIcon t)})
-      SaveBox ->
-        gets (\st -> st.editing) >>= \case
-          EditingBox was form -> do
-            let kind = boxOf form
-                replaced s = case was of
-                  Just name -> [if b.name == name then kind else b | b <- s.boxes]
-                  Nothing -> s.boxes <> [kind]
-            save (\s -> (unchanged s) {boxes = replaced s})
-          _ -> pass
       TypedTestTo t -> modify (\st -> st {testTo = t})
       SendTest -> do
         to' <- gets (\st -> st.testTo)
@@ -790,11 +647,6 @@ component =
     onMail :: (MailForm -> MailForm) -> H.HalogenM State Action Slots ViewOutput m ()
     onMail f = modify $ \st -> case st.editing of
       EditingMail form -> st {editing = EditingMail (f form)}
-      _ -> st
-
-    onBox :: (BoxForm -> BoxForm) -> H.HalogenM State Action Slots ViewOutput m ()
-    onBox f = modify $ \st -> case st.editing of
-      EditingBox was form -> st {editing = EditingBox was (f form)}
       _ -> st
 
     onProvider :: (ProviderForm -> ProviderForm) -> H.HalogenM State Action Slots ViewOutput m ()
@@ -837,46 +689,6 @@ editedName :: State -> Maybe Text
 editedName st = case st.editing of
   EditingProvider (Just name) _ -> Just name
   _ -> Nothing
-
--- | The name of the kind of box being changed, if one is.
-editedBox :: State -> Maybe Text
-editedBox st = case st.editing of
-  EditingBox (Just name) _ -> Just name
-  _ -> Nothing
-
-boxFormOf :: State -> Maybe BoxForm
-boxFormOf st = case st.editing of
-  EditingBox (Just _) form -> Just form
-  _ -> Nothing
-
--- | Whether a colour is a custom one, which the form picks with a colour
--- picker rather than from the list.
-isCustom :: BoxColour -> Bool
-isCustom = \case
-  CustomColour _ -> True
-  _ -> False
-
--- | The colour the picker starts at when "custom" is chosen: the theme's
--- teal, as it is in the light scheme.
-defaultCustomColour :: Text
-defaultCustomColour = "#0a6d69"
-
-newBox :: BoxForm
-newBox = BoxForm {typedKind = "", typedLabel = "", chosenColour = Blue, chosenIcon = NoIcon}
-
-boxFormOf' :: BoxKind -> BoxForm
-boxFormOf' b = BoxForm {typedKind = b.name, typedLabel = b.label, chosenColour = b.colour, chosenIcon = b.icon}
-
--- | The kind of box the form describes. The server checks it
--- ('checkBoxKinds'), and gives an empty label the kind's name.
-boxOf :: BoxForm -> BoxKind
-boxOf f = BoxKind {name = T.strip f.typedKind, label = T.strip f.typedLabel, colour = f.chosenColour, icon = f.chosenIcon}
-
--- | A box of a kind as a page shows it, with its title and nothing in it
--- ("Wiki.Core.Markdown.Render"'s 'Md.boxOf'), in a @page-body@, whose
--- rules draw it.
-boxPreview :: BoxKind -> HH.HTML w i
-boxPreview b = HH.div [HP.class_ (HH.ClassName "page-body server-box-preview")] [Md.boxOf (Just b) (Custom b.name) Nothing []]
 
 providerFormOf :: State -> Maybe ProviderForm
 providerFormOf st = case st.editing of

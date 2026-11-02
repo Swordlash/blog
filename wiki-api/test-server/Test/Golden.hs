@@ -91,6 +91,7 @@ spec = describe "golden JSON" $ do
     golden "recovery-codes" RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop", "qrst-uvwx-yz23-4567"]}
     golden "email-state" Sample.emailState
     golden "server-settings" Sample.serverSettings
+    golden "macro-uses" [Sample.macroUse]
     golden "provider-check" Sample.providerCheck
     golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
     golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}

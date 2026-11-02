@@ -154,6 +154,9 @@ spec = describe "Markdown.Render" $ do
       "So $x^2$ holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
     it "writes display math in a div, out of the paragraph" $
       "Then $$a+b$$ ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"
+    it "writes nothing for a display formula of nothing but definitions, a page's block of macros" $ do
+      "# T\n\n```math\n\\newcommand{\\a}{1}\n```\n\nText." `shows'` "<h1 id=\"t\">T<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#t\"></a></h1><p>Text.</p>"
+      "$$\\newcommand{\\a}{1} \\a$$" `shows'` "<div class=\"math display\">\\newcommand{\\a}{1} \\a</div>"
     it "writes math between LaTeX's delimiters as it writes math between dollars" $ do
       "So \\(x^2\\) holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
       "Then \\[a+b\\] ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"

@@ -5,6 +5,7 @@
 module Wiki.Core.Space
   ( Space (..)
   , positionSpace
+  , withMathMacros
   , subspaceOrderOf
   , subspacesOf
   , spaceTreeOrder
@@ -134,6 +135,12 @@ topLevelOf spaces sid = go (32 :: Int) sid
   where
     go 0 _ = Nothing
     go n i = find (\s -> s.id == i) spaces >>= \s -> maybe (Just s) (go (n - 1)) s.parent
+
+-- | The space with other math macros. (A function, since a record update
+-- of @mathMacros@ cannot tell a space's field from the server's settings'
+-- or a session's where they are in scope.)
+withMathMacros :: Text -> Space -> Space
+withMathMacros mathMacros s = s {mathMacros}
 
 -- | The space at another position among its siblings. (A function, since
 -- a record update of @position@ cannot tell a space's field from a page's

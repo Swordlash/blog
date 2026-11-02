@@ -48,6 +48,10 @@ module Wiki.Api.Admin
   , NewInvitation (..)
   , Invited (..)
   , invitationLifetime
+
+    -- * Macros the pages use
+  , MacroUse (..)
+  , macroUsesIn
   )
 where
 
@@ -60,7 +64,9 @@ import Protolude
 import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Id (GroupId, InvitationId, UserId)
+import Wiki.Core.Id (GroupId, InvitationId, PageId, SpaceId, UserId)
+import Wiki.Core.Math (definedMacros, usesMacro)
+import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.User (Email, Group (..), Login (..), Membership, User (..))
 
 -- | 'ServerStatus': the response to @GET \/api\/v1\/admin\/status@.
@@ -439,3 +445,33 @@ data Invited = Invited
 -- forgotten in a mailbox does not stay valid.
 invitationLifetime :: NominalDiffTime
 invitationLifetime = 7 * 24 * 60 * 60
+
+--------------------------------------------------------------------------------
+-- Macros the pages use
+
+-- | 'MacroUse' is a page that uses some of the built-in math macros an
+-- administrator is about to remove (WP5.41 of docs/PLAN.md): the editor's
+-- settings name it in their warning, so that the administrator knows which
+-- pages the removal breaks.
+data MacroUse = MacroUse
+  { usedOn :: PageId
+  , inSpace :: SpaceId
+  , pageTitle :: Text
+  , uses :: [Text]
+  -- ^ The macros of those asked about that the page uses, in the order
+  -- asked.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The pages among these that use any of these macros ('usesMacro'),
+-- each with the macros it uses, in the order of the pages. A page that
+-- defines a macro itself does not count as using the built-in one.
+macroUsesIn :: [Text] -> [Page] -> [MacroUse]
+macroUsesIn names pages =
+  [ MacroUse {usedOn = p.id, inSpace = p.space, pageTitle = p.title, uses}
+  | p <- pages
+  , let own = definedMacros p.body
+        uses = [n | n <- names, n `notElem` own, usesMacro n p.body]
+  , not (null uses)
+  ]

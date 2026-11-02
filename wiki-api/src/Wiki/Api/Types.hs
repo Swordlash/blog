@@ -78,13 +78,18 @@ data SessionInfo = SessionInfo
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administration defined ("Wiki.Core.Markdown.Box"),
   -- which every page is rendered with.
+  , mathMacros :: Maybe Text
+  -- ^ The wiki's built-in math macros as the administration keeps them
+  -- ('Wiki.Api.ServerSettings.mathMacros'), which every formula is set
+  -- with; 'Nothing' for the ones the wiki ships with.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON)
 
 -- | Read by hand rather than derived, so that a session written before
--- @boxes@ existed (in a page an offline copy kept, with the responses it
--- was rendered from) reads as having no kinds of box.
+-- @boxes@ or @mathMacros@ existed (in a page an offline copy kept, with the
+-- responses it was rendered from) reads as having no kinds of box and the
+-- built-in macros the wiki ships with.
 instance FromJSON SessionInfo where
   parseJSON = withObject "SessionInfo" $ \o ->
     SessionInfo
@@ -97,6 +102,7 @@ instance FromJSON SessionInfo where
       <*> o .: "exports"
       <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
+      <*> o .:? "mathMacros"
 
 -- | 'NewSpace': a space to create, @createSpace@.
 data NewSpace = NewSpace

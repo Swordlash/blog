@@ -115,6 +115,24 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
       run (Box "WARNING") "> [!TIP] Ti‸tle\n> a" `shouldBe` "> [!WARNING] Ti‸tle\n> a"
       run (Box "NOTE") "«>[!fun-fact*]\n> a»" `shouldBe` "«>[!NOTE*]\n> a»"
 
+  describe "PageMacros" $ do
+    let block = "\\newcommand{\\a}{1}"
+        fenced = "```math\n" <> block <> "\n```"
+    it "puts the page's block of macros under its title, the cursor staying on its text" $ do
+      run (PageMacros block) "# Title\n\nSome ‸text" `shouldBe` "# Title\n\n" <> fenced <> "\n\nSome ‸text"
+      run (PageMacros block) "# Title\nText‸" `shouldBe` "# Title\n\n" <> fenced <> "\n\nText‸"
+      run (PageMacros block) "# Title‸" `shouldBe` "# Title‸\n\n" <> fenced
+      run (PageMacros block) "No title‸" `shouldBe` fenced <> "\n\nNo title‸"
+    it "replaces the block the page has, and finds it again" $ do
+      let page = "# Title\n\n" <> fenced <> "\n\nText‸"
+      pageMacros (fst (unmark page)) `shouldBe` Just block
+      run (PageMacros "\n\\def\\b{2}\n\n") page `shouldBe` "# Title\n\n```math\n\\def\\b{2}\n```\n\nText‸"
+    it "removes the block, with the blank line after it, when it is emptied" $
+      run (PageMacros "  \n") ("# Title\n\n" <> fenced <> "\n\nText‸") `shouldBe` "# Title\n\nText‸"
+    it "takes no other math block for the page's macros" $ do
+      pageMacros "# Title\n\n```math\nx^2\n```" `shouldBe` Nothing
+      pageMacros "# Title\n\nText\n\n```math\n\\def\\a{1}\n```" `shouldBe` Nothing
+
   describe "CodeBlock" $ do
     it "puts an empty block in with the cursor where the language goes" $
       run CodeBlock "‸" `shouldBe` "```‸\n\n```"

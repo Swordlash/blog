@@ -63,7 +63,7 @@ genRoute =
 genSection :: Gen AdminSection
 genSection =
   oneof
-    [ elements [Overview, Groups, Permissions, Server, Backups, Activity]
+    [ elements [Overview, Groups, Permissions, Server, EditorSettings, Backups, Activity]
     , Users
         <$> ( UserListing
                 <$> elements ["", "ada", "a b", "100% ?#/", "zażółć"]

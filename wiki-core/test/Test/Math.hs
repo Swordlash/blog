@@ -84,6 +84,33 @@ spec = describe "Wiki.Core.Math" $ do
     it "passes over a formula that defines nothing" $
       for_ ["x^2", "\\frac{1}{2}", "\\left( x \\right)", "\\ce{H2O}", "\\operatorname{def}"] $
         \tex -> (tex, definesMacros tex) `shouldBe` (tex, False)
+
+  describe "definedMacros, removedMacros and usesMacro (WP5.41)" $ do
+    it "names what a block defines, each once, in order, but not in a comment" $
+      definedMacros
+        ( "\\newcommand{\\Prob}{\\operatorname{P}}\n\\renewcommand\\E{\\mathbb{E}}\n\\DeclareMathOperator{\\tr}{tr}"
+            <> "\n\\newcommand{\\abs}[1]{\\left|#1\\right|}\n\\def\\pair#1#2{(#1, #2)}\n\\let\\eps=\\varepsilon"
+            <> "\n% \\newcommand{\\gone}{x}\n\\newcommand{\\Prob}{P}\n\\newcommand{\\opt}[2][x]{#1#2}"
+        )
+        `shouldBe` ["\\Prob", "\\E", "\\tr", "\\abs", "\\pair", "\\eps", "\\opt"]
+
+    it "finds the macros a new block takes out" $
+      removedMacros "\\newcommand{\\a}{1}\n\\newcommand{\\b}{2}" "\\newcommand{\\b}{3}" `shouldBe` ["\\a"]
+
+    it "finds a macro used by its whole name only" $ do
+      usesMacro "\\E" "$\\E[X]$" `shouldBe` True
+      usesMacro "\\E" "$\\Earth + \\exp$" `shouldBe` False
+      usesMacro "\\E" "$\\Earth + \\E_x$" `shouldBe` True
+      usesMacro "\\E" "end of $x\\E" `shouldBe` True
+
+  describe "onlyDefinitions" $ do
+    it "knows a formula of nothing but definitions and comments" $
+      for_ ["\\newcommand{\\a}{1}", "\\newcommand{\\a}[1]{\\frac{#1}{2}}\n\\def\\b#1{#1}\n% a comment", "\\let\\c\\d\n\\DeclareMathOperator*{\\argmin}{arg\\,min}"] $
+        \tex -> (tex, onlyDefinitions tex) `shouldBe` (tex, True)
+
+    it "knows a formula that shows something, or a definition it cannot read whole" $
+      for_ ["x^2", "", "\\newcommand{\\a}{1} \\a + 1", "\\newcommand{\\a}{\\frac{1}", "\\% \\newcommand{\\a}{1}"] $
+        \tex -> (tex, onlyDefinitions tex) `shouldBe` (tex, False)
   where
     maths = "\\newcommand{\\vect}[1]{\\mathbf{#1}}\n\\newcommand{\\Hom}{\\operatorname{Hom}}"
     algebra = "\\newcommand{\\Hom}{\\mathrm{Hom}}\n\\newcommand{\\Aut}{\\operatorname{Aut}}"

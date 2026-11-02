@@ -266,6 +266,11 @@ data Session = Session
   -- rendered with. Part of the session for the same reason as 'providers':
   -- the prerendered page and the program's first render draw the same
   -- boxes.
+  , mathMacros :: Maybe Text
+  -- ^ The wiki's built-in math macros as the administration keeps them
+  -- (WP5.41 of docs/PLAN.md), which every formula is set with; 'Nothing'
+  -- for the ones the wiki ships with (@web/src/katex-macros.tex@). Part
+  -- of the session for the same reason as 'boxes'.
   }
   deriving stock (Eq, Show)
 
@@ -278,7 +283,7 @@ anonymous = anonymousIn Open
 -- wiki is open to ("Wiki.Core.Access"), so that the application knows
 -- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.

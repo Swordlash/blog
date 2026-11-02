@@ -113,6 +113,7 @@ library
       Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
+      Wiki.App.View.EditorSettings
       Wiki.App.View.Groups
       Wiki.App.View.Help
       Wiki.App.View.Export
@@ -124,6 +125,7 @@ library
       Wiki.App.View.Permissions
       Wiki.App.View.Preview
       Wiki.App.View.LivePreview
+      Wiki.App.View.MacrosPanel
       Wiki.App.View.ProviderIcons
       Wiki.App.View.Reset
       Wiki.App.View.Search
@@ -370,6 +372,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Search
       Test.Browser.Security
       Test.Browser.Server
+      Test.Browser.EditorSettings
       Test.Browser.Shell
       Test.Browser.Slides
       Test.Browser.Source

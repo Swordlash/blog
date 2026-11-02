@@ -1639,13 +1639,16 @@ grantCreateSpaces u = setGlobalGrant True GlobalGrant {subject = SubjectUser u, 
 --
 -- > assistant-hosts the writing assistant's hosts (WP5.21), one per line
 -- > boxes           the kinds of box (WP5.29), a JSON array
+-- > math-macros     the built-in math macros (WP5.41), as written; an
+-- >                 empty text is a block with nothing in it, and no row
+-- >                 the macros the wiki ships with
 --
 -- The providers are rows of @sign_in_providers@, in the order their
 -- buttons show. A provider of a kind this program does not know is left
 -- out, and a mail server without a host counts as none.
 loadServerSettings :: (Backend be) => Db be Kept
 loadServerSettings = do
-  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "home-page", settingsLike "mail-"]
+  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "home-page", settingsLike "math-macros", settingsLike "mail-"]
   providerRows <- runSelectReturningList (select (orderBy_ (\p -> (asc_ p.position, asc_ p.name)) (all_ wikiDb.sign_in_providers)))
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
@@ -1672,6 +1675,7 @@ loadServerSettings = do
       , -- A value this program cannot read (a newer one's colour or icon)
         -- reads as no kinds rather than failing every page.
         boxes = fromMaybe [] (valueOf "boxes" >>= decodeStrict' . encodeUtf8)
+      , mathMacros = snd <$> find ((== "math-macros") . fst) rows
       }
 
 -- | Store the server's settings, replacing those stored before.
@@ -1680,6 +1684,7 @@ storeServerSettings s = do
   deleteSettingsLike "public-url" []
   deleteSettingsLike "assistant-hosts" []
   deleteSettingsLike "boxes" []
+  deleteSettingsLike "math-macros" []
   deleteSettingsLike "home-page" []
   deleteSettingsLike "mail-" []
   let rows =
@@ -1687,6 +1692,7 @@ storeServerSettings s = do
           <> [("public-url", u.text) | Just u <- [s.publicUrl]]
           <> [("assistant-hosts", T.unlines s.assistantHosts) | not (null s.assistantHosts)]
           <> [("boxes", decodeUtf8 (BSL.toStrict (encode s.boxes))) | not (null s.boxes)]
+          <> [("math-macros", m) | Just m <- [s.mathMacros]]
           <> case s.mail of
             Nothing -> []
             Just m ->

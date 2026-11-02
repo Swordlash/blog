@@ -27,7 +27,7 @@ import Test.Sample qualified as Sample
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), UserQuery (..), defaultSettings, pageOfDirectory, userQueryOf)
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), MacroUse, NewInvitation (..), UserQuery (..), defaultSettings, pageOfDirectory, userQueryOf)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
@@ -278,6 +278,7 @@ stubs =
           , removeSecondFactor = \u -> if u == UserId "u1" then pure NoContent else refuse NotFound
           , setHomePage = pure
           , server = pure Sample.serverSettings
+          , macroUses = \names -> pure [Sample.macroUse | "\\Prob" `elem` names]
           , -- What was sent, each secret said to be set if it was given.
             setServer = \change -> pure (maybe NotSet (const Set) <$> change)
           , checkProvider = \name given ->
@@ -728,6 +729,10 @@ spec = describe "a server of the API's type" $ do
       answers (getAt links.admin.server) 200 Sample.serverSettings
       answers (sendJson methodPut links.admin.setHomePage Sample.serverChange.homePage) 200 Sample.serverChange.homePage
       answers (sendJson methodPut links.admin.setServer Sample.serverChange) 200 ((\secret -> if isJust secret then Set else NotSet) <$> Sample.serverChange)
+
+    it "finds the pages that use built-in macros, at macro-uses" $ do
+      answers (getAt (links.admin.macroUses ["\\Prob", "\\E"])) 200 [Sample.macroUse]
+      answers (getAt (links.admin.macroUses ["\\E"])) 200 ([] :: [MacroUse])
 
     it "checks a provider by its name, as set or as given" $ do
       links.admin.checkProvider "corp" `shouldBe` "api/v1/admin/server/providers/corp/check"

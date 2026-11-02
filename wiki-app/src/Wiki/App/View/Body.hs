@@ -271,7 +271,7 @@ options place =
 
 -- | Renderer options shared by page bodies, previews and the front page.
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
-islandOptions ctx spaceDefined =
+islandOptions ctx spaceOwn =
   Md.defaultOptions
     { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
@@ -284,6 +284,9 @@ islandOptions ctx spaceDefined =
     }
   where
     island key = HH.slot_ "island" key Islands.component
+    -- The wiki's built-in macros as the administration keeps them, if it
+    -- does, before the space's.
+    spaceDefined = wikiMacrosOf ctx.session <> spaceOwn
 
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of

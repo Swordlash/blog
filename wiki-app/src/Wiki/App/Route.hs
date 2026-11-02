@@ -190,6 +190,9 @@ data AdminSection
   | -- | The server's own settings: its public address, mail, sign-in
     -- providers, the assistant's hosts.
     Server
+  | -- | The editor's settings, for every page (WP5.41 of docs/PLAN.md):
+    -- the kinds of box and the built-in math macros.
+    EditorSettings
   | -- | The server's backups, and the wiki's data as one file: its export
     -- and import.
     Backups
@@ -224,7 +227,7 @@ allUsers = UserListing {search = "", page = 1, only = Everyone}
 -- | The sections in the order the navigation lists them, each at its first
 -- address.
 adminSections :: [AdminSection]
-adminSections = [Overview, Users allUsers, Groups, Permissions, Server, Backups, Activity]
+adminSections = [Overview, Users allUsers, Groups, Permissions, Server, EditorSettings, Backups, Activity]
 
 -- | A section's name, the last segment of its address: stable, lower
 -- case.
@@ -235,6 +238,7 @@ sectionName = \case
   Groups -> "groups"
   Permissions -> "permissions"
   Server -> "server"
+  EditorSettings -> "editor"
   Backups -> "backups"
   Activity -> "activity"
 
@@ -246,6 +250,7 @@ sectionTitle = \case
   Groups -> "Groups"
   Permissions -> "Permissions"
   Server -> "Server"
+  EditorSettings -> "Editor"
   Backups -> "Backups and data"
   Activity -> "Activity"
 
@@ -400,6 +405,7 @@ adminSection = RouteDuplex named.printer (named.parser <|> (Overview <$ (directo
         , section Groups
         , section Permissions
         , section Server
+        , section EditorSettings
         , section Backups
         , section Activity
         ]

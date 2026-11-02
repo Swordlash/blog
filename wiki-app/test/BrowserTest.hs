@@ -30,6 +30,7 @@ import Test.Browser.Search qualified as Search
 import Test.Browser.Activity qualified as Activity
 import Test.Browser.Backups qualified as Backups
 import Test.Browser.Security qualified as Security
+import Test.Browser.EditorSettings qualified as EditorSettings
 import Test.Browser.Server qualified as Server
 import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
@@ -84,6 +85,7 @@ spec = do
   describe "Wiki.App.View.Permissions" (Permissions.spec BrowserDOM)
   describe "Whom the wiki lets in" (Access.spec BrowserDOM)
   describe "Wiki.App.View.Server" (Server.spec BrowserDOM)
+  describe "Wiki.App.View.EditorSettings" (EditorSettings.spec BrowserDOM)
   describe "Wiki.App.View.Backups" (Backups.spec BrowserDOM)
   describe "Wiki.App.View.Activity" (Activity.spec BrowserDOM)
   describe "Signing in with a provider" (Providers.spec BrowserDOM)

@@ -284,6 +284,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.LivePreview (liveKey)
+import Wiki.App.View.MacrosPanel qualified as MacrosPanel
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
 import Wiki.Core.Assistant
@@ -321,6 +322,7 @@ import Wiki.Core.Markdown.Edit
   , highlightColours
   , htmlTagLabel
   , htmlTagName
+  , pageMacros
   , textColourClass
   , textColours
   )
@@ -353,6 +355,7 @@ type Slots =
   ("preview" .== H.Slot (Const Void) Void ())
     .+ ("time" .== H.Slot (Const Void) Void Int)
     .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
+    .+ ("macros" .== H.Slot (Const Void) MacrosPanel.Output ())
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -489,6 +492,8 @@ data State = State
   , conflict :: Maybe Clash
   , assistantOpen :: Bool
   -- ^ Whether the writing assistant's panel is shown.
+  , macrosOpen :: Bool
+  -- ^ Whether the math macros' panel is shown ("Wiki.App.View.MacrosPanel").
   , assistantMounted :: Bool
   -- ^ Whether the panel has been shown yet: it is then mounted, and kept.
   , hostElement :: Maybe Element
@@ -539,6 +544,8 @@ data Action
   | AttachOrImage
   | ToggleMenu Menu
   | CloseMenu
+  | ToggleMacros
+  | FromMacros MacrosPanel.Output
   | ShowPreview
   | WentTo Bool
   | BackToEditing
@@ -664,6 +671,7 @@ component =
               , changedSince = Nothing
               , conflict = Nothing
               , assistantOpen = False
+              , macrosOpen = False
               , assistantMounted = False
               , hostElement = Nothing
               , selection = Nothing
@@ -742,7 +750,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = newKindHref st.input.context} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = newKindHref st.input.context, macrosShown = st.macrosOpen} }}
           </div>
           <div class="editor-notices">
             {{ presenceView st }}
@@ -752,6 +760,9 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
+          {% if st.macrosOpen %}
+            {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
+          {% end %}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -1044,7 +1055,7 @@ component =
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
-          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ htmlMenu bar }}</div>
+          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ macrosButton bar }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
             <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
@@ -1087,6 +1098,11 @@ component =
           {% end %}
         </div>
       |]
+
+    -- The math macros' panel, shown under the toolbar while pressed.
+    macrosButton :: Bar -> H.ComponentHTML Action Slots m
+    macrosButton bar =
+      [hh|<button type="button" class="tool editor-macros-toggle" title="Math macros: the space's and the page's" aria-label="Math macros" aria-pressed={{ ariaBool bar.macrosShown }} onClick={{ const ToggleMacros }}>{{ icon macrosIcon }}</button>|]
 
     htmlMenu :: Bar -> H.ComponentHTML Action Slots m
     htmlMenu bar =
@@ -1371,6 +1387,13 @@ component =
         gets (\st -> st.fileInput) >>= H.getRef >>= traverse_ (H.liftEffect . clickElement)
       ToggleMenu which -> modify (\st -> st {menu = if st.menu == Just which then Nothing else Just which})
       CloseMenu -> closeMenu
+      ToggleMacros -> closeMenu >> modify (\st -> st {macrosOpen = not st.macrosOpen})
+      -- The page's block is written into the text as a toolbar command
+      -- writes, one edit that undo takes back.
+      FromMacros (MacrosPanel.PageMacrosSet block) -> run (PageMacros block)
+      -- The space's macros changed: the shell reloads the wiki, and the
+      -- preview sets the formulas with them.
+      FromMacros MacrosPanel.SpaceMacrosSaved -> H.raise (Changed Nothing)
       ShowPreview -> showPreview True
       -- The browser's Back or Forward reached the preview's entry, or
       -- another: the editor shows what the entry stands for.
@@ -2127,6 +2150,8 @@ data Bar = Bar
   , newKind :: Maybe Text
   -- ^ For an administrator, the address of the administration's kinds of
   -- box ('newKindHref').
+  , macrosShown :: Bool
+  -- ^ Whether the math macros' panel is shown.
   }
   deriving stock (Eq)
 
@@ -2150,7 +2175,7 @@ newKindHref ctx = Router.href ctx.router (Admin boxesSection) <$ guard (hasGloba
 
 -- | The administration's section that holds the kinds of box.
 boxesSection :: AdminSection
-boxesSection = R.Server
+boxesSection = R.EditorSettings
 
 -- | A toolbar button: the command it runs, its name, the shortcut that
 -- also runs it, and its icon (an SVG path in a 16 by 16 box, drawn as a
@@ -2196,7 +2221,7 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
@@ -2206,6 +2231,8 @@ previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 sideBySideIcon = "M1.5 2.5h13v11h-13zM8 2.5v11"
 -- A box with a bar down its left side and a title line, as a page draws one.
 boxIcon = "M2.5 2.5h11v11h-11zM2.5 2.5v11M5 5.5h6M5 8.5h6M5 11h4"
+-- A backslash and braces, as a macro's definition is written.
+macrosIcon = "M2 3l4 10M9.5 3c-1.5 0-1.5 1-1.5 2.5S7 8 6.5 8c.5 0 1.5.5 1.5 2.5S8 13 9.5 13M12 3c1.5 0 1.5 1 1.5 2.5S14.5 8 15 8c-.5 0-1.5.5-1.5 2.5S13.5 13 12 13"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]

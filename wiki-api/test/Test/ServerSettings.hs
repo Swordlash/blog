@@ -29,6 +29,7 @@ kept =
     , assistantHosts = ["http://localhost:11434"]
     , boxes = []
     , homePage = defaultHomePage
+    , mathMacros = Nothing
     }
 
 -- | A kind of box, blue with no icon, labelled as given.
@@ -49,13 +50,13 @@ spec = describe "the server's settings" $ do
       checkHomePage defaultHomePage {title = " Welcome ", body = "  source\r\n"} `shouldBe` Right defaultHomePage {title = "Welcome", body = "  source\r\n"}
   describe "a change" $ do
     it "keeps each secret it leaves out, by the provider's name" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = [], homePage = defaultHomePage}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just (Just "pw")
       map (\p -> (p.name, p.secret)) changed.providers `shouldBe` [("other", Just "o"), ("google", Just "g")]
 
     it "replaces a secret given, and clears an empty one" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = [], homePage = defaultHomePage}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just Nothing
       map (\p -> p.secret) changed.providers `shouldBe` [Just "new"]
@@ -69,7 +70,7 @@ spec = describe "the server's settings" $ do
     it "is read with a secret left out as keeping it" $ do
       let json = "{\"publicUrl\":null,\"mail\":{\"host\":\"h\",\"port\":25,\"security\":\"plain\",\"user\":null,\"from\":\"f@example.org\"},\"providers\":[{\"name\":\"g\",\"kind\":\"google\",\"clientId\":\"c\",\"issuer\":null}]}"
       (decode json :: Maybe ServerSettingsChange)
-        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = [], homePage = defaultHomePage}
+        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
     it "takes the assistant's hosts as the change gives them" $
       (applyChange identity kept (noServerSettings {assistantHosts = ["https://openrouter.ai"]} :: ServerSettingsChange)).assistantHosts `shouldBe` ["https://openrouter.ai"]
@@ -93,6 +94,11 @@ spec = describe "the server's settings" $ do
       refusedBox [box "" "Label"] "needs its name"
       refusedBox [box "exercise" "", box "Exercise" ""] "two kinds of box named exercise"
       refusedBox [box "exercise" (T.replicate 61 "x")] "longer than 60"
+    it "keep the built-in math macros without blank lines at their ends, and refuse a block too long (WP5.41)" $ do
+      ((\s -> s.mathMacros) <$> checked kept {mathMacros = Just "\n \n\\def\\a{1}\n\n\\def\\b{2}\n\n"}) `shouldBe` Right (Just "\\def\\a{1}\n\n\\def\\b{2}")
+      ((\s -> s.mathMacros) <$> checked kept {mathMacros = Nothing}) `shouldBe` Right Nothing
+      checked kept {mathMacros = Just (T.replicate 20001 "x")} `shouldSatisfy` isLeft
+      ((\s -> s.mathMacros) <$> (decode "{\"publicUrl\":null,\"mail\":null,\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just Nothing
     it "read settings stored before boxes existed as having none" $
       ((\s -> s.boxes) <$> (decode "{\"publicUrl\":null,\"mail\":null,\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just []
     it "refuse what cannot be, saying why" $ do

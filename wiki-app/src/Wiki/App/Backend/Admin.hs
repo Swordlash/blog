@@ -131,7 +131,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Activity (Activity, ActivityQuery)
-import Wiki.Api.Admin (Directory, Invitations, Invited, ServerStatus, UserPage, UserQuery, WikiSettings)
+import Wiki.Api.Admin (Directory, Invitations, Invited, MacroUse, ServerStatus, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
@@ -297,6 +297,14 @@ class (Monad m) => MonadAdmin m where
   setServerSettings :: ServerSettingsChange -> m (Either WikiError ServerSettings)
   default setServerSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => ServerSettingsChange -> m (Either WikiError ServerSettings)
   setServerSettings = lift . setServerSettings
+
+  -- | The pages that use any of these math macros
+  -- ('Wiki.Api.Admin.macroUsesIn'), among all the wiki's pages: what the
+  -- editor's settings warn about before the built-in macros lose some of
+  -- them (WP5.41 of docs/PLAN.md). For an administrator.
+  macroUses :: [Text] -> m (Either WikiError [MacroUse])
+  default macroUses :: (MonadTrans t, m ~ t n, MonadAdmin n) => [Text] -> m (Either WikiError [MacroUse])
+  macroUses = lift . macroUses
 
   -- | Ask a provider how to sign in with it: the provider stored under
   -- that name, or the one given. 'NotFound' when no provider has that name

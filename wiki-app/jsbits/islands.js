@@ -22,6 +22,13 @@ function wiki_islands_check_macros(macros, block) {
   return islands ? islands.checkMacros(JSON.parse(macros), block) : "";
 }
 
+// The built-in macros the page's islands.js ships with, as written; the
+// empty string without that script.
+function wiki_islands_builtin_macros() {
+  const islands = globalThis.wikiIslands;
+  return islands ? islands.builtinMacros() : "";
+}
+
 function wiki_islands_render_mermaid(element, source) {
   const islands = globalThis.wikiIslands;
   if (islands) islands.renderMermaid(element, source);

@@ -1485,6 +1485,53 @@ select {
   font-size: 0.9rem;
 }
 
+/* The editor's panel of math macros (Wiki.App.View.MacrosPanel), under
+   the toolbar while its button is pressed: the layers a page's formulas
+   are set with, the space's and the page's editable. */
+.editor-macros {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.editor-macros h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+.editor-macros h3 {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.9rem;
+}
+
+.editor-macros .macros-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.editor-macros-ancestor pre {
+  margin: 0.2rem 0;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+}
+
+/* The built-in macros in the administration's Editor section, and the
+   pages a removal would break. */
+.editor-macros-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  max-width: 48rem;
+}
+
+.editor-macros-pages {
+  margin: 0.3rem 0;
+}
+
 .space-macros summary {
   cursor: pointer;
   color: var(--muted);
@@ -2520,7 +2567,8 @@ body:has(.slides-view) {
   gap: 0.4rem;
 }
 
-.editor-side-by-side[aria-pressed="true"] {
+.editor-side-by-side[aria-pressed="true"],
+.editor-macros-toggle[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--background);

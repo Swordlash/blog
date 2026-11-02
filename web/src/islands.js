@@ -149,7 +149,15 @@ const showError = (element, error) => {
 // reads all of them. Should it not, the page still draws, with what it did.
 const builtin = readMacros({}, builtinTex);
 if (builtin.error) console.error("The wiki's built-in macros:", builtin.error);
-const macrosOf = macroReader(builtin.macros);
+const shippedReader = macroReader(builtin.macros);
+// Once an administrator keeps the built-in macros in the server's settings
+// (Wiki.Core.Math's wikiMacros), the application passes them as the first
+// block, marked by this comment, and the blocks are read on top of
+// nothing: a macro the administrator removed is gone.
+const wikiMacrosMarker = "%wiki-macros\n";
+const ownReader = macroReader({});
+const macrosOf = (blocks) =>
+  blocks.length > 0 && String(blocks[0]).startsWith(wikiMacrosMarker) ? ownReader(blocks) : shippedReader(blocks);
 
 // `macros` is the blocks of definitions the formula is set with besides the
 // built-in ones, farthest first: its space's chain, then the formulas before
@@ -286,9 +294,14 @@ const attachEditor = (textarea, host, original) => {
     .catch((error) => console.error("The editor's formatting could not be loaded:", error));
 };
 
+// The built-in macros the wiki ships with, as written: what the editor's
+// settings start the server's own copy from.
+const builtinMacros = () => String(builtinTex);
+
 globalThis.wikiIslands = Object.freeze({
   renderMath,
   checkMacros,
+  builtinMacros,
   renderMermaid,
   renderTikz,
   highlight,

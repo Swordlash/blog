@@ -177,7 +177,7 @@ import Data.UUID.Types qualified as UUID
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
 import Wiki.Api.Account (Account (..), InvitationToken (..), NewAccount (..), providerOnly)
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), checkUserQuery, invitationLifetime)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), checkUserQuery, invitationLifetime, macroUsesIn)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -234,7 +234,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withMathMacros, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
@@ -1055,7 +1055,16 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   createSpace parent = run Writes . createSpaceTx parent
   renameSpace sid = run Writes . renameSpaceTx sid
   setSpacePublic sid = run Writes . setSpacePublicTx sid
-  setSpaceMathMacros sid macros = run Writes (adjustSpace sid (\s -> pure s {mathMacros = trimLines macros}))
+
+  -- Whoever may edit the whole space may set its macros (WP5.41 of
+  -- docs/PLAN.md), from the editor as from the space's page.
+  setSpaceMathMacros sid macros = run Writes $ do
+    (s, c) <- findSpace sid
+    requireEdit c
+    let s' = withMathMacros (trimLines macros) s
+    db (updateSpace s')
+    pure s'
+
   setSpaceProfile sid = run Writes . setSpaceProfileTx sid
   uploadSpaceIcon sid mediaType bytes = run Writes (uploadSpaceIconTx sid mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   spaceIconUrl s = case s.icon of
@@ -1177,6 +1186,7 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
     env <- ask
     fmap (\s -> s.homePage) <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setHomePageTx change) (writeIORef env.storage.serverKept . Just))
   serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
+  macroUses names = run Reads (requireAdministrator >> macroUsesIn names <$> db loadAllPages)
   setServerSettings change = StoredWiki $ do
     env <- ask
     fmap hideSecrets <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
@@ -1444,6 +1454,8 @@ sessionTx = do
           -- API adds them as well.
           boxes = []
         , homePage = ctx.server.homePage
+        , -- Nor the built-in macros, which are the server's settings too.
+          mathMacros = Nothing
         }
 
 listSpacesTx :: Tx [Space]
@@ -2443,6 +2455,7 @@ serverChanges old new =
   [("public address", maybe "none" (\u -> u.text) new.publicUrl) | old.publicUrl /= new.publicUrl]
     <> mail
     <> concatMap provider (ordNub (map (\p -> p.name) (old.providers <> new.providers)))
+    <> [("built-in math macros", if isJust old.mathMacros then "changed" else "copied from the shipped ones") | old.mathMacros /= new.mathMacros]
   where
     mail = case (old.mail, new.mail) of
       (Just _, Nothing) -> [("mail", "removed")]

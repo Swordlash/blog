@@ -120,6 +120,13 @@ data ServerSettingsOf s = ServerSettings
   -- label, colour and icon of each (WP5.29 of docs/PLAN.md;
   -- "Wiki.Core.Markdown.Box"). Every reader's session carries them, so
   -- that every page renders its boxes the same way.
+  , mathMacros :: Maybe Text
+  -- ^ The wiki's built-in math macros as the administration keeps them
+  -- (WP5.41 of docs/PLAN.md; "Wiki.Core.Math"), which every formula is
+  -- set with: 'Nothing' until an administrator first opens the editor's
+  -- settings, which fill them from the ones the wiki ships with
+  -- (@web/src/katex-macros.tex@) and save them. Every reader's session
+  -- carries them.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
@@ -132,7 +139,7 @@ type ServerSettingsChange = ServerSettingsOf (Maybe Text)
 instance (ToJSON s) => ToJSON (ServerSettingsOf s)
 
 -- | Read by hand rather than derived, so that settings without
--- @assistantHosts@ or @boxes@, from before the fields existed (in a
+-- @assistantHosts@, @boxes@ or @mathMacros@, from before the fields existed (in a
 -- demo's stored state, or from an older client), read as having none.
 instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
   parseJSON = withObject "ServerSettings" $ \o ->
@@ -144,6 +151,7 @@ instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
       <*> o .:? "assistantHosts" .!= []
       <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
+      <*> o .:? "mathMacros"
 
 -- | 'MailSettingsOf': a mail server, reached over SMTP.
 data MailSettingsOf s = MailSettings
@@ -196,7 +204,7 @@ instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 -- server, no provider. A wiki created before these settings existed keeps
 -- working as before.
 noServerSettings :: ServerSettingsOf s
-noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [], homePage = defaultHomePage}
+noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
 --------------------------------------------------------------------------------
 -- Secrets
@@ -233,6 +241,7 @@ applyChange keep old new =
     , assistantHosts = new.assistantHosts
     , homePage = new.homePage
     , boxes = new.boxes
+    , mathMacros = new.mathMacros
     }
   where
     previous name = find (\o -> o.name == name) old.providers >>= \o -> o.secret
@@ -364,8 +373,9 @@ checkServerSettings isSet s = do
     Left "The providers need the wiki's public address: they send people back below it."
   assistantHosts <- ordNub <$> traverse parseAssistantHost (filter (not . T.null . T.strip) s.assistantHosts)
   boxes <- checkBoxKinds s.boxes
+  mathMacros <- traverse checkMathMacros s.mathMacros
   homePage <- checkHomePage s.homePage
-  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes, homePage}
+  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes, homePage, mathMacros}
   where
     checkMail m = do
       let host = T.strip m.host
@@ -472,3 +482,18 @@ newtype MailTest = MailTest {to :: Text}
 newtype MailTestResult = MailTestResult {failure :: Maybe Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | The longest block of built-in math macros, in characters: some hundred
+-- lines of definitions.
+maxMathMacros :: Int
+maxMathMacros = 20000
+
+-- | The built-in math macros as they are stored: blank lines at either
+-- end dropped, at most 'maxMathMacros' characters. Whether KaTeX reads
+-- them is checked in the browser as they are typed, as a space's are.
+checkMathMacros :: Text -> Either Text Text
+checkMathMacros t
+  | T.length t > maxMathMacros = Left ("The built-in math macros can be at most " <> show maxMathMacros <> " characters.")
+  | otherwise = Right (T.intercalate "\n" (reverse (dropWhile blank (reverse (dropWhile blank (T.lines t))))))
+  where
+    blank = T.all isSpace
