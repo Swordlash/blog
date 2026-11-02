@@ -301,6 +301,12 @@ confirms it against reality and the plan is amended if it does not hold.
     work returns `IO (Promise a)` and the program waits for it (`wait`, `waitCatch`,
     `mapConcurrently`, as with `async`); there are no awaiting imports any more. The
     bindings that awaited before #124 keep their old type through a wrapper that waits.
+29. **Math macros and kinds of box, from the editor** (the owner, 2026-11-02, built by
+    WP5.41). A page's own macros are a `math` block of definitions under its title; a
+    formula with nothing to show shows nothing, and an empty block is not written. The
+    editor's Box menu offers "New kind…" in a dialog with the same form as the
+    settings' Editor tab, and the kind saved there is in the menu at once, without
+    leaving or reloading the editor. Boxes are numbered within the page by default.
 
 ## Repository layout
 
@@ -349,27 +355,11 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.40 and WP5.42 to WP5.44 are done, the rest
-  follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.44 are done, and WP5.45 follows below. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
   any more). A multi-line `$$` block in a box that seemed to work only on one line
   works (the owner tried again; the parser reads every variant tried).
-- **WP5.41 An "Editor" tab in the settings.** The kinds of box move there from
-  "Server". The built-in macros (`\Prob` and the rest) become a server setting there:
-  a textarea filled with them on first opening, saved as typed, checked by KaTeX as
-  the space's macros are (a sample formula typed under the block is typeset with it),
-  and a warning naming the pages that use a macro being removed. In the editor, a
-  button for the space's and the page's macros, editable by whoever may edit the whole
-  space (the space's are on the space's page, "Math macros", today). The page's own
-  block is a `math` block of definitions under the title, which the page does not show
-  (a formula with nothing to show shows nothing, the owner, 2026-11-02); an empty one
-  is not written. The Box menu's
-  "New kind…" opens a dialog in the editor with the same form as the kinds of box in
-  the Editor tab (one form, used in both), instead of the administration in another
-  tab (WP5.40, which numbers boxes within the page by default, the owner, 2026-11-02):
-  a kind saved there is in the menu at once, and nothing is left or reloaded (the
-  owner, 2026-11-02).
 - **WP5.45 Favicons from space icons, and an icon for the home page.** A space's icon
   can already be an uploaded image besides an emoji (`IconImage`, recorded in the audit
   log as "an uploaded image"). What is left: the home page gets an icon too, and the
