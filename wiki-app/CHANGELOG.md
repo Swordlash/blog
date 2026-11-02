@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The assistant (WP5.43, issue #120). The mode, **Ask** (the model answers and
+changes nothing; an edit it asks for anyway is refused) or **Agent** (it edits
+the page, as before), is chosen at the top of the panel, with the model and
+the effort, which moved there from under the message box, and the settings
+keep it. The text's selection stays shown while the focus is in the assistant.
+
 Lines, footnotes and unclosed math (WP5.42, issue #120). A line break in the
 text is a line break on the page, in quotations and boxes too. The guide's
 and the demo's pages are kept with each paragraph on one line

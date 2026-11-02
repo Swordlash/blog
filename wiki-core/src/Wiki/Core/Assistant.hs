@@ -48,6 +48,9 @@ module Wiki.Core.Assistant
   , ApiKey (..)
   , Settings (..)
   , ProviderSettings (..)
+  , Mode (..)
+  , modeLabel
+  , withMode
   , defaultSettings
   , blankSettings
   , settingsOf
@@ -377,17 +380,39 @@ data ProviderSettings = ProviderSettings
   }
   deriving stock (Eq, Show)
 
--- | 'Settings': what a user has set. The provider the assistant uses, and
--- each provider's key, model and effort.
+-- | 'Settings': what a user has set. The provider the assistant uses,
+-- each provider's key, model and effort, and the assistant's mode.
 data Settings = Settings
   { provider :: Provider
   , byProvider :: Map Provider ProviderSettings
+  , chatMode :: Mode
+  -- ^ Whether the assistant edits the page or only talks.
   }
   deriving stock (Eq, Show)
 
--- | The settings before anything is set: Anthropic, with no key and no model chosen.
+-- | 'Mode' is what the assistant may do with a message (WP5.43, issue
+-- #120). In 'Agent' mode it edits the page through its tools, each edit a
+-- tracked change for the author to accept or reject. In 'Ask' mode it
+-- only answers: its tools are off, and an edit it asks for anyway is
+-- refused. The user switches between them in the editor's assistant, and
+-- the settings keep the choice, so it follows the user to other devices.
+data Mode = Ask | Agent
+  deriving stock (Eq, Show, Enum, Bounded)
+
+-- | The name a mode is shown with.
+modeLabel :: Mode -> Text
+modeLabel = \case
+  Ask -> "Ask"
+  Agent -> "Agent"
+
+-- | The settings with the assistant's mode set.
+withMode :: Mode -> Settings -> Settings
+withMode m s = s {chatMode = m}
+
+-- | The settings before anything is set: Anthropic, with no key and no
+-- model chosen, in 'Agent' mode.
 defaultSettings :: Settings
-defaultSettings = Settings {provider = Anthropic, byProvider = mempty}
+defaultSettings = Settings {provider = Anthropic, byProvider = mempty, chatMode = Agent}
 
 -- | The settings of a provider before anything is set.
 noSettings :: ProviderSettings
@@ -398,7 +423,7 @@ noSettings = ProviderSettings {key = Nothing, model = Nothing, effort = Nothing,
 -- service, and nothing learnt about a provider. Such settings need not be
 -- stored.
 blankSettings :: Settings -> Bool
-blankSettings s = s.provider == Anthropic && all (== noSettings) (Map.elems s.byProvider)
+blankSettings s = s.provider == Anthropic && s.chatMode == Agent && all (== noSettings) (Map.elems s.byProvider)
 
 -- | A provider's settings, with its defaults where nothing was set.
 settingsOf :: Provider -> Settings -> ProviderSettings
@@ -453,7 +478,7 @@ trimmed :: Maybe Text -> Maybe Text
 trimmed = mfilter (not . T.null) . fmap T.strip
 
 chooseProvider :: Provider -> Settings -> Settings
-chooseProvider p s = Settings {provider = p, byProvider = s.byProvider}
+chooseProvider p s = Settings {provider = p, byProvider = s.byProvider, chatMode = s.chatMode}
 
 -- | The base URL of a service other than OpenAI that implements OpenAI's
 -- API (Azure OpenAI, GitHub Models, OpenRouter, a server on this machine
@@ -520,7 +545,9 @@ readyFor p s
 -- provider that has settings, under its 'providerKey'. Each has its
 -- @key@ and @model@, its @defaultEffort@ when one was chosen, its
 -- @baseUrl@, its model list as @models@ with the fetch time as
--- @modelsAt@, and @unreachable@ when it is set.
+-- @modelsAt@, and @unreachable@ when it is set. The mode is @"mode":
+-- "ask"@ in 'Ask' mode, and absent in 'Agent' mode, so that settings
+-- stored before the modes existed read as they were.
 --
 -- The effort is stored as @defaultEffort@. Settings stored before WP5.11
 -- have an @effort@ field instead. That field held the effort last picked
@@ -531,9 +558,10 @@ instance ToJSON Settings where
   toJSON s =
     object $
       ("provider" .= providerKey s.provider)
-        : [ Key.fromText (providerKey p) .= object (["key" .= ps.key, "model" .= ps.model] <> learnt ps)
-          | (p, ps) <- Map.toList s.byProvider
-          ]
+        : ["mode" .= ("ask" :: Text) | s.chatMode == Ask]
+          <> [ Key.fromText (providerKey p) .= object (["key" .= ps.key, "model" .= ps.model] <> learnt ps)
+             | (p, ps) <- Map.toList s.byProvider
+             ]
     where
       learnt :: ProviderSettings -> [Pair]
       learnt ps =
@@ -547,7 +575,10 @@ instance FromJSON Settings where
     provider <- o .: "provider" >>= providerFrom
     byProvider <- fmap (Map.fromList . catMaybes) . for [minBound .. maxBound] $ \p ->
       o .:? Key.fromText (providerKey p) >>= traverse (fmap (p,) . providerSettings)
-    pure Settings {provider, byProvider}
+    -- Settings stored before the modes existed are in Agent mode, as the
+    -- assistant was.
+    chatMode <- (\m -> if m == Just ("ask" :: Text) then Ask else Agent) <$> o .:? "mode"
+    pure Settings {provider, byProvider, chatMode}
     where
       providerFrom :: Text -> Parser Provider
       providerFrom k = maybe (fail ("no such provider: " <> toS k)) pure (providerFromKey k)

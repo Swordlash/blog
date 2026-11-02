@@ -4,15 +4,23 @@
 -- (WP4.19 of docs/PLAN.md), a chat with a model that edits the page, as
 -- in code editors.
 --
--- The panel shows a list of messages, the user's and the model's (the
--- model's streamed as they arrive). Below it is a row of shortcuts that
--- fill in the message (improve, fix grammar, shorten, expand, summarise,
--- continue, translate), then the message box, then the provider's model
--- and effort, and Send, or Stop while the model is working. Enter sends,
+-- The panel shows, under its header, the assistant's mode, Ask or Agent,
+-- and the provider's model and effort; then a list of messages, the
+-- user's and the model's (the model's streamed as they arrive). Below it
+-- is a row of shortcuts that fill in the message (improve, fix grammar,
+-- shorten, expand, summarise, continue, translate), then the message box,
+-- and Send, or Stop while the model is working. Enter sends,
 -- Shift+Enter starts a new line, and Escape closes the panel, as does
 -- "Close" in its header. The editor's buttons open the panel with a
 -- provider ('UseProvider'); a provider other than the conversation's
 -- starts a new conversation.
+--
+-- The mode (WP5.43, issue #120): in Agent mode the model edits the page,
+-- as described below; in Ask mode it only answers. Its tools are then
+-- turned off in the request ("Wiki.Core.Assistant.Prompt"), and an edit
+-- it asks for anyway is refused, so nothing in the page changes. The mode
+-- is kept in the user's settings, like the model, and applies from the
+-- next message; a conversation may go on in the other mode.
 --
 -- The model picker changes the model stored in the user's settings,
 -- effective from the next message. The effort picker starts at the effort
@@ -99,6 +107,7 @@ import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (kind)
   , ErrorKind (Unreachable)
+  , Mode (..)
   , Model (..)
   , ModelChoices (..)
   , ModelName (..)
@@ -111,12 +120,14 @@ import Wiki.Core.Assistant
   , effortOf
   , efforts
   , errorText
+  , modeLabel
   , modelChoices
   , modelLabel
   , providerLabel
   , ready
   , serviceName
   , settingsOf
+  , withMode
   , withModel
   )
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Refusal (..), answer, describeEdit, parseEdit)
@@ -276,10 +287,12 @@ data State = State
   , listener :: Maybe (HS.Listener IO Heard)
   , otherModel :: Bool
   -- ^ Whether "Other…" is chosen for the model, which shows its text field.
+  , turnMode :: Mode
+  -- ^ The mode the last message was sent in, by which the model's tool
+  -- calls in its answer are made or refused.
   , effortChoice :: Maybe Text
-  -- ^ The effort picked under the message box for the current
-  -- conversation, if any. 'Nothing' means the settings' default
-  -- ('effortNow'). A new conversation with another provider starts with
+  -- ^ The effort picked in the panel for the current conversation, if
+  -- any. 'Nothing' means the settings' default ('effortNow'). A new conversation with another provider starts with
   -- 'Nothing'.
   , now :: Maybe UTCTime
   -- ^ The time the ticker last read while the model is working. The
@@ -303,6 +316,7 @@ data Action
   | Decided Decision
   | Close
   | Followed (Follow Route)
+  | ChooseMode Mode
   | ChooseModel Text
   | TypedModel Text
   | ChooseEffort Text
@@ -329,6 +343,7 @@ component =
               , absorbed = []
               , listener = Nothing
               , otherModel = False
+              , turnMode = Agent
               , effortChoice = Nothing
               , now = Nothing
               , ticker = Nothing
@@ -356,6 +371,7 @@ component =
             <a class="assistant-settings-link" {{ Router.linkProps st.input.context.router Followed AssistantSettings }}>Settings</a>
             <button type="button" class="assistant-close" title="Close the assistant (Escape)" onClick={{ const Close }}>Close</button>
           </header>
+          {{ choicesView st }}
           {{ setupNote st }}
           {% if st.input.pending > 0 %}
             <div class="assistant-changes" role="status">
@@ -367,7 +383,11 @@ component =
           <div class="assistant-log">
             <div class="assistant-messages" aria-live="polite">
               {% if null st.entries %}
-                <p class="assistant-empty">Ask for a change to the page, or choose one below. Select text first to ask about it alone. Each change the assistant makes is shown in the page, for you to accept or reject.</p>
+                {% if modeNow st == Ask %}
+                  <p class="assistant-empty">Ask about the page, or choose a request below: in Ask mode the assistant answers and changes nothing. Select text first to ask about it alone.</p>
+                {% else %}
+                  <p class="assistant-empty">Ask for a change to the page, or choose one below. Select text first to ask about it alone. Each change the assistant makes is shown in the page, for you to accept or reject.</p>
+                {% end %}
               {% end %}
               {% for e in st.entries %}
                 {{ entryView st e }}
@@ -384,14 +404,13 @@ component =
             <textarea
               class="assistant-input"
               rows="3"
-              placeholder="Ask for a change, or a question about the page"
+              placeholder={{ if modeNow st == Ask then "Ask a question about the page" else "Ask for a change, or a question about the page" :: Text }}
               aria-label="Message to the assistant"
               value={{ st.message }}
               onValueInput={{ Typed }}
               {{ HE.preventingDefault (HE.handler' (EventType "keydown") sendKey) }}
               ref={{ st.field }}
             ></textarea>
-            {{ choicesView st }}
             <div class="assistant-send-row">
               {% if st.talking %}
                 <button type="button" class="assistant-stop" onClick={{ const Stop }}>Stop</button>
@@ -403,10 +422,12 @@ component =
         </section>
       |]
 
-    -- The model and effort of the assistant's provider, below the message
-    -- box, effective from the next message. The model is stored in the
-    -- provider's settings (the settings page shows the same model). The
-    -- effort starts at the settings' default and is changed for this
+    -- The mode, and the model and effort of the assistant's provider,
+    -- under the panel's header, where they are seen before writing, each
+    -- effective from the next message. The mode is two buttons, the one
+    -- in force pressed, and is stored in the settings, as the model is in
+    -- the provider's settings (the settings page shows the same model).
+    -- The effort starts at the settings' default and is changed for this
     -- conversation only ('effortNow'). The models are grouped: the
     -- recommended ones, all the provider's other chat models, and
     -- "Other…", for any id typed in.
@@ -419,9 +440,26 @@ component =
             listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
             other = st.otherModel || not listed
             option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
+            modeButton md =
+              [hh|
+                <button
+                  type="button"
+                  class="assistant-mode-choice"
+                  {{ attr "data-mode" (T.toLower (modeLabel md)) }}
+                  aria-pressed={{ if s.chatMode == md then "true" else "false" :: Text }}
+                  title={{ modeTitle md }}
+                  disabled={{ st.talking }}
+                  onClick={{ const (ChooseMode md) }}
+                >{{ modeLabel md }}</button>
+              |]
          in Just
               [hh|
                 <div class="assistant-choices">
+                  <div class="assistant-mode" role="group" aria-label="Mode">
+                    {% for md in [minBound .. maxBound] %}
+                      {{ modeButton md }}
+                    {% end %}
+                  </div>
                   <label class="assistant-choice">
                     <span>Model</span>
                     <select class="assistant-model-choice" disabled={{ st.talking }} onValueChange={{ ChooseModel }}>
@@ -632,6 +670,7 @@ component =
         -- Back to the page's text, where the user was before the panel.
         gets (\st -> st.input.host) >>= traverse_ (H.liftEffect . focusText)
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
+      ChooseMode md -> changeSettings (withMode md)
       ChooseModel "" -> modify (\st -> st {otherModel = True})
       ChooseModel m -> do
         modify (\st -> st {otherModel = False})
@@ -679,6 +718,7 @@ component =
             -- The effort of this conversation, which the settings do not
             -- keep.
             let r = Ready {provider = kept.provider, model = kept.model, key = kept.key, effort = effortNow st s, baseUrl = kept.baseUrl}
+                md = s.chatMode
             body <- H.liftEffect (currentText host)
             decided <- outcomes host
             sentAt <- liftIO getCurrentTime
@@ -688,7 +728,7 @@ component =
                   Selected {lineRange} -> (Just (chipLabel lineRange), Nothing)
                   Whole {cutFrom} -> (Nothing, cutFrom)
                 reply = Reply {said = "", notes = [], stage = Waiting, thinking = "", thought = "", clock = shown, began = sentAt, quietSince = sentAt, took = Nothing}
-            talk <- maybe (open r) pure st.talk
+            talk <- maybe (open md r) pure st.talk
             modify $ \s' ->
               s'
                 { entries = s'.entries <> [FromUser Said {asked = text, chip, cut, askedAt = shown}, FromModel reply]
@@ -698,18 +738,19 @@ component =
                 , using = Just r
                 , detached = Nothing
                 , now = Just sentAt
+                , turnMode = md
                 }
             startTicker
-            H.liftEffect (sayTo talk (requestFor r) (userTurn decided context text))
+            H.liftEffect (sayTo talk (requestFor md r) (userTurn md decided context text))
         (Just (Left why), _) -> addEntry (Trouble why)
         _ -> pass
 
     -- The chat, opened with the settings' provider, model and key, its
     -- turn events handled by the panel.
-    open :: Ready -> H.HalogenM State Action Empty Output m Talk
-    open r = do
+    open :: Mode -> Ready -> H.HalogenM State Action Empty Output m Talk
+    open md r = do
       tell <- gets (\st -> maybe (const pass) HS.notify st.listener)
-      H.liftEffect (openTalk Opening {ready = r, request = requestFor r} tell)
+      H.liftEffect (openTalk Opening {ready = r, request = requestFor md r} tell)
 
     hear :: Heard -> H.HalogenM State Action Empty Output m ()
     hear = \case
@@ -753,6 +794,11 @@ component =
       Right e -> do
         st <- get
         case st.input.host of
+          -- In Ask mode the tools are off; a model that calls one anyway
+          -- is told so, and the page is left as it is.
+          _
+            | st.turnMode == Ask ->
+                pure (NotMade (describeEdit e) "edits are off in Ask mode", "Not applied: the user is in Ask mode, where you do not change the page. Answer in words, and quote any change you suggest.", False)
           Nothing -> pure (NotMade (describeEdit e) "the editor is not ready", "Not applied: the editor is not ready. Try again later.", False)
           Just host ->
             H.liftEffect (proposeEdit host st.nextChange e) >>= \case
@@ -821,8 +867,8 @@ settle r
   | T.null r.thought = r {thought = T.strip r.thinking, thinking = ""}
   | otherwise = r {thought = r.thought <> "\n\n" <> T.strip r.thinking, thinking = ""}
 
--- | The effort the next message is sent with: the one picked under the
--- message box for this conversation, if the provider offers it, or else
+-- | The effort the next message is sent with: the one picked in the
+-- panel for this conversation, if the provider offers it, or else
 -- the provider's default from the settings.
 effortNow :: State -> Settings -> Text
 effortNow st s = case st.effortChoice of
@@ -841,13 +887,24 @@ duration d
 attached :: State -> Maybe Span
 attached st = mfilter (\sp -> Just sp /= st.detached && sp.to > sp.from) st.input.selection
 
--- | The request a chat is opened with, by provider. The scripted provider
--- receives Anthropic's request, which its tests read.
-requestFor :: Ready -> Value
-requestFor r = case r.provider of
-  OpenAI -> openAiRequest r.model r.effort
-  Anthropic -> anthropicRequest r.model r.effort
-  Scripted -> anthropicRequest r.model r.effort
+-- | The request a message is sent with, by provider, in a mode. The
+-- scripted provider receives Anthropic's request, which its tests read.
+requestFor :: Mode -> Ready -> Value
+requestFor md r = case r.provider of
+  OpenAI -> openAiRequest md r.model r.effort
+  Anthropic -> anthropicRequest md r.model r.effort
+  Scripted -> anthropicRequest md r.model r.effort
+
+-- | The mode the next message is sent in: the settings', once they are
+-- read.
+modeNow :: State -> Mode
+modeNow st = maybe Agent (\s -> s.chatMode) (rightToMaybe =<< st.input.settings)
+
+-- | What a mode's button says on hover.
+modeTitle :: Mode -> Text
+modeTitle = \case
+  Ask -> "Ask: the assistant answers, and changes nothing in the page"
+  Agent -> "Agent: the assistant changes the page, each change for you to accept or reject"
 
 -- | Why an edit was not made, as text for the conversation.
 refusalWords :: Refusal -> Text

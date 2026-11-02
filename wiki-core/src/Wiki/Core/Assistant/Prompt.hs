@@ -18,7 +18,14 @@
 --    by the page's context at that moment ('userTurn'): the page's title,
 --    the user's decisions on the model's changes since the user's last
 --    message ('Outcome'), and the selection with a paragraph on each side,
---    or the page's Markdown cut to 'bodyCap'.
+--    or the page's Markdown cut to 'bodyCap'. In 'Ask' mode it also says
+--    that the user wants an answer and no edit.
+--
+-- The mode ('Mode') changes neither the system prompt nor the tools, so
+-- that the cached prefix stays, and a conversation can switch between
+-- modes: an earlier tool call still has its tools. In 'Ask' mode the
+-- request forbids calling them (@tool_choice@ none), and the message says
+-- why; the panel refuses a call made anyway.
 --
 -- The page's context goes with each message rather than in the system
 -- prompt, which stays unchanged. A model that thinks binds its thinking to
@@ -59,7 +66,7 @@ import Data.Aeson (ToJSON (toJSON), Value, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Text qualified as T
 import Protolude
-import Wiki.Core.Assistant (ModelName (..))
+import Wiki.Core.Assistant (Mode (..), ModelName (..))
 import Wiki.Core.Assistant.Reference (markdownReference)
 
 -- | 'Span': characters of the page, from @from@ up to @to@ (not included).
@@ -170,14 +177,18 @@ data Outcome
 -- 'Wiki.Core.Assistant.Edit.describeEdit'), together with the accepted
 -- ones. When all changes were accepted, nothing is said, since the page
 -- shows them as the model left them.
-userTurn :: [(Text, Outcome)] -> PageContext -> Text -> Text
-userTurn decided context message =
+userTurn :: Mode -> [(Text, Outcome)] -> PageContext -> Text -> Text
+userTurn mode decided context message =
   T.intercalate "\n\n" $
     ("The page is titled \"" <> context.title <> "\".")
       : decisions
         <> page
+        <> asking
         <> [tagged "request" message]
   where
+    asking = case mode of
+      Agent -> []
+      Ask -> ["The user is in Ask mode: they want an answer, and no change to the page. Your tools are off; do not edit. If a change would help, show it in your answer, quoted, for the user to make or to ask for in Agent mode."]
     decisions
       | any ((/= Accepted) . snd) decided =
           [ T.intercalate "\n" $
@@ -324,10 +335,12 @@ maxTokens = 32_000
 -- (@web/src/assistant.js@).
 --
 -- A change of effort between messages invalidates Anthropic's cache of
--- the conversation, but not of the system prompt before it.
-anthropicRequest :: ModelName -> Text -> Value
-anthropicRequest model effort =
-  object
+-- the conversation, but not of the system prompt before it. So does a
+-- change of mode: in 'Ask' mode the request has @tool_choice@ @none@,
+-- which keeps the tools but lets the model call none of them.
+anthropicRequest :: Mode -> ModelName -> Text -> Value
+anthropicRequest mode model effort =
+  object $
     [ "model" .= model
     , "max_tokens" .= maxTokens
     , "output_config" .= object ["effort" .= effort]
@@ -335,6 +348,7 @@ anthropicRequest model effort =
     , "system" .= toJSONList [cached markdownReference, cached instructions]
     , "tools" .= anthropicTools
     ]
+      <> ["tool_choice" .= object ["type" .= ("none" :: Text)] | mode == Ask]
   where
     cached text = object ["type" .= ("text" :: Text), "text" .= text, "cache_control" .= object ["type" .= ("ephemeral" :: Text)]]
 
@@ -354,10 +368,11 @@ anthropicRequest model effort =
 -- "Thinking…". OpenAI may refuse the summary to an organisation it has
 -- not verified. The browser-side code then sends the request again
 -- without it (@web/src/assistant.js@). OpenAI may also send empty
--- summaries; the panel then shows "Thinking…" alone.
-openAiRequest :: ModelName -> Text -> Value
-openAiRequest model effort =
-  object
+-- summaries; the panel then shows "Thinking…" alone. In 'Ask' mode the
+-- request has @tool_choice@ @none@.
+openAiRequest :: Mode -> ModelName -> Text -> Value
+openAiRequest mode model effort =
+  object $
     [ "model" .= model
     , "instructions" .= (markdownReference <> "\n\n" <> instructions)
     , "tools" .= openAiTools
@@ -365,3 +380,4 @@ openAiRequest model effort =
     , "include" .= ["reasoning.encrypted_content" :: Text]
     , "reasoning" .= object ["effort" .= effort, "summary" .= ("auto" :: Text)]
     ]
+      <> ["tool_choice" .= ("none" :: Text) | mode == Ask]
