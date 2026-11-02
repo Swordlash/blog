@@ -354,21 +354,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.44 are done, and WP5.45 follows below. Left out: C-like preprocessor macros (the owner: "probably not"; math
-  macros and boxes cover the need); grammar checking beyond the browser's spelling,
-  which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
-  any more). A multi-line `$$` block in a box that seemed to work only on one line
-  works (the owner tried again; the parser reads every variant tried).
-- **WP5.45 Favicons from space icons, and an icon for the home page.** A space's icon
-  can already be an uploaded image besides an emoji (`IconImage`, recorded in the audit
-  log as "an uploaded image"). What is left: the home page gets an icon too, and the
-  favicon follows them, the space's icon on the space's pages and the home page's icon
-  for the wiki (today `web/index.html` names a fixed `icon.svg`). An SVG is served only
-  as an image.
-
-### Later, or waiting for the owner
-
 - **Issue #122, the Web platform from Haskell** (the owner, 2026-11-02). The browser's
   own objects (window, navigator, crypto, history, location, document, elements,
   events) are read and called from Haskell through record fields, rather than through
@@ -389,7 +374,16 @@ In the order to do it, unless the owner says otherwise.
     CodeMirror editor object, `wikiArchive`, the assistant's SDKs, the vault's WebAuthn
     and WebCrypto flows) and the JavaScript-side handle tables (live listeners, preview
     watches, vault keys).
-  It comes after WP5.40 to WP5.45.
+
+### Later, or waiting for the owner
+
+- **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
+  WP5.45 did all of it but one point, which waits for the owner: an editor that does
+  not widen when the sidebar is folded was not reproduced (in Chromium at 1600px it
+  widens from 1272px to 1528px); which browser, and which width of the window? Left
+  out: C-like preprocessor macros (the owner: "probably not"; math macros and boxes
+  cover the need); grammar checking beyond the browser's spelling, which CodeMirror
+  already has on (later, perhaps LanguageTool; Grammarly offers no SDK any more).
 - **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
   powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
   public blog spaces). A signed-in user gets an Atom feed of their own notifications at a
