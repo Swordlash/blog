@@ -422,7 +422,9 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **Spaces** in a tree, public or private, each a tree of pages, shown one at a
   time as Confluence shows them; the front page is a directory of spaces, and a
   space has a description, an icon and a home page of its own. Pages are listed
-  by name, by date or in an order put by hand.
+  by name, by date or in an order put by hand. A space's icon is the browser
+  tab's icon on its pages, and the wiki's own icon, which an administrator sets
+  on the front page, is the tab's icon everywhere else.
 - **Pages in Markdown** ([above](#writing-pages), and
   [docs/markdown.md](docs/markdown.md)), with templates to start one from. A
   footnote's number shows its note when the pointer rests on it; following it

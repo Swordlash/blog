@@ -1470,6 +1470,22 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     dropped.icon `shouldBe` Just (IconEmoji "✍️")
     run admin (spaceIconUrl dropped) `shouldReturn` ""
 
+  it "gives the wiki's home an icon, for an administrator of the wiki only, and nothing else of a profile" $ \(Fixture run) -> do
+    (home, _) <- run admin getHomeDocument >>= ok
+    run editor (setSpaceProfile home.id (profile "" (Just (IconEmoji "🏠")) Nothing)) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (uploadSpaceIcon home.id "image/png" png) >>= (`shouldFailWith` Forbidden)
+    s <- run admin (setSpaceProfile home.id (profile "Not the home's." (Just (IconEmoji " 🏠")) Nothing)) >>= ok
+    (s.icon, s.description, s.homePage, s.blog) `shouldBe` (Just (IconEmoji "🏠"), home.description, home.homePage, home.blog)
+    (\(h, _) -> h.icon) <$> (run Anonymous getHomeDocument >>= ok) `shouldReturn` Just (IconEmoji "🏠")
+    run admin (setSpaceProfile home.id (profile "" (Just (IconColour "nope")) Nothing)) >>= shouldBeInvalid
+    pictured <- run admin (uploadSpaceIcon home.id "image/png" png) >>= ok
+    case pictured.icon of
+      Just (IconImage _ mediaType) -> mediaType.text `shouldBe` "image/png"
+      other -> expectationFailure ("expected an image, got " <> show other)
+    run Anonymous (spaceIconUrl pictured) >>= (`shouldSatisfy` (not . T.null))
+    cleared <- run admin (setSpaceProfile home.id (profile "" Nothing Nothing)) >>= ok
+    (cleared.icon, cleared.homePage) `shouldBe` (Nothing, home.homePage)
+
   it "refuses an icon that is not an image a browser shows, an empty one and one too large" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
     run admin (uploadSpaceIcon blog.id "image/svg+xml" "<svg/>") >>= shouldBeInvalid

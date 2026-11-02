@@ -725,6 +725,14 @@ requireOrdinary st sid =
 requireAdminister :: MemState -> [Space] -> Either WikiError ()
 requireAdminister st c = requireView st c >> require (canAdministerSpace (currentPrincipal st) st.grants c) >> traverse_ (requireOrdinary st . (\s -> s.id)) c
 
+-- | The current user may change a space's icon; and whether the space is
+-- the one behind the wiki's home page (WP5.45 of docs/PLAN.md), whose icon
+-- is the wiki's own and takes an administrator of the wiki.
+requireIconAdminister :: MemState -> SpaceId -> [Space] -> Either WikiError Bool
+requireIconAdminister st sid c
+  | Home.isHomeSpace st.server.homePage sid = requireView st c >> requireAdministrator st $> True
+  | otherwise = requireAdminister st c $> False
+
 -- | A name or title with the blanks around it trimmed, or 'Invalid' if
 -- nothing is left.
 nonBlank :: Text -> Text -> Either WikiError Text
@@ -965,9 +973,11 @@ setSpaceMathMacrosIn sid macros st = do
 -- | Give a space a profile, checked. An icon image the space had, which
 -- the new profile does not keep, is deleted.
 setSpaceProfileIn :: SpaceId -> SpaceProfile -> Write Space
-setSpaceProfileIn sid p st = do
+setSpaceProfileIn sid given st = do
   (s, c) <- findSpace st sid
-  requireAdminister st c
+  home <- requireIconAdminister st sid c
+  -- The wiki home's space takes only an icon: the rest is its own.
+  let p = if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given
   checked <- first Invalid (checkProfile s (map (\x -> x.id) (pagesOf sid st)) p)
   let s' = withProfile checked s
       st1 = if s'.icon == s.icon then st else dropIcon s st
@@ -978,7 +988,7 @@ setSpaceProfileIn sid p st = do
 uploadSpaceIconIn :: SpaceId -> Text -> ByteString -> Write Space
 uploadSpaceIconIn sid mediaType bytes st = do
   (s, c) <- findSpace st sid
-  requireAdminister st c
+  _ <- requireIconAdminister st sid c
   mt <- first Invalid (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
   let (b, st1) = newId "blob" (dropIcon s st)
       blob = BlobId b

@@ -12,6 +12,7 @@ import Protolude
 import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), insertPage)
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Favicon (defaultFavicon)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..), Site (..), headTags)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
@@ -172,5 +173,5 @@ spec = describe "a space shown as a blog, rendered" $ do
       headTags site meta `shouldBe` ""
 
     it "escapes what it writes" $
-      headTags site (Head {title = "x", feeds = Nothing, preview = Just Preview {title = "A \"quote\" & <tag>", description = "", url = "/", kind = "website", image = Nothing}})
+      headTags site (Head {title = "x", feeds = Nothing, icon = defaultFavicon, preview = Just Preview {title = "A \"quote\" & <tag>", description = "", url = "/", kind = "website", image = Nothing}})
         `contains` "content=\"A &quot;quote&quot; &amp; &lt;tag&gt;\""

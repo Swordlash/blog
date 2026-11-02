@@ -75,6 +75,20 @@ function wiki_set_title(title) {
   document.title = title;
 }
 
+// The tab's favicon (Wiki.App.Favicon): the page's <link rel="icon">,
+// changed only when its address or type differ, so that the browser does
+// not fetch the same icon again at every route.
+function wiki_set_favicon(href, type) {
+  let link = document.querySelector('link[rel~="icon"]');
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = "icon";
+    document.head.appendChild(link);
+  }
+  if (link.getAttribute("href") !== href) link.setAttribute("href", href);
+  if (link.getAttribute("type") !== type) link.setAttribute("type", type);
+}
+
 // The number of the session history's current entry, written into the
 // entry's state the first time the shell sees it: the one after the last
 // entry seen, since an entry the shell has not seen is one just pushed (the

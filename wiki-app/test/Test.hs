@@ -8,6 +8,7 @@ import Test.Backend.Persist qualified as Persist
 import Test.Blog qualified as Blog
 import Test.Demo qualified as Demo
 import Test.Export qualified as Export
+import Test.Favicon qualified as Favicon
 import Test.Guide qualified as Guide
 import Test.Help qualified as Help
 import Test.Hspec (around_, parallel)
@@ -42,6 +43,7 @@ main = do
       Guide.spec
       Help.spec
       Export.spec
+      Favicon.spec
       Route.spec
       Link.spec
       Live.spec

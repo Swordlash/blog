@@ -198,6 +198,12 @@ another kind of icon lets the image go. The image is kept under its hash, as
 an attachment's bytes are, and served as they are (`nosniff`, sandboxed),
 to whoever may view the space.
 
+The space behind the wiki's home page (`api/v1/home`'s) takes an icon too:
+the wiki's own, which the application shows as the browser tab's icon away
+from the spaces (WP5.45 of the plan). Only an administrator of the wiki sets
+it (403 for anyone else), and its profile takes the icon alone: the
+description, home page and blog given are ignored.
+
 A space's grants are read and changed by whoever administers it
 (`AdministerSpace` on it or an ancestor, or the global `administer`). A
 `subject` is `{"tag": "SubjectUser", "contents": <user id>}` or `{"tag":

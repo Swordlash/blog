@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Favicons (WP5.45). The browser tab shows a space's icon on the space's
+pages (its image, its emoji, or its letter on its colour, drawn as SVG in a
+`data:` URL) and the wiki's own icon everywhere else (`Wiki.App.Favicon`);
+pages written by the prerender and the server carry the same one. The wiki's
+icon is the icon of the space behind the home page, which an administrator
+sets among the home page's settings: the logo, an emoji or an uploaded
+image. `setSpaceProfile` and `uploadSpaceIcon` accept the home's space for an
+administrator of the wiki, and take only the icon of a profile there.
+
 An "Editor" tab in the administration (WP5.41): the kinds of box move
 there from "Server", beside the built-in math macros, which the first
 opening copies from the ones the wiki ships with and saves; from then on

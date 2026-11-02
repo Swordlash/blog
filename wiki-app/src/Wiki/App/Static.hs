@@ -76,6 +76,7 @@ import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
+import Wiki.App.Favicon (defaultFaviconTag, faviconTag)
 import Wiki.App.Head (Head (..), Site, escapeHtml, headTags, untitled)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
@@ -255,9 +256,11 @@ withTitle title = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml title
 
 -- | A page titled for its route, with the other tags about it
 -- ('headTags') after the title, for a writer that knows where the page is
--- served.
+-- served, and the route's favicon in place of the template's.
 withHead :: Site -> Head -> Text -> Text
-withHead site h = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml h.title <> "</title>" <> headTags site h)
+withHead site h =
+  T.replace defaultFaviconTag (faviconTag h.icon)
+    . T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml h.title <> "</title>" <> headTags site h)
 
 -- | How often the prerender checks the HTML, in microseconds: it writes
 -- its pages once, so it can afford to check slowly.

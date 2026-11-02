@@ -912,6 +912,8 @@ views m = describe "the application over it" $ do
         -- The page's "Star" button's and the header's "Starred".
         _ <- starred
         _ <- notifications
+        -- The wiki's home, whose icon is the favicon away from the spaces.
+        _ <- getHomeDocument
         pure ((\p -> p.id) <$> rightToMaybe page)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops
@@ -1025,6 +1027,8 @@ comments m = describe "a page's comments" $ do
       _ <- notifications
       _ <- watching (WatchPage page.id)
       _ <- starred
+      -- The wiki's home, whose icon is the wiki's favicon.
+      _ <- getHomeDocument
       pure (page, threads)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops

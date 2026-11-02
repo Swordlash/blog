@@ -1,7 +1,9 @@
 -- | The page's @\<head>@ tags besides its title, for programs that read
 -- the page without running it (WP4.14 of docs/PLAN.md): a link preview's
 -- @\<meta name="description">@ and OpenGraph properties, and a blog's
--- feeds (@\<link rel="alternate">@).
+-- feeds (@\<link rel="alternate">@). The page's favicon is part of what a
+-- route says about itself too ("Wiki.App.Favicon", WP5.45), written in
+-- place of the template's own ("Wiki.App.Static").
 --
 -- The shell says what the route shows ('Head', once it has loaded it).
 -- Whoever writes the page adds the tags with it ('headTags'): the
@@ -28,6 +30,7 @@ where
 
 import Data.Text qualified as T
 import Protolude
+import Wiki.App.Favicon (Favicon, defaultFavicon)
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Space (Space)
 
@@ -39,6 +42,8 @@ data Head = Head
   -- ^ For a public page: what a link preview shows.
   , feeds :: Maybe Feeds
   -- ^ For the pages of a public blog: where its feeds are.
+  , icon :: Favicon
+  -- ^ The tab's icon: the space's, or the wiki's own.
   }
   deriving stock (Eq, Show)
 
@@ -78,7 +83,7 @@ data PreviewImage
 
 -- | A page that says nothing about itself except its title.
 untitled :: Text -> Head
-untitled title = Head {title, preview = Nothing, feeds = Nothing}
+untitled title = Head {title, preview = Nothing, feeds = Nothing, icon = defaultFavicon}
 
 -- | What the writer of a page knows about where it is served.
 data Site = Site

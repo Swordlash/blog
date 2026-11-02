@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The wiki's icon (WP5.45): `PUT spaces/<home space>/profile` and the icon's
+upload accept the space behind the home page for an administrator of the
+wiki, and change only its icon. Served pages carry their route's favicon.
+
 The server's settings keep the built-in math macros (WP5.41) in the
 setting `math-macros`, which every session carries and the export uses in
 place of the shipped ones once set; a change of them is in the audit log.
