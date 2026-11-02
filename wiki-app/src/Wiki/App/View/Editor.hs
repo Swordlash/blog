@@ -727,11 +727,12 @@ component =
     -- stylesheet shows one of them (or both side by side) through the
     -- form's classes, so that what is hidden stays mounted. What appears
     -- and disappears above them (a draft found, Cancel's question, an
-    -- error) is in its own holder element, which is always there. An
-    -- element appearing or disappearing among the form's children would
-    -- shift the ones after it, and Halogen, which matches unkeyed children
-    -- by position, would recreate the Markdown's view, losing CodeMirror's
-    -- text and undo history.
+    -- error, the math macros' panel, the "New kind…" dialog) is in a holder
+    -- element of its own, which is always there. An element appearing or
+    -- disappearing among the form's children would shift the ones after
+    -- it, and Halogen, which matches unkeyed children by position, would
+    -- recreate the Markdown's view, losing CodeMirror's text and undo
+    -- history.
     editing :: State -> Work -> H.ComponentHTML Action Slots m
     editing st work =
       [hh|
@@ -769,12 +770,14 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          {% if st.macrosOpen %}
-            {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
-          {% end %}
-          {% if st.kindDialogOpen %}
-            {{ HH.slot "newKind" () NewKindDialog.component NewKindDialog.Input {context = st.input.context} FromNewKind }}
-          {% end %}
+          <div class="editor-panels">
+            {% if st.macrosOpen %}
+              {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
+            {% end %}
+            {% if st.kindDialogOpen %}
+              {{ HH.slot "newKind" () NewKindDialog.component NewKindDialog.Input {context = st.input.context} FromNewKind }}
+            {% end %}
+          </div>
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
