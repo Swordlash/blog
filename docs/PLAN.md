@@ -349,20 +349,12 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39, WP5.42 and WP5.43 are done, the rest
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.40, WP5.42 and WP5.43 are done, the rest
   follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
   any more). A multi-line `$$` block in a box that seemed to work only on one line
   works (the owner tried again; the parser reads every variant tried).
-- **WP5.40 Boxes: numbers, titles, toolbar, colours.** Boxes are numbered per kind
-  (Tip 1, Tip 2; Example 1 apart). A space chooses the form: within the page only
-  (`3`, the default, the owner, 2026-11-02), with the page's number (`2.3`: the page's position under its parent, in the
-  space's order, by hand or not), or with the section too (`2.1.3`: `##` sections).
-  `> [!TIP*]` is a box without a number, as LaTeX's `equation*`. Math in box titles
-  (`$…$`, `$$…$$`). A "Box" button in the toolbar with the space's kinds in a list,
-  and for an administrator "New kind…" there. A custom colour (a colour picker) beside
-  the theme's.
 - **WP5.41 An "Editor" tab in the settings.** The kinds of box move there from
   "Server". The built-in macros (`\Prob` and the rest) become a server setting there:
   a textarea filled with them on first opening, saved as typed, checked by KaTeX as
@@ -372,8 +364,9 @@ In the order to do it, unless the owner says otherwise.
   space (the space's are on the space's page, "Math macros", today). The Box menu's
   "New kind…" opens a dialog in the editor with the same form as the kinds of box in
   the Editor tab (one form, used in both), instead of the administration in another
-  tab (WP5.40): a kind saved there is in the menu at once, and nothing is left or
-  reloaded (the owner, 2026-11-02).
+  tab (WP5.40, which numbers boxes within the page by default, the owner, 2026-11-02):
+  a kind saved there is in the menu at once, and nothing is left or reloaded (the
+  owner, 2026-11-02).
 - **WP5.44 Stars and help.** A user stars pages (kept by the server, per user) and goes
   to them from a "Starred" list in the header. A help button (a "?" in a corner) opens
   a dialog with what the README and the guide say: TikZ, Mermaid, the kinds of box
