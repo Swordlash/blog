@@ -285,6 +285,13 @@ confirms it against reality and the plan is amended if it does not hold.
     18.2, or later) and uses the platform's APIs rather than polyfills or fallbacks for
     them. The README states the floor in one place; a package that raises it says so in
     its changelog.
+27. **A page's title is its text's first line** (the owner, issue #120, built by WP5.39).
+    Every page's text starts with `# ` and the title, and the title is read from that
+    line (without a closing `#` run or a `{#id .class}` block); the page shows it once,
+    as the heading. The editor keeps the `# ` in place and puts `# <title>` in a page
+    that lacks it; the title field only shows the line. Renaming rewrites the line and
+    keeps its attributes. Templates are the exception: their first line may be
+    `# {{title}}`, so their name is typed in the field as before.
 
 ## Repository layout
 
@@ -333,35 +340,12 @@ what is planned, not a log).
 In the order to do it, unless the owner says otherwise.
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31, with answers
-  the same evening). Cut into WP5.37 to WP5.45 below, in that order unless the owner
-  says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
+  the same evening). Cut into WP5.37 to WP5.45; WP5.37 to WP5.39 are done, the rest
+  follow below, in that order unless the owner says otherwise. Left out: C-like preprocessor macros (the owner: "probably not"; math
   macros and boxes cover the need); grammar checking beyond the browser's spelling,
   which CodeMirror already has on (later, perhaps LanguageTool; Grammarly offers no SDK
   any more). A multi-line `$$` block in a box that seemed to work only on one line
   works (the owner tried again; the parser reads every variant tried).
-- **WP5.37 Fixes to WP5.36.** With the sidebar folded the page keeps
-  `.wiki-content`'s `max-width: 54rem`, so the editor leaves the right of the screen
-  empty and its bar takes two rows: the content takes the width while folded, and the
-  editor always. The CodeMirror error in the editor's browser tests ("Selection points
-  outside of document", about one run in ten, brought by WP5.36, not by the preview's
-  following): bisect WP5.36's other changes (first the side by side pane's fixed 65vh)
-  and fix the cause, not the symptom. The search bar's results close when it loses
-  focus or a click lands elsewhere.
-- **WP5.38 The editor's bar and the preview.** The title, Save, Save and close and
-  Cancel stay at the top with the toolbar (sticky), in editing and in "Show preview",
-  where "Back to edit" stays too. "Show preview" opens at the block being edited (the
-  line markers of WP5.36 in the full preview). Showing the preview pushes a history
-  entry: the browser's Back returns to editing, and only the next Back leaves the
-  editor (with the question about unsaved changes). "Side by side" stops being a
-  checkbox: both it and "Show preview" are buttons, the first a toggle that shows
-  whether it is on (`aria-pressed`), with labels and icons that tell them apart (the
-  owner keeps mixing them up).
-- **WP5.39 The title is the first line's `#`.** Every page's text starts with `# ` and
-  the title; the editor anchors that `#` (it cannot be deleted or moved), and the title
-  field is greyed out and filled from what follows it. A page without it gets
-  `# <title>` put in by the editor when opened. The page is rendered with its title
-  once (the `#` line is the title, not a second heading). Before WP5.40, whose
-  numbering takes `#` as the title and `##` as sections.
 - **WP5.40 Boxes: numbers, titles, toolbar, colours.** Boxes are numbered per kind
   (Tip 1, Tip 2; Example 1 apart). A space chooses the form: within the page only
   (`3`), with the page's number (`2.3`: the page's position under its parent, in the
@@ -585,17 +569,22 @@ needs. Each was true when its package merged; check before relying on one.
   is not refused there either). The wiki-app `Accounts` record carries four passkey
   methods; the assistant's settings always show the password field, since they do not
   know whether the user has one.
+- With the sidebar folded the editor should take the screen's width. In Chromium at
+  1600px it does (1272px to 1528px); the owner saw it stay narrow, and the browser and
+  window width are not known yet (WP5.37).
 - The server could cache `template.html` (optional, WP5.14).
 - A second deployment (`--name`) on one machine cannot share port 443 and should use
   `--http` (WP4.18).
 
 **Tests and CI**
 - The editor's browser test "loses no keystroke while the preview catches up with a long
-  page" passes, but about one run in ten CodeMirror throws "Selection points outside of
-  document" from a scroll handler, which fails the suite: the live view reads a DOM
-  selection one typed character ahead of its state. Brought by WP5.36 (30 clean runs on
-  the `main` before it), not by the preview's following (4 in 27 with that off). WP5.37
-  bisects and fixes it.
+  page" types its keys 12 ms apart. Typed with no pause, about one run in ten
+  CodeMirror (`@codemirror/view` 6.43.15) throws "Selection points outside of document"
+  from its scroll handler, which flushes DOM changes it has not yet read
+  (`flush(pendingRecords > 0)`, new in 6.43.15; 6.43.14 throws less often). The side by
+  side pane's scrolling brings it out; no change of ours prevents it. Catching the
+  error in the page was tried and dropped: it put a typed key at the wrong place. Not
+  reported upstream yet (WP5.37).
 - Known flake: `Test.Server.Api` "logs each request…" races the log line written after
   the response under full-suite load.
 - The smoke tests open pages with `serviceWorkers: "block"` (their Playwright routes do
