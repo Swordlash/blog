@@ -455,7 +455,9 @@ quote text sel = (replace reps text, afterLines sel reps)
 -- | Make the touched lines a box of a kind ('Box'). Lines already quoted
 -- stay as they are and the others are quoted, under a new line with the
 -- marker; a line after them that has text gets a blank line before it, or
--- it would continue the box. When the first touched line is a box's marker
+-- it would continue the box. A quoted line before them gets a blank line
+-- after it too: without one, the marker would continue that quotation and
+-- be read as its text, not as a box. When the first touched line is a box's marker
 -- already, only its kind changes. With nothing selected, an empty box goes
 -- after the cursor's line, with its text selected.
 box :: Text -> Text -> Selection -> (Text, Selection)
@@ -469,15 +471,16 @@ box kind text sel@(Selection s e) = case touched text sel of
         let lastLine = fromMaybe firstLine (lastMay ls)
             end = lastLine.at + T.length lastLine.line
             next = T.takeWhile (/= '\n') (T.drop (end + 1) text)
+            previous = T.takeWhileEnd (/= '\n') (T.dropEnd 1 (T.take firstLine.at text))
             quoted l = T.isPrefixOf ">" l.line
             prefix l
               | quoted l = ""
               | T.all isSpace l.line = ">"
               | otherwise = "> "
             reps =
-              Replacement firstLine.at 0 (marker <> "\n" <> prefix firstLine)
-                : [Replacement l.at 0 (prefix l) | l <- drop 1 ls, not (quoted l)]
-                  <> [Replacement end 0 "\n" | end < T.length text, not (T.all isSpace next)]
+              [Replacement (firstLine.at - 1) 0 "\n" | firstLine.at > 0, T.isPrefixOf ">" (T.stripStart previous)]
+                <> (Replacement firstLine.at 0 (marker <> "\n" <> prefix firstLine) : [Replacement l.at 0 (prefix l) | l <- drop 1 ls, not (quoted l)])
+                <> [Replacement end 0 "\n" | end < T.length text, not (T.all isSpace next)]
          in (replace reps text, Selection (moved Before reps s) (moved Before reps e))
   _ -> template (marker <> "\n> " <> placeholder) (Just (T.length marker + 3, T.length placeholder)) text sel
   where

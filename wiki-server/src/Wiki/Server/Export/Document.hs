@@ -476,7 +476,7 @@ boxesOf defined boxes numbers = \case
             -- The title is what pandoc read after the placeholder, up to
             -- the end of its line ('withBoxes').
             (onLine, more) = break lineBreak after
-            title = walk displayInline (dropWhile (== P.Space) onLine)
+            title = map displayInline (dropWhile (== P.Space) onLine)
             label = B.toList (B.text caption) <> title
             classes = case m.boxKind of
               Custom name -> ["alert-" <> name]
@@ -490,10 +490,21 @@ boxesOf defined boxes numbers = \case
       P.LineBreak -> True
       _ -> False
     -- Display math in a title is set on the title's line, as the page sets
-    -- it, wherever it is in the title ('walk' reaches into emphasis and
-    -- links).
+    -- it, wherever it is in the title's text: in emphasis and links too.
+    -- A footnote's body is not the title's text, so its math stays as the
+    -- page shows it.
     displayInline = \case
       P.Math P.DisplayMath tex -> P.Math P.InlineMath ("\\displaystyle " <> tex)
+      P.Emph xs -> P.Emph (map displayInline xs)
+      P.Strong xs -> P.Strong (map displayInline xs)
+      P.Strikeout xs -> P.Strikeout (map displayInline xs)
+      P.Underline xs -> P.Underline (map displayInline xs)
+      P.Superscript xs -> P.Superscript (map displayInline xs)
+      P.Subscript xs -> P.Subscript (map displayInline xs)
+      P.SmallCaps xs -> P.SmallCaps (map displayInline xs)
+      P.Quoted q xs -> P.Quoted q (map displayInline xs)
+      P.Span attrs xs -> P.Span attrs (map displayInline xs)
+      P.Link attrs xs target -> P.Link attrs (map displayInline xs) target
       other -> other
 
 ----------------------------------------------------------------------

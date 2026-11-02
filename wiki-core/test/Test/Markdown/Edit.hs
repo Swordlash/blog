@@ -106,6 +106,9 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
     it "makes the lines touched a box, quoting those not quoted yet" $ do
       run (Box "EXERCISE") "«a\n\nb»" `shouldBe` "«> [!EXERCISE]\n> a\n>\n> b»"
       run (Box "NOTE") "«> a\nb»" `shouldBe` "«> [!NOTE]\n> a\n> b»"
+    it "keeps a quotation before the box out of it, so the marker starts a box" $ do
+      run (Box "TIP") "> a\n«> b»" `shouldBe` "> a\n\n«> [!TIP]\n> b»"
+      run (Box "TIP") "a\n«b»" `shouldBe` "a\n«> [!TIP]\n> b»"
     it "keeps a line after the box out of it" $
       run (Box "TIP") "«a»\nb" `shouldBe` "«> [!TIP]\n> a»\n\nb"
     it "changes the kind of a box whose marker it is on, keeping its title and star" $ do

@@ -256,6 +256,10 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     length (query (\case P.Note _ -> [()]; _ -> []) title) `shouldBe` 1
     query (\case P.Math kind tex -> [(kind, tex)]; _ -> []) title `shouldBe` [(P.InlineMath, "\\displaystyle x")]
     query (\case P.Str t -> [t]; _ -> []) title `shouldNotContain` ["[the", "guide][g]"]
+    -- A footnote's display math is not the title's: it stays a block.
+    noted <- blocksOf ToOther place "> [!TIP] See[^n]\n> Text.\n\n[^n]: $$x^2$$\n"
+    [notedTitle] <- pure (titleOf noted)
+    query (\case P.Math kind tex -> [(kind, tex)]; _ -> []) notedTitle `shouldBe` [(P.DisplayMath, "x^2")]
 
   it "reads a box whatever the page's line endings" $ do
     let boxTitles bs = [xs | P.Div (_, ["note", "alert"], _) (P.Div (_, ["title"], _) [P.Para xs] : _) <- bs]
