@@ -400,8 +400,7 @@ In the order to do it, unless the owner says otherwise.
     `OverloadedRecordDot`. A value that changes is a record of two actions (the owner,
     on the issue): `data Field a = Field {get :: IO a, set :: a -> IO ()}`, so
     `w.document.title.get` and `w.document.title.set "x"`; one the page cannot write
-    (`navigator.onLine`) has the `get` alone, under its own type, so the same `.get`
-    reads it and a `.set` does not compile. A method is a field holding the call,
+    is the read itself, with no `.get` (the owner): `w.navigator.onLine :: IO Bool`. A method is a field holding the call,
     `crypto.randomUUID :: IO UUID` or `history.go :: Int -> IO ()`, and a method
     returning a Promise awaits it (`Safe`; forced on wasm). Each field and method is also
     a plain function (`randomUUID :: Crypto -> IO UUID`), in a module per type meant to
