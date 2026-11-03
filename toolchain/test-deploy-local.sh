@@ -280,6 +280,8 @@ case $name in
           printf 'Error: [Cabal-7125]\nFailed to build splitmix-0.1.3.1. See the build log above for details.\n' >&2
           exit 1
         fi
+        # A line of the progress cabal shows, which the deploy must let through.
+        printf 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)\n'
         mkdir -p "${bin%/*}"
         cp "$FAKE_SERVER" "$bin"
         chmod +x "$bin" ;;
@@ -983,7 +985,7 @@ a=$(other_port "$p")
 out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
@@ -1179,7 +1181,12 @@ data=$HOME/wiki-demo/data
 out=$case_dir/first
 deploy --server --sqlite --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project'
+# cabal's output is shown while it builds, after the deploy's line for it.
+assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
+[ "$(line_of "$out" 'building wiki-server at -O2')" -lt "$(line_of "$out" 'Building executable wiki-server')" ] ||
+  fail "cabal's output did not come after the deploy's line for the build"
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies --sqlite \"$data/wiki.sqlite\""
 assert_lacks "$EVENTS" 'docker'
 [ "$(state db)" = sqlite ] || fail 'state does not record SQLite'
@@ -1214,7 +1221,7 @@ assert_contains "$EVENTS" "wiki-server guide update --data $data --sqlite $data/
 { [ "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server guide update')" ]; } ||
   fail 'the guide was updated before the new server started'
 assert_contains "$out" "bringing the guide's pages up to this version"
-pass '--server --sqlite builds wiki-server at -O2, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies, then updates the guide'
+pass '--server --sqlite builds wiki-server at -O2, showing cabal'"'"'s output, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies, then updates the guide'
 
 : >"$EVENTS"
 printf 'precious\n' >>"$data/wiki.sqlite"
@@ -1669,7 +1676,7 @@ assert_contains "$out" 'warning: missing for the native build of wiki-server: zl
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
 assert_contains "$EVENTS" 'bootstrap build'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'
 undeploy >/dev/null 2>&1
 pass 'on Debian a missing package is a warning: the bootstrap installs it, and the check after it stops the deploy or lets it go on'
@@ -1778,7 +1785,8 @@ assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/
 assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'bootstrap build'
 assert_lacks "$EVENTS" 'npm'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
 { [ "$(line_of "$EVENTS" 'curl https://github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ] &&
   [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
   fail 'the page was not downloaded before the toolchain and the build'
@@ -2089,7 +2097,7 @@ deploy --server --sqlite --prefix "$pre" --admin-port "$a" --backend-only >"$out
 assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
 assert_lacks "$EVENTS" 'app-demo-'
 assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$HOME/$unit" "\"$pre/bin/wiki-server\" serve"
 assert_contains "$pre/app/index.html" '<title>wiki</title>'

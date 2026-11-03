@@ -1264,9 +1264,10 @@ download_page() {
 
 # wiki-server, natively, with this repository's packages at -O2 and the
 # dependencies as the everyday build has them (cabal-native-opt.project), in a
-# build directory of its own so that neither build invalidates the other.
+# build directory of its own so that neither build invalidates the other. The
+# arguments are cabal's command and its flags.
 server_cabal() {
-  (cd "$ROOT" && cabal "$1" -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
+  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
 }
 
 # The check of what wiki-server's native build needs from the machine
@@ -1319,20 +1320,26 @@ cabal_logs_dir() {
   done
 }
 
-# wiki-server's build with --backend-only. check_native has run before it,
-# but a build can still fail on a C library (one the check found that does
-# not link, say), so a failure that names one points at the check again. A
-# failed build also shows the newest of cabal's build logs written during it,
-# which holds the error when the package that failed is a dependency.
+# wiki-server's build. cabal's output is shown as it comes, at cabal's
+# default verbosity, which names each package as it is built and GHC's
+# progress through its modules, so that a long -O2 build is not silent. A
+# copy goes to a file for the hints after a failure. check_native has run
+# before the build, but a build can still fail on a C library (one the check
+# found that does not link, say), so a failure that names one points at the
+# check again. A failed build also shows the newest of cabal's build logs
+# written during it, which holds the error when the package that failed is a
+# dependency.
 server_build_native() {
   build_log=$(mktemp)
+  build_status=$(mktemp)
   build_start=$(mktemp)
-  if server_cabal build >"$build_log" 2>&1; then
-    cat "$build_log"
-    rm -f "$build_log" "$build_start"
+  # A pipeline's status is tee's, so cabal's own status goes to a file,
+  # which stays empty when cabal succeeds.
+  { server_cabal build 2>&1 || printf '%s' "$?" >"$build_status"; } | tee "$build_log"
+  if [ ! -s "$build_status" ]; then
+    rm -f "$build_log" "$build_status" "$build_start"
     return 0
   fi
-  cat "$build_log" >&2
   logs_dir=$(cabal_logs_dir)
   if [ -n "$logs_dir" ]; then
     # shellcheck disable=SC2012 # ls -t orders by mtime; the paths are cabal's own, without newlines.
@@ -1342,13 +1349,15 @@ server_build_native() {
       tail -n 30 "$newest_log" | tee -a "$build_log" >&2
     fi
   fi
-  if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|sodium|gmp|zlib' "$build_log"; then
+  # Error messages only: cabal's output names packages such as zlib and
+  # postgresql-libpq as it builds them, failure or not.
+  if grep -Eqi "pkg-config|cannot find -l|foreign librar|missing [(]or bad[)] c librar|could not be found|[.]h: no such file" "$build_log"; then
     warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
   fi
   if grep -q 'semOpen' "$build_log"; then
     warn "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it, so if this still appears, add the line semaphore: False to cabal-native-opt.project.local"
   fi
-  rm -f "$build_log" "$build_start"
+  rm -f "$build_log" "$build_status" "$build_start"
   die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
@@ -1400,7 +1409,7 @@ elif [ -n "$build" ]; then
   build_app
   if [ "$mode" = server ]; then
     say "building wiki-server at -O2 (cabal-native-opt.project)"
-    server_cabal build
+    server_build_native
   fi
 fi
 for file in index.html 404.html app.wasm; do
@@ -1418,7 +1427,7 @@ if [ -z "$build" ]; then
   fi
 fi
 if [ "$mode" = server ]; then
-  server_bin=$(server_cabal list-bin) && [ -x "$server_bin" ] ||
+  server_bin=$(server_cabal list-bin -v0) && [ -x "$server_bin" ] ||
     die "there is no -O2 build of wiki-server (dist-newstyle/native-opt); run without --no-build"
 fi
 
