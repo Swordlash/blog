@@ -1018,6 +1018,12 @@ select {
   gap: 0.5rem;
 }
 
+/* The form's fields take the height of their contents: in a column, a
+   field's flex basis would be its height. */
+.space-profile-form .field {
+  flex: none;
+}
+
 .space-profile-form textarea {
   width: 100%;
   font: inherit;

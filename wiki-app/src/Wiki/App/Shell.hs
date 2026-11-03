@@ -930,7 +930,7 @@ component =
             {% for h in maybeToList (homeOf space pages) %}
               <li><a class="space-home-link" {{ [attr "aria-current" "page" | entering] }} {{ Router.linkProps st.router Followed (Space path) }}>{{ h.title }}</a></li>
             {% end %}
-            <li><a class="space-pages-link" {{ [attr "aria-current" "page" | st.route == SpacePages path] }} {{ Router.linkProps st.router Followed (SpacePages path) }}>Pages and settings</a></li>
+            <li><a class="space-pages-link" {{ [attr "aria-current" "page" | st.route == SpacePages path] }} {{ Router.linkProps st.router Followed (SpacePages path) }}>Space settings</a></li>
           </ul>
           <h2>Pages</h2>
           {% if null tree %}
@@ -1588,7 +1588,7 @@ crumbs st = case st.route of
   HomeSlides {} -> [(st.session.homePage.title, Just Home), ("Slides", Nothing)]
   Space path -> spaceCrumbs path
   Posts path n -> spaceCrumbs path <> [("Page " <> show n, Nothing)]
-  SpacePages path -> spaceCrumbs path <> [("Pages and settings", Nothing)]
+  SpacePages path -> spaceCrumbs path <> [("Space settings", Nothing)]
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
   EditPage path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath <> [("Edit", Nothing)]
   -- The source of a page in a space that cannot be shown is not named

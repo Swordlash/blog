@@ -117,7 +117,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "shows a private space's pages to someone it is granted to, with what they may do" $ do
     Rendered {html, title} <- render (as (Just "user-admin")) (SpacePages (slugs ["team"]))
-    title `shouldBe` "Pages and settings · Team · Wiki"
+    title `shouldBe` "Space settings · Team · Wiki"
     html `contains` "<h1>Team</h1>"
     html `contains` "<p class=\"space-description\">How the team works: its handbook, who is on call, and its projects.</p>"
     html `contains` ">Team handbook</a>"
@@ -131,7 +131,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "<h1 id=\"team-handbook\">Team handbook<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#team-handbook\"></a></h1>"
     html `contains` "<nav aria-label=\"Space\" class=\"wiki-sidebar space-sidebar\">"
     html `contains` "<a aria-current=\"page\" class=\"sidebar-space\" href=\"/s/team/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">🧭</span><span class=\"sidebar-space-name\">Team</span></a>"
-    html `contains` "<a class=\"space-pages-link\" href=\"/s/team/pages/\">Pages and settings</a>"
+    html `contains` "<a class=\"space-pages-link\" href=\"/s/team/pages/\">Space settings</a>"
     -- The sidebar has this space alone: its subspaces, and no other space.
     html `contains` "<h2>Subspaces</h2>"
     html `contains` "<a class=\"space-link\" href=\"/s/team/projects/\">"
