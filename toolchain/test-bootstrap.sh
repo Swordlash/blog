@@ -284,7 +284,32 @@ fi
 assert_contains "$case_dir/native-rhel-no-make" 'missing  make'
 assert_contains "$case_dir/native-rhel-no-make" 'RHEL, Fedora:   sudo dnf install make'
 [ ! -s "$EVENTS" ] || fail "native without make installed something: $(cat "$EVENTS")"
-pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages'
+# pkg-config knows libpq, but pg_config is not on PATH, as on RHEL with
+# PGDG's packages: the build runs pg_config, so the check names libpq and
+# says to put pg_config's directory on PATH, naming the one it finds off
+# PATH. WIKI_PG_CONFIG_DIRS stands for /usr/pgsql-*/bin and
+# /usr/lib/postgresql/*/bin, and the host's own pg_config is taken out of
+# the links.
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
+chmod +x "$case_dir/bin/make"
+rm -f "$case_dir/bin/pg_config" "$no_dpkg/pg_config"
+if WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-no-pg-config" 2>&1; then
+  fail 'native without pg_config on PATH succeeded'
+fi
+assert_contains "$case_dir/native-no-pg-config" 'missing  libpq       no pg_config on PATH, though pkg-config knows libpq: the build runs pg_config'
+assert_contains "$case_dir/native-no-pg-config" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
+mkdir -p "$case_dir/pgsql-16/bin"
+printf '#!/bin/sh\nprintf "/usr/pgsql-16/include\\n"\n' >"$case_dir/pgsql-16/bin/pg_config"
+chmod +x "$case_dir/pgsql-16/bin/pg_config"
+if WIKI_PG_CONFIG_DIRS="$case_dir/pgsql-*/bin" env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-elsewhere" 2>&1; then
+  fail 'native with pg_config off PATH succeeded'
+fi
+assert_contains "$case_dir/native-pg-config-elsewhere" "no pg_config on PATH, but there is one at $case_dir/pgsql-16/bin/pg_config"
+assert_contains "$case_dir/native-pg-config-elsewhere" "PATH=$case_dir/pgsql-16/bin:\$PATH sh toolchain/deploy-local.sh"
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-on-path" 2>&1 ||
+  fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
+[ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`

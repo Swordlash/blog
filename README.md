@@ -881,18 +881,21 @@ missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or U
 installs it next, and the check runs again after the bootstrap; elsewhere the deploy
 stops there. SQLite needs nothing: the build compiles its own copy.
 
-| Library    | Debian, Ubuntu  | RHEL, Fedora              |
-| ---------- | --------------- | ------------------------- |
-| GMP        | `libgmp-dev`    | `gmp-devel`               |
-| libpq      | `libpq-dev`     | `libpq-devel`             |
-| zlib       | `zlib1g-dev`    | `zlib-devel`              |
-| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)  |
-| pkg-config | `pkg-config`    | `pkgconf-pkg-config`      |
+| Library    | Debian, Ubuntu  | RHEL, Fedora                                                                     |
+| ---------- | --------------- | -------------------------------------------------------------------------------- |
+| GMP        | `libgmp-dev`    | `gmp-devel`                                                                      |
+| libpq      | `libpq-dev`     | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
+| zlib       | `zlib1g-dev`    | `zlib-devel`                                                                     |
+| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)                                                         |
+| pkg-config | `pkg-config`    | `pkgconf-pkg-config`                                                             |
 
 A library built from source into a directory of your own is found through the
 environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
 `C_INCLUDE_PATH`, `CPATH` and `PKG_CONFIG_PATH` at build time. zlib is found
-through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH`. libsodium is
+through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH` alone: the build
+runs `pg_config`, and pkg-config's `libpq.pc` is not enough. PGDG's packages put
+`pg_config` in `/usr/pgsql-NN/bin`, off `PATH`, so run the deploy with
+`PATH=/usr/pgsql-NN/bin:$PATH`; the check names a `pg_config` it finds there. libsodium is
 found through neither: its Haskell bindings include `sodium.h` and link
 `-lsodium` without pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
 the check compiles and links a small program the same way. Built from source, where

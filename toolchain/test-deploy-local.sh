@@ -1583,6 +1583,45 @@ assert_contains "$out" 'LD_LIBRARY_PATH'
 [ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without zlib did not report the other eight items ok'
 pass 'toolchain/check-native.sh reports each item ok, and names a missing one with its packages and exits 1'
 
+# libpq is found through pg_config on PATH, which postgresql-libpq's build
+# runs: pkg-config's libpq alone is not enough. These runs get a PATH of the
+# fakes and links to the host's commands, without pg_config on either, and
+# WIKI_PG_CONFIG_DIRS in place of /usr/pgsql-*/bin and
+# /usr/lib/postgresql/*/bin, so that the host's PostgreSQL is not seen.
+no_pg=$case_dir/no-pg
+mkdir "$no_pg"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  [ "$name" != pg_config ] || continue
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$no_pg/$name" ] || [ -L "$no_pg/$name" ] || ln -s "$cmd" "$no_pg/$name"
+done
+rm "$case_dir/bin/pg_config"
+out=$case_dir/check-no-pg-config
+status=0
+WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check without pg_config exited $status, not 1"
+assert_contains "$out" 'missing  libpq       no pg_config on PATH, though pkg-config knows libpq: the build runs pg_config (Debian: libpq-dev; RHEL: libpq-devel)'
+assert_contains "$out" 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.'
+assert_contains "$out" "PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin"
+assert_contains "$out" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without pg_config did not report the other eight items ok'
+mkdir -p "$case_dir/pgsql-16/bin"
+ln -s "$case_dir/bin/tool" "$case_dir/pgsql-16/bin/pg_config"
+out=$case_dir/check-pg-config-elsewhere
+status=0
+WIKI_PG_CONFIG_DIRS="$case_dir/nowhere $case_dir/pgsql-*/bin" env PATH="$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check with pg_config off PATH exited $status, not 1"
+assert_contains "$out" "missing  libpq       no pg_config on PATH, but there is one at $case_dir/pgsql-16/bin/pg_config"
+assert_contains "$out" "There is one at $case_dir/pgsql-16/bin/pg_config: put its directory on PATH for the deploy:"
+assert_contains "$out" "PATH=$case_dir/pgsql-16/bin:\$PATH sh toolchain/deploy-local.sh"
+out=$case_dir/check-pg-config-on-path
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 ||
+  fail 'the check failed with that pg_config on PATH'
+assert_contains "$out" "ok       libpq       pg_config at $case_dir/pgsql-16/bin/pg_config, headers in"
+ln -s tool "$case_dir/bin/pg_config"
+pass 'toolchain/check-native.sh takes libpq only from a pg_config on PATH, not from pkg-config alone, and names a pg_config off PATH to put on it'
+
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 out=$case_dir/no-zlib

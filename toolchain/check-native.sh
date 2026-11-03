@@ -18,8 +18,14 @@
 #   - the commands cc, make, curl, git and pkg-config, on PATH;
 #   - GMP, which every native GHC program links with: its header gmp.h,
 #     through the C compiler;
-#   - libpq, for PostgreSQL: postgresql-libpq's configure script asks
-#     pg_config, and pkg-config's libpq.pc does as well;
+#   - libpq, for PostgreSQL: postgresql-libpq is built with its flag
+#     use-pkg-config off, so its Setup runs pg_config, which must be on PATH
+#     and answer pg_config --includedir. pkg-config's libpq.pc is not enough.
+#     RHEL's PGDG packages put pg_config in /usr/pgsql-<NN>/bin, off PATH, so
+#     when PATH has none the check looks there and in Debian's
+#     /usr/lib/postgresql/<NN>/bin, and names the one it finds, to be put on
+#     PATH for the deploy. WIKI_PG_CONFIG_DIRS replaces those directories (a
+#     list separated by spaces), for the tests;
 #   - zlib, for the zlib package, which is built without its bundled copy and
 #     finds the system's zlib through pkg-config (zlib.pc);
 #   - libsodium, for the second factor's codes: libsodium-bindings does not
@@ -98,13 +104,29 @@ else
   lack GMP libgmp-dev gmp-devel "cc -E finds no gmp.h"
 fi
 
-# libpq: pg_config is what postgresql-libpq's configure script asks.
+# libpq, through pg_config on PATH, which postgresql-libpq's Setup runs when
+# cabal builds it. When PATH has no pg_config, a pg_config elsewhere is
+# looked for, to name in the hint: the last one the patterns match, which is
+# usually the newest PostgreSQL.
+pg_config_off_path=
 if path=$(command -v pg_config 2>/dev/null); then
-  report libpq ok "pg_config at $path"
-elif has pkg-config && pkg-config --exists libpq; then
-  report libpq ok "pkg-config --exists libpq"
+  if includedir=$(pg_config --includedir 2>/dev/null) && [ -n "$includedir" ]; then
+    report libpq ok "pg_config at $path, headers in $includedir"
+  else
+    lack libpq libpq-dev libpq-devel "pg_config at $path does not answer pg_config --includedir"
+  fi
 else
-  lack libpq libpq-dev libpq-devel "neither pg_config on PATH nor pkg-config's libpq"
+  # shellcheck disable=SC2086 # the directories are patterns, expanded here.
+  for dir in ${WIKI_PG_CONFIG_DIRS:-/usr/pgsql-*/bin /usr/lib/postgresql/*/bin}; do
+    if [ -x "$dir/pg_config" ]; then pg_config_off_path=$dir/pg_config; fi
+  done
+  if [ -n "$pg_config_off_path" ]; then
+    lack libpq libpq-dev libpq-devel "no pg_config on PATH, but there is one at $pg_config_off_path"
+  elif has pkg-config && pkg-config --exists libpq; then
+    lack libpq libpq-dev libpq-devel "no pg_config on PATH, though pkg-config knows libpq: the build runs pg_config"
+  else
+    lack libpq libpq-dev libpq-devel "no pg_config on PATH"
+  fi
 fi
 
 # zlib, through pkg-config, as the zlib package finds it.
@@ -150,6 +172,18 @@ printf '\nMissing for the native build of wiki-server: %s.\n' "$missing"
 printf 'Install them and run this again:\n'
 printf '    Debian, Ubuntu: sudo apt-get install %s\n' "$debian"
 printf '    RHEL, Fedora:   sudo dnf install %s\n' "$rhel"
+case $missing in
+  *libpq*)
+    printf 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.\n'
+    printf "RHEL has it in libpq-devel, or in PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin.\n"
+    if [ -n "$pg_config_off_path" ]; then
+      printf 'There is one at %s: put its directory on PATH for the deploy:\n' "$pg_config_off_path"
+      printf "    PATH=%s:\$PATH sh toolchain/deploy-local.sh ...\n" "${pg_config_off_path%/pg_config}"
+    else
+      printf 'Put the directory of pg_config on PATH for the deploy:\n'
+      printf "    PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh ...\n"
+    fi ;;
+esac
 case $missing in
   *libsodium*)
     [ -z "$sodium_hint" ] || printf '%s.\n' "$sodium_hint"
