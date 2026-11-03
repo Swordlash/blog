@@ -14,25 +14,31 @@ import: cabal.project
 
 tests: False
 
--- cabal.project's semaphore is not used here. It is a POSIX named semaphore
--- that cabal makes and GHC opens, and some machines refuse it: on a RHEL 9
--- server every package's build failed with "semOpen: does not exist". A
--- deployment's build must not depend on it. So cabal builds one package at a
--- time, and GHC's own -j builds the modules of each package in parallel. The
--- four packages here depend on one another in a chain, so building packages in
--- parallel would gain little, and one package at a time keeps the build to
--- one GHC's jobs rather than several GHCs' each using every core.
+-- The build semaphore of cabal.project is off here. It is a POSIX named
+-- semaphore that cabal makes and each GHC opens (-jsem), and some machines
+-- refuse it: on a RHEL 9 server every package's build failed with "semOpen:
+-- does not exist". A build of this file by hand, or the Dockerfile's, must
+-- not depend on it. toolchain/deploy-local.sh first runs
+-- toolchain/check-semaphore.sh, which tries the semaphore the way a build
+-- uses it, and builds with --semaphore when the semaphore works there
+-- (its options --semaphore and --no-semaphore decide instead of the probe).
+--
+-- jobs: $ncpus builds the dependencies in parallel, one package per core.
+-- With the semaphore on, cabal gives GHC -jsem, and the modules of a package
+-- compile in parallel too, within the same $ncpus jobs. With it off, each
+-- GHC compiles one module at a time: a -j in the packages' ghc-options would
+-- give each of the $ncpus GHCs every core.
 semaphore: False
-jobs: 1
+jobs: $ncpus
 
 package wiki-core
-  ghc-options: -O2 -j
+  ghc-options: -O2
 
 package wiki-api
-  ghc-options: -O2 -j
+  ghc-options: -O2
 
 package wiki-app
-  ghc-options: -O2 -j
+  ghc-options: -O2
 
 package wiki-server
-  ghc-options: -O2 -j
+  ghc-options: -O2

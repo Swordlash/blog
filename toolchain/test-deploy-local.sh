@@ -54,6 +54,17 @@ if [ -z "${WIKI_SERVER:-}" ]; then
     cd "$SOURCE_DIR/.." && cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server 2>/dev/null || true
   )
 fi
+# The PATH for the test of the real toolchain/check-semaphore.sh, with the
+# toolchain's environment loaded as the deploy loads it, so that its ghc is
+# the bootstrap's. Taken before the fixtures put their fakes first on PATH.
+REAL_PATH=$(
+  toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+  if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
+    # shellcheck source=/dev/null
+    . "$toolchain_home/.wiki-toolchain/env"
+  fi
+  printf '%s' "$PATH"
+)
 TMP=$(mktemp -d)
 cleanup() {
   for pidfile in "$TMP"/*/systemd/*.pid; do
@@ -130,7 +141,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -260,6 +271,19 @@ if [ "${1:-}" = native ]; then
     exit 1
   fi
 fi
+EOF
+  # The probe of cabal's build semaphore (toolchain/check-semaphore.sh): it
+  # says that it ran, and exits with FAKE_SEMAPHORE, 0 (the semaphore works)
+  # when unset, 1 (GHC cannot open it) or 2 (the probe could not run), with
+  # what the real one prints in each case.
+  cat >"$case_dir/repo/toolchain/check-semaphore.sh" <<'EOF'
+#!/bin/sh
+printf 'check-semaphore\n' >>"$EVENTS"
+case ${FAKE_SEMAPHORE:-0} in
+  0) printf 'semaphore ok\n' ;;
+  1) printf 'wiki_semaphore_probe_1: semOpen: does not exist (No such file or directory)\n' >&2; exit 1 ;;
+  *) printf 'check-semaphore: no ghc (ghc) to run the probe\n' >&2; exit 2 ;;
+esac
 EOF
   cat >"$case_dir/bin/tool" <<'EOF'
 #!/bin/sh
@@ -1223,7 +1247,13 @@ out=$case_dir/first
 deploy --server --sqlite --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
-assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project'
+assert_contains "$EVENTS" 'cabal list-bin --project-file=cabal-native-opt.project'
+# The probe found the semaphore usable, so the build uses it, and the probe
+# ran before the build.
+assert_contains "$out" 'build semaphore: ok, cabal and GHC share one job budget'
+assert_contains "$EVENTS" 'wiki-server -postgres --semaphore'
+[ "$(line_of "$EVENTS" 'check-semaphore')" -lt "$(line_of "$EVENTS" 'cabal build')" ] ||
+  fail 'the semaphore was not probed before the build'
 # cabal's output is shown while it builds, after the deploy's line for it.
 assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
 [ "$(line_of "$out" 'building wiki-server at -O2')" -lt "$(line_of "$out" 'Building executable wiki-server')" ] ||
@@ -1231,7 +1261,7 @@ assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 
 # A wiki in SQLite: wiki-server is built without PostgreSQL, for the build
 # and for list-bin alike, and the check does not ask for libpq.
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
-assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+assert_contains "$EVENTS" 'cabal list-bin --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres -v0'
 assert_lacks "$EVENTS" 'wiki-server +postgres'
 assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
 assert_lacks "$out" 'ok       libpq'
@@ -1691,6 +1721,50 @@ sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=
 [ "$status" = 2 ] || fail "the check with an unknown option exited $status, not 2"
 pass 'toolchain/check-native.sh --without-postgres reports libpq as not needed, and does not count it'
 
+# toolchain/check-semaphore.sh itself, the real one, with the real cc and
+# ghc: on this machine GHC can open the semaphore. Then with a fake ghc
+# that fails on -jsem with the RHEL server's error and compiles without it,
+# with one that fails either way, and without a ghc or a C compiler.
+fixture semaphore-probe
+probe() { env PATH="$1" sh "$SOURCE_DIR/check-semaphore.sh"; }
+mkdir -p "$case_dir/jsem-fails" "$case_dir/ghc-fails"
+cat >"$case_dir/jsem-fails/ghc" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *" -jsem "*)
+    printf 'cabal_semaphore_x: semOpen: does not exist (No such file or directory)\n' >&2
+    exit 1 ;;
+esac
+EOF
+printf '#!/bin/sh\nprintf "ghc: cannot find the base package\\n" >&2\nexit 1\n' >"$case_dir/ghc-fails/ghc"
+chmod +x "$case_dir/jsem-fails/ghc" "$case_dir/ghc-fails/ghc"
+out=$case_dir/out
+status=0
+WIKI_GHC=$case_dir/nowhere/ghc probe "$REAL_PATH" >"$out" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "the probe without a ghc exited $status, not 2"
+assert_contains "$out" "check-semaphore: no ghc ($case_dir/nowhere/ghc) to run the probe"
+status=0
+CC=$case_dir/nowhere/cc probe "$REAL_PATH" >"$out" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "the probe without a C compiler exited $status, not 2"
+assert_contains "$out" "check-semaphore: no C compiler ($case_dir/nowhere/cc) to build the probe"
+if env PATH="$REAL_PATH" sh -c 'command -v cc && command -v ghc' >/dev/null 2>&1; then
+  probe "$REAL_PATH" >"$out" 2>&1 || fail "the probe found no semaphore on this machine: $(cat "$out")"
+  [ "$(cat "$out")" = 'semaphore ok' ] || fail "the probe printed more than semaphore ok"
+  status=0
+  probe "$case_dir/jsem-fails:$REAL_PATH" >"$out" 2>&1 || status=$?
+  [ "$status" = 1 ] || fail "the probe with a ghc that cannot open the semaphore exited $status, not 1"
+  assert_contains "$out" 'cabal_semaphore_x: semOpen: does not exist (No such file or directory)'
+  status=0
+  probe "$case_dir/ghc-fails:$REAL_PATH" >"$out" 2>&1 || status=$?
+  [ "$status" = 2 ] || fail "the probe with a ghc that fails without the semaphore too exited $status, not 2"
+  assert_contains "$out" 'fails on a one-line module even without the semaphore:'
+  assert_contains "$out" 'ghc: cannot find the base package'
+  pass 'toolchain/check-semaphore.sh finds the semaphore usable here, reports GHC'"'"'s semOpen error with 1, and exits 2 when it cannot run'
+else
+  printf 'note: no cc or no ghc on PATH, so the real toolchain/check-semaphore.sh was tested only without them\n'
+  pass 'toolchain/check-semaphore.sh exits 2 without a ghc or a C compiler'
+fi
+
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 out=$case_dir/no-zlib
@@ -2144,8 +2218,7 @@ assert_contains "$out" "the newest build log, $CABAL_DIR/logs/ghc-9.14.1/splitmi
 assert_contains "$out" 'Building library line 4'
 assert_contains "$out" 'Building library line 32'
 assert_contains "$out" 'cabal_semaphore_y: semOpen: does not exist (no such file or directory)'
-assert_contains "$out" "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it"
-assert_contains "$out" 'semaphore: False to cabal-native-opt.project.local'
+assert_contains "$out" "GHC could not open cabal's build semaphore (semOpen, see above): deploy again with --no-semaphore, which builds without it"
 assert_contains "$out" 'the build of wiki-server failed (see above), so nothing was changed'
 assert_lacks "$out" 'zlib-0.7.1.0-old.log'
 assert_lacks "$out" 'an earlier build'
@@ -2153,6 +2226,46 @@ assert_lacks "$out" 'lacks a C library'
 assert_lacks "$EVENTS" 'systemctl stop'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
 pass "a build that fails in a dependency's log shows that log's path and last lines, and a semOpen in it points at the semaphore; nothing is installed"
+
+# The build semaphore. A probe that finds it unusable, or that cannot run,
+# builds without it; --semaphore and --no-semaphore decide without the
+# probe, either way.
+: >"$EVENTS"
+out=$case_dir/semaphore-unusable
+FAKE_SEMAPHORE=1 deploy --prefix "$pre" >"$out" 2>&1 || fail 'a deploy whose probe found the semaphore unusable failed'
+assert_contains "$out" 'build semaphore: not usable (wiki_semaphore_probe_1: semOpen: does not exist (No such file or directory)), building without it'
+assert_contains "$EVENTS" 'check-semaphore'
+assert_contains "$EVENTS" 'wiki-server -postgres --no-semaphore'
+assert_lacks "$EVENTS" ' --semaphore'
+: >"$EVENTS"
+out=$case_dir/semaphore-no-probe
+FAKE_SEMAPHORE=2 deploy --prefix "$pre" >"$out" 2>&1 || fail 'a deploy whose probe could not run failed'
+assert_contains "$out" 'build semaphore: not usable (the probe could not run: no ghc (ghc) to run the probe), building without it'
+assert_contains "$EVENTS" 'wiki-server -postgres --no-semaphore'
+assert_lacks "$EVENTS" ' --semaphore'
+: >"$EVENTS"
+out=$case_dir/semaphore-forced
+FAKE_SEMAPHORE=1 deploy --prefix "$pre" --semaphore >"$out" 2>&1 || fail '--semaphore failed'
+assert_contains "$out" 'build semaphore: on, as --semaphore asks (not probed)'
+assert_lacks "$EVENTS" 'check-semaphore'
+assert_contains "$EVENTS" 'wiki-server -postgres --semaphore'
+: >"$EVENTS"
+out=$case_dir/semaphore-refused
+deploy --prefix "$pre" --no-semaphore >"$out" 2>&1 || fail '--no-semaphore failed'
+assert_contains "$out" 'build semaphore: off, as --no-semaphore asks'
+assert_lacks "$EVENTS" 'check-semaphore'
+assert_contains "$EVENTS" 'wiki-server -postgres --no-semaphore'
+assert_lacks "$EVENTS" ' --semaphore'
+# Not remembered: the next run probes again.
+: >"$EVENTS"
+deploy --prefix "$pre" >"$case_dir/semaphore-again" 2>&1 || fail 'the deploy after --no-semaphore failed'
+assert_contains "$EVENTS" 'check-semaphore'
+assert_contains "$EVENTS" 'wiki-server -postgres --semaphore'
+# --no-build builds nothing, so it probes nothing.
+: >"$EVENTS"
+deploy --prefix "$pre" --no-build >"$case_dir/semaphore-no-build" 2>&1 || fail 'the deploy with --no-build failed'
+assert_lacks "$EVENTS" 'check-semaphore'
+pass 'the build uses the semaphore when the probe finds it usable, not when the probe fails or cannot run, and --semaphore and --no-semaphore decide without the probe, for one run'
 
 out=$case_dir/stop
 deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'
