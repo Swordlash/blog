@@ -69,6 +69,13 @@ A work package is done only when all of these hold, and the session says so with
 A gate that cannot be run (toolchain missing, network down) is reported as not run, never as
 passed.
 
+A change that touches no Haskell of the repository's own packages (a pin bump of
+haskell-halogen, a toolchain script, a workflow, documentation) needs only the native
+type-check locally (`npm run build-native`, or the session's type-check script); CI
+runs the tests on the pushed head (the owner, 2026-11-03: "wystarczy typecheck i CI
+niech robi testy"). The full gate above is for a work package that changes the
+packages.
+
 ## Toolchain
 
 Pins follow haskell-halogen exactly and are bumped together with its `source-repository-package`
