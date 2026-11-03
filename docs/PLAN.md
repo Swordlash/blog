@@ -371,12 +371,11 @@ In the order to do it, unless the owner says otherwise.
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
-  WP5.45 did all of it but one point, which waits for the owner: an editor that does
-  not widen when the sidebar is folded was not reproduced (in Chromium at 1600px it
-  widens from 1272px to 1528px); which browser, and which width of the window? Left
-  out: C-like preprocessor macros (the owner: "probably not"; math macros and boxes
-  cover the need); grammar checking beyond the browser's spelling, which CodeMirror
-  already has on (later, perhaps LanguageTool; Grammarly offers no SDK any more).
+  WP5.45 did all of it; an editor that did not widen when the sidebar is folded was
+  not reproduced by either side and is dropped (the owner, 2026-11-03). Left out:
+  C-like preprocessor macros (the owner: "probably not"; math macros and boxes cover
+  the need); grammar checking beyond the browser's spelling, which CodeMirror already
+  has on (later, perhaps LanguageTool; Grammarly offers no SDK any more).
 - **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
   powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
   public blog spaces). A signed-in user gets an Atom feed of their own notifications at a
@@ -570,9 +569,6 @@ needs. Each was true when its package merged; check before relying on one.
   is not refused there either). The wiki-app `Accounts` record carries four passkey
   methods; the assistant's settings always show the password field, since they do not
   know whether the user has one.
-- With the sidebar folded the editor should take the screen's width. In Chromium at
-  1600px it does (1272px to 1528px); the owner saw it stay narrow, and the browser and
-  window width are not known yet (WP5.37).
 - Footnotes (WP5.42): in the editor's "Show preview" a footnote's number only scrolls
   to the note, with no history entry, since an entry there would take the Back that
   "Back to edit" makes. The hover is a native `title` with the note's plain text.
