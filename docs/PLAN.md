@@ -368,6 +368,24 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.48 A deployment under one prefix** (the owner, 2026-11-03, putting the server
+  up at a company on a user without sudo: "nie chcę, żeby się instalowało w home,
+  musimy mieć możliwość dać prefiks"). `toolchain/deploy-local.sh --prefix DIR`
+  replaces `--dir`: the deployment (`bin/`, `app/`, `data/`), its state (`state/`, with
+  the PostgreSQL files) and the toolchain the build needs (`toolchain/`: ghcup's
+  compilers, the wasm sysroot, Node, the cabal store; `--toolchain DIR` names one to
+  share between deployments) go under that directory, and nothing under the home
+  directory but the systemd user unit, which systemd reads from
+  `~/.config/systemd/user` alone. `--prefix` is given on every run, `--status` and
+  `undeploy-local.sh` included, since nothing in home remembers it; outside the home
+  directory it needs no `--force` (the marker still protects a directory the script
+  did not make). The bootstrap takes the directory it installs the toolchain under
+  from `WIKI_TOOLCHAIN_HOME` (default the home directory, so that nothing changes for
+  developers and CI) and exports ghcup's and cabal's own variables for it; the deploy
+  runs it in `build` mode (no Chromium, no fourmolu, so no root for Chromium's
+  libraries). Tests against the fake systemd (`test-deploy-local.sh`) and in
+  `test-bootstrap.sh`; the README's deployment section.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
