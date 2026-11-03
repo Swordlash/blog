@@ -648,6 +648,35 @@ undeploy --prefix "$pre" --purge >"$out" 2>&1 || fail 'undeploy --purge under th
 assert_contains "$out" 'and the toolchain under it'
 pass 'undeploy --purge under the prefix deletes the toolchain and the state too, and keeps the data'
 
+# A deployment stopped without --purge keeps its state and loses its unit;
+# another of the same name made elsewhere meanwhile owns the unit, and a run
+# for the stopped one must not take it.
+fixture two-prefixes
+p=$(free_port 127.0.0.1)
+deploy --static --prefix "$case_dir/a" --port "$p" --no-firewall >"$case_dir/a-first" 2>&1 || fail 'the deployment at a failed'
+deploy --prefix "$case_dir/a" --stop >"$case_dir/a-stop" 2>&1 || fail 'stopping a failed'
+[ -f "$case_dir/a/state/wiki-demo.state" ] || fail 'the stopped deployment lost its state'
+deploy --static --prefix "$case_dir/b" --port "$p" --no-firewall >"$case_dir/b-first" 2>&1 || fail 'the deployment at b failed'
+: >"$EVENTS"
+out=$case_dir/a-undeploy
+if undeploy --prefix "$case_dir/a" >"$out" 2>&1; then fail "undeploying the stopped deployment took b's unit"; fi
+assert_contains "$out" "the deployment wiki-demo is under $case_dir/b: run this with --prefix $case_dir/b"
+out=$case_dir/a-redeploy
+if deploy --prefix "$case_dir/a" --no-build >"$out" 2>&1; then fail "redeploying the stopped deployment took b's unit"; fi
+assert_contains "$out" "run this with --prefix $case_dir/b, or deploy this one under another --name"
+assert_lacks "$EVENTS" 'systemctl'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'b went down'
+out=$case_dir/home-run
+if deploy --no-build >"$out" 2>&1; then fail "a run in the home directory took b's unit"; fi
+assert_contains "$out" "the deployment wiki-demo is under $case_dir/b"
+undeploy --prefix "$case_dir/b" >/dev/null 2>&1
+out=$case_dir/home-unit
+deploy --static --port "$p" --no-firewall >"$case_dir/home-first" 2>&1 || fail 'the home deployment failed'
+if deploy --prefix "$case_dir/a" --no-build >"$out" 2>&1; then fail "a run under a prefix took the home deployment's unit"; fi
+assert_contains "$out" 'the deployment wiki-demo is in the home directory (its unit names no prefix): run this without --prefix'
+undeploy >/dev/null 2>&1
+pass "a run for a stopped deployment does not take the unit of another deployment of the name, under another prefix or in the home directory"
+
 # A deployment made before --prefix, in the home directory, is adopted when
 # named by --prefix: its state moves under it and its toolchain stays home.
 fixture adopted

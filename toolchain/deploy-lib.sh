@@ -150,16 +150,23 @@ adoption_done() {
   adopted_pg_dir=
 }
 
-# A deployment under a prefix leaves one thing in the home directory, its
-# unit, which names the prefix (deploy-local.sh writes "# Prefix: DIR" into
-# it). Found by a run without --prefix, or with another, which would take
-# the unit for its own and replace it, the run stops and says what to give
-# (and what else it could do, when the caller set prefix_hint).
+# The unit in the home directory names the prefix of the deployment it
+# belongs to (deploy-local.sh writes "# Prefix: DIR" into it; a deployment
+# in the home directory writes none). A run named for another place, with
+# or without --prefix, would take that unit for its own and replace or
+# remove it, even when its own place has a state (a deployment stopped
+# without --purge keeps its state and loses its unit, and another of the
+# name can be made elsewhere meanwhile), so the run stops and says what to
+# give (and what else it could do, when the caller set prefix_hint). A
+# deployment being adopted is the unit's own: its state names the prefix.
 require_prefix_of_unit() {
-  [ ! -f "$state_file" ] && [ -f "$unit_file" ] || return 0
+  [ -f "$unit_file" ] && [ -z "${adoptable:-}" ] || return 0
   elsewhere=$(sed -n 's/^# Prefix: //p' "$unit_file" | head -n 1)
-  [ -n "$elsewhere" ] && [ "$elsewhere" != "$prefix" ] || return 0
-  die "the deployment $name is under $elsewhere: run this with --prefix $elsewhere${prefix_hint:-}"
+  [ "$elsewhere" != "$prefix" ] || return 0
+  if [ -n "$elsewhere" ]; then
+    die "the deployment $name is under $elsewhere: run this with --prefix $elsewhere${prefix_hint:-}"
+  fi
+  die "the deployment $name is in the home directory (its unit names no prefix): run this without --prefix${prefix_hint:-}"
 }
 
 # One value from a state file (the current deployment's unless a file is given).
