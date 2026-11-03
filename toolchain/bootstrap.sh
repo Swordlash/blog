@@ -4,6 +4,7 @@
 #   sh toolchain/bootstrap.sh             # toolchain, then warm the store
 #   sh toolchain/bootstrap.sh toolchain   # the toolchain only
 #   sh toolchain/bootstrap.sh build       # what a build needs: no Chromium, no fourmolu
+#   sh toolchain/bootstrap.sh native      # the host GHC and cabal alone, for wiki-server
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
@@ -74,6 +75,16 @@
 # image is built with the pins below and the downloads they check, and does not
 # carry a browser it never starts.
 #
+# `native` installs what building wiki-server natively needs and nothing
+# else: GHC and cabal through ghcup, the system packages a native build
+# links with, and cabal's package index; no wasm sysroot, cross compiler,
+# Node, Chromium, fourmolu, alex or happy (cabal builds the last two itself
+# for a native build). toolchain/deploy-local.sh --backend-only runs it, on a
+# machine that downloads the page instead of building it. It does not assume
+# Debian: without dpkg-query it checks only the commands a native build runs
+# (cc, make, curl, git), and the C libraries are found, or reported missing,
+# when wiki-server is built.
+#
 # CI on a self-hosted runner runs it the same way (`toolchain`), and appends
 # what `path` prints to $GITHUB_PATH: one directory per line, in the order
 # GitHub wants them there, where the last line is searched first.
@@ -138,9 +149,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | build | warm | env | path | check | ready) ;;
+  all | toolchain | build | native | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|build|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build|native|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -478,7 +489,8 @@ if [ "$mode" = check ]; then
 fi
 
 # setup.sh deletes its prefix: refuse unsafe state before changing anything.
-guard_wasm_sysroot || exit 1
+# A native install never runs it, and leaves ~/.ghc-wasm alone.
+[ "$mode" = native ] || guard_wasm_sysroot || exit 1
 mkdir -p "$STATE"
 
 say() {
@@ -540,12 +552,30 @@ as_root() {
 # setup.sh runs.
 system_packages() {
   missing=
+  # A native install needs what wiki-server's build runs and links with,
+  # and none of what the wasm toolchain's setup runs (jq, unzip, xz, zstd).
+  if [ "$mode" = native ]; then
+    debian_packages='build-essential curl git libgmp-dev libpq-dev libsodium-dev pkg-config'
+  else
+    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config'
+  fi
   if command -v dpkg-query >/dev/null 2>&1; then
-    for pkg in build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config; do
+    for pkg in $debian_packages; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
         missing="$missing $pkg"
       fi
     done
+  elif [ "$mode" = native ]; then
+    # Not Debian (RHEL, say): the commands alone. The C libraries are
+    # checked by the build of wiki-server, which names their packages.
+    for cmd in cc make curl git; do
+      command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+    done
+    if [ -n "$missing" ]; then
+      say "missing commands:$missing; install them and run this again (the build of wiki-server also needs the development files of GMP, libpq and libsodium, and pkg-config: gmp-devel libpq-devel libsodium-devel pkgconf-pkg-config on RHEL)"
+      exit 1
+    fi
+    return 0
   else
     for cmd in cc make curl git jq unzip xz unzstd; do
       command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
@@ -837,6 +867,17 @@ toolchain() {
   quiet_before=$(wc -c <"$LOG")
   system_packages
   install_native
+  if [ "$mode" = native ]; then
+    update_cabal_index
+    write_env
+    summary="GHC $GHC_VERSION, cabal $CABAL_VERSION; no wasm toolchain, Node, Chromium or fourmolu (native)"
+    if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
+      printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
+    else
+      say "toolchain ready in $(($(date +%s) - started))s: $summary"
+    fi
+    return 0
+  fi
   install_wasm_sysroot
   install_wasm_ghc
   install_node

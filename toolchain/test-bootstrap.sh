@@ -204,6 +204,28 @@ assert_contains "$case_dir/build" 'no Chromium or fourmolu (build)'
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'build did not write the environment file'
 pass 'build installs the compilers and Node, and neither Chromium nor fourmolu'
 
+# What toolchain/deploy-local.sh --backend-only needs: GHC and cabal alone.
+# With no Node, no sysroot, no fourmolu, no alex or happy and no Chromium,
+# `native` installs none of them (any attempt would reach the fake curl, git,
+# npm, cabal install or Playwright and be recorded), leaves a ~/.ghc-wasm it
+# does not recognise alone, and writes the environment file. Without
+# dpkg-query (RHEL, say) it checks the commands a native build runs.
+fixture native
+rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" "$case_dir/bin/alex" "$case_dir/bin/happy" \
+  "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap native >"$case_dir/native"
+[ ! -s "$EVENTS" ] || fail "native installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/native" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'native did not write the environment file'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'native touched ~/.ghc-wasm'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'native installed Node'
+rm "$case_dir/bin/dpkg-query"
+bootstrap native >"$case_dir/native-rhel" 2>&1 || fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
+[ ! -s "$EVENTS" ] || fail "native without dpkg-query installed something: $(cat "$EVENTS")"
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not'
+
 fixture generators
 sysroot
 HAPPY_REPORT=2.1.70
