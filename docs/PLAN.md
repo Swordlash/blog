@@ -53,9 +53,11 @@ confirms it against reality and the plan is amended if it does not hold.
    are available from the same pin and so far unused (WP1.5 chose plain combinators and
    one CSS file). The owner's rule: **use the quoters where they simplify the code, and
    for HTML they usually do**, so a package that writes a view of any size should reach
-   for `hh` rather than nest combinators, and say so in its report; the first use adds
-   `th` to `wiki-app`'s dependencies and native `alex` and `happy < 2.2` to the wasm job
-   (a one-off `ghc-lib-parser` build on both backends, accepted). `clay` is optional:
+   for `hh` rather than nest combinators, and say so in its report; the first use added
+   `th` to `wiki-app`'s dependencies, and until haskell-halogen 893fefa native `alex`
+   and `happy < 2.2` to the wasm job for a one-off `ghc-lib-parser` build; since that
+   pin (2026-11-03) the quotes are parsed by the compiling GHC's own `ghc` library,
+   so neither is needed. `clay` is optional:
    `web/style.css` stays the home of the stylesheet. The pin is bumped deliberately, in
    its own commit.
 4. **Targets: native GHC and wasm.** Not the JavaScript backend: `th` does not build
