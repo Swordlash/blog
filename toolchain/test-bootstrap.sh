@@ -221,9 +221,31 @@ assert_contains "$case_dir/native" 'no wasm toolchain, Node, Chromium or fourmol
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'native did not write the environment file'
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'native touched ~/.ghc-wasm'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'native installed Node'
+# The machine without dpkg-query. Removing the fake one is not enough: on a
+# Debian host the PATH would still reach the host's /usr/bin/dpkg-query,
+# which reports the host's own packages (GitHub's runner has no
+# build-essential). So these runs get a PATH of the fake tools and a
+# directory of links to every command in /usr/bin and /bin but dpkg-query.
+# env sets that PATH for the one command, so sh is found among the links.
 rm "$case_dir/bin/dpkg-query"
-bootstrap native >"$case_dir/native-rhel" 2>&1 || fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
+no_dpkg=$case_dir/no-dpkg
+mkdir "$no_dpkg"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  if [ "$name" = dpkg-query ] || [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$no_dpkg/$name" ] || [ -L "$no_dpkg/$name" ] || ln -s "$cmd" "$no_dpkg/$name"
+done
+env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel" 2>&1 ||
+  fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
 [ ! -s "$EVENTS" ] || fail "native without dpkg-query installed something: $(cat "$EVENTS")"
+if grep -F 'Debian packages' "$case_dir/native-rhel" >/dev/null; then fail 'native without dpkg-query checked Debian packages'; fi
+# The branch without dpkg-query is silent when the commands are there, so
+# take make away too: only that branch names a missing command.
+rm -f "$no_dpkg/make"
+if env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel-no-make" 2>&1; then
+  fail 'native without dpkg-query or make succeeded'
+fi
+assert_contains "$case_dir/native-rhel-no-make" 'missing commands: make; install them and run this again'
 pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not'
 
 fixture generators
