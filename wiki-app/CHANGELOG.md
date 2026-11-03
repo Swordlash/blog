@@ -13,7 +13,8 @@ of its own: the zip archive, the reader's selection, the layout and the
 contents panel, CodeMirror's text and selection in UTF-16 code units, the
 live preview's channel, the assistant's SDKs and the vault. The entry of
 the session history the shell numbers, and the preview's mark on it, are
-kept as text now (`"12"`, `"12+preview"`) rather than as an object. The
+kept as text now (`"12"`, `"12+preview"`) rather than as an object; an
+entry the previous version wrote keeps its number and its mark. The
 search box's `/` shortcut and its closing on a press outside are
 subscriptions of the box now, heard on the window and the document.
 

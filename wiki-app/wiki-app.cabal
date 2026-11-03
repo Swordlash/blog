@@ -295,6 +295,7 @@ test-suite wiki-app-test
         Test.Blog
         Test.Counting
         Test.Demo
+        Test.Entries
         Test.Guide
         Test.Help
         Test.Export
@@ -358,6 +359,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Comments
       Test.Browser.Contents
       Test.Browser.Editor
+      Test.Browser.Entries
       Test.Browser.Export
       Test.Browser.Favicon
       Test.Browser.History

@@ -12,6 +12,7 @@ import Test.Browser.Assistant qualified as Assistant
 import Test.Browser.Comments qualified as Comments
 import Test.Browser.Contents qualified as Contents
 import Test.Browser.Editor qualified as Editor
+import Test.Browser.Entries qualified as Entries
 import Test.Browser.Export qualified as Export
 import Test.Browser.Favicon qualified as Favicon
 import Test.Browser.History qualified as History
@@ -72,6 +73,7 @@ spec = do
   describe "One space at a time" (Spaces.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
+  describe "Wiki.App.Browser" Entries.spec
   describe "Room to write in" (Workspace.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
   describe "Wiki.App.View.History" (History.spec BrowserDOM)

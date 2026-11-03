@@ -7,6 +7,7 @@ import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
 import Test.Blog qualified as Blog
 import Test.Demo qualified as Demo
+import Test.Entries qualified as Entries
 import Test.Export qualified as Export
 import Test.Favicon qualified as Favicon
 import Test.Guide qualified as Guide
@@ -40,6 +41,7 @@ main = do
       Http.spec
       Persist.spec
       Demo.spec
+      Entries.spec
       Guide.spec
       Help.spec
       Export.spec

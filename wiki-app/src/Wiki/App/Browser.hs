@@ -18,6 +18,9 @@ module Wiki.App.Browser
   , followArticleLink
   , setDocumentTitle
   , setFavicon
+  , EntryState (..)
+  , readEntryState
+  , writeEntryState
   , historyEntry
   , historyGo
   , replacingEntry
@@ -49,15 +52,15 @@ module Wiki.App.Browser
 where
 
 import Data.Aeson (FromJSON (..), decodeStrict', withObject, (.:))
-import Data.Foreign (stringToForeign)
+import Data.Foreign (foreignToBool, foreignToInt, stringToForeign)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.MediaType (MediaType (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, isNull, jsValText, toJSBytes, toJSText)
-import Halogen.JSBits.Fields (inlineJS)
+import Halogen.JSBits (Inert, JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, isNull, jsValText, toJSBytes, toJSText)
+import Halogen.JSBits.Fields (Member (..), inlineJS, jsFields)
 import Halogen.JSBits.Promise (JSError, waitCatch)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -104,6 +107,21 @@ $( browserJS
 -- their time zone: the one call with an options object, which no field
 -- takes.
 $(inlineJS "js_local_time" "new Date($1).toLocaleString(undefined, { dateStyle: \"medium\", timeStyle: \"short\" })" [t|Double -> IO JSText|])
+
+-- | An entry's state as the versions before WP5.47 wrote it: an object
+-- with the number as @wikiEntry@ and the preview's mark as @wikiPreview@.
+-- A tab open across the deployment still has such entries in its session
+-- history, and they are read so that they keep their numbers, which
+-- 'historyGo' counts by. The text written now has neither member.
+newtype PreviousEntry = PreviousEntry JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''PreviousEntry
+     [ Fixed "wikiEntry" [t|Maybe JSVal|]
+     , Fixed "wikiPreview" [t|Maybe JSVal|]
+     ]
+ )
 
 -- | Where a click on a link leads, in HTML the application did not build
 -- element by element (a page's Markdown, rendered by
@@ -271,13 +289,19 @@ data EntryState = EntryState
   { number :: Maybe Int
   , preview :: Bool
   }
+  deriving (Eq, Show)
 
 readEntryState :: JSVal -> EntryState
 readEntryState value
   | isNull value = EntryState {number = Nothing, preview = False}
+  | Just number <- previous.wikiEntry = EntryState {number = Just (foreignToInt number), preview = marked}
+  | marked = EntryState {number = Nothing, preview = True}
   | otherwise =
       let (digits, rest) = T.span isDigit (jsValText value)
        in EntryState {number = readMaybe digits, preview = rest == "+preview"}
+  where
+    previous = PreviousEntry value
+    marked = maybe False foreignToBool previous.wikiPreview
 
 writeEntryState :: EntryState -> JSVal
 writeEntryState EntryState {number, preview} =
