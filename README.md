@@ -789,7 +789,8 @@ With `--server`, nothing in this mode runs Node, and it needs only GHC and cabal
 `toolchain/bootstrap.sh native`, which installs them through ghcup (under
 `<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
 wasm sysroot, Node, Chromium or fourmolu. On Debian it installs the system packages
-when it may; elsewhere (RHEL, say) it checks only `cc`, `make`, `curl` and `git`.
+when it may; elsewhere (RHEL, say) it installs none. Either way it then runs
+`toolchain/check-native.sh` (below).
 Reading GitHub's answers, Tailscale's status and the server's settings, and unpacking
 the zip, take `python3` (or `jq` and `unzip`); the checks that the service answers
 go through `curl`; the check that the port is free through `ss`, when there is one.
@@ -797,26 +798,40 @@ What Node did otherwise is done without it: the compressed copies of the page's
 files are gzip copies that `wiki-server compress` writes, rather than brotli copies
 (browsers take either, brotli's being a little smaller).
 
-`wiki-server` links with C libraries whose development files the build needs; the
-deploy checks for them before it downloads or builds anything, and names the
-packages:
+`wiki-server` links with C libraries whose development files the build needs. A
+server deploy that builds `wiki-server` (with `--backend-only` or without) first runs
+`toolchain/check-native.sh`, before it downloads or builds anything; the script
+prints `ok` or `missing` for each command and library, names the packages of what is
+missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or Ubuntu
+(`dpkg-query` on `PATH`) a missing package is only a warning, since the bootstrap
+installs it next, and the check runs again after the bootstrap; elsewhere the deploy
+stops there. SQLite needs nothing: the build compiles its own copy.
 
 | Library    | Debian, Ubuntu  | RHEL, Fedora              |
 | ---------- | --------------- | ------------------------- |
 | GMP        | `libgmp-dev`    | `gmp-devel`               |
 | libpq      | `libpq-dev`     | `libpq-devel`             |
+| zlib       | `zlib1g-dev`    | `zlib-devel`              |
 | libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)  |
 | pkg-config | `pkg-config`    | `pkgconf-pkg-config`      |
 
 A library built from source into a directory of your own is found through the
-environment the deploy is run in, which reaches cabal untouched: `PKG_CONFIG_PATH`,
-`LIBRARY_PATH`, `C_INCLUDE_PATH` and `CPATH` at build time. libsodium, for one, where
+environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
+`C_INCLUDE_PATH`, `CPATH` and `PKG_CONFIG_PATH` at build time. zlib is found
+through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH`. libsodium is
+found through neither: its Haskell bindings include `sodium.h` and link
+`-lsodium` without pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
+the check compiles and links a small program the same way. Built from source, where
 RHEL has no package:
 
 ```sh
 ./configure --prefix=$HOME/opt/libsodium --disable-shared --enable-static --with-pic && make install
-PKG_CONFIG_PATH=$HOME/opt/libsodium/lib/pkgconfig sh toolchain/deploy-local.sh ... --backend-only
+LIBRARY_PATH=$HOME/opt/libsodium/lib C_INCLUDE_PATH=$HOME/opt/libsodium/include \
+  PKG_CONFIG_PATH=$HOME/opt/libsodium/lib/pkgconfig sh toolchain/deploy-local.sh ... --backend-only
 ```
+
+`PKG_CONFIG_PATH` is there for the check: when pkg-config finds a libsodium that the
+compiler does not, the check names the two directories to give the build.
 
 A systemd unit does not inherit the shell's environment, so when the deploy runs
 with `LD_LIBRARY_PATH` set (a shared library in a directory of your own), it writes
@@ -1465,7 +1480,7 @@ browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
 release zip, checked against a pinned hash, or built from Hackage where GitHub's
 downloads are refused, as in Claude Code's cloud sessions); and native `alex` and `happy` (pinned, happy below 2.2) into the same
 directory, which the wasm build of `ghc-lib-parser`, under the `hh` quoter, runs from
-`PATH`. Debian packages it needs (GMP's, libpq's and libsodium's headers, `zstd`, `jq`
+`PATH`. Debian packages it needs (GMP's, libpq's, zlib's and libsodium's headers, `zstd`, `jq`
 and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
@@ -1729,7 +1744,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
 2. Install, once, the Debian packages the bootstrap and Chromium need, since the
    runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
-   xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config`. Chromium's are those `npx playwright install-deps
+   xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev`. Chromium's are those `npx playwright install-deps
    --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
    prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64
    libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64

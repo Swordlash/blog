@@ -15,13 +15,22 @@
 # It is meant for a Linux machine of one's own reached over Tailscale (x86_64
 # Debian or Ubuntu, as CI's runner), and does, in order:
 #
-#   1. Build: toolchain/bootstrap.sh build (installs or checks the toolchain a
-#      build needs: the compilers, the wasm sysroot and Node, with neither
-#      Chromium nor fourmolu, so no root for Chromium's libraries), npm ci
-#      and `npm run build-wasm-opt`, the production build with every package at
-#      -O2 (cabal-wasm-opt.project), into dist-newstyle/wasm-opt/public/app;
-#      with --server also wiki-server, natively with this repository's packages
-#      at -O2 (cabal-native-opt.project, into dist-newstyle/native-opt).
+#   1. Build: with --server, first toolchain/check-native.sh, which checks
+#      the commands and C libraries wiki-server's native build needs (GMP,
+#      libpq, zlib, libsodium) before anything is downloaded or built, and
+#      names their Debian and RHEL packages; a library built elsewhere is
+#      found through LIBRARY_PATH, C_INCLUDE_PATH, CPATH or PKG_CONFIG_PATH,
+#      which reach cabal untouched. On Debian or Ubuntu (dpkg-query on PATH)
+#      a missing package is a warning, since the bootstrap installs it, and
+#      the check runs again after the bootstrap; elsewhere the deploy stops
+#      there. Then toolchain/bootstrap.sh build
+#      (installs or checks the toolchain a build needs: the compilers, the
+#      wasm sysroot and Node, with neither Chromium nor fourmolu, so no root
+#      for Chromium's libraries), npm ci and `npm run build-wasm-opt`, the
+#      production build with every package at -O2 (cabal-wasm-opt.project),
+#      into dist-newstyle/wasm-opt/public/app; with --server also
+#      wiki-server, natively with this repository's packages at -O2
+#      (cabal-native-opt.project, into dist-newstyle/native-opt).
 #      Any failure stops here, before the running service is touched.
 #      With --backend-only the page is not built here: it is downloaded from
 #      the GitHub release where CI keeps it (see --backend-only below), and
@@ -175,12 +184,7 @@
 #                    the files in place of the brotli ones, the checks that the
 #                    service answers go through curl, the reading of tailscale status
 #                    through python3 (or jq), and the check that the port is free
-#                    through ss when it is there. Before anything is downloaded or
-#                    built it checks the C libraries wiki-server links with (GMP,
-#                    libpq, libsodium, through cc, pg_config and pkg-config), naming
-#                    their Debian and RHEL packages; one built elsewhere is found
-#                    through PKG_CONFIG_PATH, LIBRARY_PATH, C_INCLUDE_PATH or CPATH,
-#                    which reach cabal untouched. With --static, the demo is served
+#                    through ss when it is there. With --static, the demo is served
 #                    by server.mjs under Node, as when it is built here, and
 #                    compress.mjs writes its brotli copies; Node is the managed one
 #                    under the toolchain directory, or a Node 24 or later on PATH,
@@ -1014,9 +1018,41 @@ server_cabal() {
   (cd "$ROOT" && cabal "$1" -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
 }
 
-# wiki-server's build with --backend-only, on a machine that may lack a C
-# library it links with: a failure that names one gets the packages that
-# provide them, on Debian and on RHEL, named.
+# The check of what wiki-server's native build needs from the machine
+# (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium. It
+# runs before anything is downloaded or built, so that a missing C library
+# stops the deploy at once, with the packages that provide it, and not after
+# an hour of compiling. It sees this script's environment, as the build does.
+# On Debian or Ubuntu (dpkg-query on PATH) the bootstrap installs the
+# missing packages, so a failed check there is a warning: the deploy goes
+# on, and recheck_native runs the check again after the bootstrap. Elsewhere
+# nothing installs them, and the deploy stops.
+check_native() {
+  say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
+  if check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+    printf '%s\n' "$check_output"
+    return 0
+  fi
+  printf '%s\n' "$check_output"
+  command -v dpkg-query >/dev/null 2>&1 ||
+    die "the native build of wiki-server needs what is missing above; nothing was changed"
+  check_missing=$(printf '%s\n' "$check_output" | sed -n 's/^Missing for the native build of wiki-server: \(.*\)[.]$/\1/p')
+  warn "missing for the native build of wiki-server: ${check_missing:-see above}; the bootstrap installs the Debian packages next, and the check runs again after it"
+  native_recheck=1
+}
+
+# The check again, after the bootstrap installed the Debian packages that
+# check_native found missing. This time a failure stops the deploy, before
+# anything is built.
+recheck_native() {
+  say "checking again what the native build of wiki-server needs, after the bootstrap"
+  sh "$ROOT/toolchain/check-native.sh" ||
+    die "the native build of wiki-server still needs what is missing above; nothing was changed"
+}
+
+# wiki-server's build with --backend-only. check_native has run before it,
+# but a build can still fail on a C library (one the check found that does
+# not link, say), so a failure that names one points at the check again.
 server_build_native() {
   build_log=$(mktemp)
   if server_cabal build >"$build_log" 2>&1; then
@@ -1025,40 +1061,18 @@ server_build_native() {
     return 0
   fi
   cat "$build_log" >&2
-  if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|libsodium|gmp' "$build_log"; then
-    warn "the build of wiki-server lacks a C library or pkg-config (see above). It needs the development packages of GMP, libpq and libsodium, and pkg-config:"
-    printf '    Debian, Ubuntu: sudo apt-get install libgmp-dev libpq-dev libsodium-dev pkg-config\n' >&2
-    printf '    RHEL, Fedora:   sudo dnf install gmp-devel libpq-devel libsodium-devel pkgconf-pkg-config   (libsodium from EPEL on RHEL)\n' >&2
+  if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|sodium|gmp|zlib' "$build_log"; then
+    warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
   fi
   rm -f "$build_log"
   die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
-# The C libraries wiki-server links with, checked before anything is
-# downloaded or built with --backend-only, on a machine (RHEL, say) where
-# the bootstrap installs no system packages: libsodium through pkg-config,
-# libpq through pg_config (or pkg-config), GMP's header through the C
-# compiler. A library built from source into a prefix of one's own is found
-# through PKG_CONFIG_PATH (and C_INCLUDE_PATH for a header), which the
-# build is given untouched.
-native_libraries() {
-  missing_libraries=
-  if ! command -v pkg-config >/dev/null 2>&1; then
-    missing_libraries="pkg-config (Debian: pkg-config; RHEL: pkgconf-pkg-config)"
-  elif ! pkg-config --exists libsodium; then
-    missing_libraries="libsodium (Debian: libsodium-dev; RHEL: libsodium-devel, from EPEL; or one built from source, found through PKG_CONFIG_PATH=<its lib/pkgconfig>)"
-  fi
-  if ! command -v pg_config >/dev/null 2>&1 && ! { command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libpq; }; then
-    missing_libraries="${missing_libraries:+$missing_libraries; }libpq (Debian: libpq-dev; RHEL: libpq-devel), which gives pg_config"
-  fi
-  if command -v cc >/dev/null 2>&1 && ! printf '#include <gmp.h>\n' | cc -E -x c - >/dev/null 2>&1; then
-    missing_libraries="${missing_libraries:+$missing_libraries; }GMP's header gmp.h (Debian: libgmp-dev; RHEL: gmp-devel)"
-  fi
-  [ -z "$missing_libraries" ] ||
-    die "wiki-server's build needs C libraries this machine lacks: $missing_libraries. Install them and run this again; a library built elsewhere is found through PKG_CONFIG_PATH in the environment this is run in, as for libsodium: ./configure --prefix=<dir> --disable-shared --enable-static --with-pic && make install, then PKG_CONFIG_PATH=<dir>/lib/pkgconfig"
-}
-
 if [ -n "$build" ]; then
+  # wiki-server is built natively in server mode, whether the page is
+  # downloaded or built here: its check comes before anything else.
+  native_recheck=
+  [ "$mode" != server ] || check_native
   if [ -n "$backend_only" ] && [ "$mode" != server ]; then
     # The demo's page from GitHub: nothing is built here. Node, which
     # serves the page and writes its brotli copies, is all it installs.
@@ -1067,7 +1081,6 @@ if [ -n "$build" ]; then
     say "installing or checking Node, which serves the demo (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" node
   elif [ -n "$backend_only" ]; then
-    native_libraries
     # The page first: a REF with no page stops the deploy before anything
     # is installed or built.
     resolve_page
@@ -1081,6 +1094,7 @@ if [ -n "$build" ]; then
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" build
   fi
+  [ -z "$native_recheck" ] || recheck_native
 fi
 # The environment npm's own entry points load, for npm and Node here.
 if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then

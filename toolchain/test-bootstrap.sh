@@ -24,6 +24,7 @@ fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/repo/toolchain"
   cp "$SOURCE" "$case_dir/repo/toolchain/bootstrap.sh"
+  cp "$SOURCE_DIR/check-native.sh" "$case_dir/repo/toolchain/"
   HOME=$case_dir/home
   EVENTS=$case_dir/events
   CACHE=$case_dir/cache/chromium_headless_shell-1234
@@ -208,11 +209,36 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu'
 # With no Node, no sysroot, no fourmolu, no alex or happy and no Chromium,
 # `native` installs none of them (any attempt would reach the fake curl, git,
 # npm, cabal install or Playwright and be recorded), leaves a ~/.ghc-wasm it
-# does not recognise alone, and writes the environment file. Without
-# dpkg-query (RHEL, say) it checks the commands a native build runs.
+# does not recognise alone, and writes the environment file. Then, on
+# Debian or not, it runs toolchain/check-native.sh. What that script checks
+# is faked, so that the result does not depend on the host: cc preprocesses
+# anything and links the libsodium probe unless SODIUM_MISSING is set,
+# pkg-config knows zlib and libpq, and make and pg_config answer.
 fixture native
 rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" "$case_dir/bin/alex" "$case_dir/bin/happy" \
   "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+cat >"$case_dir/bin/cc" <<'EOF'
+#!/bin/sh
+output= sodium=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) output=$2; shift ;;
+    -lsodium) sodium=1 ;;
+  esac
+  shift
+done
+if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
+if [ -n "$sodium" ] && [ -n "${SODIUM_MISSING:-}" ]; then
+  printf 'cannot find -lsodium\n' >&2
+  exit 1
+fi
+printf '#!/bin/sh\n' >"$output"
+chmod +x "$output"
+EOF
+printf '#!/bin/sh\ncase $* in "--exists zlib" | "--exists libpq") exit 0 ;; esac\nexit 1\n' >"$case_dir/bin/pkg-config"
+printf '#!/bin/sh\nprintf "/usr/lib/postgresql/17/bin\\n"\n' >"$case_dir/bin/pg_config"
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
+chmod +x "$case_dir/bin/cc" "$case_dir/bin/pkg-config" "$case_dir/bin/pg_config" "$case_dir/bin/make"
 mkdir -p "$HOME/.ghc-wasm"
 printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
 bootstrap native >"$case_dir/native"
@@ -221,19 +247,22 @@ assert_contains "$case_dir/native" 'no wasm toolchain, Node, Chromium or fourmol
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'native did not write the environment file'
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'native touched ~/.ghc-wasm'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'native installed Node'
+# The Debian packages are all installed (the fake dpkg-query says so), but
+# the check still finds a library that does not link, and stops the run.
+if SODIUM_MISSING=1 bootstrap native >"$case_dir/native-no-sodium" 2>&1; then fail 'native without libsodium succeeded'; fi
+assert_contains "$case_dir/native-no-sodium" 'missing  libsodium'
+assert_contains "$case_dir/native-no-sodium" 'Debian, Ubuntu: sudo apt-get install libsodium-dev'
+assert_contains "$case_dir/native-no-sodium" 'the native build of wiki-server needs what is missing above'
 # The machine without dpkg-query. Removing the fake one is not enough: on a
 # Debian host the PATH would still reach the host's /usr/bin/dpkg-query,
 # which reports the host's own packages (GitHub's runner has no
 # build-essential). So these runs get a PATH of the fake tools and a
 # directory of links to the commands in /usr/bin and /bin, without
 # dpkg-query, cc and make. env sets that PATH for the one command, so sh is
-# found among the links. Of the commands this branch checks (cc, make, curl
-# and git), all four are fakes, so the result does not depend on what the
-# host has installed.
+# found among the links. Of the commands the check looks up (cc, make, curl,
+# git and pkg-config), all are fakes, so the result does not depend on what
+# the host has installed.
 rm "$case_dir/bin/dpkg-query"
-printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/cc"
-printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
-chmod +x "$case_dir/bin/cc" "$case_dir/bin/make"
 no_dpkg=$case_dir/no-dpkg
 mkdir "$no_dpkg"
 for cmd in /usr/bin/* /bin/*; do
@@ -246,14 +275,16 @@ env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" nat
   fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
 [ ! -s "$EVENTS" ] || fail "native without dpkg-query installed something: $(cat "$EVENTS")"
 if grep -F 'Debian packages' "$case_dir/native-rhel" >/dev/null; then fail 'native without dpkg-query checked Debian packages'; fi
-# The branch without dpkg-query is silent when the commands are there, so
-# take the fake make away too: only that branch names a missing command.
+# The check is silent when everything is there, so take the fake make away
+# too: the check names it, with its packages.
 rm "$case_dir/bin/make"
 if env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel-no-make" 2>&1; then
   fail 'native without dpkg-query or make succeeded'
 fi
-assert_contains "$case_dir/native-rhel-no-make" 'missing commands: make; install them and run this again'
-pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not'
+assert_contains "$case_dir/native-rhel-no-make" 'missing  make'
+assert_contains "$case_dir/native-rhel-no-make" 'RHEL, Fedora:   sudo dnf install make'
+[ ! -s "$EVENTS" ] || fail "native without make installed something: $(cat "$EVENTS")"
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`
