@@ -193,6 +193,10 @@ state_write() {
     printf 'mode=%s\n' "${mode:-static}"
     printf 'admin_port=%s\n' "${admin_port:-}"
     printf 'https=%s\n' "${https:-}"
+    printf 'way=%s\n' "${way:-}"
+    printf 'tls_cert=%s\n' "${tls_cert:-}"
+    printf 'tls_key=%s\n' "${tls_key:-}"
+    printf 'tls_ca=%s\n' "${tls_ca:-}"
     printf 'https_host=%s\n' "${https_host:-}"
     printf 'serve_port=%s\n' "${serve_port:-}"
     printf 'db=%s\n' "${db:-}"
@@ -496,6 +500,10 @@ undeploy() {
   mode=$(state_get mode)
   admin_port=$(state_get admin_port)
   https=$(state_get https)
+  way=$(state_get way)
+  tls_cert=$(state_get tls_cert)
+  tls_key=$(state_get tls_key)
+  tls_ca=$(state_get tls_ca)
   https_host=$(state_get https_host)
   serve_port=$(state_get serve_port)
   db=$(state_get db)

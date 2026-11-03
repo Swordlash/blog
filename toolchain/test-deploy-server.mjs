@@ -7,11 +7,15 @@
 // With --wiki-server, the same cases run against wiki-server serving the site
 // with --static, as `deploy-local.sh --server` runs it: the server that
 // replaces the static one must serve the application as it did. Only how each
-// says where it listens and what it logs differ.
+// says where it listens and what it logs differ. Then wiki-server serves the
+// site over HTTPS with a certificate made with openssl, as
+// `deploy-local.sh --tls-cert` runs it (skipped, and said to be, without
+// openssl).
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { request as secureRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -192,8 +196,70 @@ try {
   assert.equal(code, 0);
   child = null;
   ok("exits cleanly on SIGTERM, as systemd stops it");
+
+  if (wikiServer) await overTls();
 } finally {
   child?.kill("SIGKILL");
   rmSync(tmp, { recursive: true, force: true });
 }
 console.log(`Passed ${passed} ${wikiServer ? "wiki-server static" : "deploy server"} cases.`);
+
+// wiki-server with a certificate of its own, as the deploy runs it with
+// --tls-cert: the site over HTTPS, verified against the certificate for
+// its name, and plain HTTP to the same port answered with no page.
+async function overTls() {
+  try {
+    execFileSync("openssl", ["version"], { stdio: "ignore" });
+  } catch {
+    console.log("skipped: openssl is not installed, so wiki-server is not tried over HTTPS");
+    return;
+  }
+  const cert = join(tmp, "server.crt");
+  const key = join(tmp, "server.key");
+  execFileSync(
+    "openssl",
+    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+      "-days", "2", "-keyout", key, "-out", cert],
+    { stdio: "ignore" },
+  );
+  child = spawn(
+    wikiServer,
+    ["serve", "--data", join(tmp, "data-tls"), "--static", root, "--listen", "127.0.0.1:0", "--no-admin-listen", "--tls-cert", cert, "--tls-key", key],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  const tlsPort = await new Promise((resolve, reject) => {
+    child.on("exit", (code) => reject(new Error(`server exited with ${code}`)));
+    let log = "";
+    child.stdout.on("data", (data) => {
+      log += data;
+      const match = /^level=info event=listening listener=public address=https:\/\/127\.0\.0\.1:(\d+)\/ /m.exec(log);
+      if (match) resolve(Number(match[1]));
+    });
+  });
+  const secureGet = (path) =>
+    new Promise((resolve, reject) => {
+      secureRequest({ host: "127.0.0.1", port: tlsPort, path, servername: "localhost", ca: readFileSync(cert) }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode));
+      })
+        .on("error", reject)
+        .end();
+    });
+  assert.equal(await secureGet("/"), 200);
+  assert.equal(await secureGet("/app.wasm"), 200);
+  const plain = await new Promise((resolve) => {
+    request({ host: "127.0.0.1", port: tlsPort, path: "/" }, (response) => {
+      response.resume();
+      resolve(response.statusCode);
+    })
+      .on("error", () => resolve("refused"))
+      .end();
+  });
+  assert.notEqual(plain, 200);
+  child.removeAllListeners("exit");
+  const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  child.kill("SIGTERM");
+  assert.equal(await exited, 0);
+  child = null;
+  ok("serves HTTPS with a certificate of its own, verified for its name, and no page over plain HTTP");
+}
