@@ -27,7 +27,7 @@ case "${1:-}" in
     ;;
 esac
 
-. "$HOME/.ghc-wasm/env"
+. "${WIKI_TOOLCHAIN_HOME:-$HOME}/.ghc-wasm/env"
 export PATH="$HOME/.local/bin:$PATH"
 
 self=toolchain/dev-test.sh

@@ -17,6 +17,12 @@
 #
 #   - ghcup (into ~/.ghcup, unless one is already on PATH), and through it
 #     GHC $GHC_VERSION and cabal $CABAL_VERSION, both made the default;
+#     (~ here is the home directory, or the directory WIKI_TOOLCHAIN_HOME
+#     names: toolchain/deploy-local.sh --prefix installs the toolchain under
+#     <prefix>/toolchain, and then ghcup, cabal, npm and Playwright keep their
+#     files there as well, through their own variables, which the env file
+#     exports; without it their defaults stand, as do ghcup's and cabal's
+#     own directories);
 #   - ghc-wasm-meta at $GHC_WASM_META_REV (into ~/.ghc-wasm: wasi-sdk,
 #     binaryen, wasmtime and its own Node), and through ghcup the cross compiler
 #     wasm32-wasi-ghc-$WASM_GHC_VERSION, exactly as haskell-halogen's CI does;
@@ -108,9 +114,25 @@ ALEX_VERSION=3.5.4.2
 HAPPY_VERSION=2.1.7
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-STATE=$HOME/.wiki-toolchain
+# Where the toolchain goes: under the home directory, or under the directory
+# WIKI_TOOLCHAIN_HOME names, with the same layout below it. A named directory
+# (not the home directory itself) also tells ghcup, cabal, npm and Playwright
+# to keep their files there, so that a deployment under a prefix leaves
+# nothing in the home directory; the home directory leaves their defaults
+# alone, as before.
+BASE=${WIKI_TOOLCHAIN_HOME:-$HOME}
+NAMED_BASE=
+if [ -n "${WIKI_TOOLCHAIN_HOME:-}" ] && [ "$(realpath -m "$WIKI_TOOLCHAIN_HOME")" != "$(realpath -m "$HOME")" ]; then
+  NAMED_BASE=1
+  GHCUP_INSTALL_BASE_PREFIX=$BASE
+  CABAL_DIR=$BASE/.cabal
+  npm_config_cache=$BASE/.npm
+  PLAYWRIGHT_BROWSERS_PATH=$BASE/.cache/ms-playwright
+  export GHCUP_INSTALL_BASE_PREFIX CABAL_DIR npm_config_cache PLAYWRIGHT_BROWSERS_PATH
+fi
+STATE=$BASE/.wiki-toolchain
 LOG=$STATE/bootstrap.log
-WASM_PREFIX=$HOME/.ghc-wasm
+WASM_PREFIX=$BASE/.ghc-wasm
 META_DIR=$STATE/ghc-wasm-meta-$GHC_WASM_META_REV
 NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
@@ -124,8 +146,13 @@ case $mode in
 esac
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
-# or the default one this script installs into.
-if [ "$mode" != ready ] && command -v ghcup >/dev/null 2>&1; then
+# or the default one this script installs into. Under a named directory the
+# ghcup is that directory's own, whatever is on PATH, so that nothing is
+# installed elsewhere.
+if [ -n "$NAMED_BASE" ]; then
+  GHCUP_BIN=$BASE/.ghcup/bin
+  GHCUP=$GHCUP_BIN/ghcup
+elif [ "$mode" != ready ] && command -v ghcup >/dev/null 2>&1; then
   GHCUP=$(command -v ghcup)
   GHCUP_BIN=$("$GHCUP" whereis bindir)
 else
@@ -155,6 +182,15 @@ PATH=\$(
   done
 )
 export PATH
+EOF
+  [ -z "$NAMED_BASE" ] || cat <<EOF
+# The toolchain is under $BASE, and the tools keep their files there too.
+WIKI_TOOLCHAIN_HOME='$BASE'
+GHCUP_INSTALL_BASE_PREFIX='$BASE'
+CABAL_DIR='$BASE/.cabal'
+npm_config_cache='$BASE/.npm'
+PLAYWRIGHT_BROWSERS_PATH='$BASE/.cache/ms-playwright'
+export WIKI_TOOLCHAIN_HOME GHCUP_INSTALL_BASE_PREFIX CABAL_DIR npm_config_cache PLAYWRIGHT_BROWSERS_PATH
 EOF
 }
 
@@ -423,7 +459,8 @@ ready() {
 
 ready_done() {
   if [ "$ready_failed" != 0 ]; then
-    printf 'bootstrap: run `sh toolchain/bootstrap.sh toolchain`, then retry. npm build, serve and test commands load ~/.wiki-toolchain/env automatically; for direct commands, load `. ~/.wiki-toolchain/env` in this shell.\n' >&2
+    if [ -n "$NAMED_BASE" ]; then env_hint=$STATE/env; else env_hint='~/.wiki-toolchain/env'; fi
+    printf 'bootstrap: run `sh toolchain/bootstrap.sh toolchain`, then retry. npm build, serve and test commands load %s automatically; for direct commands, load `. %s` in this shell.\n' "$env_hint" "$env_hint" >&2
     return 1
   fi
   printf 'bootstrap: ready for %s.\n' "$1"

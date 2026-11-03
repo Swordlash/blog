@@ -2,7 +2,7 @@
 # Take down a deployment toolchain/deploy-local.sh made, without deploying
 # anything new.
 #
-#   sh toolchain/undeploy-local.sh [--name NAME] [--purge | --purge-data] [--no-firewall]
+#   sh toolchain/undeploy-local.sh [--prefix DIR] [--name NAME] [--purge | --purge-data] [--no-firewall]
 #
 # It stops and disables the systemd user service, removes its unit file and
 # reloads systemd, closes the firewall rule the deployment opened (with
@@ -14,8 +14,11 @@
 # the target directory too (only if it carries the deployment's marker) and
 # forgets the deployment's state, but keeps the wiki's data (<dir>/data: the
 # server's database, attachments and backups) unless --purge-data is given. It needs nothing of the build toolchain, and
-# running it when nothing is deployed says so and succeeds.
+# running it when nothing is deployed says so and succeeds. A deployment
+# made with --prefix is named the same way here: nothing in the home
+# directory remembers it.
 #
+#   --prefix DIR    the deployment's prefix (deploy-local.sh --prefix); --dir is its old name
 #   --name NAME     which deployment, when there are several (default wiki-demo)
 #   --purge         also delete the deployed files and the state file, but not data/
 #   --purge-data    also delete the deployed files, the state file and the wiki's data
@@ -31,11 +34,14 @@ usage() {
 }
 
 name=wiki-demo
+opt_prefix=
 purge=
 purge_data=
 no_firewall=
 while [ $# -gt 0 ]; do
   case $1 in
+    --prefix | --dir) [ $# -ge 2 ] || die "$1 needs a value"; opt_prefix=$2; shift ;;
+    --prefix=* | --dir=*) opt_prefix=${1#*=} ;;
     --name) [ $# -ge 2 ] || die "--name needs a value"; name=$2; shift ;;
     --name=*) name=${1#*=} ;;
     --purge) purge=1 ;;
@@ -47,4 +53,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 check_name "$name"
+resolve_prefix
+layout
+adopt_state
 undeploy
