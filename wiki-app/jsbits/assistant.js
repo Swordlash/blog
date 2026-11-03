@@ -291,51 +291,8 @@ async function wiki_assistant_models(config) {
   }
 }
 
-// Whether a test installed the scripted provider.
-function wiki_assistant_scripted() {
-  return wikiAssistantScriptedPage();
-}
-
-// Whether the page is a secure context (HTTPS, or the machine's own
-// address): a page served over plain HTTP elsewhere is not.
-function wiki_assistant_secure() {
-  return globalThis.isSecureContext === true;
-}
-
-// The page's Content Security Policy, as its meta element carries it (the
-// server writes its header's text there too), or "" for a page without
-// one; and the page's origin. The application checks another service's
-// base URL against them before the browser would refuse it
-// (Wiki.App.Assistant, Wiki.Api.ContentPolicy).
-function wiki_assistant_page_policy() {
-  const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
-  return meta === null ? "" : String(meta.getAttribute("content") ?? "");
-}
-
-function wiki_assistant_page_origin() {
-  return String(location.origin);
-}
-
 // Start fetching the providers' island, so that it is there by the time a
 // message is sent.
 function wiki_assistant_prepare() {
   wikiAssistantIsland().catch(() => {});
-}
-
-// Whether a keydown in the message box sends it: Enter, without Shift (a
-// new line) and outside a composition.
-function wiki_assistant_send_key(event) {
-  return event.key === "Enter" && !event.shiftKey && !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey;
-}
-
-// Whether a keydown in the message box closes the panel: Escape, outside
-// a composition (where Escape cancels the composition).
-function wiki_assistant_close_key(event) {
-  return event.key === "Escape" && !event.isComposing;
-}
-
-// The time of day of a moment (milliseconds since 1970), as the reader's
-// browser writes a short time in its language ("14:32", or "2:32 PM").
-function wiki_assistant_clock(ms) {
-  return new Date(ms).toLocaleTimeString(undefined, { timeStyle: "short" });
 }

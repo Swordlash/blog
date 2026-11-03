@@ -7,8 +7,17 @@
 -- which of the editor's keys was pressed; the browser's warning before a
 -- reload or a close loses unsaved changes; the writing assistant's
 -- edits, as changes the author accepts or rejects; and the questions
--- CodeMirror asks to complete a mention, with their answers. See
--- @jsbits/editor.js@, and @web/src/editor.js@ for CodeMirror.
+-- CodeMirror asks to complete a mention, with their answers. The files,
+-- the keys and the events CodeMirror sends are read through the Web
+-- types' fields; what works on the text itself (CodeMirror, or the
+-- textarea's selection in UTF-16 code units) is @jsbits/editor.js@, and
+-- CodeMirror is @web/src/editor.js@.
+--
+-- The editor's text is the textarea the component renders until
+-- CodeMirror has taken its place, in the element just before it, the host,
+-- which is what the component holds and hands these functions; from then
+-- on the host carries CodeMirror ('Host'), and the text, the selection
+-- and the writes are CodeMirror's.
 --
 -- Natively there is no browser: no event brings a file, no key is one of
 -- the editor's, the textarea is empty, CodeMirror never loads, and the
@@ -37,9 +46,7 @@ module Wiki.App.Editor.Browser
   , followLine
   , announceUpload
   , paneShown
-  , PreviewWatch
-  , watchPreviewEntry
-  , unwatchPreviewEntry
+  , previewEntries
   , pushPreviewEntry
   , onPreviewEntry
   , forgetPreviewEntry
@@ -70,105 +77,180 @@ module Wiki.App.Editor.Browser
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.:), (.=))
-import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as BSL
+import Data.Coerce (coerce)
+import Data.Foreign (foreignToInt)
+import Data.List (lookup)
 import Data.Text qualified as T
-import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
-import Halogen.JSBits.Promise (Promise (..), wait)
+import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, isNull, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits.Fields (Member (..), jsFields)
+import Halogen.JSBits.Promise (wait)
+import Halogen.Query.Event.Window qualified as WindowEvent
+import Halogen.Subscription (Emitter)
+import Halogen.Subscription qualified as HS
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Numeric.Natural (Natural)
 import Protolude hiding (wait)
-import System.IO.Error qualified as IOError
+import Web.Clipboard.ClipboardEvent (ClipboardEvent (..))
+import Web.DOM.Element qualified as Element
 -- With their constructors: the FFI passes the value inside each newtype.
-import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event (..))
+import Web.DOM.Internal.Types (Element (..), HTMLElement (..))
+import Web.Event.CustomEvent (CustomEvent (..))
+import Web.Event.Event (Event (..), EventType (..))
+import Web.Event.Event qualified as Event
+import Web.File.File (File)
+import Web.File.FileList qualified as FileList
+import Web.HTML.Event.DragEvent (DragEvent (..))
+import Web.HTML.HTMLElement qualified as HTMLElement
+import Web.HTML.HTMLInputElement qualified as HTMLInputElement
+import Web.HTML.HTMLTextAreaElement (HTMLTextAreaElement)
+import Web.HTML.HTMLTextAreaElement qualified as HTMLTextAreaElement
+import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
+import Wiki.App.Browser (forgetPreviewEntry, historyBack, onPreviewEntry, pushPreviewEntry)
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Replacement (..), plan, propose, settle)
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.User (Login (..), User (..))
 
--- Reading a file waits for the browser: its function returns a promise,
--- which the wrapper below the splice waits for; the rest return at once. The key, and a
--- drop's or a paste's files, are read in the event's listener, and the
--- event does not change while it is dispatched, so those bindings are
--- pure.
+-- What works on the text as CodeMirror and the textarea count it, in
+-- UTF-16 code units, and the live preview's channel between windows: logic
+-- of its own, which stays JavaScript.
 $( browserJS
      ["jsbits/editor.js"]
-     [ ("js_drop_files", "wiki_editor_drop_files", Safe, [t|Event -> JSVal|])
-     , ("js_paste_files", "wiki_editor_paste_files", Safe, [t|Event -> JSVal|])
-     , ("js_paste_file_count", "wiki_editor_paste_file_count", Safe, [t|Event -> Int|])
-     , ("js_chosen_files", "wiki_editor_chosen_files", Safe, [t|Event -> IO JSVal|])
-     , ("js_file_count", "wiki_editor_file_count", Safe, [t|JSVal -> IO Int|])
-     , ("js_file_name", "wiki_editor_file_name", Safe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_file_type", "wiki_editor_file_type", Safe, [t|JSVal -> Int -> IO JSText|])
-     , ("js_file_size", "wiki_editor_file_size", Safe, [t|JSVal -> Int -> IO Double|])
-     , ("js_read_filePromise", "wiki_editor_read_file", Safe, [t|JSVal -> Int -> IO (Promise JSText)|])
-     , ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
-     , ("js_detach", "wiki_editor_detach", Safe, [t|Element -> IO ()|])
-     , ("js_typed", "wiki_editor_typed", Safe, [t|Event -> JSText|])
-     , ("js_value", "wiki_editor_value", Safe, [t|Element -> IO JSText|])
+     [ ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
-     , ("js_key", "wiki_editor_key", Safe, [t|Event -> JSText|])
-     , ("js_focus", "wiki_editor_focus", Safe, [t|Element -> IO ()|])
      , ("js_live_listen", "wiki_live_listen", Safe, [t|JSText -> Callback -> IO Int|])
      , ("js_live_stop", "wiki_live_stop", Safe, [t|Int -> IO ()|])
      , ("js_live_follow", "wiki_live_follow", Safe, [t|Element -> Int -> IO ()|])
-     , ("js_live_uploaded", "wiki_live_uploaded", Safe, [t|Element -> IO ()|])
-     , ("js_live_pane_shown", "wiki_live_pane_shown", Safe, [t|Element -> IO ()|])
-     , ("js_preview_push", "wiki_preview_push", Safe, [t|IO ()|])
-     , ("js_preview_entry", "wiki_preview_entry", Safe, [t|IO Bool|])
-     , ("js_preview_forget", "wiki_preview_forget", Safe, [t|IO ()|])
-     , ("js_history_back", "wiki_history_back", Safe, [t|IO ()|])
-     , ("js_preview_watch", "wiki_preview_watch", Safe, [t|Callback -> IO Int|])
-     , ("js_preview_unwatch", "wiki_preview_unwatch", Safe, [t|Int -> IO ()|])
-     , ("js_preview_showing", "wiki_editor_preview_showing", Safe, [t|Element -> IO ()|])
-     , ("js_preview_shown", "wiki_editor_preview_shown", Safe, [t|Element -> IO ()|])
-     , ("js_text_shown", "wiki_editor_text_shown", Safe, [t|Element -> IO ()|])
-     , ("js_clear_field", "wiki_editor_clear_field", Safe, [t|Element -> IO ()|])
-     , ("js_focus_text", "wiki_editor_focus_text", Safe, [t|Element -> IO ()|])
-     , ("js_click", "wiki_editor_click", Safe, [t|Element -> IO ()|])
      , ("js_guard_unload", "wiki_editor_guard_unload", Safe, [t|Bool -> IO ()|])
-     , ("js_selected", "wiki_editor_selected", Safe, [t|Event -> JSText|])
-     , ("js_change_count", "wiki_editor_change_count", Safe, [t|Event -> Int|])
-     , ("js_decided", "wiki_editor_decided", Safe, [t|Event -> JSText|])
      , ("js_changes", "wiki_editor_changes", Safe, [t|Element -> IO JSText|])
      , ("js_propose", "wiki_editor_propose", Safe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
      , ("js_settle", "wiki_editor_settle", Safe, [t|Element -> JSText -> JSText -> IO ()|])
-     , ("js_mention_asked", "wiki_editor_mention_asked", Safe, [t|Event -> JSText|])
      , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
      ]
  )
 
-js_read_file :: JSVal -> Int -> IO JSText
-js_read_file a1 a2 = if inBrowser then wait =<< js_read_filePromise a1 a2 else pure inert
+-- | The host element, as @web/src/editor.js@ adds to it: the CodeMirror
+-- put in it, once the page's islands have loaded the editor.
+newtype Host = Host Element
+  deriving newtype (Inert)
+
+-- | The CodeMirror in a host, as @web/src/editor.js@ makes it: the text
+-- it holds, the focus, and what the preview beside it or shown alone asks
+-- of it.
+newtype CodeMirror = CodeMirror JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''Host
+     [ Live "wikiEditor" [t|Maybe CodeMirror|]
+     ]
+ )
+
+$( jsFields
+     ''CodeMirror
+     [ -- The whole text.
+       Method "text" [t|IO Text|]
+     , -- Let go of the editor, as the component goes.
+       Method "destroy" [t|IO ()|]
+     , -- Give the text the focus, at its selection, without scrolling.
+       Method "focus" [t|IO ()|]
+     , -- Scroll the preview beside the text, just shown, to the line
+       -- followed.
+       Method "paneShown" [t|IO ()|]
+     , -- The preview is about to be shown alone: keep where the window is.
+       Method "previewShowing" [t|IO ()|]
+     , -- The preview was shown alone: scroll to the block being edited.
+       Method "previewShown" [t|IO ()|]
+     , -- The text was shown again: the window goes back to where it was.
+       Method "textShown" [t|IO ()|]
+     , -- Tell the window of the page that a file was uploaded to it.
+       Method "uploaded" [t|IO ()|]
+     ]
+ )
+
+-- | The detail of a @wiki-selection@ event: the selection, in characters.
+newtype SelectionDetail = SelectionDetail JSVal
+  deriving newtype (Inert)
+
+-- | The detail of a @wiki-decide@ event: a decision on a change.
+newtype DecisionDetail = DecisionDetail JSVal
+  deriving newtype (Inert)
+
+-- | The detail of a @wiki-mention@ event: a question about a mention.
+newtype MentionDetail = MentionDetail JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''SelectionDetail
+     [ Fixed "from" ''Int
+     , Fixed "to" ''Int
+     ]
+ )
+
+$( jsFields
+     ''DecisionDetail
+     [ Fixed "accept" ''Bool
+     , Fixed "id" ''Int
+     ]
+ )
+
+$( jsFields
+     ''MentionDetail
+     [ Fixed "id" ''Int
+     , Fixed "letters" ''Text
+     ]
+ )
+
+-- | The detail of one of CodeMirror's events on the host, if the event
+-- carries one: a value of the event's own shape, read purely, since the
+-- event does not change.
+detailOf :: Event -> Maybe JSVal
+detailOf event = let detail = (CustomEvent event).detail in if isNull detail then Nothing else Just detail
+
+-- | The CodeMirror in the host, if the page's islands have put one there.
+codeMirror :: Element -> IO (Maybe CodeMirror)
+codeMirror host = (Host host).wikiEditor
+
+-- | The textarea beside the host, until CodeMirror has taken its place.
+textareaOf :: Element -> IO (Maybe HTMLTextAreaElement)
+textareaOf host = (>>= HTMLTextAreaElement.fromElement) <$> host.nextElementSibling
 
 -- | The files an event brought, not yet read.
-newtype Files = Files JSVal
+newtype Files = Files [File]
 
 -- | A drop's files. Call it in the drop's listener, while the browser
 -- dispatches the drop (the drop's handler), and force it there: once the
--- dispatch is over, the drop has no files any more.
+-- dispatch is over, the drop has no files any more, while the files taken
+-- from it stay readable ('FileList.now').
 droppedFiles :: Event -> Files
-droppedFiles = Files . js_drop_files
+droppedFiles event = Files (maybe [] (FileList.now . (.files)) (DragEvent event).dataTransfer)
 
 -- | A paste's files, if it brought any: a screenshot, an image copied in a
 -- browser, or files copied in a file manager. Call it in the paste's
 -- listener and force it there, as for 'droppedFiles'. A paste of text
 -- alone brings no files, and the editor inserts the text itself.
 pastedFiles :: Event -> Maybe Files
-pastedFiles ev
-  | js_paste_file_count ev > 0 = Just (Files (js_paste_files ev))
-  | otherwise = Nothing
+pastedFiles event = case maybe [] (FileList.now . (.files)) (ClipboardEvent event).clipboardData of
+  [] -> Nothing
+  files -> Just (Files files)
 
 -- | A file input's files, from its change event. The input is emptied, so
 -- that choosing the same file again is also a change.
 chosenFiles :: (MonadIO m) => Event -> m Files
-chosenFiles = liftIO . fmap Files . js_chosen_files
+chosenFiles event = liftIO $ case Event.target event >>= Element.fromEventTarget >>= HTMLInputElement.fromElement of
+  Nothing -> pure (Files [])
+  Just input -> do
+    files <- input.files >>= maybe (pure []) FileList.items
+    input.value_set ""
+    pure (Files files)
 
 -- | A file a drop, a paste or a file input brought, before its bytes are
--- read: what the browser says about it, and where to read it from.
+-- read: what the browser says about it, and the file to read.
 data PickedFile = PickedFile
   { name :: Text
   , mediaType :: Text
@@ -176,28 +258,18 @@ data PickedFile = PickedFile
   , size :: Natural
   -- ^ In bytes, so that a file that is too large is refused before it is
   -- read.
-  , files :: JSVal
-  , index :: Int
+  , file :: File
   }
 
 -- | What the browser says about each file.
 pickedFiles :: (MonadIO m) => Files -> m [PickedFile]
-pickedFiles (Files files) = liftIO $ do
-  n <- js_file_count files
-  for [0 .. n - 1] $ \index -> do
-    name <- fromJSText <$> js_file_name files index
-    mediaType <- fromJSText <$> js_file_type files index
-    size <- fromIntegral @Integer . round <$> js_file_size files index
-    pure PickedFile {name, mediaType, size, files, index}
+pickedFiles (Files files) =
+  pure [PickedFile {name = file.name, mediaType = file.type_, size = fromIntegral @Integer (round file.size), file} | file <- files]
 
 -- | A file's bytes. This waits for the browser to read them, so a
 -- component calls it with 'lift', off its loop.
 readPickedFile :: (MonadIO m) => PickedFile -> m ByteString
-readPickedFile file = liftIO $ do
-  -- The binding waits for the JavaScript promise ('wait'); 'evaluate'
-  -- forces the answer here, on this thread.
-  base64 <- evaluate . fromJSText =<< js_read_file file.files file.index
-  either (\e -> throwIO (IOError.userError ("the browser read a file as malformed base64: " <> e))) pure (Base64.decode (encodeUtf8 base64))
+readPickedFile picked = liftIO (evaluate =<< wait =<< picked.file.bytes)
 
 -- | Put CodeMirror in the host element (an empty element the editor
 -- renders just before its textarea) in place of the textarea, once the
@@ -215,12 +287,12 @@ attachEditor host original = liftIO (js_attach host (toJSText original))
 
 -- | Remove the host's CodeMirror, if it has one.
 detachEditor :: (MonadIO m) => Element -> m ()
-detachEditor = liftIO . js_detach
+detachEditor host = liftIO $ codeMirror host >>= traverse_ (.destroy)
 
 -- | The whole text a @wiki-input@ event says the editor now has. Pure,
 -- since the event does not change.
 typedText :: Event -> Text
-typedText = fromJSText . js_typed
+typedText = maybe "" jsValText . detailOf
 
 -- | Apply a toolbar command to the editor's text: read its text and
 -- selection, make the change ("Wiki.Core.Markdown.Edit"), and write the
@@ -240,18 +312,22 @@ insertAtCursor host text = edit host $ \old (Selection s e) ->
 
 edit :: (MonadIO m) => Element -> (Text -> Selection -> (Text, Selection)) -> m ()
 edit host change = liftIO $ do
-  old <- fromJSText <$> js_value host
+  old <- currentText host
   selection <- Selection <$> js_selection_start host <*> js_selection_end host
   let (new, Selection s e) = change old selection
   js_write host (toJSText new) s e
 
 -- | Give the text the focus, at its selection, without scrolling to it.
 focusText :: (MonadIO m) => Element -> m ()
-focusText = liftIO . js_focus_text
+focusText host =
+  liftIO $
+    codeMirror host >>= \case
+      Just editor -> editor.focus
+      Nothing -> textareaOf host >>= traverse_ (HTMLElement.focusWithoutScrolling . coerce)
 
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
-focusElement = liftIO . js_focus
+focusElement = liftIO . HTMLElement.focusWithoutScrolling . coerce
 
 -- | 'LiveFeed' is a window's subscription to what the editor of a page
 -- sends on the browser's channel between the wiki's windows (WP5.36 of
@@ -286,75 +362,46 @@ followLine element = liftIO . js_live_follow element
 -- uploaded to the page. The window fetches the page's attachments again,
 -- so that a reference to the new file resolves there too.
 announceUpload :: (MonadIO m) => Element -> m ()
-announceUpload = liftIO . js_live_uploaded
+announceUpload host = liftIO $ codeMirror host >>= traverse_ (.uploaded)
 
 -- | Scroll the preview beside the text in the editor (the host), just
 -- switched on, to the line the editor follows.
 paneShown :: (MonadIO m) => Element -> m ()
-paneShown = liftIO . js_live_pane_shown
+paneShown host = liftIO $ codeMirror host >>= traverse_ (.paneShown)
 
--- | 'PreviewWatch' is the editor's listener for the browser's Back and
--- Forward (popstate), which say whether the entry reached is the
--- preview's (WP5.38 of docs/PLAN.md): the listener's number in
--- @jsbits/editor.js@ and its callback, freed when it stops.
-data PreviewWatch = PreviewWatch Int (Maybe Callback)
-
--- | Watch the session history: the handler is told, on each Back or
--- Forward, whether the entry is the preview's. Natively there is no
+-- | The browser's Back and Forward (@popstate@), each saying whether the
+-- entry reached is the preview's (WP5.38 of docs/PLAN.md): the editor
+-- shows the text or the preview as the entry says. Natively there is no
 -- history, and nothing is told.
-watchPreviewEntry :: (MonadIO m) => (Bool -> IO ()) -> m PreviewWatch
-watchPreviewEntry told
-  | inBrowser = liftIO $ do
-      callback <- mkSyncCallback (told . (== "1") . jsValText)
-      listener <- js_preview_watch callback
-      pure (PreviewWatch listener (Just callback))
-  | otherwise = pure (PreviewWatch 0 Nothing)
-
--- | Stop watching, and free the callback.
-unwatchPreviewEntry :: (MonadIO m) => PreviewWatch -> m ()
-unwatchPreviewEntry (PreviewWatch listener callback) = liftIO $ do
-  when inBrowser (js_preview_unwatch listener)
-  traverse_ freeCallback callback
-
--- | Push the preview's entry onto the session history, with the editor's
--- address, so that Back returns to the text.
-pushPreviewEntry :: (MonadIO m) => m ()
-pushPreviewEntry = when inBrowser (liftIO js_preview_push)
-
--- | Whether the session history's current entry is the preview's.
-onPreviewEntry :: (MonadIO m) => m Bool
-onPreviewEntry = if inBrowser then liftIO js_preview_entry else pure False
-
--- | Take the preview's mark off the current entry.
-forgetPreviewEntry :: (MonadIO m) => m ()
-forgetPreviewEntry = when inBrowser (liftIO js_preview_forget)
-
--- | Go back one entry in the session history, as the browser's Back does.
-historyBack :: (MonadIO m) => m ()
-historyBack = when inBrowser (liftIO js_history_back)
+previewEntries :: (MonadBrowserDOM n, MonadUnliftIO n) => n (Emitter IO Bool)
+previewEntries = do
+  HS.Emitter register <- WindowEvent.windowEvent (EventType "popstate") (const (Just ()))
+  pure . HS.makeEmitter $ \push -> do
+    HS.Subscription stop <- register $ \() -> onPreviewEntry >>= push
+    pure stop
 
 -- | Keep where the window is, with the text, before the preview is shown
 -- alone: where 'textShown' returns it.
 previewShowing :: (MonadIO m) => Element -> m ()
-previewShowing = liftIO . js_preview_showing
+previewShowing host = liftIO $ codeMirror host >>= traverse_ (.previewShowing)
 
 -- | Scroll the window to the block of the line the editor (the host)
 -- follows, in the preview shown alone.
 previewShown :: (MonadIO m) => Element -> m ()
-previewShown = liftIO . js_preview_shown
+previewShown host = liftIO $ codeMirror host >>= traverse_ (.previewShown)
 
 -- | Scroll the window back to where it was before the preview was shown.
 textShown :: (MonadIO m) => Element -> m ()
-textShown = liftIO . js_text_shown
+textShown host = liftIO $ codeMirror host >>= traverse_ (.textShown)
 
 -- | Empty a form field the component does not control, such as a password
 -- once it has been sent: what was typed in it would otherwise stay there.
 clearField :: (MonadIO m) => Element -> m ()
-clearField = liftIO . js_clear_field
+clearField element = liftIO $ for_ (HTMLInputElement.fromElement element) (\input -> input.value_set "")
 
 -- | Click an element, as the user would.
 clickElement :: (MonadIO m) => Element -> m ()
-clickElement = liftIO . js_click
+clickElement element = liftIO (coerce element :: HTMLElement).click
 
 -- | The keys the editor handles itself.
 data EditorKey
@@ -374,44 +421,60 @@ data EditorKey
 -- | Which of the editor's keys a keydown is, if any. Pure, so that a
 -- handler can decide in the event's listener, while the browser can still
 -- be stopped from acting on the key
--- ('Halogen.HTML.Events.preventingDefault').
+-- ('Halogen.HTML.Events.preventingDefault'). Saving, the preview and
+-- Escape are the form's, wherever the focus is in it; the rest are the
+-- text's (the textarea's, or CodeMirror's content), not the assistant's
+-- message box, which is a textarea of the form too, where Tab and the
+-- shortcuts are its own. Shift+7 and Shift+8 are read by the key's place
+-- (its code), since the character they type differs between layouts, as
+-- is P with Alt, which types a character of its own on a Mac. A key the
+-- list of a mention's completion acts on (Tab, Enter, Escape) never
+-- reaches the form: CodeMirror stops it (@web/src/editor.js@).
 editorKey :: Event -> Maybe EditorKey
-editorKey event = case fromJSText (js_key event) of
-  "save" -> Just SaveKey
-  "preview" -> Just PreviewKey
-  "escape" -> Just EscapeKey
-  "indent" -> Just IndentKey
-  "bold" -> Just (CommandKey Bold)
-  "italic" -> Just (CommandKey Italic)
-  "link" -> Just (CommandKey Link)
-  "code" -> Just (CommandKey InlineCode)
-  "numbered" -> Just (CommandKey NumberedList)
-  "bulleted" -> Just (CommandKey BulletList)
-  _ -> Nothing
+editorKey event
+  | pressed.isComposing = Nothing
+  | command && not pressed.altKey && not pressed.shiftKey && key == "s" = Just SaveKey
+  | command && pressed.altKey && not pressed.shiftKey && pressed.code == "KeyP" = Just PreviewKey
+  | plain && key == "Escape" = Just EscapeKey
+  | not inText = Nothing
+  | plain && key == "Tab" = Just IndentKey
+  | command && not pressed.altKey && not pressed.shiftKey = CommandKey <$> lookup key [("b", Bold), ("i", Italic), ("k", Link), ("e", InlineCode)]
+  | command && not pressed.altKey && pressed.shiftKey = CommandKey <$> lookup pressed.code [("Digit7", NumberedList), ("Digit8", BulletList)]
+  | otherwise = Nothing
+  where
+    pressed = KeyboardEvent event
+    command = pressed.ctrlKey || pressed.metaKey
+    plain = not (command || pressed.altKey || pressed.shiftKey)
+    key = if T.length pressed.key == 1 then T.toLower pressed.key else pressed.key
+    inText = isJust (Event.target event >>= Element.fromEventTarget >>= (`Element.closestNow` "textarea.editor-text, .cm-content"))
 
 -- | The editor's current text: CodeMirror's, or the textarea's.
 currentText :: (MonadIO m) => Element -> m Text
-currentText host = liftIO (fromJSText <$> js_value host)
+currentText host =
+  liftIO $
+    codeMirror host >>= \case
+      Just editor -> editor.text
+      Nothing -> textareaOf host >>= maybe (pure "") (.value)
 
 -- | The selection a @wiki-selection@ event reports, in characters, if
 -- anything is selected. Pure, since the event does not change.
 selectedSpan :: Event -> Maybe Span
-selectedSpan event = case T.splitOn ":" (fromJSText (js_selected event)) of
-  [a, b] | Just f <- readMaybe a, Just t <- readMaybe b -> Just (Span f t)
-  _ -> Nothing
+selectedSpan event = do
+  detail <- SelectionDetail <$> detailOf event
+  guard (detail.to > detail.from)
+  Just (Span detail.from detail.to)
 
 -- | How many of the assistant's changes a @wiki-changes@ event says are
 -- still undecided.
 changesLeft :: Event -> Int
-changesLeft = js_change_count
+changesLeft = maybe 0 foreignToInt . detailOf
 
 -- | The decision a @wiki-decide@ event reports, made with a change's own
 -- buttons: accept or reject, and which change.
 decision :: Event -> Maybe (Decision, Int)
-decision event = case T.splitOn ":" (fromJSText (js_decided event)) of
-  ["accept", i] -> (Accept,) <$> readMaybe i
-  ["reject", i] -> (Reject,) <$> readMaybe i
-  _ -> Nothing
+decision event = do
+  detail <- DecisionDetail <$> detailOf event
+  Just (if detail.accept then Accept else Reject, detail.id)
 
 -- | The assistant's undecided changes, as CodeMirror tracks them, at their
 -- current positions.
@@ -428,7 +491,7 @@ trackedChanges host = liftIO $ do
 -- toolbar command's does. Run it in 'Halogen.liftEffect'.
 proposeEdit :: (MonadIO m) => Element -> Int -> Edit -> m (Either Refusal (Replacement, [Int]))
 proposeEdit host i change = liftIO $ do
-  text <- fromJSText <$> js_value host
+  text <- currentText host
   case plan change text of
     Left why -> pure (Left why)
     Right r -> do
@@ -467,9 +530,10 @@ jsonText = toJSText . decodeUtf8 . BSL.toStrict . encode
 -- (@web/src/editor.js@), and waits for 'answerMention'. Pure, since the
 -- event does not change.
 mentionAsked :: Event -> Maybe (Int, Text)
-mentionAsked event = case T.breakOn ":" (fromJSText (js_mention_asked event)) of
-  (i, letters) | Just n <- readMaybe i, n > 0 -> Just (n, T.drop 1 letters)
-  _ -> Nothing
+mentionAsked event = do
+  detail <- MentionDetail <$> detailOf event
+  guard (detail.id > 0)
+  Just (detail.id, detail.letters)
 
 -- | Answer the question with this number: the users a mention that starts
 -- with its letters may name, display name first, or 'Nothing' when they

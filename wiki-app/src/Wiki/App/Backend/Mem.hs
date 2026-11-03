@@ -69,14 +69,18 @@ import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString.Base64 qualified as Base64
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
+import Data.MediaType (MediaType (..))
 import Data.Set qualified as Set
 import Data.Time (UTCTime, getCurrentTime)
-import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude hiding (wait)
+import Web.File.Blob qualified as Blob
+import Web.HTML.Window qualified as Window
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
+import Web.URL qualified as URL
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Assistant (MonadAssistant)
@@ -105,11 +109,8 @@ import Wiki.Core.User (User (..))
 -- call them. Also a message on the browser's console, which natively says
 -- nothing: there the tests check what 'openMemWiki' found instead.
 $( browserJS
-     ["jsbits/object-url.js", "jsbits/console.js", "jsbits/databases.js"]
-     [ ("js_object_url", "wiki_object_url", Safe, [t|JSText -> JSText -> IO JSText|])
-     , ("js_revoke_object_url", "wiki_revoke_object_url", Safe, [t|JSText -> IO ()|])
-     , ("js_warn", "wiki_warn", Safe, [t|JSText -> IO ()|])
-     , ("js_database_existsPromise", "wiki_database_exists", Safe, [t|JSText -> IO (Promise Bool)|])
+     ["jsbits/databases.js"]
+     [ ("js_database_existsPromise", "wiki_database_exists", Safe, [t|JSText -> IO (Promise Bool)|])
      ]
  )
 
@@ -225,7 +226,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   uploadAttachment pid name mediaType = write . uploadAttachmentIn pid name mediaType
   deleteAttachment aid = do
     result <- write (deleteAttachmentIn aid)
-    for_ result (liftIO . traverse_ (js_revoke_object_url . toJSText))
+    for_ result (liftIO . traverse_ (URL.revokeObjectURL))
     pure (void result)
   searchPages = query . searchPagesIn
   getDraft = query . getDraftIn
@@ -267,7 +268,7 @@ blobUrl mediaType blob =
             Nothing
               | Map.member blob s.blobs || Set.member blob s.unreadBlobs -> (s {objectUrls = Map.insert blob made s.objectUrls}, made)
               | otherwise -> (s, made)
-          when (kept /= made) (js_revoke_object_url (toJSText made))
+          when (kept /= made) (URL.revokeObjectURL made)
           pure kept
 
 -- | A blob's bytes read from IndexedDB, or 'Nothing' if they cannot be
@@ -406,7 +407,7 @@ instance (MonadIO m) => MonadLoad (MemWiki m) where
 -- nothing serves one, a @data:@ URL with the bytes in it.
 objectUrl :: Text -> ByteString -> IO Text
 objectUrl mediaType base64
-  | inBrowser = fromJSText <$> js_object_url (toJSText (decodeUtf8 base64)) (toJSText mediaType)
+  | inBrowser = Blob.fromBytes (Base64.decodeLenient base64) (MediaType mediaType) >>= URL.createObjectURL
   | otherwise = pure ("data:" <> mediaType <> ";base64," <> decodeUtf8 base64)
 
 --------------------------------------------------------------------------------
@@ -536,7 +537,7 @@ resetMemWiki seed = MemWiki $ do
   env <- ask
   liftIO . serially env $ do
     old <- atomicModifyIORef' env.wiki (seed,)
-    traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
+    traverse_ (URL.revokeObjectURL) (Map.elems old.objectUrls)
     for_ env.store $ \store -> do
       outcome <- tried $ do
         store.wipe
@@ -600,7 +601,7 @@ importMemWiki archive = do
                 Right () -> Right <$> writeIORef store.kept Kept {wiki = new, records = records new}
           for_ written $ \() -> do
             previous <- atomicModifyIORef' env.wiki (new,)
-            traverse_ (js_revoke_object_url . toJSText) (Map.elems previous.objectUrls)
+            traverse_ (URL.revokeObjectURL) (Map.elems previous.objectUrls)
           pure written
 
 --------------------------------------------------------------------------------
@@ -704,4 +705,4 @@ describe e = case e.failure of
 
 -- | Say something on the browser's console; natively, nothing.
 warn :: Text -> IO ()
-warn message = when inBrowser (js_warn (toJSText message))
+warn message = Window.window >>= \w -> w.console.warn message

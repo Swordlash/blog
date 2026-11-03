@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+The one-line JavaScript functions that read or called the browser's own
+objects are gone (WP5.47): the shell, the editor, the search box, the slides,
+the demo's backend and the assistant read and call the platform through
+haskell-halogen's Web types and their fields (`w.history.go`,
+`event.key`, `file.bytes`), and the wiki's own objects (the editor's host
+and its CodeMirror, the install prompt the loader keeps, the entries of the
+session history) have fields of their own. What stays JavaScript is logic
+of its own: the zip archive, the reader's selection, the layout and the
+contents panel, CodeMirror's text and selection in UTF-16 code units, the
+live preview's channel, the assistant's SDKs and the vault. The entry of
+the session history the shell numbers, and the preview's mark on it, are
+kept as text now (`"12"`, `"12+preview"`) rather than as an object; an
+entry the previous version wrote keeps its number and its mark. The
+search box's `/` shortcut and its closing on a press outside are
+subscriptions of the box now, heard on the window and the document.
+
 The sidebar's link to a space's pages, order, settings and macros is
 "Space settings" now, which is what people look for there; the page's
 breadcrumb says the same. The settings form's fields no longer sit a

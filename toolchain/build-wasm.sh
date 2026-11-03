@@ -70,6 +70,11 @@ esac
 # contains a different ar and clang; unsetting CC alone leaves those active
 # and invalidates Cabal's native configuration on every backend switch.
 prerender=$package-prerender
+# Cabal keeps the parsed project in cache/config, checked against the project
+# file but not reliably against the files it imports (see below, for the wasm
+# build): after a change to haskell-halogen's pin in cabal.project this build
+# went on building the old commit's sources.
+rm -f "$native_build_dir/cache/config"
 prerender_bin=$(
   stage native-prerender-build cabal build "$package:exe:$prerender" --project-file="$native_project" --builddir="$native_build_dir" >&2
   cabal list-bin -v0 "$package:exe:$prerender" --project-file="$native_project" --builddir="$native_build_dir"
