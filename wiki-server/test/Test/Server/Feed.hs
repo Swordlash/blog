@@ -5,7 +5,20 @@
 -- allowlist with its addresses absolute; then served over HTTP, to the
 -- public and refused for what is not; and what the pages the server
 -- renders say of themselves in their heads.
-module Test.Server.Feed (spec) where
+--
+-- The helpers that read a feed as XML and check it against a schema are
+-- exported for the tests of the feed of notifications
+-- ("Test.Server.Notifications").
+module Test.Server.Feed
+  ( spec
+  , parsed
+  , named
+  , children
+  , textOf
+  , attributeOf
+  , shouldValidate
+  )
+where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL

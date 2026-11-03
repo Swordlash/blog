@@ -1,16 +1,20 @@
 -- | Mentions, watching and notifications on the server (WP4.13 of
 -- docs/PLAN.md). Over real HTTP: a mention in a save and in a comment told
 -- to the user mentioned, listed and marked read, the operator refused, a
--- watch read and set; over a real WebSocket, a notification told to the
--- user's tab whatever it subscribed to, and to nobody else's; mail at once
--- to a verified address only, with a link that turns it off without
--- signing in. On the storage, with the thread's look run by hand at chosen
--- times: the daily digest, grouped by page, mailed once a day from its
--- hour; a notification of a page the user may no longer read not mailed;
--- the unsubscribe link's secret; what is kept.
+-- watch read and set, the address of the user's feed of notifications
+-- (WP5.31) made and replaced, and the feed served at it; over a real
+-- WebSocket, a notification told to the user's tab whatever it subscribed
+-- to, and to nobody else's; mail at once to a verified address only, with
+-- a link that turns it off without signing in. On the storage, with the
+-- thread's look run by hand at chosen times: the daily digest, grouped by
+-- page, mailed once a day from its hour; a notification of a page the
+-- user may no longer read not mailed; the unsubscribe link's secret; the
+-- feed's fifty newest, without a page the user may no longer read; what
+-- is kept.
 module Test.Server.Notifications (spec) where
 
 import Data.Aeson (ToJSON, Value, eitherDecode, encode)
+import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -23,15 +27,18 @@ import System.Timeout (timeout)
 import Test.Database (Backing (..))
 import Test.HUnit (assertFailure)
 import Test.Hspec
+import Test.Server.Feed (attributeOf, children, parsed, shouldValidate, textOf)
+import Test.Server.Feed qualified as Xml
 import Test.Server.Fixture
 import Test.Storage.Fixture (countWhere, ok, path, whoFor, withDemo)
 import Web.HttpApiData (toUrlPiece)
-import Wiki.Api (CommentsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), CommentsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Comments (NewThread (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Links (links)
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (UnsubscribeToken (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (PageEdit (..))
@@ -41,6 +48,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), Watch (..), WatchReason (..))
@@ -50,14 +58,15 @@ import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
+import Wiki.Server.Feed (notificationFeed)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Notifier (mailRound, newNotifier, newWake)
 import Wiki.Server.Storage (Storage, StoredWiki, Who (..), runStoredWiki, withStorageAside, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
-import Wiki.Server.Storage.Rows (insertUsers, prefixEnd, updateDisabled)
+import Wiki.Server.Storage.Notifications (insertNotification, unsubscribeToken, unsubscribeUser)
+import Wiki.Server.Storage.Rows (insertUsers, prefixEnd, storeFeedToken, updateDisabled)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Schema qualified as Schema
 
@@ -202,6 +211,65 @@ overHttp backing = describe "over HTTP" $ do
     (.status) <$> asWithout r (Just people.reader) methodGet "api/v1/notifications/people/search" `shouldReturn` 400
     -- Nobody to a visitor, as with the people asked for by login.
     (asWithout r Nothing methodGet (links.notifications.searchPeople "an") >>= jsonAs @[User] 200) `shouldReturn` []
+
+  it "makes the address of the user's feed of notifications on request, and a new one in place of it" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    let feedOf who = asWithout r (Just who) methodGet links.notifications.feed >>= jsonAs @FeedAddress 200
+        renew who = asWithout r (Just who) methodPost links.notifications.renewFeed >>= jsonAs @FeedAddress 200
+    feedOf people.reader `shouldReturn` FeedAddress {address = Nothing}
+    made <- renew people.reader
+    made.address `shouldSatisfy` maybe False ("me/notifications.atom?token=" `T.isPrefixOf`)
+    feedOf people.reader `shouldReturn` made
+    -- Each user has their own.
+    feedOf people.editor `shouldReturn` FeedAddress {address = Nothing}
+    renewed <- renew people.reader
+    renewed.address `shouldNotBe` made.address
+    feedOf people.reader `shouldReturn` renewed
+    -- Nobody not signed in has one, and the operator, who is no user, none.
+    (asWithout r Nothing methodGet links.notifications.feed >>= jsonAs 403) `shouldReturn` Forbidden
+    (asWithout r Nothing methodPost links.notifications.renewFeed >>= jsonAs 403) `shouldReturn` Forbidden
+    (getUrl r (onAdmin r links.notifications.feed) >>= jsonAs 403) `shouldReturn` Forbidden
+    (send r methodPost (onAdmin r links.notifications.renewFeed) [] "" >>= jsonAs 403) `shouldReturn` Forbidden
+
+  it "serves the feed at its address, as the bell lists the notifications, with titles and links only" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    notes <- pageNamed r "blog" "notes-on-haskell"
+    _ <- saveAs r people.editor notes "Ask @reader."
+    thread :: Thread <- asWith r (Just people.admin) methodPost (links.comments notes.id).open NewThread {anchor = Nothing, body = "Yes, @reader, do."} >>= jsonAs 201
+    made :: FeedAddress <- asWithout r (Just people.reader) methodPost links.notifications.renewFeed >>= jsonAs 200
+    address <- maybe (assertFailure "no address") pure made.address
+    let token = T.drop (T.length "me/notifications.atom?token=") address
+        pageUrl = r.public <> "/s/blog/p/notes-on-haskell/"
+    served <- getUrl r (onPublic r address)
+    served.status `shouldBe` 200
+    header "Content-Type" served `shouldBe` Just "application/atom+xml; charset=utf-8"
+    header "Cache-Control" served `shouldBe` Just "private, no-store"
+    let xml = decodeUtf8 (BSL.toStrict served.body)
+    xml `shouldValidate` "test/schemas/atom.rng"
+    root <- parsed xml
+    let entries = children "entry" root
+    -- The newest first, each with its author and its link, and no content:
+    -- a feed reader keeps a copy outside the wiki.
+    map (map textOf . children "title") entries `shouldBe` [["Ada Admin mentioned you in Notes on Haskell"], ["Edgar Editor mentioned you in Notes on Haskell"]]
+    map (map textOf . concatMap (children "name") . children "author") entries `shouldBe` [["Ada Admin"], ["Edgar Editor"]]
+    map (map (attributeOf "href") . children "link") entries `shouldBe` [[Just (pageUrl <> "#comment-thread-" <> thread.id.text)], [Just pageUrl]]
+    Xml.named "content" root `shouldBe` []
+    -- The secret is in no id, so a new address leaves the entries as they were.
+    (token `T.isInfixOf` xml) `shouldBe` False
+    -- Reading the feed marks nothing read.
+    (toldOver r people.reader <&> \n -> n.unread) `shouldReturn` 2
+    -- A new address, and the old one answers nothing; nor does a wrong
+    -- secret, or none.
+    renewed :: FeedAddress <- asWithout r (Just people.reader) methodPost links.notifications.renewFeed >>= jsonAs 200
+    newAddress <- maybe (assertFailure "no address") pure renewed.address
+    ((.status) <$> getUrl r (onPublic r address)) `shouldReturn` 404
+    ((.status) <$> getUrl r (onPublic r newAddress)) `shouldReturn` 200
+    ((.status) <$> getUrl r (onPublic r "me/notifications.atom?token=nothing")) `shouldReturn` 404
+    ((.status) <$> getUrl r (onPublic r "me/notifications.atom")) `shouldReturn` 404
+    -- In a closed wiki too: the secret is what lets its reader in.
+    closed :: WikiSettings <- sendJson r "PUT" (onAdmin r links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
+    closed.access `shouldBe` Closed
+    ((.status) <$> getUrl r (onPublic r newAddress)) `shouldReturn` 200
 
   it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
@@ -405,6 +473,41 @@ inTheStorage backing = describe "in the storage" $ do
     writing st (unsubscribeUser token) `shouldReturn` True
     mailOf "user-reader" `shouldReturn` Just (Just "off")
     mailOf "user-editor" `shouldReturn` Just Nothing
+
+  it "puts the fifty newest in the feed of notifications, and nothing of a page the user may no longer read" $ withDemo backing $ \st -> do
+    blog <- as' st "admin" (getSpace (path "blog")) >>= ok
+    notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
+    now <- getCurrentTime
+    let rita = UserId "user-reader"
+        changed i =
+          Notification
+            { id = NotificationId ("changed-" <> show i)
+            , kind = Changed
+            , page = notes.id
+            , thread = Nothing
+            , actor = Author {id = UserId "user-editor", name = "Edgar Editor"}
+            , title = "Notes " <> show i
+            , excerpt = ""
+            , createdAt = addUTCTime (fromIntegral i) now
+            , read = False
+            , location = Nothing
+            }
+        titles = maybe (pure []) (\xml -> map textOf . concatMap (children "title") . children "entry" <$> parsed xml)
+        feedNow secret = notificationFeed st "https://wiki.example/" secret
+    writing st $ do
+      storeFeedToken rita "a-secret"
+      for_ [1 .. 52 :: Int] $ \i -> insertNotification rita (changed i) False
+    xml <- feedNow "a-secret"
+    titles xml `shouldReturn` ["Edgar Editor changed Notes " <> show i | i <- [52, 51 .. 3 :: Int]]
+    for_ xml (`shouldValidate` "test/schemas/atom.rng")
+    feedNow "another" `shouldReturn` Nothing
+    _ <- as' st "admin" (setSpacePublic blog.id False) >>= ok
+    hidden <- feedNow "a-secret"
+    isJust hidden `shouldBe` True
+    titles hidden `shouldReturn` []
+    -- A user who may not sign in has no feed.
+    writing st (updateDisabled rita True)
+    feedNow "a-secret" `shouldReturn` Nothing
 
   it "deletes what is older than kept with the day's digest" $ withDemo backing $ \st -> do
     sent <- newIORef []
