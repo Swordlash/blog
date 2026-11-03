@@ -9,7 +9,7 @@
 #                                [--bind ADDRESS] [--admin-port N] [--prefix DIR]
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
-#                                [--backend-only[=REF] | --no-backend-only]
+#                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
 #                                [--no-build] [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
@@ -212,6 +212,13 @@
 #                    release. They are public, so no token is needed: curl downloads
 #                    them from github.com and lists them with api.github.com (sixty
 #                    requests an hour without a token; a deploy makes one or two).
+#                    The downloaded zip is kept in a cache of the five newest:
+#                    <toolchain>/.wiki-toolchain/pages when the deployment has a
+#                    toolchain directory other than the home directory, else
+#                    ${XDG_CACHE_HOME:-~/.cache}/wiki-demo/pages. A commit's page
+#                    never changes, so a cached one is used as it is. A tag's page
+#                    can be replaced on GitHub, so a cached one is used only while
+#                    the release lists the same size for it.
 #                    The page and the server talk over the API, so the page should be
 #                    of the checkout's commit; a warning says when it is not (and for
 #                    the demo too). Reading GitHub's answers and unpacking the zip
@@ -228,6 +235,8 @@
 #                    and nothing else. Remembered for the next run
 #   --no-backend-only
 #                    build the page on this machine again, after a run with --backend-only
+#   --refresh-page   with --backend-only, download the page even when the cache has
+#                    it; for this run only
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
@@ -272,7 +281,7 @@ usage() {
 
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
-opt_backend_only=''
+opt_backend_only='' refresh_page=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
@@ -304,6 +313,7 @@ while [ $# -gt 0 ]; do
     --backend-only) opt_backend_only='head' ;;
     --backend-only=*) opt_backend_only=${1#*=}; [ -n "$opt_backend_only" ] || opt_backend_only='head' ;;
     --no-backend-only) opt_backend_only='none' ;;
+    --refresh-page) refresh_page=1 ;;
     --github-token-file | --github-token-file=*)
       die "--github-token-file is not needed: the pages CI builds are public release assets, downloaded without a token" ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
@@ -1032,9 +1042,10 @@ github_repo() {
   esac
 }
 
-# The assets of a release into release_list, "name time" per line, the time
-# the one each was uploaded at; empty when there is no such release. Stops
-# the deploy on any other answer.
+# The assets of a release into release_list, "name time size" per line: the
+# time each was uploaded at (- when GitHub gives none) and its size in bytes.
+# The list is empty when there is no such release. Stops the deploy on any
+# other answer.
 release_assets() {
   release_list=
   listing=$(mktemp)
@@ -1046,8 +1057,8 @@ release_assets() {
   case $code in
     200)
       release_list=$(json_read 'for a in d.get("assets") or []:
-    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "")' \
-        '.assets[]? | "\(.name) \(.updated_at // .created_at // "")"' <"$listing") || {
+    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "-", a.get("size", ""))' \
+        '.assets[]? | "\(.name) \(.updated_at // .created_at // "-") \(.size // "")"' <"$listing") || {
         rm -f "$listing"
         die "could not read the answer of api.github.com about the release $1"
       } ;;
@@ -1091,9 +1102,11 @@ same_code() {
 # Which page --backend-only=REF names: sets page_tag (the release), page_asset
 # (its asset, app-server-… or app-demo-… as page_kind says) and
 # backend_only_commit (the commit the page was built from, empty for a tag
-# this checkout does not have).
+# this checkout does not have), and for a tag page_size (the size of its
+# asset as the release lists it, for the cache).
 resolve_page() {
   if [ "$page_kind" = server ]; then page_name=page; else page_name='demo page'; fi
+  page_size=
   no_page() {
     die "no $page_name was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
   }
@@ -1148,29 +1161,83 @@ resolve_page() {
         [ -n "$tag_assets" ] || die "GitHub has no release $ref with a page, and $ref is neither main nor a commit hash: name main, a tag pushed since CI keeps pages, or a hash"
         printf '%s\n' "$tag_assets" | grep -qxF "$page_asset" ||
           die "the release $ref on GitHub has no $page_asset: CI attaches it when the tag is pushed"
+        page_size=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { print $3; exit }')
         backend_only_commit=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/${ref}^{commit}" 2>/dev/null || true)
       fi ;;
   esac
 }
 
-# Download the page resolve_page found and unpack it into $out, through a
-# directory beside it, so that a failed download leaves the last page as it
-# was. python3 unpacks it (unzip where there is none).
-download_page() {
-  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
-  say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
-  work=$ROOT/dist-newstyle/wasm-opt/download
-  rm -rf "$work"
+# Unpack a page's zip into $work/app and check that it is a page of the kind
+# page_kind names. On failure it sets unpack_error to the reason and returns
+# 1. python3 unpacks it (unzip where there is none).
+unpack_page() {
+  rm -rf "$work/app"
   mkdir -p "$work/app"
-  curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
   if command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$work/page.zip" "$work/app" || die "could not unpack $page_asset (see above)"
+    python3 -m zipfile -e "$1" "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
   else
-    unzip -q "$work/page.zip" -d "$work/app" || die "could not unpack $page_asset (see above)"
+    unzip -q "$1" -d "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
   fi
   for file in index.html 404.html app.wasm; do
-    [ -f "$work/app/$file" ] || die "$page_asset lacks $file: it is not a page CI built for the $page_kind"
+    [ -f "$work/app/$file" ] || { unpack_error="$page_asset lacks $file: it is not a page CI built for the $page_kind"; return 1; }
   done
+}
+
+# Delete all but the five newest zips in the page cache, by modification
+# time. A zip's time is when it was downloaded or last used.
+prune_pages() {
+  # shellcheck disable=SC2012 # ls -t orders by mtime; the names are asset names, without newlines.
+  ls -t "$page_cache"/*.zip 2>/dev/null | tail -n +6 | while IFS= read -r old; do
+    rm -f "$old"
+  done
+}
+
+# Unpack the page resolve_page found into $out, through a directory beside
+# it, so that a failed download leaves the last page as it was. The zip comes
+# from the page cache when the cache has it and it is still the page GitHub
+# has: a page of a commit (app-<kind>-<hash>.zip) never changes, and a tag's
+# is taken only while the release lists the cached file's size for it.
+# --refresh-page skips the cache. A downloaded zip enters the cache only
+# after it unpacked as a page, under a temporary name first, so a broken or
+# partial download is never taken from there.
+download_page() {
+  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
+  page_cache=${toolchain_home:+$toolchain_home/.wiki-toolchain/pages}
+  [ -n "$page_cache" ] || page_cache=${XDG_CACHE_HOME:-$HOME/.cache}/wiki-demo/pages
+  cached=$page_cache/$page_asset
+  work=$ROOT/dist-newstyle/wasm-opt/download
+  rm -rf "$work"
+  mkdir -p "$work"
+  from_cache=
+  if [ -z "$refresh_page" ] && [ -f "$cached" ]; then
+    if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
+      from_cache=1
+    elif [ -n "$page_size" ] && [ "$(wc -c <"$cached" | tr -d ' ')" = "$page_size" ]; then
+      from_cache=1
+    fi
+  fi
+  if [ -n "$from_cache" ]; then
+    if unpack_page "$cached"; then
+      touch "$cached"
+      say "the page of ${backend_only_commit:-$page_tag} from the cache: $cached"
+    else
+      warn "the cached $cached is not a page ($unpack_error), so it is deleted and downloaded again"
+      rm -f "$cached"
+      from_cache=
+    fi
+  fi
+  if [ -z "$from_cache" ]; then
+    say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
+    curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
+    unpack_page "$work/page.zip" || die "$unpack_error"
+    if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
+      mv -f "$page_cache/.$page_asset.part" "$cached"; then
+      prune_pages
+    else
+      rm -f "$page_cache/.$page_asset.part"
+      warn "could not keep the page in the cache $page_cache; the next deploy downloads it again"
+    fi
+  fi
   rm -rf "$out"
   mkdir -p "${out%/*}"
   mv "$work/app" "$out"

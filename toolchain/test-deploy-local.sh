@@ -112,7 +112,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -1689,7 +1689,8 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
 ' "${2:-$page}" "$1"
 }
 # A release's JSON as the API gives it: its tag, and its assets with the
-# times they were uploaded at, given as name time pairs.
+# times they were uploaded at, given as name time pairs, and their sizes,
+# those of the files under download/<tag>/ (0 for an asset with no file).
 release() {
   tag=$1
   shift
@@ -1697,7 +1698,8 @@ release() {
     printf '{"tag_name":"%s","prerelease":true,"assets":[' "$tag"
     sep=
     while [ $# -gt 0 ]; do
-      printf '%s{"name":"%s","updated_at":"%s","browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$1" "$2" "$tag" "$1"
+      size=$(wc -c <"$FAKE_GITHUB/download/$tag/$1" 2>/dev/null || printf 0)
+      printf '%s{"name":"%s","updated_at":"%s","size":%s,"browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$1" "$2" "$size" "$tag" "$1"
       sep=,
       shift 2
     done
@@ -1757,6 +1759,9 @@ assert_lacks "$out" 'warning: the page is of'
 [ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the downloaded page is not served'
 { [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ] && [ "$(pstate https)" = no ]; } ||
   fail 'the state does not record the page from GitHub'
+cmp "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip" "$FAKE_GITHUB/download/main-latest/app-server-$head1.zip" ||
+  fail 'the downloaded page was not kept in the cache under the toolchain directory'
+[ -z "$(find "$pre/toolchain/.wiki-toolchain/pages" -name '.*')" ] || fail 'the cache keeps a temporary file'
 pass '--backend-only downloads the checkout'"'"'s page from its GitHub release, builds wiki-server alone after bootstrap native, without npm or Node, and serves it with gzip copies'
 
 : >"$EVENTS"
@@ -1775,6 +1780,25 @@ deploy --status --prefix "$pre" >"$out" 2>&1
 assert_contains "$out" "its page is downloaded from GitHub (--backend-only=head, the page of $head1)"
 pass 'a redeploy with --no-build keeps the page and the choice, and gives the unit the LD_LIBRARY_PATH of its shell; --status says where the page comes from'
 
+# A second deploy of the same commit takes its page from the cache and
+# downloads nothing; --refresh-page downloads it again, for that run only.
+cache=$pre/toolchain/.wiki-toolchain/pages
+: >"$EVENTS"
+out=$case_dir/cached
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy from the cache failed'
+assert_contains "$EVENTS" 'curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of $head1 from the cache: $cache/app-server-$head1.zip"
+assert_lacks "$out" 'downloading the page'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the page from the cache is not served'
+: >"$EVENTS"
+out=$case_dir/refresh
+deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail '--refresh-page failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_lacks "$out" 'from the cache'
+assert_lacks "$pre/state/wiki-demo.state" 'refresh'
+pass 'a second deploy of the same commit takes the page from the cache and downloads nothing; --refresh-page downloads it again'
+
 # A commit that changes Markdown alone has no page of its own (CI ignores
 # it); the page of the commit before it is the same.
 printf 'notes\n' >"$case_dir/repo/NOTES.md"
@@ -1785,7 +1809,8 @@ out=$case_dir/markdown
 deploy --prefix "$pre" >"$out" 2>&1 || fail 'the deploy of a commit changing Markdown alone failed'
 assert_lacks "$HOME/$unit" 'LD_LIBRARY_PATH'
 assert_contains "$out" "changes Markdown files alone since $head1, which has a page on GitHub: taking that one"
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache"
+assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$out" 'warning: the page is of'
 [ "$(pstate backend_only_commit)" = "$head1" ] || fail 'the page of the commit before was not recorded'
 pass 'a checkout whose commit changes Markdown alone takes the page of the commit before it'
@@ -1808,7 +1833,7 @@ assert_lacks "$EVENTS" 'curl https://github.com/'
 : >"$EVENTS"
 out=$case_dir/template-other-page
 deploy --prefix "$pre" --backend-only="$head1" >"$out" 2>&1 || fail "--backend-only=$head1 failed"
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache"
 assert_contains "$out" "warning: the page is of $head1, and wiki-server is built from this checkout"
 pass 'a commit that changes a built-in template alone has no page of the commit before, and that page is of another version'
 
@@ -1820,7 +1845,7 @@ assert_contains "$out" "warning: the page is of $newest, and wiki-server is buil
 { [ "$(pstate backend_only)" = main ] && [ "$(pstate backend_only_commit)" = "$newest" ]; } || fail 'the state does not record main'
 : >"$EVENTS"
 deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of main failed'
-assert_contains "$EVENTS" "app-server-$newest.zip"
+assert_contains "$out" "the page of $newest from the cache"
 [ "$(pstate backend_only)" = main ] || fail 'a redeploy without the flag forgot main'
 pass '--backend-only=main takes the newest page of main, warns that it is of another commit, and is remembered'
 
@@ -1841,11 +1866,44 @@ deploy --prefix "$pre" --backend-only=v9.9 >"$out" 2>&1 || fail 'a tag failed'
 assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
 assert_contains "$out" 'cannot tell which commit the page of v9.9 was built from'
 { [ "$(pstate backend_only)" = v9.9 ] && [ -z "$(pstate backend_only_commit)" ]; } || fail 'the state does not record the tag'
+# A tag's asset can be replaced: the cached one is taken while the release
+# lists its size, and downloaded again when the size changed.
+: >"$EVENTS"
+out=$case_dir/tag-cached
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag failed'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of v9.9 from the cache: $cache/app-server-v9.9.zip"
+cp -r "$page" "$case_dir/page2"
+printf "a file the first v9.9 had not\n" >"$case_dir/page2/extra.txt"
+page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" "$case_dir/page2"
+release v9.9 app-server-v9.9.zip 2026-10-02T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/tag-replaced
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a replaced tag failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+assert_lacks "$out" 'from the cache'
+cmp "$cache/app-server-v9.9.zip" "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" || fail 'the cache kept the replaced asset'
+[ -f "$pre/app/extra.txt" ] || fail "the replaced tag's page was not deployed"
 out=$case_dir/no-tag
 if deploy --prefix "$pre" --backend-only=v0.0-none >"$out" 2>&1; then fail 'a tag with no release was deployed'; fi
 assert_contains "$out" 'GitHub has no release v0.0-none with a page'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a refused REF took the server down'
-pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page'
+pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page; a tag'"'"'s cached page is taken while its size is unchanged, and downloaded again when it changed'
+
+# The cache keeps the five newest zips: after a download, older ones go.
+rm -f "$cache"/*.zip
+for i in 1 2 3 4 5 6; do
+  : >"$cache/app-server-old$i.zip"
+  touch -d "$i hours ago" "$cache/app-server-old$i.zip"
+done
+: >"$EVENTS"
+out=$case_dir/prune
+deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail 'the deploy that prunes the cache failed'
+[ "$(find "$cache" -name '*.zip' | wc -l)" -eq 5 ] || fail "the cache holds $(find "$cache" -name '*.zip' | wc -l) zips, not five"
+for kept in app-server-v9.9.zip app-server-old1.zip app-server-old2.zip app-server-old3.zip app-server-old4.zip; do
+  [ -f "$cache/$kept" ] || fail "the prune deleted $kept"
+done
+pass 'after a download the cache keeps its five newest zips'
 
 # A machine without libsodium that is not Debian (no dpkg-query on PATH),
 # so nothing would install it: the check refuses.
@@ -2001,7 +2059,8 @@ assert_contains "$pre/app/index.html" '<title>wiki</title>'
 : >"$EVENTS"
 out=$case_dir/to-demo
 deploy --static --prefix "$pre" >"$out" 2>&1 || fail 'the move from the server back to the demo failed'
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache: $pre/toolchain/.wiki-toolchain/pages/app-demo-$head1.zip"
+assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$EVENTS" 'app-server-'
 assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'cabal'
@@ -2067,8 +2126,9 @@ assert_contains "$out" "The wiki has no public address yet: set it to $https_url
 assert_contains "$HOME/$unit" '--secure-cookies'
 [ "$(state https_host)" = box.tail1234.ts.net ] || fail 'HTTPS was not recorded'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'a Node was installed'
+[ -f "$HOME/.cache/wiki-demo/pages/app-server-$head1.zip" ] || fail 'without a toolchain directory of its own, the page is not cached in ~/.cache/wiki-demo/pages'
 undeploy >/dev/null 2>&1
-pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node'
+pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node; its page is cached in ~/.cache'
 
 # HTTPS with a certificate of one's own, and behind a reverse proxy
 # (WP5.50). The certificates are made with openssl, as a company's
