@@ -645,7 +645,7 @@ undeploy --prefix "$pre" --purge >"$out" 2>&1 || fail 'undeploy --purge under th
 [ -d "$pre/data" ] || fail '--purge deleted the data'
 [ ! -e "$pre/toolchain" ] && [ ! -e "$pre/bin" ] && [ ! -e "$pre/state" ] || fail '--purge kept the toolchain, the state or the files'
 [ ! -e "$HOME/$unit" ] || fail '--purge kept the unit'
-assert_contains "$out" 'its state and the toolchain under it'
+assert_contains "$out" 'and the toolchain under it'
 pass 'undeploy --purge under the prefix deletes the toolchain and the state too, and keeps the data'
 
 # A deployment made before --prefix, in the home directory, is adopted when
@@ -710,7 +710,7 @@ undeploy --prefix "$HOME/wiki-demo" --purge >"$out" 2>&1 || fail 'undeploy --pur
 [ -f "$FAKE_DOCKER/wiki-demo" ] || fail '--purge deleted the volume'
 [ -d "$HOME/wiki-demo/data" ] || fail '--purge deleted the data'
 [ ! -e "$HOME/wiki-demo/bin" ] && [ ! -e "$HOME/wiki-demo/state/wiki-demo.state" ] || fail '--purge kept the files or the state'
-assert_contains "$out" "and the database's password in $pgd, with the volume wiki-demo_wiki-db"
+assert_contains "$out" "and the password of the database in $pgd, with the volume wiki-demo_wiki-db"
 pass 'adoption on PostgreSQL copies the database files under the prefix and --purge keeps the password with the volume'
 
 # sudo that wants a password: the ufw commands are printed, not run. Over

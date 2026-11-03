@@ -520,7 +520,7 @@ undeploy() {
           find "$dir/state" -mindepth 1 -maxdepth 1 ! -name "$name.postgres" -exec rm -rf {} +
           [ -n "$kept_pg" ] || rm -rf "$dir/state"
         fi
-        say "deleted the deployed files in $dir${prefix:+ and the toolchain under it}, and kept the wiki's data in $dir/data${kept_pg:+ and the database's password in $dir/state/$name.postgres, with the volume ${name}_wiki-db} (--purge-data deletes them too)"
+        say "deleted the deployed files in $dir${prefix:+ and the toolchain under it}, and kept the wiki's data in $dir/data${kept_pg:+ and the password of the database in $dir/state/$name.postgres, with the volume ${name}_wiki-db} (--purge-data deletes them too)"
       else
         rm -rf "$dir"
         say "deleted $dir${prefix:+, the state and the toolchain under it included}"
