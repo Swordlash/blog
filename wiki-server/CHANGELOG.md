@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+`wiki-server compress DIR` (WP5.49) writes a gzip copy, `<file>.gz`, beside
+each file of the application's directory that the deploy script compresses
+(its text and code over 1 KiB), and keeps a copy newer than its file. A
+deployment without Node (`deploy-local.sh --backend-only`) runs it in place
+of the brotli copies, and the server sends the `.gz` to a browser that
+accepts gzip.
+
 A user's notifications as a private Atom feed (WP5.31): migration
 `0006-notification-feed` adds `users.feed_token`, the secret of a user's
 feed, none until they make one. `GET notifications/feed` answers the

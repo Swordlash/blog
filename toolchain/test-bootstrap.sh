@@ -204,6 +204,84 @@ assert_contains "$case_dir/build" 'no Chromium or fourmolu (build)'
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'build did not write the environment file'
 pass 'build installs the compilers and Node, and neither Chromium nor fourmolu'
 
+# What toolchain/deploy-local.sh --backend-only needs: GHC and cabal alone.
+# With no Node, no sysroot, no fourmolu, no alex or happy and no Chromium,
+# `native` installs none of them (any attempt would reach the fake curl, git,
+# npm, cabal install or Playwright and be recorded), leaves a ~/.ghc-wasm it
+# does not recognise alone, and writes the environment file. Without
+# dpkg-query (RHEL, say) it checks the commands a native build runs.
+fixture native
+rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" "$case_dir/bin/alex" "$case_dir/bin/happy" \
+  "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap native >"$case_dir/native"
+[ ! -s "$EVENTS" ] || fail "native installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/native" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'native did not write the environment file'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'native touched ~/.ghc-wasm'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'native installed Node'
+# The machine without dpkg-query. Removing the fake one is not enough: on a
+# Debian host the PATH would still reach the host's /usr/bin/dpkg-query,
+# which reports the host's own packages (GitHub's runner has no
+# build-essential). So these runs get a PATH of the fake tools and a
+# directory of links to the commands in /usr/bin and /bin, without
+# dpkg-query, cc and make. env sets that PATH for the one command, so sh is
+# found among the links. Of the commands this branch checks (cc, make, curl
+# and git), all four are fakes, so the result does not depend on what the
+# host has installed.
+rm "$case_dir/bin/dpkg-query"
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/cc"
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
+chmod +x "$case_dir/bin/cc" "$case_dir/bin/make"
+no_dpkg=$case_dir/no-dpkg
+mkdir "$no_dpkg"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  case $name in dpkg-query | cc | make) continue ;; esac
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$no_dpkg/$name" ] || [ -L "$no_dpkg/$name" ] || ln -s "$cmd" "$no_dpkg/$name"
+done
+env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel" 2>&1 ||
+  fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
+[ ! -s "$EVENTS" ] || fail "native without dpkg-query installed something: $(cat "$EVENTS")"
+if grep -F 'Debian packages' "$case_dir/native-rhel" >/dev/null; then fail 'native without dpkg-query checked Debian packages'; fi
+# The branch without dpkg-query is silent when the commands are there, so
+# take the fake make away too: only that branch names a missing command.
+rm "$case_dir/bin/make"
+if env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel-no-make" 2>&1; then
+  fail 'native without dpkg-query or make succeeded'
+fi
+assert_contains "$case_dir/native-rhel-no-make" 'missing commands: make; install them and run this again'
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not'
+
+# What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
+# With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`
+# installs none of them (any attempt would reach the fake curl, git or
+# cabal install and be recorded), reuses the Node 24 on PATH, leaves a
+# ~/.ghc-wasm it does not recognise alone, and writes the environment file.
+# With only an older Node on PATH it downloads Node, and nothing else.
+fixture node
+rm "$case_dir/bin/ghc" "$case_dir/bin/cabal" "$case_dir/bin/wasm32-wasi-ghc" "$case_dir/bin/fourmolu" \
+  "$case_dir/bin/alex" "$case_dir/bin/happy"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap node >"$case_dir/node"
+[ ! -s "$EVENTS" ] || fail "node installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/node" 'Node v24.99.0; no compilers, wasm toolchain, Chromium or fourmolu (node)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'node did not write the environment file'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
+[ ! -e "$HOME/.ghcup" ] || fail 'node installed ghcup'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'node installed Node over a compatible one'
+NODE_REPORT=v22.0.0
+export NODE_REPORT
+if bootstrap node >"$case_dir/node-old" 2>&1; then fail 'node succeeded without downloading Node'; fi
+assert_contains "$case_dir/node-old" 'downloading Node failed'
+[ "$(cat "$EVENTS")" = "unexpected curl --fail --location --retry 5 --silent --show-error --output $HOME/.wiki-toolchain/node-v24.21.0-linux-x64.tar.xz https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz" ] ||
+  fail "node with an old Node did more than download Node: $(cat "$EVENTS")"
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
+pass 'node installs Node alone, reusing a Node 24 on PATH, with no compilers, wasm toolchain, Chromium or fourmolu'
+
 fixture generators
 sysroot
 HAPPY_REPORT=2.1.70

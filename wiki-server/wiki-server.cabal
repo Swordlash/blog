@@ -70,6 +70,7 @@ library
         Wiki.Server.App
         Wiki.Server.Auth
         Wiki.Server.Backups
+        Wiki.Server.Compress
         Wiki.Server.Console
         Wiki.Server.Events
         Wiki.Server.Export
@@ -180,7 +181,8 @@ library
         websockets >= 0.13 && < 0.14,
         wiki-api,
         wiki-app,
-        wiki-core
+        wiki-core,
+        zlib
 
 -- Native only: a server has no business in the browser.
 executable wiki-server
@@ -195,6 +197,7 @@ executable wiki-server
     buildable: False
   else
     build-depends:
+        directory,
         optparse-applicative,
         protolude,
         sel,
@@ -282,6 +285,7 @@ test-suite wiki-server-test
         Test.Server.Api
         Test.Server.Backups
         Test.Server.Comments
+        Test.Server.Compress
         Test.Server.Export
         Test.Server.FakeProvider
         Test.Server.Feed

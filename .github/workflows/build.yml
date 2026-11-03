@@ -1,18 +1,32 @@
 name: CI
 
 # Markdown alone (the plan, the README, notes) builds nothing, so a change
-# to it alone runs no CI.
+# to it alone runs no CI. Some Markdown is compiled into the programs and
+# counts as code here: wiki-core's built-in templates (wiki-core/templates) and
+# its Markdown reference (wiki-core/reference/markdown.md, a symbolic link
+# to docs/markdown.md, which is the file a change to the reference
+# touches). The filter is `paths` with `!` rather than `paths-ignore`:
+# GitHub documents `!` for `paths` only, where a later pattern takes a path
+# back. server-page.yml and toolchain/deploy-local.sh's is_code say the same.
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
+    paths:
+      - '**'
+      - '!**.md'
+      - 'wiki-core/templates/**'
+      - 'wiki-core/reference/**'
+      - 'docs/markdown.md'
   pull_request:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
+    paths:
+      - '**'
+      - '!**.md'
+      - 'wiki-core/templates/**'
+      - 'wiki-core/reference/**'
+      - 'docs/markdown.md'
   workflow_dispatch:
     inputs:
       # Which runner wasm takes on a run by hand: the owner's (the default)

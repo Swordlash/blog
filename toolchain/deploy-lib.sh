@@ -15,7 +15,10 @@
 #     how it is reached: https (yes, the default, or no for --http), and when
 #     HTTPS is in effect the MagicDNS name it is served on (https_host) and
 #     the port `tailscale serve` proxies that name to (serve_port), which is
-#     what undeploying turns off;
+#     what undeploying turns off; and for a deployment that downloads its
+#     page from GitHub (--backend-only), the REF it names (backend_only:
+#     main, a tag, a hash, or head for the checkout's own commit) and the
+#     commit whose page it downloaded last (backend_only_commit);
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted. Named with --prefix, the directory holds the state too
@@ -194,6 +197,8 @@ state_write() {
     printf 'serve_port=%s\n' "${serve_port:-}"
     printf 'db=%s\n' "${db:-}"
     printf 'db_port=%s\n' "${db_port:-}"
+    printf 'backend_only=%s\n' "${backend_only:-}"
+    printf 'backend_only_commit=%s\n' "${backend_only_commit:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -495,6 +500,8 @@ undeploy() {
   serve_port=$(state_get serve_port)
   db=$(state_get db)
   db_port=$(state_get db_port)
+  backend_only=$(state_get backend_only)
+  backend_only_commit=$(state_get backend_only_commit)
   # A deployment that moved from PostgreSQL to --sqlite still has the
   # stopped container and its volume: --purge deletes them too.
   pg_down
