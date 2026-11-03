@@ -5,6 +5,7 @@
 #   sh toolchain/bootstrap.sh toolchain   # the toolchain only
 #   sh toolchain/bootstrap.sh build       # what a build needs: no Chromium, no fourmolu
 #   sh toolchain/bootstrap.sh native      # the host GHC and cabal alone, for wiki-server
+#   sh toolchain/bootstrap.sh node        # Node alone, to serve the demo's page CI built
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
@@ -85,6 +86,15 @@
 # (cc, make, curl, git), and the C libraries are found, or reported missing,
 # when wiki-server is built.
 #
+# `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
+# unless a Node 24 or later with npm is on PATH already, and the env file.
+# It installs no compilers, wasm sysroot, Chromium, fourmolu, alex or happy,
+# and no system packages, and leaves ~/.ghc-wasm alone.
+# toolchain/deploy-local.sh --static --backend-only runs it: that deployment
+# downloads the demo's page CI built, and needs Node only to serve the page
+# (server.mjs) and to write its brotli copies (compress.mjs). Before a
+# download it checks for curl, tar and xz, which fetch and unpack Node.
+#
 # CI on a self-hosted runner runs it the same way (`toolchain`), and appends
 # what `path` prints to $GITHUB_PATH: one directory per line, in the order
 # GitHub wants them there, where the last line is searched first.
@@ -149,9 +159,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | build | native | warm | env | path | check | ready) ;;
+  all | toolchain | build | native | node | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|build|native|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build|native|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -489,8 +499,11 @@ if [ "$mode" = check ]; then
 fi
 
 # setup.sh deletes its prefix: refuse unsafe state before changing anything.
-# A native install never runs it, and leaves ~/.ghc-wasm alone.
-[ "$mode" = native ] || guard_wasm_sysroot || exit 1
+# A native or node install never runs it, and leaves ~/.ghc-wasm alone.
+case $mode in
+  native | node) ;;
+  *) guard_wasm_sysroot || exit 1 ;;
+esac
 mkdir -p "$STATE"
 
 say() {
@@ -718,6 +731,22 @@ ghcup_wasm_install() {
   )
 }
 
+# The commands install_node downloads and unpacks Node with, checked by the
+# node mode before a download needs them: that mode installs no system
+# packages, so a missing command is named here rather than failing halfway.
+node_commands() {
+  compatible_node && return 0
+  [ "$("$NODE_DIR/bin/node" --version 2>/dev/null || true)" != "v$NODE_VERSION" ] || return 0
+  missing=
+  for cmd in curl tar xz; do
+    command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+  done
+  if [ -n "$missing" ]; then
+    say "missing commands:$missing; install them and run this again (Node is downloaded with curl and unpacked with tar and xz)"
+    exit 1
+  fi
+}
+
 install_node() {
   compatible_node && return 0
   if [ "$("$NODE_DIR/bin/node" --version 2>/dev/null || true)" != "v$NODE_VERSION" ]; then
@@ -865,6 +894,18 @@ toolchain() {
   esac
   started=$(date +%s)
   quiet_before=$(wc -c <"$LOG")
+  if [ "$mode" = node ]; then
+    node_commands
+    install_node
+    write_env
+    summary="Node $(node --version); no compilers, wasm toolchain, Chromium or fourmolu (node)"
+    if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
+      printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
+    else
+      say "toolchain ready in $(($(date +%s) - started))s: $summary"
+    fi
+    return 0
+  fi
   system_packages
   install_native
   if [ "$mode" = native ]; then

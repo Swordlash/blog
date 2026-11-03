@@ -255,6 +255,33 @@ fi
 assert_contains "$case_dir/native-rhel-no-make" 'missing commands: make; install them and run this again'
 pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not'
 
+# What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
+# With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`
+# installs none of them (any attempt would reach the fake curl, git or
+# cabal install and be recorded), reuses the Node 24 on PATH, leaves a
+# ~/.ghc-wasm it does not recognise alone, and writes the environment file.
+# With only an older Node on PATH it downloads Node, and nothing else.
+fixture node
+rm "$case_dir/bin/ghc" "$case_dir/bin/cabal" "$case_dir/bin/wasm32-wasi-ghc" "$case_dir/bin/fourmolu" \
+  "$case_dir/bin/alex" "$case_dir/bin/happy"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap node >"$case_dir/node"
+[ ! -s "$EVENTS" ] || fail "node installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/node" 'Node v24.99.0; no compilers, wasm toolchain, Chromium or fourmolu (node)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'node did not write the environment file'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
+[ ! -e "$HOME/.ghcup" ] || fail 'node installed ghcup'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'node installed Node over a compatible one'
+NODE_REPORT=v22.0.0
+export NODE_REPORT
+if bootstrap node >"$case_dir/node-old" 2>&1; then fail 'node succeeded without downloading Node'; fi
+assert_contains "$case_dir/node-old" 'downloading Node failed'
+[ "$(cat "$EVENTS")" = "unexpected curl --fail --location --retry 5 --silent --show-error --output $HOME/.wiki-toolchain/node-v24.21.0-linux-x64.tar.xz https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz" ] ||
+  fail "node with an old Node did more than download Node: $(cat "$EVENTS")"
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
+pass 'node installs Node alone, reusing a Node 24 on PATH, with no compilers, wasm toolchain, Chromium or fourmolu'
+
 fixture generators
 sysroot
 HAPPY_REPORT=2.1.70
