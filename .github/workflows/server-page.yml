@@ -1,23 +1,34 @@
 name: Server page
 
-# The page wiki-server serves, built here so that a machine that cannot
-# build it (no npm registry, no wasm toolchain, no Node) can deploy the
-# server with it: `sh toolchain/deploy-local.sh --backend-only[=REF]`
-# downloads it and builds wiki-server alone. The page is
-# dist-newstyle/wasm-opt/public/app, the production build
-# toolchain/deploy-local.sh makes on a machine that can
-# (`WIKI_BACKEND=server HALOGEN_BASE_PATH=/ npm run build-wasm-opt`).
+# The two pages of each commit, built here so that a machine that cannot
+# build them (no npm registry, no wasm toolchain) can deploy them:
 #
-# It is kept as a release asset, a zip of the directory's contents, since
+#   - the page wiki-server serves, dist-newstyle/wasm-opt/public/app
+#     (`WIKI_BACKEND=server HALOGEN_BASE_PATH=/ npm run build-wasm-opt`):
+#     `sh toolchain/deploy-local.sh --backend-only[=REF]` downloads it and
+#     builds wiki-server alone;
+#   - the serverless demo's, a prerendered page per route with the wiki
+#     kept in the browser, dist-newstyle/wasm-opt/public/demo
+#     (`WIKI_BACKEND=demo`, the same build with the pages written for the
+#     demo): `sh toolchain/deploy-local.sh --static --backend-only[=REF]`
+#     downloads it and builds nothing, serving it with Node.
+#
+# Both are the production builds toolchain/deploy-local.sh makes on a
+# machine that can. In the second build cabal finds nothing to compile,
+# and only the steps after it run again: the JSFFI glue, wasm-opt, the
+# bundle and the prerender.
+#
+# Each is kept as a release asset, a zip of the directory's contents, since
 # a release asset of a public repository downloads without a token and a
 # workflow artifact does not:
 #
 #   - for main, on the pre-release main-latest, made by the first run and
 #     updated by every push to main after: app-server-<full commit
-#     hash>.zip for each of main's newest five commits with a page (older
-#     ones are deleted), the release's text listing them;
+#     hash>.zip and app-demo-<full commit hash>.zip for each of main's
+#     newest five commits with a page (the two of an older commit are
+#     deleted together), the release's text listing them;
 #   - for a tag, on that tag's release, made if there is none:
-#     app-server-<tag>.zip, kept for good.
+#     app-server-<tag>.zip and app-demo-<tag>.zip, kept for good.
 #
 # A push to main that changes Markdown alone builds no page, as CI builds
 # nothing for it: its page is that of the commit before, which the deploy
@@ -221,67 +232,99 @@ jobs:
         HALOGEN_BASE_PATH: /
       run: npm run build-wasm-opt
 
-    # The directory's contents at the zip's root, as the deploy script
+    # Into a directory of its own, so that the server's page stays.
+    - name: Build the demo's page
+      env:
+        WIKI_BACKEND: demo
+        HALOGEN_BASE_PATH: /
+        WIKI_PUBLIC_DIR: dist-newstyle/wasm-opt/public/demo
+      run: npm run build-wasm-opt
+
+    # Each directory's contents at its zip's root, as the deploy script
     # unpacks it; it checks for the same three files.
-    - name: Zip the page
+    - name: Zip the pages
       id: zip
       run: |
-        app=dist-newstyle/wasm-opt/public/app
-        for file in index.html 404.html app.wasm; do
-          [ -f "$app/$file" ] || { echo "::error::the build lacks $file"; exit 1; }
-        done
         if [ "$GITHUB_REF_TYPE" = tag ]; then
-          asset="app-server-$(printf '%s' "$GITHUB_REF_NAME" | tr / -).zip"
+          name=$(printf '%s' "$GITHUB_REF_NAME" | tr / -)
         else
-          asset="app-server-$GITHUB_SHA.zip"
+          name=$GITHUB_SHA
         fi
-        (cd "$app" && zip -q -r -X "$RUNNER_TEMP/$asset" .)
-        echo "asset=$asset" >> "$GITHUB_OUTPUT"
-        du -h "$RUNNER_TEMP/$asset" | tee -a "$GITHUB_STEP_SUMMARY"
+        for kind in server demo; do
+          if [ "$kind" = server ]; then
+            app=dist-newstyle/wasm-opt/public/app
+          else
+            app=dist-newstyle/wasm-opt/public/demo
+          fi
+          for file in index.html 404.html app.wasm; do
+            [ -f "$app/$file" ] || { echo "::error::the $kind's page lacks $file"; exit 1; }
+          done
+          asset="app-$kind-$name.zip"
+          (cd "$app" && zip -q -r -X "$RUNNER_TEMP/$asset" .)
+          echo "$kind=$asset" >> "$GITHUB_OUTPUT"
+          du -h "$RUNNER_TEMP/$asset" | tee -a "$GITHUB_STEP_SUMMARY"
+        done
 
-    - name: Keep the page of main on the pre-release main-latest
+    - name: Keep the pages of main on the pre-release main-latest
       if: github.ref == 'refs/heads/main'
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-        ASSET: ${{ steps.zip.outputs.asset }}
+        SERVER_ASSET: ${{ steps.zip.outputs.server }}
+        DEMO_ASSET: ${{ steps.zip.outputs.demo }}
       run: |
         if ! gh release view main-latest >/dev/null 2>&1; then
           gh release create main-latest --prerelease --target "$GITHUB_SHA" \
-            --title 'The page of main, latest five commits' \
-            --notes 'The page wiki-server serves, for the newest commits of main.'
+            --title 'The pages of main, latest five commits' \
+            --notes 'The page wiki-server serves and the demo, for the newest commits of main.'
         fi
-        gh release upload main-latest "$RUNNER_TEMP/$ASSET" --clobber
-        # The newest five pages are kept, by the time each was uploaded.
+        gh release upload main-latest "$RUNNER_TEMP/$SERVER_ASSET" "$RUNNER_TEMP/$DEMO_ASSET" --clobber
+        # The pages of the newest five commits are kept, a commit's two
+        # together. The assets, newest first by the time each was uploaded;
+        # then the commits, each once, in the order of its newest asset. A
+        # commit built before the demo's page was added has only its
+        # server's page, and counts the same.
         gh api "repos/$GITHUB_REPOSITORY/releases/tags/main-latest" \
-          --jq '.assets[] | select(.name | test("^app-server-[0-9a-f]{40}[.]zip$")) | "\(.updated_at) \(.name)"' |
+          --jq '.assets[] | select(.name | test("^app-(server|demo)-[0-9a-f]{40}[.]zip$")) | "\(.updated_at) \(.name)"' |
           sort -r > "$RUNNER_TEMP/assets"
-        tail -n +6 "$RUNNER_TEMP/assets" | while read -r _ name; do
-          echo "deleting $name"
-          gh release delete-asset main-latest "$name" --yes
+        sed -E 's/^[^ ]+ app-(server|demo)-([0-9a-f]{40})[.]zip$/\2/' "$RUNNER_TEMP/assets" | awk '!seen[$0]++' > "$RUNNER_TEMP/commits"
+        tail -n +6 "$RUNNER_TEMP/commits" | while read -r commit; do
+          for name in "app-server-$commit.zip" "app-demo-$commit.zip"; do
+            if grep -q " $name\$" "$RUNNER_TEMP/assets"; then
+              echo "deleting $name"
+              gh release delete-asset main-latest "$name" --yes
+            fi
+          done
         done
         # shellcheck disable=SC2016 # Markdown's backticks, not commands.
         {
-          echo 'The page wiki-server serves, for the newest five commits of main with one, newest first:'
+          echo 'The pages of the newest five commits of main that have them, newest first. For each commit, `app-server-<hash>.zip` is the page wiki-server serves, and `app-demo-<hash>.zip` the serverless demo (a prerendered page per route, the wiki kept in the browser).'
           echo
-          head -n 5 "$RUNNER_TEMP/assets" | while read -r time name; do
-            commit=${name#app-server-}
-            echo "- ${commit%.zip}, built $time"
+          head -n 5 "$RUNNER_TEMP/commits" | while read -r commit; do
+            time=$(grep -m 1 -E " app-(server|demo)-${commit}[.]zip\$" "$RUNNER_TEMP/assets" | cut -d' ' -f1)
+            echo "- $commit, built $time:"
+            if grep -q " app-server-${commit}[.]zip\$" "$RUNNER_TEMP/assets"; then
+              printf '  - the server'"'"'s page, `app-server-%s.zip`: `sh toolchain/deploy-local.sh --backend-only=%s`\n' "$commit" "$commit"
+            fi
+            if grep -q " app-demo-${commit}[.]zip\$" "$RUNNER_TEMP/assets"; then
+              printf '  - the demo, `app-demo-%s.zip`: `sh toolchain/deploy-local.sh --static --backend-only=%s`\n' "$commit" "$commit"
+            fi
           done
           echo
-          echo 'Deployed with `sh toolchain/deploy-local.sh --backend-only=main` (the newest), or `--backend-only=<hash>`.'
+          echo 'The newest: `--backend-only=main` for the server, `--static --backend-only=main` for the demo.'
         } > "$RUNNER_TEMP/notes"
         gh release edit main-latest --notes-file "$RUNNER_TEMP/notes"
 
-    - name: Keep the page of the tag on its release
+    - name: Keep the pages of the tag on its release
       if: github.ref_type == 'tag'
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-        ASSET: ${{ steps.zip.outputs.asset }}
+        SERVER_ASSET: ${{ steps.zip.outputs.server }}
+        DEMO_ASSET: ${{ steps.zip.outputs.demo }}
       run: |
         if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
-            --notes "The page wiki-server serves is attached as $ASSET: sh toolchain/deploy-local.sh --backend-only=$GITHUB_REF_NAME deploys it."
+            --notes "Two pages are attached. $SERVER_ASSET is the page wiki-server serves: sh toolchain/deploy-local.sh --backend-only=$GITHUB_REF_NAME deploys it with the server. $DEMO_ASSET is the serverless demo: sh toolchain/deploy-local.sh --static --backend-only=$GITHUB_REF_NAME deploys it."
         fi
-        gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/$ASSET" --clobber
+        gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/$SERVER_ASSET" "$RUNNER_TEMP/$DEMO_ASSET" --clobber
