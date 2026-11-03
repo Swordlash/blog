@@ -319,10 +319,47 @@ status=0
 env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --postgres >"$case_dir/native-bad-option" 2>&1 || status=$?
 [ "$status" = 2 ] || fail "native with an unknown option exited $status, not 2"
 assert_contains "$case_dir/native-bad-option" 'native [--without-postgres]'
+# Debian without libpq-dev, and without root or a sudo that needs no
+# password: plain native stops at the Debian packages, naming libpq-dev;
+# native --without-postgres does not ask for it, installs nothing, and goes
+# on to the check (which a missing libsodium then stops, to show that it ran).
+cat >"$case_dir/bin/dpkg-query" <<'EOF'
+#!/bin/sh
+[ "$4" != libpq-dev ] || exit 1
+printf 'install ok installed\n'
+EOF
+cat >"$case_dir/bin/id" <<'EOF'
+#!/bin/sh
+if [ "$1" = -u ]; then printf '1000\n'; else exec /usr/bin/id "$@"; fi
+EOF
+rm "$case_dir/bin/sudo"
+cat >"$case_dir/bin/sudo" <<'EOF'
+#!/bin/sh
+[ "$*" = '-n true' ] && exit 1
+printf 'unexpected sudo %s\n' "$*" >>"$EVENTS"
+exit 91
+EOF
+chmod +x "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+status=0
+WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-debian-no-libpq" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native on Debian without libpq-dev or root exited $status, not 1"
+assert_contains "$case_dir/native-debian-no-libpq" 'missing Debian packages: libpq-dev; install them (sudo apt-get install libpq-dev)'
+WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-debian-without-postgres" 2>&1 ||
+  fail "native --without-postgres on Debian without libpq-dev failed: $(cat "$case_dir/native-debian-without-postgres")"
+if grep -F 'missing Debian packages' "$case_dir/native-debian-without-postgres" >/dev/null; then fail 'native --without-postgres asked Debian for libpq-dev'; fi
+assert_contains "$case_dir/native-debian-without-postgres" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
+status=0
+SODIUM_MISSING=1 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-debian-check" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --without-postgres without libsodium exited $status, not 1"
+assert_contains "$case_dir/native-debian-check" 'missing  libsodium'
+assert_contains "$case_dir/native-debian-check" 'skipped  libpq       not needed (built without PostgreSQL)'
+[ ! -s "$EVENTS" ] || fail "native on Debian without libpq-dev installed something: $(cat "$EVENTS")"
+rm "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+ln -s tool "$case_dir/bin/sudo"
 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-on-path" 2>&1 ||
   fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
 [ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"
-pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH, or not at all with --without-postgres'
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH, or, with --without-postgres, neither libpq-dev from Debian nor libpq in the check'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`

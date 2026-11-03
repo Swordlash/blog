@@ -87,10 +87,11 @@
 # Debian: without dpkg-query it installs no system packages. Either way it
 # then runs toolchain/check-native.sh, which checks the commands and C
 # libraries wiki-server's build needs and names the Debian and RHEL packages
-# of any that are missing. `native --without-postgres` passes that option
-# to the check, for a wiki-server built without PostgreSQL (the cabal flag
-# postgres off), which needs no libpq: toolchain/deploy-local.sh gives it
-# for a wiki in SQLite.
+# of any that are missing. `native --without-postgres` is for a
+# wiki-server built without PostgreSQL (the cabal flag postgres off), which
+# needs no libpq: it does not ask Debian for libpq-dev, and passes the
+# option to the check. toolchain/deploy-local.sh gives it for a wiki in
+# SQLite.
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
@@ -603,16 +604,20 @@ as_root() {
 
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
 # (native programs link libgmp), libpq's (wiki-server reaches PostgreSQL
-# through postgresql-libpq), zlib's (the zlib package links the system's
-# zlib, which it finds through pkg-config), libsodium's (wiki-server's second
-# factor's codes are one-time-password's, over sel's bindings to libsodium),
-# pkg-config, and what ghc-wasm-meta's setup.sh runs.
+# through postgresql-libpq; only for a build with PostgreSQL), zlib's (the
+# zlib package links the system's zlib, which it finds through pkg-config),
+# libsodium's (wiki-server's second factor's codes are one-time-password's,
+# over sel's bindings to libsodium), pkg-config, and what ghc-wasm-meta's
+# setup.sh runs.
 system_packages() {
   missing=
   # A native install needs what wiki-server's build runs and links with,
   # and none of what the wasm toolchain's setup runs (jq, unzip, xz, zstd).
+  # With --without-postgres it needs no libpq-dev, so a machine without it,
+  # and without root, is not stopped here.
   if [ "$mode" = native ]; then
-    debian_packages='build-essential curl git libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
+    debian_packages='build-essential curl git libgmp-dev libsodium-dev pkg-config zlib1g-dev'
+    [ -n "$check_postgres" ] || debian_packages="$debian_packages libpq-dev"
   else
     debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
   fi
