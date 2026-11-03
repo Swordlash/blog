@@ -47,8 +47,6 @@ module Wiki.Server.Storage.Postgres
 
     -- * Backups
   , exportSnapshot
-  , PgPrograms (..)
-  , defaultPgPrograms
   , dumpPostgres
   , restorePostgres
   , checkDump
@@ -76,7 +74,7 @@ import System.IO (hClose)
 import System.Process (CreateProcess (..), StdStream (..), proc, waitForProcess, withCreateProcess)
 import Text.Printf (printf)
 import Wiki.Server.Secret (Secret (..))
-import Wiki.Server.Storage.Layout (PgDatabase (..))
+import Wiki.Server.Storage.Layout (PgDatabase (..), PgPrograms (..))
 import Wiki.Server.Storage.Schema (PageNodes (..))
 
 --------------------------------------------------------------------------------
@@ -309,20 +307,6 @@ postgresCodePoints = customExpr_ (\t -> "(" <> t <> " COLLATE \"C\")")
 exportSnapshot :: Pg Text
 exportSnapshot =
   fromMaybe "" <$> Beam.runSelectReturningOne (select (pure (Beam.as_ @Text (customExpr_ ("pg_export_snapshot()" :: (IsString a) => a)))))
-
--- | 'PgPrograms' are the programs a backup and a restore run: @pg_dump@
--- and @pg_restore@ by default, found on the path. A deployment whose
--- PostgreSQL runs in a container gives programs that run them there
--- (@toolchain/deploy-local.sh@ does), since @pg_dump@ refuses a server of
--- a newer major version than its own.
-data PgPrograms = PgPrograms
-  { dump :: FilePath
-  , restore :: FilePath
-  }
-  deriving stock (Eq, Show)
-
-defaultPgPrograms :: PgPrograms
-defaultPgPrograms = PgPrograms {dump = "pg_dump", restore = "pg_restore"}
 
 -- | Dump a database, as one consistent state, into a file in
 -- @pg_dump@'s custom format, which @pg_restore@ reads. With a snapshot

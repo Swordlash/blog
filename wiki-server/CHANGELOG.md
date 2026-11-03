@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+A wiki-server without PostgreSQL (WP5.52): the cabal flag `postgres`, on by
+default, can be turned off (`--constraint='wiki-server -postgres'`) for a
+wiki kept in SQLite. Such a build leaves out `Wiki.Server.Storage.Postgres`
+and the `beam-postgres`, `postgresql-simple` and `postgresql-libpq`
+packages, so it needs neither libpq nor `pg_config`, and builds on a machine
+whose libpq is too old for `postgresql-libpq`. It refuses a PostgreSQL
+database at start (`--database`, or `WIKI_DATABASE_URL`), in `serve` and in
+every console command, saying that it was built without PostgreSQL and how
+to build it with it. `wiki-server --version` prints a second line with the
+databases the build has: `backends: sqlite, postgresql`, or `backends:
+sqlite`. Its test suite runs on SQLite alone, and its `postgres` group runs
+nothing, with a note. `PgPrograms` and `defaultPgPrograms` moved from
+`Wiki.Server.Storage.Postgres` to `Wiki.Server.Storage.Layout`, since the
+command line names the programs either way, and
+`Wiki.Server.Storage.Backend` no longer re-exports `Postgres`.
+
 The public listener speaks HTTPS itself with `wiki-server serve --tls-cert
 FILE --tls-key FILE` (WP5.50), through warp-tls: TLS 1.2 and 1.3, no C
 library added. The files are PEM; the certificate file may carry its chain

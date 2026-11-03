@@ -14,6 +14,9 @@
 -- [--database-password-file FILE]@ for a PostgreSQL database, or @--sqlite
 -- FILE@; without either, the URL in @WIKI_DATABASE_URL@ if it is set, else
 -- the SQLite file @DIR\/wiki.sqlite@ ("Wiki.Server.Options").
+-- A wiki-server built without PostgreSQL (the cabal flag @postgres@ off)
+-- refuses a PostgreSQL database at start; @--version@ prints, after the
+-- version, the databases it was built for (@backends: sqlite@).
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
 -- directory on its two listeners ("Wiki.Server", "Wiki.Server.Options").
@@ -42,7 +45,7 @@ import Wiki.Server.Compress (compressDirectory)
 import Wiki.Server.Console (BackupOutcome (..), GuideCommand, OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runGuide, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (defaultKeep)
-import Wiki.Server.Version (serverVersion)
+import Wiki.Server.Version (serverVersion, versionReport)
 
 -- | What the server is asked to do.
 data Command
@@ -75,7 +78,7 @@ commands =
           )
           <|> (Serve <$> serveOptions)
       )
-        <**> simpleVersioner (toS serverVersion)
+        <**> simpleVersioner (toS versionReport)
         <**> helper
     )
     (fullDesc <> progDesc "The wiki's server" <> header (toS serverVersion))

@@ -986,6 +986,10 @@ out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+# A wiki in PostgreSQL: wiki-server is built with it, and libpq is checked.
+assert_contains "$EVENTS" 'wiki-server:exe:wiki-server --constraint=wiki-server +postgres'
+assert_lacks "$EVENTS" 'wiki-server -postgres'
+assert_contains "$out" 'ok       libpq       pg_config at'
 pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
@@ -1187,6 +1191,13 @@ assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.pr
 assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
 [ "$(line_of "$out" 'building wiki-server at -O2')" -lt "$(line_of "$out" 'Building executable wiki-server')" ] ||
   fail "cabal's output did not come after the deploy's line for the build"
+# A wiki in SQLite: wiki-server is built without PostgreSQL, for the build
+# and for list-bin alike, and the check does not ask for libpq.
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+assert_lacks "$EVENTS" 'wiki-server +postgres'
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_lacks "$out" 'ok       libpq'
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies --sqlite \"$data/wiki.sqlite\""
 assert_lacks "$EVENTS" 'docker'
 [ "$(state db)" = sqlite ] || fail 'state does not record SQLite'
@@ -1629,6 +1640,20 @@ assert_contains "$out" "ok       libpq       pg_config at $case_dir/pgsql-16/bin
 ln -s tool "$case_dir/bin/pg_config"
 pass 'toolchain/check-native.sh takes libpq only from a pg_config on PATH, not from pkg-config alone, and names a pg_config off PATH to put on it'
 
+# For a build without PostgreSQL, libpq is not needed: its line says so and
+# is not counted.
+out=$case_dir/check-without-postgres
+sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres >"$out" 2>&1 ||
+  fail 'the check --without-postgres failed with everything there'
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-postgres did not report eight items ok'
+assert_lacks "$out" 'missing'
+status=0
+sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "the check with an unknown option exited $status, not 2"
+pass 'toolchain/check-native.sh --without-postgres reports libpq as not needed, and does not count it'
+
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 out=$case_dir/no-zlib
@@ -1674,7 +1699,9 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
   fail 'a Debian machine whose bootstrap installed zlib did not deploy'
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+# The check after the bootstrap is told, as the first was, that a wiki in
+# SQLite needs no libpq: eight items.
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
 assert_contains "$EVENTS" 'bootstrap build'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'

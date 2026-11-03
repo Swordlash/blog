@@ -18,6 +18,11 @@
 --
 -- PostgreSQL's programs refuse to run as root, so a test run as root runs
 -- them as the user @postgres@ (with @su@), in a directory that user owns.
+--
+-- A wiki-server built without PostgreSQL (the cabal flag @postgres@ off)
+-- has no PostgreSQL backing: its tests run on SQLite alone, and the
+-- @postgres@ group runs nothing. Either way a note on the standard error
+-- says that the PostgreSQL tests were left out, and why.
 module Test.Database
   ( TestGroup (..)
   , testGroup
@@ -33,27 +38,35 @@ module Test.Database
   )
 where
 
-import Data.ByteString.Char8 qualified as BC
-import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import Data.IORef (IORef)
 import Data.Text qualified as T
+import Protolude
+import System.Environment (lookupEnv)
+import System.IO.Error (userError)
+import Test.Hspec (pendingWith)
+import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
+import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDir)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
+#ifdef WIKI_POSTGRES
+import Data.ByteString.Char8 qualified as BC
+import Data.IORef (atomicModifyIORef', newIORef)
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Network.Socket qualified as Socket
-import Protolude
 import System.Directory (doesFileExist, findExecutable, listDirectory)
-import System.Environment (lookupEnv)
 import System.FilePath ((</>))
-import System.IO.Error (userError)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.Posix.Signals (Handler (..), installHandler, sigTERM)
 import System.Posix.User (getEffectiveUserID)
 import System.Process (callProcess, readProcessWithExitCode)
-import Test.Hspec (pendingWith)
-import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
-import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDir, postgresAt)
-import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Postgres (PgPrograms (..), closePostgres, defaultPgPrograms, openPostgres)
-import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
+import Wiki.Server.Storage (postgresAt)
+import Wiki.Server.Storage.Layout (defaultPgPrograms)
+import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
+#else
+import Wiki.Server.Storage.Layout (withoutPostgres)
+#endif
 
 -- | One native CI job's tests. Local runs include every group by default.
 data TestGroup = AllTests | UnitTests | SqliteTests | PostgresTests
@@ -105,23 +118,48 @@ withBackings :: TestGroup -> ([Backing] -> IO a) -> IO a
 withBackings selection act = case selection of
   UnitTests -> act []
   SqliteTests -> act [OnSqlite]
-  _ -> do
-    let run pg = act ([OnSqlite | selection == AllTests] <> [pg])
-    configured <- lookupEnv "WIKI_TEST_DATABASE_URL"
-    when (selection == PostgresTests && maybe True (T.null . T.strip . T.pack) configured) $
-      ioError (userError "The postgres test group requires WIKI_TEST_DATABASE_URL")
-    case configured of
-      Just url -> do
-        made <- newIORef 0
-        dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
-        restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
-        run (OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}})
-      Nothing ->
-        findPostgres >>= \case
-          Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
-          Just bin -> stoppedByTerm . withCluster bin $ \url -> do
-            made <- newIORef 0
-            run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}})
+  _ -> withPostgresBackings selection (\pg -> act ([OnSqlite | selection == AllTests] <> pg))
+
+-- | The PostgreSQL backing of a group that has one ('AllTests' or
+-- 'PostgresTests'), as a list: one backing, or none in a wiki-server built
+-- without PostgreSQL.
+withPostgresBackings :: TestGroup -> ([Backing] -> IO a) -> IO a
+
+-- | A place on a PostgreSQL server: a database made for the example in
+-- the data directory, and dropped afterwards.
+withPostgresPlace :: PgServer -> FilePath -> (Place -> IO a) -> IO a
+
+-- | A connection of its own to a PostgreSQL database.
+withPostgresConnection :: PgDatabase -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
+
+#ifdef WIKI_POSTGRES
+withPostgresBackings selection act' = do
+  let run pg = act' [pg]
+  configured <- lookupEnv "WIKI_TEST_DATABASE_URL"
+  when (selection == PostgresTests && maybe True (T.null . T.strip . T.pack) configured) $
+    ioError (userError "The postgres test group requires WIKI_TEST_DATABASE_URL")
+  case configured of
+    Just url -> do
+      made <- newIORef 0
+      dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
+      restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
+      run (OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}})
+    Nothing ->
+      findPostgres >>= \case
+        Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
+        Just bin -> stoppedByTerm . withCluster bin $ \url -> do
+          made <- newIORef 0
+          run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}})
+
+withPostgresPlace server dir act = do
+  n <- atomicModifyIORef' server.made (\k -> (k + 1, k + 1))
+  let name = "wiki_test_" <> show n
+      admin = BC.pack (toS server.url)
+      statement q = bracket (Pg.connectPostgreSQL admin) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
+  bracket_ (statement ("CREATE DATABASE " <> name)) (statement ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
+    act Place {dataDir = dir, database = postgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
+
+withPostgresConnection db act = bracket (openPostgres db) closePostgres act
 
 -- | Run an action that a SIGTERM (what @timeout@ sends) interrupts as a
 -- Ctrl-C would, so that the cluster it started is stopped and deleted
@@ -176,6 +214,17 @@ freePort = do
   port <- Socket.socketPort s
   Socket.close s
   pure (fromIntegral port)
+#else
+-- Without PostgreSQL there is no PostgreSQL backing to run: the note says
+-- so, and the group runs on SQLite alone, or not at all.
+withPostgresBackings _ act' = do
+  hPutStrLn stderr ("The PostgreSQL tests are left out: " <> withoutPostgres)
+  act' []
+
+withPostgresPlace _ _ _ = ioError (userError (toS withoutPostgres))
+
+withPostgresConnection _ _ = ioError (userError (toS withoutPostgres))
+#endif
 
 -- | The URL of another database of the same server: the same URL with
 -- the database's name in place of the one it has.
@@ -193,13 +242,7 @@ withPlace :: Backing -> FilePath -> (Place -> IO a) -> IO a
 withPlace backing dir act = case backing of
   OnSqlite -> act (inDataDir dir)
   PostgresNotRun why -> pendingWith (toS why) >> panic "pendingWith returned"
-  OnPostgres server -> do
-    n <- atomicModifyIORef' server.made (\k -> (k + 1, k + 1))
-    let name = "wiki_test_" <> show n
-        admin = BC.pack (toS server.url)
-        statement q = bracket (Pg.connectPostgreSQL admin) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
-    bracket_ (statement ("CREATE DATABASE " <> name)) (statement ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
-      act Place {dataDir = dir, database = postgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
+  OnPostgres server -> withPostgresPlace server dir act
 
 -- | The command line's choice of a database, for a place: what a test
 -- gives a server or a console command to find the place's database.
@@ -218,4 +261,4 @@ placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.d
 withConnectionTo :: Place -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
 withConnectionTo at act = case at.database of
   SqliteFile file -> bracket (openSqlite ReadWrite file) closeSqlite act
-  PostgresAt db -> bracket (openPostgres db) closePostgres act
+  PostgresAt db -> withPostgresConnection db act

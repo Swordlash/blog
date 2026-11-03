@@ -6,7 +6,6 @@ module Test.Server.Options (spec, environmentSpec) where
 import Data.Text qualified as T
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
-import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -19,8 +18,15 @@ import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..))
-import Wiki.Server.Storage.Layout (withoutPassword)
-import Wiki.Server.Storage.Postgres (PgPrograms (..), connectionString, defaultPgPrograms, dumpPostgres)
+import Wiki.Server.Storage.Layout (defaultPgPrograms, withoutPassword)
+import Wiki.Server.Version (serverBackends)
+#ifdef WIKI_POSTGRES
+import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
+import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Postgres (connectionString, dumpPostgres)
+#else
+import Wiki.Server.Storage.Layout (withoutPostgres)
+#endif
 
 spec :: Backing -> Spec
 spec backing = describe "the server's options" $ do
@@ -108,6 +114,24 @@ database = describe "a PostgreSQL database" $ do
     for_ ["postgres://wiki:secret@db/wiki", "postgresql://:secret@db/wiki", "postgres://wiki@db/wiki?password=secret", "postgres://wiki@db/wiki?sslmode=require&password=secret" :: Text] $ \u ->
       parsed ["--database", toS u] `shouldSatisfy` either (T.isInfixOf "--database-password-file") (const False)
 
+  resolved url
+
+  it "shows a URL given whole with its passwords hidden, in every form libpq takes one" $ do
+    withoutPassword "postgres://wiki:secret@db:5432/wiki" `shouldBe` "postgres://wiki:***@db:5432/wiki"
+    withoutPassword "postgres://wiki@db/wiki?password=secret" `shouldBe` "postgres://wiki@db/wiki?password=***"
+    withoutPassword "postgres://wiki@db/wiki?sslmode=require&password=se%20cret&application_name=x" `shouldBe` "postgres://wiki@db/wiki?sslmode=require&password=***&application_name=x"
+    withoutPassword "host=db dbname=wiki password=secret user=wiki" `shouldBe` "host=db dbname=wiki password=*** user=wiki"
+    withoutPassword "host=db password='se \\'cret' user=wiki" `shouldBe` "host=db password=*** user=wiki"
+    withoutPassword "postgres://wiki@db/wiki" `shouldBe` "postgres://wiki@db/wiki"
+    show (PostgresAt PgDatabase {url = "postgres://wiki:secret@db/wiki", password = Just (Secret "other")}) `shouldNotSatisfy` (\t -> any (`T.isInfixOf` t) ["secret", "other"])
+
+-- | How a PostgreSQL database the options name is resolved: with its
+-- password apart from its URL, in a wiki-server built with PostgreSQL;
+-- refused at start, in one built without it. The backends that
+-- @wiki-server --version@ prints say which.
+resolved :: Text -> Spec
+#ifdef WIKI_POSTGRES
+resolved url = do
   it "keeps the file's password apart from the URL, so that nothing that shows the place shows it" $
     withSystemTempDirectory "wiki-options-test" $ \dir -> do
       writeFile (dir </> "password") "s3cr+et/&é\n"
@@ -123,14 +147,20 @@ database = describe "a PostgreSQL database" $ do
             SqliteFile _ -> expectationFailure "on SQLite"
       resolvePlace dir (PostgresChosen url (Just (dir </> "none"))) defaultPgPrograms >>= (`shouldSatisfy` either (T.isInfixOf "cannot be read") (const False))
 
-  it "shows a URL given whole with its passwords hidden, in every form libpq takes one" $ do
-    withoutPassword "postgres://wiki:secret@db:5432/wiki" `shouldBe` "postgres://wiki:***@db:5432/wiki"
-    withoutPassword "postgres://wiki@db/wiki?password=secret" `shouldBe` "postgres://wiki@db/wiki?password=***"
-    withoutPassword "postgres://wiki@db/wiki?sslmode=require&password=se%20cret&application_name=x" `shouldBe` "postgres://wiki@db/wiki?sslmode=require&password=***&application_name=x"
-    withoutPassword "host=db dbname=wiki password=secret user=wiki" `shouldBe` "host=db dbname=wiki password=*** user=wiki"
-    withoutPassword "host=db password='se \\'cret' user=wiki" `shouldBe` "host=db password=*** user=wiki"
-    withoutPassword "postgres://wiki@db/wiki" `shouldBe` "postgres://wiki@db/wiki"
-    show (PostgresAt PgDatabase {url = "postgres://wiki:secret@db/wiki", password = Just (Secret "other")}) `shouldNotSatisfy` (\t -> any (`T.isInfixOf` t) ["secret", "other"])
+  it "is one of the backends --version names" $
+    serverBackends `shouldBe` ["sqlite", "postgresql"]
+#else
+resolved url = do
+  it "is refused at start by a wiki-server built without PostgreSQL, before its password file is read" $
+    withSystemTempDirectory "wiki-options-test" $ \dir -> do
+      resolvePlace dir (PostgresChosen url Nothing) defaultPgPrograms >>= (`shouldBe` Left withoutPostgres) . fmap (\p -> p.database)
+      resolvePlace dir (PostgresChosen url (Just (dir </> "none"))) defaultPgPrograms >>= (`shouldBe` Left withoutPostgres) . fmap (\p -> p.database)
+      withoutPostgres `shouldSatisfy` T.isInfixOf "wiki-server +postgres"
+      resolvePlace dir (SqliteChosen (dir </> "wiki.sqlite")) defaultPgPrograms >>= (`shouldBe` Right (SqliteFile (dir </> "wiki.sqlite"))) . fmap (\p -> p.database)
+
+  it "is not one of the backends --version names" $
+    serverBackends `shouldBe` ["sqlite"]
+#endif
 
 refusedAtStart :: Backing -> Spec
 refusedAtStart backing = describe "a server" $ do
@@ -153,7 +183,11 @@ refusedAtStart backing = describe "a server" $ do
 
 -- | Check the inherited password with exclusive access to the process
 -- environment. Other examples may run pg_dump at the same time otherwise.
+-- A wiki-server built without PostgreSQL has no pg_dump to give one to:
+-- then this checks that @WIKI_DATABASE_URL@ is refused as @--database@
+-- is, rather than taken for no database and the wiki kept in SQLite.
 environmentSpec :: Spec
+#ifdef WIKI_POSTGRES
 environmentSpec = describe "the server's options" $ describe "a PostgreSQL database" $ do
   let url = "postgres://wiki@127.0.0.1:5433/wiki"
   it "gives its password to pg_dump in the environment: its own, the URL's decoded as libpq does, or else the server's PGPASSWORD" $
@@ -172,3 +206,12 @@ environmentSpec = describe "the server's options" $ describe "a PostgreSQL datab
       bracket (lookupEnv "PGPASSWORD") (maybe (unsetEnv "PGPASSWORD") (setEnv "PGPASSWORD")) $ \_ -> do
         setEnv "PGPASSWORD" "inherited"
         given PgDatabase {url = encodeUtf8 url, password = Nothing} `shouldReturn` ("inherited|--format=custom --no-owner --no-privileges --dbname=" <> url)
+#else
+environmentSpec = describe "the server's options" $
+  describe "a PostgreSQL database" $
+    it "named by WIKI_DATABASE_URL is refused at start by a wiki-server built without PostgreSQL" $
+      withSystemTempDirectory "wiki-options-test" $ \dir ->
+        bracket (lookupEnv "WIKI_DATABASE_URL") (maybe (unsetEnv "WIKI_DATABASE_URL") (setEnv "WIKI_DATABASE_URL")) $ \_ -> do
+          setEnv "WIKI_DATABASE_URL" "postgres://wiki@127.0.0.1:5433/wiki"
+          resolvePlace dir InDataDirectory defaultPgPrograms >>= (`shouldBe` Left withoutPostgres) . fmap (\p -> p.database)
+#endif

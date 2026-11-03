@@ -29,9 +29,14 @@ import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
-import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
-import Wiki.Server.Storage.Postgres (PgPrograms (..), checkDump, withDatabaseAlone)
+import Wiki.Server.Storage.Layout (PgPrograms (..), attachmentsDir, backupsDir)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite)
+#ifdef WIKI_POSTGRES
+import Wiki.Server.Storage.Postgres (withDatabaseAlone)
+#else
+import System.IO.Error (userError)
+import Wiki.Server.Storage.Layout (withoutPostgres)
+#endif
 
 spec :: Backing -> Spec
 spec backing = do
@@ -69,7 +74,18 @@ extension at = case at.database of
 problemsOf :: Place -> FilePath -> IO [Text]
 problemsOf at file = case at.database of
   SqliteFile _ -> integrityProblems file
-  PostgresAt _ -> either pure (const []) <$> checkDump at.programs file
+  PostgresAt _ -> either pure (const []) <$> checkPgDump at.programs file
+
+-- | Run something while holding a PostgreSQL database's lock alone, as
+-- a restore does; 'Nothing' when another holds it. Only the PostgreSQL
+-- backing calls it, which a wiki-server built without PostgreSQL does not
+-- have.
+holdingAlone :: PgDatabase -> IO a -> IO (Maybe a)
+#ifdef WIKI_POSTGRES
+holdingAlone = withDatabaseAlone
+#else
+holdingAlone _ _ = ioError (userError (toS withoutPostgres))
+#endif
 
 copies :: Backing -> Spec
 copies backing = describe "backup" $ do
@@ -212,7 +228,7 @@ restoring backing = describe "restore" $ do
         withPlaceIn backing $ \fresh -> case fresh.database of
           PostgresAt db -> do
             withStorage defaultConfig fresh (const pass)
-            opened <- withDatabaseAlone db (try @DataDirInUse (withStorage defaultConfig fresh (const pass)))
+            opened <- holdingAlone db (try @DataDirInUse (withStorage defaultConfig fresh (const pass)))
             either (\(DataDirInUse why) -> why) (const "opened") <$> opened `shouldBe` Just "The PostgreSQL database is being restored (wiki-server restore holds its lock): start the server once the restore has ended."
           SqliteFile _ -> expectationFailure "a place on SQLite"
     _ -> pass

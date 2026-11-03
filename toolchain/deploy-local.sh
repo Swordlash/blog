@@ -1285,10 +1285,20 @@ download_page() {
 # wiki-server, natively, with this repository's packages at -O2 and the
 # dependencies as the everyday build has them (cabal-native-opt.project), in a
 # build directory of its own so that neither build invalidates the other. The
-# arguments are cabal's command and its flags.
+# arguments are cabal's command and its flags. A wiki in SQLite gets a
+# wiki-server built without PostgreSQL (the cabal flag postgres off), which
+# needs neither libpq nor pg_config; a wiki in PostgreSQL gets one with it.
+# Cabal rebuilds wiki-server when the flag changes, so a deployment that
+# switches database switches build too.
 server_cabal() {
-  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
+  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres")
 }
+
+# The sign of wiki-server's cabal flag postgres for this deployment's
+# database, and the argument that tells toolchain/check-native.sh about it.
+postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +; fi; }
+check_postgres=
+[ "$db" != sqlite ] || check_postgres=--without-postgres
 
 # The check of what wiki-server's native build needs from the machine
 # (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium. It
@@ -1301,7 +1311,7 @@ server_cabal() {
 # nothing installs them, and the deploy stops.
 check_native() {
   say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-  if check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+  if check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
     printf '%s\n' "$check_output"
     return 0
   fi
@@ -1318,7 +1328,7 @@ check_native() {
 # anything is built.
 recheck_native() {
   say "checking again what the native build of wiki-server needs, after the bootstrap"
-  sh "$ROOT/toolchain/check-native.sh" ||
+  sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ||
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 

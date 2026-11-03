@@ -14,6 +14,10 @@ module Wiki.Server.Storage.Layout
   ( Database (..)
   , PgDatabase (..)
   , postgresAt
+  , PgPrograms (..)
+  , defaultPgPrograms
+  , withPostgres
+  , withoutPostgres
   , defaultDatabase
   , databaseFile
   , attachmentsDir
@@ -61,6 +65,39 @@ instance Show PgDatabase where
 -- | The PostgreSQL database at a URL that needs no password apart from it.
 postgresAt :: ByteString -> Database
 postgresAt url = PostgresAt PgDatabase {url, password = Nothing}
+
+-- | 'PgPrograms' are the programs a backup and a restore run: @pg_dump@
+-- and @pg_restore@ by default, found on the path. A deployment whose
+-- PostgreSQL runs in a container gives programs that run them there
+-- (@toolchain/deploy-local.sh@ does), since @pg_dump@ refuses a server of
+-- a newer major version than its own. They are here, and not in
+-- "Wiki.Server.Storage.Postgres", because the command line names them
+-- whether or not this wiki-server was built with PostgreSQL.
+data PgPrograms = PgPrograms
+  { dump :: FilePath
+  , restore :: FilePath
+  }
+  deriving stock (Eq, Show)
+
+defaultPgPrograms :: PgPrograms
+defaultPgPrograms = PgPrograms {dump = "pg_dump", restore = "pg_restore"}
+
+-- | 'withPostgres' says whether this wiki-server was built with
+-- PostgreSQL: the cabal flag @postgres@, on by default. Without it, the
+-- module "Wiki.Server.Storage.Postgres" and the libraries it needs are not
+-- in the program, and a PostgreSQL database is refused with
+-- 'withoutPostgres'.
+withPostgres :: Bool
+#ifdef WIKI_POSTGRES
+withPostgres = True
+#else
+withPostgres = False
+#endif
+
+-- | 'withoutPostgres' is the message a wiki-server built without
+-- PostgreSQL gives when it is asked to use a PostgreSQL database.
+withoutPostgres :: Text
+withoutPostgres = "this wiki-server was built without PostgreSQL (the cabal flag postgres was off): keep the wiki in SQLite (--sqlite FILE, or no --database), or build wiki-server with PostgreSQL (cabal build --constraint='wiki-server +postgres' wiki-server:exe:wiki-server, or toolchain/deploy-local.sh --postgres)"
 
 -- | The database a data directory has when nothing else is said: the
 -- SQLite file in it ('databaseFile').

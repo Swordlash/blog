@@ -16,15 +16,20 @@
 module Test.Storage.Transactions (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Database.PostgreSQL.Simple qualified as Pg
 import Protolude
 import Test.Database (Backing)
 import Test.Hspec
 import Test.Storage.Fixture (withPlaceIn)
-import Wiki.Server.Storage (Database (..), Place (..))
+import Wiki.Server.Storage (Database (..), PgDatabase, Place (..))
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
-import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
+#ifdef WIKI_POSTGRES
+import Database.PostgreSQL.Simple qualified as Pg
+import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
+#else
+import System.IO.Error (userError)
+import Wiki.Server.Storage.Layout (withoutPostgres)
+#endif
 
 -- | The exception a test's body throws.
 data Boom = Boom
@@ -81,15 +86,24 @@ spec backing = describe "a transaction" $ do
 onConnection :: Backing -> (forall be. (Backend be) => Connection be -> IO () -> IO a) -> IO a
 onConnection backing act = withPlaceIn backing $ \at -> case at.database of
   SqliteFile file -> bracket (openSqlite ReadWrite file) closeSqlite (\c -> act c pass)
-  PostgresAt db -> bracket (openPostgres db) closePostgres $ \c -> do
-    pid <-
-      Pg.query_ c "SELECT pg_backend_pid()" >>= \case
-        [Pg.Only p] -> pure (p :: Int)
-        _ -> panic "no backend pid"
-    let idle =
-          bracket (openPostgres db) closePostgres $ \other ->
-            Pg.query other "SELECT state FROM pg_stat_activity WHERE pid = ?" (Pg.Only pid) `shouldReturn` [Pg.Only ("idle" :: Text)]
-    act c idle
+  PostgresAt db -> onPostgres db act
+
+-- | 'onConnection' on a PostgreSQL database, which only a wiki-server
+-- built with PostgreSQL has.
+onPostgres :: PgDatabase -> (forall be. (Backend be) => Connection be -> IO () -> IO a) -> IO a
+#ifdef WIKI_POSTGRES
+onPostgres db act = bracket (openPostgres db) closePostgres $ \c -> do
+  pid <-
+    Pg.query_ c "SELECT pg_backend_pid()" >>= \case
+      [Pg.Only p] -> pure (p :: Int)
+      _ -> panic "no backend pid"
+  let idle =
+        bracket (openPostgres db) closePostgres $ \other ->
+          Pg.query other "SELECT state FROM pg_stat_activity WHERE pid = ?" (Pg.Only pid) `shouldReturn` [Pg.Only ("idle" :: Text)]
+  act c idle
+#else
+onPostgres _ _ = ioError (userError (toS withoutPostgres))
+#endif
 
 -- | Check that a connection has no transaction open: the server sees it
 -- idle, and a new transaction begins on it.

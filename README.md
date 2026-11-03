@@ -880,15 +880,20 @@ prints `ok` or `missing` for each command and library, names the packages of wha
 missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or Ubuntu
 (`dpkg-query` on `PATH`) a missing package is only a warning, since the bootstrap
 installs it next, and the check runs again after the bootstrap; elsewhere the deploy
-stops there. SQLite needs nothing: the build compiles its own copy.
+stops there. SQLite needs nothing: the build compiles its own copy. libpq is needed
+only for a wiki in PostgreSQL: with `--sqlite` the deploy builds `wiki-server`
+without PostgreSQL (the cabal flag `postgres` off), which needs neither libpq nor
+`pg_config`, and the check, given `--without-postgres`, reports libpq as not
+needed. That is the way on a machine whose libpq is too old for
+`postgresql-libpq`.
 
-| Library    | Debian, Ubuntu  | RHEL, Fedora                                                                     |
-| ---------- | --------------- | -------------------------------------------------------------------------------- |
-| GMP        | `libgmp-dev`    | `gmp-devel`                                                                      |
-| libpq      | `libpq-dev`     | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
-| zlib       | `zlib1g-dev`    | `zlib-devel`                                                                     |
-| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)                                                         |
-| pkg-config | `pkg-config`    | `pkgconf-pkg-config`                                                             |
+| Library                 | Debian, Ubuntu  | RHEL, Fedora                                                                     |
+| ----------------------- | --------------- | -------------------------------------------------------------------------------- |
+| GMP                     | `libgmp-dev`    | `gmp-devel`                                                                      |
+| libpq (PostgreSQL only) | `libpq-dev`     | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
+| zlib                    | `zlib1g-dev`    | `zlib-devel`                                                                     |
+| libsodium               | `libsodium-dev` | `libsodium-devel` (EPEL)                                                         |
+| pkg-config              | `pkg-config`    | `pkgconf-pkg-config`                                                             |
 
 A library built from source into a directory of your own is found through the
 environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
@@ -1025,6 +1030,15 @@ PostgreSQL's full-text search, which finds whole words, ranks the pages by how
 well they match, and takes a phrase in quotes, `or` and `-word`; on SQLite it is
 the demo's, which finds a part of a word too. `/api/v1/info` says which
 (`capabilities`).
+
+With `--sqlite`, `wiki-server` is built without PostgreSQL: the cabal flag
+`postgres`, on by default, is off (`--constraint='wiki-server -postgres'`), so
+neither libpq nor `pg_config` is needed. Such a server refuses a PostgreSQL
+database at start, saying it was built without PostgreSQL, and
+`wiki-server --version` names the databases it was built for (`backends:
+sqlite`, or `backends: sqlite, postgresql`). Going back to `--postgres` builds it
+with PostgreSQL again; cabal rebuilds `wiki-server` when the flag changes. By
+hand: `cabal build --constraint='wiki-server -postgres' wiki-server:exe:wiki-server`.
 
 A wiki moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import

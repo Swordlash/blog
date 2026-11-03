@@ -1,7 +1,8 @@
 -- | The server's tests. Those of the storage and of the server over HTTP
 -- run once on each database ("Test.Database"): SQLite, and PostgreSQL when
--- one is at hand, else reported as not run. Those that touch no database
--- run once.
+-- one is at hand, else reported as not run. A wiki-server built without
+-- PostgreSQL runs them on SQLite alone, and says so. Those that touch no
+-- database run once.
 module Main (main) where
 
 import Protolude

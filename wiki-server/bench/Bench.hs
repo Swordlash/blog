@@ -76,7 +76,7 @@ import Wiki.Server.Events qualified as Events
 import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapApplication)
 import Wiki.Server.Storage (Config (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, postgresAt, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage qualified as Storage
-import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
+import Wiki.Server.Storage.Layout (PgPrograms (..), defaultPgPrograms)
 import Wiki.Server.Storage.Rows (chunksOf, insertPage, insertVersion, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 

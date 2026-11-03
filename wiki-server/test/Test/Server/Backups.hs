@@ -28,10 +28,9 @@ import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (SecretState (..))
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Storage (Database (..), Place (..))
-import Wiki.Server.Storage.Backup (Restore (..), backupFiles, restore)
+import Wiki.Server.Storage.Backup (Restore (..), backupFiles, checkPgDump, restore)
 import Wiki.Server.Storage.Blobs (storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
-import Wiki.Server.Storage.Postgres (checkDump)
 import Wiki.Server.Storage.Sqlite (integrityProblems)
 
 spec :: Backing -> Spec
@@ -111,7 +110,7 @@ onSchedule backing = describe "turned on" $ do
     file <- maybe (assertFailure "no file named") (pure . (backupsDir r.dataDir </>) . toS) made.file
     case r.place.database of
       SqliteFile _ -> integrityProblems file `shouldReturn` []
-      PostgresAt _ -> checkDump r.place.programs file `shouldReturn` Right ()
+      PostgresAt _ -> checkPgDump r.place.programs file `shouldReturn` Right ()
     (Just <$> getFileSize file) `shouldReturn` made.size
     b.next `shouldBe` Just (addUTCTime (6 * 3600) made.startedAt)
     b.kept `shouldBe` 1

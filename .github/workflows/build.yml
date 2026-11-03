@@ -376,6 +376,17 @@ jobs:
       if: matrix.group == 'unit'
       run: node --check toolchain/screenshots.mjs
 
+    # wiki-server with the cabal flag postgres off, as a deployment on
+    # SQLite builds it (toolchain/deploy-local.sh --sqlite). CPP gives that
+    # build other code, so a warning only it has fails here, and its unit
+    # tests run. Last, in the same build directory, so that only
+    # wiki-server compiles again: every step before it had the flag on.
+    - name: Build and test wiki-server without PostgreSQL
+      if: matrix.group == 'unit'
+      run: |
+        cabal build wiki-server --builddir=dist-newstyle/native --constraint='wiki-server -postgres'
+        cabal test wiki-server:test:wiki-server-test --builddir=dist-newstyle/native --constraint='wiki-server -postgres'
+
     - name: Report incremental build size
       if: matrix.group == 'unit'
       run: du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
