@@ -723,11 +723,17 @@ needs. Each was true when its package merged; check before relying on one.
   LAN-facing `0.0.0.0` bind opens the port on `tailscale0` alone, so a LAN at work
   needs `--no-firewall` or a rule of its own. The TLS files are read at start only:
   a renewal needs `systemctl --user restart`.
-- The deployment's server build (`cabal-native-opt.project`) does not use cabal's build
-  semaphore: on the owner's RHEL 9 machine GHC could not open the semaphore cabal made
-  (`semOpen: does not exist`), so the opt project has `semaphore: False`, `jobs: 1` and
-  GHC's `-j` per package; the everyday `cabal.project` keeps the semaphore. The deploy
-  streams cabal's output and, after a failure, prints the newest cabal log's tail
+- The deployment's server build (`cabal-native-opt.project`) builds with `jobs: $ncpus`
+  and turns cabal's build semaphore on only when it works: on the owner's RHEL 9
+  machine GHC could not open the semaphore cabal made (`semOpen: does not exist`), so
+  the opt project says `semaphore: False` and the deploy first runs
+  `toolchain/check-semaphore.sh` (a C helper creates a named semaphore as cabal does
+  and the toolchain's `ghc -jsem` compiles a one-line module; #144) and passes
+  `--semaphore` or `--no-semaphore` to cabal; `--semaphore`/`--no-semaphore` on the
+  deploy, and the wizard's choice, decide instead of the probe. Without the semaphore
+  the four own packages compile one module at a time (no `-j`, which on top of
+  `$ncpus` GHCs would oversubscribe); the Dockerfile's builds run without it. The
+  deploy streams cabal's output and, after a failure, prints the newest cabal log's tail
   (cabal's console says only "see the build log above"). Downloaded pages are cached
   per commit (a tag's by GitHub's asset id and time); `--refresh-page` downloads anew.
   libpq is found through `pg_config` on PATH alone (`postgresql-libpq` does not use
