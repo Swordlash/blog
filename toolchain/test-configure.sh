@@ -135,14 +135,18 @@ pass 'a deployment to adopt is found in the home directory by its dir'
 # links first, then . and .. Behind /srv/link, a link to
 # /mnt/deployments/current, /srv/link/../wiki is /mnt/deployments/wiki,
 # not /srv/wiki, for the prefix (whose state is then looked for there) and
-# for the certificate's files alike, existing or not yet. A .. after a
-# directory that does not exist, which no link can be, is removed as text.
+# for the certificate's files alike, existing or not yet. A directory that
+# does not exist and a .. after it cancel out, and a link after them is
+# still followed: /srv/missing/../link/../wiki is /mnt/deployments/wiki too
+# (the wizard resolves with realpath -m, as the deploy does).
 mkdir -p "$TMP/mnt/deployments/current" "$TMP/mnt/deployments/certs" "$TMP/srv"
 ln -s ../mnt/deployments/current "$TMP/srv/link"
 : >"$TMP/mnt/deployments/certs/wiki.pem"
 expect "sh toolchain/deploy-local.sh --server --prefix $TMP/mnt/deployments/wiki --postgres --db-port 5433 --tls-cert $TMP/mnt/deployments/certs/wiki.pem --tls-key $TMP/mnt/deployments/wiki.key --port 8080 --admin-port 8081 --toolchain $TMP/shared" \
   "prefix=$TMP/srv/link/../wiki" way=cert "tls_cert=$TMP/srv/link/../certs/wiki.pem" "tls_key=$TMP/srv/link/new/../../wiki.key" "toolchain=$TMP/tools/../shared"
-pass 'paths are resolved as realpath -m: links before .., and .. alone after what does not exist'
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/mnt/deployments/wiki --postgres --db-port 5433 --tls-cert $TMP/mnt/deployments/certs/wiki.pem --tls-key $TMP/mnt/deployments/wiki.key --port 8080 --admin-port 8081" \
+  "prefix=$TMP/srv/missing/../link/../wiki" way=cert "tls_cert=$TMP/srv/missing/../link/../certs/wiki.pem" "tls_key=$TMP/srv/link/new/../../wiki.key"
+pass 'paths are resolved by realpath -m: links before .., also after a missing directory and its ..'
 
 # Answers the deploy would refuse are refused: a port under 1024, two
 # listeners on one port, a certificate without its key, an unknown key.

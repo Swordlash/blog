@@ -5,6 +5,7 @@ build-depends:
   , directory
   , filepath
   , microlens
+  , process
   , text
   , unix
   , vty ==6.6
@@ -119,6 +120,7 @@ import Brick.Forms
   )
 import Brick.Types (nestEventM')
 import Brick.Widgets.Edit (editAttr, editFocusedAttr)
+import Control.Exception (IOException, try)
 import Control.Monad (foldM, unless)
 import Control.Monad.IO.Class (liftIO)
 import Data.Char (isDigit)
@@ -128,12 +130,13 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Graphics.Vty as V
 import Lens.Micro (Lens', lens)
-import System.Directory (canonicalizePath, doesFileExist, getHomeDirectory, makeAbsolute)
+import System.Directory (doesFileExist, getHomeDirectory, makeAbsolute)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
-import System.FilePath (joinPath, splitDirectories, (</>))
+import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 import System.Posix.Process (executeFile)
+import System.Process (readProcess)
 
 -- * The answers
 
@@ -418,19 +421,15 @@ quote w
 
 -- * Paths and the state file
 
--- | A path as the deploy's realpath -m makes it: ~ and ~/ expanded, made
--- absolute, its symbolic links followed, and without . and .. components.
--- A relative path is taken from the directory toolchain/configure.sh was
+-- | A path as the deploy will see it. ~ and ~/ are expanded, and a
+-- relative path is taken from the directory toolchain/configure.sh was
 -- started in (WIKI_CONFIGURE_DIR, which the wrapper sets before it changes
--- to the checkout's root), or else from the current directory.
---
--- The order matters. canonicalizePath follows the links of the part of the
--- path that exists, so /srv/link/../wiki with /srv/link pointing to
--- /mnt/deployments/current is /mnt/deployments/wiki, as for realpath, not
--- the /srv/wiki of a .. removed by text first. canonicalizePath leaves the
--- part that does not exist yet as it was given, . and .. included; no link
--- can be in that part, so its . and .. are then removed by text, as
--- realpath -m removes them.
+-- to the checkout's root), or else from the current directory. Then the
+-- path is resolved by `realpath -m`, the program the deploy itself resolves
+-- its paths with, so that the two cannot disagree: realpath follows
+-- symbolic links and removes . and .. in an order of its own, which a
+-- path such as /srv/missing/../link/../wiki depends on. The deploy needs
+-- realpath too, so a machine without it fails here as the deploy would.
 absolute :: Text -> IO Text
 absolute t
   | T.null t = pure t
@@ -445,12 +444,20 @@ absolute t
       rooted <- case started of
         Just dir | not (null dir) -> pure (dir </> expanded)
         _ -> makeAbsolute expanded
-      T.pack . collapse <$> canonicalizePath rooted
-  where
-    collapse p = joinPath ("/" : reverse (foldl step [] (drop 1 (splitDirectories p))))
-    step acc "." = acc
-    step acc ".." = drop 1 acc
-    step acc d = d : acc
+      resolved <- try (readProcess "realpath" ["-m", rooted] "")
+      case resolved of
+        Right out | (line : _) <- lines out, not (null line) -> pure (T.pack line)
+        Right _ -> ioError (userError ("realpath -m " <> rooted <> " printed nothing"))
+        Left e ->
+          ioError
+            ( userError
+                ( "realpath -m "
+                    <> rooted
+                    <> " failed ("
+                    <> show (e :: IOException)
+                    <> "): the wizard resolves paths with realpath, as the deploy does; install coreutils"
+                )
+            )
 
 -- | The answers' paths as the deploy will resolve them ('absolute'): the
 -- prefix as the deploy keeps it in the state, and the toolchain and the
