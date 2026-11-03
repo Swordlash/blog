@@ -624,7 +624,8 @@ sent anywhere, and a reload starts the demo over.
 [The wiki's server](#the-wikis-server)), or with `--static` the demo, and serves it
 from a Linux machine of your own (x86_64 Debian or Ubuntu) as a systemd user
 service, for you and your devices on its Tailscale network, over HTTPS at the
-machine's name there, `https://<machine>.<tailnet>.ts.net/`. Run it from the
+machine's name there, `https://<machine>.<tailnet>.ts.net/`; or over HTTPS with a
+certificate of your own, or behind a reverse proxy (below). Run it from the
 checkout, as the user the service should run as (not root):
 
 ```sh
@@ -703,8 +704,75 @@ server listens on the machine's Tailscale address (`tailscale ip -4`), without
 `--secure-cookies`, and is opened at `http://<tailscale address or MagicDNS
 name>:8080/`; a serve an earlier deploy set is turned off (`tailscale serve
 --https=443 off`). It is remembered like the other options, and `--https` goes
-back. `--bind` with any other address than 127.0.0.1 implies `--http`; `--bind
-0.0.0.0` listens everywhere.
+back. Behind `tailscale serve`, `--bind` with any other address than 127.0.0.1
+implies `--http`; `--bind 0.0.0.0` listens everywhere.
+
+### HTTPS with a certificate of your own
+
+Where a certificate comes from elsewhere, as at work from the company's
+certificate authority, the server serves HTTPS itself, without Tailscale:
+
+```sh
+sh toolchain/deploy-local.sh --tls-cert wiki.crt --tls-key wiki.key --bind 0.0.0.0 --port 8443
+```
+
+The files are PEM, as authorities hand them out: the certificate file holds the
+server's certificate with its chain after it (the intermediate certificates), the
+key file its private key, and a `.pem` holding both is given as both
+(`--tls-cert wiki.pem --tls-key wiki.pem`). `wiki-server` terminates TLS on its
+public listener with `warp-tls` (TLS 1.2 and 1.3; the admin listener stays plain
+HTTP on 127.0.0.1), marks the session cookie `Secure`, and gives its own address as
+`https://` where no public address is set. It reads the files as it starts, and
+refuses to start, naming the file, when one cannot be read, holds no certificate or
+no key, or the key is not the certificate's. The unit names them by absolute path
+where they are, so they must stay there, readable by your user, and outside the
+deployment's directory, which installing empties, or under its `data/` (as
+`~/wiki-demo/data/tls/`; the deploy refuses them anywhere else in it); a renewed
+certificate takes a restart, `systemctl --user restart wiki-demo.service`. The
+files are remembered, and a renewed certificate in a new file is given alone
+(`--tls-cert new.crt`).
+
+Any `--bind` will do, `0.0.0.0` included (without `--bind`, the Tailscale address,
+as with `--http`); ufw is opened for the port as with `--http`. The deploy checks
+that the server answers over HTTPS with `curl --insecure`, the certificate left
+unchecked; `--tls-ca company-ca.crt` then checks it as a browser that trusts that
+authority would, for the name the certificate is issued for (read with `openssl`),
+and warns when it does not verify: most often, a chain missing from the
+certificate file. To try the way with a certificate of your own making, which
+browsers warn about:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=wiki.example \
+  -addext subjectAltName=DNS:wiki.example -keyout wiki.key -out wiki.crt
+```
+
+### HTTPS behind a reverse proxy
+
+For a wiki on the internet, a reverse proxy on the same machine (Caddy, nginx)
+can serve HTTPS with a certificate it fetches and renews itself:
+
+```sh
+sh toolchain/deploy-local.sh --behind-proxy --port 8080
+```
+
+The server then listens on `127.0.0.1` only, over plain HTTP, with `Secure`
+cookies, and no firewall rule is opened; the deploy prints what the proxy must do.
+It must pass WebSocket upgrades on (comments and notifications arrive live at
+`api/v1/events`), and send `X-Forwarded-Proto` and `X-Forwarded-Host` (or keep the
+`Host` the browser asked for), from which the server tells its public address and
+the origin passkeys are checked against. Caddy's `reverse_proxy` does all of it;
+a whole Caddyfile, with the certificate from Let's Encrypt:
+
+```
+wiki.example.org {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+`--https` (through `tailscale serve`), `--tls-cert`, `--behind-proxy` and `--http`
+exclude each other: the deploy refuses two together. The one given is remembered,
+and giving another moves the deployment over (the serve or the firewall rule of
+the way before is turned off). `--status` says which way a deployment serves.
 
 ### Everything under one directory
 
@@ -980,7 +1048,9 @@ The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/ap
 --listen 127.0.0.1:8080 --admin-listen 127.0.0.1:8081 --secure-cookies` and the
 database's options (above) behind
 `tailscale serve` (with `--http`, `--listen <tailscale address>:8080` and no
-`--secure-cookies`), and checks that both listeners and the HTTPS address answer.
+`--secure-cookies`; with `--tls-cert`, `--tls-cert` and `--tls-key` in its place;
+behind a proxy, `--secure-cookies` too), and checks that both listeners and the
+HTTPS address answer.
 The admin listener is not served: it stays on this machine. When the
 administration's Server section has no public address yet, the deploy says to
 set it to the HTTPS one (and says so too when it holds another); it is a setting
@@ -1106,8 +1176,9 @@ to the demo, keeping `data/`.
   login (`users remove LOGIN`), keeping what the person wrote under the login. It is also how an installation whose
   administrators are all locked out is recovered. Sign in on the public address
   with that login. Sessions last two weeks without use. Behind HTTPS the server
-  must run with `--secure-cookies`, which the deploy script passes over HTTPS;
-  behind a proxy of your own, pass it yourself.
+  must run with `--secure-cookies`, which the deploy script passes behind
+  `tailscale serve` and with `--behind-proxy`; a server with `--tls-cert` needs
+  none, since it speaks HTTPS itself.
 - **Keeping an account safe.** The panel under a signed-in user's name lists
   where they are signed in (when, from which address, this browser marked),
   with "Sign out" for each other session and "Sign out everywhere"; sets up a
@@ -1344,9 +1415,10 @@ The regression tests run both scripts against fakes of systemctl, loginctl, ufw,
 sudo, tailscale (with `tailscale serve`), curl, docker (whose PostgreSQL
 container is a file saying whether it was made and runs) and cabal (whose
 `wiki-server` is a script) in a temporary home,
-start the installed server as the unit would, test the static server over HTTP,
+start the installed server as the unit would (over HTTPS with certificates
+`openssl` makes, for `--tls-cert`), test the static server over HTTP,
 and run the same cases against the real `wiki-server` (`npm run build-native`
-first, or name one with `WIKI_SERVER`):
+first, or name one with `WIKI_SERVER`), and that one over HTTPS too:
 
 ```sh
 sh toolchain/test-deploy-local.sh

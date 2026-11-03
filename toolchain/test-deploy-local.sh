@@ -4,7 +4,7 @@
 # in a temporary $HOME with a fake repository whose bootstrap and npm build a
 # tiny page, whose cabal builds a fake wiki-server (a script that logs how it
 # was called, backs up by copying a SQLite file or by running the pg_dump it
-# is given, and serves with Node), and fakes for systemctl, loginctl, ufw,
+# is given, and serves with Node, over HTTPS when given a certificate), and fakes for systemctl, loginctl, ufw,
 # sudo, tailscale, curl, id and docker. The fake docker keeps a deployment's
 # PostgreSQL container as a file that says whether it was made and is
 # running, and its pg_dump writes a line that names the database. The fake systemctl
@@ -125,16 +125,20 @@ EOF
   # backs a database up by copying it, and serves with Node, answering the
   # probes of the API and of the admin listener, and the administration's
   # server settings with the public address FAKE_PUBLIC_URL (none if unset).
+  # With --tls-cert and --tls-key its public listener speaks HTTPS with
+  # them, as wiki-server's does.
   cat >"$case_dir/fake-wiki-server" <<EOF
 #!/bin/sh
 printf 'wiki-server %s\n' "\$*" >>"$EVENTS"
 command=\$1
 shift
 target=\${1:-}
-data= listen= admin= static= sqlite= database= dump=
+data= listen= admin= static= sqlite= database= dump= cert= key=
 while [ \$# -gt 0 ]; do
   case \$1 in
     --data) data=\$2; shift ;;
+    --tls-cert) cert=\$2; shift ;;
+    --tls-key) key=\$2; shift ;;
     --listen) listen=\$2; shift ;;
     --admin-listen) admin=\$2; shift ;;
     --static) static=\$2; shift ;;
@@ -179,11 +183,15 @@ case \$command in
     [ -z "\$sqlite" ] || [ -f "\$sqlite" ] || printf 'a database\n' >"\$sqlite"
     exec "$NODE_REAL" -e '
       const http = require("node:http");
+      const https = require("node:https");
       const fs = require("node:fs");
-      const [listen, admin, root] = process.argv.slice(1);
-      const serve = (address, api) => {
+      const [listen, admin, root, cert, key] = process.argv.slice(1);
+      const serve = (address, api, tls) => {
         const at = address.lastIndexOf(":");
-        http.createServer((request, response) => {
+        const create = tls
+          ? (handler) => https.createServer({ cert: fs.readFileSync(cert), key: fs.readFileSync(key) }, handler)
+          : (handler) => http.createServer(handler);
+        create((request, response) => {
           if (request.url === api) {
             response.writeHead(200, { "content-type": "application/json" }).end("{}");
           } else if (request.url === "/admin/api/v1/admin/server" && api.startsWith("/admin/")) {
@@ -197,9 +205,9 @@ case \$command in
           }
         }).listen(Number(address.slice(at + 1)), address.slice(0, at));
       };
-      serve(listen, "/api/v1/info");
-      serve(admin, "/admin/api/v1/admin/status");
-    ' "\$listen" "\$admin" "\$static" ;;
+      serve(listen, "/api/v1/info", Boolean(cert));
+      serve(admin, "/admin/api/v1/admin/status", false);
+    ' "\$listen" "\$admin" "\$static" "\$cert" "\$key" ;;
 esac
 EOF
 
@@ -365,11 +373,14 @@ case $name in
     # under download/<tag>/), and the listeners on this machine, which a
     # deployment without Node probes with curl: with -o, -w '%{http_code}'
     # and -f as curl reads them.
-    output='' format='' failing=''
+    output='' format='' failing='' cacert='' connect='' insecure=''
     while [ $# -gt 1 ]; do
       case $1 in
         -o) output=$2; shift ;;
         -w) format=$2; shift ;;
+        --cacert) cacert=$2; shift ;;
+        --connect-to) connect=$2; shift ;;
+        --insecure) insecure=1 ;;
         --*) ;;
         -*f*) failing=1 ;;
       esac
@@ -387,6 +398,30 @@ case $name in
         [ -f "$asset" ] || exit 22
         cp "$asset" "$output"
         exit 0 ;;
+      # The server's own HTTPS listener, as curl reaches it: checking its
+      # certificate against --cacert, for the URL's name reached at the
+      # address --connect-to gives, or not at all with --insecure.
+      https://127.*:* | https://*.test:*)
+        printf 'curl-tls %s cacert=%s connect=%s insecure=%s\n' "$url" "$cacert" "$connect" "$insecure" >>"$EVENTS"
+        exec "$NODE_REAL" -e '
+          const [url, output, format, failing, cacert, connect, insecure] = process.argv.slice(1);
+          const target = new URL(url);
+          const [name, , host, port] = connect ? connect.split(":") : [];
+          const request = require("node:https").get({
+            host: host ?? target.hostname, port: port ?? target.port, path: target.pathname,
+            servername: name ?? target.hostname, rejectUnauthorized: !insecure,
+            ca: cacert ? require("node:fs").readFileSync(cacert) : undefined,
+          }, (r) => {
+            const chunks = [];
+            r.on("data", (c) => chunks.push(c)).on("end", () => {
+              if (failing && r.statusCode >= 400) process.exit(22);
+              if (output && output !== "/dev/null") require("node:fs").writeFileSync(output, Buffer.concat(chunks));
+              if (format) process.stdout.write(String(r.statusCode));
+              process.exit(0);
+            });
+          });
+          request.on("error", (e) => { process.stderr.write("curl: (60) " + e.message + "\n"); if (format) process.stdout.write("000"); process.exit(60); });
+        ' "$url" "$output" "$format" "$failing" "$cacert" "$connect" "$insecure" ;;
       http://127.0.0.1:* | 'http://[::1]:'*)
         exec "$NODE_REAL" -e '
           const [url, output, format, failing] = process.argv.slice(1);
@@ -1367,7 +1402,7 @@ fixture upgrade
 p=$(free_port 127.0.0.2)
 deploy --static --http --port "$p" >"$case_dir/first" 2>&1 || fail 'the plain HTTP deploy failed'
 assert_contains "$EVENTS" "ufw allow in on tailscale0 to any port $p proto tcp comment wiki-demo"
-sed -i '/^https=/d; /^https_host=/d; /^serve_port=/d' "$HOME/.config/wiki-demo/wiki-demo.state"
+sed -i '/^https=/d; /^https_host=/d; /^serve_port=/d; /^way=/d; /^tls_/d' "$HOME/.config/wiki-demo/wiki-demo.state"
 : >"$EVENTS"
 out=$case_dir/upgraded
 deploy --no-build >"$out" 2>&1 || fail 'the redeploy of an earlier plain HTTP deployment failed'
@@ -1995,6 +2030,229 @@ assert_contains "$HOME/$unit" '--secure-cookies'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'a Node was installed'
 undeploy >/dev/null 2>&1
 pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node'
+
+# HTTPS with a certificate of one's own, and behind a reverse proxy
+# (WP5.50). The certificates are made with openssl, as a company's
+# authority would issue them: an authority, and a certificate for
+# wiki.test it signed; another authority, which did not sign it. Without
+# openssl these cases are skipped, and said to be.
+# The status and media type of a GET over HTTPS, accepting any
+# certificate, from the real listener.
+https_get() {
+  "$NODE_REAL" -e '
+    require("node:https").get(process.argv[1], { rejectUnauthorized: false }, (r) => console.log(r.statusCode, r.headers["content-type"]))
+      .on("error", () => console.log("unreachable"));
+  ' "$1"
+}
+if command -v openssl >/dev/null 2>&1; then
+  certs=$TMP/certs
+  mkdir -p "$certs"
+  (
+    cd "$certs"
+    openssl req -x509 -newkey rsa:2048 -nodes -subj '/CN=Test Authority' -days 2 -keyout ca.key -out ca.crt
+    openssl req -x509 -newkey rsa:2048 -nodes -subj '/CN=Other Authority' -days 2 -keyout other-ca.key -out other-ca.crt
+    openssl req -newkey rsa:2048 -nodes -subj /CN=wiki.test -keyout wiki.key -out wiki.csr
+    printf 'subjectAltName=DNS:wiki.test\n' >wiki.ext
+    openssl x509 -req -in wiki.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 -extfile wiki.ext -out wiki.crt
+    cat wiki.crt ca.crt wiki.key >wiki.pem
+  ) >"$TMP/certs.log" 2>&1 || { cat "$TMP/certs.log" >&2; fail 'openssl could not make the test certificates'; }
+
+  # The server's own certificate, on 0.0.0.0: no --http implied, no
+  # tailscale serve, the port opened in ufw, the probe over HTTPS without
+  # checking the certificate, and the files remembered by absolute path.
+  fixture tls
+  p=$(free_port 127.0.0.1)
+  a=$(other_port "$p")
+  data=$HOME/wiki-demo/data
+  out=$case_dir/first
+  (cd "$certs" && deploy --server --sqlite --tls-cert wiki.crt --tls-key wiki.key --bind 0.0.0.0 --port "$p" --admin-port "$a") >"$out" 2>&1 ||
+    fail 'the deploy with a certificate of its own failed'
+  assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --tls-cert \"$certs/wiki.crt\" --tls-key \"$certs/wiki.key\" --sqlite \"$data/wiki.sqlite\""
+  assert_lacks "$HOME/$unit" 'secure-cookies'
+  assert_lacks "$out" 'implies --http'
+  assert_lacks "$EVENTS" 'tailscale serve'
+  assert_contains "$EVENTS" "curl-tls https://127.0.0.1:$p/api/v1/info cacert= connect= insecure=1"
+  assert_contains "$out" "answers on https://127.0.0.1:$p/api/v1/info"
+  assert_contains "$out" "its admin listener answers on http://127.0.0.1:$a/admin/"
+  assert_contains "$EVENTS" "ufw allow in on tailscale0 to any port $p proto tcp comment wiki-demo"
+  assert_contains "$out" "  https://wiki.test:$p/   (the name the certificate is for)"
+  assert_contains "$out" 'a renewed certificate takes a restart, systemctl --user restart wiki-demo.service'
+  assert_contains "$out" 'The wiki has no public address yet: set it to the https:// address people use'
+  { [ "$(state way)" = cert ] && [ "$(state tls_cert)" = "$certs/wiki.crt" ] && [ "$(state tls_key)" = "$certs/wiki.key" ] &&
+    [ "$(state https)" = no ] && [ "$(state rule_port)" = "$p" ]; } || fail 'state does not record the certificate'
+  [ "$(https_get "https://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer over HTTPS'
+  out=$case_dir/status
+  deploy --status >"$out" 2>&1
+  assert_contains "$out" "HTTPS by wiki-server itself, with its own certificate (--tls-cert $certs/wiki.crt --tls-key $certs/wiki.key)"
+  assert_contains "$out" "  https://wiki.test:$p/"
+  pass '--tls-cert and --tls-key serve HTTPS from wiki-server on 0.0.0.0, probed with curl --insecure, the port opened, the files remembered'
+
+  # Remembered; then one .pem for both, checked against the authority that
+  # signed it, for the name it is for; then against another, which warns.
+  : >"$EVENTS"
+  deploy --no-build >"$case_dir/again" 2>&1 || fail 'a redeploy with the remembered certificate failed'
+  assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --tls-cert \"$certs/wiki.crt\""
+  out=$case_dir/pem
+  deploy --no-build --tls-cert "$certs/wiki.pem" --tls-key "$certs/wiki.pem" --tls-ca "$certs/ca.crt" >"$out" 2>&1 || fail 'a redeploy with one .pem failed'
+  assert_contains "$HOME/$unit" "--tls-cert \"$certs/wiki.pem\" --tls-key \"$certs/wiki.pem\""
+  assert_contains "$EVENTS" "curl-tls https://wiki.test:$p/api/v1/info cacert=$certs/ca.crt connect=wiki.test:$p:127.0.0.1:$p insecure="
+  assert_contains "$out" "its certificate verifies against $certs/ca.crt for wiki.test"
+  [ "$(state tls_ca)" = "$certs/ca.crt" ] || fail 'the authority was not remembered'
+  out=$case_dir/other-ca
+  deploy --no-build --tls-ca "$certs/other-ca.crt" >"$out" 2>&1 || fail 'a certificate that does not verify failed the deploy'
+  assert_contains "$out" "warning: its certificate does not verify against --tls-ca $certs/other-ca.crt for the name wiki.test"
+  assert_contains "$HOME/$unit" "--tls-cert \"$certs/wiki.pem\""
+  deploy --status >"$case_dir/status-ca" 2>&1
+  assert_contains "$case_dir/status-ca" "checked against --tls-ca $certs/other-ca.crt"
+  pass 'the certificate is remembered; one .pem serves as both; --tls-ca checks it for its name, and warns when it does not verify'
+
+  # Back to tailscale serve: the certificate is dropped, the address goes
+  # back to 127.0.0.1 and the port's rule is closed. On another port, as
+  # the one on 0.0.0.0 holds 127.0.0.1 too until it stops.
+  p2=$(other_port "$p")
+  : >"$EVENTS"
+  out=$case_dir/https
+  deploy --no-build --https --port "$p2" >"$out" 2>&1 || fail '--https after a certificate failed'
+  assert_contains "$out" "no longer serving with the certificate $certs/wiki.pem: --https replaces --tls-cert"
+  assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p2 --admin-listen 127.0.0.1:$a --secure-cookies"
+  assert_lacks "$HOME/$unit" 'tls-cert'
+  assert_contains "$EVENTS" "tailscale serve --bg http://127.0.0.1:$p2"
+  assert_contains "$EVENTS" "ufw delete allow in on tailscale0 to any port $p proto tcp"
+  { [ "$(state way)" = tailscale ] && [ -z "$(state tls_cert)" ] && [ -z "$(state tls_ca)" ]; } || fail 'state still records the certificate'
+  undeploy >/dev/null 2>&1
+  pass '--https leaves the certificate: back behind tailscale serve on 127.0.0.1, the rule closed'
+
+  # The ways exclude each other, and the certificate needs both files, a
+  # server, and files that can be read; all refused before anything is
+  # built.
+  fixture tls-refused
+  p=$(free_port 127.0.0.1)
+  refused() {
+    out=$case_dir/refused
+    if deploy --port "$p" "$@" >"$out" 2>&1; then fail "deploy $* was taken"; fi
+    assert_contains "$out" "$refusal"
+  }
+  refusal='--https and --tls-cert are ways to serve that exclude each other'
+  refused --https --tls-cert "$certs/wiki.crt" --tls-key "$certs/wiki.key"
+  refusal='--tls-cert and --behind-proxy are ways to serve that exclude each other'
+  refused --tls-cert "$certs/wiki.crt" --tls-key "$certs/wiki.key" --behind-proxy
+  refusal='--http and --behind-proxy are ways to serve that exclude each other'
+  refused --http --behind-proxy
+  refusal='--tls-cert needs --tls-key FILE'
+  refused --server --sqlite --tls-cert "$certs/wiki.crt"
+  refusal="cannot read --tls-key $certs/missing.key"
+  refused --server --sqlite --tls-cert "$certs/wiki.crt" --tls-key "$certs/missing.key"
+  refusal='--tls-ca is the authority the deploy checks the server'"'"'s own certificate against'
+  refused --server --sqlite --tls-ca "$certs/ca.crt"
+  refusal="the demo's static server speaks plain HTTP, so --tls-cert is for the wiki's server"
+  refused --static --tls-cert "$certs/wiki.crt" --tls-key "$certs/wiki.key"
+  assert_lacks "$EVENTS" 'bootstrap'
+  assert_lacks "$EVENTS" 'npm'
+  [ ! -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'a refused deploy wrote a state'
+  pass 'the ways to serve exclude each other, and a certificate needs its key, a server and readable files, before anything is built'
+
+  # Certificate files inside the deployment's directory, which the install
+  # empties but for data/, state/ and toolchain/: refused before the
+  # service is stopped, under the home directory and under a prefix (there
+  # through a link from outside); under data/tls/ they are kept, and taken.
+  fixture tls-inside
+  p=$(free_port 127.0.0.2)
+  a=$(other_port "$p")
+  deploy --server --sqlite --http --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the plain HTTP deploy failed'
+  cp "$certs/wiki.crt" "$certs/wiki.key" "$HOME/wiki-demo/"
+  cp "$HOME/.config/wiki-demo/wiki-demo.state" "$case_dir/state-before"
+  : >"$EVENTS"
+  out=$case_dir/refused
+  if deploy --no-build --tls-cert "$HOME/wiki-demo/wiki.crt" --tls-key "$HOME/wiki-demo/wiki.key" >"$out" 2>&1; then
+    fail 'certificate files the install would delete were taken'
+  fi
+  assert_contains "$out" "the TLS file $HOME/wiki-demo/wiki.crt is inside $HOME/wiki-demo, which installing empties but for data/, state/ and toolchain/, so it would be deleted: keep it in $HOME/wiki-demo/data/tls/ or outside $HOME/wiki-demo"
+  assert_lacks "$EVENTS" 'systemctl stop'
+  cmp -s "$HOME/.config/wiki-demo/wiki-demo.state" "$case_dir/state-before" || fail 'a refused deploy changed the state'
+  [ -f "$HOME/wiki-demo/wiki.key" ] || fail 'a refused deploy deleted the key'
+  [ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the service stopped answering'
+  mkdir -p "$HOME/wiki-demo/data/tls"
+  mv "$HOME/wiki-demo/wiki.crt" "$HOME/wiki-demo/wiki.key" "$HOME/wiki-demo/data/tls/"
+  out=$case_dir/kept
+  deploy --no-build --tls-cert "$HOME/wiki-demo/data/tls/wiki.crt" --tls-key "$HOME/wiki-demo/data/tls/wiki.key" >"$out" 2>&1 ||
+    fail 'certificate files under data/tls/ were refused'
+  assert_contains "$HOME/$unit" "--tls-cert \"$HOME/wiki-demo/data/tls/wiki.crt\" --tls-key \"$HOME/wiki-demo/data/tls/wiki.key\""
+  [ -f "$HOME/wiki-demo/data/tls/wiki.key" ] || fail 'the install deleted the key under data/tls/'
+  [ "$(https_get "https://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer over HTTPS'
+  undeploy >/dev/null 2>&1
+  fixture tls-inside-prefix
+  pre=$case_dir/srv
+  q=$(free_port 127.0.0.2)
+  b=$(other_port "$q")
+  out=$case_dir/prefix-first
+  deploy --server --sqlite --http --prefix "$pre" --port "$q" --admin-port "$b" >"$out" 2>&1 || fail 'the deploy under a prefix failed'
+  cp "$certs/wiki.pem" "$pre/wiki.pem"
+  ln -s "$pre/wiki.pem" "$case_dir/link.pem"
+  : >"$EVENTS"
+  out=$case_dir/prefix-refused
+  if deploy --no-build --prefix "$pre" --tls-cert "$case_dir/link.pem" --tls-key "$case_dir/link.pem" >"$out" 2>&1; then
+    fail 'a certificate linked into the prefix was taken'
+  fi
+  assert_contains "$out" "the TLS file $pre/wiki.pem is inside $pre, which installing empties"
+  assert_lacks "$EVENTS" 'systemctl stop'
+  [ -f "$pre/wiki.pem" ] || fail 'a refused deploy deleted the .pem under the prefix'
+  undeploy --prefix "$pre" >/dev/null 2>&1
+  pass 'certificate files the install would delete are refused before the service is stopped, through links and under a prefix too; under data/tls/ they are kept'
+else
+  printf 'skipped: openssl is not installed, so the cases of a certificate of its own (--tls-cert) do not run\n'
+fi
+
+# Behind a reverse proxy: from tailscale serve, which is turned off, to
+# plain HTTP on 127.0.0.1 with Secure cookies and the proxy's needs
+# printed; from --http, whose rule is closed; an address other than
+# 127.0.0.1 refused.
+fixture proxy
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the first deploy failed'
+[ -s "$FAKE_TS_SERVE" ] || fail 'the first deploy did not set tailscale serve'
+: >"$EVENTS"
+out=$case_dir/proxy
+deploy --no-build --behind-proxy >"$out" 2>&1 || fail 'the deploy behind a proxy failed'
+assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --sqlite"
+assert_contains "$EVENTS" 'tailscale serve --https=443 off'
+[ ! -s "$FAKE_TS_SERVE" ] || fail '--behind-proxy left tailscale serve on'
+assert_lacks "$EVENTS" 'ufw allow'
+assert_lacks "$EVENTS" 'curl-tls'
+assert_contains "$out" "answers on http://127.0.0.1:$p/api/v1/info"
+assert_contains "$out" "It is behind a reverse proxy (--behind-proxy), which must:"
+assert_contains "$out" 'send X-Forwarded-Proto and X-Forwarded-Host'
+assert_contains "$out" "      reverse_proxy 127.0.0.1:$p"
+assert_contains "$out" "  the reverse proxy's https:// address, which proxies to"
+{ [ "$(state way)" = proxy ] && [ "$(state https)" = no ] && [ -z "$(state serve_port)" ]; } || fail 'state does not record the proxy'
+deploy --status >"$case_dir/status" 2>&1
+assert_contains "$case_dir/status" 'behind a reverse proxy (--behind-proxy): plain HTTP on 127.0.0.1'
+out=$case_dir/refused
+if deploy --no-build --bind 127.0.0.2 >"$out" 2>&1; then fail '--behind-proxy was taken with another address'; fi
+assert_contains "$out" '--behind-proxy serves plain HTTP on 127.0.0.1, for a reverse proxy on this machine: drop --bind 127.0.0.2'
+: >"$EVENTS"
+deploy --no-build --http >"$case_dir/http" 2>&1 || fail '--http after the proxy failed'
+assert_contains "$case_dir/http" 'no longer behind a reverse proxy: --http replaces --behind-proxy'
+assert_contains "$HOME/$unit" "--listen 127.0.0.2:$p"
+assert_contains "$EVENTS" "ufw allow in on tailscale0 to any port $p proto tcp comment wiki-demo"
+: >"$EVENTS"
+deploy --no-build --behind-proxy >"$case_dir/proxy-again" 2>&1 || fail '--behind-proxy after --http failed'
+assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies"
+assert_contains "$EVENTS" "ufw delete allow in on tailscale0 to any port $p proto tcp"
+[ -z "$(state rule_port)" ] || fail 'the rule was kept behind the proxy'
+undeploy >/dev/null 2>&1
+pass '--behind-proxy serves plain HTTP on 127.0.0.1 with Secure cookies, turns tailscale serve off, closes the rule and says what the proxy must do'
+
+# The demo behind a reverse proxy too.
+fixture proxy-demo
+p=$(free_port 127.0.0.1)
+out=$case_dir/out
+deploy --static --behind-proxy --port "$p" >"$out" 2>&1 || fail 'the demo behind a proxy failed'
+assert_contains "$HOME/$unit" "--port $p --bind 127.0.0.1"
+assert_lacks "$EVENTS" 'tailscale serve'
+assert_contains "$out" "      reverse_proxy 127.0.0.1:$p"
+undeploy >/dev/null 2>&1
+pass 'the demo is served behind a reverse proxy as the server is'
 
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"

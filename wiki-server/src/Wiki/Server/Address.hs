@@ -6,8 +6,9 @@
 -- (WP4.4), which is the address the wiki is known by behind a proxy or a
 -- domain name. Without one, the request's own is used: its @Host@ (or the
 -- @X-Forwarded-Host@ a proxy in front sets), the scheme a proxy says it was
--- reached by (@X-Forwarded-Proto@, else @http@, since the server itself
--- speaks plain HTTP), and the path where the listener serves the wiki.
+-- reached by (@X-Forwarded-Proto@), else the listener's own (@https@ when
+-- it speaks TLS, @http@ when not), and the path where the listener serves
+-- the wiki.
 module Wiki.Server.Address
   ( publicAddress
   , requestOrigin
@@ -38,7 +39,9 @@ requestAddress :: Text -> Request -> Text
 requestAddress mount request = requestOrigin request <> mount
 
 -- | The origin a request names the wiki by: the scheme and the host, as
--- the browser or a proxy in front of the server requested them.
+-- the browser or a proxy in front of the server requested them. Without a
+-- proxy's @X-Forwarded-Proto@, the scheme is the connection's: @https@ on
+-- a listener that speaks TLS ('isSecure').
 requestOrigin :: Request -> Text
 requestOrigin request = scheme <> "://" <> host
   where
@@ -47,7 +50,8 @@ requestOrigin request = scheme <> "://" <> host
     host = maybe "localhost" firstOf (header "X-Forwarded-Host" <|> (decodeUtf8With lenientDecode <$> requestHeaderHost request))
     scheme = case T.toLower . firstOf <$> header "X-Forwarded-Proto" of
       Just "https" -> "https"
-      _ -> "http"
+      Just _ -> "http"
+      Nothing -> if isSecure request then "https" else "http"
 
 -- | An address in the wiki (a path relative to the wiki's path, as the
 -- API's links are, @api\/v1\/…@), under its public address.

@@ -3,7 +3,9 @@
 # the wiki's server, wiki-server, with its data on this machine, or with
 # --static the serverless demo as static files (whose home is GitHub Pages).
 #
-#   sh toolchain/deploy-local.sh [--server | --static] [--http | --https] [--port N]
+#   sh toolchain/deploy-local.sh [--server | --static] [--port N]
+#                                [--https | --tls-cert FILE --tls-key FILE [--tls-ca FILE]
+#                                 | --behind-proxy | --http]
 #                                [--bind ADDRESS] [--admin-port N] [--prefix DIR]
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
@@ -72,15 +74,18 @@
 #      server (the static one with Node by absolute path, the one
 #      toolchain/bootstrap.sh installs into ~/.wiki-toolchain, or else the Node
 #      it found on PATH; or wiki-server, with --data <dir>/data, --listen on the
-#      address and port, its admin listener on 127.0.0.1, and --secure-cookies
-#      over HTTPS, and with the LD_LIBRARY_PATH of the shell this runs in, if
-#      it has one, since a unit does not inherit it), enable it and (re)start
-#      it, and check that it answers.
+#      address and port, its admin listener on 127.0.0.1, --secure-cookies
+#      behind tailscale serve or a reverse proxy, --tls-cert and --tls-key
+#      with a certificate of one's own, and with the LD_LIBRARY_PATH of the
+#      shell this runs in, if it has one, since a unit does not inherit it),
+#      enable it and (re)start it, and check that it answers (over HTTPS,
+#      through curl, with --tls-cert).
 #      With --server, then bring the guide's pages up to the new version
 #      (`wiki-server guide update`): a fresh wiki gets the guide, the space
 #      Guide, as the server first starts, and each deploy after gives its
 #      pages the text the new version has.
-#   4. HTTPS (the default): the server listens on 127.0.0.1 only, and
+#   4. HTTPS, one of three ways, or plain HTTP. Through tailscale serve (the
+#      default, --https): the server listens on 127.0.0.1 only, and
 #      `tailscale serve --bg http://127.0.0.1:<port>` serves it to the tailnet
 #      (never to the internet: no Funnel) at https://<machine>.<tailnet>.ts.net/,
 #      tailscaled terminating TLS with a Let's Encrypt certificate it fetches
@@ -93,12 +98,28 @@
 #      certificate takes a moment) and prints it first. It needs MagicDNS and
 #      "HTTPS Certificates" on in the tailnet's DNS settings; without them it
 #      says so and serves plain HTTP as --http does, until a later run finds
-#      them. With --http it serves plain HTTP on the Tailscale address
-#      instead, and turns off a serve an earlier deploy set.
-#   5. Firewall, with --http: if ufw is installed and active, allow the port
-#      on the Tailscale interface only, and delete the rule for the previous
-#      port when the port changed, or when the address is 127.0.0.1 (as with
-#      HTTPS), which needs none. Changes go through `sudo -n`; when sudo needs
+#      them. With a certificate of one's own (--tls-cert FILE --tls-key
+#      FILE, PEM, as a company's certificate authority issues them; one .pem
+#      holding both may be given as both): wiki-server serves HTTPS itself
+#      on its public listener, at any --bind, 0.0.0.0 included (the
+#      Tailscale address by default, as --http); the unit names the files
+#      where they are, so they must stay readable by this user, and the
+#      server reads them as it starts, so a renewed certificate takes
+#      `systemctl --user restart <name>.service`. The check that it answers
+#      skips the certificate (curl --insecure); with --tls-ca FILE the
+#      certificate is then checked against that authority, for the name it
+#      is issued for (read with openssl), and a warning says when it does
+#      not verify. Behind a reverse proxy (--behind-proxy: Caddy, nginx) that
+#      terminates TLS on this machine: plain HTTP on 127.0.0.1, Secure
+#      cookies, no firewall rule, and the deploy prints what the proxy must
+#      do. With --http it serves plain HTTP on the Tailscale address
+#      instead. Any way but tailscale serve turns off a serve an earlier
+#      deploy set.
+#   5. Firewall, with --http or --tls-cert: if ufw is installed and active,
+#      allow the port on the Tailscale interface only, and delete the rule
+#      for the previous port when the port changed, or when the address is
+#      127.0.0.1 (as behind tailscale serve or a reverse proxy), which needs
+#      none. Changes go through `sudo -n`; when sudo needs
 #      a password the commands are printed for you to run instead.
 #
 # Running it again rebuilds and replaces the deployment: the old service stops
@@ -116,12 +137,27 @@
 #   --http           serve plain HTTP on the Tailscale address, without Secure cookies,
 #                    for a tailnet without HTTPS certificates; remembered for the next run
 #   --https          serve HTTPS through `tailscale serve` (the first run's default)
+#   --tls-cert FILE  --server: serve HTTPS from wiki-server itself, with this certificate
+#   --tls-key FILE   (PEM; its chain may follow it in the file) and its private key (the
+#                    same file when one .pem holds both), on the --bind address;
+#                    remembered, by absolute path. Either may later be given alone, for
+#                    a renewed certificate in another file. Inside the deployment's
+#                    directory only data/ will do (<dir>/data/tls/): installing
+#                    empties the rest
+#   --tls-ca FILE    with --tls-cert: after the deploy, check the certificate the server
+#                    serves against this certificate authority; remembered (--tls-ca=
+#                    forgets it)
+#   --behind-proxy   serve plain HTTP on 127.0.0.1, with Secure cookies, for a reverse
+#                    proxy on this machine that serves HTTPS (Caddy, nginx); remembered.
+#                    --https, --tls-cert, --behind-proxy and --http exclude each other;
+#                    giving one moves a deployment off the way it was served
 #   --port N         the port to serve on (1024-65535; default the previous one, or 8080)
 #   --bind ADDRESS   the address to listen on: by default 127.0.0.1 behind tailscale
 #                    serve, or with --http this machine's Tailscale IPv4 address
 #                    (`tailscale ip -4`), or 127.0.0.1 with a warning when Tailscale
-#                    does not answer; any address but 127.0.0.1 implies --http, and
-#                    0.0.0.0 listens everywhere
+#                    does not answer; behind tailscale serve any address but
+#                    127.0.0.1 implies --http, behind a reverse proxy only 127.0.0.1
+#                    will do, and 0.0.0.0 listens everywhere
 #   --postgres       --server: keep the wiki in PostgreSQL, in Docker (the first run's
 #                    default); remembered for the next run
 #   --sqlite         --server: keep the wiki in data/wiki.sqlite instead, with no Docker
@@ -237,6 +273,7 @@ usage() {
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 opt_backend_only=''
+opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -250,6 +287,13 @@ while [ $# -gt 0 ]; do
     --static) opt_mode=static ;;
     --http) opt_https=no ;;
     --https) opt_https=yes ;;
+    --tls-cert) need_value $# "$1"; opt_tls_cert=$2; shift ;;
+    --tls-cert=*) opt_tls_cert=${1#*=} ;;
+    --tls-key) need_value $# "$1"; opt_tls_key=$2; shift ;;
+    --tls-key=*) opt_tls_key=${1#*=} ;;
+    --tls-ca) need_value $# "$1"; opt_tls_ca=$2 opt_tls_ca_given=1; shift ;;
+    --tls-ca=*) opt_tls_ca=${1#*=} opt_tls_ca_given=1 ;;
+    --behind-proxy) opt_proxy=1 ;;
     --admin-port) need_value $# "$1"; opt_admin_port=$2; shift ;;
     --admin-port=*) opt_admin_port=${1#*=} ;;
     --postgres) opt_db=postgres ;;
@@ -285,6 +329,17 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# The ways to serve exclude each other: one may be given, and a later run
+# moves to another by naming it.
+ways=
+[ "$opt_https" != yes ] || ways="$ways --https"
+[ "$opt_https" != no ] || ways="$ways --http"
+[ -z "$opt_tls_cert$opt_tls_key" ] || ways="$ways --tls-cert"
+[ -z "$opt_proxy" ] || ways="$ways --behind-proxy"
+case $ways in
+  ' '*' '*)
+    die "$(printf '%s' "${ways# }" | sed 's/ / and /g') are ways to serve that exclude each other: give one (--https through tailscale serve, --tls-cert FILE --tls-key FILE with a certificate of your own, --behind-proxy behind a reverse proxy, or --http for plain HTTP)" ;;
+esac
 check_name "$name"
 resolve_prefix
 layout
@@ -314,6 +369,16 @@ prev_trust=$(state_get trust)
 # then moves to it.
 prev_https=$(state_get https)
 prev_https_host=$(state_get https_host)
+# How the deployment is reached (see "The way it is served" below):
+# tailscale, http, cert or proxy. Unset in a deployment of a version
+# before the last two, whose https says which of the first two it was.
+prev_way=$(state_get way)
+if [ -z "$prev_way" ]; then
+  if [ "$prev_https" = no ]; then prev_way=http; else prev_way=tailscale; fi
+fi
+prev_tls_cert=$(state_get tls_cert)
+prev_tls_key=$(state_get tls_key)
+prev_tls_ca=$(state_get tls_ca)
 prev_serve_port=$(state_get serve_port)
 # Unset in a server deployment of a version before PostgreSQL: its data/
 # holds a wiki.sqlite of the earlier schema.
@@ -445,25 +510,57 @@ print(name or "-", magic, certs)' '(.BackendState // "") as $state
     console.log([name || "-", magic, certs].join(" "));
   })'
 }
-# The addresses to open, the one to use first: over HTTPS the MagicDNS name
-# (https_host, with serve_note when the serve is not set yet), then the
-# listener itself, on this machine.
+# The first DNS name a certificate (a PEM file) is issued for, from its
+# subjectAltName, else its subject's CN; nothing when openssl is not here
+# or the certificate names none.
+cert_name() {
+  command -v openssl >/dev/null 2>&1 || return 0
+  names=$(openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' | sed -n 's/^ *DNS://p' | head -n 1)
+  [ -n "$names" ] ||
+    names=$(openssl x509 -in "$1" -noout -subject -nameopt sep_multiline 2>/dev/null | sed -n 's/^ *CN=//p' | head -n 1)
+  # A wildcard name stands for any name under it: one of them is asked.
+  case $names in
+    '*.'*) names=wiki${names#\*} ;;
+  esac
+  printf '%s\n' "$names"
+}
+# The addresses to open, the one to use first, for an address, a port, the
+# way it is served ($3) and its certificate ($4). Through tailscale serve:
+# the MagicDNS name (https_host, with serve_note when the serve is not set
+# yet), then the listener itself, on this machine. Behind a reverse proxy:
+# the listener, which the proxy's address stands for. Otherwise: the
+# listener at its address (the Tailscale one for 0.0.0.0) and the MagicDNS
+# name, over https with the server's own certificate, first at the name
+# the certificate is for, and over http without one.
 print_urls() {
   if [ -n "${https_host:-}" ]; then
     printf '  https://%s/%s\n' "$https_host" "${serve_note:-}"
     printf '  http://127.0.0.1:%s/   (on this machine)\n' "$2"
     return 0
   fi
+  if [ "$3" = proxy ]; then
+    printf "  the reverse proxy's https:// address, which proxies to\n"
+    printf '  http://127.0.0.1:%s/   (on this machine)\n' "$2"
+    return 0
+  fi
+  if [ "$3" = cert ]; then
+    url_scheme=https
+    # The name the certificate is for, which a browser checks.
+    cn=$(cert_name "$4")
+    [ -z "$cn" ] || printf '  https://%s:%s/   (the name the certificate is for)\n' "$cn" "$2"
+  else
+    url_scheme=http
+  fi
   case $1 in
     0.0.0.0 | ::) host=$(tailscale_ip || hostname) ;;
     *) host=$1 ;;
   esac
   case $host in *:*) host="[$host]" ;; esac
-  printf '  http://%s:%s/\n' "$host" "$2"
+  printf '  %s://%s:%s/\n' "$url_scheme" "$host" "$2"
   dns=$(magicdns_name)
   case $1 in
     127.0.0.1 | ::1) ;;
-    *) [ -z "$dns" ] || printf '  http://%s:%s/\n' "$dns" "$2" ;;
+    *) [ -z "$dns" ] || printf '  %s://%s:%s/\n' "$url_scheme" "$dns" "$2" ;;
   esac
 }
 
@@ -602,7 +699,11 @@ if [ "$action" = status ]; then
     [ ! -d "$prev_dir/data" ] || say "a server's data is kept in $prev_dir/data"
   fi
   https_host=$prev_https_host serve_note=
-  if [ -n "$prev_serve_port" ]; then
+  if [ "$prev_way" = cert ]; then
+    say "HTTPS by wiki-server itself, with its own certificate (--tls-cert $prev_tls_cert --tls-key $prev_tls_key${prev_tls_ca:+, checked against --tls-ca $prev_tls_ca}), read as it starts: a renewed certificate takes systemctl --user restart $name.service"
+  elif [ "$prev_way" = proxy ]; then
+    say "behind a reverse proxy (--behind-proxy): plain HTTP on 127.0.0.1:$prev_port for the proxy, which serves HTTPS; Secure cookies"
+  elif [ -n "$prev_serve_port" ]; then
     if ! serve_read; then
       say "HTTPS at https://$https_host/ through tailscale serve, whose status Tailscale does not give now"
       serve_note='   (tailscale serve status does not answer)'
@@ -639,7 +740,7 @@ if [ "$action" = status ]; then
       node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
     fi
     printf 'Open:\n'
-    print_urls "$prev_bind" "$prev_port"
+    print_urls "$prev_bind" "$prev_port" "$prev_way" "$prev_tls_cert"
     [ "$prev_mode" != server ] || printf 'Administration, on this machine: http://127.0.0.1:%s/admin/\n' "$prev_admin_port"
   fi
   exit 0
@@ -720,6 +821,70 @@ if [ -n "$backend_only" ]; then
   fi
 fi
 
+# The way it is served, one of four, remembered: tailscale (HTTPS through
+# tailscale serve, the first run's default), http (plain HTTP, --http),
+# cert (HTTPS by wiki-server itself, with a certificate of one's own,
+# --tls-cert and --tls-key) or proxy (plain HTTP on 127.0.0.1 behind a
+# reverse proxy that terminates TLS, --behind-proxy). A way given now
+# replaces the remembered one, and with it the remembered certificate.
+if [ "$opt_https" = yes ]; then
+  way=tailscale
+elif [ "$opt_https" = no ]; then
+  way=http
+elif [ -n "$opt_tls_cert$opt_tls_key" ]; then
+  way=cert
+elif [ -n "$opt_proxy" ]; then
+  way=proxy
+else
+  way=$prev_way
+fi
+case $prev_way in
+  cert) [ "$way" = cert ] || say "no longer serving with the certificate $prev_tls_cert: $(printf '%s' "${ways# }") replaces --tls-cert" ;;
+  proxy) [ "$way" = proxy ] || say "no longer behind a reverse proxy: $(printf '%s' "${ways# }") replaces --behind-proxy" ;;
+esac
+tls_cert='' tls_key='' tls_ca=''
+if [ "$way" = cert ]; then
+  [ "$mode" = server ] ||
+    die "the demo's static server speaks plain HTTP, so --tls-cert is for the wiki's server (--server); serve the demo through tailscale serve (--https) or a reverse proxy (--behind-proxy)"
+  # A file not given now is the previous run's, as with the other options:
+  # a renewed certificate in a new file is given alone.
+  if [ "$prev_way" = cert ]; then
+    tls_cert=${opt_tls_cert:-$prev_tls_cert} tls_key=${opt_tls_key:-$prev_tls_key} tls_ca=$prev_tls_ca
+  else
+    tls_cert=$opt_tls_cert tls_key=$opt_tls_key
+  fi
+  [ -n "$tls_cert" ] || die "--tls-key needs --tls-cert FILE, the certificate (PEM) it is the key of"
+  [ -n "$tls_key" ] || die "--tls-cert needs --tls-key FILE, the certificate's private key (PEM; the same file when one .pem holds both)"
+  [ -z "$opt_tls_ca_given" ] || tls_ca=$opt_tls_ca
+  # The unit reads the files from where they are, at every start of the
+  # service, as this user: they are named by absolute path and must stay
+  # readable there.
+  for option in tls-cert tls-key tls-ca; do
+    case $option in
+      tls-cert) file=$tls_cert ;;
+      tls-key) file=$tls_key ;;
+      tls-ca) file=$tls_ca ;;
+    esac
+    [ -n "$file" ] || continue
+    case $file in
+      *'
+'*) die "--$option $file holds a newline, which the unit file cannot hold" ;;
+    esac
+    { [ -f "$file" ] && [ -r "$file" ]; } ||
+      die "cannot read --$option $file: the service reads it from where it is, as $user, at every start"
+    file=$(realpath "$file")
+    case $option in
+      tls-cert) tls_cert=$file ;;
+      tls-key) tls_key=$file ;;
+      tls-ca) tls_ca=$file ;;
+    esac
+  done
+  command -v curl >/dev/null 2>&1 ||
+    die "--tls-cert: the deploy checks the HTTPS listener with curl, which is not installed here"
+elif [ -n "$opt_tls_ca" ]; then
+  die "--tls-ca is the authority the deploy checks the server's own certificate against: it goes with --tls-cert FILE --tls-key FILE"
+fi
+
 # The directory, absolute and with symbolic links resolved, so that the
 # safety checks compare what would really be deleted: the prefix, or for a
 # deployment in the home directory the previous run's or ~/<name>.
@@ -763,22 +928,36 @@ fi
 if [ "$mode" = server ] && [ -n "$prev_dir" ] && [ "$prev_dir" != "$dir" ] && [ -d "$prev_dir/data" ] && [ ! -d "$dir/data" ]; then
   die "the wiki's data is in $prev_dir/data: move it to $dir/data yourself first (with the service stopped: sh toolchain/undeploy-local.sh --name $name), or deploy under another --name"
 fi
+# The certificate's files must survive the install, which empties the
+# directory but for data/, state/ and toolchain/: a file elsewhere in it
+# would be deleted, the key with it, and the service could not start. Both
+# paths are real ones (realpath above), so a link cannot hide where a file
+# is.
+for file in "$tls_cert" "$tls_key" "$tls_ca"; do
+  case $file in
+    "$dir"/data/* | "$dir"/state/* | "$dir"/toolchain/*) ;;
+    "$dir"/*)
+      die "the TLS file $file is inside $dir, which installing empties but for data/, state/ and toolchain/, so it would be deleted: keep it in $dir/data/tls/ or outside $dir" ;;
+  esac
+done
 # The directory is claimed now, before the build: under a prefix the
 # toolchain is installed under it first, and a directory that is not empty
 # is emptied only when it carries the marker.
 mkdir -p "$dir"
 [ -f "$dir/$MARKER" ] || printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$dir/$MARKER"
 
-# HTTPS unless --http says otherwise, now or on an earlier run; a
-# deployment of a version before it was the default moves to it.
-https=${opt_https:-${prev_https:-yes}}
+# HTTPS through tailscale serve (https=yes) is the tailscale way alone;
+# the others leave tailscale serve off (https=no). A deployment of a
+# version before HTTPS was the default moves to it.
+if [ "$way" = tailscale ]; then https=yes; else https=no; fi
 # The previous run's address is kept when it was asked for (but not an
-# address --https cannot serve behind tailscale serve); one chosen
-# automatically is chosen again, as Tailscale may have come up since.
+# address --https or --behind-proxy, given now, cannot serve from); one
+# chosen automatically is chosen again, as Tailscale may have come up
+# since.
 if [ -n "$opt_bind" ]; then
   bind=$opt_bind bind_choice=explicit
 elif [ "$prev_bind_choice" = explicit ] && [ -n "$prev_bind" ] &&
-  ! { [ "$opt_https" = yes ] && [ "$prev_bind" != 127.0.0.1 ]; }; then
+  ! { { [ "$opt_https" = yes ] || [ -n "$opt_proxy" ]; } && [ "$prev_bind" != 127.0.0.1 ]; }; then
   bind=$prev_bind bind_choice=explicit
 else
   bind_choice=auto bind=
@@ -792,8 +971,13 @@ if [ -n "$bind" ] && [ "$bind" != 127.0.0.1 ] && [ "$https" = yes ]; then
   say "--bind $bind implies --http: tailscale serve proxies to 127.0.0.1 only"
   https=no
 fi
+# A reverse proxy on this machine reaches the server on 127.0.0.1, and
+# nothing else should reach its plain HTTP.
+if [ "$way" = proxy ] && [ -n "$bind" ] && [ "$bind" != 127.0.0.1 ]; then
+  die "--behind-proxy serves plain HTTP on 127.0.0.1, for a reverse proxy on this machine: drop --bind $bind, or give --bind 127.0.0.1"
+fi
 if [ -z "$bind" ]; then
-  if [ "$https" = yes ]; then
+  if [ "$https" = yes ] || [ "$way" = proxy ]; then
     # Settled once Node is at hand, below: HTTPS may turn out not to be
     # available, and then the Tailscale address serves plain HTTP.
     bind=127.0.0.1
@@ -1370,9 +1554,14 @@ if [ "$mode" = server ]; then
   description="Wiki server ($name) from $dir on $bind:$port"
   exec_start="\"$dir/bin/wiki-server\" serve --data \"$dir/data\" --static \"$dir/app\" --listen $listen --admin-listen 127.0.0.1:$admin_port"
   # A Secure cookie is sent over HTTPS only, so over plain HTTP it would
-  # make signing in impossible: only behind tailscale serve. The admin
-  # listener uses no cookie.
-  [ -z "$https_host" ] || exec_start="$exec_start --secure-cookies"
+  # make signing in impossible: only behind tailscale serve or a reverse
+  # proxy that serves HTTPS. With its own certificate the server speaks
+  # TLS, which implies it. The admin listener uses no cookie.
+  if [ -n "$https_host" ] || [ "$way" = proxy ]; then
+    exec_start="$exec_start --secure-cookies"
+  elif [ "$way" = cert ]; then
+    exec_start="$exec_start --tls-cert $(unit_word "$tls_cert") --tls-key $(unit_word "$tls_key")"
+  fi
   # The database: PostgreSQL by its URL, without the password, which is in
   # a file of the owner's; or the SQLite file in the data directory.
   if [ "$db" = postgres ]; then
@@ -1447,7 +1636,16 @@ case $bind in
   *:*) probe_host="[$bind]" ;;
   *) probe_host=$bind ;;
 esac
+# Whether an address answers 200. The server's own HTTPS listener is asked
+# through curl without checking its certificate (--insecure, for this probe
+# alone): the probe asks whether the service is up, and the certificate is
+# checked below when --tls-ca says against what.
 answers() {
+  case $1 in
+    https://*)
+      [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' --insecure "$1" 2>/dev/null)" = 200 ]
+      return ;;
+  esac
   if [ -n "$nodeless" ]; then
     [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' "$1" 2>/dev/null)" = 200 ]
     return
@@ -1457,17 +1655,37 @@ answers() {
   ' "$1" 2>/dev/null
 }
 if [ "$mode" = server ]; then probe_path=api/v1/info; else probe_path=; fi
+if [ "$way" = cert ]; then scheme=https; else scheme=http; fi
 waited=0
-until service_active && answers "http://$probe_host:$port/$probe_path"; do
+until service_active && answers "$scheme://$probe_host:$port/$probe_path"; do
   waited=$((waited + 1))
   if [ "$waited" -ge "${WIKI_DEPLOY_WAIT:-20}" ]; then
     systemctl --user status "$name.service" --no-pager >&2 || true
     [ -n "$no_firewall" ] || firewall_report
-    die "$name.service does not answer on http://$probe_host:$port/; see journalctl --user -u $name"
+    die "$name.service does not answer on $scheme://$probe_host:$port/; see journalctl --user -u $name"
   fi
   sleep 1
 done
-say "$name.service answers on http://$probe_host:$port/$probe_path"
+say "$name.service answers on $scheme://$probe_host:$port/$probe_path"
+# With --tls-ca, the certificate is checked as a browser that trusts that
+# authority checks it: its chain, and its name. The name is the first one
+# the certificate is issued for (its subjectAltName, read with openssl),
+# reached at the listener's address (curl --connect-to); without openssl,
+# the listener's address itself. A certificate that does not verify is
+# warned of: the service runs, and the browsers say the same.
+if [ "$way" = cert ] && [ -n "$tls_ca" ]; then
+  tls_name=$(cert_name "$tls_cert")
+  if [ -n "$tls_name" ]; then
+    set -- --connect-to "$tls_name:$port:$probe_host:$port" "https://$tls_name:$port/$probe_path"
+  else
+    set -- "https://$probe_host:$port/$probe_path"
+  fi
+  if verified=$(curl -sS -o /dev/null --max-time 10 --noproxy '*' --cacert "$tls_ca" "$@" 2>&1); then
+    say "its certificate verifies against $tls_ca${tls_name:+ for $tls_name}"
+  else
+    warn "its certificate does not verify against --tls-ca $tls_ca${tls_name:+ for the name $tls_name} (${verified:-curl failed}): a browser that trusts that authority refuses it too. Check that $tls_cert has the chain after the certificate, and that the certificate is for the name people use"
+  fi
+fi
 if [ "$mode" = server ]; then
   if answers "http://127.0.0.1:$admin_port/admin/api/v1/admin/status"; then
     say "its admin listener answers on http://127.0.0.1:$admin_port/admin/"
@@ -1593,9 +1811,27 @@ panel_public_url() {
   ' "http://127.0.0.1:$admin_port/admin/api/v1/admin/server" 2>/dev/null
 }
 
+# What a reverse proxy in front of the deployment must do (--behind-proxy),
+# with the few lines of a Caddyfile that do it all: Caddy's reverse_proxy
+# passes WebSocket upgrades on and sends X-Forwarded-Proto and
+# X-Forwarded-Host, from which the server tells its public address and
+# passkeys' origin.
+proxy_needs() {
+  cat <<EOF
+It is behind a reverse proxy (--behind-proxy), which must:
+  - serve HTTPS and proxy to http://127.0.0.1:$port,
+  - pass WebSocket upgrades on (comments and notifications arrive live at api/v1/events),
+  - send X-Forwarded-Proto and X-Forwarded-Host (or keep the Host the browser asked for).
+Caddy does all of it, with a certificate it fetches and renews itself, from a Caddyfile of:
+  wiki.example.org {
+      reverse_proxy 127.0.0.1:$port
+  }
+EOF
+}
+
 if [ "$mode" = server ]; then
   printf '\nThe wiki is served from %s, its data in %s/data. Open:\n' "$dir" "$dir"
-  print_urls "$bind" "$port"
+  print_urls "$bind" "$port" "$way" "$tls_cert"
   if [ "$db" = postgres ]; then
     printf 'Its database is PostgreSQL in Docker (docker compose --project-name %s ps), on\n' "$name"
     printf '127.0.0.1:%s, its data in the volume %s_wiki-db; its password is in %s/db-password.\n' "$db_port" "$name" "$(pg_dir)"
@@ -1615,6 +1851,16 @@ if [ "$mode" = server ]; then
       printf 'The public address in the administration'"'"'s Server section is %s, but the wiki\n' "$public_url"
       printf 'is served at https://%s/: change it there (http://127.0.0.1:%s/admin/admin/) if people use that one.\n' "$https_host" "$admin_port"
     fi
+  fi
+  if [ "$way" = cert ]; then
+    printf 'It serves HTTPS itself with %s and its key %s, which it reads\n' "$tls_cert" "$tls_key"
+    printf 'as it starts: a renewed certificate takes a restart, systemctl --user restart %s.service\n' "$name"
+  elif [ "$way" = proxy ]; then
+    proxy_needs
+  fi
+  if { [ "$way" = cert ] || [ "$way" = proxy ]; } && public_url=$(panel_public_url) && [ -z "$public_url" ]; then
+    printf 'The wiki has no public address yet: set it to the https:// address people use in the\n'
+    printf "administration's Server section (http://127.0.0.1:%s/admin/admin/); mailed links and sign-in providers start with it.\n" "$admin_port"
   fi
   cat <<EOF
 Administration, on this machine only: http://127.0.0.1:$admin_port/admin/
@@ -1651,7 +1897,8 @@ EOF
   fi
 else
   printf '\nThe demo is served from %s. Open:\n' "$dir"
-  print_urls "$bind" "$port"
+  print_urls "$bind" "$port" "$way" "$tls_cert"
+  [ "$way" != proxy ] || proxy_needs
   cat <<EOF
 Logs:    journalctl --user -u $name -f
 Status:  sh toolchain/deploy-local.sh --status --name $name$prefix_arg
