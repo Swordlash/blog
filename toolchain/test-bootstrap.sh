@@ -195,6 +195,37 @@ bootstrap toolchain >"$case_dir/repair"
 [ "$(cat "$EVENTS")" = "$(printf 'chromium install\nchromium launch')" ] || fail 'broken Chromium cache was not repaired'
 pass 'a stale browser marker does not hide a missing executable'
 
+# A Debian machine without libpq-dev, and without root or a sudo that needs
+# no password: dpkg-query reports every package installed but libpq-dev, id
+# -u is not 0, and sudo -n fails. no_debian_fakes puts the fixture's tools
+# back.
+debian_without_libpq() {
+  # The fixture's dpkg-query and sudo are links to its tool: they are
+  # removed first, so that writing the fakes does not write through them.
+  rm -f "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+  cat >"$case_dir/bin/dpkg-query" <<'EOF'
+#!/bin/sh
+[ "$4" != libpq-dev ] || exit 1
+printf 'install ok installed\n'
+EOF
+  cat >"$case_dir/bin/id" <<'EOF'
+#!/bin/sh
+if [ "$1" = -u ]; then printf '1000\n'; else exec /usr/bin/id "$@"; fi
+EOF
+  cat >"$case_dir/bin/sudo" <<'EOF'
+#!/bin/sh
+[ "$*" = '-n true' ] && exit 1
+printf 'unexpected sudo %s\n' "$*" >>"$EVENTS"
+exit 91
+EOF
+  chmod +x "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+}
+no_debian_fakes() {
+  rm -f "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+  ln -s tool "$case_dir/bin/dpkg-query"
+  ln -s tool "$case_dir/bin/sudo"
+}
+
 # The Dockerfile's builder installs what a build needs and nothing more: with
 # no fourmolu on PATH and no Chromium in the cache, `build` installs neither
 # (here any attempt would reach curl or Playwright and be recorded).
@@ -205,7 +236,26 @@ bootstrap build >"$case_dir/build"
 [ ! -s "$EVENTS" ] || fail "build installed or launched something: $(cat "$EVENTS")"
 assert_contains "$case_dir/build" 'no Chromium or fourmolu (build)'
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'build did not write the environment file'
-pass 'build installs the compilers and Node, and neither Chromium nor fourmolu'
+# On Debian without libpq-dev and without root, plain build stops at the
+# Debian packages, naming libpq-dev; build --without-postgres (the deploy's,
+# for a wiki in SQLite) does not ask for it and installs nothing. Another
+# option is refused.
+debian_without_libpq
+status=0
+bootstrap build >"$case_dir/build-debian-no-libpq" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "build on Debian without libpq-dev or root exited $status, not 1"
+assert_contains "$case_dir/build-debian-no-libpq" 'missing Debian packages: libpq-dev; install them (sudo apt-get install libpq-dev)'
+bootstrap build --without-postgres >"$case_dir/build-without-postgres" 2>&1 ||
+  fail "build --without-postgres on Debian without libpq-dev failed: $(cat "$case_dir/build-without-postgres")"
+if grep -F 'missing Debian packages' "$case_dir/build-without-postgres" >/dev/null; then fail 'build --without-postgres asked Debian for libpq-dev'; fi
+assert_contains "$case_dir/build-without-postgres" 'no Chromium or fourmolu (build)'
+status=0
+bootstrap build --postgres >"$case_dir/build-bad-option" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "build with an unknown option exited $status, not 2"
+assert_contains "$case_dir/build-bad-option" 'build [--without-postgres]'
+[ ! -s "$EVENTS" ] || fail "build on Debian without libpq-dev installed something: $(cat "$EVENTS")"
+no_debian_fakes
+pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; with --without-postgres it does not ask Debian for libpq-dev'
 
 # What toolchain/deploy-local.sh --backend-only needs: GHC and cabal alone.
 # With no Node, no sysroot, no fourmolu, no alex or happy and no Chromium,
@@ -323,23 +373,7 @@ assert_contains "$case_dir/native-bad-option" 'native [--without-postgres]'
 # password: plain native stops at the Debian packages, naming libpq-dev;
 # native --without-postgres does not ask for it, installs nothing, and goes
 # on to the check (which a missing libsodium then stops, to show that it ran).
-cat >"$case_dir/bin/dpkg-query" <<'EOF'
-#!/bin/sh
-[ "$4" != libpq-dev ] || exit 1
-printf 'install ok installed\n'
-EOF
-cat >"$case_dir/bin/id" <<'EOF'
-#!/bin/sh
-if [ "$1" = -u ]; then printf '1000\n'; else exec /usr/bin/id "$@"; fi
-EOF
-rm "$case_dir/bin/sudo"
-cat >"$case_dir/bin/sudo" <<'EOF'
-#!/bin/sh
-[ "$*" = '-n true' ] && exit 1
-printf 'unexpected sudo %s\n' "$*" >>"$EVENTS"
-exit 91
-EOF
-chmod +x "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
+debian_without_libpq
 status=0
 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-debian-no-libpq" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "native on Debian without libpq-dev or root exited $status, not 1"
@@ -354,8 +388,8 @@ SODIUM_MISSING=1 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$
 assert_contains "$case_dir/native-debian-check" 'missing  libsodium'
 assert_contains "$case_dir/native-debian-check" 'skipped  libpq       not needed (built without PostgreSQL)'
 [ ! -s "$EVENTS" ] || fail "native on Debian without libpq-dev installed something: $(cat "$EVENTS")"
-rm "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
-ln -s tool "$case_dir/bin/sudo"
+no_debian_fakes
+rm "$case_dir/bin/dpkg-query"
 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-on-path" 2>&1 ||
   fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
 [ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"

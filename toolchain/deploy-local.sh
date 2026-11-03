@@ -1295,11 +1295,14 @@ server_cabal() {
 }
 
 # The sign of wiki-server's cabal flag postgres for this deployment's
-# database, and the argument that tells toolchain/check-native.sh about it,
-# which toolchain/bootstrap.sh native passes to the same check.
+# database, and the argument that tells toolchain/check-native.sh about it.
+# toolchain/bootstrap.sh native and build take it too: then neither asks
+# Debian for libpq-dev, and native passes it to the same check.
 postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +; fi; }
+# Only the wiki's server on SQLite opts out: the demo's build is left as
+# it was.
 check_postgres=
-[ "$db" != sqlite ] || check_postgres=--without-postgres
+if [ "$mode" = server ] && [ "$db" = sqlite ]; then check_postgres=--without-postgres; fi
 
 # The check of what wiki-server's native build needs from the machine
 # (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium. It
@@ -1416,7 +1419,7 @@ if [ -n "$build" ]; then
       say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
     fi
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" build
+    sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"}
   fi
   [ -z "$native_recheck" ] || recheck_native
 fi

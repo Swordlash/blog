@@ -754,7 +754,8 @@ a=$(other_port "$p")
 pre=$case_dir/srv/wiki
 out=$case_dir/first
 deploy --server --sqlite --prefix "$pre" --port "$p" --admin-port "$a" --bind 0.0.0.0 --no-firewall >"$out" 2>&1 || fail 'the deploy under a prefix failed'
-assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+# A wiki in SQLite: the bootstrap's build mode asks Debian for no libpq-dev.
+assert_contains "$EVENTS" "bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" "npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 for file in .wiki-demo-deployment bin/wiki-server bin/wiki app/index.html state/wiki-demo.state toolchain/.wiki-toolchain/node/bin/node; do
   [ -e "$pre/$file" ] || fail "missing $file under the prefix"
@@ -874,7 +875,7 @@ assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p "
 assert_contains "$HOME/$unit" "# Prefix: $HOME/wiki-demo"
 : >"$EVENTS"
 deploy --prefix "$HOME/wiki-demo" >"$case_dir/rebuilt" 2>&1 || fail 'rebuilding the adopted deployment failed'
-assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME=
+assert_contains "$EVENTS" 'bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=
 '
 [ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the rebuild forgot the toolchain choice'
 : >"$EVENTS"
@@ -995,7 +996,10 @@ out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
-# A wiki in PostgreSQL: wiki-server is built with it, and libpq is checked.
+# A wiki in PostgreSQL: wiki-server is built with it, the bootstrap is not
+# told to leave libpq out, and libpq is checked.
+assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME='
+assert_lacks "$EVENTS" 'without-postgres'
 assert_contains "$EVENTS" 'wiki-server:exe:wiki-server --constraint=wiki-server +postgres'
 assert_lacks "$EVENTS" 'wiki-server -postgres'
 assert_contains "$out" 'ok       libpq       pg_config at'
@@ -2132,7 +2136,7 @@ deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'
 : >"$EVENTS"
 out=$case_dir/back
 deploy --prefix "$pre" --no-backend-only >"$out" 2>&1 || fail '--no-backend-only failed'
-assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 [ -z "$(pstate backend_only)" ] || fail '--no-backend-only was not recorded'
 [ -f "$pre/app/app.wasm.br" ] || fail 'the page built here has no brotli copies'
