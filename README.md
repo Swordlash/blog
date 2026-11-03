@@ -620,6 +620,27 @@ sent anywhere, and a reload starts the demo over.
 
 ## Deploying on your own machine
 
+The easiest way in is the wizard, `toolchain/configure.sh`: a terminal application
+that asks for the deploy's options in a few screens (what to deploy, where the page
+comes from, the database, how it is reached, the address, the rest), each with what
+it does, and hides what does not apply to the choices before it. It starts from the
+deployment's last run, read from its state file, so a redeploy is Enter through every
+screen. The last screen shows the command line, `sh toolchain/deploy-local.sh …`:
+Enter runs it, with the deploy's output in the terminal, and `q` quits and prints it
+to copy. The first screen also offers `--status` and `--stop` for a deployment.
+
+```sh
+sh toolchain/configure.sh
+```
+
+The wizard is a Haskell program with [brick](https://hackage.haskell.org/package/brick),
+compiled on your machine as a cabal script. So the wrapper first checks the C compiler
+and libraries (`toolchain/check-native.sh --with-wizard`, which adds terminfo, below),
+installs GHC and cabal (`toolchain/bootstrap.sh native --with-wizard`), and then runs
+it. The first run compiles brick and vty, which takes a few minutes; cabal keeps them,
+and later runs start at once. Everything the wizard does can be done with the options
+below, which it only writes out.
+
 `toolchain/deploy-local.sh` builds the wiki's server (see
 [The wiki's server](#the-wikis-server)), or with `--static` the demo, and serves it
 from a Linux machine of your own (x86_64 Debian or Ubuntu) as a systemd user
@@ -887,15 +908,17 @@ only for a wiki in PostgreSQL: with `--sqlite` the deploy builds `wiki-server`
 without PostgreSQL (the cabal flag `postgres` off), which needs neither libpq nor
 `pg_config`, and the check, given `--without-postgres`, reports libpq as not
 needed. That is the way on a machine whose libpq is too old for
-`postgresql-libpq`.
+`postgresql-libpq`. terminfo is the wizard's alone (`toolchain/configure.sh`, above):
+the check counts it only with `--with-wizard`, which the deploy does not give.
 
-| Library                 | Debian, Ubuntu  | RHEL, Fedora                                                                     |
-| ----------------------- | --------------- | -------------------------------------------------------------------------------- |
-| GMP                     | `libgmp-dev`    | `gmp-devel`                                                                      |
-| libpq (PostgreSQL only) | `libpq-dev`     | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
-| zlib                    | `zlib1g-dev`    | `zlib-devel`                                                                     |
-| libsodium               | `libsodium-dev` | `libsodium-devel` (EPEL)                                                         |
-| pkg-config              | `pkg-config`    | `pkgconf-pkg-config`                                                             |
+| Library                 | Debian, Ubuntu   | RHEL, Fedora                                                                     |
+| ----------------------- | ---------------- | -------------------------------------------------------------------------------- |
+| GMP                     | `libgmp-dev`     | `gmp-devel`                                                                      |
+| libpq (PostgreSQL only) | `libpq-dev`      | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
+| zlib                    | `zlib1g-dev`     | `zlib-devel`                                                                     |
+| libsodium               | `libsodium-dev`  | `libsodium-devel` (EPEL)                                                         |
+| pkg-config              | `pkg-config`     | `pkgconf-pkg-config`                                                             |
+| terminfo (wizard only)  | `libncurses-dev` | `ncurses-devel`                                                                  |
 
 A library built from source into a directory of your own is found through the
 environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
