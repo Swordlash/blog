@@ -368,6 +368,22 @@ confirms it against reality and the plan is amended if it does not hold.
     the forwarded headers the server already reads. `--https`, `--http`, `--tls-cert`
     and `--behind-proxy` refuse one another; the state remembers the way, and a
     deployment from before reads as Tailscale or HTTP from its old key.
+34. **The PostgreSQL backend is a cabal flag** (the owner, 2026-11-03, built by
+    WP5.52). `wiki-server`'s flag `postgres`, on by default and manual, puts
+    `Wiki.Server.Storage.Postgres` and its `beam-postgres`, `postgresql-simple` and
+    `postgresql-libpq` dependencies in the build; with it off (`--constraint
+    'wiki-server -postgres'`) a PostgreSQL `--database` or `WIKI_DATABASE_URL` is
+    refused at start, `wiki-server --version` lists the backends it has, and the test
+    suite's PostgreSQL group is left out with a note. CPP sits only where the backend
+    is chosen (the storage, its backend instance, the backup and restore, and a flag
+    read in the layout); `PgPrograms` lives in the layout so the options and the
+    console need none. The deploy builds with the flag off for a wiki in SQLite and
+    on otherwise, explicitly, and for the wiki's server in SQLite passes
+    `--without-postgres` to `check-native.sh` and to `bootstrap.sh native` and
+    `build`, which then ask Debian for no `libpq-dev`: a SQLite deployment needs
+    neither libpq nor `pg_config`, on either path, on Debian without root or on RHEL.
+    CI's `native (unit)` job builds `wiki-server` with the flag off as well and runs
+    its unit group, so a warning on either side is caught.
 
 ## Repository layout
 
@@ -441,26 +457,6 @@ In the order to do it, unless the owner says otherwise.
   its answers (the form's state to arguments, as a plain function the test calls),
   and the wrapper in `test-deploy-local.sh`. Docs: the README's deployment section
   opens with the wizard. After WP5.50, since it adds the HTTPS options.
-- **WP5.52 A server without PostgreSQL** (the owner, 2026-11-03: the work server has
-  an old PostgreSQL and its libpq, against which `postgresql-libpq` 0.11 does not
-  build, and the deployment is SQLite anyway). A cabal flag `postgres` on
-  `wiki-server`, on by default, off when the deployment keeps the wiki in SQLite:
-  with it off, `Wiki.Server.Storage.Postgres` and the `beam-postgres`,
-  `postgresql-simple` and `postgresql-libpq` dependencies are out of the build (CPP
-  where the backend is chosen: the storage, the options, the backup and restore,
-  the console's commands), `--database postgres://…` is refused at start with "built
-  without PostgreSQL", `wiki-server --version` (or the status page) says which
-  backends it has, and the test suite's PostgreSQL group is left out with a note
-  rather than failing. `toolchain/deploy-local.sh --sqlite` builds with the flag off
-  (`--constraint 'wiki-server -postgres'` on the opt project), so a SQLite deployment
-  needs neither libpq nor `pg_config`; `--postgres` builds with it on, and switching
-  rebuilds (cabal does that itself on a changed flag). `toolchain/check-native.sh`
-  takes `--without-postgres` (the deploy passes it for `--sqlite`) and then reports
-  libpq as not needed instead of missing. Tests: the native suite built both ways
-  (CI's `native (unit)` job adds a build of `wiki-server` with the flag off and runs
-  its unit group), the deploy test for `--sqlite` passing the constraint and
-  `--postgres` not, the check with `--without-postgres`. Docs: the README's server
-  section and the library table, wiki-server's CHANGELOG.
 
 ### Later, or waiting for the owner
 
@@ -712,6 +708,11 @@ needs. Each was true when its package merged; check before relying on one.
   libpq is found through `pg_config` on PATH alone (`postgresql-libpq` does not use
   pkg-config), and `check-native.sh` names a `pg_config` found under `/usr/pgsql-*/bin`
   (#140).
+- Without PostgreSQL (WP5.52): `toolchain/test-native-groups.mjs` expects a binary
+  built with the flag on (its postgres group asks for `WIKI_TEST_DATABASE_URL`); a
+  haddock on `Storage.release` names `Postgres.holdDatabaseShared`, which a flag-off
+  build lacks; `bootstrap.sh all` and `toolchain`, the developer install, still ask
+  Debian for `libpq-dev`, and the demo's `bootstrap.sh build` too, on purpose.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
