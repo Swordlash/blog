@@ -1328,6 +1328,18 @@ installs with `apt-get` when it runs as root or with password-less `sudo`, and n
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
 
+What it downloads, and from where, for a network that allows hosts one by one:
+ghcup from `downloads.haskell.org`, and through it the compilers and cabal from
+there and from `github.com` (the wasm compiler's bindist is a release of
+`haskell-wasm/ghc-wasm-bindists`); ghc-wasm-meta from `gitlab.haskell.org`, or,
+where that host is refused (a proxy that answers 403), the same commit from its
+mirror `github.com/haskell-wasm/ghc-wasm-meta`, whose `setup.sh` then takes
+wasi-sdk, binaryen, wasmtime and its Node from releases on `github.com`; Node from
+`nodejs.org`; fourmolu from `github.com`, or Hackage; the package index and
+packages from `hackage.haskell.org`; npm packages from `registry.npmjs.org`; and
+Chromium from Playwright's CDN (`playwright.azureedge.net`, `cdn.playwright.dev`),
+which only the browser tests need.
+
 The wasm sysroot is reused when its `.paladyn-rev` matches the pinned ghc-wasm-meta
 revision (or a previous bootstrap marked that revision) and its tools and libc are
 present and working. An existing unrecognised or incomplete sysroot is refused before
