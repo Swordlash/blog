@@ -861,7 +861,8 @@ again when GitHub's asset changed, by its id and upload time. `--refresh-page`
 downloads it again.
 
 With `--server`, nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
-`toolchain/bootstrap.sh native`, which installs them through ghcup (under
+`toolchain/bootstrap.sh native` (`native --without-postgres` for a wiki in SQLite,
+whose check then does not ask for libpq), which installs them through ghcup (under
 `<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
 wasm sysroot, Node, Chromium or fourmolu. On Debian it installs the system packages
 when it may; elsewhere (RHEL, say) it installs none. Either way it then runs

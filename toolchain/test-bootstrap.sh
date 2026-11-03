@@ -308,10 +308,21 @@ if WIKI_PG_CONFIG_DIRS="$case_dir/pgsql-*/bin" env PATH="$case_dir/bin:$no_dpkg"
 fi
 assert_contains "$case_dir/native-pg-config-elsewhere" "no pg_config on PATH, but there is one at $case_dir/pgsql-16/bin/pg_config"
 assert_contains "$case_dir/native-pg-config-elsewhere" "PATH=$case_dir/pgsql-16/bin:\$PATH sh toolchain/deploy-local.sh"
+# For a wiki-server built without PostgreSQL (deploy-local.sh --sqlite),
+# native --without-postgres passes the option to the check, which then does
+# not ask for libpq: the same machine passes. Another option is refused.
+WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-without-postgres" 2>&1 ||
+  fail "native --without-postgres without pg_config failed: $(cat "$case_dir/native-without-postgres")"
+if grep -F libpq "$case_dir/native-without-postgres" >/dev/null; then fail 'native --without-postgres reported libpq'; fi
+assert_contains "$case_dir/native-without-postgres" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
+status=0
+env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --postgres >"$case_dir/native-bad-option" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "native with an unknown option exited $status, not 2"
+assert_contains "$case_dir/native-bad-option" 'native [--without-postgres]'
 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-on-path" 2>&1 ||
   fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
 [ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"
-pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH'
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH, or not at all with --without-postgres'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`

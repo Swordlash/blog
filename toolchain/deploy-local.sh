@@ -1295,7 +1295,8 @@ server_cabal() {
 }
 
 # The sign of wiki-server's cabal flag postgres for this deployment's
-# database, and the argument that tells toolchain/check-native.sh about it.
+# database, and the argument that tells toolchain/check-native.sh about it,
+# which toolchain/bootstrap.sh native passes to the same check.
 postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +; fi; }
 check_postgres=
 [ "$db" != sqlite ] || check_postgres=--without-postgres
@@ -1409,7 +1410,7 @@ if [ -n "$build" ]; then
     resolve_page
     download_page
     say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" native
+    sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"}
   else
     if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
       say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."

@@ -87,7 +87,10 @@
 # Debian: without dpkg-query it installs no system packages. Either way it
 # then runs toolchain/check-native.sh, which checks the commands and C
 # libraries wiki-server's build needs and names the Debian and RHEL packages
-# of any that are missing.
+# of any that are missing. `native --without-postgres` passes that option
+# to the check, for a wiki-server built without PostgreSQL (the cabal flag
+# postgres off), which needs no libpq: toolchain/deploy-local.sh gives it
+# for a wiki in SQLite.
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
@@ -164,10 +167,24 @@ mode=${1:-all}
 case $mode in
   all | toolchain | build | native | node | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|build|native|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build|native [--without-postgres]|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
+
+# The option of `native`: --without-postgres, which native_check passes to
+# toolchain/check-native.sh, so that a build without PostgreSQL is not
+# stopped for want of libpq.
+check_postgres=
+if [ "$mode" = native ] && [ $# -gt 1 ]; then
+  case $2 in
+    --without-postgres) check_postgres=--without-postgres ;;
+    *)
+      printf 'usage: %s native [--without-postgres]\n' "$0" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
 # or the default one this script installs into. Under a named directory the
@@ -638,9 +655,10 @@ system_packages() {
 # (toolchain/check-native.sh), for `native`. It runs after system_packages,
 # so on Debian it confirms the packages just installed, and elsewhere it is
 # the only check. Its output is shown only when something is missing, so a
-# run with nothing to do stays one line.
+# run with nothing to do stays one line. With --without-postgres the check
+# does not ask for libpq.
 native_check() {
-  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
     printf '%s\n' "$check_output" >&2
     say "the native build of wiki-server needs what is missing above; install it and run this again"
     exit 1
