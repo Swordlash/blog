@@ -659,6 +659,7 @@ deploy --prefix "$HOME/wiki-demo" >"$case_dir/rebuilt" 2>&1 || fail 'rebuilding 
 assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME=
 '
 [ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the rebuild forgot the toolchain choice'
+: >"$EVENTS"
 out=$case_dir/elsewhere
 if deploy --prefix "$HOME/elsewhere" --no-build >"$out" 2>&1; then fail 'a second deployment of the name was made elsewhere'; fi
 assert_contains "$out" "the deployment wiki-demo is under $HOME/wiki-demo: run this with --prefix $HOME/wiki-demo, or deploy this one under another --name"
