@@ -1108,6 +1108,17 @@ fi
 for file in index.html 404.html app.wasm; do
   [ -f "$out/$file" ] || die "the build in $out lacks $file; run without --no-build"
 done
+# The page in $out is the last one built or downloaded, for whichever mode
+# that run had. With --no-build nothing replaces it, so a page of the other
+# mode would be installed for the wrong server. The page's
+# <meta name="wiki-backend"> says which it is: build-wasm.sh writes it, and
+# CI's pages have it. A page without one is not checked.
+if [ -z "$build" ]; then
+  page_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$out/index.html" | head -n 1)
+  if [ -n "$page_backend" ] && [ "$page_backend" != "$page_kind" ]; then
+    die "the page in $out is the $page_backend's, and this deploy is of the $page_kind (--$mode): run without --no-build, which builds or downloads the $page_kind's page"
+  fi
+fi
 if [ "$mode" = server ]; then
   server_bin=$(server_cabal list-bin) && [ -x "$server_bin" ] ||
     die "there is no -O2 build of wiki-server (dist-newstyle/native-opt); run without --no-build"

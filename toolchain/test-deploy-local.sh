@@ -1485,14 +1485,14 @@ github_page_fixture() {
   # The page CI builds for the server, its files at the zip's root.
   page=$case_dir/page
   mkdir -p "$page/s"
-  printf '<!doctype html><title>wiki</title>%2000s' '' >"$page/index.html"
+  printf '<!doctype html><meta name="wiki-backend" content="server"><title>wiki</title>%2000s' '' >"$page/index.html"
   printf '<!doctype html><title>missing</title>' >"$page/404.html"
   head -c 4096 /dev/zero >"$page/app.wasm"
   printf 'console.log(1);\n' >"$page/index.js"
   # And the demo's, a page per route, which says it is the demo's.
   demo_page=$case_dir/demo-page
   mkdir -p "$demo_page/s/blog"
-  printf '<!doctype html><title>demo</title>%2000s' '' >"$demo_page/index.html"
+  printf '<!doctype html><meta name="wiki-backend" content="demo"><title>demo</title>%2000s' '' >"$demo_page/index.html"
   printf '<!doctype html><title>demo blog</title>%2000s' '' >"$demo_page/s/blog/index.html"
   printf '<!doctype html><title>missing</title>' >"$demo_page/404.html"
   head -c 4096 /dev/zero >"$demo_page/app.wasm"
@@ -1802,6 +1802,35 @@ assert_contains "$pre/app/index.html" '<title>demo</title>'
 [ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo is not served after the move back'
 { [ "$(pstate mode)" = static ] && [ "$(pstate backend_only)" = head ]; } || fail 'the state does not record the demo from GitHub again'
 pass 'a move from the demo from GitHub to the server and back downloads the page of each, building wiki-server only for the server'
+
+# --no-build installs the page in place, which is of the last mode built or
+# downloaded: a page of the other mode is refused before the service is
+# touched, by the kind its <meta name="wiki-backend"> says.
+: >"$EVENTS"
+out=$case_dir/demo-page-for-server
+if deploy --server --sqlite --prefix "$pre" --admin-port "$a" --no-build >"$out" 2>&1; then fail '--server --no-build installed the demo page'; fi
+assert_contains "$out" "the page in $case_dir/repo/dist-newstyle/wasm-opt/public/app is the demo's, and this deploy is of the server (--server): run without --no-build, which builds or downloads the server's page"
+assert_lacks "$EVENTS" 'systemctl stop'
+assert_lacks "$EVENTS" 'systemctl restart'
+[ "$(pstate mode)" = static ] || fail 'a refused --no-build changed the state'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'a refused --no-build took the demo down'
+deploy --server --sqlite --prefix "$pre" --admin-port "$a" >"$out" 2>&1 || fail 'the move to the server failed'
+: >"$EVENTS"
+out=$case_dir/server-page-for-demo
+if deploy --static --prefix "$pre" --no-build >"$out" 2>&1; then fail '--static --no-build installed the server page'; fi
+assert_contains "$out" "the page in $case_dir/repo/dist-newstyle/wasm-opt/public/app is the server's, and this deploy is of the demo (--static): run without --no-build, which builds or downloads the demo's page"
+assert_lacks "$EVENTS" 'systemctl stop'
+assert_lacks "$EVENTS" 'systemctl restart'
+[ "$(pstate mode)" = server ] || fail 'a refused --no-build changed the state'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a refused --no-build took the server down'
+: >"$EVENTS"
+out=$case_dir/server-no-build
+deploy --prefix "$pre" --no-build >"$out" 2>&1 || fail 'a --no-build of the server with its own page failed'
+assert_contains "$EVENTS" 'systemctl restart wiki-demo.service'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after its --no-build'
+deploy --static --prefix "$pre" >"$out" 2>&1 || fail 'the move back to the demo failed'
+pass '--no-build refuses a page of the other mode before the service is touched, and takes one of its own'
 
 : >"$EVENTS"
 out=$case_dir/back
