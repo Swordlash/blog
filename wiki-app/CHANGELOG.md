@@ -10,6 +10,11 @@ no feed and says so. `MonadNotifications` gains `feedAddress` and
 `renewFeedAddress`, which the demo answers with `Invalid`. The server's
 tour in the guide says where the feed is.
 
+Where the browser has no asynchronous clipboard (a page served over plain
+HTTP from another machine), "Copy" beside an invitation's link, and beside
+the feed's address, now selects the address in its field and copies it;
+before, the field's value was neither selected nor copied.
+
 The one-line JavaScript functions that read or called the browser's own
 objects are gone (WP5.47): the shell, the editor, the search box, the slides,
 the demo's backend and the assistant read and call the platform through

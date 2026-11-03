@@ -105,7 +105,7 @@ import Wiki.App.Route (route)
 #endif
 
 $( browserJS
-     ["jsbits/test-fetch.js", "jsbits/test-markup.js"]
+     ["jsbits/test-fetch.js", "jsbits/test-markup.js", "jsbits/test-clipboard.js"]
      [ ("js_server_start", "wiki_test_server_start", Safe, [t|IO ()|])
      , ("js_server_stop", "wiki_test_server_stop", Safe, [t|IO ()|])
      , ("js_server_answer", "wiki_test_server_answer", Safe, [t|JSText -> JSText -> Int -> JSText -> IO ()|])
@@ -121,6 +121,7 @@ $( browserJS
      , ("js_server_tell", "wiki_test_server_tell", Safe, [t|JSText -> IO ()|])
      , ("js_server_hang_up", "wiki_test_server_hang_up", Safe, [t|IO ()|])
      , ("js_server_said", "wiki_test_server_said", Safe, [t|IO JSText|])
+     , ("js_hide_clipboard", "wiki_test_hide_clipboard", Safe, [t|Bool -> IO ()|])
      ]
  )
 
@@ -552,7 +553,8 @@ ownPassword m = describe "one's own password" $ do
     serverStops
 
 -- | The address of one's feed of notifications, made, copied and made
--- anew from the account panel's notifications.
+-- anew from the account panel's notifications, and copied again without
+-- the browser's asynchronous clipboard.
 notificationFeed :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 notificationFeed m = describe "one's feed of notifications" $
   it "makes its address in the account panel, shows it whole, copies it, and makes a new one" $
@@ -583,6 +585,19 @@ notificationFeed m = describe "one's feed of notifications" $
       eventually (find ui ".notification-feed-address" >>= (`getProperty` "value") >>= (`shouldSatisfy` T.isSuffixOf "/me/notifications.atom?token=second"))
       posts <- filter (\r -> r.method == "POST" && r.url == "api/v1/notifications/feed") <$> asked
       length posts `shouldBe` 2
+      -- Without the asynchronous clipboard, as over plain HTTP from another
+      -- machine, the address in the field is selected whole and copied
+      -- the old way.
+      length <$> findAll ui ".notification-feed-copied" `shouldReturn` 0
+      unsafeIOToPageM (js_hide_clipboard True)
+      field <- find ui ".notification-feed-address"
+      whole <- T.length <$> getProperty field "value"
+      find ui ".notification-feed-copy" >>= click
+      eventually $ do
+        getProperty field "selectionStart" `shouldReturn` "0"
+        getProperty field "selectionEnd" `shouldReturn` show whole
+      eventually (find ui ".notification-feed-copied" >>= (`shouldHaveText` "Copied."))
+      unsafeIOToPageM (js_hide_clipboard False)
       unmount ui
       serverStops
 
