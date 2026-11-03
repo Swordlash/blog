@@ -186,18 +186,18 @@ bootstrap toolchain >"$case_dir/repair"
 [ "$(cat "$EVENTS")" = "$(printf 'chromium install\nchromium launch')" ] || fail 'broken Chromium cache was not repaired'
 pass 'a stale browser marker does not hide a missing executable'
 
-# A Debian machine without libpq-dev, and without root or a sudo that needs
-# no password: dpkg-query reports every package installed but libpq-dev, id
-# -u is not 0, and sudo -n fails. no_debian_fakes puts the fixture's tools
-# back.
+# A Debian machine without libpq-dev (or the package given), and without
+# root or a sudo that needs no password: dpkg-query reports every package
+# installed but that one, id -u is not 0, and sudo -n fails.
+# no_debian_fakes puts the fixture's tools back.
 debian_without_libpq() {
   # The fixture's dpkg-query and sudo are links to its tool: they are
   # removed first, so that writing the fakes does not write through them.
   rm -f "$case_dir/bin/dpkg-query" "$case_dir/bin/id" "$case_dir/bin/sudo"
-  cat >"$case_dir/bin/dpkg-query" <<'EOF'
+  cat >"$case_dir/bin/dpkg-query" <<EOF
 #!/bin/sh
-[ "$4" != libpq-dev ] || exit 1
-printf 'install ok installed\n'
+[ "\$4" != ${1:-libpq-dev} ] || exit 1
+printf 'install ok installed\\n'
 EOF
   cat >"$case_dir/bin/id" <<'EOF'
 #!/bin/sh
@@ -255,24 +255,30 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # does not recognise alone, and writes the environment file. Then, on
 # Debian or not, it runs toolchain/check-native.sh. What that script checks
 # is faked, so that the result does not depend on the host: cc preprocesses
-# anything and links the libsodium probe unless SODIUM_MISSING is set,
+# anything and links the libsodium probe unless SODIUM_MISSING is set (and
+# the terminfo probe unless TINFO_MISSING is),
 # pkg-config knows zlib and libpq, and make and pg_config answer.
 fixture native
 rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" \
   "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
 cat >"$case_dir/bin/cc" <<'EOF'
 #!/bin/sh
-output= sodium=
+output= sodium= tinfo=
 while [ $# -gt 0 ]; do
   case $1 in
     -o) output=$2; shift ;;
     -lsodium) sodium=1 ;;
+    -ltinfo) tinfo=1 ;;
   esac
   shift
 done
 if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
 if [ -n "$sodium" ] && [ -n "${SODIUM_MISSING:-}" ]; then
   printf 'cannot find -lsodium\n' >&2
+  exit 1
+fi
+if [ -n "$tinfo" ] && [ -n "${TINFO_MISSING:-}" ]; then
+  printf 'cannot find -ltinfo\n' >&2
   exit 1
 fi
 printf '#!/bin/sh\n' >"$output"
@@ -385,6 +391,57 @@ env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/tool
   fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
 [ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"
 pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH, or, with --without-postgres, neither libpq-dev from Debian nor libpq in the check'
+
+# The configuration wizard (toolchain/configure.sh) runs native
+# --without-postgres --with-wizard. On Debian without libncurses-dev and
+# without root, that stops at the Debian packages, naming it; native
+# without --with-wizard does not ask for it. The check then reports
+# terminfo, which plain native skips; without -ltinfo the check stops the
+# run. build takes no --with-wizard.
+debian_without_libpq libncurses-dev
+status=0
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres --with-wizard >"$case_dir/native-wizard-no-ncurses" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --with-wizard on Debian without libncurses-dev or root exited $status, not 1"
+assert_contains "$case_dir/native-wizard-no-ncurses" 'missing Debian packages: libncurses-dev; install them (sudo apt-get install libncurses-dev)'
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-no-wizard" 2>&1 ||
+  fail "native without --with-wizard on Debian without libncurses-dev failed: $(cat "$case_dir/native-no-wizard")"
+if grep -F 'libncurses-dev' "$case_dir/native-no-wizard" >/dev/null; then fail 'native without --with-wizard asked Debian for libncurses-dev'; fi
+no_debian_fakes
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --with-wizard --without-postgres >"$case_dir/native-wizard" 2>&1 ||
+  fail "native --with-wizard failed: $(cat "$case_dir/native-wizard")"
+assert_contains "$case_dir/native-wizard" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
+status=0
+TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres --with-wizard >"$case_dir/native-wizard-no-tinfo" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --with-wizard without -ltinfo exited $status, not 1"
+assert_contains "$case_dir/native-wizard-no-tinfo" 'missing  terminfo'
+assert_contains "$case_dir/native-wizard-no-tinfo" 'sudo apt-get install libncurses-dev'
+assert_contains "$case_dir/native-wizard-no-tinfo" 'sudo dnf install ncurses-devel'
+TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-no-tinfo" 2>&1 ||
+  fail "native without --with-wizard and without -ltinfo failed: $(cat "$case_dir/native-no-tinfo")"
+status=0
+env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" build --with-wizard >"$case_dir/build-wizard" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "build --with-wizard exited $status, not 2"
+assert_contains "$case_dir/build-wizard" 'build [--without-postgres]'
+[ ! -s "$EVENTS" ] || fail "native --with-wizard installed something: $(cat "$EVENTS")"
+pass 'native --with-wizard asks Debian for libncurses-dev and checks terminfo; native alone does neither'
+
+# toolchain/check-native.sh by itself: terminfo is skipped and not counted
+# without --with-wizard, and checked and counted with it.
+out=$case_dir/check-plain
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check failed: $(cat "$out")"
+assert_contains "$out" 'skipped  terminfo    not needed (for the configuration wizard only: --with-wizard)'
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+out=$case_dir/check-wizard
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --with-wizard >"$out" 2>&1 || fail "the check --with-wizard failed: $(cat "$out")"
+assert_contains "$out" 'ok       terminfo    -ltinfo, through cc (for the configuration wizard)'
+assert_contains "$out" 'All 10 items the native build of wiki-server and the configuration wizard need are there.'
+out=$case_dir/check-wizard-no-tinfo
+status=0
+TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres --with-wizard >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check --with-wizard without -ltinfo exited $status, not 1"
+assert_contains "$out" 'missing  terminfo    cc cannot link a program with -ltinfo (the configuration wizard needs it) (Debian: libncurses-dev; RHEL: ncurses-devel)'
+assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
+pass 'toolchain/check-native.sh checks terminfo with --with-wizard only'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler or fourmolu on PATH, `node`

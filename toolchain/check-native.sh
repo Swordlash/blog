@@ -2,16 +2,21 @@
 # Check what the native build of wiki-server needs from the machine, before
 # anything is downloaded or built.
 #
-#   sh toolchain/check-native.sh [--without-postgres | --help]
+#   sh toolchain/check-native.sh [--without-postgres] [--with-wizard] | --help
 #
 # It prints one line per item, ok or missing, with how the item was found or
 # what was tried, and then a summary. With --without-postgres, for a build
 # of wiki-server with the cabal flag postgres off (what the deploy builds
-# for a wiki in SQLite), libpq is reported as not needed and not counted. It exits 0 when everything is there and
-# 1 when something is missing. It installs nothing and changes nothing.
+# for a wiki in SQLite), libpq is reported as not needed and not counted.
+# With --with-wizard it also checks terminfo, which the configuration
+# wizard (toolchain/configure.sh) links and wiki-server does not; without
+# it, terminfo is reported as not needed and not counted. It exits 0 when
+# everything is there and 1 when something is missing. It installs nothing
+# and changes nothing.
 #
 # toolchain/deploy-local.sh runs it first whenever it builds wiki-server, and
 # toolchain/bootstrap.sh native runs it after installing the Debian packages.
+# toolchain/configure.sh runs it with --with-wizard, before the bootstrap.
 # Without it, a missing C library shows up only as a link error deep in a
 # cabal build, after the downloads and the compilers.
 #
@@ -35,7 +40,11 @@
 #   - libsodium, for the second factor's codes: libsodium-bindings does not
 #     use pkg-config, so cabal includes sodium.h and links -lsodium from the
 #     compiler's own directories and those LIBRARY_PATH and C_INCLUDE_PATH
-#     name. The check compiles and links a one-line program the same way.
+#     name. The check compiles and links a one-line program the same way;
+#   - terminfo, for the configuration wizard only (--with-wizard): vty, the
+#     terminal library under brick, links GHC's terminfo package, which
+#     links -ltinfo (Debian's libncurses-dev, RHEL's ncurses-devel). The
+#     check links a one-line program with -ltinfo through the compiler.
 #
 # SQLite is not an item: direct-sqlite builds its own copy of SQLite.
 #
@@ -46,24 +55,29 @@
 set -eu
 
 usage() {
-  printf 'usage: sh toolchain/check-native.sh [--without-postgres | --help]\n'
+  printf 'usage: sh toolchain/check-native.sh [--without-postgres] [--with-wizard] | --help\n'
 }
 
 postgres=yes
-case ${1:-} in
-  '') ;;
-  --without-postgres) postgres= ;;
-  -h | --help)
-    usage
-    printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
-    printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, libsodium), one line each,\n'
-    printf 'and exits 1 when one is missing. It installs nothing. --without-postgres\n'
-    printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
-    exit 0 ;;
-  *)
-    usage >&2
-    exit 2 ;;
-esac
+wizard=
+for option do
+  case $option in
+    --without-postgres) postgres= ;;
+    --with-wizard) wizard=yes ;;
+    -h | --help)
+      usage
+      printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
+      printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, libsodium), one line each,\n'
+      printf 'and exits 1 when one is missing. It installs nothing. --without-postgres\n'
+      printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
+      printf '%s\n' '--with-wizard also checks terminfo, which the configuration wizard'
+      printf '(toolchain/configure.sh) links.\n'
+      exit 0 ;;
+    *)
+      usage >&2
+      exit 2 ;;
+  esac
+done
 
 checked=0
 missing=
@@ -173,12 +187,34 @@ else
   trap - EXIT
 fi
 
+# terminfo, linked as vty links it (GHC's terminfo package names -ltinfo).
+# The probe declares the one function it calls, so that it needs no header:
+# the build compiles no C against terminfo, it only links the library.
+if [ -z "$wizard" ]; then
+  printf '%-8s %-11s %s\n' skipped terminfo 'not needed (for the configuration wizard only: --with-wizard)'
+elif ! has cc; then
+  lack terminfo libncurses-dev ncurses-devel "not checked: needs cc"
+else
+  probe=$(mktemp -d)
+  trap 'rm -rf "$probe"' EXIT
+  printf 'int setupterm(const char *, int, int *);\nint main(void) { int e; (void)setupterm(0, 1, &e); return 0; }\n' >"$probe/tinfo.c"
+  if cc -o "$probe/tinfo" "$probe/tinfo.c" -ltinfo >"$probe/cc.log" 2>&1; then
+    report terminfo ok "-ltinfo, through cc (for the configuration wizard)"
+  else
+    lack terminfo libncurses-dev ncurses-devel "cc cannot link a program with -ltinfo (the configuration wizard needs it)"
+  fi
+  rm -rf "$probe"
+  trap - EXIT
+fi
+
+what='the native build of wiki-server' needs=needs
+[ -z "$wizard" ] || what="$what and the configuration wizard" needs=need
 if [ -z "$missing" ]; then
-  printf 'All %s items the native build of wiki-server needs are there.\n' "$checked"
+  printf 'All %s items %s %s are there.\n' "$checked" "$what" "$needs"
   exit 0
 fi
 
-printf '\nMissing for the native build of wiki-server: %s.\n' "$missing"
+printf '\nMissing for %s: %s.\n' "$what" "$missing"
 printf 'Install them and run this again:\n'
 printf '    Debian, Ubuntu: sudo apt-get install %s\n' "$debian"
 printf '    RHEL, Fedora:   sudo dnf install %s\n' "$rhel"

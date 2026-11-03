@@ -16,13 +16,31 @@
 # server's own tests run (toolchain/test-deploy-server.mjs), and the same
 # cases against wiki-server (the native build's, from npm run build-native, or
 # the one WIKI_SERVER names), which must serve the application as the static
-# server did.
+# server did. The configuration wizard is checked here too: its options
+# against the deploy's header, and its wrapper, toolchain/configure.sh,
+# with the fakes. With WIKI_TEST_WIZARD=1 and cabal on PATH, it first runs
+# toolchain/test-configure.sh as well, which compiles the wizard (brick and
+# vty: minutes the first time) and checks the command lines it builds; npm
+# run test-native leaves that out.
 #
 #   sh toolchain/test-deploy-local.sh
+#   WIKI_TEST_WIZARD=1 sh toolchain/test-deploy-local.sh
 set -eu
 
 SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 NODE_REAL=$(command -v node)
+# The wizard's command lines, which take GHC, cabal and a compiled brick:
+# only when asked for (WIKI_TEST_WIZARD=1) and cabal is on PATH. They run
+# first, before the fixtures change HOME, PATH and cabal's directory, so
+# that cabal finds its package index and store.
+if [ "${WIKI_TEST_WIZARD:-}" = 1 ]; then
+  if command -v cabal >/dev/null 2>&1; then
+    sh "$SOURCE_DIR/test-configure.sh"
+  else
+    printf 'FAIL: WIKI_TEST_WIZARD=1, but cabal is not on PATH to build the wizard with (. ~/.wiki-toolchain/env)\n' >&2
+    exit 1
+  fi
+fi
 export NODE_REAL
 # Found before the fixtures put a fake cabal first on PATH, with the cabal
 # the bootstrap installed, as the npm entry points find it.
@@ -92,7 +110,7 @@ http_get() {
 fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/sbin" "$case_dir/repo/toolchain" "$case_dir/systemd"
-  for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh; do
+  for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
   cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"
@@ -112,7 +130,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -316,16 +334,22 @@ case $name in
     # The preprocessor finds every header (gmp.h). A link with -lsodium,
     # the probe of toolchain/check-native.sh, writes its program, unless
     # FAKE_NO_LIBSODIUM hides the system's libsodium and LIBRARY_PATH and
-    # C_INCLUDE_PATH name no directories with libsodium.a and sodium.h.
-    output= sodium=
+    # C_INCLUDE_PATH name no directories with libsodium.a and sodium.h. A
+    # link with -ltinfo, the wizard's probe, fails with FAKE_NO_TINFO.
+    output= sodium= tinfo=
     while [ $# -gt 0 ]; do
       case $1 in
         -o) output=$2; shift ;;
         -lsodium) sodium=1 ;;
+        -ltinfo) tinfo=1 ;;
       esac
       shift
     done
     if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
+    if [ -n "$tinfo" ] && [ -n "${FAKE_NO_TINFO:-}" ]; then
+      printf 'ld: cannot find -ltinfo\n' >&2
+      exit 1
+    fi
     if [ -n "$sodium" ] && [ -n "${FAKE_NO_LIBSODIUM:-}" ] &&
       ! { [ -f "${LIBRARY_PATH:-/nowhere}/libsodium.a" ] && [ -f "${C_INCLUDE_PATH:-/nowhere}/sodium.h" ]; }; then
       printf 'ld: cannot find -lsodium\n' >&2
@@ -2515,6 +2539,73 @@ assert_lacks "$EVENTS" 'tailscale serve'
 assert_contains "$out" "      reverse_proxy 127.0.0.1:$p"
 undeploy >/dev/null 2>&1
 pass 'the demo is served behind a reverse proxy as the server is'
+
+# The wizard, toolchain/configure.hs, knows the deploy's options: every
+# option the header of deploy-local.sh describes is a string literal of the
+# wizard, and every option literal of the wizard is in the header, so that
+# a new option of the deploy cannot be missing from the wizard, nor a gone
+# one stay in it. Left out on purpose: --force, which does nothing any more
+# and which the wizard does not offer; and the wizard's own --args-from and
+# --help. --dir, the old name of --prefix, is mentioned in the header's
+# prose only.
+wizard_options_differ() {
+  sed -n '2,/^set -eu/p' "$SOURCE_DIR/deploy-local.sh" |
+    sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' | sort -u >"$TMP/header-options"
+  grep -o '"--[a-z][a-z-]*' "$1" | sed 's/^"//' | grep -v -x -e '--args-from' -e '--help' | sort -u >"$TMP/wizard-options"
+  [ "$(wc -l <"$TMP/header-options")" -ge 20 ] || fail "the deploy's header lists too few options; did its format change? $(cat "$TMP/header-options")"
+  comm -23 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-wizard"
+  comm -13 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-header"
+  [ -s "$TMP/not-in-wizard" ] || [ -s "$TMP/not-in-header" ]
+}
+if wizard_options_differ "$SOURCE_DIR/configure.hs"; then
+  fail "the wizard and the deploy's header differ: not in toolchain/configure.hs: $(cat "$TMP/not-in-wizard"); not in the header of deploy-local.sh: $(cat "$TMP/not-in-header")"
+fi
+# The comparison itself: an option taken out of a copy of the wizard, and
+# one added to it, are both noticed.
+sed 's/"--enable-linger/"--enable-lingering/g' "$SOURCE_DIR/configure.hs" >"$TMP/configure-changed.hs"
+wizard_options_differ "$TMP/configure-changed.hs" || fail 'an option renamed in the wizard went unnoticed'
+grep -x -e '--enable-linger' "$TMP/not-in-wizard" >/dev/null || fail 'the missing --enable-linger was not named'
+grep -x -e '--enable-lingering' "$TMP/not-in-header" >/dev/null || fail 'the unknown --enable-lingering was not named'
+pass 'the wizard offers every option of the deploy'"'"'s header but --force, and no other'
+
+# The wizard's wrapper: toolchain/configure.sh checks the machine with the
+# wizard's item (terminfo) and without libpq, runs the bootstrap's native
+# mode for GHC and cabal with the same options, and then runs the wizard as
+# a cabal script outside the project (-z), from the checkout's root, with
+# its own arguments. The fake cabal records the call, and the first run is
+# announced (the fake's list-bin names no program).
+fixture configure
+out=$case_dir/out
+(cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --args-from answers) >"$out" 2>&1 ||
+  fail "the wrapper failed: $(cat "$out")"
+assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard WIKI_TOOLCHAIN_HOME='
+assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --args-from answers"
+[ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal run')" ] || fail 'the wizard ran before the bootstrap'
+assert_contains "$out" 'configure: compiling the wizard: the first time, brick and vty as well'
+assert_lacks "$out" 'warning'
+# Without terminfo on a machine that is not Debian, the wrapper stops at
+# the check, naming the packages, before the bootstrap or cabal.
+: >"$EVENTS"
+status=0
+FAKE_NO_TINFO=1 PATH=$case_dir/bin:$NO_DPKG sh "$case_dir/repo/toolchain/configure.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the wrapper without terminfo exited $status, not 1"
+assert_contains "$out" 'missing  terminfo'
+assert_contains "$out" 'sudo apt-get install libncurses-dev'
+assert_contains "$out" 'sudo dnf install ncurses-devel'
+assert_contains "$out" 'configure: the wizard is compiled on this machine with GHC, and the machine lacks what is listed above'
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'cabal'
+# On Debian (a dpkg-query on PATH) a missing package is a warning: the
+# bootstrap installs it, as the fake one installs zlib, and the wizard runs.
+ln -s tool "$case_dir/bin/dpkg-query"
+FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed sh "$case_dir/repo/toolchain/configure.sh" >"$out" 2>&1 ||
+  fail "the wrapper on Debian without zlib failed: $(cat "$out")"
+assert_contains "$out" 'configure: warning: the bootstrap installs the Debian packages missing above next'
+assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs --"
+sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
+assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
+pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through cabal run -z'
 
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"

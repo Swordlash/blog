@@ -88,7 +88,10 @@
 # needs no libpq: it does not ask Debian for libpq-dev, and passes the
 # option to the check. `build --without-postgres` leaves libpq-dev out the
 # same way. toolchain/deploy-local.sh gives the option to both modes for a
-# wiki in SQLite.
+# wiki in SQLite. `native --with-wizard` is for the configuration wizard
+# (toolchain/configure.sh, which runs it): it also asks Debian for
+# libncurses-dev, whose libtinfo the wizard's terminal library links, and
+# passes the option to the check, which then checks terminfo.
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
@@ -157,26 +160,39 @@ mode=${1:-all}
 case $mode in
   all | toolchain | build | native | node | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|build [--without-postgres]|native [--without-postgres]|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres]|native [--without-postgres] [--with-wizard]|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
 
-# The option of the deploy's two modes, `native` and `build`:
+# The options of the deploy's two modes, `native` and `build`:
 # --without-postgres, for a wiki-server built without PostgreSQL. Both
 # modes then leave libpq-dev out of the Debian packages (system_packages),
 # and native_check passes the option to toolchain/check-native.sh, so that
 # such a build is not stopped for want of libpq. `all` and `toolchain`, the
 # everyday install for working on the wiki, always ask for libpq-dev.
+# `native` also takes --with-wizard, for the configuration wizard
+# (toolchain/configure.sh): libncurses-dev joins the Debian packages, and
+# the check checks terminfo. The deploy never gives it.
 check_postgres=
-if { [ "$mode" = native ] || [ "$mode" = build ]; } && [ $# -gt 1 ]; then
-  case $2 in
-    --without-postgres) check_postgres=--without-postgres ;;
-    *)
-      printf 'usage: %s %s [--without-postgres]\n' "$0" "$mode" >&2
-      exit 2
-      ;;
-  esac
+check_wizard=
+if [ "$mode" = native ]; then
+  usage_options='[--without-postgres] [--with-wizard]'
+else
+  usage_options='[--without-postgres]'
+fi
+if [ "$mode" = native ] || [ "$mode" = build ]; then
+  shift
+  for option do
+    case $mode:$option in
+      *:--without-postgres) check_postgres=--without-postgres ;;
+      native:--with-wizard) check_wizard=--with-wizard ;;
+      *)
+        printf 'usage: %s %s %s\n' "$0" "$mode" "$usage_options" >&2
+        exit 2
+        ;;
+    esac
+  done
 fi
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
@@ -571,7 +587,8 @@ as_root() {
 # zlib package links the system's zlib, which it finds through pkg-config),
 # libsodium's (wiki-server's second factor's codes are one-time-password's,
 # over sel's bindings to libsodium), pkg-config, and what ghc-wasm-meta's
-# setup.sh runs.
+# setup.sh runs; with native --with-wizard also ncurses' (libtinfo, which
+# the configuration wizard's terminal library, vty, links).
 system_packages() {
   missing=
   # A native install needs what wiki-server's build runs and links with,
@@ -584,6 +601,7 @@ system_packages() {
     debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libsodium-dev pkg-config zlib1g-dev'
   fi
   [ -n "$check_postgres" ] || debian_packages="$debian_packages libpq-dev"
+  [ -z "$check_wizard" ] || debian_packages="$debian_packages libncurses-dev"
   if command -v dpkg-query >/dev/null 2>&1; then
     for pkg in $debian_packages; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
@@ -624,11 +642,15 @@ system_packages() {
 # so on Debian it confirms the packages just installed, and elsewhere it is
 # the only check. Its output is shown only when something is missing, so a
 # run with nothing to do stays one line. With --without-postgres the check
-# does not ask for libpq.
+# does not ask for libpq; with --with-wizard it checks terminfo too.
 native_check() {
-  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
+  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_wizard:+"$check_wizard"} 2>&1); then
     printf '%s\n' "$check_output" >&2
-    say "the native build of wiki-server needs what is missing above; install it and run this again"
+    if [ -n "$check_wizard" ]; then
+      say "the native build of wiki-server and the configuration wizard need what is missing above; install it and run this again"
+    else
+      say "the native build of wiki-server needs what is missing above; install it and run this again"
+    fi
     exit 1
   fi
 }
