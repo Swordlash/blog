@@ -386,6 +386,19 @@ confirms it against reality and the plan is amended if it does not hold.
     neither libpq nor `pg_config`, on either path, on Debian without root or on RHEL.
     CI's `native (unit)` job builds `wiki-server` with the flag off as well and runs
     its unit group, so a warning on either side is caught.
+35. **The deploy has a wizard, a cabal script on brick** (the owner, 2026-11-03, built
+    by WP5.51). `toolchain/configure.hs`, run through `sh toolchain/configure.sh`
+    (which runs the native check and `bootstrap.sh native` with `--with-wizard`, the
+    terminfo item and Debian package only the wizard needs, then `cabal run -z`:
+    outside the project, since cabal would otherwise resolve the whole wiki for the
+    script), asks for the deploy's options in eight screens, prefilled from the
+    deployment's state file found as the deploy finds it, resolves paths with the
+    deploy's own `realpath -m`, and on the last screen `exec`s `deploy-local.sh` with
+    the command line it shows (`q` prints it instead). Every option in the deploy's
+    header is a literal in the wizard and the other way round, checked by a test, so
+    the two cannot drift; `--args-from FILE` runs the answers without screens for the
+    tests (`toolchain/test-configure.sh`, run by the deploy test with
+    `WIKI_TEST_WIZARD=1`, not in CI: it compiles brick).
 
 ## Repository layout
 
@@ -433,32 +446,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.51 A configuration wizard for the deploy, in brick** (the owner, 2026-11-03:
-  "to już się robi trochę upierdliwe"; `deploy-local.sh` has some thirty options by
-  now). `toolchain/configure.hs`, a cabal script (a `{- cabal: -}` stanza, run with
-  `cabal run`, not a package of the project), with `brick` and `Brick.Forms`, run
-  through `sh toolchain/configure.sh`, which first runs `toolchain/check-native.sh`
-  and `toolchain/bootstrap.sh native` (the wizard needs GHC and cabal, which a fresh
-  machine lacks; its first run compiles brick and vty, minutes, cached by cabal
-  after). The wizard asks in screens, not one question per flag: what (the server or
-  the demo), where (prefix, name, bind, port, admin port), where the page comes from
-  (built here, or `--backend-only=REF` with REF's meanings), the database (SQLite or
-  PostgreSQL, its port), HTTPS (Tailscale, a certificate and key, a proxy: WP5.50's
-  three ways), the extras (`--enable-linger`, `--no-firewall`, `--fresh`,
-  `--no-build`); each field with the option's description, which lives in the wizard
-  alone and is checked against the script's header by a test in
-  `test-deploy-local.sh` (every option in the header is in the wizard, and the other
-  way round, so the two cannot drift). It reads the deployment's state file
-  (`state_get`'s keys, by prefix and name) to prefill, so a rerun is Enter through.
-  The last screen shows the command line it made, to copy or to run: Enter `exec`s
-  `deploy-local.sh` with it, so the deploy's own output reaches the terminal. Also
-  `--status` and `--stop` for a chosen deployment. vty links terminfo (`libtinfo`),
-  so `ncurses-devel` / `libncurses-dev` joins `check-native.sh`'s items (only the
-  wizard needs it; the check says so) and the bootstrap's Debian packages. Tests: the
-  option-coverage test above, a pure test of the command line the wizard builds from
-  its answers (the form's state to arguments, as a plain function the test calls),
-  and the wrapper in `test-deploy-local.sh`. Docs: the README's deployment section
-  opens with the wizard. After WP5.50, since it adds the HTTPS options.
 - **WP5.53 Links to pages and sections, and the home page's options in its editor**
   (the owner, 2026-11-03, issue #120; one pull request for the three). (a) *A link to
   a page from the editor.* Next to Link, a "Link to a page" button (and Ctrl+Shift+K)
@@ -751,6 +738,10 @@ needs. Each was true when its package merged; check before relying on one.
   haddock on `Storage.release` names `Postgres.holdDatabaseShared`, which a flag-off
   build lacks; `bootstrap.sh all` and `toolchain`, the developer install, still ask
   Debian for `libpq-dev`, and the demo's `bootstrap.sh build` too, on purpose.
+- The wizard (WP5.51) needs GHC even for a demo-only deployment (`--static
+  --backend-only`), and on a machine other than Debian stops when libsodium or zlib
+  is missing, as the bootstrap's own check would; brick and vty compile once, some
+  minutes. Its command-line tests run only with `WIKI_TEST_WIZARD=1` (not in CI).
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
