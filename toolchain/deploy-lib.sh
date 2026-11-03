@@ -91,8 +91,14 @@ resolve_prefix() {
 
 # Where the deployment keeps its state: under its prefix, or, for one in the
 # home directory, under ~/.config/wiki-demo. After 'resolve_prefix' and
-# 'check_name'.
+# 'check_name'. A deployment made before --prefix and named by it now still
+# has its state in the home directory: it is read there, and adoptable is
+# set, until a deploy adopts it ('adopt_into_prefix'); --status and
+# undeploy-local.sh move nothing. A state in the home directory for the name
+# that points elsewhere is another deployment of the same name, which is not
+# moved this way: its data would stay behind.
 layout() {
+  adoptable=
   if [ -n "$prefix" ]; then
     STATE_DIR=$prefix/state
   else
@@ -100,28 +106,48 @@ layout() {
   fi
   state_file=$STATE_DIR/$name.state
   unit_file=$UNIT_DIR/$name.service
+  if [ -n "$prefix" ] && [ ! -f "$state_file" ] && [ -f "$HOME_STATE_DIR/$name.state" ]; then
+    at=$(state_get dir "$HOME_STATE_DIR/$name.state")
+    if [ "$at" != "$prefix" ]; then
+      die "the deployment $name is at $at, its state in $HOME_STATE_DIR and the wiki's data in $at/data: deploy it there with --prefix $at, or this one under another --name"
+    fi
+    STATE_DIR=$HOME_STATE_DIR
+    state_file=$STATE_DIR/$name.state
+    adoptable=1
+  fi
 }
 
-# A deployment made before --prefix kept its state in the home directory
-# (~/.config/wiki-demo/<name>.state, the PostgreSQL files beside it). Named
-# by --prefix now, it is adopted: the state moves under the prefix, and the
-# toolchain it built with stays in the home directory unless --toolchain says
-# otherwise. A state in the home directory for the name that points elsewhere
-# is another deployment of the same name, which is not moved this way: its
-# data would stay behind.
-adopt_state() {
-  [ -n "$prefix" ] && [ ! -f "$state_file" ] || return 0
-  [ -f "$HOME_STATE_DIR/$name.state" ] || return 0
-  at=$(state_get dir "$HOME_STATE_DIR/$name.state")
-  if [ "$at" != "$prefix" ]; then
-    die "the deployment $name is at $at, its state in $HOME_STATE_DIR and the wiki's data in $at/data: deploy it there with --prefix $at, or this one under another --name"
-  fi
+# Adopt a deployment made before --prefix: its state file moves under the
+# prefix, and its PostgreSQL files (the database's password, the compose
+# files, the pg_dump and pg_restore wrappers) are copied there, not moved,
+# since the running service's unit, its console and the wrappers still name
+# the old files until the deploy writes them anew: a deploy that stops
+# short after this leaves the service able to start as it was. A deploy
+# calls this once the build has succeeded, before it writes anything for
+# the deployment, and 'adoption_done' once the new unit is in place.
+adopt_into_prefix() {
+  [ -n "${adoptable:-}" ] || return 0
+  old_state_dir=$STATE_DIR
+  STATE_DIR=$prefix/state
+  state_file=$STATE_DIR/$name.state
   mkdir -p "$STATE_DIR"
-  mv "$HOME_STATE_DIR/$name.state" "$state_file"
-  [ ! -d "$HOME_STATE_DIR/$name.postgres" ] || mv "$HOME_STATE_DIR/$name.postgres" "$STATE_DIR/$name.postgres"
-  [ ! -f "$HOME_STATE_DIR/$name.env" ] || mv "$HOME_STATE_DIR/$name.env" "$STATE_DIR/$name.env"
-  printf 'toolchain=%s\n' "$HOME" >>"$state_file"
-  say "moved the state of $name from $HOME_STATE_DIR to $STATE_DIR; the toolchain it builds with stays under $HOME (--toolchain moves it)"
+  mv "$old_state_dir/$name.state" "$state_file"
+  rm -f "$old_state_dir/$name.env"
+  adopted_pg_dir=
+  if [ -d "$old_state_dir/$name.postgres" ]; then
+    rm -rf "$STATE_DIR/$name.postgres"
+    cp -Rp "$old_state_dir/$name.postgres" "$STATE_DIR/$name.postgres"
+    adopted_pg_dir=$old_state_dir/$name.postgres
+  fi
+  adoptable=
+  say "adopting $name: its state moves from $old_state_dir to $STATE_DIR; the toolchain it builds with stays under $HOME unless --toolchain says otherwise"
+}
+
+# The end of an adoption: the old PostgreSQL files go, now that the unit,
+# the console and the wrappers name the copies under the prefix.
+adoption_done() {
+  [ -z "${adopted_pg_dir:-}" ] || rm -rf "$adopted_pg_dir"
+  adopted_pg_dir=
 }
 
 # A deployment under a prefix leaves one thing in the home directory, its
@@ -450,6 +476,7 @@ undeploy() {
     say "$name.service is not installed"
   fi
   dir=$(state_get dir)
+  toolchain_dir=$(state_get toolchain)
   port=$(state_get port)
   bind=$(state_get bind)
   bind_choice=$(state_get bind_choice)
@@ -484,8 +511,16 @@ undeploy() {
       if unsafe_dir "$dir" || ! marked_for "$dir" "$name"; then
         warn "not deleting $dir: it does not carry this deployment's marker ($MARKER)"
       elif [ -d "$dir/data" ] && [ -z "${purge_data:-}" ]; then
-        find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name "$MARKER" -exec rm -rf {} +
-        say "deleted the deployed files in $dir${prefix:+, its state and the toolchain under it}, and kept the wiki's data in $dir/data (--purge-data deletes it too)"
+        find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name state ! -name "$MARKER" -exec rm -rf {} +
+        # Under a prefix the state goes too, but for the PostgreSQL files:
+        # the password belongs to the database volume, which is kept.
+        kept_pg=
+        if [ -d "$dir/state" ]; then
+          [ "$db" != postgres ] || [ ! -d "$dir/state/$name.postgres" ] || kept_pg=1
+          find "$dir/state" -mindepth 1 -maxdepth 1 ! -name "$name.postgres" -exec rm -rf {} +
+          [ -n "$kept_pg" ] || rm -rf "$dir/state"
+        fi
+        say "deleted the deployed files in $dir${prefix:+ and the toolchain under it}, and kept the wiki's data in $dir/data${kept_pg:+ and the database's password in $dir/state/$name.postgres, with the volume ${name}_wiki-db} (--purge-data deletes them too)"
       else
         rm -rf "$dir"
         say "deleted $dir${prefix:+, the state and the toolchain under it included}"

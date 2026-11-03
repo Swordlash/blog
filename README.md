@@ -723,9 +723,13 @@ it: `--status --prefix /srv/wiki`, `undeploy-local.sh --prefix /srv/wiki` (whose
 anywhere but `/`, the home directory and the ones above it, and the checkout must be
 outside it; a directory that is not empty is used only when this script made it. A
 deployment made without `--prefix` (in `~/wiki-demo`, its state in
-`~/.config/wiki-demo`) is adopted when a run names its directory with `--prefix`: the
-state moves under it, and the toolchain stays in the home directory unless
-`--toolchain` says otherwise. `--dir` is the old name of `--prefix`.
+`~/.config/wiki-demo`) is adopted when a deploy names its directory with `--prefix`:
+once the build has succeeded its state moves under it (the PostgreSQL files are
+copied, and the old ones go once the new unit names the copies), and the toolchain
+stays in the home directory unless `--toolchain` says otherwise; `--status` reads
+the state where it is. A `--toolchain` inside the prefix can only be
+`<prefix>/toolchain`, since installing empties the rest. `--dir` is the old name of
+`--prefix`.
 
 `--bind 0.0.0.0` listens on every address and serves plain HTTP (`tailscale serve` and
 the Secure cookies are for 127.0.0.1 behind it), over which signing in with a password

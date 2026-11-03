@@ -126,13 +126,17 @@
 #                    the home directory needs nothing more. Without it the
 #                    deployment goes to ~/<name> (or where the previous run put it)
 #                    with its state in ~/.config/wiki-demo, as before. A deployment
-#                    made that way and named by --prefix now is adopted: its state
-#                    moves under the prefix. --dir is the old name of this option
+#                    made that way and named by --prefix now is adopted by the
+#                    deploy: its state moves under the prefix once the build has
+#                    succeeded (--status reads it where it is). --dir is the old
+#                    name of this option
 #   --toolchain DIR  the directory the toolchain is installed under
 #                    (toolchain/bootstrap.sh's WIKI_TOOLCHAIN_HOME): <prefix>/toolchain
-#                    by default under --prefix, the home directory otherwise;
-#                    remembered for the next run. Two deployments share one by naming
-#                    the same directory
+#                    by default under --prefix, the home directory otherwise, and
+#                    the home directory for an adopted deployment; remembered for
+#                    the next run. Two deployments share one by naming the same
+#                    directory. Inside the prefix only <prefix>/toolchain will do,
+#                    since installing empties the rest
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
 #   --no-build       deploy the last -O2 build as it is, without the build step
@@ -225,7 +229,6 @@ done
 check_name "$name"
 resolve_prefix
 layout
-adopt_state
 
 if [ "$action" = stop ]; then
   undeploy
@@ -271,12 +274,14 @@ env_file=$STATE_DIR/$name.env
 user=$(id -un)
 
 # The directory the toolchain is under: --toolchain's, the previous run's,
-# <prefix>/toolchain under a prefix, or the home directory. The choice is
-# remembered as made (toolchain_dir, the home directory included, so that a
-# deployment that chose it keeps it). The bootstrap and the build read it
-# from WIKI_TOOLCHAIN_HOME; the home directory itself is their default, so
-# it is not named, and the tools keep their own defaults.
-toolchain_dir=${opt_toolchain:-${prev_toolchain:-${prefix:+$prefix/toolchain}}}
+# the home directory for a deployment adopted from it (its toolchain is
+# there), <prefix>/toolchain under a prefix, or the home directory. The
+# choice is remembered as made (toolchain_dir, the home directory included,
+# so that a deployment that chose it keeps it). The bootstrap and the build
+# read it from WIKI_TOOLCHAIN_HOME; the home directory itself is their
+# default, so it is not named, and the tools keep their own defaults.
+toolchain_dir=${opt_toolchain:-${prev_toolchain:-${adoptable:+$HOME}}}
+[ -n "$toolchain_dir" ] || toolchain_dir=${prefix:+$prefix/toolchain}
 toolchain_home=
 if [ -n "$toolchain_dir" ]; then
   case $toolchain_dir in
@@ -598,6 +603,12 @@ fi
 case $ROOT/ in
   "$dir"/*) die "the checkout $ROOT is inside $dir, which installing empties: run this from a checkout elsewhere, or choose another --prefix" ;;
 esac
+# Nor can the toolchain be inside it anywhere but at toolchain/, which the
+# install leaves alone.
+case $toolchain_home in
+  '' | "$dir/toolchain") ;;
+  "$dir" | "$dir"/*) die "--toolchain $toolchain_home is inside $dir, which installing empties but for data/, state/ and toolchain/: put it at $dir/toolchain, or outside $dir" ;;
+esac
 if [ -e "$dir" ] && [ ! -d "$dir" ]; then
   die "refusing to install into $dir: it is not a directory"
 fi
@@ -776,6 +787,10 @@ fi
 if [ "$mode" = server ] && ! { [ "$prev_mode" = server ] && [ "$admin_port" = "$prev_admin_port" ] && service_active; }; then
   can_listen "$admin_port" 127.0.0.1 || die "cannot listen on 127.0.0.1:$admin_port (see above): choose another --admin-port"
 fi
+
+# A deployment made before --prefix is adopted now that the build is done:
+# its state comes under the prefix, where what follows writes.
+adopt_into_prefix
 
 # The wiki's database. On PostgreSQL its files are written and its
 # container is made, or started, and waited for; this changes nothing the
@@ -968,6 +983,7 @@ mv "$unit_file.tmp" "$unit_file"
 state_write
 systemctl --user daemon-reload
 systemctl --user enable "$name.service" >/dev/null 2>&1 || systemctl --user enable "$name.service"
+adoption_done
 say "starting $name.service"
 systemctl --user restart "$name.service"
 

@@ -609,6 +609,16 @@ assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p "
 assert_lacks "$EVENTS" 'bootstrap'
 pass 'a redeploy under the prefix keeps the toolchain and the state, and remembers the options'
 
+out=$case_dir/stopped
+deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop under the prefix failed'
+[ "$(sed -n 's/^toolchain=//p' "$pre/state/wiki-demo.state")" = "$pre/toolchain" ] || fail '--stop forgot the toolchain'
+deploy --prefix "$pre" --no-build >"$case_dir/restarted" 2>&1 || fail 'the redeploy after --stop failed'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server did not come back after --stop'
+out=$case_dir/inside
+if deploy --prefix "$pre" --toolchain "$pre/tools" --no-build >"$out" 2>&1; then fail 'a toolchain inside the prefix was accepted'; fi
+assert_contains "$out" "put it at $pre/toolchain, or outside $pre"
+pass '--stop keeps the toolchain choice, and a toolchain inside the prefix other than toolchain/ is refused'
+
 out=$case_dir/no-prefix
 if deploy --status >"$out" 2>&1; then fail '--status without the prefix went on'; fi
 assert_contains "$out" "the deployment wiki-demo is under $pre: run this with --prefix $pre"
@@ -645,10 +655,18 @@ p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 deploy --server --sqlite --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment failed'
 [ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the home deployment kept no state in the home directory'
+out=$case_dir/status-before
+deploy --status --prefix "$HOME/wiki-demo" >"$out" 2>&1
+assert_contains "$out" "on 127.0.0.1:$p"
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail '--status moved the state'
+: >"$EVENTS"
+out=$case_dir/build-fails
+if FAKE_BUILD_FAIL=1 deploy --prefix "$HOME/wiki-demo" >"$out" 2>&1; then fail 'a failed build adopted'; fi
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'a failed build moved the state'
 : >"$EVENTS"
 out=$case_dir/adopted
 deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting the home deployment failed'
-assert_contains "$out" "moved the state of wiki-demo from $HOME/.config/wiki-demo to $HOME/wiki-demo/state"
+assert_contains "$out" "adopting wiki-demo: its state moves from $HOME/.config/wiki-demo to $HOME/wiki-demo/state"
 [ ! -e "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the state stayed in the home directory'
 [ -f "$HOME/wiki-demo/state/wiki-demo.state" ] || fail 'the state did not move under the prefix'
 [ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the adopted deployment moved its toolchain'
@@ -665,7 +683,35 @@ if deploy --prefix "$HOME/elsewhere" --no-build >"$out" 2>&1; then fail 'a secon
 assert_contains "$out" "the deployment wiki-demo is under $HOME/wiki-demo: run this with --prefix $HOME/wiki-demo, or deploy this one under another --name"
 assert_lacks "$EVENTS" 'systemctl stop'
 undeploy --prefix "$HOME/wiki-demo" >/dev/null 2>&1
-pass 'a deployment made in the home directory is adopted by --prefix, keeping its state, port and toolchain'
+pass 'a deployment made in the home directory is adopted by a deploy with --prefix, keeping its state, port and toolchain'
+
+# The same on PostgreSQL: the password and the compose files are copied
+# under the prefix and the old ones go once the new unit names the copies;
+# --purge keeps the password with the volume it belongs to.
+fixture adopted-postgres
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment on PostgreSQL failed'
+old_pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+password=$(cat "$old_pgd/db-password")
+out=$case_dir/adopted
+deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting on PostgreSQL failed'
+pgd=$HOME/wiki-demo/state/wiki-demo.postgres
+[ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the password did not come along'
+[ "$(stat -c %a "$pgd/db-password")" = 600 ] || fail 'the copied password is not the owner'"'"'s alone'
+[ ! -e "$old_pgd" ] || fail 'the old PostgreSQL files stayed'
+assert_contains "$HOME/$unit" "--database-password-file \"$pgd/db-password\""
+assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_PASSWORD_FILE='$pgd/db-password'"
+assert_contains "$pgd/pg_dump" "$pgd/docker-compose.yml"
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the adopted server does not answer'
+out=$case_dir/purged
+undeploy --prefix "$HOME/wiki-demo" --purge >"$out" 2>&1 || fail 'undeploy --purge on PostgreSQL failed'
+[ "$(cat "$pgd/db-password")" = "$password" ] || fail '--purge deleted the password of the volume kept'
+[ -f "$FAKE_DOCKER/wiki-demo" ] || fail '--purge deleted the volume'
+[ -d "$HOME/wiki-demo/data" ] || fail '--purge deleted the data'
+[ ! -e "$HOME/wiki-demo/bin" ] && [ ! -e "$HOME/wiki-demo/state/wiki-demo.state" ] || fail '--purge kept the files or the state'
+assert_contains "$out" "and the database's password in $pgd, with the volume wiki-demo_wiki-db"
+pass 'adoption on PostgreSQL copies the database files under the prefix and --purge keeps the password with the volume'
 
 # sudo that wants a password: the ufw commands are printed, not run. Over
 # plain HTTP, where the Tailscale address is served and ufw has a rule to

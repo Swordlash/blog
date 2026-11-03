@@ -55,5 +55,4 @@ done
 check_name "$name"
 resolve_prefix
 layout
-adopt_state
 undeploy
