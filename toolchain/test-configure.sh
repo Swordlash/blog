@@ -57,6 +57,21 @@ expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 809
   mode=server db=sqlite way=proxy port=8090 bind=0.0.0.0 enable_linger=yes
 pass 'the server in SQLite behind a proxy: no --bind, no --db-port'
 
+# The build semaphore: the probe gives no option, on and off give
+# --semaphore and --no-semaphore, and neither is given when nothing is
+# built (--no-build) or for the demo, whose build has no server.
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081 --semaphore' \
+  mode=server db=sqlite way=proxy port=8090 semaphore=on
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081 --no-semaphore --no-firewall' \
+  mode=server db=sqlite way=proxy port=8090 semaphore=off no_firewall=yes
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite way=proxy port=8090 semaphore=probe
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081 --no-build' \
+  mode=server db=sqlite way=proxy port=8090 semaphore=off no_build=yes
+expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
+  mode=static way=proxy port=8090 semaphore=on
+pass 'the build semaphore: --semaphore or --no-semaphore for a server that is built, nothing for the probe'
+
 # The demo, downloaded at a tag, over plain HTTP everywhere, under a prefix
 # with a space: no server option (the deploy refuses them for the demo),
 # and the prefix quoted.
@@ -150,7 +165,7 @@ pass 'paths are resolved by realpath -m: links before .., also after a missing d
 
 # Answers the deploy would refuse are refused: a port under 1024, two
 # listeners on one port, a certificate without its key, an unknown key.
-for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue'; do
+for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue' 'semaphore=yes'; do
   # shellcheck disable=SC2086 # the answers are words.
   printf '%s\n' $answers >"$TMP/answers"
   if "$WIZARD" --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err"; then
