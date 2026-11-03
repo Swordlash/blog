@@ -739,6 +739,82 @@ script could not change anyway. Without sudo there is no lingering either: try
 `loginctl enable-linger` from a session on the machine itself, or ask an
 administrator for it, or the service stops when you log out.
 
+### Without a browser build
+
+On a machine that cannot build the page (no npm registry, so `npm ci` cannot run;
+nothing new may be installed, so no Node or wasm toolchain either), `--backend-only`
+downloads the page GitHub Actions built and builds `wiki-server` alone:
+
+```sh
+sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0 --no-firewall --backend-only
+```
+
+The page is the one `npm run build-wasm-opt` makes for the server
+(`WIKI_BACKEND=server HALOGEN_BASE_PATH=/`), built by
+`.github/workflows/server-page.yml` and kept as a release asset of the repository
+`origin` names, a zip of `dist-newstyle/wasm-opt/public/app`:
+`app-server-<commit>.zip` on the pre-release `main-latest` for each of main's newest
+five commits (a push to main that changes Markdown alone builds none), and
+`app-server-<tag>.zip` on the release of each tag pushed, for good. The repository
+is public and so are its releases: no token is needed. `curl` lists them through
+`api.github.com` (sixty requests an hour without a token; a deploy makes one or two)
+and downloads the zip from `github.com`, through the proxy `https_proxy` names, if
+any. `--backend-only=REF` says which page:
+
+- nothing (`--backend-only` alone): this checkout's commit, `git rev-parse HEAD`,
+  or, when that commit changes Markdown files alone, the newest commit before it
+  that changes more, whose page is the same. A commit with no page stops the deploy:
+  "no page was built for <hash> on GitHub; push it, or name main, a tag or another
+  hash";
+- `main`: the newest page of main;
+- a tag: the page on that tag's release;
+- a commit hash, or the start of one: that commit's page, if it is among the five.
+
+The page and the server talk over the API, so they should be of one version: a
+page of another commit than the checkout's (one that changes more than Markdown)
+is deployed with a warning. The choice is remembered, and a run without the
+option downloads again by it (a `git pull` and a rerun deploy the new commit's
+page); `--no-build` redeploys what is there; `--no-backend-only` builds the page
+on this machine again. `--static` with it is refused: the demo is built here.
+
+Nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
+`toolchain/bootstrap.sh native`, which installs them through ghcup (under
+`<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
+wasm sysroot, Node, Chromium or fourmolu. On Debian it installs the system packages
+when it may; elsewhere (RHEL, say) it checks only `cc`, `make`, `curl` and `git`.
+Reading GitHub's answers, Tailscale's status and the server's settings, and unpacking
+the zip, take `python3` (or `jq` and `unzip`); the checks that the service answers
+go through `curl`; the check that the port is free through `ss`, when there is one.
+What Node did otherwise is done without it: the compressed copies of the page's
+files are gzip copies that `wiki-server compress` writes, rather than brotli copies
+(browsers take either, brotli's being a little smaller).
+
+`wiki-server` links with C libraries whose development files the build needs; the
+deploy checks for them before it downloads or builds anything, and names the
+packages:
+
+| Library    | Debian, Ubuntu  | RHEL, Fedora              |
+| ---------- | --------------- | ------------------------- |
+| GMP        | `libgmp-dev`    | `gmp-devel`               |
+| libpq      | `libpq-dev`     | `libpq-devel`             |
+| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)  |
+| pkg-config | `pkg-config`    | `pkgconf-pkg-config`      |
+
+A library built from source into a directory of your own is found through the
+environment the deploy is run in, which reaches cabal untouched: `PKG_CONFIG_PATH`,
+`LIBRARY_PATH`, `C_INCLUDE_PATH` and `CPATH` at build time. libsodium, for one, where
+RHEL has no package:
+
+```sh
+./configure --prefix=$HOME/opt/libsodium --disable-shared --enable-static --with-pic && make install
+PKG_CONFIG_PATH=$HOME/opt/libsodium/lib/pkgconfig sh toolchain/deploy-local.sh ... --backend-only
+```
+
+A systemd unit does not inherit the shell's environment, so when the deploy runs
+with `LD_LIBRARY_PATH` set (a shared library in a directory of your own), it writes
+it into the unit, `Environment="LD_LIBRARY_PATH=..."`, and says so; a static build,
+as above, needs none.
+
 ### What else it does
 
 - When Tailscale does not answer at all, it listens on 127.0.0.1 and says so.
