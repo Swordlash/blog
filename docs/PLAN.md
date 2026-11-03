@@ -438,6 +438,32 @@ In the order to do it, unless the owner says otherwise.
   the README's deployment section (a Caddyfile of five lines for the proxy way, the
   `openssl` line for a self-signed certificate to try with), the deploy's header,
   wiki-server's CHANGELOG.
+- **WP5.51 A configuration wizard for the deploy, in brick** (the owner, 2026-11-03:
+  "to już się robi trochę upierdliwe"; `deploy-local.sh` has some thirty options by
+  now). `toolchain/configure.hs`, a cabal script (a `{- cabal: -}` stanza, run with
+  `cabal run`, not a package of the project), with `brick` and `Brick.Forms`, run
+  through `sh toolchain/configure.sh`, which first runs `toolchain/check-native.sh`
+  and `toolchain/bootstrap.sh native` (the wizard needs GHC and cabal, which a fresh
+  machine lacks; its first run compiles brick and vty, minutes, cached by cabal
+  after). The wizard asks in screens, not one question per flag: what (the server or
+  the demo), where (prefix, name, bind, port, admin port), where the page comes from
+  (built here, or `--backend-only=REF` with REF's meanings), the database (SQLite or
+  PostgreSQL, its port), HTTPS (Tailscale, a certificate and key, a proxy: WP5.50's
+  three ways), the extras (`--enable-linger`, `--no-firewall`, `--fresh`,
+  `--no-build`); each field with the option's description, which lives in the wizard
+  alone and is checked against the script's header by a test in
+  `test-deploy-local.sh` (every option in the header is in the wizard, and the other
+  way round, so the two cannot drift). It reads the deployment's state file
+  (`state_get`'s keys, by prefix and name) to prefill, so a rerun is Enter through.
+  The last screen shows the command line it made, to copy or to run: Enter `exec`s
+  `deploy-local.sh` with it, so the deploy's own output reaches the terminal. Also
+  `--status` and `--stop` for a chosen deployment. vty links terminfo (`libtinfo`),
+  so `ncurses-devel` / `libncurses-dev` joins `check-native.sh`'s items (only the
+  wizard needs it; the check says so) and the bootstrap's Debian packages. Tests: the
+  option-coverage test above, a pure test of the command line the wizard builds from
+  its answers (the form's state to arguments, as a plain function the test calls),
+  and the wrapper in `test-deploy-local.sh`. Docs: the README's deployment section
+  opens with the wizard. After WP5.50, since it adds the HTTPS options.
 
 ### Later, or waiting for the owner
 
