@@ -1735,8 +1735,10 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
 ' "${2:-$page}" "$1"
 }
 # A release's JSON as the API gives it: its tag, and its assets with the
-# times they were uploaded at, given as name time pairs, and their sizes,
-# those of the files under download/<tag>/ (0 for an asset with no file).
+# times they were uploaded at, given as name time pairs, their sizes, those
+# of the files under download/<tag>/ (0 for an asset with no file), and ids
+# made from the name and the time, so that an asset uploaded again, at
+# another time, gets another id, as on GitHub.
 release() {
   tag=$1
   shift
@@ -1745,7 +1747,8 @@ release() {
     sep=
     while [ $# -gt 0 ]; do
       size=$(wc -c <"$FAKE_GITHUB/download/$tag/$1" 2>/dev/null || printf 0)
-      printf '%s{"name":"%s","updated_at":"%s","size":%s,"browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$1" "$2" "$size" "$tag" "$1"
+      id=$(printf '%s %s' "$1" "$2" | cksum | cut -d' ' -f1)
+      printf '%s{"id":%s,"name":"%s","updated_at":"%s","size":%s,"browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$id" "$1" "$2" "$size" "$tag" "$1"
       sep=,
       shift 2
     done
@@ -1809,6 +1812,7 @@ assert_lacks "$out" 'warning: the page is of'
 cmp "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip" "$FAKE_GITHUB/download/main-latest/app-server-$head1.zip" ||
   fail 'the downloaded page was not kept in the cache under the toolchain directory'
 [ -z "$(find "$pre/toolchain/.wiki-toolchain/pages" -name '.*')" ] || fail 'the cache keeps a temporary file'
+assert_contains "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip.meta" "id=$(printf '%s %s' "app-server-$head1.zip" 2026-10-31T10:00:00Z | cksum | cut -d' ' -f1) updated_at=2026-10-31T10:00:00Z size="
 pass '--backend-only downloads the checkout'"'"'s page from its GitHub release, builds wiki-server alone after bootstrap native, without npm or Node, and serves it with gzip copies'
 
 : >"$EVENTS"
@@ -1913,15 +1917,17 @@ deploy --prefix "$pre" --backend-only=v9.9 >"$out" 2>&1 || fail 'a tag failed'
 assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
 assert_contains "$out" 'cannot tell which commit the page of v9.9 was built from'
 { [ "$(pstate backend_only)" = v9.9 ] && [ -z "$(pstate backend_only_commit)" ]; } || fail 'the state does not record the tag'
-# A tag's asset can be replaced: the cached one is taken while the release
-# lists its size, and downloaded again when the size changed.
+# A tag's asset can be replaced (CI uploads it again with --clobber): the
+# cached one is taken while the release lists the asset with the id and time
+# in its .meta file, and downloaded again when either changed, even at the
+# same size, or when the .meta file is missing.
 : >"$EVENTS"
 out=$case_dir/tag-cached
 deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag failed'
 assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_contains "$out" "the page of v9.9 from the cache: $cache/app-server-v9.9.zip"
 cp -r "$page" "$case_dir/page2"
-printf "a file the first v9.9 had not\n" >"$case_dir/page2/extra.txt"
+printf 'version one of v9.9\n' >"$case_dir/page2/extra.txt"
 page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" "$case_dir/page2"
 release v9.9 app-server-v9.9.zip 2026-10-02T10:00:00Z
 : >"$EVENTS"
@@ -1931,18 +1937,47 @@ assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/
 assert_lacks "$out" 'from the cache'
 cmp "$cache/app-server-v9.9.zip" "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" || fail 'the cache kept the replaced asset'
 [ -f "$pre/app/extra.txt" ] || fail "the replaced tag's page was not deployed"
+assert_contains "$cache/app-server-v9.9.zip.meta" 'updated_at=2026-10-02T10:00:00Z'
+# Uploaded again, with another file of the same size: the same length,
+# another id and time.
+old_size=$(wc -c <"$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip")
+cp -r "$page" "$case_dir/page3"
+printf 'version two of v9.9\n' >"$case_dir/page3/extra.txt"
+page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" "$case_dir/page3"
+[ "$(wc -c <"$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip")" = "$old_size" ] || fail 'the fixture: the second zip is not of the first one'"'"'s size'
+release v9.9 app-server-v9.9.zip 2026-10-03T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/tag-same-size
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag replaced at the same size failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+assert_lacks "$out" 'from the cache'
+assert_contains "$pre/app/extra.txt" 'version two of v9.9'
+assert_contains "$cache/app-server-v9.9.zip.meta" 'updated_at=2026-10-03T10:00:00Z'
+: >"$EVENTS"
+out=$case_dir/tag-unchanged
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of an unchanged tag failed'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of v9.9 from the cache: $cache/app-server-v9.9.zip"
+rm "$cache/app-server-v9.9.zip.meta"
+: >"$EVENTS"
+out=$case_dir/tag-no-meta
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag without its .meta file failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+[ -f "$cache/app-server-v9.9.zip.meta" ] || fail 'the download did not write the .meta file again'
 out=$case_dir/no-tag
 if deploy --prefix "$pre" --backend-only=v0.0-none >"$out" 2>&1; then fail 'a tag with no release was deployed'; fi
 assert_contains "$out" 'GitHub has no release v0.0-none with a page'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a refused REF took the server down'
-pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page; a tag'"'"'s cached page is taken while its size is unchanged, and downloaded again when it changed'
+pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page; a tag'"'"'s cached page is taken while GitHub'"'"'s asset is the same by id and time, and downloaded again when it was replaced, even at the same size'
 
-# The cache keeps the five newest zips: after a download, older ones go.
-rm -f "$cache"/*.zip
+# The cache keeps the five newest zips: after a download, older ones go. A
+# zip that goes takes its .meta file with it.
+rm -f "$cache"/*.zip "$cache"/*.meta
 for i in 1 2 3 4 5 6; do
   : >"$cache/app-server-old$i.zip"
   touch -d "$i hours ago" "$cache/app-server-old$i.zip"
 done
+printf 'id=1 updated_at=- size=0\n' >"$cache/app-server-old6.zip.meta"
 : >"$EVENTS"
 out=$case_dir/prune
 deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail 'the deploy that prunes the cache failed'
@@ -1950,7 +1985,8 @@ deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail 'the deploy that prun
 for kept in app-server-v9.9.zip app-server-old1.zip app-server-old2.zip app-server-old3.zip app-server-old4.zip; do
   [ -f "$cache/$kept" ] || fail "the prune deleted $kept"
 done
-pass 'after a download the cache keeps its five newest zips'
+[ ! -e "$cache/app-server-old6.zip.meta" ] || fail 'the prune left the .meta file of a zip it deleted'
+pass 'after a download the cache keeps its five newest zips, and deletes the .meta files of the others'
 
 # A machine without libsodium that is not Debian (no dpkg-query on PATH),
 # so nothing would install it: the check refuses.

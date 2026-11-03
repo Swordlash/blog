@@ -856,8 +856,9 @@ on this machine again. With `--static` it deploys the demo's page instead (below
 A downloaded page is kept in a cache of the five newest, so a redeploy of the same
 page downloads nothing: `<prefix>/toolchain/.wiki-toolchain/pages` (or under the
 `--toolchain` directory), or `~/.cache/wiki-demo/pages` when the toolchain is in the
-home directory. A commit's page is taken from there as it is; a tag's only while
-its release lists the same size for it. `--refresh-page` downloads it again.
+home directory. A commit's page is taken from there as it is; a tag's is downloaded
+again when GitHub's asset changed, by its id and upload time. `--refresh-page`
+downloads it again.
 
 With `--server`, nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
 `toolchain/bootstrap.sh native`, which installs them through ghcup (under

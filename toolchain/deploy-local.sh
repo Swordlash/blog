@@ -218,7 +218,8 @@
 #                    ${XDG_CACHE_HOME:-~/.cache}/wiki-demo/pages. A commit's page
 #                    never changes, so a cached one is used as it is. A tag's page
 #                    can be replaced on GitHub, so a cached one is used only while
-#                    the release lists the same size for it.
+#                    the release lists the same asset for it, by GitHub's id and
+#                    upload time, which the cache keeps beside the zip.
 #                    The page and the server talk over the API, so the page should be
 #                    of the checkout's commit; a warning says when it is not (and for
 #                    the demo too). Reading GitHub's answers and unpacking the zip
@@ -1042,8 +1043,9 @@ github_repo() {
   esac
 }
 
-# The assets of a release into release_list, "name time size" per line: the
-# time each was uploaded at (- when GitHub gives none) and its size in bytes.
+# The assets of a release into release_list, "name time size id" per line:
+# the time each was uploaded at (- when GitHub gives none), its size in bytes
+# and GitHub's id for it. A replaced asset gets a new id and time.
 # The list is empty when there is no such release. Stops the deploy on any
 # other answer.
 release_assets() {
@@ -1057,8 +1059,8 @@ release_assets() {
   case $code in
     200)
       release_list=$(json_read 'for a in d.get("assets") or []:
-    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "-", a.get("size", ""))' \
-        '.assets[]? | "\(.name) \(.updated_at // .created_at // "-") \(.size // "")"' <"$listing") || {
+    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "-", a.get("size", "-"), a.get("id", "-"))' \
+        '.assets[]? | "\(.name) \(.updated_at // .created_at // "-") \(.size // "-") \(.id // "-")"' <"$listing") || {
         rm -f "$listing"
         die "could not read the answer of api.github.com about the release $1"
       } ;;
@@ -1102,11 +1104,11 @@ same_code() {
 # Which page --backend-only=REF names: sets page_tag (the release), page_asset
 # (its asset, app-server-… or app-demo-… as page_kind says) and
 # backend_only_commit (the commit the page was built from, empty for a tag
-# this checkout does not have), and for a tag page_size (the size of its
-# asset as the release lists it, for the cache).
+# this checkout does not have), and page_meta (the asset's identity on
+# GitHub, "id=… updated_at=… size=…", which the page cache keeps beside the
+# zip).
 resolve_page() {
   if [ "$page_kind" = server ]; then page_name=page; else page_name='demo page'; fi
-  page_size=
   no_page() {
     die "no $page_name was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
   }
@@ -1161,10 +1163,10 @@ resolve_page() {
         [ -n "$tag_assets" ] || die "GitHub has no release $ref with a page, and $ref is neither main nor a commit hash: name main, a tag pushed since CI keeps pages, or a hash"
         printf '%s\n' "$tag_assets" | grep -qxF "$page_asset" ||
           die "the release $ref on GitHub has no $page_asset: CI attaches it when the tag is pushed"
-        page_size=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { print $3; exit }')
         backend_only_commit=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/${ref}^{commit}" 2>/dev/null || true)
       fi ;;
   esac
+  page_meta=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { printf "id=%s updated_at=%s size=%s\n", $4, $2, $3; exit }')
 }
 
 # Unpack a page's zip into $work/app and check that it is a page of the kind
@@ -1184,22 +1186,35 @@ unpack_page() {
 }
 
 # Delete all but the five newest zips in the page cache, by modification
-# time. A zip's time is when it was downloaded or last used.
+# time, with their .meta files. A zip's time is when it was downloaded or
+# last used.
 prune_pages() {
   # shellcheck disable=SC2012 # ls -t orders by mtime; the names are asset names, without newlines.
   ls -t "$page_cache"/*.zip 2>/dev/null | tail -n +6 | while IFS= read -r old; do
-    rm -f "$old"
+    rm -f "$old" "$old.meta"
   done
+}
+
+# Write the .meta file beside a cached zip: page_meta, the asset's id, time
+# and size on GitHub, through a temporary name.
+write_page_meta() {
+  [ -n "$page_meta" ] || return 0
+  if ! { printf '%s\n' "$page_meta" >"$page_cache/.$page_asset.meta.part" &&
+    mv -f "$page_cache/.$page_asset.meta.part" "$cached.meta"; }; then
+    rm -f "$page_cache/.$page_asset.meta.part"
+  fi
 }
 
 # Unpack the page resolve_page found into $out, through a directory beside
 # it, so that a failed download leaves the last page as it was. The zip comes
 # from the page cache when the cache has it and it is still the page GitHub
-# has: a page of a commit (app-<kind>-<hash>.zip) never changes, and a tag's
-# is taken only while the release lists the cached file's size for it.
-# --refresh-page skips the cache. A downloaded zip enters the cache only
-# after it unpacked as a page, under a temporary name first, so a broken or
-# partial download is never taken from there.
+# has. A page of a commit (app-<kind>-<hash>.zip) never changes. A tag's
+# asset can be uploaded again (CI replaces it), and two zips can have the
+# same size, so a tag's cached zip is taken only while its .meta file names
+# the id and time the release lists for the asset; a zip without one is
+# downloaded again. --refresh-page skips the cache. A downloaded zip enters
+# the cache only after it unpacked as a page, under a temporary name first,
+# so a broken or partial download is never taken from there.
 download_page() {
   url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
   page_cache=${toolchain_home:+$toolchain_home/.wiki-toolchain/pages}
@@ -1212,17 +1227,21 @@ download_page() {
   if [ -z "$refresh_page" ] && [ -f "$cached" ]; then
     if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
       from_cache=1
-    elif [ -n "$page_size" ] && [ "$(wc -c <"$cached" | tr -d ' ')" = "$page_size" ]; then
-      from_cache=1
+    else
+      case $page_meta in
+        '' | 'id=- '* | *' updated_at=- '*) ;;
+        *) [ "$(cat "$cached.meta" 2>/dev/null || true)" != "$page_meta" ] || from_cache=1 ;;
+      esac
     fi
   fi
   if [ -n "$from_cache" ]; then
     if unpack_page "$cached"; then
       touch "$cached"
+      [ -f "$cached.meta" ] || write_page_meta
       say "the page of ${backend_only_commit:-$page_tag} from the cache: $cached"
     else
       warn "the cached $cached is not a page ($unpack_error), so it is deleted and downloaded again"
-      rm -f "$cached"
+      rm -f "$cached" "$cached.meta"
       from_cache=
     fi
   fi
@@ -1232,6 +1251,7 @@ download_page() {
     unpack_page "$work/page.zip" || die "$unpack_error"
     if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
       mv -f "$page_cache/.$page_asset.part" "$cached"; then
+      write_page_meta
       prune_pages
     else
       rm -f "$page_cache/.$page_asset.part"
