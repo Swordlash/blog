@@ -9,6 +9,10 @@
 -- fails afterwards takes the server down with it, for systemd to restart:
 -- a server with only some of its listeners should not keep running.
 --
+-- With @--tls-cert@ and @--tls-key@ the public listener speaks HTTPS
+-- ("Wiki.Server.Tls"), with the files read before any socket is bound; the
+-- admin listener stays plain HTTP, on loopback.
+--
 -- On @SIGTERM@ (systemd stopping it) or @SIGINT@ the server stops
 -- accepting connections, gives the requests in progress up to ten seconds
 -- to finish, and closes the database, so that stopping never interrupts a
@@ -32,6 +36,7 @@ import Data.Time (getCurrentTime)
 import Ki qualified
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (..), Socket, SocketOption (..), SocketType (..), bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket, setSocketOption)
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
+import Network.Wai.Handler.WarpTLS (runTLSSocket)
 import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Import (ImportSummary (..))
@@ -59,6 +64,7 @@ import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, withStorage)
 import Wiki.Server.Storage.Layout (PgDatabase (..), withoutPassword)
 import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
+import Wiki.Server.Tls (loadTls)
 import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
 
@@ -116,6 +122,9 @@ withServerUsing given raw sendMail action = do
   flows <- newFlows
   providerCache <- newProviderCache
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
+  -- The public listener's certificate and key, read and checked before
+  -- anything starts: a file that is wrong stops the server here, named.
+  tls <- for ((,) <$> options.tlsCert <*> options.tlsKey) $ \(cert, key) -> loadTls cert key >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
   -- Five accounts created, or attempted, from an address in fifteen
@@ -178,7 +187,9 @@ withServerUsing given raw sendMail action = do
               , mount = "/admin/"
               , finding = EveryoneAdministers
               }
-          listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
+          -- The public listener is the first, and the only one that may
+          -- speak TLS.
+          listeners = (options.listen, (public, tls)) : [(a, (admin, Nothing)) | Just a <- [options.adminListen]]
       logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
       -- The administration's settings as the server starts with them
       -- (secrets left out); a change is seen by the next request, unlogged.
@@ -212,11 +223,13 @@ withServerUsing given raw sendMail action = do
                         logWith logger Warning [("event", "connection"), ("listener", l.name), ("error", show e)]
                   )
                 $ defaultSettings
-        addresses <- for bound $ \(socket, (_, l)) -> do
+        addresses <- for bound $ \(socket, (_, (l, secure))) -> do
           address <- getSocketName socket
-          logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]
+          logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress (isJust secure) address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]
           pure address
-        threads <- for bound $ \(socket, (_, l)) -> Async.async (runSettingsSocket (settings l) socket (listenerApp logger env site l))
+        threads <- for bound $ \(socket, (_, (l, secure))) ->
+          let run = maybe runSettingsSocket runTLSSocket secure
+           in Async.async (run (settings l) socket (listenerApp logger env site l))
         -- Warp stops accepting when its listening socket is closed, then
         -- waits up to ten seconds for its open connections to finish. The
         -- sockets belong to this function, so they are closed here rather
@@ -234,7 +247,7 @@ withServerUsing given raw sendMail action = do
 
 -- | Bind every listener's socket, or none: if one fails, those bound
 -- before it are closed, and the error names its address.
-bindAll :: [(Listen, Listener)] -> IO [(Socket, (Listen, Listener))]
+bindAll :: [(Listen, a)] -> IO [(Socket, (Listen, a))]
 bindAll = \case
   [] -> pure []
   (l, x) : rest -> do
@@ -258,9 +271,10 @@ bindListen l = do
       listen socket 1024
       pure socket
 
--- | An address as the start of a URL.
-showAddress :: SockAddr -> Text
-showAddress a = "http://" <> T.pack (show a)
+-- | An address as the start of a URL: @https@ for a listener that speaks
+-- TLS, @http@ for one that does not.
+showAddress :: Bool -> SockAddr -> Text
+showAddress secure a = (if secure then "https://" else "http://") <> T.pack (show a)
 
 -- | A database as the log names it: a SQLite file by its path, a
 -- PostgreSQL database by its URL without its password.

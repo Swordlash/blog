@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+The public listener speaks HTTPS itself with `wiki-server serve --tls-cert
+FILE --tls-key FILE` (WP5.50), through warp-tls: TLS 1.2 and 1.3, no C
+library added. The files are PEM; the certificate file may carry its chain
+after the certificate, and one `.pem` holding the certificate and the key
+may be given as both. They are read once, as the server starts, before it
+listens: a file that cannot be read, one with no certificate or no key in
+it, or a key that is not the certificate's stops the server with a message
+naming the file. A renewed certificate is read by the next start (`systemctl
+--user restart` for a deployment). The admin listener stays plain HTTP. With
+TLS on, the session cookie is `Secure` without `--secure-cookies`, and the
+wiki's address, when the request's own is used (feeds, passkeys' origin), is
+`https` without a proxy's `X-Forwarded-Proto`. The log's `listening` line
+gives the public listener's address as `https://` then.
+
 `wiki-server compress DIR` (WP5.49) writes a gzip copy, `<file>.gz`, beside
 each file of the application's directory that the deploy script compresses
 (its text and code over 1 KiB), and keeps a copy newer than its file. A

@@ -31,6 +31,7 @@ import Test.Server.Presence qualified as Presence
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
+import Test.Server.Tls qualified as Tls
 import Test.Server.Totp qualified as Totp
 import Test.Server.Vault qualified as Vault
 import Test.Server.WebAuthn qualified as WebAuthn
@@ -63,6 +64,7 @@ main = secureMain $ do
         WebAuthn.spec
         Metrics.spec
         Compress.spec
+        Tls.keySpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
@@ -78,6 +80,7 @@ main = secureMain $ do
           Options.spec b
           Api.spec b
           Static.spec b
+          Tls.spec b
           Render.spec b
           Feed.spec b
           Import.spec b

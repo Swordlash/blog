@@ -12,6 +12,7 @@ module Test.Server.Fixture
   , site
   , template
   , serverInfoOn
+  , trustingTls
 
     -- * Requests
   , Reply (..)
@@ -47,9 +48,12 @@ import Data.CaseInsensitive qualified as CI
 import Data.IORef (IORef, modifyIORef', newIORef)
 import Data.List (lookup)
 import Data.Text qualified as T
+import Network.Connection (TLSSettings (..))
 import Network.HTTP.Client (Manager, RequestBody (..), decompress, defaultManagerSettings, httpLbs, managerResponseTimeout, method, newManager, parseRequest, path, redirectCount, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus, responseTimeoutMicro)
+import Network.HTTP.Client.TLS (mkManagerSettings)
 import Network.HTTP.Types (Header, Method, hContentType, methodGet, statusCode)
 import Network.Socket (SockAddr (..))
+import Network.TLS (defaultSupported)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
@@ -74,7 +78,8 @@ import Wiki.Server.Storage (Place (..), defaultConfig, importArchive, withStorag
 -- | A server being driven by a test.
 data Running = Running
   { public :: Text
-  -- ^ The public listener's root, @http:\/\/127.0.0.1:\<port>@.
+  -- ^ The public listener's root, @http:\/\/127.0.0.1:\<port>@, or
+  -- @https:\/\/…@ when it speaks TLS.
   , admin :: Text
   -- ^ The admin listener's root.
   , dataDir :: FilePath
@@ -217,7 +222,6 @@ serveInUsing change sending at staticDir test = do
   let dataDir = at.dataDir
   logged <- newIORef []
   outbox <- newIORef []
-  manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
   let options =
         change
           (defaultServeOptions dataDir)
@@ -230,11 +234,16 @@ serveInUsing change sending at staticDir test = do
               -- the guide turn it on ("Test.Server.Guide").
               guide = False
             }
+      -- A server whose public listener speaks TLS is reached over HTTPS,
+      -- with the test's own certificate ('trustingTls').
+      secure = isJust options.tlsCert
+      settings = if secure then mkManagerSettings trustingTls Nothing else defaultManagerSettings
+  manager <- newManager settings {managerResponseTimeout = responseTimeoutMicro 60000000}
   withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (sending (testMail outbox)) $ \server ->
     test
       Running
-        { public = root server.publicAddress
-        , admin = maybe "" root server.adminAddress
+        { public = root (if secure then "https" else "http") server.publicAddress
+        , admin = maybe "" (root "http") server.adminAddress
         , dataDir
         , place = at
         , staticDir
@@ -243,9 +252,21 @@ serveInUsing change sending at staticDir test = do
         , outbox
         }
   where
-    root = \case
-      SockAddrInet port _ -> "http://127.0.0.1:" <> show port
+    root scheme = \case
+      SockAddrInet port _ -> scheme <> "://127.0.0.1:" <> show port
       other -> panic ("not an IPv4 address: " <> show other)
+
+-- | 'trustingTls' is how the tests' clients speak TLS to a test's server:
+-- accepting any certificate, since each test makes its own, signed by
+-- nobody. Only a test may do this.
+trustingTls :: TLSSettings
+trustingTls =
+  TLSSettingsSimple
+    { settingDisableCertificateValidation = True
+    , settingDisableSession = False
+    , settingUseServerName = False
+    , settingClientSupported = defaultSupported
+    }
 
 -- | How the test servers send mail: into the outbox, as a mail server
 -- would take it; not at all to @unreachable.test@; and for real, over

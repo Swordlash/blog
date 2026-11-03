@@ -171,8 +171,16 @@ data ServeOptions = ServeOptions
   -- ^ Allow an admin listener on an address that is not loopback.
   , secureCookies :: Bool
   -- ^ The session cookie is @Secure@: the browser reaches the public
-  -- listener over HTTPS (through a proxy in front of it), and sends the
-  -- cookie over nothing else.
+  -- listener over HTTPS (through a proxy in front of it, or the server's
+  -- own TLS), and sends the cookie over nothing else. 'checkOptions' turns
+  -- it on when the public listener speaks TLS.
+  , tlsCert :: Maybe FilePath
+  -- ^ The public listener's certificate (@--tls-cert@), a PEM file: the
+  -- server's certificate, then the chain after it, if any. With 'tlsKey',
+  -- the public listener speaks HTTPS ("Wiki.Server.Tls").
+  , tlsKey :: Maybe FilePath
+  -- ^ The certificate's private key (@--tls-key@), a PEM file. It may be
+  -- the same file as 'tlsCert', when one @.pem@ holds both.
   , basePath :: Text
   -- ^ The path the public listener serves the wiki under, @\/@ or
   -- @\/wiki\/@, as the application was built for (@HALOGEN_BASE_PATH@).
@@ -208,6 +216,8 @@ defaultServeOptions dataDir =
     , adminListen = Just (Listen "127.0.0.1" 8081)
     , adminListenUnsafe = False
     , secureCookies = False
+    , tlsCert = Nothing
+    , tlsKey = Nothing
     , basePath = "/"
     , staticDir = Nothing
     , maxImportSize = defaultMaxImportSize
@@ -232,7 +242,9 @@ serveOptions = do
   admin <- option address (long "admin-listen" <> metavar "HOST:PORT" <> value (Listen "127.0.0.1" 8081) <> showDefaultWith (toS . renderListen) <> help "The admin listener, where everyone is the administrator: loopback only")
   noAdmin <- switch (long "no-admin-listen" <> help "Do not listen for the administrator at all")
   adminListenUnsafe <- switch (long "admin-listen-unsafe" <> help "Allow --admin-listen on an address that is not loopback (inside a container, say)")
-  secureCookies <- switch (long "secure-cookies" <> help "Mark the session's cookie Secure, for a wiki reached over HTTPS only (a browser never sends such a cookie over plain HTTP)")
+  secureCookies <- switch (long "secure-cookies" <> help "Mark the session's cookie Secure, for a wiki reached over HTTPS only (a browser never sends such a cookie over plain HTTP); implied by --tls-cert")
+  tlsCert <- optional (strOption (long "tls-cert" <> metavar "FILE" <> help "Serve the public listener over HTTPS with this certificate, a PEM file (the chain may follow the certificate); needs --tls-key. The admin listener stays plain HTTP"))
+  tlsKey <- optional (strOption (long "tls-key" <> metavar "FILE" <> help "The certificate's private key, a PEM file (the same file as --tls-cert when one .pem holds both)"))
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
   rclone <- strOption (long "rclone" <> metavar "PATH" <> value "rclone" <> showDefault <> help "The rclone program, for backups the administration copies to an rclone remote")
@@ -253,6 +265,8 @@ serveOptions = do
       , adminListen = if noAdmin then Nothing else Just admin
       , adminListenUnsafe
       , secureCookies
+      , tlsCert
+      , tlsKey
       , basePath
       , staticDir
       , maxImportSize = maxImportMb * 1024 * 1024
@@ -395,10 +409,12 @@ normaliseBasePath p
     segments = filter (not . T.null) (T.splitOn "/" p)
 
 -- | The options as the server runs them, or every reason they are invalid.
+-- A public listener that speaks TLS marks the session cookie @Secure@: its
+-- browsers reach it over HTTPS only.
 checkOptions :: ServeOptions -> Either [Text] ServeOptions
 checkOptions o =
   case (errors, normaliseBasePath o.basePath) of
-    ([], Right base) -> Right o {basePath = base}
+    ([], Right base) -> Right o {basePath = base, secureCookies = o.secureCookies || isJust o.tlsCert}
     (es, b) -> Left (es <> either pure (const []) b)
   where
     errors =
@@ -415,3 +431,7 @@ checkOptions o =
            , a.port /= 0
            ]
         <> ["--max-import-size must be at least 1 MiB" | o.maxImportSize < 1024 * 1024]
+        <> case (o.tlsCert, o.tlsKey) of
+          (Just _, Nothing) -> ["--tls-cert needs --tls-key, the certificate's private key (the same file, when one .pem holds both)"]
+          (Nothing, Just _) -> ["--tls-key needs --tls-cert, the certificate it is the key of"]
+          _ -> []
