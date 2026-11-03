@@ -418,13 +418,19 @@ quote w
 
 -- * Paths and the state file
 
--- | A path as the deploy will see it: ~ and ~/ expanded, made absolute,
--- and without . and .. components. A relative path is taken from the
--- directory toolchain/configure.sh was started in (WIKI_CONFIGURE_DIR,
--- which the wrapper sets before it changes to the checkout's root), or
--- else from the current directory.
--- Symbolic links are resolved for the prefix alone ('statePath'), as the
--- deploy's realpath does; the other paths are resolved by the deploy.
+-- | A path as the deploy's realpath -m makes it: ~ and ~/ expanded, made
+-- absolute, its symbolic links followed, and without . and .. components.
+-- A relative path is taken from the directory toolchain/configure.sh was
+-- started in (WIKI_CONFIGURE_DIR, which the wrapper sets before it changes
+-- to the checkout's root), or else from the current directory.
+--
+-- The order matters. canonicalizePath follows the links of the part of the
+-- path that exists, so /srv/link/../wiki with /srv/link pointing to
+-- /mnt/deployments/current is /mnt/deployments/wiki, as for realpath, not
+-- the /srv/wiki of a .. removed by text first. canonicalizePath leaves the
+-- part that does not exist yet as it was given, . and .. included; no link
+-- can be in that part, so its . and .. are then removed by text, as
+-- realpath -m removes them.
 absolute :: Text -> IO Text
 absolute t
   | T.null t = pure t
@@ -436,21 +442,22 @@ absolute t
             | "~/" `T.isPrefixOf` t = home </> drop 2 s
             | otherwise = s
       started <- lookupEnv "WIKI_CONFIGURE_DIR"
-      T.pack . collapse
-        <$> case started of
-          Just dir | not (null dir) -> pure (dir </> expanded)
-          _ -> makeAbsolute expanded
+      rooted <- case started of
+        Just dir | not (null dir) -> pure (dir </> expanded)
+        _ -> makeAbsolute expanded
+      T.pack . collapse <$> canonicalizePath rooted
   where
     collapse p = joinPath ("/" : reverse (foldl step [] (drop 1 (splitDirectories p))))
     step acc "." = acc
     step acc ".." = drop 1 acc
     step acc d = d : acc
 
--- | The answers' paths made absolute, as 'absolute' does, and the prefix
--- with its symbolic links resolved, as the deploy keeps it in the state.
+-- | The answers' paths as the deploy will resolve them ('absolute'): the
+-- prefix as the deploy keeps it in the state, and the toolchain and the
+-- certificate's files as the unit will name them.
 resolvePaths :: Answers -> IO Answers
 resolvePaths a = do
-  p <- absolute (prefix a) >>= \p -> if T.null p then pure p else T.pack <$> canonicalizePath (T.unpack p)
+  p <- absolute (prefix a)
   t <- absolute (toolchain a)
   c <- absolute (tlsCert a)
   k <- absolute (tlsKey a)
