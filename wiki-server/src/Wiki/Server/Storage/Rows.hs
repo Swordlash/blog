@@ -76,6 +76,9 @@ module Wiki.Server.Storage.Rows
   , updateDisabled
   , deleteSessionsOf
   , deleteUserRows
+  , loadFeedToken
+  , storeFeedToken
+  , userByFeedToken
   , totpEnabled
   , deleteSecondFactor
   , loadSecondFactorUsers
@@ -944,9 +947,26 @@ insertAccount u login displayName phc =
               , email_verified_at = Nothing
               , notification_mail = Nothing
               , watch_own = True
+              , feed_token = Nothing
               }
           ]
       maybe (Left login) Right <$> loadAccount u
+
+-- | The secret of a user's feed of notifications, if they have made one.
+loadFeedToken :: (Backend be) => UserId -> Db be (Maybe Text)
+loadFeedToken u = join <$> runSelectReturningOne (select ((\r -> r.feed_token) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
+
+-- | Give a user a new secret for their feed of notifications, in place of
+-- the old, which answers nothing from now on.
+storeFeedToken :: (Backend be) => UserId -> Text -> Db be ()
+storeFeedToken u secret = runUpdate (update wikiDb.users (\r -> r.feed_token <-. val_ (Just secret)) (\r -> r.id ==. val_ u.text))
+
+-- | The user whose feed of notifications a secret opens, if they may sign
+-- in: a user who may not has no feed either.
+userByFeedToken :: (Backend be) => Text -> Db be (Maybe UserId)
+userByFeedToken secret =
+  fmap (\r -> UserId r.id)
+    <$> runSelectReturningOne (select (filter_ (\r -> r.feed_token ==. val_ (Just secret) &&. Beam.not_ r.disabled) (all_ wikiDb.users)))
 
 -- | Replace a user's password hash.
 updatePasswordHash :: (Backend be) => UserId -> Text -> Db be ()
@@ -1234,6 +1254,7 @@ insertUsers us =
             , email_verified_at = Nothing
             , notification_mail = Nothing
             , watch_own = True
+            , feed_token = Nothing
             }
         | u <- chunk
         ]

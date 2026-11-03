@@ -45,6 +45,7 @@ module Test.Sample
   , backupRcloneChange
   , notification
   , notifications
+  , feedAddress
   , notificationSettings
   , starredPage
   , vault
@@ -67,7 +68,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
-import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), Notifications (..), feedAddressOf)
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
@@ -587,6 +588,10 @@ notifications =
 
 notificationSettings :: NotificationSettings
 notificationSettings = NotificationSettings {mail = MailDaily, watchOwn = True, verifiedEmail = True, mailing = True}
+
+-- | The sample feed address, once made.
+feedAddress :: FeedAddress
+feedAddress = FeedAddress {address = Just (feedAddressOf "sample-secret")}
 
 -- | The sample page, starred, where it is in the sample space.
 starredPage :: StarredPage

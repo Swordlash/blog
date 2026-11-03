@@ -36,7 +36,7 @@ import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..), feedAddressOf)
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), SecondFactorState (..), SessionRef (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Stars (StarredPage (..), Starring (..))
@@ -316,6 +316,8 @@ stubs =
           , setPageWatch = \_ w -> pure (Watch w.watching Chosen)
           , spaceWatch = \_ -> pure (Watch False Unchosen)
           , setSpaceWatch = \_ w -> pure (Watch w.watching Chosen)
+          , feed = pure Sample.feedAddress
+          , renewFeed = pure Sample.feedAddress {address = Just (feedAddressOf "renewed-secret")}
           }
     , stars =
         StarsApi
@@ -505,6 +507,10 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPost n.markRead ReadMark {ids = [], everything = True}) 200 Sample.notifications {unread = 0}
       answers (getAt n.settings) 200 Sample.notificationSettings
       answers (sendJson methodPut n.setSettings NotificationSettingsChange {mail = MailOff, watchOwn = False}) 200 NotificationSettings {mail = MailOff, watchOwn = False, verifiedEmail = True, mailing = True}
+    it "gives the feed's address, and a new one on request" $ do
+      n.feed `shouldBe` "api/v1/notifications/feed"
+      answers (getAt n.feed) 200 Sample.feedAddress
+      answers (request methodPost n.renewFeed [] "") 200 FeedAddress {address = Just "me/notifications.atom?token=renewed-secret"}
     it "names the users among the logins asked for, each a parameter of its own" $ do
       n.people ["bea", "nobody"] `shouldBe` "api/v1/notifications/people?login[]=bea&login[]=nobody"
       answers (getAt (n.people ["bea", "nobody"])) 200 (Map.fromList [("bea" :: Text, Sample.author)])

@@ -81,7 +81,9 @@ import Protolude hiding (Generic)
 -- People
 
 -- | A user (@users@): their login, name, password hash, whether they are
--- disabled, their e-mail address, and how they are told of what happens.
+-- disabled, their e-mail address, how they are told of what happens, and
+-- the secret of their feed of notifications (migration
+-- @0006-notification-feed@), none until they ask for one.
 data Users f = UserRow
   { id :: Columnar f Text
   , login :: Columnar f Text
@@ -92,6 +94,7 @@ data Users f = UserRow
   , email_verified_at :: Columnar f (Maybe UTCTime)
   , notification_mail :: Columnar f (Maybe Text)
   , watch_own :: Columnar f Bool
+  , feed_token :: Columnar f (Maybe Text)
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

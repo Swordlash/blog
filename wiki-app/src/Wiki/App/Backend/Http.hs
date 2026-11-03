@@ -620,6 +620,8 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   -- so every cached watch is removed.
   setNotificationSettings change = send (endpoints.notifications.setSettings change) <* modifyCache (\c -> c {watches = mempty})
   unsubscribe token = send_ (endpoints.unsubscribe token)
+  feedAddress = send endpoints.notifications.feed
+  renewFeedAddress = send endpoints.notifications.renewFeed
 
 -- | Stars, over the API's @stars…@ endpoints. The list holds pages'
 -- titles and places, which change when anyone renames, moves or deletes a

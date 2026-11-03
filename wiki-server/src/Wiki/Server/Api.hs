@@ -738,6 +738,8 @@ handlers env caller =
           , setPageWatch = \p w -> wiki (setWatching (WatchPage p) w.watching)
           , spaceWatch = wiki . watching . WatchSpace
           , setSpaceWatch = \sid w -> wiki (setWatching (WatchSpace sid) w.watching)
+          , feed = wiki feedAddress
+          , renewFeed = wiki renewFeedAddress
           }
     , -- The storage checks who may: the stars are the user's own.
       stars =
