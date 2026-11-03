@@ -815,10 +815,10 @@ nothing: the build compiles its own copy.
 
 A library built from source into a directory of your own is found through the
 environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
-`C_INCLUDE_PATH`, `CPATH` and `PKG_CONFIG_PATH` at build time. zlib and libpq are
-found through `PKG_CONFIG_PATH` (libpq also through `pg_config` on `PATH`). libsodium
-is not: its Haskell bindings include `sodium.h` and link `-lsodium` without
-pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
+`C_INCLUDE_PATH`, `CPATH` and `PKG_CONFIG_PATH` at build time. zlib is found
+through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH`. libsodium is
+found through neither: its Haskell bindings include `sodium.h` and link
+`-lsodium` without pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
 the check compiles and links a small program the same way. Built from source, where
 RHEL has no package:
 
