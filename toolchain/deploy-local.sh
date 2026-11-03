@@ -10,7 +10,8 @@
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
 #                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
-#                                [--no-build] [--no-firewall] [--enable-linger]
+#                                [--no-build] [--semaphore | --no-semaphore]
+#                                [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
 #
@@ -32,7 +33,9 @@
 #      production build with every package at -O2 (cabal-wasm-opt.project),
 #      into dist-newstyle/wasm-opt/public/app; with --server also
 #      wiki-server, natively with this repository's packages at -O2
-#      (cabal-native-opt.project, into dist-newstyle/native-opt).
+#      (cabal-native-opt.project, into dist-newstyle/native-opt), with
+#      cabal's build semaphore when toolchain/check-semaphore.sh finds that
+#      GHC can open one on this machine, and without it otherwise.
 #      Any failure stops here, before the running service is touched.
 #      With --backend-only the page is not built here: it is downloaded from
 #      the GitHub release where CI keeps it (see --backend-only below), and
@@ -239,6 +242,13 @@
 #   --refresh-page   with --backend-only, download the page even when the cache has
 #                    it; for this run only
 #   --no-build       deploy the last -O2 build as it is, without the build step
+#   --semaphore      build wiki-server with cabal's build semaphore, through which cabal
+#                    and GHC share one budget of jobs, without the probe
+#   --no-semaphore   build wiki-server without the semaphore, without the probe. With
+#                    neither, toolchain/check-semaphore.sh first checks that GHC can
+#                    open a semaphore made the way cabal makes one, and the build uses
+#                    the semaphore only when it can. Not remembered: a choice for
+#                    this run's build
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
 #                    starts at boot and survives logging out
@@ -285,7 +295,7 @@ opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_por
 opt_backend_only='' refresh_page=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 action=deploy
-build=1 no_firewall='' enable_linger='' force=''
+build=1 no_firewall='' enable_linger='' force='' opt_semaphore=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
 while [ $# -gt 0 ]; do
   case $1 in
@@ -330,6 +340,8 @@ while [ $# -gt 0 ]; do
     --name) need_value $# "$1"; name=$2; shift ;;
     --name=*) name=${1#*=} ;;
     --no-build) build= ;;
+    --semaphore) opt_semaphore=on ;;
+    --no-semaphore) opt_semaphore=off ;;
     --no-firewall) no_firewall=1 ;;
     --enable-linger) enable_linger=1 ;;
     --force) force=1 ;;
@@ -1289,9 +1301,51 @@ download_page() {
 # wiki-server built without PostgreSQL (the cabal flag postgres off), which
 # needs neither libpq nor pg_config; a wiki in PostgreSQL gets one with it.
 # Cabal rebuilds wiki-server when the flag changes, so a deployment that
-# switches database switches build too.
+# switches database switches build too. The first argument is cabal's
+# command; the others are flags that follow the project's own.
 server_cabal() {
-  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres")
+  cabal_command=$1
+  shift
+  (cd "$ROOT" && cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
+}
+
+# Whether wiki-server's build uses cabal's build semaphore: cabal's flag for
+# it, --semaphore or --no-semaphore. cabal-native-opt.project has the
+# semaphore off, because on some machines GHC cannot open the semaphore
+# cabal makes, and then every package's build fails. With the semaphore,
+# cabal and GHC share one budget of jobs, so the modules of a package compile
+# in parallel too. The option --semaphore or --no-semaphore decides when
+# given; otherwise toolchain/check-semaphore.sh tries the semaphore with the
+# ghc on PATH, the one cabal builds with, which the toolchain's environment
+# has put there by now. The flag is given either way, so that a project's
+# .local file does not decide. It is set once per run, before the build.
+semaphore_flag() {
+  case $opt_semaphore in
+    on)
+      say "build semaphore: on, as --semaphore asks (not probed)"
+      build_semaphore=--semaphore
+      return 0 ;;
+    off)
+      say "build semaphore: off, as --no-semaphore asks"
+      build_semaphore=--no-semaphore
+      return 0 ;;
+  esac
+  probe_status=0
+  probe_output=$(sh "$ROOT/toolchain/check-semaphore.sh" 2>&1) || probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
+    say "build semaphore: ok, cabal and GHC share one job budget"
+    build_semaphore=--semaphore
+    return 0
+  fi
+  # The first line of the probe's error, which names the failure (GHC's
+  # semOpen line), without the probe's own name and a closing colon.
+  probe_reason=$(printf '%s\n' "$probe_output" | sed -n '/./{s/^check-semaphore: //;s/:$//;p;q;}')
+  if [ "$probe_status" -eq 1 ]; then
+    say "build semaphore: not usable (${probe_reason:-see toolchain/check-semaphore.sh}), building without it"
+  else
+    say "build semaphore: not usable (the probe could not run: ${probe_reason:-see toolchain/check-semaphore.sh}), building without it"
+  fi
+  build_semaphore=--no-semaphore
 }
 
 # The sign of wiki-server's cabal flag postgres for this deployment's
@@ -1362,14 +1416,16 @@ cabal_logs_dir() {
 # found that does not link, say), so a failure that names one points at the
 # check again. A failed build also shows the newest of cabal's build logs
 # written during it, which holds the error when the package that failed is a
-# dependency.
+# dependency. semaphore_flag decides first whether the build uses cabal's
+# build semaphore.
 server_build_native() {
+  semaphore_flag
   build_log=$(mktemp)
   build_status=$(mktemp)
   build_start=$(mktemp)
   # A pipeline's status is tee's, so cabal's own status goes to a file,
   # which stays empty when cabal succeeds.
-  { server_cabal build 2>&1 || printf '%s' "$?" >"$build_status"; } | tee "$build_log"
+  { server_cabal build "$build_semaphore" 2>&1 || printf '%s' "$?" >"$build_status"; } | tee "$build_log"
   if [ ! -s "$build_status" ]; then
     rm -f "$build_log" "$build_status" "$build_start"
     return 0
@@ -1389,7 +1445,7 @@ server_build_native() {
     warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
   fi
   if grep -q 'semOpen' "$build_log"; then
-    warn "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it, so if this still appears, add the line semaphore: False to cabal-native-opt.project.local"
+    warn "GHC could not open cabal's build semaphore (semOpen, see above): deploy again with --no-semaphore, which builds without it"
   fi
   rm -f "$build_log" "$build_status" "$build_start"
   die "the build of wiki-server failed (see above), so nothing was changed"

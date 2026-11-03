@@ -1020,9 +1020,13 @@ It builds the application as above and `wiki-server` natively with this
 repository's packages at `-O2` (`cabal-native-opt.project`, into
 `dist-newstyle/native-opt`; the first time compiles only those four packages, the
 dependencies come from the cabal store), and installs into the deployment's
-directory. The server links pandoc, for exporting pages as documents: the
-first build that needs it compiles pandoc and its dependencies into the cabal
-store, which takes a while (twenty minutes or more), once.
+directory. Before the build, `toolchain/check-semaphore.sh` checks that GHC can
+open a build semaphore made the way cabal makes one (on some machines it cannot),
+and the build uses cabal's semaphore, which lets cabal and GHC share one budget
+of jobs, only when it can. `--semaphore` and `--no-semaphore` decide instead of
+the check, for that run. The server links pandoc, for exporting pages as
+documents: the first build that needs it compiles pandoc and its dependencies
+into the cabal store, which takes a while (twenty minutes or more), once.
 
 ```
 ~/wiki-demo/bin/wiki-server   the server

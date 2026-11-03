@@ -63,6 +63,7 @@ ghc-options: -threaded
 -- >   way=tailscale|cert|proxy|http tls_cert=FILE  tls_key=FILE  tls_ca=FILE
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
 -- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
+-- >   semaphore=probe|on|off
 --
 -- backend_only is empty for a page built here, head for the page of the
 -- checkout's commit, or a REF (main, a tag, a commit hash), as the state
@@ -157,6 +158,13 @@ data Page = BuiltHere | Downloaded
 data Database = Postgres | Sqlite
   deriving (Eq, Ord, Show)
 
+-- | Whether the server's build uses cabal's build semaphore: as
+-- toolchain/check-semaphore.sh finds (the deploy's default), always
+-- (--semaphore), or never (--no-semaphore). The deploy does not remember
+-- it, so a rerun starts from the probe.
+data Semaphore = Probe | SemaphoreOn | SemaphoreOff
+  deriving (Eq, Ord, Show)
+
 -- | How the deployment is reached. The names are the state file's values
 -- of its key way.
 data Way = Tailscale | Certificate | Proxy | PlainHttp
@@ -187,6 +195,7 @@ data Answers = Answers
   , adminPort :: Text
   , toolchain :: Text
   , noBuild :: Bool
+  , semaphore :: Semaphore
   , noFirewall :: Bool
   , enableLinger :: Bool
   , rememberedDownload :: Bool
@@ -217,6 +226,7 @@ defaultAnswers =
     , adminPort = "8081"
     , toolchain = ""
     , noBuild = False
+    , semaphore = Probe
     , noFirewall = False
     , enableLinger = False
     , rememberedDownload = False
@@ -289,6 +299,7 @@ applyAnswer a (key, v) = case key of
   "fresh" -> yesNo (\x -> a {fresh = x})
   "refresh_page" -> yesNo (\x -> a {refreshPage = x})
   "no_build" -> yesNo (\x -> a {noBuild = x})
+  "semaphore" -> pick (\x -> a {semaphore = x}) [("probe", Probe), ("on", SemaphoreOn), ("off", SemaphoreOff)]
   "no_firewall" -> yesNo (\x -> a {noFirewall = x})
   "enable_linger" -> yesNo (\x -> a {enableLinger = x})
   _ -> Left ("unknown key " <> key)
@@ -339,6 +350,7 @@ deployArgs a = case action a of
       , if server then option "--admin-port" (adminPort a) else []
       , option "--toolchain" (toolchain a)
       , flag "--no-build" (noBuild a)
+      , if server && not (noBuild a) then semaphoreArgs else []
       , flag "--no-firewall" (noFirewall a)
       , flag "--enable-linger" (enableLinger a)
       ]
@@ -358,6 +370,10 @@ deployArgs a = case action a of
           Sqlite -> ["--sqlite"]
       )
         ++ flag "--fresh" (fresh a)
+    semaphoreArgs = case semaphore a of
+      Probe -> []
+      SemaphoreOn -> ["--semaphore"]
+      SemaphoreOff -> ["--no-semaphore"]
     wayArgs = case way a of
       Tailscale -> ["--https"]
       Proxy -> ["--behind-proxy"]
@@ -549,6 +565,7 @@ data Name
   | AdminPortField
   | ToolchainField
   | NoBuildField
+  | SemaphoreChoice Semaphore
   | NoFirewallField
   | LingerField
   | Scroll
@@ -739,17 +756,33 @@ fieldsFor s a = case s of
         noBuildL
         NoBuildField
         "--no-build  skip the build"
-    , check
-        "With plain HTTP or a certificate the deploy opens the port in ufw on the Tailscale interface; this leaves the firewall alone."
-        noFirewallL
-        NoFirewallField
-        "--no-firewall  leave the firewall alone"
-    , check
-        "Run sudo loginctl enable-linger, so the service starts at boot and keeps running after you log out."
-        enableLingerL
-        LingerField
-        "--enable-linger  start at boot"
     ]
+      ++ [ choice
+             "The build semaphore"
+             ( case semaphore a of
+                 Probe ->
+                   "cabal's build semaphore lets cabal and GHC share one budget of jobs, so the modules of a package compile in parallel too. Some machines refuse it, and then every package's build fails: toolchain/check-semaphore.sh tries it first, and the build uses it only when it works."
+                 SemaphoreOn -> "Build with the semaphore, without trying it first."
+                 SemaphoreOff -> "Build without the semaphore: packages in parallel, the modules of each one at a time."
+             )
+             semaphoreL
+             [ (Probe, SemaphoreChoice Probe, "tried first, used when it works")
+             , (SemaphoreOn, SemaphoreChoice SemaphoreOn, "--semaphore  always")
+             , (SemaphoreOff, SemaphoreChoice SemaphoreOff, "--no-semaphore  never")
+             ]
+         | mode a == Server
+         ]
+      ++ [ check
+             "With plain HTTP or a certificate the deploy opens the port in ufw on the Tailscale interface; this leaves the firewall alone."
+             noFirewallL
+             NoFirewallField
+             "--no-firewall  leave the firewall alone"
+         , check
+             "Run sudo loginctl enable-linger, so the service starts at boot and keeps running after you log out."
+             enableLingerL
+             LingerField
+             "--enable-linger  start at boot"
+         ]
   Command -> []
 
 -- | A radio field with its title and the help of the current choice.
@@ -801,6 +834,9 @@ databaseL = lens database (\a v -> a {database = v})
 
 wayL :: Lens' Answers Way
 wayL = lens way (\a v -> a {way = v})
+
+semaphoreL :: Lens' Answers Semaphore
+semaphoreL = lens semaphore (\a v -> a {semaphore = v})
 
 refreshPageL, freshL, noBuildL, noFirewallL, enableLingerL :: Lens' Answers Bool
 refreshPageL = lens refreshPage (\a v -> a {refreshPage = v})
