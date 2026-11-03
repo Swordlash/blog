@@ -401,6 +401,44 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.50 HTTPS three ways: Tailscale, a certificate of one's own, a reverse proxy**
+  (the owner, 2026-11-03: "musimy supportować oba"; at home `tailscale serve`, at
+  work a certificate from the company's CA as `.crt`/`.key` (or `.pem`), and some day a
+  public wiki behind Caddy). Today "HTTPS" in `toolchain/deploy-local.sh` means
+  `tailscale serve` alone, which proxies to `127.0.0.1`, so `--bind 0.0.0.0` implies
+  plain HTTP, and `wiki-server` cannot terminate TLS. Three ways, one deployment
+  script: (1) **Tailscale** as now, the default when nothing else is given. (2) **The
+  server's own TLS**: `wiki-server serve --tls-cert FILE --tls-key FILE`
+  (PEM; the certificate file may carry the chain after the leaf, and a `.pem` holding
+  both the certificate and the key is accepted as both arguments), through `warp-tls`
+  (`runTLSSocket`, pure Haskell, no new C library; TLS 1.2 and 1.3, warp-tls's
+  defaults) on the public listener only (the admin listener stays loopback and
+  plain); the session cookie is `Secure` then, and the public address's scheme is
+  `https` without a proxy header. The server refuses to start with an unreadable
+  certificate or key, or one that does not match, saying which. Files are read at
+  start; a renewed certificate takes a restart (`systemctl --user restart`; the
+  deploy says so). In the deploy: `--tls-cert FILE --tls-key FILE` (remembered in the
+  state; the files are read by the unit from where they are, so they must stay
+  readable by the service's user) with any `--bind`, including `0.0.0.0`, which then
+  no longer implies `--http`; the probe uses `curl --cacert` when `--tls-ca FILE` is
+  given, else `--insecure` for the probe alone, and the firewall rule as for
+  `--http`. (3) **A reverse proxy** (Caddy, nginx) that terminates TLS and proxies to
+  `127.0.0.1`: `--behind-proxy` in the deploy (remembered): plain HTTP on
+  `127.0.0.1`, `--secure-cookies` for the server, the probe over HTTP, no firewall
+  rule, and the deploy prints what the proxy must do (pass WebSocket upgrades, send
+  `X-Forwarded-Proto` and `X-Forwarded-Host`, which the server already reads for its
+  public address and for passkeys' origin). `--https` and `--http` keep their
+  meanings; `--tls-cert` and `--behind-proxy` are two more ways, and the three are
+  exclusive, refused together with a message. `--status` says which way a deployment
+  serves. Tests: a server test over HTTPS with a certificate the test makes
+  (`openssl req -x509` in the test, skipped with a note where `openssl` is missing),
+  a mismatched pair refused, a `.pem` holding both accepted, the cookie `Secure`, the
+  feed and the live channel over TLS; deploy tests for the three ways, the exclusions,
+  `--status`, `--bind 0.0.0.0` with a certificate, and the remembered files. Docs:
+  the README's deployment section (a Caddyfile of five lines for the proxy way, the
+  `openssl` line for a self-signed certificate to try with), the deploy's header,
+  wiki-server's CHANGELOG.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
