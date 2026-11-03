@@ -170,6 +170,21 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
       run Link "«https://example.com»" `shouldBe` "[«link text»](https://example.com)"
     it "unwraps a link's text" $ run Link "[«site»](https://x.org) after" `shouldBe` "«site» after"
 
+  describe "LinkTo" $ do
+    let page = LinkTo "Diagrams" "/docs/markdown-guide/diagrams"
+    it "writes the title as the text, with the cursor after the link" $
+      run page "See ‸ here" `shouldBe` "See [Diagrams](/docs/markdown-guide/diagrams)‸ here"
+    it "keeps the selected text as the link's text" $
+      run page "See «the pictures» here" `shouldBe` "See [the pictures](/docs/markdown-guide/diagrams)‸ here"
+    it "keeps a fragment" $
+      run (LinkTo "Mathematics" "/docs/markdown-guide/mathematics#macros") "‸" `shouldBe` "[Mathematics](/docs/markdown-guide/mathematics#macros)‸"
+    it "escapes what in a title would end the text or start emphasis" $
+      run (LinkTo "A [draft] *now* \\ `x`" "/a") "‸" `shouldBe` "[A \\[draft\\] \\*now\\* \\\\ \\`x\\`](/a)‸"
+    it "puts an address with a space or a parenthesis between angle brackets" $
+      run (LinkTo "A" "/a b(c)") "‸" `shouldBe` "[A](</a b(c)>)‸"
+    it "links a link's text again rather than unwrapping it" $
+      run page "[«site»](https://x.org)" `shouldBe` "[[site](/docs/markdown-guide/diagrams)‸](https://x.org)"
+
   describe "Image" $ do
     Image `turns` "‸" `into` "![«description»](https://)"
     Image `turns` "«https://x.org/a.png»" `into` "![«description»](https://x.org/a.png)"

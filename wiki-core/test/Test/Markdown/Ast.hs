@@ -5,6 +5,7 @@ module Test.Markdown.Ast (spec) where
 import Protolude
 import Test.Hspec
 import Wiki.Core.Markdown.Ast
+import Wiki.Core.Markdown.Box (alertKindName)
 
 parses :: Text -> [Block] -> Expectation
 parses source expected = parseMarkdown source `shouldBe` Right expected
@@ -12,9 +13,10 @@ parses source expected = parseMarkdown source `shouldBe` Right expected
 para :: [Inline] -> [Block]
 para xs = [Para xs]
 
--- | A numbered box's head, with this title.
-titled :: Maybe [Inline] -> BoxHead
-titled title = BoxHead {title, numbered = True}
+-- | The head of the first numbered box of its kind in a page, with this
+-- title, as the parser gives it its id.
+titled :: AlertKind -> Maybe [Inline] -> BoxHead
+titled kind title = BoxHead {title, numbered = True, id = Just ("box-" <> alertKindName kind <> "-1")}
 
 spec :: Spec
 spec = describe "Markdown.Ast" $ do
@@ -96,7 +98,7 @@ spec = describe "Markdown.Ast" $ do
     it "reads a pause, three dots alone in a paragraph, where a slide can have one" $ do
       "a\n\n. . .\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
       "::: incremental\n. . .\n:::" `parses` [Div [("class", "incremental")] [Pause]]
-      "> [!TIP]\n> . . ." `parses` [Alert Tip (titled Nothing) [Pause]]
+      "> [!TIP]\n> . . ." `parses` [Alert Tip (titled Tip Nothing) [Pause]]
       "- a\n\n  . . .\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
     it "leaves three dots text in a quotation, after other text, or written closer" $ do
       "> . . ." `parses` [BlockQuote (para [Str ". . ."])]
@@ -106,21 +108,21 @@ spec = describe "Markdown.Ast" $ do
     it "reads a fenced div with its class" $
       "::: warning\nCareful.\n:::" `parses` [Div [("class", "warning")] (para [Str "Careful."])]
     it "reads a GitHub alert" $
-      "> [!NOTE]\n> Read this." `parses` [Alert Note (titled Nothing) (para [Str "Read this."])]
+      "> [!NOTE]\n> Read this." `parses` [Alert Note (titled Note Nothing) (para [Str "Read this."])]
     it "reads a box of any kind, in any case, as that kind in lower case" $ do
-      "> [!EXERCISE]\n> Prove it." `parses` [Alert (Custom "exercise") (titled Nothing) (para [Str "Prove it."])]
-      "> [!fun-fact]\n> Owls." `parses` [Alert (Custom "fun-fact") (titled Nothing) (para [Str "Owls."])]
-      "> [!Tip]\n> Here." `parses` [Alert Tip (titled Nothing) (para [Str "Here."])]
+      "> [!EXERCISE]\n> Prove it." `parses` [Alert (Custom "exercise") (titled (Custom "exercise") Nothing) (para [Str "Prove it."])]
+      "> [!fun-fact]\n> Owls." `parses` [Alert (Custom "fun-fact") (titled (Custom "fun-fact") Nothing) (para [Str "Owls."])]
+      "> [!Tip]\n> Here." `parses` [Alert Tip (titled Tip Nothing) (para [Str "Here."])]
     it "reads the title written after a box's marker" $ do
-      "> [!EXERCISE] Exercise 3\n> Prove it." `parses` [Alert (Custom "exercise") (titled (Just [Str "Exercise 3"])) (para [Str "Prove it."])]
-      "> [!WARNING]   Mind the gap  \n> Here." `parses` [Alert Warning (titled (Just [Str "Mind the gap"])) (para [Str "Here."])]
+      "> [!EXERCISE] Exercise 3\n> Prove it." `parses` [Alert (Custom "exercise") (titled (Custom "exercise") (Just [Str "Exercise 3"])) (para [Str "Prove it."])]
+      "> [!WARNING]   Mind the gap  \n> Here." `parses` [Alert Warning (titled Warning (Just [Str "Mind the gap"])) (para [Str "Here."])]
     it "reads a box's title as text, with its math and emphasis, and mentions" $ do
-      "> [!TIP] Use $x^2$ *now*\n> Here." `parses` [Alert Tip (titled (Just [Str "Use ", Math InlineMath "x^2", Str " ", Emph [Str "now"]])) (para [Str "Here."])]
-      "> [!TIP] $$\\sum_i x_i$$\n> Here." `parses` [Alert Tip (titled (Just [Math DisplayMath "\\sum_i x_i"])) (para [Str "Here."])]
-      "> [!NOTE] Ask @ada\n> x" `parses` [Alert Note (titled (Just [Str "Ask ", Mention "ada"])) (para [Str "x"])]
+      "> [!TIP] Use $x^2$ *now*\n> Here." `parses` [Alert Tip (titled Tip (Just [Str "Use ", Math InlineMath "x^2", Str " ", Emph [Str "now"]])) (para [Str "Here."])]
+      "> [!TIP] $$\\sum_i x_i$$\n> Here." `parses` [Alert Tip (titled Tip (Just [Math DisplayMath "\\sum_i x_i"])) (para [Str "Here."])]
+      "> [!NOTE] Ask @ada\n> x" `parses` [Alert Note (titled Note (Just [Str "Ask ", Mention "ada"])) (para [Str "x"])]
     it "reads a star after the kind as a box without a number" $ do
-      "> [!TIP*]\n> Here." `parses` [Alert Tip BoxHead {title = Nothing, numbered = False} (para [Str "Here."])]
-      "> [!exercise*] Warm-up\n> x" `parses` [Alert (Custom "exercise") BoxHead {title = Just [Str "Warm-up"], numbered = False} (para [Str "x"])]
+      "> [!TIP*]\n> Here." `parses` [Alert Tip BoxHead {title = Nothing, numbered = False, id = Nothing} (para [Str "Here."])]
+      "> [!exercise*] Warm-up\n> x" `parses` [Alert (Custom "exercise") BoxHead {title = Just [Str "Warm-up"], numbered = False, id = Just "box-exercise-warm-up"} (para [Str "x"])]
       boxMarkers "> [!TIP*] T\n> x\n\n> [!NOTE]\n> y" `shouldBe` [BoxMarker 1 3 Tip (Just "T") False, BoxMarker 4 3 Note Nothing True]
     it "leaves a marker with a star elsewhere, or two, a quotation" $ do
       "> [!*TIP]\n> x" `parses` [BlockQuote (para [Str "[!*TIP]", SoftBreak, Str "x"])]

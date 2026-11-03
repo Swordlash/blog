@@ -24,7 +24,9 @@
 --   unique in the document: a heading with an @id@ of its own keeps it,
 --   and the others get theirs in document order (the second @Intro@ gets
 --   @intro-2@, the third @intro-3@), none taking an id written in braces
---   anywhere in the page;
+--   anywhere in the page; and box identifiers, made the same way from the
+--   box's kind and its number or its title (@box-tip-3@,
+--   @box-tip-before-you-start@; 'withHeadingIds');
 -- * math, @$…$@ and @\\(…\\)@ inline, @$$…$$@ and @\\[…\\]@ display
 --   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
 -- * attributes in braces after a heading, a fence's info string, a link,
@@ -84,6 +86,7 @@ import Commonmark.Entity qualified as CM
 import Commonmark.Extensions qualified as CME
 import Commonmark.TokParsers qualified as CM
 import Data.Dynamic (fromDynamic, toDyn)
+import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -91,7 +94,7 @@ import Data.Tree (Tree (..))
 import Protolude hiding (try)
 import Text.Parsec (getPosition, many1, option, try)
 import Text.Parsec qualified as Parsec
-import Wiki.Core.Markdown.Box (AlertKind (..), readAlertKind)
+import Wiki.Core.Markdown.Box (AlertKind (..), alertKindName, readAlertKind)
 import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
 import Wiki.Core.Slug (freshName, headingSlug)
@@ -200,10 +203,16 @@ data MathKind = InlineMath | DisplayMath
 -- | 'BoxHead' is what a box's marker line says besides its kind: the title
 -- written after the marker, read as Markdown text (so @$x^2$@ in it is
 -- math), if there is one; and whether the box is numbered, which it is
--- unless its kind has a star (@> [!TIP*]@).
+-- unless its kind has a star (@> [!TIP*]@). It also holds the box's @id@,
+-- which the parser gives it ('withHeadingIds'), so that a link can point
+-- at the box as it points at a heading.
 data BoxHead = BoxHead
   { title :: Maybe [Inline]
   , numbered :: Bool
+  , id :: Maybe Text
+  -- ^ The box's @id@: @box-tip-3@ for the third numbered tip of the
+  -- page, @box-tip-before-you-start@ for a tip without a number titled
+  -- "Before you start", none for a box with neither.
   }
   deriving stock (Eq, Show)
 
@@ -411,11 +420,21 @@ mentions = foldMap block'
 -- parsed tree, so that whatever renders the tree, and whatever lists its
 -- headings, sees the same ids.
 --
+-- Boxes get theirs in the same pass, so that a box's id and a heading's
+-- are never the same. A numbered box's id is its kind and its number
+-- among the numbered boxes of its kind in the whole page, in the order
+-- the page shows them (@box-tip-3@): the number "Within the page" shows,
+-- whatever the space's numbering, since the id must not change when an
+-- administrator numbers the boxes another way. A box without a number
+-- but with a title gets its kind and its title's slug
+-- (@box-tip-before-you-start@). A box with neither has no id: nothing
+-- names it that a link could keep to.
+--
 -- This replaces commonmark-extensions' @autoIdentifiersSpec@, which gave
 -- the second @Intro@ the id @intro-1@ and did not avoid the ids written
 -- out.
 withHeadingIds :: [Block] -> [Block]
-withHeadingIds doc = evalState (traverse assign doc) written
+withHeadingIds doc = evalState (traverse assign doc) (written, mempty)
   where
     written = Set.fromList (concatMap explicit doc)
     explicit = \case
@@ -428,20 +447,39 @@ withHeadingIds doc = evalState (traverse assign doc) written
       Footnotes notes -> concat [concatMap explicit bs | Footnote _ _ bs <- notes]
       _ -> []
     ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
-    assign :: Block -> State (Set Text) Block
+    -- The ids taken so far, and how many numbered boxes of each kind
+    -- (by its name) came before.
+    assign :: Block -> State (Set Text, Map Text Int) Block
     assign = \case
       Heading level attrs xs
         | null (ownId attrs) -> do
-            taken <- get
-            let ident = freshName (`Set.member` taken) (headingSlug (plainText xs))
-            put (Set.insert ident taken)
+            ident <- fresh (headingSlug (plainText xs))
             pure (Heading level (("id", ident) : filter ((/= "id") . fst) attrs) xs)
       BlockQuote bs -> BlockQuote <$> traverse assign bs
       List kind items -> List kind <$> traverse (\(ListItem task bs) -> ListItem task <$> traverse assign bs) items
       Div attrs bs -> Div attrs <$> traverse assign bs
-      Alert kind title bs -> Alert kind title <$> traverse assign bs
+      -- The box's own id before those of the headings and boxes inside
+      -- it, as the page shows them and counts the boxes.
+      Alert kind box bs -> do
+        let name = alertKindName kind
+        base <-
+          if box.numbered
+            then do
+              n <- gets (\(_, counts) -> Map.findWithDefault 0 name counts + 1)
+              modify (second (Map.insert name n))
+              pure (Just (show n))
+            else pure (headingSlug . plainText <$> mfilter (T.any isAlphaNum . plainText) box.title)
+        ident <- traverse (\b -> fresh ("box-" <> name <> "-" <> b)) base
+        Alert kind box {id = ident} <$> traverse assign bs
       Footnotes notes -> Footnotes <$> traverse (\(Footnote n label bs) -> Footnote n label <$> traverse assign bs) notes
       other -> pure other
+    -- The name, or the first of @name-2@, @name-3@, … that is free, taken
+    -- from now on.
+    fresh :: Text -> State (Set Text, Map Text Int) Text
+    fresh base = do
+      ident <- gets (\(taken, _) -> freshName (`Set.member` taken) base)
+      modify (first (Set.insert ident))
+      pure ident
 
 -- | A paragraph that is nothing but the wiki link @[[toc]]@ marks where
 -- the table of contents goes. Any other link to @toc@ stays a link, to a
@@ -706,7 +744,7 @@ alertBlockSpec =
                 (fromDynamic (CM.blockData (rootLabel node)))
         title <- if null titleToks then pure Nothing else Just . inlines <$> CM.runInlineParser titleToks
         inside <- mconcat <$> CM.renderChildren node
-        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered} (blocks inside))) (marker : markersOf inside))
+        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered, id = Nothing} (blocks inside))) (marker : markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
 

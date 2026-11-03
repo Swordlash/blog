@@ -47,10 +47,12 @@
 -- are a @\<section class=\"footnotes\">@ at the end, each ending with a
 -- link back to its first reference. Table cells
 -- are aligned with a @text-align@ style. A box, @> [!KIND]@, is
--- @\<div class=\"alert alert-note\">@ (its kind's name after @alert-@)
+-- @\<div class=\"alert alert-note\">@ (its kind's name after @alert-@),
+-- with its @id@ if it has one ("Wiki.Core.Markdown.Ast"),
 -- with a @\<p class=\"alert-title\">@ that holds its title: its kind's
 -- label and its number ('numbering'; @Tip 3@), then the title written
--- after the marker, if there is one, with its math (@Tip 3: Title@). A box
+-- after the marker, if there is one, with its math (@Tip 3: Title@), then
+-- a heading's empty link to the box's @id@. A box
 -- without a number shows the title written after the marker, or else its
 -- kind's label ("Wiki.Core.Markdown.Box"). A box of a kind the administrator defined
 -- ('boxes') carries the kind's colour and icon as CSS custom properties in
@@ -264,7 +266,8 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
         let defined = definedKind opts.boxes kind
         title <- withPieces [PText (boxCaption defined kind number (isJust box.title))] (maybe [] (map displayInline) box.title) []
         inner <- renderBlocks' bs
-        pure [boxWith defined kind title inner]
+        let anchor = if opts.headingAnchors then concatMap (\i -> headingAnchor [("id", i)]) box.id else []
+        pure [boxWith defined kind box.id (title <> anchor) inner]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -524,7 +527,10 @@ firstNote = \case
 -- @web/style.css@): an empty @\<a class="heading-anchor">@ whose @#@ the
 -- stylesheet draws, so that the page's text (what a comment quotes,
 -- "Wiki.Core.Anchor", and what a search finds) has no @#@ after every
--- heading. Following it puts the heading's address in the address bar.
+-- heading. A box's title ends with one too, to the box's @id@. In the
+-- application a click on it copies the section's address
+-- ("Wiki.App.Browser"); its @href@ is the section's all the same, for the
+-- browser's own "Copy link" and a click with the middle button.
 headingAnchor :: Attributes -> [HH.HTML w i]
 headingAnchor attrs =
   [ HH.a [HP.href ("#" <> ident), classesProp ["heading-anchor"], HP.attr (HH.AttrName "aria-label") "Link to this section"] []
@@ -567,14 +573,14 @@ classesProp = HP.class_ . HH.ClassName . T.unwords
 -- marker if there is one, as text, and what it holds. The
 -- administration's preview of a kind is drawn by this ("Wiki.App.View.Server").
 boxOf :: Maybe BoxKind -> AlertKind -> Maybe Text -> [HH.HTML w i] -> HH.HTML w i
-boxOf defined kind title = boxWith defined kind [HH.text (fromMaybe (boxCaption defined kind Nothing False) title)]
+boxOf defined kind title = boxWith defined kind Nothing [HH.text (fromMaybe (boxCaption defined kind Nothing False) title)]
 
--- | A box: its kind's definition, its kind, what its title holds (after
--- the icon), and what it holds.
-boxWith :: Maybe BoxKind -> AlertKind -> [HH.HTML w i] -> [HH.HTML w i] -> HH.HTML w i
-boxWith defined kind title inner =
+-- | A box: its kind's definition, its kind, its @id@ if it has one, what
+-- its title holds (after the icon), and what it holds.
+boxWith :: Maybe BoxKind -> AlertKind -> Maybe Text -> [HH.HTML w i] -> [HH.HTML w i] -> HH.HTML w i
+boxWith defined kind ident title inner =
   HH.div
-    (classesProp ["alert", "alert-" <> alertKindName kind] : [HP.styleText (boxStyle k) | Just k <- [defined]])
+    (classesProp ["alert", "alert-" <> alertKindName kind] : [HP.id i | Just i <- [ident]] <> [HP.styleText (boxStyle k) | Just k <- [defined]])
     (HH.p [classesProp ["alert-title"]] (icon <> title) : inner)
   where
     icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]

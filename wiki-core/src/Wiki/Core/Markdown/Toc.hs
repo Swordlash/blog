@@ -7,9 +7,15 @@
 -- the same links. Only headings at the top level of the document are
 -- listed: a heading in a block quote, a list, a box or a footnote is part
 -- of that block rather than a section of the page.
+--
+-- 'anchors' lists every place in a page a link can point at, headings and
+-- boxes at any depth, from the same ids: the editor's "Link to a page"
+-- dialog offers them as the sections to link to.
 module Wiki.Core.Markdown.Toc
   ( Entry (..)
   , tableOfContents
+  , Anchor (..)
+  , anchors
   , entryCount
   , hasContentsMarker
   , contentsPanel
@@ -20,10 +26,12 @@ module Wiki.Core.Markdown.Toc
 where
 
 import Data.List (span)
+import Data.Map.Strict qualified as Map
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Protolude
-import Wiki.Core.Markdown.Ast (Block (..), attribute, plainText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), ListItem (..), attribute, plainText)
+import Wiki.Core.Markdown.Box (alertKindName, kindTitle)
 
 -- | 'Entry': a heading in the table of contents, with the headings of its
 -- section (the deeper headings that follow it, up to the next heading of
@@ -50,6 +58,55 @@ tableOfContents doc = nest [(level, ident, plainText xs) | Heading level attrs x
       (level, ident, text) : rest ->
         let (inside, after) = span (\(l, _, _) -> l > level) rest
          in Entry {id = ident, level, text, below = nest inside} : nest after
+
+-- | 'Anchor' is a place in a page that a link can point at with a
+-- fragment (@#intro@): a heading or a box, by the @id@ the parser gave it
+-- ("Wiki.Core.Markdown.Ast").
+data Anchor = Anchor
+  { id :: Text
+  , label :: Text
+  -- ^ What a list of the page's anchors shows for it: a heading's text;
+  -- a box's kind and number, then its title (@Tip 3: Before you
+  -- start@), or its title alone when it has no number.
+  , level :: Maybe Int
+  -- ^ A heading's level, from 1; none for a box.
+  }
+  deriving stock (Eq, Show)
+
+-- | Every heading and every box of a document that has an @id@, at any
+-- depth (in a box, a list, a quotation), in the order the page shows
+-- them. Unlike 'tableOfContents', which lists the sections of the page,
+-- this lists every place a link can go to. A box's number is the one it
+-- has within the page, as its id has it, whatever the space's numbering.
+anchors :: [Block] -> [Anchor]
+anchors doc = evalState (concat <$> traverse block doc) mempty
+  where
+    block :: Block -> State (Map Text Int) [Anchor]
+    block = \case
+      Heading level attrs xs -> pure [Anchor {id = i, label = plainText xs, level = Just level} | Just i <- [attribute "id" attrs]]
+      Alert kind box bs -> do
+        let name = alertKindName kind
+        number <-
+          if box.numbered
+            then do
+              n <- gets (\counts -> Map.findWithDefault 0 name counts + 1)
+              modify (Map.insert name n)
+              pure (Just n)
+            else pure Nothing
+        let titled = plainText <$> box.title
+            caption = case (number, titled) of
+              (Just n, Just t) -> kindTitle name <> " " <> show n <> ": " <> t
+              (Just n, Nothing) -> kindTitle name <> " " <> show n
+              (Nothing, Just t) -> t
+              (Nothing, Nothing) -> kindTitle name
+        inner <- blocks bs
+        pure ([Anchor {id = i, label = caption, level = Nothing} | Just i <- [box.id]] <> inner)
+      BlockQuote bs -> blocks bs
+      List _ items -> concat <$> traverse (\(ListItem _ bs) -> blocks bs) items
+      Div _ bs -> blocks bs
+      Footnotes notes -> concat <$> traverse (\(Footnote _ _ bs) -> blocks bs) notes
+      _ -> pure []
+    blocks bs = concat <$> traverse block bs
 
 -- | The number of headings in a table of contents, at every depth.
 entryCount :: [Entry] -> Int

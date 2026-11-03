@@ -61,10 +61,16 @@ module Wiki.Core.Anchor
     -- * Marking them
   , Marking (..)
   , highlight
+
+    -- * Linking to them
+  , textFragment
+  , encodeFragmentPart
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.ByteString qualified as BS
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Core (HTML (..))
@@ -177,6 +183,65 @@ commonPrefixLength x y = maybe 0 (\(common, _, _) -> T.length common) (T.commonP
 
 commonSuffixLength :: Text -> Text -> Int
 commonSuffixLength x y = commonPrefixLength (T.reverse x) (T.reverse y)
+
+-- | The text fragment of a quote, @:~:text=…@, which goes after the @#@
+-- of a page's address: the browsers (Chromium, Safari, Firefox) scroll a
+-- page opened at such an address to the quote and highlight it, by
+-- themselves. "Copy link" on a selection writes one (the owner, issue
+-- #120); nothing of the wiki's reads it back.
+--
+-- The browser looks for the text in the page as whole words, so the
+-- quote is widened to the words it starts and ends in, in the page's
+-- text given ('renderedText'). A quote of more than 'fragmentWords' words
+-- is written as its first and last few (@text=start,end@), which keeps
+-- the address short and lets the browser find it across the paragraphs
+-- it spans. When the quote occurs more than once in the page (in any
+-- case: the browser ignores it), the words before and after it are added
+-- as its prefix and suffix (@text=prefix-,quote,-suffix@), as the
+-- anchor's context places it. Each part is percent-encoded
+-- ('encodeFragmentPart').
+textFragment :: Text -> Anchor -> Text
+textFragment text a = ":~:text=" <> T.intercalate "," (prefixPart <> body <> suffixPart)
+  where
+    -- Where the quote is, widened to whole words; the anchor alone when
+    -- the page no longer has it.
+    (before, quote, after) = case locate text a of
+      Found r ->
+        let s = if maybe False (wordChar . fst) (T.uncons a.exact) then r.start - T.length (T.takeWhileEnd wordChar (T.take r.start text)) else r.start
+            e = if maybe False (wordChar . snd) (T.unsnoc a.exact) then r.end + T.length (T.takeWhile wordChar (T.drop r.end text)) else r.end
+         in (T.take s text, T.take (e - s) (T.drop s text), T.drop e text)
+      Orphaned -> (a.prefix, a.exact, a.suffix)
+    wordChar c = isAlphaNum c || c == '_'
+    quoteWords = T.words quote
+    body
+      | length quoteWords > fragmentWords = [encodeFragmentPart (T.unwords (take 3 quoteWords)), encodeFragmentPart (T.unwords (lastN 3 quoteWords))]
+      | otherwise = [encodeFragmentPart (T.unwords quoteWords)]
+    lastN n xs = drop (length xs - n) xs
+    repeated = T.count (T.toCaseFold (T.unwords quoteWords)) (T.toCaseFold (T.unwords (T.words text))) > 1
+    -- The last words before the quote, and the first after it, at most
+    -- three of each: whole words, since the quote was widened to them.
+    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, let ws = lastN 3 (T.words before), not (null ws)]
+    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, let ws = take 3 (T.words after), not (null ws)]
+
+-- | How many words a text fragment's quote may have before only its first
+-- and last three are written.
+fragmentWords :: Int
+fragmentWords = 8
+
+-- | A part of a text fragment as an address writes it: percent-encoded as
+-- JavaScript's @encodeURIComponent@ encodes (every byte of the UTF-8 but
+-- letters, digits and @-_.!~*'()@), and @-@ too, which the fragment's
+-- syntax gives a meaning of its own (the end of a prefix, the start of a
+-- suffix). @,@ and @&@, which it also uses, are encoded already.
+encodeFragmentPart :: Text -> Text
+encodeFragmentPart = T.concat . map byte . BS.unpack . encodeUtf8
+  where
+    byte b
+      | isAsciiUpper c || isAsciiLower c || isDigit c || c `elem` ("_.!~*'()" :: [Char]) = T.singleton c
+      | otherwise = "%" <> T.pack [hex (b `div` 16), hex (b `mod` 16)]
+      where
+        c = chr (fromIntegral b)
+    hex n = "0123456789ABCDEF" `T.index` fromIntegral n
 
 -- | A rendered document's text (see "The text" above): its text nodes, in
 -- order, joined; nothing of a child component (an island).

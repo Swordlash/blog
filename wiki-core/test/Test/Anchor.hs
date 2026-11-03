@@ -109,6 +109,32 @@ spec = describe "Anchor" $ do
       checkAnchor (Anchor "q" (T.replicate 40 "a" <> "b") ("c" <> T.replicate 40 "d"))
         `shouldBe` Right (Anchor "q" (T.replicate 31 "a" <> "b") ("c" <> T.replicate 31 "d"))
 
+  describe "textFragment" $ do
+    it "is the quote alone when the page has it once" $
+      textFragment "The quick brown fox jumps." (quoting "brown fox" "The quick brown fox jumps.") `shouldBe` ":~:text=brown%20fox"
+    it "widens a quote to the words it starts and ends in" $
+      textFragment "The quick brown fox jumps." (quoting "ick brown fo" "The quick brown fox jumps.") `shouldBe` ":~:text=quick%20brown%20fox"
+    it "adds the words before and after a quote the page has more than once" $ do
+      let text = "One cat sat here. Then a cat sat there, by the door."
+          again = anchorAt text (Range 25 32)
+      textFragment text again `shouldBe` ":~:text=here.%20Then%20a-,cat%20sat,-there%2C%20by%20the"
+    it "counts a quote again in any case, as the browser does" $ do
+      let text = "Note this. note that."
+      textFragment text (quoting "note" text) `shouldBe` ":~:text=Note%20this.-,note,-that."
+    it "writes a long quote as its first and last words" $ do
+      let text = "one two three four five six seven eight nine ten"
+      textFragment text (quoting "two three four five six seven eight nine ten" text) `shouldBe` ":~:text=two%20three%20four,eight%20nine%20ten"
+    it "writes an orphaned quote as the anchor has it" $
+      textFragment "Gone." (Anchor "the old words" "" "") `shouldBe` ":~:text=the%20old%20words"
+
+  describe "encodeFragmentPart" $ do
+    it "encodes as encodeURIComponent does, and the dash too" $
+      encodeFragmentPart "a-b, c & d's (e)!*~._" `shouldBe` "a%2Db%2C%20c%20%26%20d's%20(e)!*~._"
+    it "encodes each byte of a character outside ASCII" $
+      encodeFragmentPart "zażółć ✓" `shouldBe` "za%C5%BC%C3%B3%C5%82%C4%87%20%E2%9C%93"
+    it "encodes the fragment's own signs and the percent sign" $
+      encodeFragmentPart "#:~:text=%" `shouldBe` "%23%3A~%3Atext%3D%25"
+
   describe "renderedText" $ do
     it "is the text of the rendered page, joined with nothing between blocks" $ do
       let doc = either (panic . show) identity (renderMarkdown defaultOptions "# Title\n\nA *b* [c](d).\n\n- one\n- two")
