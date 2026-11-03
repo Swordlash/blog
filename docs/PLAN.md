@@ -702,6 +702,16 @@ needs. Each was true when its package merged; check before relying on one.
   LAN-facing `0.0.0.0` bind opens the port on `tailscale0` alone, so a LAN at work
   needs `--no-firewall` or a rule of its own. The TLS files are read at start only:
   a renewal needs `systemctl --user restart`.
+- The deployment's server build (`cabal-native-opt.project`) does not use cabal's build
+  semaphore: on the owner's RHEL 9 machine GHC could not open the semaphore cabal made
+  (`semOpen: does not exist`), so the opt project has `semaphore: False`, `jobs: 1` and
+  GHC's `-j` per package; the everyday `cabal.project` keeps the semaphore. The deploy
+  streams cabal's output and, after a failure, prints the newest cabal log's tail
+  (cabal's console says only "see the build log above"). Downloaded pages are cached
+  per commit (a tag's by GitHub's asset id and time); `--refresh-page` downloads anew.
+  libpq is found through `pg_config` on PATH alone (`postgresql-libpq` does not use
+  pkg-config), and `check-native.sh` names a `pg_config` found under `/usr/pgsql-*/bin`
+  (#140).
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
