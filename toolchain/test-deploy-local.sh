@@ -108,8 +108,11 @@ fixture() {
   export HOME EVENTS FAKE_SYSTEMD PATH WIKI_DEPLOY_SBIN WIKI_DEPLOY_UFW_CONF WIKI_DEPLOY_WAIT WIKI_DEPLOY_HTTPS_WAIT FAKE_TS_SERVE
   FAKE_DOCKER=$case_dir/docker
   export FAKE_DOCKER
+  # cabal's own directory, where its build logs go (logs/ghc-<version>/).
+  CABAL_DIR=$case_dir/cabal
+  export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -264,6 +267,17 @@ case $name in
         printf 'cabal build PKG_CONFIG_PATH=%s LIBRARY_PATH=%s C_INCLUDE_PATH=%s\n' "${PKG_CONFIG_PATH:-}" "${LIBRARY_PATH:-}" "${C_INCLUDE_PATH:-}" >>"$EVENTS"
         if [ -n "${FAKE_CABAL_NO_LIBRARY:-}" ]; then
           printf "Error: The pkg-config package 'libsodium' is required but it could not be found.\n" >&2
+          exit 1
+        fi
+        if [ -n "${FAKE_CABAL_SEMOPEN:-}" ]; then
+          # As on the RHEL server: a dependency's build fails in its log,
+          # and the console only points at it.
+          mkdir -p "$CABAL_DIR/logs/ghc-9.14.1"
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32; do
+            printf 'Building library line %s\n' "$i"
+          done >"$CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log"
+          printf 'cabal_semaphore_y: semOpen: does not exist (no such file or directory)\n' >>"$CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log"
+          printf 'Error: [Cabal-7125]\nFailed to build splitmix-0.1.3.1. See the build log above for details.\n' >&2
           exit 1
         fi
         mkdir -p "${bin%/*}"
@@ -1869,6 +1883,31 @@ assert_contains "$out" 'the build of wiki-server lacks a C library or pkg-config
 assert_lacks "$EVENTS" 'systemctl stop'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
 pass 'a machine without libsodium is refused before the build by toolchain/check-native.sh, which names its packages and the directories to give the build; LIBRARY_PATH and C_INCLUDE_PATH reach the build; a build that lacks a library points at the check'
+
+# A build that fails in a dependency's log, as on the RHEL server whose GHC
+# could not open cabal's semaphore: the deploy shows the newest log written
+# during the build, its path and its last 30 lines, with the semaphore hint,
+# and installs nothing. A log from before the build is not the one shown.
+mkdir -p "$CABAL_DIR/logs/ghc-9.14.1"
+printf 'an earlier build\n' >"$CABAL_DIR/logs/ghc-9.14.1/zlib-0.7.1.0-old.log"
+touch -d '1 hour ago' "$CABAL_DIR/logs/ghc-9.14.1/zlib-0.7.1.0-old.log"
+: >"$EVENTS"
+out=$case_dir/semopen
+if FAKE_CABAL_SEMOPEN=1 deploy --prefix "$pre" >"$out" 2>&1; then fail 'a build that failed in a dependency deployed'; fi
+assert_contains "$out" 'See the build log above for details.'
+assert_contains "$out" "the newest build log, $CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log, ends with:"
+assert_contains "$out" 'Building library line 4'
+assert_contains "$out" 'Building library line 32'
+assert_contains "$out" 'cabal_semaphore_y: semOpen: does not exist (no such file or directory)'
+assert_contains "$out" "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it"
+assert_contains "$out" 'semaphore: False to cabal-native-opt.project.local'
+assert_contains "$out" 'the build of wiki-server failed (see above), so nothing was changed'
+assert_lacks "$out" 'zlib-0.7.1.0-old.log'
+assert_lacks "$out" 'an earlier build'
+assert_lacks "$out" 'lacks a C library'
+assert_lacks "$EVENTS" 'systemctl stop'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
+pass "a build that fails in a dependency's log shows that log's path and last lines, and a semOpen in it points at the semaphore; nothing is installed"
 
 out=$case_dir/stop
 deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'

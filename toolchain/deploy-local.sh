@@ -1234,21 +1234,54 @@ recheck_native() {
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 
+# The directory of cabal's build logs. cabal writes a log for each dependency
+# it builds, under <logs>/ghc-<version>/, and when such a build fails its
+# console says only "See the build log above for details": the error itself is
+# in that log. cabal path -z answers without reading the project (without -z
+# it would resolve the project and fetch its source repositories). When cabal
+# path gives no answer (an older cabal), the places cabal uses by default are
+# tried.
+cabal_logs_dir() {
+  logs=$(cd "$ROOT" && cabal path -z -v0 --logs-dir 2>/dev/null) || logs=
+  for dir in "$logs" ${CABAL_DIR:+"$CABAL_DIR/logs"} "$HOME/.cabal/logs" \
+    "${XDG_CACHE_HOME:-$HOME/.cache}/cabal/logs" "$HOME/.local/state/cabal/logs"; do
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+}
+
 # wiki-server's build with --backend-only. check_native has run before it,
 # but a build can still fail on a C library (one the check found that does
-# not link, say), so a failure that names one points at the check again.
+# not link, say), so a failure that names one points at the check again. A
+# failed build also shows the newest of cabal's build logs written during it,
+# which holds the error when the package that failed is a dependency.
 server_build_native() {
   build_log=$(mktemp)
+  build_start=$(mktemp)
   if server_cabal build >"$build_log" 2>&1; then
     cat "$build_log"
-    rm -f "$build_log"
+    rm -f "$build_log" "$build_start"
     return 0
   fi
   cat "$build_log" >&2
+  logs_dir=$(cabal_logs_dir)
+  if [ -n "$logs_dir" ]; then
+    # shellcheck disable=SC2012 # ls -t orders by mtime; the paths are cabal's own, without newlines.
+    newest_log=$(find "$logs_dir" -type f -name '*.log' -newer "$build_start" -exec ls -t {} + 2>/dev/null | head -n 1 || true)
+    if [ -n "$newest_log" ]; then
+      say "the newest build log, $newest_log, ends with:" >&2
+      tail -n 30 "$newest_log" | tee -a "$build_log" >&2
+    fi
+  fi
   if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|sodium|gmp|zlib' "$build_log"; then
     warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
   fi
-  rm -f "$build_log"
+  if grep -q 'semOpen' "$build_log"; then
+    warn "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it, so if this still appears, add the line semaphore: False to cabal-native-opt.project.local"
+  fi
+  rm -f "$build_log" "$build_start"
   die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
