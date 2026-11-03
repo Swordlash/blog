@@ -14,14 +14,25 @@ import: cabal.project
 
 tests: False
 
+-- cabal.project's semaphore is not used here. It is a POSIX named semaphore
+-- that cabal makes and GHC opens, and some machines refuse it: on a RHEL 9
+-- server every package's build failed with "semOpen: does not exist". A
+-- deployment's build must not depend on it. So cabal builds one package at a
+-- time, and GHC's own -j builds the modules of each package in parallel. The
+-- four packages here depend on one another in a chain, so building packages in
+-- parallel would gain little, and one package at a time keeps the build to
+-- one GHC's jobs rather than several GHCs' each using every core.
+semaphore: False
+jobs: 1
+
 package wiki-core
-  ghc-options: -O2
+  ghc-options: -O2 -j
 
 package wiki-api
-  ghc-options: -O2
+  ghc-options: -O2 -j
 
 package wiki-app
-  ghc-options: -O2
+  ghc-options: -O2 -j
 
 package wiki-server
-  ghc-options: -O2
+  ghc-options: -O2 -j

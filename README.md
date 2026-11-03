@@ -853,6 +853,13 @@ option downloads again by it (a `git pull` and a rerun deploy the new commit's
 page); `--no-build` redeploys what is there; `--no-backend-only` builds the page
 on this machine again. With `--static` it deploys the demo's page instead (below).
 
+A downloaded page is kept in a cache of the five newest, so a redeploy of the same
+page downloads nothing: `<prefix>/toolchain/.wiki-toolchain/pages` (or under the
+`--toolchain` directory), or `~/.cache/wiki-demo/pages` when the toolchain is in the
+home directory. A commit's page is taken from there as it is; a tag's is downloaded
+again when GitHub's asset changed, by its id and upload time. `--refresh-page`
+downloads it again.
+
 With `--server`, nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
 `toolchain/bootstrap.sh native`, which installs them through ghcup (under
 `<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
@@ -875,18 +882,21 @@ missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or U
 installs it next, and the check runs again after the bootstrap; elsewhere the deploy
 stops there. SQLite needs nothing: the build compiles its own copy.
 
-| Library    | Debian, Ubuntu  | RHEL, Fedora              |
-| ---------- | --------------- | ------------------------- |
-| GMP        | `libgmp-dev`    | `gmp-devel`               |
-| libpq      | `libpq-dev`     | `libpq-devel`             |
-| zlib       | `zlib1g-dev`    | `zlib-devel`              |
-| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)  |
-| pkg-config | `pkg-config`    | `pkgconf-pkg-config`      |
+| Library    | Debian, Ubuntu  | RHEL, Fedora                                                                     |
+| ---------- | --------------- | -------------------------------------------------------------------------------- |
+| GMP        | `libgmp-dev`    | `gmp-devel`                                                                      |
+| libpq      | `libpq-dev`     | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
+| zlib       | `zlib1g-dev`    | `zlib-devel`                                                                     |
+| libsodium  | `libsodium-dev` | `libsodium-devel` (EPEL)                                                         |
+| pkg-config | `pkg-config`    | `pkgconf-pkg-config`                                                             |
 
 A library built from source into a directory of your own is found through the
 environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
 `C_INCLUDE_PATH`, `CPATH` and `PKG_CONFIG_PATH` at build time. zlib is found
-through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH`. libsodium is
+through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH` alone: the build
+runs `pg_config`, and pkg-config's `libpq.pc` is not enough. PGDG's packages put
+`pg_config` in `/usr/pgsql-NN/bin`, off `PATH`, so run the deploy with
+`PATH=/usr/pgsql-NN/bin:$PATH`; the check names a `pg_config` it finds there. libsodium is
 found through neither: its Haskell bindings include `sodium.h` and link
 `-lsodium` without pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
 the check compiles and links a small program the same way. Built from source, where

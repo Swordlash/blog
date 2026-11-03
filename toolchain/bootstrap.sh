@@ -59,7 +59,9 @@
 #
 # Commands' own output goes to ~/.wiki-toolchain/bootstrap.log (appended, one
 # header per run); the terminal gets a line per step, and on a failure the end
-# of the log.
+# of the log. In the modes toolchain/deploy-local.sh uses (native and build),
+# the long steps' output (ghcup's installs, cabal's builds and index update,
+# the wasm sysroot's setup) is shown on the terminal as well.
 #
 # A developer runs it by hand the same way. When PATH lacks a pinned compiler,
 # it installs or activates it through ghcup, and leaves the shell's PATH alone:
@@ -526,6 +528,30 @@ run() {
   "$@" >>"$LOG" 2>&1 || fail "$step"
 }
 
+# Run a long step (ghcup installing a compiler, cabal building or updating
+# its index, the wasm sysroot's setup) as run does. In the modes
+# toolchain/deploy-local.sh uses, native and build, its output is also shown
+# as it comes, so that a deploy does not sit silent for minutes. The other
+# modes, which the SessionStart hooks use, keep it in the log alone.
+run_long() {
+  case $mode in
+    native | build) ;;
+    *)
+      run "$@"
+      return 0 ;;
+  esac
+  step=$1
+  shift
+  printf '+ %s\n' "$*" >>"$LOG"
+  # A pipeline's status is tee's, so the command's own status goes to a
+  # file, which stays empty when the command succeeds.
+  status_file=$(mktemp)
+  { "$@" 2>&1 || printf '%s' "$?" >"$status_file"; } | tee -a "$LOG"
+  failed=$(cat "$status_file")
+  rm -f "$status_file"
+  [ -z "$failed" ] || fail "$step"
+}
+
 fetch() {
   curl --fail --location --retry 5 --silent --show-error --output "$2" "$1"
 }
@@ -648,7 +674,7 @@ ghcup_tool() {
     if "$GHCUP" whereis "$tool" "$version" >/dev/null 2>&1; then
       run "removing a broken $tool $version" "$GHCUP" rm "$tool" "$version"
     fi
-    run "installing $tool $version" "$@"
+    run_long "installing $tool $version" "$@"
   fi
 }
 
@@ -706,7 +732,7 @@ install_wasm_sysroot() {
     guard_wasm_sysroot || exit 1
     fetch_wasm_meta
     say "installing the wasm sysroot into $WASM_PREFIX (wasi-sdk, binaryen, wasmtime, Node)"
-    run "installing the wasm sysroot" env PREFIX="$WASM_PREFIX" SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" bash "$META_DIR/setup.sh"
+    run_long "installing the wasm sysroot" env PREFIX="$WASM_PREFIX" SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" bash "$META_DIR/setup.sh"
     touch "$WASM_PREFIX/.bootstrap-$GHC_WASM_META_REV"
     wasm_sysroot_ready || fail "verifying the wasm sysroot (inspect it before retrying)"
   fi
@@ -868,7 +894,7 @@ install_parser_generators() {
     [ "$(generator_version "$generator")" != "$wanted" ] || continue
     mkdir -p "$GHCUP_BIN"
     say "building $generator $wanted from Hackage into $GHCUP_BIN"
-    run "building $generator" cabal install "$generator-$wanted" \
+    run_long "building $generator" cabal install "$generator-$wanted" \
       --ignore-project --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \
       --install-method=copy --overwrite-policy=always
   done
@@ -878,7 +904,7 @@ update_cabal_index() {
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
   if [ ! -f "$index" ] || [ -n "${1:-}" ]; then
     say "updating cabal's package index"
-    run "updating cabal's package index" sh -c "cd '$STATE' && cabal update"
+    run_long "updating cabal's package index" sh -c "cd '$STATE' && cabal update"
   fi
 }
 

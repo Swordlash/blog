@@ -108,8 +108,11 @@ fixture() {
   export HOME EVENTS FAKE_SYSTEMD PATH WIKI_DEPLOY_SBIN WIKI_DEPLOY_UFW_CONF WIKI_DEPLOY_WAIT WIKI_DEPLOY_HTTPS_WAIT FAKE_TS_SERVE
   FAKE_DOCKER=$case_dir/docker
   export FAKE_DOCKER
+  # cabal's own directory, where its build logs go (logs/ghc-<version>/).
+  CABAL_DIR=$case_dir/cabal
+  export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -266,6 +269,19 @@ case $name in
           printf "Error: The pkg-config package 'libsodium' is required but it could not be found.\n" >&2
           exit 1
         fi
+        if [ -n "${FAKE_CABAL_SEMOPEN:-}" ]; then
+          # As on the RHEL server: a dependency's build fails in its log,
+          # and the console only points at it.
+          mkdir -p "$CABAL_DIR/logs/ghc-9.14.1"
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32; do
+            printf 'Building library line %s\n' "$i"
+          done >"$CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log"
+          printf 'cabal_semaphore_y: semOpen: does not exist (no such file or directory)\n' >>"$CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log"
+          printf 'Error: [Cabal-7125]\nFailed to build splitmix-0.1.3.1. See the build log above for details.\n' >&2
+          exit 1
+        fi
+        # A line of the progress cabal shows, which the deploy must let through.
+        printf 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)\n'
         mkdir -p "${bin%/*}"
         cp "$FAKE_SERVER" "$bin"
         chmod +x "$bin" ;;
@@ -969,7 +985,7 @@ a=$(other_port "$p")
 out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
@@ -1165,7 +1181,12 @@ data=$HOME/wiki-demo/data
 out=$case_dir/first
 deploy --server --sqlite --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project'
+# cabal's output is shown while it builds, after the deploy's line for it.
+assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
+[ "$(line_of "$out" 'building wiki-server at -O2')" -lt "$(line_of "$out" 'Building executable wiki-server')" ] ||
+  fail "cabal's output did not come after the deploy's line for the build"
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies --sqlite \"$data/wiki.sqlite\""
 assert_lacks "$EVENTS" 'docker'
 [ "$(state db)" = sqlite ] || fail 'state does not record SQLite'
@@ -1200,7 +1221,7 @@ assert_contains "$EVENTS" "wiki-server guide update --data $data --sqlite $data/
 { [ "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server guide update')" ]; } ||
   fail 'the guide was updated before the new server started'
 assert_contains "$out" "bringing the guide's pages up to this version"
-pass '--server --sqlite builds wiki-server at -O2, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies, then updates the guide'
+pass '--server --sqlite builds wiki-server at -O2, showing cabal'"'"'s output, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies, then updates the guide'
 
 : >"$EVENTS"
 printf 'precious\n' >>"$data/wiki.sqlite"
@@ -1569,6 +1590,45 @@ assert_contains "$out" 'LD_LIBRARY_PATH'
 [ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without zlib did not report the other eight items ok'
 pass 'toolchain/check-native.sh reports each item ok, and names a missing one with its packages and exits 1'
 
+# libpq is found through pg_config on PATH, which postgresql-libpq's build
+# runs: pkg-config's libpq alone is not enough. These runs get a PATH of the
+# fakes and links to the host's commands, without pg_config on either, and
+# WIKI_PG_CONFIG_DIRS in place of /usr/pgsql-*/bin and
+# /usr/lib/postgresql/*/bin, so that the host's PostgreSQL is not seen.
+no_pg=$case_dir/no-pg
+mkdir "$no_pg"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  [ "$name" != pg_config ] || continue
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$no_pg/$name" ] || [ -L "$no_pg/$name" ] || ln -s "$cmd" "$no_pg/$name"
+done
+rm "$case_dir/bin/pg_config"
+out=$case_dir/check-no-pg-config
+status=0
+WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check without pg_config exited $status, not 1"
+assert_contains "$out" 'missing  libpq       no pg_config on PATH, though pkg-config knows libpq: the build runs pg_config (Debian: libpq-dev; RHEL: libpq-devel)'
+assert_contains "$out" 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.'
+assert_contains "$out" "PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin"
+assert_contains "$out" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without pg_config did not report the other eight items ok'
+mkdir -p "$case_dir/pgsql-16/bin"
+ln -s "$case_dir/bin/tool" "$case_dir/pgsql-16/bin/pg_config"
+out=$case_dir/check-pg-config-elsewhere
+status=0
+WIKI_PG_CONFIG_DIRS="$case_dir/nowhere $case_dir/pgsql-*/bin" env PATH="$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check with pg_config off PATH exited $status, not 1"
+assert_contains "$out" "missing  libpq       no pg_config on PATH, but there is one at $case_dir/pgsql-16/bin/pg_config"
+assert_contains "$out" "There is one at $case_dir/pgsql-16/bin/pg_config: put its directory on PATH for the deploy:"
+assert_contains "$out" "PATH=$case_dir/pgsql-16/bin:\$PATH sh toolchain/deploy-local.sh"
+out=$case_dir/check-pg-config-on-path
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_pg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 ||
+  fail 'the check failed with that pg_config on PATH'
+assert_contains "$out" "ok       libpq       pg_config at $case_dir/pgsql-16/bin/pg_config, headers in"
+ln -s tool "$case_dir/bin/pg_config"
+pass 'toolchain/check-native.sh takes libpq only from a pg_config on PATH, not from pkg-config alone, and names a pg_config off PATH to put on it'
+
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 out=$case_dir/no-zlib
@@ -1616,7 +1676,7 @@ assert_contains "$out" 'warning: missing for the native build of wiki-server: zl
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
 assert_contains "$EVENTS" 'bootstrap build'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'
 undeploy >/dev/null 2>&1
 pass 'on Debian a missing package is a warning: the bootstrap installs it, and the check after it stops the deploy or lets it go on'
@@ -1675,7 +1735,10 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
 ' "${2:-$page}" "$1"
 }
 # A release's JSON as the API gives it: its tag, and its assets with the
-# times they were uploaded at, given as name time pairs.
+# times they were uploaded at, given as name time pairs, their sizes, those
+# of the files under download/<tag>/ (0 for an asset with no file), and ids
+# made from the name and the time, so that an asset uploaded again, at
+# another time, gets another id, as on GitHub.
 release() {
   tag=$1
   shift
@@ -1683,7 +1746,9 @@ release() {
     printf '{"tag_name":"%s","prerelease":true,"assets":[' "$tag"
     sep=
     while [ $# -gt 0 ]; do
-      printf '%s{"name":"%s","updated_at":"%s","browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$1" "$2" "$tag" "$1"
+      size=$(wc -c <"$FAKE_GITHUB/download/$tag/$1" 2>/dev/null || printf 0)
+      id=$(printf '%s %s' "$1" "$2" | cksum | cut -d' ' -f1)
+      printf '%s{"id":%s,"name":"%s","updated_at":"%s","size":%s,"browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$id" "$1" "$2" "$size" "$tag" "$1"
       sep=,
       shift 2
     done
@@ -1723,7 +1788,8 @@ assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/
 assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'bootstrap build'
 assert_lacks "$EVENTS" 'npm'
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
 { [ "$(line_of "$EVENTS" 'curl https://github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ] &&
   [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
   fail 'the page was not downloaded before the toolchain and the build'
@@ -1743,6 +1809,10 @@ assert_lacks "$out" 'warning: the page is of'
 [ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the downloaded page is not served'
 { [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ] && [ "$(pstate https)" = no ]; } ||
   fail 'the state does not record the page from GitHub'
+cmp "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip" "$FAKE_GITHUB/download/main-latest/app-server-$head1.zip" ||
+  fail 'the downloaded page was not kept in the cache under the toolchain directory'
+[ -z "$(find "$pre/toolchain/.wiki-toolchain/pages" -name '.*')" ] || fail 'the cache keeps a temporary file'
+assert_contains "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip.meta" "id=$(printf '%s %s' "app-server-$head1.zip" 2026-10-31T10:00:00Z | cksum | cut -d' ' -f1) updated_at=2026-10-31T10:00:00Z size="
 pass '--backend-only downloads the checkout'"'"'s page from its GitHub release, builds wiki-server alone after bootstrap native, without npm or Node, and serves it with gzip copies'
 
 : >"$EVENTS"
@@ -1761,6 +1831,25 @@ deploy --status --prefix "$pre" >"$out" 2>&1
 assert_contains "$out" "its page is downloaded from GitHub (--backend-only=head, the page of $head1)"
 pass 'a redeploy with --no-build keeps the page and the choice, and gives the unit the LD_LIBRARY_PATH of its shell; --status says where the page comes from'
 
+# A second deploy of the same commit takes its page from the cache and
+# downloads nothing; --refresh-page downloads it again, for that run only.
+cache=$pre/toolchain/.wiki-toolchain/pages
+: >"$EVENTS"
+out=$case_dir/cached
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy from the cache failed'
+assert_contains "$EVENTS" 'curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of $head1 from the cache: $cache/app-server-$head1.zip"
+assert_lacks "$out" 'downloading the page'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the page from the cache is not served'
+: >"$EVENTS"
+out=$case_dir/refresh
+deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail '--refresh-page failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_lacks "$out" 'from the cache'
+assert_lacks "$pre/state/wiki-demo.state" 'refresh'
+pass 'a second deploy of the same commit takes the page from the cache and downloads nothing; --refresh-page downloads it again'
+
 # A commit that changes Markdown alone has no page of its own (CI ignores
 # it); the page of the commit before it is the same.
 printf 'notes\n' >"$case_dir/repo/NOTES.md"
@@ -1771,7 +1860,8 @@ out=$case_dir/markdown
 deploy --prefix "$pre" >"$out" 2>&1 || fail 'the deploy of a commit changing Markdown alone failed'
 assert_lacks "$HOME/$unit" 'LD_LIBRARY_PATH'
 assert_contains "$out" "changes Markdown files alone since $head1, which has a page on GitHub: taking that one"
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache"
+assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$out" 'warning: the page is of'
 [ "$(pstate backend_only_commit)" = "$head1" ] || fail 'the page of the commit before was not recorded'
 pass 'a checkout whose commit changes Markdown alone takes the page of the commit before it'
@@ -1794,7 +1884,7 @@ assert_lacks "$EVENTS" 'curl https://github.com/'
 : >"$EVENTS"
 out=$case_dir/template-other-page
 deploy --prefix "$pre" --backend-only="$head1" >"$out" 2>&1 || fail "--backend-only=$head1 failed"
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache"
 assert_contains "$out" "warning: the page is of $head1, and wiki-server is built from this checkout"
 pass 'a commit that changes a built-in template alone has no page of the commit before, and that page is of another version'
 
@@ -1806,7 +1896,7 @@ assert_contains "$out" "warning: the page is of $newest, and wiki-server is buil
 { [ "$(pstate backend_only)" = main ] && [ "$(pstate backend_only_commit)" = "$newest" ]; } || fail 'the state does not record main'
 : >"$EVENTS"
 deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of main failed'
-assert_contains "$EVENTS" "app-server-$newest.zip"
+assert_contains "$out" "the page of $newest from the cache"
 [ "$(pstate backend_only)" = main ] || fail 'a redeploy without the flag forgot main'
 pass '--backend-only=main takes the newest page of main, warns that it is of another commit, and is remembered'
 
@@ -1827,11 +1917,76 @@ deploy --prefix "$pre" --backend-only=v9.9 >"$out" 2>&1 || fail 'a tag failed'
 assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
 assert_contains "$out" 'cannot tell which commit the page of v9.9 was built from'
 { [ "$(pstate backend_only)" = v9.9 ] && [ -z "$(pstate backend_only_commit)" ]; } || fail 'the state does not record the tag'
+# A tag's asset can be replaced (CI uploads it again with --clobber): the
+# cached one is taken while the release lists the asset with the id and time
+# in its .meta file, and downloaded again when either changed, even at the
+# same size, or when the .meta file is missing.
+: >"$EVENTS"
+out=$case_dir/tag-cached
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag failed'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of v9.9 from the cache: $cache/app-server-v9.9.zip"
+cp -r "$page" "$case_dir/page2"
+printf 'version one of v9.9\n' >"$case_dir/page2/extra.txt"
+page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" "$case_dir/page2"
+release v9.9 app-server-v9.9.zip 2026-10-02T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/tag-replaced
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a replaced tag failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+assert_lacks "$out" 'from the cache'
+cmp "$cache/app-server-v9.9.zip" "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" || fail 'the cache kept the replaced asset'
+[ -f "$pre/app/extra.txt" ] || fail "the replaced tag's page was not deployed"
+assert_contains "$cache/app-server-v9.9.zip.meta" 'updated_at=2026-10-02T10:00:00Z'
+# Uploaded again, with another file of the same size: the same length,
+# another id and time.
+old_size=$(wc -c <"$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip")
+cp -r "$page" "$case_dir/page3"
+printf 'version two of v9.9\n' >"$case_dir/page3/extra.txt"
+page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip" "$case_dir/page3"
+[ "$(wc -c <"$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip")" = "$old_size" ] || fail 'the fixture: the second zip is not of the first one'"'"'s size'
+release v9.9 app-server-v9.9.zip 2026-10-03T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/tag-same-size
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag replaced at the same size failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+assert_lacks "$out" 'from the cache'
+assert_contains "$pre/app/extra.txt" 'version two of v9.9'
+assert_contains "$cache/app-server-v9.9.zip.meta" 'updated_at=2026-10-03T10:00:00Z'
+: >"$EVENTS"
+out=$case_dir/tag-unchanged
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of an unchanged tag failed'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page of v9.9 from the cache: $cache/app-server-v9.9.zip"
+rm "$cache/app-server-v9.9.zip.meta"
+: >"$EVENTS"
+out=$case_dir/tag-no-meta
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of a tag without its .meta file failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+[ -f "$cache/app-server-v9.9.zip.meta" ] || fail 'the download did not write the .meta file again'
 out=$case_dir/no-tag
 if deploy --prefix "$pre" --backend-only=v0.0-none >"$out" 2>&1; then fail 'a tag with no release was deployed'; fi
 assert_contains "$out" 'GitHub has no release v0.0-none with a page'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a refused REF took the server down'
-pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page'
+pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page; a tag'"'"'s cached page is taken while GitHub'"'"'s asset is the same by id and time, and downloaded again when it was replaced, even at the same size'
+
+# The cache keeps the five newest zips: after a download, older ones go. A
+# zip that goes takes its .meta file with it.
+rm -f "$cache"/*.zip "$cache"/*.meta
+for i in 1 2 3 4 5 6; do
+  : >"$cache/app-server-old$i.zip"
+  touch -d "$i hours ago" "$cache/app-server-old$i.zip"
+done
+printf 'id=1 updated_at=- size=0\n' >"$cache/app-server-old6.zip.meta"
+: >"$EVENTS"
+out=$case_dir/prune
+deploy --prefix "$pre" --refresh-page >"$out" 2>&1 || fail 'the deploy that prunes the cache failed'
+[ "$(find "$cache" -name '*.zip' | wc -l)" -eq 5 ] || fail "the cache holds $(find "$cache" -name '*.zip' | wc -l) zips, not five"
+for kept in app-server-v9.9.zip app-server-old1.zip app-server-old2.zip app-server-old3.zip app-server-old4.zip; do
+  [ -f "$cache/$kept" ] || fail "the prune deleted $kept"
+done
+[ ! -e "$cache/app-server-old6.zip.meta" ] || fail 'the prune left the .meta file of a zip it deleted'
+pass 'after a download the cache keeps its five newest zips, and deletes the .meta files of the others'
 
 # A machine without libsodium that is not Debian (no dpkg-query on PATH),
 # so nothing would install it: the check refuses.
@@ -1869,6 +2024,31 @@ assert_contains "$out" 'the build of wiki-server lacks a C library or pkg-config
 assert_lacks "$EVENTS" 'systemctl stop'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
 pass 'a machine without libsodium is refused before the build by toolchain/check-native.sh, which names its packages and the directories to give the build; LIBRARY_PATH and C_INCLUDE_PATH reach the build; a build that lacks a library points at the check'
+
+# A build that fails in a dependency's log, as on the RHEL server whose GHC
+# could not open cabal's semaphore: the deploy shows the newest log written
+# during the build, its path and its last 30 lines, with the semaphore hint,
+# and installs nothing. A log from before the build is not the one shown.
+mkdir -p "$CABAL_DIR/logs/ghc-9.14.1"
+printf 'an earlier build\n' >"$CABAL_DIR/logs/ghc-9.14.1/zlib-0.7.1.0-old.log"
+touch -d '1 hour ago' "$CABAL_DIR/logs/ghc-9.14.1/zlib-0.7.1.0-old.log"
+: >"$EVENTS"
+out=$case_dir/semopen
+if FAKE_CABAL_SEMOPEN=1 deploy --prefix "$pre" >"$out" 2>&1; then fail 'a build that failed in a dependency deployed'; fi
+assert_contains "$out" 'See the build log above for details.'
+assert_contains "$out" "the newest build log, $CABAL_DIR/logs/ghc-9.14.1/splitmix-0.1.3.1-abc123.log, ends with:"
+assert_contains "$out" 'Building library line 4'
+assert_contains "$out" 'Building library line 32'
+assert_contains "$out" 'cabal_semaphore_y: semOpen: does not exist (no such file or directory)'
+assert_contains "$out" "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it"
+assert_contains "$out" 'semaphore: False to cabal-native-opt.project.local'
+assert_contains "$out" 'the build of wiki-server failed (see above), so nothing was changed'
+assert_lacks "$out" 'zlib-0.7.1.0-old.log'
+assert_lacks "$out" 'an earlier build'
+assert_lacks "$out" 'lacks a C library'
+assert_lacks "$EVENTS" 'systemctl stop'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
+pass "a build that fails in a dependency's log shows that log's path and last lines, and a semOpen in it points at the semaphore; nothing is installed"
 
 out=$case_dir/stop
 deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'
@@ -1953,7 +2133,7 @@ deploy --server --sqlite --prefix "$pre" --admin-port "$a" --backend-only >"$out
 assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
 assert_lacks "$EVENTS" 'app-demo-'
 assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
-assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$HOME/$unit" "\"$pre/bin/wiki-server\" serve"
 assert_contains "$pre/app/index.html" '<title>wiki</title>'
@@ -1962,7 +2142,8 @@ assert_contains "$pre/app/index.html" '<title>wiki</title>'
 : >"$EVENTS"
 out=$case_dir/to-demo
 deploy --static --prefix "$pre" >"$out" 2>&1 || fail 'the move from the server back to the demo failed'
-assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$head1.zip"
+assert_contains "$out" "the page of $head1 from the cache: $pre/toolchain/.wiki-toolchain/pages/app-demo-$head1.zip"
+assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$EVENTS" 'app-server-'
 assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'cabal'
@@ -2028,8 +2209,9 @@ assert_contains "$out" "The wiki has no public address yet: set it to $https_url
 assert_contains "$HOME/$unit" '--secure-cookies'
 [ "$(state https_host)" = box.tail1234.ts.net ] || fail 'HTTPS was not recorded'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'a Node was installed'
+[ -f "$HOME/.cache/wiki-demo/pages/app-server-$head1.zip" ] || fail 'without a toolchain directory of its own, the page is not cached in ~/.cache/wiki-demo/pages'
 undeploy >/dev/null 2>&1
-pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node'
+pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node; its page is cached in ~/.cache'
 
 # HTTPS with a certificate of one's own, and behind a reverse proxy
 # (WP5.50). The certificates are made with openssl, as a company's

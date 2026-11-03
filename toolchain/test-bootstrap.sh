@@ -49,6 +49,8 @@ case $name in
       install)
         printf 'cabal %s\n' "$*" >>"$EVENTS"
         for arg do case $arg in --installdir=*) dest=${arg#*=} ;; esac; done
+        printf 'Building %s (the fake cabal)\n' "$2"
+        [ -z "${FAKE_CABAL_FAIL:-}" ] || exit 1
         case $2 in
           happy-*) printf '#!/bin/sh\nprintf "Happy Version 2.1.7\\n"\n' >"$dest/happy"; chmod +x "$dest/happy" ;;
           alex-*) printf '#!/bin/sh\nprintf "Alex version 3.5.4.2\\n"\n' >"$dest/alex"; chmod +x "$dest/alex" ;;
@@ -284,7 +286,32 @@ fi
 assert_contains "$case_dir/native-rhel-no-make" 'missing  make'
 assert_contains "$case_dir/native-rhel-no-make" 'RHEL, Fedora:   sudo dnf install make'
 [ ! -s "$EVENTS" ] || fail "native without make installed something: $(cat "$EVENTS")"
-pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages'
+# pkg-config knows libpq, but pg_config is not on PATH, as on RHEL with
+# PGDG's packages: the build runs pg_config, so the check names libpq and
+# says to put pg_config's directory on PATH, naming the one it finds off
+# PATH. WIKI_PG_CONFIG_DIRS stands for /usr/pgsql-*/bin and
+# /usr/lib/postgresql/*/bin, and the host's own pg_config is taken out of
+# the links.
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
+chmod +x "$case_dir/bin/make"
+rm -f "$case_dir/bin/pg_config" "$no_dpkg/pg_config"
+if WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-no-pg-config" 2>&1; then
+  fail 'native without pg_config on PATH succeeded'
+fi
+assert_contains "$case_dir/native-no-pg-config" 'missing  libpq       no pg_config on PATH, though pkg-config knows libpq: the build runs pg_config'
+assert_contains "$case_dir/native-no-pg-config" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
+mkdir -p "$case_dir/pgsql-16/bin"
+printf '#!/bin/sh\nprintf "/usr/pgsql-16/include\\n"\n' >"$case_dir/pgsql-16/bin/pg_config"
+chmod +x "$case_dir/pgsql-16/bin/pg_config"
+if WIKI_PG_CONFIG_DIRS="$case_dir/pgsql-*/bin" env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-elsewhere" 2>&1; then
+  fail 'native with pg_config off PATH succeeded'
+fi
+assert_contains "$case_dir/native-pg-config-elsewhere" "no pg_config on PATH, but there is one at $case_dir/pgsql-16/bin/pg_config"
+assert_contains "$case_dir/native-pg-config-elsewhere" "PATH=$case_dir/pgsql-16/bin:\$PATH sh toolchain/deploy-local.sh"
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-pg-config-on-path" 2>&1 ||
+  fail "native with that pg_config on PATH failed: $(cat "$case_dir/native-pg-config-on-path")"
+[ ! -s "$EVENTS" ] || fail "native without pg_config installed something: $(cat "$EVENTS")"
+pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`
@@ -321,12 +348,31 @@ bootstrap check >"$case_dir/check"
 assert_contains "$case_dir/check" 'install happy 2.1.7 (found: 2.1.70)'
 bootstrap toolchain >"$case_dir/install"
 assert_contains "$EVENTS" 'cabal install happy-2.1.7 --ignore-project'
+if grep -F '(the fake cabal)' "$case_dir/install" >/dev/null; then fail 'toolchain mode showed a long step'"'"'s output'; fi
 assert_contains "$EVENTS" "--with-compiler=$case_dir/bin/ghc"
 if grep -F 'alex-' "$EVENTS" >/dev/null; then fail 'matching alex was reinstalled'; fi
 : >"$EVENTS"
 bootstrap toolchain >"$case_dir/repeat"
 [ "$(cat "$EVENTS")" = 'chromium launch' ] || fail 'happy was reinstalled after repair'
 pass 'generators use --version, match whole versions and install only the missing pin'
+
+# In the modes toolchain/deploy-local.sh uses, a long step's output is shown
+# as it comes and kept in the log (above, in toolchain mode, it is logged
+# alone): here cabal building happy in build mode. A long step that fails
+# still stops the run, naming the step.
+fixture generators-build
+sysroot
+rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+HAPPY_REPORT=2.1.70
+export HAPPY_REPORT
+if FAKE_CABAL_FAIL=1 bootstrap build >"$case_dir/build-fails" 2>&1; then fail 'build with a failing cabal install succeeded'; fi
+assert_contains "$case_dir/build-fails" 'Building happy-2.1.7 (the fake cabal)'
+assert_contains "$case_dir/build-fails" 'bootstrap: building happy failed'
+bootstrap build >"$case_dir/build"
+assert_contains "$case_dir/build" 'Building happy-2.1.7 (the fake cabal)'
+assert_contains "$HOME/.wiki-toolchain/bootstrap.log" 'Building happy-2.1.7 (the fake cabal)'
+assert_contains "$EVENTS" 'cabal install happy-2.1.7 --ignore-project'
+pass "in build and native modes a long step's output is shown as well as logged, and a failing one stops the run"
 
 for kind in unknown incomplete wrong-revision; do
   fixture "$kind"

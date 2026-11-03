@@ -9,7 +9,7 @@
 #                                [--bind ADDRESS] [--admin-port N] [--prefix DIR]
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
-#                                [--backend-only[=REF] | --no-backend-only]
+#                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
 #                                [--no-build] [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
@@ -212,6 +212,14 @@
 #                    release. They are public, so no token is needed: curl downloads
 #                    them from github.com and lists them with api.github.com (sixty
 #                    requests an hour without a token; a deploy makes one or two).
+#                    The downloaded zip is kept in a cache of the five newest:
+#                    <toolchain>/.wiki-toolchain/pages when the deployment has a
+#                    toolchain directory other than the home directory, else
+#                    ${XDG_CACHE_HOME:-~/.cache}/wiki-demo/pages. A commit's page
+#                    never changes, so a cached one is used as it is. A tag's page
+#                    can be replaced on GitHub, so a cached one is used only while
+#                    the release lists the same asset for it, by GitHub's id and
+#                    upload time, which the cache keeps beside the zip.
 #                    The page and the server talk over the API, so the page should be
 #                    of the checkout's commit; a warning says when it is not (and for
 #                    the demo too). Reading GitHub's answers and unpacking the zip
@@ -228,6 +236,8 @@
 #                    and nothing else. Remembered for the next run
 #   --no-backend-only
 #                    build the page on this machine again, after a run with --backend-only
+#   --refresh-page   with --backend-only, download the page even when the cache has
+#                    it; for this run only
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
@@ -272,7 +282,7 @@ usage() {
 
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
-opt_backend_only=''
+opt_backend_only='' refresh_page=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
@@ -304,6 +314,7 @@ while [ $# -gt 0 ]; do
     --backend-only) opt_backend_only='head' ;;
     --backend-only=*) opt_backend_only=${1#*=}; [ -n "$opt_backend_only" ] || opt_backend_only='head' ;;
     --no-backend-only) opt_backend_only='none' ;;
+    --refresh-page) refresh_page=1 ;;
     --github-token-file | --github-token-file=*)
       die "--github-token-file is not needed: the pages CI builds are public release assets, downloaded without a token" ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
@@ -1032,9 +1043,11 @@ github_repo() {
   esac
 }
 
-# The assets of a release into release_list, "name time" per line, the time
-# the one each was uploaded at; empty when there is no such release. Stops
-# the deploy on any other answer.
+# The assets of a release into release_list, "name time size id" per line:
+# the time each was uploaded at (- when GitHub gives none), its size in bytes
+# and GitHub's id for it. A replaced asset gets a new id and time.
+# The list is empty when there is no such release. Stops the deploy on any
+# other answer.
 release_assets() {
   release_list=
   listing=$(mktemp)
@@ -1046,8 +1059,8 @@ release_assets() {
   case $code in
     200)
       release_list=$(json_read 'for a in d.get("assets") or []:
-    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "")' \
-        '.assets[]? | "\(.name) \(.updated_at // .created_at // "")"' <"$listing") || {
+    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "-", a.get("size", "-"), a.get("id", "-"))' \
+        '.assets[]? | "\(.name) \(.updated_at // .created_at // "-") \(.size // "-") \(.id // "-")"' <"$listing") || {
         rm -f "$listing"
         die "could not read the answer of api.github.com about the release $1"
       } ;;
@@ -1091,7 +1104,9 @@ same_code() {
 # Which page --backend-only=REF names: sets page_tag (the release), page_asset
 # (its asset, app-server-… or app-demo-… as page_kind says) and
 # backend_only_commit (the commit the page was built from, empty for a tag
-# this checkout does not have).
+# this checkout does not have), and page_meta (the asset's identity on
+# GitHub, "id=… updated_at=… size=…", which the page cache keeps beside the
+# zip).
 resolve_page() {
   if [ "$page_kind" = server ]; then page_name=page; else page_name='demo page'; fi
   no_page() {
@@ -1151,26 +1166,98 @@ resolve_page() {
         backend_only_commit=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/${ref}^{commit}" 2>/dev/null || true)
       fi ;;
   esac
+  page_meta=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { printf "id=%s updated_at=%s size=%s\n", $4, $2, $3; exit }')
 }
 
-# Download the page resolve_page found and unpack it into $out, through a
-# directory beside it, so that a failed download leaves the last page as it
-# was. python3 unpacks it (unzip where there is none).
-download_page() {
-  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
-  say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
-  work=$ROOT/dist-newstyle/wasm-opt/download
-  rm -rf "$work"
+# Unpack a page's zip into $work/app and check that it is a page of the kind
+# page_kind names. On failure it sets unpack_error to the reason and returns
+# 1. python3 unpacks it (unzip where there is none).
+unpack_page() {
+  rm -rf "$work/app"
   mkdir -p "$work/app"
-  curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
   if command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$work/page.zip" "$work/app" || die "could not unpack $page_asset (see above)"
+    python3 -m zipfile -e "$1" "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
   else
-    unzip -q "$work/page.zip" -d "$work/app" || die "could not unpack $page_asset (see above)"
+    unzip -q "$1" -d "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
   fi
   for file in index.html 404.html app.wasm; do
-    [ -f "$work/app/$file" ] || die "$page_asset lacks $file: it is not a page CI built for the $page_kind"
+    [ -f "$work/app/$file" ] || { unpack_error="$page_asset lacks $file: it is not a page CI built for the $page_kind"; return 1; }
   done
+}
+
+# Delete all but the five newest zips in the page cache, by modification
+# time, with their .meta files. A zip's time is when it was downloaded or
+# last used.
+prune_pages() {
+  # shellcheck disable=SC2012 # ls -t orders by mtime; the names are asset names, without newlines.
+  ls -t "$page_cache"/*.zip 2>/dev/null | tail -n +6 | while IFS= read -r old; do
+    rm -f "$old" "$old.meta"
+  done
+}
+
+# Write the .meta file beside a cached zip: page_meta, the asset's id, time
+# and size on GitHub, through a temporary name.
+write_page_meta() {
+  [ -n "$page_meta" ] || return 0
+  if ! { printf '%s\n' "$page_meta" >"$page_cache/.$page_asset.meta.part" &&
+    mv -f "$page_cache/.$page_asset.meta.part" "$cached.meta"; }; then
+    rm -f "$page_cache/.$page_asset.meta.part"
+  fi
+}
+
+# Unpack the page resolve_page found into $out, through a directory beside
+# it, so that a failed download leaves the last page as it was. The zip comes
+# from the page cache when the cache has it and it is still the page GitHub
+# has. A page of a commit (app-<kind>-<hash>.zip) never changes. A tag's
+# asset can be uploaded again (CI replaces it), and two zips can have the
+# same size, so a tag's cached zip is taken only while its .meta file names
+# the id and time the release lists for the asset; a zip without one is
+# downloaded again. --refresh-page skips the cache. A downloaded zip enters
+# the cache only after it unpacked as a page, under a temporary name first,
+# so a broken or partial download is never taken from there.
+download_page() {
+  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
+  page_cache=${toolchain_home:+$toolchain_home/.wiki-toolchain/pages}
+  [ -n "$page_cache" ] || page_cache=${XDG_CACHE_HOME:-$HOME/.cache}/wiki-demo/pages
+  cached=$page_cache/$page_asset
+  work=$ROOT/dist-newstyle/wasm-opt/download
+  rm -rf "$work"
+  mkdir -p "$work"
+  from_cache=
+  if [ -z "$refresh_page" ] && [ -f "$cached" ]; then
+    if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
+      from_cache=1
+    else
+      case $page_meta in
+        '' | 'id=- '* | *' updated_at=- '*) ;;
+        *) [ "$(cat "$cached.meta" 2>/dev/null || true)" != "$page_meta" ] || from_cache=1 ;;
+      esac
+    fi
+  fi
+  if [ -n "$from_cache" ]; then
+    if unpack_page "$cached"; then
+      touch "$cached"
+      [ -f "$cached.meta" ] || write_page_meta
+      say "the page of ${backend_only_commit:-$page_tag} from the cache: $cached"
+    else
+      warn "the cached $cached is not a page ($unpack_error), so it is deleted and downloaded again"
+      rm -f "$cached" "$cached.meta"
+      from_cache=
+    fi
+  fi
+  if [ -z "$from_cache" ]; then
+    say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
+    curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
+    unpack_page "$work/page.zip" || die "$unpack_error"
+    if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
+      mv -f "$page_cache/.$page_asset.part" "$cached"; then
+      write_page_meta
+      prune_pages
+    else
+      rm -f "$page_cache/.$page_asset.part"
+      warn "could not keep the page in the cache $page_cache; the next deploy downloads it again"
+    fi
+  fi
   rm -rf "$out"
   mkdir -p "${out%/*}"
   mv "$work/app" "$out"
@@ -1197,9 +1284,10 @@ download_page() {
 
 # wiki-server, natively, with this repository's packages at -O2 and the
 # dependencies as the everyday build has them (cabal-native-opt.project), in a
-# build directory of its own so that neither build invalidates the other.
+# build directory of its own so that neither build invalidates the other. The
+# arguments are cabal's command and its flags.
 server_cabal() {
-  (cd "$ROOT" && cabal "$1" -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
+  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
 }
 
 # The check of what wiki-server's native build needs from the machine
@@ -1234,21 +1322,62 @@ recheck_native() {
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 
-# wiki-server's build with --backend-only. check_native has run before it,
-# but a build can still fail on a C library (one the check found that does
-# not link, say), so a failure that names one points at the check again.
+# The directory of cabal's build logs. cabal writes a log for each dependency
+# it builds, under <logs>/ghc-<version>/, and when such a build fails its
+# console says only "See the build log above for details": the error itself is
+# in that log. cabal path -z answers without reading the project (without -z
+# it would resolve the project and fetch its source repositories). When cabal
+# path gives no answer (an older cabal), the places cabal uses by default are
+# tried.
+cabal_logs_dir() {
+  logs=$(cd "$ROOT" && cabal path -z -v0 --logs-dir 2>/dev/null) || logs=
+  for dir in "$logs" ${CABAL_DIR:+"$CABAL_DIR/logs"} "$HOME/.cabal/logs" \
+    "${XDG_CACHE_HOME:-$HOME/.cache}/cabal/logs" "$HOME/.local/state/cabal/logs"; do
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+}
+
+# wiki-server's build. cabal's output is shown as it comes, at cabal's
+# default verbosity, which names each package as it is built and GHC's
+# progress through its modules, so that a long -O2 build is not silent. A
+# copy goes to a file for the hints after a failure. check_native has run
+# before the build, but a build can still fail on a C library (one the check
+# found that does not link, say), so a failure that names one points at the
+# check again. A failed build also shows the newest of cabal's build logs
+# written during it, which holds the error when the package that failed is a
+# dependency.
 server_build_native() {
   build_log=$(mktemp)
-  if server_cabal build >"$build_log" 2>&1; then
-    cat "$build_log"
-    rm -f "$build_log"
+  build_status=$(mktemp)
+  build_start=$(mktemp)
+  # A pipeline's status is tee's, so cabal's own status goes to a file,
+  # which stays empty when cabal succeeds.
+  { server_cabal build 2>&1 || printf '%s' "$?" >"$build_status"; } | tee "$build_log"
+  if [ ! -s "$build_status" ]; then
+    rm -f "$build_log" "$build_status" "$build_start"
     return 0
   fi
-  cat "$build_log" >&2
-  if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|sodium|gmp|zlib' "$build_log"; then
+  logs_dir=$(cabal_logs_dir)
+  if [ -n "$logs_dir" ]; then
+    # shellcheck disable=SC2012 # ls -t orders by mtime; the paths are cabal's own, without newlines.
+    newest_log=$(find "$logs_dir" -type f -name '*.log' -newer "$build_start" -exec ls -t {} + 2>/dev/null | head -n 1 || true)
+    if [ -n "$newest_log" ]; then
+      say "the newest build log, $newest_log, ends with:" >&2
+      tail -n 30 "$newest_log" | tee -a "$build_log" >&2
+    fi
+  fi
+  # Error messages only: cabal's output names packages such as zlib and
+  # postgresql-libpq as it builds them, failure or not.
+  if grep -Eqi "pkg-config|cannot find -l|foreign librar|missing [(]or bad[)] c librar|could not be found|[.]h: no such file" "$build_log"; then
     warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
   fi
-  rm -f "$build_log"
+  if grep -q 'semOpen' "$build_log"; then
+    warn "GHC could not open cabal's build semaphore (semOpen, see above): cabal-native-opt.project no longer uses it, so if this still appears, add the line semaphore: False to cabal-native-opt.project.local"
+  fi
+  rm -f "$build_log" "$build_status" "$build_start"
   die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
@@ -1300,7 +1429,7 @@ elif [ -n "$build" ]; then
   build_app
   if [ "$mode" = server ]; then
     say "building wiki-server at -O2 (cabal-native-opt.project)"
-    server_cabal build
+    server_build_native
   fi
 fi
 for file in index.html 404.html app.wasm; do
@@ -1318,7 +1447,7 @@ if [ -z "$build" ]; then
   fi
 fi
 if [ "$mode" = server ]; then
-  server_bin=$(server_cabal list-bin) && [ -x "$server_bin" ] ||
+  server_bin=$(server_cabal list-bin -v0) && [ -x "$server_bin" ] ||
     die "there is no -O2 build of wiki-server (dist-newstyle/native-opt); run without --no-build"
 fi
 
