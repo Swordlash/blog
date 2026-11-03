@@ -856,7 +856,7 @@ try {
   // opens the editor on it; Ctrl+S saves and stays there, saying so, and
   // Save and close shows the page.
   await page.locator("#app .space-pages-link").click();
-  await arrive({ path: "/s/blog/pages/", view: "space-view", crumb: "Pages and settings" }, "Blog's pages, for a new page");
+  await arrive({ path: "/s/blog/pages/", view: "space-view", crumb: "Space settings" }, "Blog's pages, for a new page");
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await arrive({ path: "/s/blog/new-page/", view: "new-page-view", crumb: "New page" }, "the new page's form");
   await page.locator("#app .new-page-title").pressSequentially("Smoke page");
@@ -890,7 +890,7 @@ try {
   await arrive({ path: "/s/team/", view: "page-view", text: "Team handbook" }, "the team's space");
   await page.locator("#app .wiki-sidebar .sidebar-templates a", { hasText: "Weekly sync" }).waitFor({ timeout });
   await page.locator("#app .space-pages-link").click();
-  await arrive({ path: "/s/team/pages/", view: "space-view", crumb: "Pages and settings" }, "Team's pages, for a page from a template");
+  await arrive({ path: "/s/team/pages/", view: "space-view", crumb: "Space settings" }, "Team's pages, for a page from a template");
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await arrive({ path: "/s/team/new-page/", view: "new-page-view", crumb: "New page" }, "the new page's form, with templates");
   const starts = await page.locator("#app .new-page-choice").allTextContents();

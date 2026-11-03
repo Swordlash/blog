@@ -274,7 +274,7 @@ serverTour =
   , "The front page lists the spaces you may read, and those you visited last."
   , "Inside a space, the sidebar shows its pages and its subspaces, and a menu"
   , "to switch to another space. A space is private until whoever administers"
-  , "it makes it public; **Pages and settings**, in the sidebar, is where they"
+  , "it makes it public; **Space settings**, in the sidebar, is where they"
   , "choose who may view, edit or administer it, and give it a description, an"
   , "icon and a home page. The icon is the browser tab's on the space's pages;"
   , "an administrator gives the wiki an icon of its own on the front page, for"

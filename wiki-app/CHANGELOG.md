@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The sidebar's link to a space's pages, order, settings and macros is
+"Space settings" now, which is what people look for there; the page's
+breadcrumb says the same. The settings form's fields no longer sit a
+field's height apart.
+
 A click on a space's card on the front page, made while the home page was
 still loading, is no longer lost now and then: the home page sits in an
 element of its own (`home-document`), so the directory keeps its place.

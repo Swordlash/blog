@@ -109,7 +109,7 @@ anonymous backing = describe "for someone not signed in" $ do
     appIn space `shouldNotSatisfy` T.isInfixOf "class=\"space-link\" href=\"/s/blog/\""
     (pagesStatus, pages) <- page r r.public "/s/docs/pages/"
     pagesStatus `shouldBe` 200
-    pages `shouldSatisfy` T.isInfixOf "<title>Pages and settings · Docs · Wiki</title>"
+    pages `shouldSatisfy` T.isInfixOf "<title>Space settings · Docs · Wiki</title>"
     appIn pages `shouldSatisfy` T.isInfixOf "<h1>Docs</h1>"
     appIn pages `shouldSatisfy` T.isInfixOf "<p class=\"space-description\">How to use this wiki: a guided tour, and everything its Markdown can do.</p>"
     (tourStatus, tour) <- page r r.public "/s/docs/p/tour/"
