@@ -16,10 +16,16 @@ response types), `wiki-app` (the Halogen application), `wiki-server` (servant, S
 
 ## How work is organised
 
-One session, the one the owner talks to, does the work itself (the owner, 2026-10-31):
-it owns `docs/PLAN.md`, cuts the plan into work packages, implements each one, and
-amends the plan as it goes: a decision confirmed or changed, acceptance criteria met or
-carried over. No subagents implement work packages. Changes to `docs/PLAN.md` alone go
+One session, the one the owner talks to, owns the work (the owner, 2026-10-31): it owns
+`docs/PLAN.md`, cuts the plan into work packages, sees each one through, and amends
+the plan as it goes: a decision confirmed or changed, acceptance criteria met or
+carried over. Who writes the code depends on the session's model (the owner,
+2026-11-03): a session on Fable (`claude-fable`) plans, briefs and reviews, and never
+implements itself: for each work package it runs one Opus subagent (model `opus`,
+every effort `high`) in a worktree of its own, with the package's text, the files to
+read and the verification to run, and takes its report; a session on another model
+implements itself. Either way the session is the one that opens the pull request,
+handles the review rounds and amends the plan. Changes to `docs/PLAN.md` alone go
 straight to `main`, without a pull request; code goes through one, one per work package,
 opened ready for review, not as a draft, on its own branch.
 

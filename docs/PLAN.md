@@ -368,6 +368,23 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.49 A deployment without a browser build** (the owner, 2026-11-03, on a company
+  machine with no npm registry at all: "zróbmy browserless deployment"). The page the
+  server serves (`dist-newstyle/wasm-opt/public/app`: `app.wasm`, the bundled JavaScript
+  and CSS with their npm dependencies, the fonts) is built by GitHub Actions and kept
+  there: every push to `main` keeps the last five as workflow artifacts, and every tag
+  keeps its own as a release asset. `toolchain/deploy-local.sh --backend-only[=REF]`
+  then builds nothing for the browser and needs neither the wasm toolchain nor npm: it
+  downloads that page for REF, `main` (the latest), a tag, or a commit hash (the
+  default: the checkout's own), with a GitHub token the operator gives it (a
+  fine-grained token reading the repository's actions and contents, from
+  `--github-token-file` or `GH_TOKEN`), builds `wiki-server` natively (the bootstrap's
+  new `native` mode: the host compiler and cabal alone), and installs as before. Node
+  is not required in that mode: what the deploy did with it (the brotli copies, the
+  probes of the listeners) is done without, or skipped and said. Tests against the fake
+  GitHub in `test-deploy-local.sh`, the `native` mode in `test-bootstrap.sh`; the
+  workflow checked by a run on `main`; the README's deployment section.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
