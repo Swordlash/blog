@@ -1,0 +1,278 @@
+name: Server page
+
+# The page wiki-server serves, built here so that a machine that cannot
+# build it (no npm registry, no wasm toolchain, no Node) can deploy the
+# server with it: `sh toolchain/deploy-local.sh --backend-only[=REF]`
+# downloads it and builds wiki-server alone. The page is
+# dist-newstyle/wasm-opt/public/app, the production build
+# toolchain/deploy-local.sh makes on a machine that can
+# (`WIKI_BACKEND=server HALOGEN_BASE_PATH=/ npm run build-wasm-opt`).
+#
+# It is kept as a release asset, a zip of the directory's contents, since
+# a release asset of a public repository downloads without a token and a
+# workflow artifact does not:
+#
+#   - for main, on the pre-release main-latest, made by the first run and
+#     updated by every push to main after: app-server-<full commit
+#     hash>.zip for each of main's newest five commits with a page (older
+#     ones are deleted), the release's text listing them;
+#   - for a tag, on that tag's release, made if there is none:
+#     app-server-<tag>.zip, kept for good.
+#
+# A push to main that changes Markdown alone builds no page, as CI builds
+# nothing for it: its page is that of the commit before, which the deploy
+# script takes for it. The tag main-latest is made by this workflow
+# through the API, which starts no run of it, and is ignored anyway.
+#
+# Apart from build.yml so that a tag's push runs this alone, and so that
+# a push to main builds the page whatever build.yml's plan job decides (it
+# skips its build jobs for a tree a pull request has tested). On GitHub's
+# hosted runners always: the steps that set the toolchain up are those of
+# build.yml's wasm job on a hosted runner, and its caches are read, with a
+# store and build directories of this build's own, since every dependency
+# is compiled at -O2 here. The first run compiles all of them, which takes
+# an hour or more; later runs only what changed.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '**'
+      - '!main-latest'
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+# One build of a ref at a time; a newer push to main waits for the one
+# under way rather than cancelling it, so that its commit gets its page.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# The same pins as build.yml's (and toolchain/bootstrap.sh's): change them
+# together.
+env:
+  GHC_VERSION: '9.14.1'
+  CABAL_VERSION: '3.16.1.0'
+  WASM_GHC_VERSION: '9.14.1.20260731'
+  GHC_WASM_META_REV: '358ea50b8496a69da6ce375c0c58bc049dbcb92d'
+  GHC_WASM_FLAVOUR: '9.14'
+  NODE_VERSION: '24'
+  ALEX_VERSION: '3.5.4.2'
+  HAPPY_VERSION: '2.1.7'
+
+jobs:
+  page:
+    runs-on: ubuntu-latest
+    # Releases are made and their assets added and deleted with the run's
+    # own token.
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Pin the cabal directory
+      run: echo "CABAL_DIR=$HOME/.cabal" >> "$GITHUB_ENV"
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+
+    # The same caches as build.yml's wasm job, read and written under the
+    # same keys.
+    - name: Cache wasm sysroot
+      uses: actions/cache@v5
+      with:
+        path: ~/.ghc-wasm
+        key: ${{ runner.os }}-ghc-wasm-sysroot-${{ env.GHC_WASM_META_REV }}
+
+    - name: Cache wasm cross-compiler
+      uses: actions/cache@v5
+      with:
+        path: /usr/local/.ghcup/ghc/wasm32-wasi-${{ env.WASM_GHC_VERSION }}
+        key: ${{ runner.os }}-ghcup-wasm32-wasi-${{ env.WASM_GHC_VERSION }}
+
+    # As in build.yml's wasm job on a hosted runner.
+    - name: Install GHC WebAssembly toolchain
+      run: |
+        mkdir -p "$RUNNER_TEMP/ghc-wasm-meta"
+        curl --fail --location --retry 5 "https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$GHC_WASM_META_REV/ghc-wasm-meta-$GHC_WASM_META_REV.tar.gz" | tar xz --strip-components=1 --directory "$RUNNER_TEMP/ghc-wasm-meta"
+        if [ ! -x "$HOME/.ghc-wasm/add_to_github_path.sh" ]; then
+          SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" "$RUNNER_TEMP/ghc-wasm-meta/setup.sh"
+        fi
+        touch "$HOME/.ghc-wasm/.bootstrap-$GHC_WASM_META_REV"
+        # shellcheck source=/dev/null
+        . ~/.ghc-wasm/env
+        if ! ghcup whereis cabal "$CABAL_VERSION" >/dev/null 2>&1; then
+          ghcup install cabal "$CABAL_VERSION"
+        fi
+        ghcup set cabal "$CABAL_VERSION"
+        if ! ghcup whereis ghc "wasm32-wasi-$WASM_GHC_VERSION" >/dev/null 2>&1; then
+          # CONFIGURE_ARGS is a list of arguments, split on purpose.
+          # shellcheck disable=SC2086
+          ghcup -s "file://$RUNNER_TEMP/ghc-wasm-meta/ghcup-wasm-0.0.9.yaml" install ghc "wasm32-wasi-$WASM_GHC_VERSION" --set -- $CONFIGURE_ARGS
+        fi
+        ghcup set ghc "wasm32-wasi-$WASM_GHC_VERSION"
+
+    # The prerender, wiki-app-prerender, is a native program.
+    - name: Install host GHC
+      run: |
+        if ! ghcup whereis ghc "$GHC_VERSION" >/dev/null 2>&1; then
+          ghcup install ghc "$GHC_VERSION"
+        fi
+        ghcup set ghc "$GHC_VERSION"
+
+    - name: Activate toolchain
+      run: |
+        echo "$(ghcup whereis basedir)/ghc/wasm32-wasi-$WASM_GHC_VERSION/bin" >> "$GITHUB_PATH"
+        echo "$(ghcup whereis basedir)/bin" >> "$GITHUB_PATH"
+
+    - name: Install libpq and libsodium
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
+
+    - name: Install JavaScript dependencies
+      run: npm ci
+
+    - name: Update Cabal package index
+      run: cabal update
+
+    # A store of this build's own (every dependency at -O2 has its own unit
+    # ids), carried forward from run to run as build.yml's are; failing
+    # one, build.yml's wasm store, which holds the prerender's native
+    # dependencies.
+    - name: Restore cached dependencies
+      uses: actions/cache/restore@v5
+      id: cache
+      env:
+        key: ${{ runner.os }}-wasm-opt-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}
+        plan: ${{ hashFiles('cabal.project', 'cabal-wasm.project', 'cabal-wasm-opt.project', '**/*.cabal') }}
+        fallback: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}
+      with:
+        path: ${{ env.CABAL_DIR }}/store
+        key: ${{ env.key }}-${{ env.plan }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ env.key }}-${{ env.plan }}-
+          ${{ env.key }}-
+          ${{ env.fallback }}-
+
+    - name: Cache the build directories
+      uses: actions/cache@v5
+      env:
+        compatibility: ${{ runner.os }}-${{ runner.arch }}-server-page-build-v1-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}
+      with:
+        path: |
+          dist-newstyle/native-fast
+          dist-newstyle/wasm-opt/build
+          dist-newstyle/wasm-opt/cache
+          dist-newstyle/wasm-opt/packagedb
+          dist-newstyle/wasm-opt/src
+        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
+        restore-keys: ${{ env.compatibility }}-
+
+    # Native alex and happy for the wasm build of ghc-lib-parser, as in
+    # build.yml's wasm job.
+    - name: Install alex and happy
+      run: |
+        cabal install "alex-$ALEX_VERSION" "happy-$HAPPY_VERSION" --ignore-project \
+          --with-compiler="$(ghcup whereis ghc "$GHC_VERSION")" --installdir="$CABAL_DIR/bin" \
+          --install-method=copy --overwrite-policy=always
+        echo "$CABAL_DIR/bin" >> "$GITHUB_PATH"
+
+    # Built here so that the store is saved even if the build after fails.
+    - name: Install dependencies
+      run: |
+        cabal build all --only-dependencies --project-file=cabal-native-fast.project --builddir=dist-newstyle/native-fast
+        (
+          # shellcheck source=/dev/null
+          . ~/.ghc-wasm/env
+          rm -f dist-newstyle/wasm-opt/cache/compiler
+          cabal build all --only-dependencies --project-file=cabal-wasm-opt.project \
+            --builddir=dist-newstyle/wasm-opt \
+            --with-compiler="$(command -v wasm32-wasi-ghc)" \
+            --with-hc-pkg="$(command -v wasm32-wasi-ghc-pkg)" \
+            --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
+        )
+
+    - name: Save cached dependencies
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ env.CABAL_DIR }}/store
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Build the server's page
+      env:
+        WIKI_BACKEND: server
+        HALOGEN_BASE_PATH: /
+      run: npm run build-wasm-opt
+
+    # The directory's contents at the zip's root, as the deploy script
+    # unpacks it; it checks for the same three files.
+    - name: Zip the page
+      id: zip
+      run: |
+        app=dist-newstyle/wasm-opt/public/app
+        for file in index.html 404.html app.wasm; do
+          [ -f "$app/$file" ] || { echo "::error::the build lacks $file"; exit 1; }
+        done
+        if [ "$GITHUB_REF_TYPE" = tag ]; then
+          asset="app-server-$(printf '%s' "$GITHUB_REF_NAME" | tr / -).zip"
+        else
+          asset="app-server-$GITHUB_SHA.zip"
+        fi
+        (cd "$app" && zip -q -r -X "$RUNNER_TEMP/$asset" .)
+        echo "asset=$asset" >> "$GITHUB_OUTPUT"
+        du -h "$RUNNER_TEMP/$asset" | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: Keep the page of main on the pre-release main-latest
+      if: github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        ASSET: ${{ steps.zip.outputs.asset }}
+      run: |
+        if ! gh release view main-latest >/dev/null 2>&1; then
+          gh release create main-latest --prerelease --target "$GITHUB_SHA" \
+            --title 'The page of main, latest five commits' \
+            --notes 'The page wiki-server serves, for the newest commits of main.'
+        fi
+        gh release upload main-latest "$RUNNER_TEMP/$ASSET" --clobber
+        # The newest five pages are kept, by the time each was uploaded.
+        gh api "repos/$GITHUB_REPOSITORY/releases/tags/main-latest" \
+          --jq '.assets[] | select(.name | test("^app-server-[0-9a-f]{40}[.]zip$")) | "\(.updated_at) \(.name)"' |
+          sort -r > "$RUNNER_TEMP/assets"
+        tail -n +6 "$RUNNER_TEMP/assets" | while read -r _ name; do
+          echo "deleting $name"
+          gh release delete-asset main-latest "$name" --yes
+        done
+        # shellcheck disable=SC2016 # Markdown's backticks, not commands.
+        {
+          echo 'The page wiki-server serves, for the newest five commits of main with one, newest first:'
+          echo
+          head -n 5 "$RUNNER_TEMP/assets" | while read -r time name; do
+            commit=${name#app-server-}
+            echo "- ${commit%.zip}, built $time"
+          done
+          echo
+          echo 'Deployed with `sh toolchain/deploy-local.sh --backend-only=main` (the newest), or `--backend-only=<hash>`.'
+        } > "$RUNNER_TEMP/notes"
+        gh release edit main-latest --notes-file "$RUNNER_TEMP/notes"
+
+    - name: Keep the page of the tag on its release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        ASSET: ${{ steps.zip.outputs.asset }}
+      run: |
+        if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "The page wiki-server serves is attached as $ASSET: sh toolchain/deploy-local.sh --backend-only=$GITHUB_REF_NAME deploys it."
+        fi
+        gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/$ASSET" --clobber
