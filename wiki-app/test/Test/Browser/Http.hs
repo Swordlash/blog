@@ -60,7 +60,7 @@ import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
-import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), Notifications (..), NotificationsApi (..))
 import Wiki.Api.ServerSettings (HomePage (showAnonymous), ServerSettings, ServerSettingsOf (homePage), noServerSettings)
 import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
@@ -91,7 +91,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
-import Wiki.Core.Notification (Watch (..), WatchReason (..), WatchTarget (..))
+import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..), WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Space qualified as S
@@ -361,6 +361,7 @@ spec m = do
   views m
   accounts m
   ownPassword m
+  notificationFeed m
   comments m
   presence m
 
@@ -549,6 +550,41 @@ ownPassword m = describe "one's own password" $ do
     length <$> findAll ui ".sign-out" `shouldReturn` 0
     unmount ui
     serverStops
+
+-- | The address of one's feed of notifications, made, copied and made
+-- anew from the account panel's notifications.
+notificationFeed :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+notificationFeed m = describe "one's feed of notifications" $
+  it "makes its address in the account panel, shows it whole, copies it, and makes a new one" $
+    runPage $ do
+      serverStarts
+      serveDemo
+      rita <- unsafeIOToPageM (signedInAs "user-reader")
+      answerWith "GET" "api/v1/session" 200 rita
+      answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
+      answerWith "GET" (endpointUrl (\e -> e.notifications.settings)) 200 NotificationSettings {mail = MailOff, watchOwn = True, verifiedEmail = False, mailing = False}
+      answerWith "GET" "api/v1/notifications/feed" 200 FeedAddress {address = Nothing}
+      answerWith "POST" "api/v1/notifications/feed" 200 FeedAddress {address = Just "me/notifications.atom?token=first"}
+      ui <- startServer m Home
+      find ui ".account-toggle" >>= click
+      find ui ".notification-feed-renew" >>= (`shouldHaveText` "Make an address")
+      length <$> findAll ui ".notification-feed-address" `shouldReturn` 0
+      find ui ".notification-feed-renew" >>= click
+      -- The address in full, as a feed reader needs it.
+      shown <- find ui ".notification-feed-address" >>= (`getProperty` "value")
+      shown `shouldSatisfy` T.isSuffixOf "/me/notifications.atom?token=first"
+      shown `shouldSatisfy` T.isPrefixOf "http"
+      -- Whether the browser lets the page write to the clipboard is not
+      -- this test's concern; that "Copy" is there and can be pressed is.
+      find ui ".notification-feed-copy" >>= click
+      answerWith "POST" "api/v1/notifications/feed" 200 FeedAddress {address = Just "me/notifications.atom?token=second"}
+      find ui ".notification-feed-renew" >>= (`shouldHaveText` "Make a new address")
+      find ui ".notification-feed-renew" >>= click
+      eventually (find ui ".notification-feed-address" >>= (`getProperty` "value") >>= (`shouldSatisfy` T.isSuffixOf "/me/notifications.atom?token=second"))
+      posts <- filter (\r -> r.method == "POST" && r.url == "api/v1/notifications/feed") <$> asked
+      length posts `shouldBe` 2
+      unmount ui
+      serverStops
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)

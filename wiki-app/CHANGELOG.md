@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The account panel's notifications have a block "Your notifications as a
+feed" (WP5.31): over `wiki-server`, "Make an address" makes the secret
+address of an Atom feed of one's notifications, shown whole with "Copy",
+and "Make a new address" replaces it, the old one stopping. The demo has
+no feed and says so. `MonadNotifications` gains `feedAddress` and
+`renewFeedAddress`, which the demo answers with `Invalid`. The server's
+tour in the guide says where the feed is.
+
 The one-line JavaScript functions that read or called the browser's own
 objects are gone (WP5.47): the shell, the editor, the search box, the slides,
 the demo's backend and the assistant read and call the platform through

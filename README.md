@@ -463,7 +463,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   replies and resolving, arriving live in every tab over `wiki-server`.
 - **Mentions and notifications**: `@login` tells someone, under a bell in the
   header, as do comments on and changes to the pages they watch; over
-  `wiki-server`, by mail too.
+  `wiki-server`, by mail too, and as a private Atom feed whose address the
+  account panel gives.
 - **Search** by title and text (`/` to focus it), in every space or one.
 - **Stars**: a page's **Star** keeps it under **Starred** in the header, one
   click away from every page, for each user (kept by `wiki-server`, or in the
