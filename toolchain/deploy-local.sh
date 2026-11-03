@@ -1416,7 +1416,7 @@ if [ -n "$build" ]; then
     sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"}
   else
     if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
-      say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
+      say "first -O2 build: every dependency is compiled again at -O2 for wasm, so this can take over an hour once; later runs rebuild only what changed."
     fi
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"}

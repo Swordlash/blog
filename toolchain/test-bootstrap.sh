@@ -30,8 +30,8 @@ fixture() {
   CACHE=$case_dir/cache/chromium_headless_shell-1234
   CHROMIUM_NAME=chrome-headless-shell
   PATH=$case_dir/bin:/usr/bin:/bin
-  NODE_REPORT=v24.99.0 GHC_REPORT=9.14.1 HAPPY_REPORT=2.1.7 ALEX_REPORT=3.5.4.2
-  export HOME EVENTS CACHE CHROMIUM_NAME PATH NODE_REPORT GHC_REPORT HAPPY_REPORT ALEX_REPORT
+  NODE_REPORT=v24.99.0 GHC_REPORT=9.14.1
+  export HOME EVENTS CACHE CHROMIUM_NAME PATH NODE_REPORT GHC_REPORT
   : >"$EVENTS"
   mkdir -p "$HOME/index/hackage.haskell.org"
   touch "$HOME/index/hackage.haskell.org/01-index.tar"
@@ -46,23 +46,16 @@ case $name in
       --numeric-version) printf '3.16.1.0\n' ;;
       path) printf '%s/index\n' "$HOME" ;;
       build | test) printf 'cabal'; printf ' <%s>' "$@"; printf '\n' ;;
-      install)
+      update)
         printf 'cabal %s\n' "$*" >>"$EVENTS"
-        for arg do case $arg in --installdir=*) dest=${arg#*=} ;; esac; done
-        printf 'Building %s (the fake cabal)\n' "$2"
+        printf 'Downloading the package index (the fake cabal)\n'
         [ -z "${FAKE_CABAL_FAIL:-}" ] || exit 1
-        case $2 in
-          happy-*) printf '#!/bin/sh\nprintf "Happy Version 2.1.7\\n"\n' >"$dest/happy"; chmod +x "$dest/happy" ;;
-          alex-*) printf '#!/bin/sh\nprintf "Alex version 3.5.4.2\\n"\n' >"$dest/alex"; chmod +x "$dest/alex" ;;
-          *) exit 91 ;;
-        esac ;;
+        touch "$HOME/index/hackage.haskell.org/01-index.tar" ;;
       *) printf 'unexpected cabal %s\n' "$*" >>"$EVENTS"; exit 91 ;;
     esac ;;
   node)
     if [ "${1:-}" = --version ]; then printf '%s\n' "$NODE_REPORT"; else exec "$NODE_REAL" "$@"; fi ;;
   npm) printf 'unexpected npm %s\n' "$*" >>"$EVENTS"; exit 91 ;;
-  alex) [ "$1" = --version ] || exit 1; printf 'Alex version %s, (c) 2003 Chris Dornan and Simon Marlow\n' "$ALEX_REPORT" ;;
-  happy) [ "$1" = --version ] || exit 1; printf 'Happy Version %s Copyright (c) 1993-1996 Andy Gill, Simon Marlow (c) 1997-2005 Simon Marlow\n' "$HAPPY_REPORT" ;;
   fourmolu) printf 'fourmolu 0.21.0.0\n' ;;
   dpkg-query) printf 'install ok installed\n' ;;
   curl|apt-get|sudo) printf 'unexpected %s %s\n' "$name" "$*" >>"$EVENTS"; exit 91 ;;
@@ -85,7 +78,7 @@ case $name in
 esac
 EOF
   chmod +x "$case_dir/bin/tool"
-  for cmd in ghc cabal wasm32-wasi-ghc node npm alex happy fourmolu dpkg-query curl apt-get sudo git; do
+  for cmd in ghc cabal wasm32-wasi-ghc node npm fourmolu dpkg-query curl apt-get sudo git; do
     ln -s tool "$case_dir/bin/$cmd"
   done
   FAKE_SETUP=$case_dir/fake-setup.sh
@@ -171,8 +164,6 @@ cmp "$case_dir/before" "$case_dir/after" || fail 'check mutated fixtures'
 assert_contains "$case_dir/check" 'reuse ghc 9.14.1'
 assert_contains "$case_dir/check" 'reuse wasm sysroot'
 assert_contains "$case_dir/check" 'reuse Node v24.99.0'
-assert_contains "$case_dir/check" 'reuse alex 3.5.4.2'
-assert_contains "$case_dir/check" 'reuse happy 2.1.7'
 assert_contains "$case_dir/check" "reuse playwright-core 1.63.0 ($case_dir/repo)"
 assert_contains "$case_dir/check" 'reuse Chromium cache'
 [ ! -s "$EVENTS" ] || fail 'check ran a mutation command'
@@ -258,7 +249,7 @@ no_debian_fakes
 pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; with --without-postgres it does not ask Debian for libpq-dev'
 
 # What toolchain/deploy-local.sh --backend-only needs: GHC and cabal alone.
-# With no Node, no sysroot, no fourmolu, no alex or happy and no Chromium,
+# With no Node, no sysroot, no fourmolu and no Chromium,
 # `native` installs none of them (any attempt would reach the fake curl, git,
 # npm, cabal install or Playwright and be recorded), leaves a ~/.ghc-wasm it
 # does not recognise alone, and writes the environment file. Then, on
@@ -267,7 +258,7 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # anything and links the libsodium probe unless SODIUM_MISSING is set,
 # pkg-config knows zlib and libpq, and make and pg_config answer.
 fixture native
-rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" "$case_dir/bin/alex" "$case_dir/bin/happy" \
+rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" \
   "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
 cat >"$case_dir/bin/cc" <<'EOF'
 #!/bin/sh
@@ -396,14 +387,13 @@ env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/tool
 pass 'native installs GHC and cabal alone, with no wasm toolchain, Node, Chromium or fourmolu, on Debian or not, and checks what the native build needs after the Debian packages, libpq through pg_config on PATH, or, with --without-postgres, neither libpq-dev from Debian nor libpq in the check'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
-# With no GHC, cabal, wasm compiler, fourmolu, alex or happy on PATH, `node`
+# With no GHC, cabal, wasm compiler or fourmolu on PATH, `node`
 # installs none of them (any attempt would reach the fake curl, git or
 # cabal install and be recorded), reuses the Node 24 on PATH, leaves a
 # ~/.ghc-wasm it does not recognise alone, and writes the environment file.
 # With only an older Node on PATH it downloads Node, and nothing else.
 fixture node
-rm "$case_dir/bin/ghc" "$case_dir/bin/cabal" "$case_dir/bin/wasm32-wasi-ghc" "$case_dir/bin/fourmolu" \
-  "$case_dir/bin/alex" "$case_dir/bin/happy"
+rm "$case_dir/bin/ghc" "$case_dir/bin/cabal" "$case_dir/bin/wasm32-wasi-ghc" "$case_dir/bin/fourmolu"
 mkdir -p "$HOME/.ghc-wasm"
 printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
 bootstrap node >"$case_dir/node"
@@ -422,38 +412,36 @@ assert_contains "$case_dir/node-old" 'downloading Node failed'
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
 pass 'node installs Node alone, reusing a Node 24 on PATH, with no compilers, wasm toolchain, Chromium or fourmolu'
 
-fixture generators
+# A long step in toolchain mode, which the SessionStart hooks use: here cabal
+# updating a missing package index. Its output is kept in the log alone, and
+# the next run, with the index there, does not update it again.
+fixture index
 sysroot
-HAPPY_REPORT=2.1.70
-export HAPPY_REPORT
-bootstrap check >"$case_dir/check"
-assert_contains "$case_dir/check" 'install happy 2.1.7 (found: 2.1.70)'
+rm "$HOME/index/hackage.haskell.org/01-index.tar"
 bootstrap toolchain >"$case_dir/install"
-assert_contains "$EVENTS" 'cabal install happy-2.1.7 --ignore-project'
+assert_contains "$EVENTS" 'cabal update'
 if grep -F '(the fake cabal)' "$case_dir/install" >/dev/null; then fail 'toolchain mode showed a long step'"'"'s output'; fi
-assert_contains "$EVENTS" "--with-compiler=$case_dir/bin/ghc"
-if grep -F 'alex-' "$EVENTS" >/dev/null; then fail 'matching alex was reinstalled'; fi
+assert_contains "$HOME/.wiki-toolchain/bootstrap.log" 'Downloading the package index (the fake cabal)'
 : >"$EVENTS"
 bootstrap toolchain >"$case_dir/repeat"
-[ "$(cat "$EVENTS")" = 'chromium launch' ] || fail 'happy was reinstalled after repair'
-pass 'generators use --version, match whole versions and install only the missing pin'
+[ "$(cat "$EVENTS")" = 'chromium launch' ] || fail 'the package index was updated again'
+pass "in toolchain mode a long step's output is logged alone, and an index that is there is not updated"
 
 # In the modes toolchain/deploy-local.sh uses, a long step's output is shown
 # as it comes and kept in the log (above, in toolchain mode, it is logged
-# alone): here cabal building happy in build mode. A long step that fails
-# still stops the run, naming the step.
-fixture generators-build
+# alone): here cabal updating the package index in build mode. A long step
+# that fails still stops the run, naming the step.
+fixture index-build
 sysroot
 rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
-HAPPY_REPORT=2.1.70
-export HAPPY_REPORT
-if FAKE_CABAL_FAIL=1 bootstrap build >"$case_dir/build-fails" 2>&1; then fail 'build with a failing cabal install succeeded'; fi
-assert_contains "$case_dir/build-fails" 'Building happy-2.1.7 (the fake cabal)'
-assert_contains "$case_dir/build-fails" 'bootstrap: building happy failed'
+rm "$HOME/index/hackage.haskell.org/01-index.tar"
+if FAKE_CABAL_FAIL=1 bootstrap build >"$case_dir/build-fails" 2>&1; then fail 'build with a failing cabal update succeeded'; fi
+assert_contains "$case_dir/build-fails" 'Downloading the package index (the fake cabal)'
+assert_contains "$case_dir/build-fails" "bootstrap: updating cabal's package index failed"
 bootstrap build >"$case_dir/build"
-assert_contains "$case_dir/build" 'Building happy-2.1.7 (the fake cabal)'
-assert_contains "$HOME/.wiki-toolchain/bootstrap.log" 'Building happy-2.1.7 (the fake cabal)'
-assert_contains "$EVENTS" 'cabal install happy-2.1.7 --ignore-project'
+assert_contains "$case_dir/build" 'Downloading the package index (the fake cabal)'
+assert_contains "$HOME/.wiki-toolchain/bootstrap.log" 'Downloading the package index (the fake cabal)'
+assert_contains "$EVENTS" 'cabal update'
 pass "in build and native modes a long step's output is shown as well as logged, and a failing one stops the run"
 
 for kind in unknown incomplete wrong-revision; do
@@ -681,13 +669,12 @@ pass 'direct readiness rejects unloaded PATH while every npm build, serve and te
 
 readiness_fixture old-env
 mkdir -p "$HOME/.ghcup/bin" "$HOME/.wiki-toolchain"
-cp "$case_dir/bin/tool" "$HOME/.ghcup/bin/happy"
-HAPPY_REPORT=2.1.70
-export HAPPY_REPORT
-# Managed happy is pinned even while an incompatible user installation wins
+GHC_REPORT=9.12.2
+export GHC_REPORT
+# Managed GHC is pinned even while an incompatible user installation wins
 # on the initial PATH. The old env file wrongly skips a directory already there.
-printf '#!/bin/sh\nprintf "Happy Version 2.1.7\\n"\n' >"$HOME/.ghcup/bin/happy"
-chmod +x "$HOME/.ghcup/bin/happy"
+printf '#!/bin/sh\nprintf "9.14.1\\n"\n' >"$HOME/.ghcup/bin/ghc"
+chmod +x "$HOME/.ghcup/bin/ghc"
 PATH=$PATH:$HOME/.ghcup/bin:$HOME/.wiki-toolchain/node/bin:$HOME/.ghcup/bin
 export PATH
 printf 'case ":$PATH:" in *":%s/.ghcup/bin:"*) ;; *) PATH="%s/.ghcup/bin:$PATH" ;; esac\nexport PATH\n' \
@@ -734,17 +721,11 @@ assert_contains "$case_dir/missing-server" 'npm package http-server'
 pass 'partial npm dependencies and missing local executables fail with npm ci instructions'
 
 readiness_fixture pins
-HAPPY_REPORT=2.1.70
-export HAPPY_REPORT
-if bootstrap ready >"$case_dir/generator" 2>&1; then fail 'wrong generator passed readiness'; fi
-assert_contains "$case_dir/generator" 'happy 2.1.7 is required'
-HAPPY_REPORT=2.1.7
-export HAPPY_REPORT
 rm "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
 if bootstrap ready test-wasm >"$case_dir/chromium" 2>&1; then fail 'missing Chromium passed readiness for a browser test'; fi
 assert_contains "$case_dir/chromium" 'Chromium headless shell'
 [ ! -s "$EVENTS" ] || fail 'strict readiness tried repairing a missing tool'
-pass 'strict checks reject generator pins and missing Chromium without repairs'
+pass 'strict checks reject missing Chromium without repairs'
 
 # Each command is gated on what it needs: a hosted CI runner has the host GHC
 # and cabal alone for the native job, and the wasm job installs Chromium only
@@ -753,7 +734,7 @@ readiness_fixture needs
 rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
 bootstrap ready build-wasm >"$case_dir/wasm-no-browser"
 assert_contains "$case_dir/wasm-no-browser" 'ready for build-wasm'
-rm "$case_dir/bin/alex" "$case_dir/bin/happy" "$case_dir/bin/node" "$case_dir/bin/npm"
+rm "$case_dir/bin/node" "$case_dir/bin/npm"
 # The host may already have Node 24 in /usr/bin. An explicit old mock
 # makes this case independent of the machine running the test.
 ln -s tool "$case_dir/bin/node"
@@ -766,7 +747,6 @@ for command in build-native test-native; do
   assert_contains "$case_dir/$command" "ready for $command"
 done
 if bootstrap ready build-wasm >"$case_dir/wasm-native-only" 2>&1; then fail 'a wasm build passed readiness with the host tools alone'; fi
-assert_contains "$case_dir/wasm-native-only" 'alex 3.5.4.2 is required'
 assert_contains "$case_dir/wasm-native-only" 'wasm sysroot'
 assert_contains "$case_dir/wasm-native-only" 'Node >=24'
 if grep -F fourmolu "$case_dir/wasm-native-only" >/dev/null; then fail 'readiness asked for fourmolu'; fi

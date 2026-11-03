@@ -81,8 +81,6 @@ env:
   GHC_WASM_META_REV: '358ea50b8496a69da6ce375c0c58bc049dbcb92d'
   GHC_WASM_FLAVOUR: '9.14'
   NODE_VERSION: '24'
-  ALEX_VERSION: '3.5.4.2'
-  HAPPY_VERSION: '2.1.7'
 
 jobs:
   page:
@@ -195,15 +193,6 @@ jobs:
           dist-newstyle/wasm-opt/src
         key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
         restore-keys: ${{ env.compatibility }}-
-
-    # Native alex and happy for the wasm build of ghc-lib-parser, as in
-    # build.yml's wasm job.
-    - name: Install alex and happy
-      run: |
-        cabal install "alex-$ALEX_VERSION" "happy-$HAPPY_VERSION" --ignore-project \
-          --with-compiler="$(ghcup whereis ghc "$GHC_VERSION")" --installdir="$CABAL_DIR/bin" \
-          --install-method=copy --overwrite-policy=always
-        echo "$CABAL_DIR/bin" >> "$GITHUB_PATH"
 
     # Built here so that the store is saved even if the build after fails.
     - name: Install dependencies
