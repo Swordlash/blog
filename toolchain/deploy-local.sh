@@ -26,7 +26,10 @@
 #      With --backend-only the page is not built here: it is downloaded from
 #      the GitHub release where CI keeps it (see --backend-only below), and
 #      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
-#      and cabal alone: no wasm toolchain, no Node, no npm).
+#      and cabal alone: no wasm toolchain, no Node, no npm). With --static
+#      and --backend-only the demo's page is downloaded the same way and
+#      nothing is built: toolchain/bootstrap.sh node installs Node alone,
+#      which serves the page and writes its brotli copies.
 #      With --server the wiki's database is PostgreSQL by default: the
 #      postgres service of docker-compose.yml (postgres:17), run with Docker
 #      as the compose project <name>, its data in the named volume
@@ -147,25 +150,28 @@
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
 #   --backend-only[=REF]
-#                    --server: build wiki-server only, and download the page CI built
-#                    for REF instead of building it, for a machine without the wasm
-#                    toolchain, npm or Node. REF is main (the newest page of main), a
-#                    tag (its release's page), or a commit hash, whole or a prefix;
-#                    without =REF, this checkout's own commit (git rev-parse HEAD),
-#                    or the newest before it that differs from it in Markdown files
-#                    alone, other than the Markdown compiled into the programs (CI
-#                    builds no page for those). CI keeps the pages as
-#                    release assets of the repository origin names
-#                    (.github/workflows/server-page.yml): app-server-<hash>.zip on
-#                    the pre-release main-latest for main's newest five commits, and
-#                    app-server-<tag>.zip on each tag's release. They are public, so
-#                    no token is needed: curl downloads them from github.com and lists
-#                    them with api.github.com (sixty requests an hour without a
-#                    token; a deploy makes one or two). The page and the server talk
-#                    over the API, so the page should be of the checkout's commit;
-#                    a warning says when it is not. Reading GitHub's answers and
-#                    unpacking the zip take python3 (or jq and unzip). Nothing in
-#                    this mode uses Node: wiki-server compress writes gzip copies of
+#                    download the page CI built for REF instead of building it, for a
+#                    machine without the wasm toolchain or npm: with --server, build
+#                    wiki-server only, and use no Node; with --static, build nothing,
+#                    and use Node alone (below). REF is main (the newest page of
+#                    main), a tag (its release's page), or a commit hash, whole or a
+#                    prefix; without =REF, this checkout's own commit (git rev-parse
+#                    HEAD), or the newest before it that differs from it in Markdown
+#                    files alone, other than the Markdown compiled into the programs
+#                    (CI builds no page for those). CI keeps the pages as release
+#                    assets of the repository origin names
+#                    (.github/workflows/server-page.yml): app-server-<hash>.zip (the
+#                    server's page) and app-demo-<hash>.zip (the demo's) on the
+#                    pre-release main-latest for main's newest five commits, and
+#                    app-server-<tag>.zip and app-demo-<tag>.zip on each tag's
+#                    release. They are public, so no token is needed: curl downloads
+#                    them from github.com and lists them with api.github.com (sixty
+#                    requests an hour without a token; a deploy makes one or two).
+#                    The page and the server talk over the API, so the page should be
+#                    of the checkout's commit; a warning says when it is not (and for
+#                    the demo too). Reading GitHub's answers and unpacking the zip
+#                    take python3 (or jq and unzip). With --server, nothing in this
+#                    mode uses Node: wiki-server compress writes gzip copies of
 #                    the files in place of the brotli ones, the checks that the
 #                    service answers go through curl, the reading of tailscale status
 #                    through python3 (or jq), and the check that the port is free
@@ -174,8 +180,12 @@
 #                    libpq, libsodium, through cc, pg_config and pkg-config), naming
 #                    their Debian and RHEL packages; one built elsewhere is found
 #                    through PKG_CONFIG_PATH, LIBRARY_PATH, C_INCLUDE_PATH or CPATH,
-#                    which reach cabal untouched. Remembered for the next run;
-#                    --static with it is refused (the demo is built on this machine)
+#                    which reach cabal untouched. With --static, the demo is served
+#                    by server.mjs under Node, as when it is built here, and
+#                    compress.mjs writes its brotli copies; Node is the managed one
+#                    under the toolchain directory, or a Node 24 or later on PATH,
+#                    or else toolchain/bootstrap.sh node installs the managed one,
+#                    and nothing else. Remembered for the next run
 #   --no-backend-only
 #                    build the page on this machine again, after a run with --backend-only
 #   --no-build       deploy the last -O2 build as it is, without the build step
@@ -555,8 +565,10 @@ if [ "$action" = status ]; then
     exit 0
   fi
   say "deployment $name: $prev_dir, on $prev_bind:$prev_port${prev_toolchain:+; its toolchain under $prev_toolchain}"
-  if [ -n "$prev_backend_only" ]; then
+  if [ -n "$prev_backend_only" ] && [ "$prev_mode" = server ]; then
     say "its page is downloaded from GitHub (--backend-only=$prev_backend_only${prev_backend_only_commit:+, the page of $prev_backend_only_commit}), and only wiki-server is built here"
+  elif [ -n "$prev_backend_only" ]; then
+    say "its page, the demo's, is downloaded from GitHub (--backend-only=$prev_backend_only${prev_backend_only_commit:+, the page of $prev_backend_only_commit}), and nothing is built here"
   fi
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
@@ -617,7 +629,7 @@ if [ "$action" = status ]; then
   fi
   linger_report
   if [ -n "$prev_port" ]; then
-    if [ -n "$prev_backend_only" ]; then
+    if [ -n "$prev_backend_only" ] && [ "$prev_mode" = server ]; then
       node='' nodeless=1
     else
       node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
@@ -678,8 +690,10 @@ if [ "$mode" = server ]; then
 fi
 
 # The page from GitHub (--backend-only), now or on an earlier run, unless
-# --no-backend-only goes back to building it here. Only for the server: the
-# demo is built here, as its pages are prerendered per route.
+# --no-backend-only goes back to building it here. CI builds two pages of
+# each commit, the server's and the demo's (prerendered per route), so
+# page_kind says which one this deployment downloads.
+if [ "$mode" = server ]; then page_kind=server; else page_kind=demo; fi
 case $opt_backend_only in
   '') backend_only=$prev_backend_only ;;
   none) backend_only= ;;
@@ -688,20 +702,15 @@ esac
 backend_only_commit=
 nodeless=
 if [ -n "$backend_only" ]; then
-  if [ "$mode" != server ]; then
-    if [ -n "$opt_backend_only" ]; then
-      die "--backend-only deploys the wiki's server with a page CI built; the demo (--static) is built on this machine: drop --static, or --backend-only"
-    fi
-    die "this deployment downloads its page from GitHub (--backend-only=$backend_only), which is for the wiki's server; the demo (--static) is built on this machine: add --no-backend-only"
-  fi
   backend_only_commit=$prev_backend_only_commit
-  # Nothing in this mode runs Node.
-  nodeless=1
+  # Nothing in the server's mode runs Node; the demo's runs it to serve
+  # the page, as when the page is built here.
+  [ "$mode" != server ] || nodeless=1
   command -v curl >/dev/null 2>&1 || die "--backend-only downloads the page with curl, which is not installed here"
   if ! command -v python3 >/dev/null 2>&1; then
     if [ -n "$build" ] && ! { command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; }; then
       die "--backend-only reads GitHub's answers and unpacks the page with python3, which is not installed here (nor jq and unzip, which would do instead)"
-    elif ! command -v jq >/dev/null 2>&1; then
+    elif [ -n "$nodeless" ] && ! command -v jq >/dev/null 2>&1; then
       die "--backend-only reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
     fi
   fi
@@ -808,11 +817,11 @@ build_app() {
 
 # --- The page from GitHub (--backend-only) ---------------------------------
 #
-# CI (.github/workflows/server-page.yml) builds the server's page as
-# build_app does and keeps it as a zip of the directory's contents, a
-# release asset: app-server-<hash>.zip on the pre-release main-latest for
-# each of main's newest five commits, and app-server-<tag>.zip on a tag's
-# release. Release assets of a public repository need no token, unlike a
+# CI (.github/workflows/server-page.yml) builds the server's page and the
+# demo's as build_app does and keeps each as a zip of the directory's
+# contents, a release asset: app-server-<hash>.zip and app-demo-<hash>.zip
+# on the pre-release main-latest for each of main's newest five commits,
+# and app-server-<tag>.zip and app-demo-<tag>.zip on a tag's release. Release assets of a public repository need no token, unlike a
 # workflow's artifacts. The listing comes from api.github.com, the zip from
 # github.com.
 
@@ -862,8 +871,9 @@ release_assets() {
   rm -f "$listing"
 }
 
-# The asset name of a tag's page: a tag may hold a slash, an asset name not.
-tag_asset() { printf 'app-server-%s.zip\n' "$(printf '%s' "$1" | tr / -)"; }
+# The asset name of a tag's page, of the kind page_kind names (server or
+# demo): a tag may hold a slash, an asset name not.
+tag_asset() { printf 'app-%s-%s.zip\n' "$page_kind" "$(printf '%s' "$1" | tr / -)"; }
 
 # Whether a file of the repository is code: something the page or the
 # server is built from. Markdown files are documentation, except the
@@ -891,11 +901,13 @@ same_code() {
 }
 
 # Which page --backend-only=REF names: sets page_tag (the release), page_asset
-# (its asset) and backend_only_commit (the commit the page was built from,
-# empty for a tag this checkout does not have).
+# (its asset, app-server-… or app-demo-… as page_kind says) and
+# backend_only_commit (the commit the page was built from, empty for a tag
+# this checkout does not have).
 resolve_page() {
+  if [ "$page_kind" = server ]; then page_name=page; else page_name='demo page'; fi
   no_page() {
-    die "no page was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
+    die "no $page_name was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
   }
   github_repo=$(github_repo) || exit 1
   ref=$backend_only
@@ -906,9 +918,9 @@ resolve_page() {
     main)
       page_tag=main-latest
       release_assets main-latest
-      page_asset=$(printf '%s\n' "$release_list" | grep -E '^app-server-[0-9a-f]{40}[.]zip ' | sort -k 2 -r | head -n 1 | cut -d' ' -f1)
-      [ -n "$page_asset" ] || die "GitHub has no page of main yet (the release main-latest has none): CI makes one on the next push to main"
-      backend_only_commit=${page_asset#app-server-}
+      page_asset=$(printf '%s\n' "$release_list" | grep -E "^app-$page_kind-[0-9a-f]{40}[.]zip " | sort -k 2 -r | head -n 1 | cut -d' ' -f1)
+      [ -n "$page_asset" ] || die "GitHub has no $page_name of main yet (the release main-latest has none): CI makes one on the next push to main"
+      backend_only_commit=${page_asset#"app-$page_kind-"}
       backend_only_commit=${backend_only_commit%.zip} ;;
     *)
       if printf '%s\n' "$ref" | grep -Eqx '[0-9a-fA-F]{7,40}'; then
@@ -923,22 +935,22 @@ resolve_page() {
           # from it in documentation alone has the same page.
           for commit in $(git -C "$ROOT" rev-list --max-count=20 "$full"); do
             same_code "$commit" "$full" || break
-            if printf '%s\n' "$assets" | grep -qx "app-server-${commit}[.]zip"; then
-              page_asset=app-server-$commit.zip
+            if printf '%s\n' "$assets" | grep -qx "app-$page_kind-${commit}[.]zip"; then
+              page_asset=app-$page_kind-$commit.zip
               [ "$commit" = "$full" ] || say "$full changes Markdown files alone since $commit, which has a page on GitHub: taking that one"
               break
             fi
           done
           [ -n "$page_asset" ] || no_page "$ref"
         else
-          matches=$(printf '%s\n' "$assets" | grep -E "^app-server-${ref}[0-9a-f]*[.]zip\$" || true)
+          matches=$(printf '%s\n' "$assets" | grep -E "^app-$page_kind-${ref}[0-9a-f]*[.]zip\$" || true)
           case $(printf '%s' "$matches" | grep -c . || true) in
             0) no_page "$ref" ;;
             1) page_asset=$matches ;;
             *) die "$ref is the start of several commits with a page on GitHub: give more of the hash" ;;
           esac
         fi
-        backend_only_commit=${page_asset#app-server-}
+        backend_only_commit=${page_asset#"app-$page_kind-"}
         backend_only_commit=${backend_only_commit%.zip}
       else
         page_tag=$ref
@@ -969,19 +981,29 @@ download_page() {
     unzip -q "$work/page.zip" -d "$work/app" || die "could not unpack $page_asset (see above)"
   fi
   for file in index.html 404.html app.wasm; do
-    [ -f "$work/app/$file" ] || die "$page_asset lacks $file: it is not a page CI built for the server"
+    [ -f "$work/app/$file" ] || die "$page_asset lacks $file: it is not a page CI built for the $page_kind"
   done
   rm -rf "$out"
   mkdir -p "${out%/*}"
   mv "$work/app" "$out"
   rm -rf "$work"
   # The page and the server talk over the API, so they should be of one
-  # version; a page of another commit is taken, with a warning.
+  # version; a page of another commit is taken, with a warning. The demo
+  # talks to no server, but a demo of another commit than the checkout's is
+  # as easily a surprise, so it is said too.
   checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
   if [ -z "$backend_only_commit" ]; then
-    warn "cannot tell which commit the page of $page_tag was built from (the tag is not in this checkout); wiki-server is built from ${checkout:-this checkout}, and the two should be of one version"
+    if [ "$page_kind" = server ]; then
+      warn "cannot tell which commit the page of $page_tag was built from (the tag is not in this checkout); wiki-server is built from ${checkout:-this checkout}, and the two should be of one version"
+    else
+      warn "cannot tell which commit the demo page of $page_tag was built from (the tag is not in this checkout)"
+    fi
   elif [ "$backend_only_commit" != "$checkout" ] && ! same_code "$backend_only_commit" "$checkout"; then
-    warn "the page is of $backend_only_commit, and wiki-server is built from this checkout, ${checkout:-of no commit}: they talk over the API, so keep them of one version (check that commit out, or deploy with --backend-only alone, the checkout's own page)"
+    if [ "$page_kind" = server ]; then
+      warn "the page is of $backend_only_commit, and wiki-server is built from this checkout, ${checkout:-of no commit}: they talk over the API, so keep them of one version (check that commit out, or deploy with --backend-only alone, the checkout's own page)"
+    else
+      warn "the demo page is of $backend_only_commit, and this checkout is ${checkout:-of no commit}: the demo served is that commit's (deploy with --backend-only alone for the checkout's own)"
+    fi
   fi
 }
 
@@ -1037,7 +1059,14 @@ native_libraries() {
 }
 
 if [ -n "$build" ]; then
-  if [ -n "$backend_only" ]; then
+  if [ -n "$backend_only" ] && [ "$mode" != server ]; then
+    # The demo's page from GitHub: nothing is built here. Node, which
+    # serves the page and writes its brotli copies, is all it installs.
+    resolve_page
+    download_page
+    say "installing or checking Node, which serves the demo (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
+    sh "$ROOT/toolchain/bootstrap.sh" node
+  elif [ -n "$backend_only" ]; then
     native_libraries
     # The page first: a REF with no page stops the deploy before anything
     # is installed or built.
@@ -1061,8 +1090,10 @@ fi
 bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env)
 eval "$bootstrap_env"
 if [ -n "$build" ] && [ -n "$backend_only" ]; then
-  say "building wiki-server at -O2 (cabal-native-opt.project)"
-  server_build_native
+  if [ "$mode" = server ]; then
+    say "building wiki-server at -O2 (cabal-native-opt.project)"
+    server_build_native
+  fi
 elif [ -n "$build" ]; then
   say "npm ci"
   (cd "$ROOT" && npm ci --no-audit --no-fund)
@@ -1097,7 +1128,7 @@ elif node=$(command -v node); then
   node=$(realpath "$node")
   warn "using $node for the service; it must stay where it is (the bootstrap's own Node, in $toolchain_base/.wiki-toolchain, would)"
 else
-  die "no Node to run the server with; run sh toolchain/bootstrap.sh"
+  die "no Node to run the static server with; run sh toolchain/bootstrap.sh node, which installs it"
 fi
 
 # Whether HTTPS can be served: it needs Tailscale running, with MagicDNS

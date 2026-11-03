@@ -1489,12 +1489,23 @@ github_page_fixture() {
   printf '<!doctype html><title>missing</title>' >"$page/404.html"
   head -c 4096 /dev/zero >"$page/app.wasm"
   printf 'console.log(1);\n' >"$page/index.js"
+  # And the demo's, a page per route, which says it is the demo's.
+  demo_page=$case_dir/demo-page
+  mkdir -p "$demo_page/s/blog"
+  printf '<!doctype html><title>demo</title>%2000s' '' >"$demo_page/index.html"
+  printf '<!doctype html><title>demo blog</title>%2000s' '' >"$demo_page/s/blog/index.html"
+  printf '<!doctype html><title>missing</title>' >"$demo_page/404.html"
+  head -c 4096 /dev/zero >"$demo_page/app.wasm"
+  printf 'console.log(2);\n' >"$demo_page/index.js"
   other=1111111111111111111111111111111111111111
   newest=2222222222222222222222222222222222222222
   for commit in "$other" "$newest" "$head1"; do
     page_zip "$FAKE_GITHUB/download/main-latest/app-server-$commit.zip"
+    page_zip "$FAKE_GITHUB/download/main-latest/app-demo-$commit.zip" "$demo_page"
   done
 }
+# A zip of a page's files at its root, as CI makes it: the server's page, or
+# the directory given second.
 page_zip() {
   python3 -c '
 import os, sys, zipfile
@@ -1503,7 +1514,7 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for d, _, files in os.walk(root):
         for f in files:
             z.write(os.path.join(d, f), os.path.relpath(os.path.join(d, f), root))
-' "$page" "$1"
+' "${2:-$page}" "$1"
 }
 # A release's JSON as the API gives it: its tag, and its assets with the
 # times they were uploaded at, given as name time pairs.
@@ -1538,11 +1549,12 @@ assert_lacks "$EVENTS" 'cabal'
 assert_lacks "$EVENTS" 'npm'
 : >"$EVENTS"
 out=$case_dir/static
-if deploy --static --backend-only --prefix "$pre" --port "$p" >"$out" 2>&1; then fail '--static --backend-only was taken'; fi
-assert_contains "$out" "--backend-only deploys the wiki's server with a page CI built"
-assert_lacks "$EVENTS" 'curl'
+if deploy --static --backend-only --prefix "$pre" --port "$p" >"$out" 2>&1; then fail '--static --backend-only with no demo page was taken'; fi
+assert_contains "$out" "no demo page was built for $head1 on GitHub; push it, or name main, a tag or another hash"
+assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$EVENTS" 'bootstrap'
-pass '--backend-only for a commit with no page on GitHub, and --static with it, are refused before anything is built'
+assert_lacks "$EVENTS" 'npm'
+pass '--backend-only for a commit with no page on GitHub, of the server or of the demo, is refused before anything is built'
 
 release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-server-$newest.zip" 2026-11-02T10:00:00Z "app-server-$head1.zip" 2026-10-31T10:00:00Z
 : >"$EVENTS"
@@ -1699,6 +1711,108 @@ assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKE
 [ -f "$pre/app/app.wasm.br" ] || fail 'the page built here has no brotli copies'
 undeploy --prefix "$pre" >/dev/null 2>&1
 pass '--stop keeps the choice, and --no-backend-only builds the page here again'
+
+# The demo from GitHub (--static --backend-only): the demo's page CI built
+# is downloaded and served by server.mjs under Node, the one thing the
+# bootstrap installs (its node mode). Nothing is built: no cabal, no npm,
+# no wasm build. github_page_fixture leaves no managed Node, and the
+# fixture's PATH has none, so the bootstrap must install it.
+github_page_fixture backend-static
+pre=$case_dir/srv/wiki
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-demo-$other.zip" 2026-11-01T10:00:00Z \
+  "app-server-$newest.zip" 2026-11-02T10:00:00Z "app-demo-$newest.zip" 2026-11-02T10:00:00Z \
+  "app-server-$head1.zip" 2026-10-31T10:00:00Z "app-demo-$head1.zip" 2026-10-31T10:00:00Z
+out=$case_dir/first
+deploy --static --http --bind 127.0.0.1 --port "$p" --prefix "$pre" --backend-only >"$out" 2>&1 || fail 'the deploy with --static --backend-only failed'
+assert_contains "$EVENTS" "curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest"
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$head1.zip"
+assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_lacks "$EVENTS" 'app-server-'
+assert_lacks "$EVENTS" 'bootstrap build'
+assert_lacks "$EVENTS" 'bootstrap native'
+assert_lacks "$EVENTS" 'cabal'
+assert_lacks "$EVENTS" 'npm'
+assert_lacks "$EVENTS" 'wiki-server'
+assert_contains "$HOME/$unit" "ExecStart=\"$pre/toolchain/.wiki-toolchain/node/bin/node\" \"$pre/server.mjs\" --root \"$pre/app\" --port $p --bind 127.0.0.1"
+assert_contains "$pre/app/index.html" '<title>demo</title>'
+for file in app/s/blog/index.html app/404.html app/app.wasm.br app/index.html.br app/s/blog/index.html.br server.mjs; do
+  [ -f "$pre/$file" ] || fail "missing $file"
+done
+[ -z "$(find "$pre/app" -name '*.gz')" ] || fail 'gzip copies with Node at hand'
+[ ! -e "$pre/bin" ] || fail 'a wiki-server was installed for the demo'
+assert_lacks "$out" 'warning: the'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo is not served'
+[ "$(http_get "http://127.0.0.1:$p/s/blog/")" = '200 text/html; charset=utf-8' ] || fail "the demo's page of a route is not served"
+{ [ "$(pstate mode)" = static ] && [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ]; } ||
+  fail 'the state does not record the demo from GitHub'
+pass '--static --backend-only downloads the demo'"'"'s page, installs Node alone, builds nothing, and serves it with server.mjs and brotli copies'
+
+: >"$EVENTS"
+out=$case_dir/no-build
+deploy --prefix "$pre" --no-build >"$out" 2>&1 || fail 'the redeploy of the demo with --no-build failed'
+assert_lacks "$EVENTS" 'curl https://'
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'cabal'
+assert_lacks "$EVENTS" 'npm'
+assert_contains "$pre/app/index.html" '<title>demo</title>'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo is not served after --no-build'
+{ [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ]; } || fail '--no-build forgot the demo from GitHub'
+out=$case_dir/status
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "its page, the demo's, is downloaded from GitHub (--backend-only=head, the page of $head1), and nothing is built here"
+out=$case_dir/stop
+deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop of the demo failed'
+[ "$(pstate backend_only)" = head ] || fail '--stop forgot the demo from GitHub'
+: >"$EVENTS"
+out=$case_dir/main
+deploy --prefix "$pre" --backend-only=main >"$out" 2>&1 || fail '--static --backend-only=main failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$newest.zip"
+assert_contains "$out" "warning: the demo page is of $newest, and this checkout is $head1"
+{ [ "$(pstate backend_only)" = main ] && [ "$(pstate backend_only_commit)" = "$newest" ]; } || fail 'the state does not record main for the demo'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo of main is not served'
+pass 'the demo from GitHub keeps its choice through --no-build and --stop, --status says so, and a demo page of another commit is warned of'
+
+# From the demo to the server and back, the choice of the page from GitHub
+# kept: each takes its own kind of page.
+: >"$EVENTS"
+out=$case_dir/to-server
+deploy --server --sqlite --prefix "$pre" --admin-port "$a" --backend-only >"$out" 2>&1 || fail 'the move from the demo to the server failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_lacks "$EVENTS" 'app-demo-'
+assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project'
+assert_lacks "$EVENTS" 'npm'
+assert_contains "$HOME/$unit" "\"$pre/bin/wiki-server\" serve"
+assert_contains "$pre/app/index.html" '<title>wiki</title>'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the move from the demo'
+{ [ "$(pstate mode)" = server ] && [ "$(pstate backend_only)" = head ]; } || fail 'the state does not record the server from GitHub'
+: >"$EVENTS"
+out=$case_dir/to-demo
+deploy --static --prefix "$pre" >"$out" 2>&1 || fail 'the move from the server back to the demo failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$head1.zip"
+assert_lacks "$EVENTS" 'app-server-'
+assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_lacks "$EVENTS" 'cabal'
+assert_lacks "$EVENTS" 'npm'
+assert_contains "$out" "keeping the server's data in $pre/data"
+assert_contains "$HOME/$unit" "\"$pre/server.mjs\" --root \"$pre/app\""
+assert_contains "$pre/app/index.html" '<title>demo</title>'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo is not served after the move back'
+{ [ "$(pstate mode)" = static ] && [ "$(pstate backend_only)" = head ]; } || fail 'the state does not record the demo from GitHub again'
+pass 'a move from the demo from GitHub to the server and back downloads the page of each, building wiki-server only for the server'
+
+: >"$EVENTS"
+out=$case_dir/back
+deploy --prefix "$pre" --no-backend-only >"$out" 2>&1 || fail '--no-backend-only for the demo failed'
+assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=demo'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+[ -z "$(pstate backend_only)" ] || fail '--no-backend-only was not recorded for the demo'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'the demo built here is not served'
+undeploy --prefix "$pre" >/dev/null 2>&1
+pass '--no-backend-only builds the demo here again'
 
 # Over HTTPS through tailscale serve, the status of Tailscale and the
 # administration's settings are read with python3 rather than Node.

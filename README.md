@@ -588,6 +588,11 @@ Pages does. `npx http-server` does, from a directory holding it as `blog/`
 mkdir site && unzip app.zip -d site/blog && cp site/blog/404.html site/ && npx http-server site -p 8080
 ```
 
+Or, with Node alone, deploy the demo's page CI keeps for main's newest commits and
+for each tag as a service on this machine, served at <http://127.0.0.1:8080/>:
+`sh toolchain/deploy-local.sh --static --http --bind 127.0.0.1 --port 8080 --backend-only`
+(see [Without a browser build](#without-a-browser-build)).
+
 An administrator can choose **Edit home page** to use the ordinary page editor:
 the full formatting toolbar and shortcuts, previews, uploads and pasted or dropped
 attachments, automatic drafts, the writing assistant, tracked changes and save
@@ -753,11 +758,12 @@ The page is the one `npm run build-wasm-opt` makes for the server
 (`WIKI_BACKEND=server HALOGEN_BASE_PATH=/`), built by
 `.github/workflows/server-page.yml` and kept as a release asset of the repository
 `origin` names, a zip of `dist-newstyle/wasm-opt/public/app`:
-`app-server-<commit>.zip` on the pre-release `main-latest` for each of main's newest
-five commits (a push to main that changes Markdown alone builds none, unless it is
+`app-server-<commit>.zip` (and the demo's page, `app-demo-<commit>.zip`, below) on
+the pre-release `main-latest` for each of main's newest five commits (a push to main that changes Markdown alone builds none, unless it is
 Markdown compiled into the programs: `wiki-core/templates/` and the Markdown
 reference, `docs/markdown.md`, linked from `wiki-core/reference/`), and
-`app-server-<tag>.zip` on the release of each tag pushed, for good. The repository
+`app-server-<tag>.zip` and `app-demo-<tag>.zip` on the release of each tag pushed,
+for good. The repository
 is public and so are its releases: no token is needed. `curl` lists them through
 `api.github.com` (sixty requests an hour without a token; a deploy makes one or two)
 and downloads the zip from `github.com`, through the proxy `https_proxy` names, if
@@ -777,9 +783,9 @@ page of another commit than the checkout's (one that changes more than Markdown)
 is deployed with a warning. The choice is remembered, and a run without the
 option downloads again by it (a `git pull` and a rerun deploy the new commit's
 page); `--no-build` redeploys what is there; `--no-backend-only` builds the page
-on this machine again. `--static` with it is refused: the demo is built here.
+on this machine again. With `--static` it deploys the demo's page instead (below).
 
-Nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
+With `--server`, nothing in this mode runs Node, and it needs only GHC and cabal: the deploy runs
 `toolchain/bootstrap.sh native`, which installs them through ghcup (under
 `<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
 wasm sysroot, Node, Chromium or fourmolu. On Debian it installs the system packages
@@ -816,6 +822,25 @@ A systemd unit does not inherit the shell's environment, so when the deploy runs
 with `LD_LIBRARY_PATH` set (a shared library in a directory of your own), it writes
 it into the unit, `Environment="LD_LIBRARY_PATH=..."`, and says so; a static build,
 as above, needs none.
+
+The demo deploys the same way, from a page of its own: `--static --backend-only`
+downloads `app-demo-<commit>.zip` and builds nothing. On this machine alone, at
+<http://127.0.0.1:8080/>:
+
+```sh
+sh toolchain/deploy-local.sh --static --http --bind 127.0.0.1 --port 8080 --backend-only
+```
+
+It needs Node and nothing else: no GHC, cabal, wasm toolchain or npm. The static
+server, `server.mjs`, runs on Node, and `compress.mjs` writes the brotli copies with
+it. The deploy takes the Node under the toolchain directory, or a Node 24 or later
+with npm on `PATH`; with neither, `toolchain/bootstrap.sh node` installs Node alone
+under the toolchain directory. The demo's page differs from the server's: it is
+`WIKI_BACKEND=demo`, a prerendered page for each route of the demo's content, its
+wiki kept in each visitor's browser rather than on this machine, and any static
+server can serve it. The choice of REF, the warning for a page of another commit,
+`--no-build`, `--stop` and `--no-backend-only` work as for the server. Commits and
+tags that CI built before the demo's page was added have no `app-demo-` zip.
 
 ### What else it does
 
