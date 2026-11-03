@@ -333,6 +333,27 @@ confirms it against reality and the plan is amended if it does not hold.
     id (`FeedHead.identity`), never the token, so a renewed address leaves them as they
     were and two users' feeds differ; the feed has no self link, and the alternate
     link is the wiki.
+32. **The pages are built on GitHub and kept as release assets** (the owner,
+    2026-11-03, built by WP5.49). `.github/workflows/server-page.yml` builds, on every
+    push to `main` that changes code and on every tag, the server's page and the
+    demo's from one `app.wasm`, and keeps them as release assets, which a public
+    repository serves without a token: `app-server-<hash>.zip` and
+    `app-demo-<hash>.zip` for the newest five commits of `main` on the pre-release
+    `main-latest`, and `app-server-<tag>.zip` and `app-demo-<tag>.zip` on a tag's
+    release, for good. `toolchain/deploy-local.sh --backend-only[=REF]` (REF: the
+    checkout's commit, `main`, a tag or a hash) downloads the mode's page with `curl`
+    alone and builds nothing for the browser: `--server` builds `wiki-server` after the
+    bootstrap's `native` mode (the host GHC and cabal alone, no wasm toolchain, no
+    Node, no npm) and `--static` builds nothing at all (the bootstrap's `node` mode:
+    Node alone, for `server.mjs`). The server's mode uses no Node: gzip copies from
+    `wiki-server compress`, probes with `curl`, JSON and zips through `python3` (or
+    `jq` and `unzip`). The deploy checks libsodium, libpq and GMP before anything is
+    built, names their Debian and RHEL packages, passes `PKG_CONFIG_PATH`,
+    `LIBRARY_PATH`, `C_INCLUDE_PATH` and `CPATH` through, and writes the shell's
+    `LD_LIBRARY_PATH` into the unit. Markdown counts as documentation in CI's filters
+    and in the deploy's "same page" fallback except what is compiled in: the built-in
+    templates and the Markdown reference (`is_code` in the script, the `paths` filters
+    of both workflows).
 
 ## Repository layout
 
@@ -379,25 +400,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.49 A deployment without a browser build** (the owner, 2026-11-03, on a company
-  machine with no npm registry at all: "zróbmy browserless deployment"). The page the
-  server serves (`dist-newstyle/wasm-opt/public/app`: `app.wasm`, the bundled JavaScript
-  and CSS with their npm dependencies, the fonts) is built by GitHub Actions and kept as
-  release assets, since the repository is public and a release asset needs no token to
-  download (a workflow artifact does): every push to `main` updates one rolling
-  pre-release, `main-latest`, whose assets are the pages of the last five commits
-  (`app-server-<hash>.zip`), and every tag keeps its own page as an asset of its
-  release. `toolchain/deploy-local.sh --backend-only[=REF]` then builds nothing for the
-  browser and needs neither the wasm toolchain, npm nor Node: it downloads that page
-  for REF, `main` (the latest), a tag, or a commit hash (the default: the checkout's
-  own; a hash with no page says so and what to name instead), builds `wiki-server`
-  natively (the bootstrap's new `native` mode: the host compiler and cabal alone), and
-  installs as before. What the deploy did with Node is done without: the brotli copies
-  with the `brotli` command when it is installed, else skipped and said; the probes of
-  the listeners with `curl`; the JSON it reads with `jq`. Tests against the fake GitHub
-  in `test-deploy-local.sh`, the `native` mode in `test-bootstrap.sh`; the workflow
-  checked by its first run on `main`; the README's deployment section.
 
 ### Later, or waiting for the owner
 
@@ -624,6 +626,15 @@ needs. Each was true when its package merged; check before relying on one.
   Two deployments of one `--name` cannot coexist, whatever their prefixes: the name
   is the unit's. The toolchain under a prefix is a second copy (several gigabytes)
   unless `--toolchain` names a shared one.
+- The page workflow (WP5.49) keeps one run per ref without cancelling, and GitHub
+  keeps only the newest pending run, so two quick pushes to `main` during a build lose
+  the middle commit's pages; `--backend-only` says "no page was built" for it. A
+  checkout at a tag whose commit is not among `main`'s newest five needs
+  `--backend-only=<tag>`. Commits and tags from before the demo's page was added have
+  the server's page only. A Node 24 without npm is not reused for the demo's
+  deployment (the version check wants npm); the managed Node is installed instead.
+  `--no-build` refuses a page of the other mode, so a switch between `--server` and
+  `--static` needs a run that builds or downloads.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
