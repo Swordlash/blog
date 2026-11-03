@@ -354,6 +354,20 @@ confirms it against reality and the plan is amended if it does not hold.
     and in the deploy's "same page" fallback except what is compiled in: the built-in
     templates and the Markdown reference (`is_code` in the script, the `paths` filters
     of both workflows).
+33. **HTTPS three ways, exclusive of one another** (the owner, 2026-11-03, built by
+    WP5.50). `tailscale serve` as before, the default; the server's own TLS,
+    `wiki-server serve --tls-cert FILE --tls-key FILE` through `warp-tls` on the public
+    listener alone (PEM, a chain after the leaf, one `.pem` for both; the key checked
+    against the certificate at start, since tls does not; the session cookie `Secure`
+    and the public address `https` without a proxy header; a renewed certificate takes
+    a restart), which the deploy takes with `--tls-cert`/`--tls-key` (and `--tls-ca`
+    for a check by the certificate's DNS name) at any `--bind`, `0.0.0.0` included,
+    the files refused inside the deployment directory unless under `data/`, `state/`
+    or `toolchain/`, which the install keeps; and `--behind-proxy` for a reverse proxy
+    (Caddy, nginx) that terminates TLS: plain HTTP on `127.0.0.1`, `Secure` cookies,
+    the forwarded headers the server already reads. `--https`, `--http`, `--tls-cert`
+    and `--behind-proxy` refuse one another; the state remembers the way, and a
+    deployment from before reads as Tailscale or HTTP from its old key.
 
 ## Repository layout
 
@@ -401,43 +415,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.50 HTTPS three ways: Tailscale, a certificate of one's own, a reverse proxy**
-  (the owner, 2026-11-03: "musimy supportować oba"; at home `tailscale serve`, at
-  work a certificate from the company's CA as `.crt`/`.key` (or `.pem`), and some day a
-  public wiki behind Caddy). Today "HTTPS" in `toolchain/deploy-local.sh` means
-  `tailscale serve` alone, which proxies to `127.0.0.1`, so `--bind 0.0.0.0` implies
-  plain HTTP, and `wiki-server` cannot terminate TLS. Three ways, one deployment
-  script: (1) **Tailscale** as now, the default when nothing else is given. (2) **The
-  server's own TLS**: `wiki-server serve --tls-cert FILE --tls-key FILE`
-  (PEM; the certificate file may carry the chain after the leaf, and a `.pem` holding
-  both the certificate and the key is accepted as both arguments), through `warp-tls`
-  (`runTLSSocket`, pure Haskell, no new C library; TLS 1.2 and 1.3, warp-tls's
-  defaults) on the public listener only (the admin listener stays loopback and
-  plain); the session cookie is `Secure` then, and the public address's scheme is
-  `https` without a proxy header. The server refuses to start with an unreadable
-  certificate or key, or one that does not match, saying which. Files are read at
-  start; a renewed certificate takes a restart (`systemctl --user restart`; the
-  deploy says so). In the deploy: `--tls-cert FILE --tls-key FILE` (remembered in the
-  state; the files are read by the unit from where they are, so they must stay
-  readable by the service's user) with any `--bind`, including `0.0.0.0`, which then
-  no longer implies `--http`; the probe uses `curl --cacert` when `--tls-ca FILE` is
-  given, else `--insecure` for the probe alone, and the firewall rule as for
-  `--http`. (3) **A reverse proxy** (Caddy, nginx) that terminates TLS and proxies to
-  `127.0.0.1`: `--behind-proxy` in the deploy (remembered): plain HTTP on
-  `127.0.0.1`, `--secure-cookies` for the server, the probe over HTTP, no firewall
-  rule, and the deploy prints what the proxy must do (pass WebSocket upgrades, send
-  `X-Forwarded-Proto` and `X-Forwarded-Host`, which the server already reads for its
-  public address and for passkeys' origin). `--https` and `--http` keep their
-  meanings; `--tls-cert` and `--behind-proxy` are two more ways, and the three are
-  exclusive, refused together with a message. `--status` says which way a deployment
-  serves. Tests: a server test over HTTPS with a certificate the test makes
-  (`openssl req -x509` in the test, skipped with a note where `openssl` is missing),
-  a mismatched pair refused, a `.pem` holding both accepted, the cookie `Secure`, the
-  feed and the live channel over TLS; deploy tests for the three ways, the exclusions,
-  `--status`, `--bind 0.0.0.0` with a certificate, and the remembered files. Docs:
-  the README's deployment section (a Caddyfile of five lines for the proxy way, the
-  `openssl` line for a self-signed certificate to try with), the deploy's header,
-  wiki-server's CHANGELOG.
 - **WP5.51 A configuration wizard for the deploy, in brick** (the owner, 2026-11-03:
   "to już się robi trochę upierdliwe"; `deploy-local.sh` has some thirty options by
   now). `toolchain/configure.hs`, a cabal script (a `{- cabal: -}` stanza, run with
@@ -719,6 +696,12 @@ needs. Each was true when its package merged; check before relying on one.
   deployment (the version check wants npm); the managed Node is installed instead.
   `--no-build` refuses a page of the other mode, so a switch between `--server` and
   `--static` needs a run that builds or downloads.
+- HTTPS with a certificate of one's own (WP5.50): checked with certificates `openssl`
+  made, not yet with a company CA's chain or a real DNS name through `--tls-ca`;
+  Caddy or nginx in front of `--behind-proxy` was not run. The ufw rule for a
+  LAN-facing `0.0.0.0` bind opens the port on `tailscale0` alone, so a LAN at work
+  needs `--no-firewall` or a rule of its own. The TLS files are read at start only:
+  a renewal needs `systemctl --user restart`.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
