@@ -459,6 +459,42 @@ In the order to do it, unless the owner says otherwise.
   its answers (the form's state to arguments, as a plain function the test calls),
   and the wrapper in `test-deploy-local.sh`. Docs: the README's deployment section
   opens with the wizard. After WP5.50, since it adds the HTTPS options.
+- **WP5.53 Links to pages and sections, and the home page's options in its editor**
+  (the owner, 2026-11-03, issue #120; one pull request for the three). (a) *A link to
+  a page from the editor.* Next to Link, a "Link to a page" button (and Ctrl+Shift+K)
+  that opens a dialog with the search box's parts (the input, the space selector,
+  the hits, the arrows and Enter: the picking part of `View/Search.hs` becomes a
+  component of its own, which the header's box and this dialog both use), so the
+  writer picks a page instead of finding its address; choosing one writes
+  `[title](/s/…/p/…)` around the selection as Link does (the selected text stays
+  the link's text; nothing selected, the page's title), through the same pure edit
+  functions. A checkbox "link a section" lists the chosen page's anchors (its
+  headings with their ids, and its boxes, (b)), read from the page's Markdown with a
+  wiki-core function `anchors :: Document -> [Anchor]` (id and label) that the table
+  of contents' walk is built on, and the link gets the `#id`. (b) *Links to sections,
+  boxes and selected text, as Confluence has them.* A box (`> [!KIND]`) gets an id:
+  `box-<kind>-<number>` when it is numbered, else `box-<kind>-<slug of its title>`
+  when it has a title, made unique as heading ids are; none otherwise. The hover
+  button every heading already has (`heading-anchor`, the `#`) copies the section's
+  absolute address with its fragment to the clipboard on a click, instead of
+  navigating (its href stays, so "copy link" and a middle click keep working), shows
+  "Copied" for a moment, and puts the fragment in the address bar; a box's title gets
+  the same button. The click is handled where the article's clicks already are
+  (`Browser.articleLink`), so the prerendered page needs nothing. Selected text: the
+  popover the inline comments show on a selection gains "Copy link", whose address
+  uses the browser's own text fragment (`#:~:text=…`, URL-encoded, with a prefix and
+  suffix when the quote is not unique, as `Wiki.Core.Anchor` already computes), which
+  Chromium, Safari and Firefox scroll to and highlight by themselves; nothing of ours
+  reads it. (c) *The home page's options in its editor.* Show Spaces, Show Recently
+  visited, Show to signed-out visitors and the icon leave the home page's view
+  (`View/Directory.hs`) and appear in the editor when it edits the home document
+  (`EditHome`): a "Home page" group above the text, saved with Save (the page, then
+  `setHomePage`) and dropped by Cancel. Tests: native for box ids, `anchors` and the
+  text-fragment address; hspec-halogen for the dialog (search, pick, the link
+  written, with and without a section), the copy button (the clipboard test hook)
+  and the home editor's options (saved, cancelled, gone from the view). Docs: the
+  README's editing section (the two buttons, the links), wiki-app's and wiki-core's
+  CHANGELOGs.
 
 ### Later, or waiting for the owner
 
