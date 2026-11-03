@@ -114,7 +114,7 @@ adopt_state() {
   [ -f "$HOME_STATE_DIR/$name.state" ] || return 0
   at=$(state_get dir "$HOME_STATE_DIR/$name.state")
   if [ "$at" != "$prefix" ]; then
-    die "the deployment $name is at $at (its state in $HOME_STATE_DIR${at:+; the wiki's data is in $at/data}): deploy it there with --prefix $at, or this one under another --name"
+    die "the deployment $name is at $at, its state in $HOME_STATE_DIR and the wiki's data in $at/data: deploy it there with --prefix $at, or this one under another --name"
   fi
   mkdir -p "$STATE_DIR"
   mv "$HOME_STATE_DIR/$name.state" "$state_file"
@@ -127,12 +127,13 @@ adopt_state() {
 # A deployment under a prefix leaves one thing in the home directory, its
 # unit, which names the prefix (deploy-local.sh writes "# Prefix: DIR" into
 # it). Found by a run without --prefix, or with another, which would take
-# the unit for its own and replace it, the run stops and says what to give.
+# the unit for its own and replace it, the run stops and says what to give
+# (and what else it could do, when the caller set prefix_hint).
 require_prefix_of_unit() {
   [ ! -f "$state_file" ] && [ -f "$unit_file" ] || return 0
   elsewhere=$(sed -n 's/^# Prefix: //p' "$unit_file" | head -n 1)
   [ -n "$elsewhere" ] && [ "$elsewhere" != "$prefix" ] || return 0
-  die "the deployment $name is under $elsewhere: run this with --prefix $elsewhere${1:-}"
+  die "the deployment $name is under $elsewhere: run this with --prefix $elsewhere${prefix_hint:-}"
 }
 
 # One value from a state file (the current deployment's unless a file is given).

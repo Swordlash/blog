@@ -231,7 +231,8 @@ if [ "$action" = stop ]; then
   undeploy
   exit 0
 fi
-require_prefix_of_unit ', or deploy this one under another --name'
+prefix_hint=', or deploy this one under another --name'
+require_prefix_of_unit
 
 prev_dir=$(state_get dir)
 prev_toolchain=$(state_get toolchain)

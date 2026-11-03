@@ -1168,7 +1168,7 @@ p=$(free_port 127.0.0.1)
 deploy --server --port "$p" --admin-port "$(other_port "$p")" >"$case_dir/first" 2>&1 || fail 'server deploy failed'
 out=$case_dir/out
 if deploy --no-build --prefix "$HOME/elsewhere" >"$out" 2>&1; then fail 'moved the deployment away from its data'; fi
-assert_contains "$out" "the wiki's data is in $HOME/wiki-demo/data"
+assert_contains "$out" "the wiki's data in $HOME/wiki-demo/data: deploy it there with --prefix $HOME/wiki-demo"
 undeploy --purge-data >/dev/null 2>&1
 pass 'a server deployment is not moved away from its data'
 

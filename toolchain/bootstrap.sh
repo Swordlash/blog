@@ -459,6 +459,7 @@ ready() {
 
 ready_done() {
   if [ "$ready_failed" != 0 ]; then
+    # shellcheck disable=SC2088 # the tilde is for the reader, as the message is.
     if [ -n "$NAMED_BASE" ]; then env_hint=$STATE/env; else env_hint='~/.wiki-toolchain/env'; fi
     printf 'bootstrap: run `sh toolchain/bootstrap.sh toolchain`, then retry. npm build, serve and test commands load %s automatically; for direct commands, load `. %s` in this shell.\n' "$env_hint" "$env_hint" >&2
     return 1
