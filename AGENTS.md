@@ -36,10 +36,12 @@ saved credential removed afterwards; a model or effort below that is not a revie
 session without the key, or whose key has run out of quota, asks the GitHub Codex bot
 instead, with a comment of `@codex review` on the pull request, and waits for its answer
 (the owner, 2026-11-02); its review counts as a round. The
-session verifies each finding, fixes the real ones and pushes; a second round follows
-large fixes. Every pull request, every time. Three rounds at most (the owner,
-2026-11-02, down from four): the fixes after the third are made and described in the
-pull request, not reviewed again.
+session verifies each finding, fixes the real ones and pushes, and every push of fixes
+is followed by another round, however small the fixes, until a round finds nothing
+(the owner, 2026-11-03: a round is never skipped because the fixes were small). Every
+pull request, every time. Three rounds at most (the owner, 2026-11-02, down from
+four): the fixes after the third are made and described in the pull request, not
+reviewed again.
 
 The owner merges. The session does not merge a pull request unless the owner asks it
 to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
