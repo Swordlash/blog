@@ -321,6 +321,18 @@ confirms it against reality and the plan is amended if it does not hold.
     `jsbits` is logic of the wiki's own, by decision 25: the zip archive, the reader's
     selection, the layout and the contents panel, CodeMirror's text and selection in
     UTF-16 code units, the live preview's channel, the assistant's SDKs and the vault.
+31. **A user's feed of notifications, at an address only a POST makes** (built by
+    WP5.31). A signed-in user has an Atom feed of the bell's list (the latest 50 about
+    pages they may still read, title and link only, no body) at
+    `me/notifications.atom?token=<secret>`, served outside the API's closed-wiki check
+    with `Cache-Control: private, no-store` and outside `FeedCache`. The secret is
+    made by `POST notifications/feed` and replaced by a later one; `GET` only reports
+    the address, or none, so opening the account panel never makes a secret. A wrong,
+    missing or renewed token is 404, not 401; the operator has none. The feed's `<id>`
+    and its entries' ids are built on the wiki's address, the feed's path and the user
+    id (`FeedHead.identity`), never the token, so a renewed address leaves them as they
+    were and two users' feeds differ; the feed has no self link, and the alternate
+    link is the wiki.
 
 ## Repository layout
 
@@ -395,34 +407,6 @@ In the order to do it, unless the owner says otherwise.
   C-like preprocessor macros (the owner: "probably not"; math macros and boxes cover
   the need); grammar checking beyond the browser's spelling, which CodeMirror already
   has on (later, perhaps LanguageTool; Grammarly offers no SDK any more).
-- **WP5.31 A private feed of one's notifications** (the owner, 2026-10-29: "a mamy
-  powiadomienia do mentions, w rss?"; they are in the bell and in mail, feeds exist only for
-  public blog spaces). A signed-in user gets an Atom feed of their own notifications at a
-  secret address, `GET /me/notifications.atom?token=<token>`: the latest 50 (the bell's
-  list), newest first, each entry titled as the bell words it ("anna mentioned you in
-  X", "a comment on Y"), with the link the bell follows (the page, the comment's anchor),
-  the actor as the author, `updated` at the notification's time, and **no body**: a feed
-  read by an outside reader is a copy outside the wiki, so an entry carries the title and
-  the link only (decision recorded here; the owner may want excerpts later). The token
-  is a secret of the user's (32 random bytes, base64url) in a new `users.feed_token`
-  column, made on first use, shown once in the account panel's notifications block with
-  the feed's address and "Copy" and "Make a new address" (which replaces the token: the
-  old address stops answering), and never in the API's other answers; a wrong or missing
-  token is 404, not 401, so the address does not confirm a user; the operator account
-  gets none. Served by `Wiki.Server.Feed` as the blog feeds are (the same Atom writer,
-  validated against the same RELAX NG schema in the tests), with `Cache-Control:
-  private, no-store` and outside `FeedCache` (a private answer is never cached by
-  route); nothing about a page the user may no longer read (the same re-check as mail).
-  The bell's "mark read" is not affected: reading the feed marks nothing. API
-  `Wiki.Api.Notifications` gains `feedAddress` (`GET`, the address or none yet) and
-  `renewFeedAddress` (`POST`), through the derived client; `MonadNotifications` the
-  two methods, with the demo answering "no feeds in the demo". Migration `000N` for the
-  column (numbered at rebase time). Tests: server (the feed validates; 50 newest; a page
-  no longer readable left out; a renewed token makes the old address 404; a missing
-  token is 404; the operator gets 404), contract on Mem/SQLite/PostgreSQL/HTTP for the
-  two methods, browser (the block shows the address once made, "Copy", renew). Docs:
-  `docs/api.md` (the endpoint and the feed), the notifications section of the user docs
-  ("Your notifications as a feed"). Queued after WP5.30; not started until the owner says so (the same note).
 - **WP5.32 Only wasm may use the owner's runner** (the owner, 2026-10-29).
   Goal: run `native` and `format` on GitHub's hosted runners in parallel with
   `wasm`, and run `deploy` on GitHub's hosted runners after the build jobs pass.
@@ -595,6 +579,9 @@ needs. Each was true when its package merged; check before relying on one.
   word, punctuation or the line's end follows the number (`$5 each`, `$3.50`), so a
   formula such as `$5.` left open is not underlined. Multi-line `$$` or `\[` blocks are
   never checked.
+- `Wiki.App.Browser.copyText`'s fallback without the clipboard API selects an
+  `<input>` with its own `select` and any other element with a range; a `<textarea>`
+  would need `selectionStart`/`selectionEnd`, which no caller passes today (WP5.31).
 - The server could cache `template.html` (optional, WP5.14).
 - A second deployment (`--name`) on one machine cannot share port 443 and should use
   `--http` (WP4.18).
