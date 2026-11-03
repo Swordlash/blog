@@ -82,9 +82,10 @@
 # Node, Chromium, fourmolu, alex or happy (cabal builds the last two itself
 # for a native build). toolchain/deploy-local.sh --backend-only runs it, on a
 # machine that downloads the page instead of building it. It does not assume
-# Debian: without dpkg-query it checks only the commands a native build runs
-# (cc, make, curl, git), and the C libraries are found, or reported missing,
-# when wiki-server is built.
+# Debian: without dpkg-query it installs no system packages. Either way it
+# then runs toolchain/check-native.sh, which checks the commands and C
+# libraries wiki-server's build needs and names the Debian and RHEL packages
+# of any that are missing.
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
@@ -559,18 +560,18 @@ as_root() {
 
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
 # (native programs link libgmp), libpq's (wiki-server reaches PostgreSQL
-# through postgresql-libpq), libsodium's (wiki-server's second factor's codes
-# are one-time-password's, over sel's bindings to libsodium), pkg-config
-# (which those bindings find libsodium with), and what ghc-wasm-meta's
-# setup.sh runs.
+# through postgresql-libpq), zlib's (the zlib package links the system's
+# zlib, which it finds through pkg-config), libsodium's (wiki-server's second
+# factor's codes are one-time-password's, over sel's bindings to libsodium),
+# pkg-config, and what ghc-wasm-meta's setup.sh runs.
 system_packages() {
   missing=
   # A native install needs what wiki-server's build runs and links with,
   # and none of what the wasm toolchain's setup runs (jq, unzip, xz, zstd).
   if [ "$mode" = native ]; then
-    debian_packages='build-essential curl git libgmp-dev libpq-dev libsodium-dev pkg-config'
+    debian_packages='build-essential curl git libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
   else
-    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config'
+    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
   fi
   if command -v dpkg-query >/dev/null 2>&1; then
     for pkg in $debian_packages; do
@@ -579,15 +580,8 @@ system_packages() {
       fi
     done
   elif [ "$mode" = native ]; then
-    # Not Debian (RHEL, say): the commands alone. The C libraries are
-    # checked by the build of wiki-server, which names their packages.
-    for cmd in cc make curl git; do
-      command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
-    done
-    if [ -n "$missing" ]; then
-      say "missing commands:$missing; install them and run this again (the build of wiki-server also needs the development files of GMP, libpq and libsodium, and pkg-config: gmp-devel libpq-devel libsodium-devel pkgconf-pkg-config on RHEL)"
-      exit 1
-    fi
+    # Not Debian (RHEL, say): nothing is installed. native_check, which
+    # runs next, names the packages of whatever is missing.
     return 0
   else
     for cmd in cc make curl git jq unzip xz unzstd; do
@@ -612,6 +606,19 @@ system_packages() {
   # shellcheck disable=SC2086
   run "installing Debian packages" $sudo env DEBIAN_FRONTEND=noninteractive \
     apt-get install --yes --no-install-recommends $missing
+}
+
+# The check of what wiki-server's native build needs
+# (toolchain/check-native.sh), for `native`. It runs after system_packages,
+# so on Debian it confirms the packages just installed, and elsewhere it is
+# the only check. Its output is shown only when something is missing, so a
+# run with nothing to do stays one line.
+native_check() {
+  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+    printf '%s\n' "$check_output" >&2
+    say "the native build of wiki-server needs what is missing above; install it and run this again"
+    exit 1
+  fi
 }
 
 install_ghcup() {
@@ -907,6 +914,7 @@ toolchain() {
     return 0
   fi
   system_packages
+  [ "$mode" != native ] || native_check
   install_native
   if [ "$mode" = native ]; then
     update_cabal_index
