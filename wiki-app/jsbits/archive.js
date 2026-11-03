@@ -40,17 +40,3 @@ function wiki_archive_path(unzipped, i) {
 function wiki_archive_bytes(unzipped, i) {
   return unzipped.files[unzipped.paths[i]];
 }
-
-// Save bytes as a file, as a link with a download attribute would; the
-// object URL is let go once the browser has had time to start saving.
-function wiki_download(name, mediaType, bytes) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.style.display = "none";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}

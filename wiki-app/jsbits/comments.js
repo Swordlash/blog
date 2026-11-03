@@ -73,16 +73,3 @@ function wiki_comment_selection(container) {
     left: Math.max(0, last.left - box.left),
   });
 }
-
-// The thread whose quote a click landed on, or "".
-function wiki_clicked_thread(event) {
-  const target = event.target;
-  const mark = target instanceof Element ? target.closest("mark.comment-mark[data-thread]") : null;
-  return mark === null ? "" : mark.getAttribute("data-thread");
-}
-
-// Scroll the first element a selector picks into view, if it is not in it.
-function wiki_reveal(selector) {
-  const element = document.querySelector(selector);
-  if (element !== null) element.scrollIntoView({ block: "nearest" });
-}

@@ -60,6 +60,7 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
+import Data.Coerce (coerce)
 import Data.List (zip3)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -67,7 +68,7 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.JSBits.Promise (JSError)
 import Halogen.Query.Event.Window qualified as Window
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
@@ -76,9 +77,16 @@ import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
-import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event (..), EventType (..), preventDefault)
+import Web.DOM.Element qualified as Element
+import Web.DOM.Internal.Types (Element (..), HTMLElement (..))
+import Web.Event.Event (Event (..), EventType (..), defaultPreventedNow, preventDefault)
+import Web.Event.Event qualified as Event
+import Web.HTML.HTMLElement qualified as HTMLElement
+import Web.HTML.Window qualified as HTMLWindow
+import Web.UIEvent.KeyboardEvent (KeyboardEvent)
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
+import Web.UIEvent.TouchEvent (TouchEvent (..))
+import Web.UIEvent.TouchEvent qualified as TouchEvent
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
@@ -94,21 +102,6 @@ import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author)
-
--- The key is read in the keydown's listener ('slideKeys'), and a touch's
--- position in the touch's listener, while the browser dispatches them, so
--- those bindings are pure; the rest return at once.
-$( browserJS
-     ["jsbits/slides.js"]
-     [ ("js_slides_key", "wiki_slides_key", Safe, [t|Event -> JSText|])
-     , ("js_slides_touch_x", "wiki_slides_touch_x", Safe, [t|Event -> Double|])
-     , ("js_slides_touch_y", "wiki_slides_touch_y", Safe, [t|Event -> Double|])
-     , ("js_slides_toggle_fullscreen", "wiki_slides_toggle_fullscreen", Safe, [t|Element -> IO ()|])
-     , ("js_slides_exit_fullscreen", "wiki_slides_exit_fullscreen", Safe, [t|IO ()|])
-     , ("js_slides_focus", "wiki_slides_focus", Safe, [t|Element -> IO ()|])
-     , ("js_slides_print", "wiki_slides_print", Safe, [t|IO ()|])
-     ]
- )
 
 -- | The slides view's input: the page at a path in a space the shell has
 -- loaded, with the space's pages (for the links between them), and the
@@ -156,7 +149,7 @@ data State = State
   -- ^ Where a touch on the slides started.
   }
 
--- | The command for a key ('js_slides_key').
+-- | The command a key is for ('commandOf').
 data Command = Next | Previous | ToFirst | ToLast | Choose | ToggleFullscreen | ToggleNotes | ToggleOverview | Leave
   deriving stock (Eq, Show)
 
@@ -328,10 +321,9 @@ component =
         [HH.text "Back to page"]
 
     touchAt :: (Double -> Double -> Action) -> Event -> Maybe Action
-    touchAt make event =
-      let x = js_slides_touch_x event
-          y = js_slides_touch_y event
-       in if isNaN x || isNaN y then Nothing else Just (make x y)
+    touchAt make event = do
+      touch <- TouchEvent.firstChangedTouch (TouchEvent event)
+      Just (make touch.clientX touch.clientY)
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
@@ -348,7 +340,7 @@ component =
           _ -> do
             focusView
             H.raise Loaded
-      Finalize -> H.liftEffect (liftIO js_slides_exit_fullscreen)
+      Finalize -> H.liftEffect (liftIO exitFullscreen)
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -393,7 +385,7 @@ component =
           Choose
             | st.overview -> modify (\s -> s {overview = False})
             | otherwise -> goTo (forward st)
-          ToggleFullscreen -> H.getRef st.view >>= traverse_ (H.liftEffect . liftIO . js_slides_toggle_fullscreen)
+          ToggleFullscreen -> H.getRef st.view >>= traverse_ (H.liftEffect . liftIO . toggleFullscreen)
           ToggleNotes -> modify (\s -> s {notesOpen = not s.notesOpen})
           ToggleOverview -> modify (\s -> s {overview = not s.overview})
           Leave -> modify (\s -> s {overview = False})
@@ -417,7 +409,7 @@ component =
             get >>= \st -> goTo (if dx < 0 then forward st else backward st)
       SetPrintNotes b -> modify (\st -> st {printNotes = b})
       SetPrintSteps b -> modify (\st -> st {printSteps = b})
-      Print -> H.liftEffect (liftIO js_slides_print)
+      Print -> H.liftEffect (liftIO (HTMLWindow.window >>= \w -> w.print))
 
     -- Show a slide at a step, and put them in the address, replacing the
     -- ones there.
@@ -432,7 +424,7 @@ component =
 
     -- Focus into the view, where Tab then finds its controls.
     focusView :: H.HalogenM State Action Slots ViewOutput m ()
-    focusView = gets (\st -> st.view) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . js_slides_focus)
+    focusView = gets (\st -> st.view) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . HTMLElement.focusWithoutScrolling . coerce)
 
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
@@ -461,26 +453,64 @@ slideKeys = do
   HS.Emitter register <- Window.keyDown
   pure . HS.makeEmitter $ \push -> do
     HS.Subscription stop <- register $ \pressed -> do
-      let event = KeyboardEvent.toEvent pressed
-      for_ (commandOf event) $ \command -> do
-        preventDefault event
+      for_ (commandOf pressed) $ \command -> do
+        preventDefault (KeyboardEvent.toEvent pressed)
         push command
     pure stop
 
--- | Which of the slides' commands a keydown is for, if any
--- ('js_slides_key').
-commandOf :: Event -> Maybe Command
-commandOf event = case fromJSText (js_slides_key event) of
-  "next" -> Just Next
-  "previous" -> Just Previous
-  "first" -> Just ToFirst
-  "last" -> Just ToLast
-  "choose" -> Just Choose
-  "fullscreen" -> Just ToggleFullscreen
-  "notes" -> Just ToggleNotes
-  "overview" -> Just ToggleOverview
-  "leave" -> Just Leave
-  _ -> Nothing
+-- | Which of the slides' commands a keydown is for, if any: forward and
+-- back, the first and the last slide, Enter (the slide picked in the
+-- overview, or the next), full screen, the notes, the overview, and
+-- Escape, which leaves the overview. Keys with Ctrl, Alt or Cmd held are
+-- the browser's (Ctrl+P prints, Alt+Left goes back), and so is a key
+-- typed into a field, and Space or Enter on a button or a link, which
+-- press it. It is asked by the window's listener, which hears a key after
+-- every element's own: a key one of them has handled already, and kept
+-- from the browser, is theirs.
+commandOf :: KeyboardEvent -> Maybe Command
+commandOf pressed
+  | T.null pressed.key || defaultPreventedNow event = Nothing
+  | pressed.ctrlKey || pressed.metaKey || pressed.altKey = Nothing
+  | inside "input:not([type=checkbox]), textarea, select, [contenteditable]" = Nothing
+  | otherwise = case pressed.key of
+      " "
+        | pressable -> Nothing
+        | pressed.shiftKey -> Just Previous
+        | otherwise -> Just Next
+      "Enter"
+        | pressable -> Nothing
+        | pressed.shiftKey -> Just Previous
+        | otherwise -> Just Choose
+      "Home" -> Just ToFirst
+      "End" -> Just ToLast
+      "Escape" -> Just Leave
+      key
+        | key `elem` ["ArrowRight", "ArrowDown", "PageDown"] -> Just Next
+        | key `elem` ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"] -> Just Previous
+        | key `elem` ["f", "F"] -> Just ToggleFullscreen
+        | key `elem` ["n", "N", "s", "S"] -> Just ToggleNotes
+        | key `elem` ["o", "O"] -> Just ToggleOverview
+        | otherwise -> Nothing
+  where
+    event = KeyboardEvent.toEvent pressed
+    target = Event.target event >>= Element.fromEventTarget
+    inside selector = isJust (target >>= (`Element.closestNow` selector))
+    pressable = inside "button, a[href], summary, input"
+
+-- | The view full screen, or the page back from full screen if anything
+-- is. A browser that will not (no user gesture, or not allowed in a frame)
+-- refuses, which is ignored: the slides fill the window anyway.
+toggleFullscreen :: Element -> IO ()
+toggleFullscreen view = do
+  w <- HTMLWindow.window
+  full <- w.document.fullscreenElement
+  void . try @JSError $ if isJust full then void w.document.exitFullscreen else void view.requestFullscreen
+
+-- | Leave full screen, if the page is.
+exitFullscreen :: IO ()
+exitFullscreen = do
+  w <- HTMLWindow.window
+  whenM (isJust <$> w.document.fullscreenElement) (void (try @JSError (void w.document.exitFullscreen)))
 
 -- | Fetch the page the input names, with the URL of each of its
 -- attachments, and as slides; or the reason it cannot be shown. Markdown

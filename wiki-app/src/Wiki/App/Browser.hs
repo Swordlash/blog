@@ -2,13 +2,16 @@
 
 -- | The few browser features the shell needs that Halogen does not
 -- provide: the link a click in a rendered page landed on, scrolling to a
--- heading or a footnote, the document's title, the position in the
--- session history, the clipboard, a modal dialog, and a time written in
--- the reader's time zone and language. Also the demo's zip files: making,
--- reading and saving them (see @jsbits/archive.js@). See
--- @jsbits/browser.js@. Natively there is no browser: no click lands on a
--- link, every history entry is the first, nothing is copied, no dialog is
--- shown, and the rest does nothing.
+-- heading or a footnote, the document's title and favicon, the position in
+-- the session history, the clipboard, a modal dialog, a file saved, and a
+-- time written in the reader's time zone and language. They are read and
+-- called through the Web types' fields ("Web.HTML.Window" and the rest);
+-- only the demo's zip files (making and reading them, @jsbits/archive.js@),
+-- the reader's selection in a page (@jsbits/comments.js@) and what follows
+-- the page's layout (@jsbits/layout.js@, @jsbits/toc.js@) have JavaScript
+-- of their own. Natively there is no browser: no click lands on a link,
+-- every history entry is the first, nothing is copied, no dialog is shown,
+-- and the rest does nothing.
 module Wiki.App.Browser
   ( ArticleLink (..)
   , articleLink
@@ -18,6 +21,10 @@ module Wiki.App.Browser
   , historyEntry
   , historyGo
   , replacingEntry
+  , pushPreviewEntry
+  , onPreviewEntry
+  , forgetPreviewEntry
+  , historyBack
   , copyText
   , absoluteUrl
   , zipFiles
@@ -42,42 +49,43 @@ module Wiki.App.Browser
 where
 
 import Data.Aeson (FromJSON (..), decodeStrict', withObject, (.:))
+import Data.Foreign (stringToForeign)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
+import Data.MediaType (MediaType (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Halogen.JSBits (Inert (..), JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
-import Halogen.JSBits.Promise (Promise (..), wait)
+import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, isNull, jsValText, toJSBytes, toJSText)
+import Halogen.JSBits.Fields (inlineJS)
+import Halogen.JSBits.Promise (JSError, waitCatch)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
-import Halogen.Router.Duplex (decodeComponent)
-import Protolude hiding (wait)
--- With its constructor: the FFI passes the value inside the newtype.
-import Web.DOM.Internal.Types (Element (..))
+import Halogen.Router.Duplex (decodeComponent, encodeComponent)
+import Protolude hiding (waitCatch)
+import System.IO.Unsafe (unsafePerformIO)
+import Web.DOM.Element qualified as Element
+-- With their constructors: the FFI passes the value inside a newtype.
+import Web.DOM.Internal.Types (Element (..), toNode)
 import Web.Event.Event (Event (..))
+import Web.Event.Event qualified as Event
+import Web.File.Blob qualified as Blob
+import Web.HTML.HTMLDialogElement qualified as HTMLDialogElement
+import Web.HTML.HTMLElement qualified as HTMLElement
+import Web.HTML.Window qualified as Window
+import Web.UIEvent.MouseEvent (MouseEvent (..))
+import Web.URL qualified as URL
 import Wiki.App.Route (Route, routeOfHref)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Id (CommentThreadId (..))
 
--- Copying waits for the browser's clipboard, so that binding is a safe
--- import, which waits for the promise; the rest return at once. The link a
--- click landed on is read in the click's listener, while the browser
--- dispatches it, and the click does not change meanwhile, so that binding
--- is pure.
+-- The zip files are the page's archive library's (archive.js), the
+-- reader's selection is read as "Wiki.Core.Anchor" reads a page
+-- (comments.js), and the heights and the contents follow the page's layout
+-- (layout.js, toc.js): logic of their own, which stays JavaScript.
 $( browserJS
-     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
-     [ ("js_clicked_href", "wiki_clicked_href", Safe, [t|Event -> JSText|])
-     , ("js_clicked_note", "wiki_clicked_note", Safe, [t|Event -> JSText|])
-     , ("js_scroll_to", "wiki_scroll_to", Safe, [t|JSText -> IO ()|])
-     , ("js_follow_note", "wiki_follow_note", Safe, [t|JSText -> JSText -> IO ()|])
-     , ("js_set_title", "wiki_set_title", Safe, [t|JSText -> IO ()|])
-     , ("js_set_favicon", "wiki_set_favicon", Safe, [t|JSText -> JSText -> IO ()|])
-     , ("js_history_entry", "wiki_history_entry", Safe, [t|IO Int|])
-     , ("js_history_go", "wiki_history_go", Safe, [t|Int -> IO ()|])
-     , ("js_history_replacing", "wiki_history_replacing", Safe, [t|Int -> IO ()|])
-     , ("js_history_replaced", "wiki_history_replaced", Safe, [t|IO ()|])
-     , ("js_copy_textPromise", "wiki_copy_text", Safe, [t|Element -> JSText -> IO (Promise Bool)|])
-     , ("js_archive_new", "wiki_archive_new", Safe, [t|IO JSVal|])
+     ["jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
+     [ ("js_archive_new", "wiki_archive_new", Safe, [t|IO JSVal|])
      , ("js_archive_add", "wiki_archive_add", Safe, [t|JSVal -> JSText -> JSVal -> IO ()|])
      , ("js_archive_zip", "wiki_archive_zip", Safe, [t|JSVal -> IO JSVal|])
      , ("js_archive_unzip", "wiki_archive_unzip", Safe, [t|JSVal -> IO JSVal|])
@@ -85,24 +93,17 @@ $( browserJS
      , ("js_archive_count", "wiki_archive_count", Safe, [t|JSVal -> IO Int|])
      , ("js_archive_path", "wiki_archive_path", Safe, [t|JSVal -> Int -> IO JSText|])
      , ("js_archive_bytes", "wiki_archive_bytes", Safe, [t|JSVal -> Int -> IO JSVal|])
-     , ("js_download", "wiki_download", Safe, [t|JSText -> JSText -> JSVal -> IO ()|])
-     , ("js_local_time", "wiki_local_time", Safe, [t|Double -> IO JSText|])
-     , ("js_page_backend", "wiki_page_backend", Safe, [t|IO JSText|])
-     , ("js_console_warn", "wiki_console_warn", Safe, [t|JSText -> IO ()|])
-     , ("js_absolute_url", "wiki_absolute_url", Safe, [t|JSText -> IO JSText|])
      , ("js_comment_selection", "wiki_comment_selection", Safe, [t|Element -> IO JSText|])
-     , ("js_clicked_thread", "wiki_clicked_thread", Safe, [t|Event -> JSText|])
-     , ("js_reveal", "wiki_reveal", Safe, [t|JSText -> IO ()|])
      , ("js_keep_heights", "wiki_keep_heights", Safe, [t|IO ()|])
      , ("js_keep_contents", "wiki_keep_contents", Safe, [t|IO ()|])
      , ("js_reveal_fragment", "wiki_reveal_fragment", Safe, [t|IO ()|])
-     , ("js_dialog_show", "wiki_dialog_show", Safe, [t|Element -> IO ()|])
-     , ("js_dialog_close", "wiki_dialog_close", Safe, [t|Element -> IO ()|])
      ]
  )
 
-js_copy_text :: Element -> JSText -> IO Bool
-js_copy_text a1 a2 = if inBrowser then wait =<< js_copy_textPromise a1 a2 else pure inert
+-- A time written as the reader's language writes a date and a time, in
+-- their time zone: the one call with an options object, which no field
+-- takes.
+$(inlineJS "js_local_time" "new Date($1).toLocaleString(undefined, { dateStyle: \"medium\", timeStyle: \"short\" })" [t|Double -> IO JSText|])
 
 -- | Where a click on a link leads, in HTML the application did not build
 -- element by element (a page's Markdown, rendered by
@@ -127,19 +128,40 @@ data ArticleLink
 -- the browser dispatches the click and can still be stopped from following
 -- the link ('Halogen.HTML.Events.preventingDefault'). Asked later, from the
 -- component's action, the browser may have followed it already. The
--- answer is read from the click as it is at that moment, so the listener
--- forces it, which deciding between 'Nothing' and 'Just' does.
+-- answer is read from the click as it is at that moment
+-- ('Element.closestNow'), so the listener forces it, which deciding
+-- between 'Nothing' and 'Just' does.
 articleLink :: Router Route -> Event -> Maybe ArticleLink
-articleLink router event = case (routeOfHref router href, T.stripPrefix "#" href) of
-  _ | T.null href -> Nothing
-  (Just r, _) -> Just (ToRoute r)
-  (Nothing, Just fragment)
-    | T.null reference -> Just (ToFragment (decodeComponent fragment))
-    | otherwise -> Just (ToNote (decodeComponent fragment) reference)
-  (Nothing, Nothing) -> Nothing
+articleLink router event = do
+  anchor <- clickedLink event
+  let href = fromMaybe "" (Element.getAttributeNow anchor "href")
+  guard (not (T.null href))
+  case (routeOfHref router href, T.stripPrefix "#" href) of
+    (Just r, _) -> Just (ToRoute r)
+    (Nothing, Just fragment) -> case noteReference anchor of
+      Just reference -> Just (ToNote (decodeComponent fragment) reference)
+      Nothing -> Just (ToFragment (decodeComponent fragment))
+    (Nothing, Nothing) -> Nothing
   where
-    href = fromJSText (js_clicked_href event)
-    reference = fromJSText (js_clicked_note event)
+    -- A footnote's reference is the link's own id (@fnref-1@, or
+    -- @fnref-1-2@ for the second reference to the note).
+    noteReference anchor = do
+      _ <- Element.closestNow anchor "sup.footnote-ref > a[href^='#fn-']"
+      mfilter (not . T.null) (Element.getAttributeNow anchor "id")
+
+-- | The link a plain click landed on: the main button with no modifier
+-- key, on a link that opens in its own tab and is not a download. Read as
+-- the click is dispatched, purely, as 'articleLink' is.
+clickedLink :: Event -> Maybe Element
+clickedLink event = do
+  let click = MouseEvent event
+  guard (not (Event.defaultPreventedNow event) && click.button == 0)
+  guard (not (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey))
+  target <- Event.target event >>= Element.fromEventTarget
+  anchor <- Element.closestNow target "a[href]"
+  guard (isNothing (Element.getAttributeNow anchor "download"))
+  guard (maybe True (`elem` ["", "_self"]) (Element.getAttributeNow anchor "target"))
+  pure anchor
 
 -- | Follow a link 'articleLink' found: through the router, or by scrolling
 -- to the place on the page. A footnote's reference also adds an entry to
@@ -152,36 +174,153 @@ articleLink router event = case (routeOfHref router href, T.stripPrefix "#" href
 followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
-  ToFragment fragment -> liftIO (js_scroll_to (toJSText fragment))
-  ToNote footnote reference -> liftIO (js_follow_note (toJSText footnote) (toJSText reference))
+  ToFragment fragment -> liftIO (scrollTo fragment)
+  ToNote footnote reference -> liftIO (followNote footnote reference)
+
+-- Scroll to an element of the page by its id, as following a link to
+-- @#id@ would, and put @#id@ in the address bar, so that the address shown
+-- is the place's, to copy and pass on. The entry is replaced rather than a
+-- new one pushed (the router hears nothing of it, and Back leaves the
+-- page), with its state kept ('historyEntry''s number); the address is
+-- written out from the path, since a bare @#id@ would be read against the
+-- page's @\<base href>@. Under a router that keeps the route in the
+-- fragment (@#/s/...@, the browser tests'), the fragment is the router's,
+-- and is left.
+scrollTo :: Text -> IO ()
+scrollTo place = do
+  w <- Window.window
+  found <- w.document.getElementById place
+  for_ found $ \element -> do
+    element.scrollIntoView
+    fragment <- w.location.hash
+    unless ("#/" `T.isPrefixOf` fragment) $ do
+      kept <- w.history.state
+      here <- (<>) <$> w.location.pathname <*> w.location.search
+      w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent place))
+
+-- Go from a footnote's reference to its note, as following a link to
+-- @#fn-1@ on an ordinary page does: a new entry in the session history, so
+-- that the browser's Back returns to the reference. The entry left gets
+-- the reference's own address (@#fnref-1@), which is where Back returns:
+-- the shell scrolls to what an address names when it arrives at an entry
+-- of the page it shows ('revealFragment'). The new entry is numbered as
+-- 'historyEntry' numbers entries, the one after the entry left, and the
+-- router hears nothing of it, as of a push of its own. Under a router that
+-- keeps the route in the fragment (the browser tests'), the fragment is
+-- the router's, and the note is only scrolled to; so it is in the editor's
+-- preview, whose own entry ('pushPreviewEntry') "Back to edit" goes back
+-- from, one entry, which a note's entry on top of it would take.
+followNote :: Text -> Text -> IO ()
+followNote footnote reference = do
+  w <- Window.window
+  found <- w.document.getElementById footnote
+  for_ found $ \element -> do
+    fragment <- w.location.hash
+    inPreview <- onPreviewEntry
+    unless ("#/" `T.isPrefixOf` fragment || inPreview) $ do
+      here <- (<>) <$> w.location.pathname <*> w.location.search
+      entry <- historyEntry
+      unless (T.null reference) $ do
+        kept <- w.history.state
+        w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent reference))
+      w.history.pushState (writeEntryState EntryState {number = Just (entry + 1), preview = False}) "" (Just (here <> "#" <> encodeComponent footnote))
+      writeIORef lastEntry (entry + 1)
+    element.scrollIntoView
 
 -- | Show a @\<dialog>@ element as a modal dialog (@showModal@): above the
 -- page, with a backdrop, the rest of the page inert, closed by Escape, and
 -- the focus given back to where it was when the dialog closes. The element
 -- then fires @close@. Natively nothing happens.
 showDialog :: (MonadIO m) => Element -> m ()
-showDialog = liftIO . js_dialog_show
+showDialog element = liftIO $ for_ (HTMLDialogElement.fromElement element) $ \dialog -> unlessM dialog.open dialog.showModal
 
 -- | Close a dialog 'showDialog' showed. It fires @close@.
 closeDialog :: (MonadIO m) => Element -> m ()
-closeDialog = liftIO . js_dialog_close
+closeDialog element = liftIO $ for_ (HTMLDialogElement.fromElement element) $ \dialog -> whenM dialog.open dialog.close
 
 -- | Set the title of the browser's tab and of its history entry.
 setDocumentTitle :: (MonadIO m) => Text -> m ()
-setDocumentTitle = liftIO . js_set_title . toJSText
+setDocumentTitle title = liftIO $ Window.window >>= \w -> w.document.title_set title
 
 -- | Set the favicon of the browser's tab ("Wiki.App.Favicon"): the page's
--- @\<link rel="icon">@, given its address and its media type. Natively
--- nothing happens.
+-- @\<link rel="icon">@, given its address and its media type. The link is
+-- changed only when its address or type differ, so that the browser does
+-- not fetch the same icon again at every route. Natively nothing happens.
 setFavicon :: (MonadIO m) => Text -> Text -> m ()
-setFavicon href mediaType = liftIO (js_set_favicon (toJSText href) (toJSText mediaType))
+setFavicon href mediaType = liftIO $ do
+  w <- Window.window
+  found <- w.document.querySelector "link[rel~=\"icon\"]"
+  iconLink <- case found of
+    Just iconLink -> pure iconLink
+    Nothing -> do
+      iconLink <- w.document.createElement "link"
+      iconLink.setAttribute "rel" "icon"
+      _ <- (HTMLElement.toElement w.document.head).appendChild (toNode iconLink)
+      pure iconLink
+  for_ [("href", href), ("type", mediaType)] $ \(name, value) -> do
+    current <- iconLink.getAttribute name
+    when (current /= Just value) (iconLink.setAttribute name value)
 
--- | The number of the session history's current entry. The entries the
--- shell has seen are numbered in order, so that 'historyGo' can return to
--- one. The router keeps no such number, nor any state of its own in the
--- entry. Natively always 0.
+-- | What the shell keeps in an entry of the session history, as the
+-- entry's state: the entry's number ('historyEntry'), and whether the
+-- entry is the editor's preview's ('pushPreviewEntry'). It is written as
+-- text, @"12"@, @"12+preview"@, or @"+preview"@ for an entry not yet
+-- numbered, since the history keeps a string as it is. An entry nobody
+-- wrote to has @null@: the router's own pushes write no state.
+data EntryState = EntryState
+  { number :: Maybe Int
+  , preview :: Bool
+  }
+
+readEntryState :: JSVal -> EntryState
+readEntryState value
+  | isNull value = EntryState {number = Nothing, preview = False}
+  | otherwise =
+      let (digits, rest) = T.span isDigit (jsValText value)
+       in EntryState {number = readMaybe digits, preview = rest == "+preview"}
+
+writeEntryState :: EntryState -> JSVal
+writeEntryState EntryState {number, preview} =
+  stringToForeign (maybe "" show number <> if preview then "+preview" else "")
+
+-- The number of the last entry seen, and, while the router replaces the
+-- current entry ('replacingEntry'), the number that entry had. One page
+-- has one history, so they are the page's, as the numbers in the entries
+-- are.
+{-# NOINLINE lastEntry #-}
+lastEntry :: IORef Int
+lastEntry = unsafePerformIO (newIORef 0)
+
+{-# NOINLINE replacedEntry #-}
+replacedEntry :: IORef (Maybe Int)
+replacedEntry = unsafePerformIO (newIORef Nothing)
+
+-- | The number of the session history's current entry, written into the
+-- entry's state the first time the shell sees it: the one after the last
+-- entry seen, since an entry the shell has not seen is one just pushed
+-- (the router's own pushes write no state). An entry keeps its number when
+-- the page is reloaded or gone back to, so that the numbers of two entries
+-- tell how far apart they are, which 'historyGo' wants. The router keeps
+-- no such number. Natively always 0.
 historyEntry :: (MonadIO m) => m Int
-historyEntry = liftIO js_history_entry
+historyEntry
+  | not inBrowser = pure 0
+  | otherwise = liftIO $ do
+      w <- Window.window
+      kept <- readEntryState <$> w.history.state
+      case kept.number of
+        Just entry -> entry <$ writeIORef lastEntry entry
+        Nothing -> do
+          -- Whoever asks while the router replaces the entry gets the
+          -- number the entry had, not a new one.
+          entry <-
+            readIORef replacedEntry >>= \case
+              Just replaced -> pure replaced
+              Nothing -> do
+                next <- (+ 1) <$> readIORef lastEntry
+                next <$ writeIORef lastEntry next
+          w.history.replaceState (writeEntryState kept {number = Just entry}) "" Nothing
+          pure entry
 
 -- | Run something that replaces the current entry of the session history
 -- (the router's redirect), keeping the entry's number: the entry is the
@@ -193,28 +332,78 @@ replacingEntry :: (MonadIO m) => m () -> m ()
 replacingEntry replacement
   | inBrowser = do
       entry <- historyEntry
-      liftIO (js_history_replacing entry)
+      liftIO (writeIORef replacedEntry (Just entry))
       replacement
-      liftIO js_history_replaced
+      liftIO $ do
+        replaced <- readIORef replacedEntry
+        writeIORef replacedEntry Nothing
+        for_ replaced $ \number -> do
+          w <- Window.window
+          kept <- readEntryState <$> w.history.state
+          w.history.replaceState (writeEntryState kept {number = Just number}) "" Nothing
   | otherwise = replacement
 
 -- | Go this many entries forward in the session history (back, if
 -- negative), as the browser's buttons do: the router receives it as it
 -- receives them.
 historyGo :: (MonadIO m) => Int -> m ()
-historyGo = liftIO . js_history_go
+historyGo delta = liftIO $ Window.window >>= \w -> w.history.go delta
+
+-- | Push the preview's entry onto the session history (WP5.38 of
+-- docs/PLAN.md): "Show preview" in the editor pushes an entry at the
+-- editor's own address, marked as the preview's, so that the browser's
+-- Back returns to the text rather than leaving the editor. The shell sees
+-- the same route and only numbers the entry; the editor, watching the
+-- history, shows the text or the preview as the entry says
+-- ('onPreviewEntry').
+pushPreviewEntry :: (MonadIO m) => m ()
+pushPreviewEntry = when inBrowser . liftIO $ do
+  w <- Window.window
+  w.history.pushState (writeEntryState EntryState {number = Nothing, preview = True}) "" Nothing
+
+-- | Whether the session history's current entry is the preview's.
+onPreviewEntry :: (MonadIO m) => m Bool
+onPreviewEntry
+  | not inBrowser = pure False
+  | otherwise = liftIO $ Window.window >>= \w -> (.preview) . readEntryState <$> w.history.state
+
+-- | Take the preview's mark off the current entry: an editor opened on
+-- the preview's entry (after a reload, or back from another page) starts
+-- with the text.
+forgetPreviewEntry :: (MonadIO m) => m ()
+forgetPreviewEntry = when inBrowser . liftIO $ do
+  w <- Window.window
+  kept <- readEntryState <$> w.history.state
+  when kept.preview $ w.history.replaceState (writeEntryState kept {preview = False}) "" Nothing
+
+-- | Go back one entry in the session history, as the browser's Back does.
+historyBack :: (MonadIO m) => m ()
+historyBack = when inBrowser . liftIO $ Window.window >>= \w -> w.history.back
 
 -- | Put text on the clipboard, given the element that shows it, and say
--- whether it worked. If the browser will not copy it, the element's text
--- is left selected, for the reader to copy with the keyboard. This waits
--- for the browser, so a component calls it off its loop ('liftIO' in
--- 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is
+-- whether it worked. The asynchronous clipboard first; where there is none
+-- (a page served over plain HTTP from another machine) or it refuses, the
+-- element's text is selected and copied the old way, and if even that
+-- fails it stays selected, for the reader to copy with the keyboard. This
+-- waits for the browser, so a component calls it off its loop ('liftIO'
+-- in 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is
 -- copied.
 copyText :: (MonadIO m) => Element -> Text -> m Bool
-copyText element text =
-  -- The binding waits for the JavaScript promise ('wait'); 'evaluate'
-  -- forces the answer here, on this thread.
-  liftIO (evaluate =<< js_copy_text element (toJSText text))
+copyText element text = liftIO $ do
+  w <- Window.window
+  copied <- case w.navigator.clipboard of
+    Nothing -> pure False
+    Just clipboard -> isRight <$> (clipboard.writeText text >>= waitCatch)
+  if copied
+    then pure True
+    else do
+      range <- w.document.createRange
+      range.selectNodeContents (toNode element)
+      found <- w.getSelection
+      for_ found $ \selection -> do
+        selection.removeAllRanges
+        selection.addRange range
+      either (const False) identity <$> try @JSError (w.document.execCommand "copy")
 
 -- | An application address (as 'Router.href' writes it) as a full URL,
 -- with the scheme and host the page was loaded from: what a link sent in
@@ -223,7 +412,10 @@ copyText element text =
 absoluteUrl :: (MonadIO m) => Text -> m Text
 absoluteUrl path
   | not inBrowser = pure path
-  | otherwise = liftIO (fromJSText <$> js_absolute_url (toJSText path))
+  | otherwise = liftIO $ do
+      w <- Window.window
+      base <- w.document.baseURI
+      URL.parse path (Just base) >>= maybe (pure path) URL.href
 
 -- | A zip file of these files, by path. Natively there is no zip here, and
 -- the file is empty: the native programs zip with @zip-archive@.
@@ -249,9 +441,21 @@ unzipFiles bytes
         why -> pure (Left why)
 
 -- | Give bytes to the browser to save as a file with this name and media
--- type. Natively nothing is saved.
+-- type: a link with a @download@ attribute, clicked. The object URL the
+-- link points at is let go once the browser has had time to start saving.
+-- Natively nothing is saved.
 download :: (MonadIO m) => Text -> Text -> ByteString -> m ()
-download name mediaType bytes = liftIO . when inBrowser $ js_download (toJSText name) (toJSText mediaType) =<< toJSBytes bytes
+download name mediaType bytes = liftIO . when inBrowser $ do
+  url <- URL.createObjectURL =<< Blob.fromBytes bytes (MediaType mediaType)
+  w <- Window.window
+  anchor <- w.document.createElement "a"
+  anchor.setAttribute "href" url
+  anchor.setAttribute "download" name
+  anchor.setAttribute "hidden" ""
+  w.document.body >>= traverse_ (\body -> (HTMLElement.toElement body).appendChild (toNode anchor))
+  for_ (HTMLElement.fromElement anchor) (.click)
+  anchor.remove
+  void . forkIO $ threadDelay 60_000_000 >> URL.revokeObjectURL url
 
 -- | A time as the reader reads it: in their time zone, written the way
 -- their browser's language writes a date and a time. Natively, where there
@@ -264,7 +468,7 @@ localTime t
 -- | A warning on the browser's console, for whoever looks there, about
 -- something the program carried on without. Natively nothing.
 consoleWarn :: (MonadIO m) => Text -> m ()
-consoleWarn message = when inBrowser (liftIO (js_console_warn (toJSText message)))
+consoleWarn message = liftIO $ Window.window >>= \w -> w.console.warn message
 
 -- | Which backend the page says to use: the in-memory one, which keeps
 -- the wiki in the browser like the demo, or the HTTP one, which talks to
@@ -277,12 +481,15 @@ data PageBackend = DemoBackend | ServerBackend
 -- else, or nothing, for the demo, which is what a page from before there
 -- was a choice means. Natively, the demo.
 pageBackend :: (MonadIO m) => m PageBackend
-pageBackend = liftIO $ (\b -> if fromJSText b == "server" then ServerBackend else DemoBackend) <$> js_page_backend
+pageBackend = liftIO $ do
+  w <- Window.window
+  said <- w.document.querySelector "meta[name=\"wiki-backend\"]" >>= traverse (`Element.getAttribute` "content")
+  pure (if join said == Just "server" then ServerBackend else DemoBackend)
 
 --------------------------------------------------------------------------------
 -- Comments
 
--- | Text the reader has selected in a page, as the anchor of a comment
+-- | Text the reader has selected in a page, as the link of a comment
 -- about it ("Wiki.Core.Anchor"), and where a button to comment on it can
 -- go, under the selection: in pixels from the top left corner of the
 -- element the page's article is in.
@@ -306,15 +513,18 @@ readSelection element
   | otherwise = liftIO $ decodeStrict' . encodeUtf8 . fromJSText <$> js_comment_selection element
 
 -- | The thread whose highlighted quote a click landed on, if any: what
--- the page checks in the click's listener.
+-- the page checks in the click's listener, purely, as 'articleLink' is.
 clickedThread :: Event -> Maybe CommentThreadId
-clickedThread event = case fromJSText (js_clicked_thread event) of
-  "" -> Nothing
-  thread -> Just (CommentThreadId thread)
+clickedThread event = do
+  target <- Event.target event >>= Element.fromEventTarget
+  mark <- Element.closestNow target "mark.comment-mark[data-thread]"
+  CommentThreadId <$> Element.getAttributeNow mark "data-thread"
 
 -- | Scroll what a CSS selector picks into view, if it is not in view.
 reveal :: (MonadIO m) => Text -> m ()
-reveal selector = when inBrowser (liftIO (js_reveal (toJSText selector)))
+reveal selector = liftIO $ do
+  w <- Window.window
+  w.document.querySelector selector >>= traverse_ (`Element.scrollIntoViewBlock` Element.ToNearest)
 
 -- | Keep the heights of the sticky header and of the page's action bar as
 -- CSS variables, which the stylesheet uses to stack the bar, the editor's

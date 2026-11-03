@@ -53,7 +53,6 @@ $( browserJS
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_render_tikz", "wiki_islands_render_tikz", Safe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Safe, [t|Element -> JSText -> JSText -> IO ()|])
-     , ("js_set_text", "wiki_islands_set_text", Safe, [t|Element -> JSText -> IO ()|])
      ]
  )
 
@@ -147,7 +146,7 @@ instance MonadIslands BrowserDOM where
 
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 
-  renderTime at element = liftIO $ localTime at >>= js_set_text element . toJSText
+  renderTime at element = liftIO $ localTime at >>= element.textContent_set
 
 -- | The blocks as a JSON array of strings, the one form in which a binding
 -- can pass a list.

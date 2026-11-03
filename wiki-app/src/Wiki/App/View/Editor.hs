@@ -208,6 +208,7 @@ module Wiki.App.View.Editor
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
@@ -221,7 +222,6 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
-import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
@@ -242,7 +242,6 @@ import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
   , PickedFile (..)
-  , PreviewWatch
   , announceUpload
   , answerMention
   , applyCommand
@@ -265,6 +264,7 @@ import Wiki.App.Editor.Browser
   , paneShown
   , pastedFiles
   , pickedFiles
+  , previewEntries
   , previewShowing
   , previewShown
   , pushPreviewEntry
@@ -273,8 +273,6 @@ import Wiki.App.Editor.Browser
   , settleChanges
   , textShown
   , typedText
-  , unwatchPreviewEntry
-  , watchPreviewEntry
   )
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
@@ -479,10 +477,6 @@ data State = State
   -- text is reached through it ("Wiki.App.Editor.Browser").
   , fileInput :: H.RefLabel
   , backButton :: H.RefLabel
-  , history :: Maybe PreviewWatch
-  -- ^ The listener for the browser's Back and Forward, which move between
-  -- the text and the preview shown alone ("Show preview" pushes an entry
-  -- of the session history).
   , loads :: Int
   -- ^ How many times the page has been loaded: the key of the title input
   -- and the textarea, which a reload replaces.
@@ -633,7 +627,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadLoad m, MonadAdmin m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadAdmin m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -672,7 +666,6 @@ component =
               , host
               , fileInput
               , backButton
-              , history = Nothing
               , loads = 1
               , watching = Nothing
               , presence = Unsaid
@@ -1318,10 +1311,8 @@ component =
         -- An editor opened on the preview's entry starts with the text, so
         -- the entry is the text's.
         H.liftEffect forgetPreviewEntry
-        moves <- H.liftEffect (liftIO HS.create)
-        void (H.subscribe (WentTo <$> moves.emitter))
-        watch <- H.liftEffect (watchPreviewEntry (HS.notify moves.listener))
-        modify (\st -> st {history = Just watch})
+        moves <- H.liftEffect previewEntries
+        void (H.subscribe (WentTo <$> moves))
         -- Also after the first render, which a prerendered page shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
@@ -1345,7 +1336,6 @@ component =
       -- CodeMirror are not, so they are removed here.
       Finalize -> do
         H.liftEffect (guardUnload False)
-        gets (\st -> st.history) >>= traverse_ (H.liftEffect . unwatchPreviewEntry)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
         -- This tab no longer edits the page.
         st <- get

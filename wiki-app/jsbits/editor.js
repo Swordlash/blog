@@ -26,60 +26,6 @@ function wikiTextarea(host) {
   return textarea instanceof HTMLTextAreaElement ? textarea : null;
 }
 
-// A drop's files, as an array. Taken in the drop's listener, while the
-// event is being dispatched: its dataTransfer is emptied once it has been,
-// but the File objects taken from it stay readable.
-function wiki_editor_drop_files(event) {
-  return Array.from(event.dataTransfer?.files ?? []);
-}
-
-// A paste's files, as an array, and how many there are: a screenshot or an
-// image copied in a browser, or files copied in a file manager, where the
-// browser exposes them. Taken in the paste's listener, as a drop's are, and
-// for the same reason; the count lets the listener leave a paste of text
-// alone.
-function wiki_editor_paste_files(event) {
-  return Array.from(event.clipboardData?.files ?? []);
-}
-
-function wiki_editor_paste_file_count(event) {
-  return event.clipboardData?.files?.length ?? 0;
-}
-
-// A file input's files, as an array. The input is emptied after, so that
-// choosing the same file again is a change too.
-function wiki_editor_chosen_files(event) {
-  const input = event.target;
-  if (input instanceof HTMLInputElement && input.files) {
-    const files = Array.from(input.files);
-    input.value = "";
-    return files;
-  }
-  return [];
-}
-
-function wiki_editor_file_count(files) {
-  return files.length;
-}
-
-function wiki_editor_file_name(files, i) {
-  return files[i].name;
-}
-
-function wiki_editor_file_type(files, i) {
-  return files[i].type;
-}
-
-function wiki_editor_file_size(files, i) {
-  return files[i].size;
-}
-
-// A file's bytes, as base64 text: bytes cross the FFI as text the same way
-// on every backend (as jsbits/object-url.js has them the other way).
-async function wiki_editor_read_file(files, i) {
-  return new Uint8Array(await files[i].arrayBuffer()).toBase64();
-}
-
 // Put CodeMirror in the host in place of the textarea, once its module has
 // loaded; `original` is the Markdown the textarea was made with, which the
 // browser has made the textarea's line endings "\n" in. Without the page's
@@ -87,24 +33,6 @@ async function wiki_editor_read_file(files, i) {
 function wiki_editor_attach(host, original) {
   const textarea = wikiTextarea(host);
   if (textarea) globalThis.wikiIslands?.attachEditor?.(textarea, host, original);
-}
-
-// Let go of the host's CodeMirror, as the component goes.
-function wiki_editor_detach(host) {
-  host.wikiEditor?.destroy();
-}
-
-// The text CodeMirror's "wiki-input" event says the editor now has.
-function wiki_editor_typed(event) {
-  return String(event.detail ?? "");
-}
-
-// The text, and its selection in characters (code points), which is how
-// Haskell's Text counts: the browser and CodeMirror count UTF-16 code units,
-// two for a character beyond the Basic Multilingual Plane, such as most
-// emoji.
-function wiki_editor_value(host) {
-  return host.wikiEditor ? host.wikiEditor.text() : (wikiTextarea(host)?.value ?? "");
 }
 
 function wikiCharacters(text, units) {
@@ -194,62 +122,6 @@ function wiki_editor_write(host, text, start, end) {
   textarea.setSelectionRange(wikiUnits(text, start), wikiUnits(text, end));
 }
 
-// Which of the editor's keys a keydown is, or "" for one the browser keeps.
-// Saving, the preview and Escape are the form's, wherever the focus is in
-// it; the rest are the text's (the textarea's, or CodeMirror's content). Shift+7 and Shift+8 are read by the key's
-// place (its code), since the character they type differs between layouts,
-// as is P with Alt, which types a character of its own on a Mac. A key
-// the list of a mention's completion acts on (Tab, Enter, Escape) never
-// reaches the form: CodeMirror stops it (web/src/editor.js).
-function wiki_editor_key(event) {
-  if (event.isComposing) return "";
-  const command = event.ctrlKey || event.metaKey;
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  if (command && !event.altKey && !event.shiftKey && key === "s") return "save";
-  if (command && event.altKey && !event.shiftKey && event.code === "KeyP") return "preview";
-  const plain = !(command || event.altKey || event.shiftKey);
-  if (plain && key === "Escape") return "escape";
-  const target = event.target;
-  // The page's text only: the assistant's message box is a textarea of the
-  // form too, where Tab and the shortcuts are its own.
-  const inText =
-    (target instanceof HTMLTextAreaElement && target.classList.contains("editor-text")) ||
-    (target instanceof Element && target.closest(".cm-content") !== null);
-  if (!inText) return "";
-  if (plain && key === "Tab") return "indent";
-  if (command && !event.altKey && !event.shiftKey) {
-    const commands = { b: "bold", i: "italic", k: "link", e: "code" };
-    return commands[key] ?? "";
-  }
-  if (command && !event.altKey && event.shiftKey) {
-    if (event.code === "Digit7") return "numbered";
-    if (event.code === "Digit8") return "bulleted";
-  }
-  return "";
-}
-
-// Focus an element without scrolling to it: the back button.
-function wiki_editor_focus(element) {
-  element.focus({ preventScroll: true });
-}
-
-// Empty a form field the page does not control: a password used once.
-function wiki_editor_clear_field(element) {
-  element.value = "";
-}
-
-// Focus the text, at its selection, without scrolling to it: coming back
-// from the preview, where it was.
-function wiki_editor_focus_text(host) {
-  if (host.wikiEditor) host.wikiEditor.focus();
-  else wikiTextarea(host)?.focus({ preventScroll: true });
-}
-
-// Click an element: the file input, from the toolbar's image button.
-function wiki_editor_click(element) {
-  element.click();
-}
-
 // Whether leaving the page should be warned about. One listener for the
 // page's lifetime, which asks the browser to warn only while this is set:
 // browsers show their own words, not the page's.
@@ -265,25 +137,6 @@ function wiki_editor_guard_unload(dirty) {
     event.preventDefault();
     event.returnValue = "";
   });
-}
-
-// The selection a "wiki-selection" event tells of, as "from:to" in
-// characters, or "" when nothing is selected.
-function wiki_editor_selected(event) {
-  const from = Number(event.detail?.from ?? 0);
-  const to = Number(event.detail?.to ?? 0);
-  return to > from ? `${from}:${to}` : "";
-}
-
-// How many tracked changes a "wiki-changes" event says are left.
-function wiki_editor_change_count(event) {
-  return Number(event.detail ?? 0);
-}
-
-// The decision a "wiki-decide" event tells of: "accept:<id>" or
-// "reject:<id>".
-function wiki_editor_decided(event) {
-  return `${event.detail?.accept ? "accept" : "reject"}:${Number(event.detail?.id ?? 0)}`;
 }
 
 // The assistant's tracked changes, as JSON, in characters: [{id, from, to,
@@ -333,12 +186,6 @@ function wiki_editor_settle(host, ids, replacements) {
   );
 }
 
-// The question a "wiki-mention" event asks, as "<id>:<letters>": which users
-// a mention that starts with the letters may name (web/src/editor.js).
-function wiki_editor_mention_asked(event) {
-  return `${Number(event.detail?.id ?? 0)}:${String(event.detail?.letters ?? "")}`;
-}
-
 // The answer to the question `id`: `people` is JSON, [{login, name}], or ""
 // when the users could not be found (the backend was not reached).
 function wiki_editor_mentioned(host, id, people) {
@@ -370,77 +217,6 @@ function wiki_live_listen(key, callback) {
 function wiki_live_stop(handle) {
   wikiLiveListeners.get(handle)?.close();
   wikiLiveListeners.delete(handle);
-}
-
-// Scroll the preview beside the text, just shown, to the line followed.
-function wiki_live_pane_shown(host) {
-  host.wikiEditor?.paneShown();
-}
-
-// The preview's entry in the session history (WP5.38 of docs/PLAN.md).
-// "Show preview" pushes an entry with the editor's own address, marked
-// wikiPreview, so that the browser's Back returns to the text rather than
-// leaving the editor. The shell sees the same route and only notes the
-// entry; the editor, watching popstate, shows the text or the preview as
-// the entry says.
-function wiki_preview_push() {
-  history.pushState({ wikiPreview: true }, "", location.href);
-}
-
-// Whether the session history's current entry is the preview's.
-function wiki_preview_entry() {
-  return history.state?.wikiPreview === true;
-}
-
-// Take the mark off the current entry: an editor opened on the preview's
-// entry (after a reload, or back from another page) starts with the text.
-function wiki_preview_forget() {
-  const state = history.state;
-  if (state?.wikiPreview !== true) return;
-  const { wikiPreview: _, ...kept } = state;
-  history.replaceState(kept, "");
-}
-
-function wiki_history_back() {
-  history.back();
-}
-
-const wikiPreviewWatches = new Map();
-let wikiPreviewNext = 0;
-
-// Call back on each popstate with whether the entry is the preview's ("1")
-// or not (""). The number to stop with.
-function wiki_preview_watch(callback) {
-  const handler = () => callback(wiki_preview_entry() ? "1" : "");
-  window.addEventListener("popstate", handler);
-  const handle = ++wikiPreviewNext;
-  wikiPreviewWatches.set(handle, handler);
-  return handle;
-}
-
-function wiki_preview_unwatch(handle) {
-  const handler = wikiPreviewWatches.get(handle);
-  if (handler) window.removeEventListener("popstate", handler);
-  wikiPreviewWatches.delete(handle);
-}
-
-// The preview was shown alone: the window goes to the block being
-// edited. The text was shown again: the window goes back to where it was.
-function wiki_editor_preview_showing(host) {
-  host.wikiEditor?.previewShowing();
-}
-
-function wiki_editor_preview_shown(host) {
-  host.wikiEditor?.previewShown();
-}
-
-function wiki_editor_text_shown(host) {
-  host.wikiEditor?.textShown();
-}
-
-// Tell the window of the page that a file was uploaded to it.
-function wiki_live_uploaded(host) {
-  host.wikiEditor?.uploaded();
 }
 
 // Scroll to the block of a source line in rendered Markdown with line

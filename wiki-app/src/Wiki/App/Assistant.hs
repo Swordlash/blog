@@ -79,14 +79,19 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Type.Equality (type (~))
-import Halogen.JSBits (Callback, Inert (..), JSText, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
+import Halogen.JSBits.Fields (Member (..), inlineJS, jsFields)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
 import Protolude hiding (wait)
+import Web.DOM.Element qualified as Element
+import Web.DOM.Internal.Types (Window (..))
 import Web.Event.Event (Event (..))
+import Web.HTML.Window qualified as Window
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
+import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, RegistrationOptions, RegistrationResponse)
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), providerKey)
@@ -111,14 +116,7 @@ $( browserJS
      , ("js_close", "wiki_assistant_close", Safe, [t|Int -> IO ()|])
      , ("js_checkPromise", "wiki_assistant_check", Safe, [t|JSText -> IO (Promise JSText)|])
      , ("js_modelsPromise", "wiki_assistant_models", Safe, [t|JSText -> IO (Promise JSText)|])
-     , ("js_scripted", "wiki_assistant_scripted", Safe, [t|IO Bool|])
-     , ("js_secure", "wiki_assistant_secure", Safe, [t|IO Bool|])
      , ("js_prepare", "wiki_assistant_prepare", Safe, [t|IO ()|])
-     , ("js_send_key", "wiki_assistant_send_key", Safe, [t|Event -> Bool|])
-     , ("js_close_key", "wiki_assistant_close_key", Safe, [t|Event -> Bool|])
-     , ("js_clock", "wiki_assistant_clock", Safe, [t|Double -> IO JSText|])
-     , ("js_page_policy", "wiki_assistant_page_policy", Safe, [t|IO JSText|])
-     , ("js_page_origin", "wiki_assistant_page_origin", Safe, [t|IO JSText|])
      , ("js_new_keyPromise", "wiki_vault_new_key", Safe, [t|Bool -> IO (Promise Int)|])
      , ("js_sealPromise", "wiki_vault_seal", Safe, [t|Int -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_open_sealedPromise", "wiki_vault_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
@@ -140,6 +138,33 @@ $( browserJS
      , ("js_passkey_abort", "wiki_passkey_abort", Safe, [t|IO ()|])
      ]
  )
+
+-- The time of day as the browser's language writes a short time: the one
+-- call with an options object, which no field takes.
+$(inlineJS "js_clock" "new Date($1).toLocaleTimeString(undefined, { timeStyle: \"short\" })" [t|Double -> IO JSText|])
+
+-- | The window as the scripted provider's page adds to it (a test's):
+-- @wikiAssistantScript@, the script the provider answers with.
+newtype Scripted = Scripted Window
+  deriving newtype (Inert)
+
+$( jsFields
+     ''Scripted
+     [ Live "wikiAssistantScript" [t|Maybe JSVal|]
+     ]
+ )
+
+-- | Whether the page carries a scripted provider's script.
+scripted :: IO Bool
+scripted = Scripted <$> Window.window >>= fmap isJust . (.wikiAssistantScript)
+
+-- | The page's Content Security Policy, from its @\<meta http-equiv>@, or
+-- empty where the page has none.
+pagePolicy :: IO Text
+pagePolicy = do
+  w <- Window.window
+  content <- w.document.querySelector "meta[http-equiv=\"Content-Security-Policy\"]" >>= traverse (`Element.getAttribute` "content")
+  pure (fromMaybe "" (join content))
 
 js_check :: JSText -> IO JSText
 js_check a1 = if inBrowser then wait =<< js_checkPromise a1 else pure inert
@@ -286,13 +311,17 @@ instance FromJSON Heard where
 -- pure, so that the keydown listener can decide synchronously, and prevent
 -- Enter from inserting a new line.
 sendsMessage :: Event -> Bool
-sendsMessage = js_send_key
+sendsMessage event =
+  let key = KeyboardEvent event
+   in key.key == "Enter" && not key.shiftKey && not key.isComposing && not (key.ctrlKey || key.metaKey || key.altKey)
 
 -- | Whether a keydown in the message box closes the panel: Escape, but not
 -- in the middle of composing a character, where Escape cancels the
 -- composition.
 closesPanel :: Event -> Bool
-closesPanel = js_close_key
+closesPanel event =
+  let key = KeyboardEvent event
+   in key.key == "Escape" && not key.isComposing
 
 -- | The time of day of a moment, as the chat shows it beside a message:
 -- in the browser's time zone, written the way the browser's language
@@ -558,8 +587,8 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_passkey_sign_in (toJSText (json (toJSON options))) conditional ticket
     pure . passkeyAnswer answer $ \o -> o .: "response"
   abortSignInPasskey = liftIO js_passkey_abort
-  scriptedInstalled = liftIO js_scripted
-  secureContext = liftIO js_secure
+  scriptedInstalled = liftIO scripted
+  secureContext = liftIO ((.isSecureContext) <$> Window.window)
   prepareAssistant = liftIO js_prepare
   openTalk opening heard = liftIO $ do
     callback <- mkSyncCallback (heard . heardOf . jsValText)
@@ -642,11 +671,11 @@ blockedBy :: Ready -> IO (Maybe AssistantError)
 blockedBy r = case r.baseUrl of
   Nothing -> pure Nothing
   Just url ->
-    js_scripted >>= \case
+    scripted >>= \case
       True -> pure Nothing
       False -> do
-        policy <- fromJSText <$> js_page_policy
-        origin <- fromJSText <$> js_page_origin
+        policy <- pagePolicy
+        origin <- Window.window >>= \w -> w.location.origin
         pure $
           if T.null policy || allowsConnect origin policy url.text
             then Nothing

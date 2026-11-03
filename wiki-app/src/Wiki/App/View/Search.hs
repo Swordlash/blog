@@ -30,22 +30,31 @@ module Wiki.App.View.Search
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
+import Data.Coerce (coerce)
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.Query.Event.Window qualified as WindowEvent
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.Subscription (Emitter)
+import Halogen.Subscription qualified as HS
 import Halogen.TH (hh, hhs)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
-import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event (..), EventType (..))
+import Web.DOM.Element qualified as Element
+import Web.DOM.Internal.Types (Element (..), HTMLElement (..), toNode)
+import Web.Event.Event (Event (..), EventType (..), defaultPreventedNow, preventDefault)
+import Web.Event.Event qualified as Event
+import Web.HTML.HTMLInputElement qualified as HTMLInputElement
 import Web.UIEvent.FocusEvent (FocusEvent)
-import Web.UIEvent.FocusEvent qualified as FE
+import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
+import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session, WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -54,18 +63,6 @@ import Wiki.Core.Path (renderPath)
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name))
-
--- The key is read in the keydown's listener, while the browser dispatches
--- it, and the event does not change meanwhile, so that binding is pure.
-$( browserJS
-     ["jsbits/search.js"]
-     [ ("js_search_key", "wiki_search_key", Safe, [t|Event -> JSText|])
-     , ("js_search_focus_leaves", "wiki_search_focus_leaves", Safe, [t|Element -> Event -> IO Bool|])
-     , ("js_search_blur", "wiki_search_blur", Safe, [t|Element -> IO ()|])
-     , ("js_search_bind_shortcut", "wiki_search_bind_shortcut", Safe, [t|Element -> IO ()|])
-     , ("js_search_unbind_shortcut", "wiki_search_unbind_shortcut", Safe, [t|Element -> IO ()|])
-     ]
- )
 
 newtype Input = Input {context :: Context}
 
@@ -90,13 +87,11 @@ data State = State
   -- ^ The search waiting for the typing to pause.
   , box :: H.RefLabel
   , input :: H.RefLabel
-  , bound :: Maybe Element
-  -- ^ The input the @/@ shortcut focuses, once the shortcut is bound.
   }
 
 data Action
   = Initialize
-  | Finalize
+  | Shortcut
   | Receive Input
   | Typed Text
   | Chose Text
@@ -121,7 +116,7 @@ pause = 150_000
 shown :: Int
 shown = 8
 
-component :: forall query output m. (MonadLoad m, MonadUUID m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadLoad m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -140,7 +135,6 @@ component =
               , pending = Nothing
               , box
               , input
-              , bound = Nothing
               }
       , render
       , eval =
@@ -148,7 +142,6 @@ component =
             H.defaultEval
               { H.handleAction = handleAction
               , H.initialize = Just Initialize
-              , H.finalize = Just Finalize
               , H.receive = Just . Receive
               }
       }
@@ -204,7 +197,7 @@ component =
     -- the component is busy with. Any other key makes no action and is left
     -- to the browser.
     listKey :: Event -> Maybe Action
-    listKey event = case fromJSText (js_search_key event) of
+    listKey event = case (KeyboardEvent event).key of
       "ArrowDown" -> Just (Move 1)
       "ArrowUp" -> Just (Move (-1))
       "Enter" -> Just Pick
@@ -213,7 +206,7 @@ component =
     -- Escape, anywhere in the box, closes the list, and the browser also
     -- does its own action (a search input clears its text).
     closeKey :: Event -> Maybe Action
-    closeKey event = case fromJSText (js_search_key event) of
+    closeKey event = case (KeyboardEvent event).key of
       "Escape" -> Just Close
       _ -> Nothing
 
@@ -247,13 +240,24 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
+      -- The "/" shortcut and the press outside the box are heard for as
+      -- long as the box is shown: the subscriptions end with it.
       Initialize -> do
         ref <- gets (\st -> st.input)
-        element' <- H.getRef ref
-        for_ element' $ \element -> do
-          H.liftEffect (liftIO (js_search_bind_shortcut element))
-          modify (\st -> st {bound = Just element})
-      Finalize -> gets (\st -> st.bound) >>= traverse_ (H.liftEffect . liftIO . js_search_unbind_shortcut)
+        found <- H.getRef ref
+        for_ found $ \element -> do
+          slashes <- H.liftEffect (slashPressed element)
+          void (H.subscribe (Shortcut <$ slashes))
+          presses <- H.liftEffect (pressedOutside element)
+          void (H.subscribe (Close <$ presses))
+      -- The browser was kept from typing the "/" in the listener; the box
+      -- takes the focus now, with its text selected, to be typed over.
+      Shortcut -> do
+        ref <- gets (\st -> st.input)
+        found <- H.getRef ref
+        for_ found $ \element -> H.liftEffect . liftIO $ do
+          (coerce element :: HTMLElement).focus
+          for_ (HTMLInputElement.fromElement element) (.select)
       Receive Input {context} -> do
         before <- gets (\st -> st.context)
         -- A space that no longer exists, or is no longer visible, is
@@ -290,7 +294,9 @@ component =
         ref <- gets (\st -> st.box)
         container' <- H.getRef ref
         for_ container' $ \container -> do
-          leaving <- H.liftEffect (liftIO (js_search_focus_leaves container (FE.toEvent ev)))
+          leaving <- case ev.relatedTarget >>= Element.fromEventTarget of
+            Nothing -> pure True
+            Just next -> H.liftEffect (liftIO (not <$> container.contains (toNode next)))
           when leaving $ modify (\st -> st {open = False, selected = Nothing})
       KeepFocus -> pass
       Followed f -> do
@@ -346,7 +352,48 @@ component =
     leave = do
       modify (\st -> st {open = False, selected = Nothing})
       ref <- gets (\st -> st.input)
-      H.getRef ref >>= traverse_ (H.liftEffect . liftIO . js_search_blur)
+      H.getRef ref >>= traverse_ (\element -> H.liftEffect (liftIO (coerce element :: HTMLElement).blur))
+
+-- | The "/" shortcut: "/" pressed anywhere but in a field (where it is a
+-- character to type), as GitHub and others have it. Whether a key is the
+-- shortcut is decided in the window's listener, while the browser
+-- dispatches the key, and the browser is told there not to type it; a key
+-- an element has handled already, and kept from the browser, is left to
+-- it. A page shown as slides covers the box, and takes its keys itself.
+slashPressed :: (MonadBrowserDOM n, MonadUnliftIO n) => Element -> n (Emitter IO ())
+slashPressed input = do
+  HS.Emitter register <- WindowEvent.keyDown
+  pure . HS.makeEmitter $ \push -> do
+    HS.Subscription stop <- register $ \pressed -> do
+      connected <- input.isConnected
+      when (connected && isShortcut pressed) $ do
+        preventDefault (KeyboardEvent.toEvent pressed)
+        push ()
+    pure stop
+  where
+    isShortcut pressed =
+      pressed.key == "/"
+        && not (defaultPreventedNow (KeyboardEvent.toEvent pressed))
+        && not (pressed.ctrlKey || pressed.metaKey || pressed.altKey)
+        && isNothing (Event.target (KeyboardEvent.toEvent pressed) >>= Element.fromEventTarget >>= (`Element.closestNow` "input, textarea, select, [contenteditable], .slides-view"))
+
+-- | A press anywhere outside the box, heard on the document, which closes
+-- the list: the box's focusout does too, but a press on something that
+-- keeps the focus where it is (a toolbar button that prevents its
+-- mousedown's default) takes no focus from the input.
+pressedOutside :: (MonadBrowserDOM n, MonadUnliftIO n) => Element -> n (Emitter IO ())
+pressedOutside input = do
+  HS.Emitter register <- WindowEvent.documentEvent (EventType "pointerdown") Just
+  pure . HS.makeEmitter $ \push -> do
+    HS.Subscription stop <- register $ \press -> do
+      connected <- input.isConnected
+      box <- input.closest "[role=\"search\"]"
+      case (box, Event.target press >>= Element.fromEventTarget) of
+        (Just around, Just target) | connected -> do
+          inside <- around.contains (toNode target)
+          unless inside (push ())
+        _ -> pass
+    pure stop
 
 -- | Whether the list under the input is shown: while focus is in the box
 -- and there is typed text to list hits for.
