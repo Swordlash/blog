@@ -33,9 +33,10 @@
 # State changes within a program keep their original order.
 set -eu
 cd "$(dirname "$0")/.."
-if [ -r "$HOME/.wiki-toolchain/env" ]; then
+toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
   # shellcheck source=/dev/null
-  . "$HOME/.wiki-toolchain/env"
+  . "$toolchain_home/.wiki-toolchain/env"
 fi
 native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
 native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}

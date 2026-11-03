@@ -140,7 +140,7 @@ EOF
 }
 
 sysroot() {
-  prefix=$HOME/.ghc-wasm
+  prefix=${1:-$HOME}/.ghc-wasm
   mkdir -p "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi"
   touch "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libc.a" "$prefix/env"
   printf '%s\n' "$REV" >"$prefix/.paladyn-rev"
@@ -266,6 +266,30 @@ assert_contains "$EVENTS" "setup.sh PREFIX=$HOME/.ghc-wasm SKIP_GHC=1 FLAVOUR="
 bootstrap check >"$case_dir/check"
 assert_contains "$case_dir/check" 'reuse wasm sysroot'
 pass 'ghc-wasm-meta comes from its GitHub mirror when gitlab.haskell.org refuses the archive'
+
+# The toolchain under a directory WIKI_TOOLCHAIN_HOME names (a deployment's
+# prefix): everything is found and installed there, the tools are told to
+# keep their files there, and the home directory stays empty.
+fixture named-base
+base=$case_dir/srv/toolchain
+sysroot "$base"
+WIKI_TOOLCHAIN_HOME=$base
+export WIKI_TOOLCHAIN_HOME
+bootstrap check >"$case_dir/check"
+assert_contains "$case_dir/check" "reuse wasm sysroot $base/.ghc-wasm"
+bootstrap build >"$case_dir/build"
+[ -f "$base/.wiki-toolchain/env" ] || fail 'build did not write the environment file under the named directory'
+[ ! -e "$HOME/.wiki-toolchain" ] && [ ! -e "$HOME/.ghc-wasm" ] && [ ! -e "$HOME/.ghcup" ] || fail 'the named directory left something in the home directory'
+bootstrap env >"$case_dir/env"
+for line in "WIKI_TOOLCHAIN_HOME='$base'" "GHCUP_INSTALL_BASE_PREFIX='$base'" "CABAL_DIR='$base/.cabal'" "npm_config_cache='$base/.npm'" "PLAYWRIGHT_BROWSERS_PATH='$base/.cache/ms-playwright'"; do
+  assert_contains "$case_dir/env" "$line"
+  assert_contains "$base/.wiki-toolchain/env" "$line"
+done
+assert_contains "$case_dir/env" "$base/.wiki-toolchain/node/bin:$base/.ghcup/bin"
+unset WIKI_TOOLCHAIN_HOME
+bootstrap env >"$case_dir/env-home"
+if grep -F 'CABAL_DIR' "$case_dir/env-home" >/dev/null; then fail 'the home directory layout exports the tools'"'"' variables'; fi
+pass 'WIKI_TOOLCHAIN_HOME puts the toolchain under a named directory, with the tools told to keep their files there'
 
 fixture wrong-playwright
 sysroot

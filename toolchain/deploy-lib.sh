@@ -8,7 +8,8 @@
 # side by side. Each has
 #
 #   - a state file, $STATE_DIR/<name>.state, of key=value lines: the target
-#     directory, port and bind address, how the address was chosen, the
+#     directory, the directory the toolchain is under (toolchain, empty for
+#     the home directory), port and bind address, how the address was chosen, the
 #     port whose firewall rule this opened (empty when it opened none),
 #     what is deployed (mode: static, or server with its admin_port), and
 #     how it is reached: https (yes, the default, or no for --http), and when
@@ -17,7 +18,12 @@
 #     what undeploying turns off;
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
-#     deleted;
+#     deleted. Named with --prefix, the directory holds the state too
+#     (state/, so $STATE_DIR is there) and, unless --toolchain names another
+#     place, the toolchain the build needs (toolchain/), and the home
+#     directory holds nothing of the deployment but its unit; a deployment
+#     without --prefix lives in ~/<name> with its state in
+#     ~/.config/wiki-demo, as every deployment did before --prefix;
 #   - a systemd user unit, $UNIT_DIR/<name>.service;
 #   - for the wiki's server, a data directory, <dir>/data, which no deploy
 #     ever deletes and undeploy deletes only when told --purge-data;
@@ -39,7 +45,10 @@
 # `ufw status` without a password.
 
 CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
-STATE_DIR=$CONFIG_HOME/wiki-demo
+# The state of the deployments in the home directory; one under a prefix
+# keeps its state under the prefix ('layout').
+HOME_STATE_DIR=$CONFIG_HOME/wiki-demo
+STATE_DIR=$HOME_STATE_DIR
 UNIT_DIR=$CONFIG_HOME/systemd/user
 MARKER=.wiki-demo-deployment
 # The interface Tailscale creates on Linux; the firewall rule admits the port
@@ -67,6 +76,99 @@ check_name() {
   unit_file=$UNIT_DIR/$name.service
 }
 
+# The prefix --prefix named, absolute and with symbolic links resolved, so
+# that the safety checks compare what would really be emptied; empty for a
+# deployment in the home directory.
+resolve_prefix() {
+  prefix=
+  [ -n "${opt_prefix:-}" ] || return 0
+  case $opt_prefix in
+    /*) prefix=$opt_prefix ;;
+    *) prefix=$PWD/$opt_prefix ;;
+  esac
+  prefix=$(realpath -m "$prefix")
+}
+
+# Where the deployment keeps its state: under its prefix, or, for one in the
+# home directory, under ~/.config/wiki-demo. After 'resolve_prefix' and
+# 'check_name'. A deployment made before --prefix and named by it now still
+# has its state in the home directory: it is read there, and adoptable is
+# set, until a deploy adopts it ('adopt_into_prefix'); --status and
+# undeploy-local.sh move nothing. A state in the home directory for the name
+# that points elsewhere is another deployment of the same name, which is not
+# moved this way: its data would stay behind.
+layout() {
+  adoptable=
+  if [ -n "$prefix" ]; then
+    STATE_DIR=$prefix/state
+  else
+    STATE_DIR=$HOME_STATE_DIR
+  fi
+  state_file=$STATE_DIR/$name.state
+  unit_file=$UNIT_DIR/$name.service
+  if [ -n "$prefix" ] && [ ! -f "$state_file" ] && [ -f "$HOME_STATE_DIR/$name.state" ]; then
+    at=$(state_get dir "$HOME_STATE_DIR/$name.state")
+    if [ "$at" != "$prefix" ]; then
+      die "the deployment $name is at $at, its state in $HOME_STATE_DIR and the wiki's data in $at/data: deploy it there with --prefix $at, or this one under another --name"
+    fi
+    STATE_DIR=$HOME_STATE_DIR
+    state_file=$STATE_DIR/$name.state
+    adoptable=1
+  fi
+}
+
+# Adopt a deployment made before --prefix: its state file moves under the
+# prefix, and its PostgreSQL files (the database's password, the compose
+# files, the pg_dump and pg_restore wrappers) are copied there, not moved,
+# since the running service's unit, its console and the wrappers still name
+# the old files until the deploy writes them anew: a deploy that stops
+# short after this leaves the service able to start as it was. A deploy
+# calls this once the build has succeeded, before it writes anything for
+# the deployment, and 'adoption_done' once the new unit is in place.
+adopt_into_prefix() {
+  [ -n "${adoptable:-}" ] || return 0
+  old_state_dir=$STATE_DIR
+  STATE_DIR=$prefix/state
+  state_file=$STATE_DIR/$name.state
+  mkdir -p "$STATE_DIR"
+  mv "$old_state_dir/$name.state" "$state_file"
+  rm -f "$old_state_dir/$name.env"
+  adopted_pg_dir=
+  if [ -d "$old_state_dir/$name.postgres" ]; then
+    rm -rf "$STATE_DIR/$name.postgres"
+    cp -Rp "$old_state_dir/$name.postgres" "$STATE_DIR/$name.postgres"
+    adopted_pg_dir=$old_state_dir/$name.postgres
+  fi
+  adoptable=
+  say "adopting $name: its state moves from $old_state_dir to $STATE_DIR; the toolchain it builds with stays under $HOME unless --toolchain says otherwise"
+}
+
+# The end of an adoption: the old PostgreSQL files go, now that the unit,
+# the console and the wrappers name the copies under the prefix.
+adoption_done() {
+  [ -z "${adopted_pg_dir:-}" ] || rm -rf "$adopted_pg_dir"
+  adopted_pg_dir=
+}
+
+# The unit in the home directory names the prefix of the deployment it
+# belongs to (deploy-local.sh writes "# Prefix: DIR" into it; a deployment
+# in the home directory writes none). A run named for another place, with
+# or without --prefix, would take that unit for its own and replace or
+# remove it, even when its own place has a state (a deployment stopped
+# without --purge keeps its state and loses its unit, and another of the
+# name can be made elsewhere meanwhile), so the run stops and says what to
+# give (and what else it could do, when the caller set prefix_hint). A
+# deployment being adopted is the unit's own: its state names the prefix.
+require_prefix_of_unit() {
+  [ -f "$unit_file" ] && [ -z "${adoptable:-}" ] || return 0
+  elsewhere=$(sed -n 's/^# Prefix: //p' "$unit_file" | head -n 1)
+  [ "$elsewhere" != "$prefix" ] || return 0
+  if [ -n "$elsewhere" ]; then
+    die "the deployment $name is under $elsewhere: run this with --prefix $elsewhere${prefix_hint:-}"
+  fi
+  die "the deployment $name is in the home directory (its unit names no prefix): run this without --prefix${prefix_hint:-}"
+}
+
 # One value from a state file (the current deployment's unless a file is given).
 state_get() {
   sed -n "s/^$1=//p" "${2:-$state_file}" 2>/dev/null | tail -n 1
@@ -80,6 +182,7 @@ state_write() {
     printf '# Written by toolchain/deploy-local.sh; read by it and by undeploy-local.sh.\n'
     printf 'name=%s\n' "$name"
     printf 'dir=%s\n' "$dir"
+    printf 'toolchain=%s\n' "${toolchain_dir:-}"
     printf 'port=%s\n' "$port"
     printf 'bind=%s\n' "$bind"
     printf 'bind_choice=%s\n' "$bind_choice"
@@ -214,7 +317,9 @@ firewall_explain() {
 }
 
 # Whether another deployment's state still claims a rule on this port, in
-# which case closing it would cut that one off.
+# which case closing it would cut that one off. Only the deployments whose
+# state is in the same directory are seen: those in the home directory, or
+# those under the same prefix.
 port_rule_shared() {
   for other in "$STATE_DIR"/*.state; do
     if [ ! -f "$other" ] || [ "$other" = "$state_file" ]; then continue; fi
@@ -362,8 +467,9 @@ pg_down() {
 # deployment's); purge_data deletes that too. no_firewall leaves the firewall alone. Running it when nothing is
 # deployed says so and succeeds.
 undeploy() {
+  require_prefix_of_unit
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
-    say "nothing is deployed under the name $name"
+    say "nothing is deployed under the name $name${prefix:+ under $prefix}${prefix:-: a deployment under a prefix is found with --prefix DIR}"
     return 0
   fi
   if [ -f "$unit_file" ]; then
@@ -377,6 +483,7 @@ undeploy() {
     say "$name.service is not installed"
   fi
   dir=$(state_get dir)
+  toolchain_dir=$(state_get toolchain)
   port=$(state_get port)
   bind=$(state_get bind)
   bind_choice=$(state_get bind_choice)
@@ -411,11 +518,19 @@ undeploy() {
       if unsafe_dir "$dir" || ! marked_for "$dir" "$name"; then
         warn "not deleting $dir: it does not carry this deployment's marker ($MARKER)"
       elif [ -d "$dir/data" ] && [ -z "${purge_data:-}" ]; then
-        find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name "$MARKER" -exec rm -rf {} +
-        say "deleted the deployed files in $dir, and kept the wiki's data in $dir/data (--purge-data deletes it too)"
+        find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name state ! -name "$MARKER" -exec rm -rf {} +
+        # Under a prefix the state goes too, but for the PostgreSQL files:
+        # the password belongs to the database volume, which is kept.
+        kept_pg=
+        if [ -d "$dir/state" ]; then
+          [ "$db" != postgres ] || [ ! -d "$dir/state/$name.postgres" ] || kept_pg=1
+          find "$dir/state" -mindepth 1 -maxdepth 1 ! -name "$name.postgres" -exec rm -rf {} +
+          [ -n "$kept_pg" ] || rm -rf "$dir/state"
+        fi
+        say "deleted the deployed files in $dir${prefix:+ and the toolchain under it}, and kept the wiki's data in $dir/data${kept_pg:+ and the password of the database in $dir/state/$name.postgres, with the volume ${name}_wiki-db} (--purge-data deletes them too)"
       else
         rm -rf "$dir"
-        say "deleted $dir"
+        say "deleted $dir${prefix:+, the state and the toolchain under it included}"
       fi
     fi
     rm -f "$state_file" "$STATE_DIR/$name.env"

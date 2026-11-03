@@ -4,16 +4,19 @@
 # --static the serverless demo as static files (whose home is GitHub Pages).
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--http | --https] [--port N]
-#                                [--bind ADDRESS] [--admin-port N] [--dir DIR] [--name NAME]
+#                                [--bind ADDRESS] [--admin-port N] [--prefix DIR]
+#                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
-#                                [--no-build] [--no-firewall] [--enable-linger] [--force]
-#   sh toolchain/deploy-local.sh --stop [--name NAME]
-#   sh toolchain/deploy-local.sh --status [--name NAME]
+#                                [--no-build] [--no-firewall] [--enable-linger]
+#   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
+#   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
 #
 # It is meant for a Linux machine of one's own reached over Tailscale (x86_64
 # Debian or Ubuntu, as CI's runner), and does, in order:
 #
-#   1. Build: toolchain/bootstrap.sh (installs or checks the toolchain), npm ci
+#   1. Build: toolchain/bootstrap.sh build (installs or checks the toolchain a
+#      build needs: the compilers, the wasm sysroot and Node, with neither
+#      Chromium nor fourmolu, so no root for Chromium's libraries), npm ci
 #      and `npm run build-wasm-opt`, the production build with every package at
 #      -O2 (cabal-wasm-opt.project), into dist-newstyle/wasm-opt/public/app;
 #      with --server also wiki-server, natively with this repository's packages
@@ -113,14 +116,35 @@
 #                    the administration to whoever is on this machine (default the
 #                    previous one, or 8081); from elsewhere, through
 #                    ssh -L 8081:127.0.0.1:8081 <this machine>
-#   --dir DIR        where to install (default the previous one, or ~/<name>)
+#   --prefix DIR     where to install. The deployment (bin/, app/, data/), its state
+#                    (state/) and the toolchain the build needs (toolchain/, unless
+#                    --toolchain names another place) go under that directory, and
+#                    nothing under the home directory but the systemd user unit,
+#                    which systemd reads from ~/.config/systemd/user alone. Given on
+#                    every run, --status and undeploy-local.sh included, since
+#                    nothing in the home directory remembers it; a directory outside
+#                    the home directory needs nothing more. Without it the
+#                    deployment goes to ~/<name> (or where the previous run put it)
+#                    with its state in ~/.config/wiki-demo, as before. A deployment
+#                    made that way and named by --prefix now is adopted by the
+#                    deploy: its state moves under the prefix once the build has
+#                    succeeded (--status reads it where it is). --dir is the old
+#                    name of this option
+#   --toolchain DIR  the directory the toolchain is installed under
+#                    (toolchain/bootstrap.sh's WIKI_TOOLCHAIN_HOME): <prefix>/toolchain
+#                    by default under --prefix, the home directory otherwise, and
+#                    the home directory for an adopted deployment; remembered for
+#                    the next run. Two deployments share one by naming the same
+#                    directory. Inside the prefix only <prefix>/toolchain will do,
+#                    since installing empties the rest
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
 #                    starts at boot and survives logging out
-#   --force          allow a target directory outside your home directory
+#   --force          nothing any more (--prefix allows any directory but /, the home
+#                    directory and the ones above it); accepted for old command lines
 #   --stop           take the deployment down (toolchain/undeploy-local.sh: stop and
 #                    disable the service, remove its unit, close its port, turn its
 #                    tailscale serve off; files and data kept)
@@ -158,7 +182,7 @@ usage() {
 }
 
 name=wiki-demo
-opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
+opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -185,8 +209,10 @@ while [ $# -gt 0 ]; do
       die "${1%%=*} is gone: the wiki's public address, its mail server and its sign-in providers are set in the administration's Server section, on the admin listener (http://127.0.0.1:<admin-port>/admin/admin/), where they take effect at once, without a deploy" ;;
     --trust-network | --no-trust-network)
       die "$1 is gone: the public address serves whoever signs in. Make an administrator with the console (<dir>/bin/wiki users add --data <dir>/data LOGIN --admin, which asks for the password) and sign in as them" ;;
-    --dir) need_value $# "$1"; opt_dir=$2; shift ;;
-    --dir=*) opt_dir=${1#*=} ;;
+    --prefix | --dir) need_value $# "$1"; opt_prefix=$2; shift ;;
+    --prefix=* | --dir=*) opt_prefix=${1#*=} ;;
+    --toolchain) need_value $# "$1"; opt_toolchain=$2; shift ;;
+    --toolchain=*) opt_toolchain=${1#*=} ;;
     --name) need_value $# "$1"; name=$2; shift ;;
     --name=*) name=${1#*=} ;;
     --no-build) build= ;;
@@ -201,13 +227,18 @@ while [ $# -gt 0 ]; do
   shift
 done
 check_name "$name"
+resolve_prefix
+layout
 
 if [ "$action" = stop ]; then
   undeploy
   exit 0
 fi
+prefix_hint=', or deploy this one under another --name'
+require_prefix_of_unit
 
 prev_dir=$(state_get dir)
+prev_toolchain=$(state_get toolchain)
 prev_port=$(state_get port)
 prev_bind=$(state_get bind)
 prev_bind_choice=$(state_get bind_choice)
@@ -241,6 +272,34 @@ prev_oidc=$(state_get oidc)
 env_file=$STATE_DIR/$name.env
 
 user=$(id -un)
+
+# The directory the toolchain is under: --toolchain's, the previous run's,
+# the home directory for a deployment adopted from it (its toolchain is
+# there), <prefix>/toolchain under a prefix, or the home directory. The
+# choice is remembered as made (toolchain_dir, the home directory included,
+# so that a deployment that chose it keeps it). The bootstrap and the build
+# read it from WIKI_TOOLCHAIN_HOME; the home directory itself is their
+# default, so it is not named, and the tools keep their own defaults.
+toolchain_dir=${opt_toolchain:-${prev_toolchain:-${adoptable:+$HOME}}}
+[ -n "$toolchain_dir" ] || toolchain_dir=${prefix:+$prefix/toolchain}
+toolchain_home=
+if [ -n "$toolchain_dir" ]; then
+  case $toolchain_dir in
+    /*) ;;
+    *) toolchain_dir=$PWD/$toolchain_dir ;;
+  esac
+  toolchain_dir=$(realpath -m "$toolchain_dir")
+  [ "$toolchain_dir" = "$(realpath -m "$HOME")" ] || toolchain_home=$toolchain_dir
+fi
+if [ -n "$toolchain_home" ]; then
+  WIKI_TOOLCHAIN_HOME=$toolchain_home
+  export WIKI_TOOLCHAIN_HOME
+else
+  unset WIKI_TOOLCHAIN_HOME
+fi
+toolchain_base=${toolchain_home:-$HOME}
+# For the messages: what a later run must be given to find this deployment.
+prefix_arg=${prefix:+ --prefix $prefix}
 
 # A word of a unit's ExecStart, quoted for systemd: in double quotes, with
 # its quotes and backslashes escaped, and its % and $ doubled, which systemd
@@ -403,10 +462,10 @@ console_wrapper() {
 
 if [ "$action" = status ]; then
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
-    say "nothing is deployed under the name $name"
+    say "nothing is deployed under the name $name${prefix:+ under $prefix}${prefix:-: a deployment under a prefix is found with --prefix DIR}"
     exit 0
   fi
-  say "deployment $name: $prev_dir, on $prev_bind:$prev_port"
+  say "deployment $name: $prev_dir, on $prev_bind:$prev_port${prev_toolchain:+; its toolchain under $prev_toolchain}"
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
     case $prev_db in
@@ -466,7 +525,7 @@ if [ "$action" = status ]; then
   fi
   linger_report
   if [ -n "$prev_port" ]; then
-    node=$(command -v "$HOME/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
+    node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
     printf 'Open:\n'
     print_urls "$prev_bind" "$prev_port"
     [ "$prev_mode" != server ] || printf 'Administration, on this machine: http://127.0.0.1:%s/admin/\n' "$prev_admin_port"
@@ -523,23 +582,32 @@ if [ "$mode" = server ]; then
 fi
 
 # The directory, absolute and with symbolic links resolved, so that the
-# safety checks compare what would really be deleted.
-dir=${opt_dir:-${prev_dir:-$HOME/$name}}
+# safety checks compare what would really be deleted: the prefix, or for a
+# deployment in the home directory the previous run's or ~/<name>.
+dir=${prefix:-${prev_dir:-$HOME/$name}}
 case $dir in
   /*) ;;
   *) dir=$PWD/$dir ;;
 esac
 dir=$(realpath -m "$dir")
-case $dir in
-  *[\"\\\$%\`]* | *'
-'*) die "the target directory $dir contains a character the unit file cannot hold (\" \\ \$ % \` or a newline)" ;;
+case $dir$toolchain_home in
+  *[\"\\\$%\`\']* | *'
+'*) die "the target directory $dir or the toolchain's $toolchain_home contains a character the unit file or the toolchain's env file cannot hold (\" \\ \$ % \` ' or a newline)" ;;
 esac
 if unsafe_dir "$dir"; then
   die "refusing to install into $dir: it is /, your home directory or above it"
 fi
-case $dir in
-  "$(realpath -m "$HOME")"/*) ;;
-  *) [ -n "$force" ] || die "refusing to install into $dir: it is outside your home directory (--force allows that)" ;;
+[ -n "$prefix" ] || [ -z "$force" ] || say "--force does nothing any more: --prefix allows any directory but /, the home directory and the ones above it"
+# The install empties the directory (but for data/, state/ and toolchain/),
+# so the checkout cannot be inside it.
+case $ROOT/ in
+  "$dir"/*) die "the checkout $ROOT is inside $dir, which installing empties: run this from a checkout elsewhere, or choose another --prefix" ;;
+esac
+# Nor can the toolchain be inside it anywhere but at toolchain/, which the
+# install leaves alone.
+case $toolchain_home in
+  '' | "$dir/toolchain") ;;
+  "$dir" | "$dir"/*) die "--toolchain $toolchain_home is inside $dir, which installing empties but for data/, state/ and toolchain/: put it at $dir/toolchain, or outside $dir" ;;
 esac
 if [ -e "$dir" ] && [ ! -d "$dir" ]; then
   die "refusing to install into $dir: it is not a directory"
@@ -556,6 +624,11 @@ fi
 if [ "$mode" = server ] && [ -n "$prev_dir" ] && [ "$prev_dir" != "$dir" ] && [ -d "$prev_dir/data" ] && [ ! -d "$dir/data" ]; then
   die "the wiki's data is in $prev_dir/data: move it to $dir/data yourself first (with the service stopped: sh toolchain/undeploy-local.sh --name $name), or deploy under another --name"
 fi
+# The directory is claimed now, before the build: under a prefix the
+# toolchain is installed under it first, and a directory that is not empty
+# is emptied only when it carries the marker.
+mkdir -p "$dir"
+[ -f "$dir/$MARKER" ] || printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$dir/$MARKER"
 
 # HTTPS unless --http says otherwise, now or on an earlier run; a
 # deployment of a version before it was the default moves to it.
@@ -618,13 +691,13 @@ if [ -n "$build" ]; then
   if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
     say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
   fi
-  say "installing or checking the toolchain (toolchain/bootstrap.sh toolchain)"
-  sh "$ROOT/toolchain/bootstrap.sh" toolchain
+  say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
+  sh "$ROOT/toolchain/bootstrap.sh" build
 fi
 # The environment npm's own entry points load, for npm and Node here.
-if [ -r "$HOME/.wiki-toolchain/env" ]; then
+if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
   # shellcheck source=/dev/null
-  . "$HOME/.wiki-toolchain/env"
+  . "$toolchain_base/.wiki-toolchain/env"
 fi
 bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env)
 eval "$bootstrap_env"
@@ -649,14 +722,14 @@ fi
 
 # The service's Node, by absolute path: the managed one if the bootstrap
 # installed it, otherwise the one it found on PATH. The managed one is named
-# through ~/.wiki-toolchain/node, the link the bootstrap moves to a new
+# through .wiki-toolchain/node, the link the bootstrap moves to a new
 # version, not the versioned directory behind it, which an upgrade leaves
 # behind to be cleaned up.
-if [ -x "$HOME/.wiki-toolchain/node/bin/node" ]; then
-  node=$HOME/.wiki-toolchain/node/bin/node
+if [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
+  node=$toolchain_base/.wiki-toolchain/node/bin/node
 elif node=$(command -v node); then
   node=$(realpath "$node")
-  warn "using $node for the service; it must stay where it is (the bootstrap's own Node, in ~/.wiki-toolchain, would)"
+  warn "using $node for the service; it must stay where it is (the bootstrap's own Node, in $toolchain_base/.wiki-toolchain, would)"
 else
   die "no Node to run the server with; run sh toolchain/bootstrap.sh"
 fi
@@ -714,6 +787,10 @@ fi
 if [ "$mode" = server ] && ! { [ "$prev_mode" = server ] && [ "$admin_port" = "$prev_admin_port" ] && service_active; }; then
   can_listen "$admin_port" 127.0.0.1 || die "cannot listen on 127.0.0.1:$admin_port (see above): choose another --admin-port"
 fi
+
+# A deployment made before --prefix is adopted now that the build is done:
+# its state comes under the prefix, where what follows writes.
+adopt_into_prefix
 
 # The wiki's database. On PostgreSQL its files are written and its
 # container is made, or started, and waited for; this changes nothing the
@@ -821,8 +898,9 @@ fi
 
 say "installing into $dir"
 mkdir -p "$dir"
-# Everything but the data, which outlives every deployment of it.
-find "$dir" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +
+# Everything but the data, which outlives every deployment of it, and, under
+# a prefix, the state and the toolchain, which the next deploy needs.
+find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name state ! -name toolchain ! -name "$MARKER" -exec rm -rf {} +
 printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$dir/$MARKER"
 cp -R "$out" "$dir/app"
 if [ "$mode" = server ]; then
@@ -881,9 +959,10 @@ fi
 mkdir -p "$UNIT_DIR"
 cat >"$unit_file.tmp" <<EOF
 # Written by toolchain/deploy-local.sh from $ROOT;
-# run it again to change this deployment, or toolchain/undeploy-local.sh --name $name
+# run it again to change this deployment, or toolchain/undeploy-local.sh --name $name$prefix_arg
 # to take it down.
-[Unit]
+${prefix:+# Prefix: $prefix
+}[Unit]
 Description=$description
 After=network-online.target
 # Restart for as long as it takes: at boot the Tailscale address may appear a
@@ -904,6 +983,7 @@ mv "$unit_file.tmp" "$unit_file"
 state_write
 systemctl --user daemon-reload
 systemctl --user enable "$name.service" >/dev/null 2>&1 || systemctl --user enable "$name.service"
+adoption_done
 say "starting $name.service"
 systemctl --user restart "$name.service"
 
@@ -1080,9 +1160,10 @@ Backups: $dir/data/backups (one before every deploy; another: $dir/bin/wiki back
 Users:   $dir/bin/wiki users list --data $dir/data
   the first administrator: $dir/bin/wiki users add --data $dir/data LOGIN --admin (asks for the password)
 Logs:    journalctl --user -u $name -f
-Status:  sh toolchain/deploy-local.sh --status --name $name
-Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge deletes the files but data/, --purge-data that too)
+Status:  sh toolchain/deploy-local.sh --status --name $name$prefix_arg
+Stop:    sh toolchain/undeploy-local.sh --name $name$prefix_arg   (--purge deletes the files but data/, --purge-data that too)
 EOF
+  [ -z "$toolchain_home" ] || printf 'The toolchain the build used is under %s (--toolchain names another; the home directory holds only the unit).\n' "$toolchain_home"
   printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
   printf 'reader, who sees the public spaces only; the operator is on the admin listener.\n'
   printf 'Whether the wiki is open (anyone may make an account) or closed (by invitation\n'
@@ -1110,7 +1191,7 @@ else
   print_urls "$bind" "$port"
   cat <<EOF
 Logs:    journalctl --user -u $name -f
-Status:  sh toolchain/deploy-local.sh --status --name $name
-Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge also deletes $dir)
+Status:  sh toolchain/deploy-local.sh --status --name $name$prefix_arg
+Stop:    sh toolchain/undeploy-local.sh --name $name$prefix_arg   (--purge also deletes $dir)
 EOF
 fi

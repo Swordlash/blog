@@ -28,9 +28,10 @@ export NODE_REAL
 # the bootstrap installed, as the npm entry points find it.
 if [ -z "${WIKI_SERVER:-}" ]; then
   WIKI_SERVER=$(
-    if [ -r "$HOME/.wiki-toolchain/env" ]; then
+    toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+    if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
       # shellcheck source=/dev/null
-      . "$HOME/.wiki-toolchain/env"
+      . "$toolchain_home/.wiki-toolchain/env"
     fi
     cd "$SOURCE_DIR/.." && cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server 2>/dev/null || true
   )
@@ -179,10 +180,18 @@ case \$command in
 esac
 EOF
 
+  # The bootstrap: it says how it was called and where the toolchain goes,
+  # and installs the managed Node and the environment file there, as the
+  # real one does under WIKI_TOOLCHAIN_HOME.
   cat >"$case_dir/repo/toolchain/bootstrap.sh" <<'EOF'
 #!/bin/sh
 [ "${1:-}" = env ] && exit 0
-printf 'bootstrap %s\n' "$*" >>"$EVENTS"
+printf 'bootstrap %s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
+base=${WIKI_TOOLCHAIN_HOME:-$HOME}
+mkdir -p "$base/.wiki-toolchain/node/bin"
+printf '#!/bin/sh\nexec "$NODE_REAL" "$@"\n' >"$base/.wiki-toolchain/node/bin/node"
+chmod +x "$base/.wiki-toolchain/node/bin/node"
+: >"$base/.wiki-toolchain/env"
 EOF
   cat >"$case_dir/bin/tool" <<'EOF'
 #!/bin/sh
@@ -195,7 +204,7 @@ case $name in
       *) printf 'uid=1000(tester)\n' ;;
     esac ;;
   npm)
-    printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" >>"$EVENTS"
+    printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
     if [ "$1 $2" = "run build-wasm-opt" ]; then
       [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
       out=dist-newstyle/wasm-opt/public/app
@@ -396,7 +405,7 @@ p1=$(free_port 127.0.0.1)
 p2=$(other_port "$p1")
 out=$case_dir/first
 deploy --static --port "$p1" >"$out" 2>&1 || fail 'first install failed'
-assert_contains "$EVENTS" 'bootstrap toolchain'
+assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME='
 assert_contains "$EVENTS" 'npm ci --no-audit --no-fund'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=demo'
 assert_contains "$out" 'first -O2 build'
@@ -541,34 +550,197 @@ pass 'undeploy --purge deletes the marked files and the state; with nothing depl
 
 # The target directory's safety checks, all before the build.
 fixture unsafe
-mkdir -p "$HOME/notes" "$case_dir/outside"
+mkdir -p "$HOME/notes"
 printf 'keep\n' >"$HOME/notes/todo.txt"
-for target in "$HOME" / "$case_dir/outside" "$HOME/notes" "$HOME/.."; do
+for target in "$HOME" / "$HOME/notes" "$HOME/.." "$case_dir/repo"; do
   out=$case_dir/refused
-  if deploy --static --dir "$target" >"$out" 2>&1; then fail "deployed into $target"; fi
-  assert_contains "$out" 'refusing'
+  if deploy --static --prefix "$target" >"$out" 2>&1; then fail "deployed into $target"; fi
+  case $target in
+    "$case_dir/repo"*) assert_contains "$out" 'the checkout' ;;
+    *) assert_contains "$out" 'refusing' ;;
+  esac
 done
 mkdir -p "$HOME/other"
 printf 'name=other\n' >"$HOME/other/.wiki-demo-deployment"
-if deploy --static --dir "$HOME/other" >"$out" 2>&1; then fail "deployed into another deployment's directory"; fi
+if deploy --static --prefix "$HOME/other" >"$out" 2>&1; then fail "deployed into another deployment's directory"; fi
 assert_contains "$out" 'use --name other'
 [ -f "$HOME/notes/todo.txt" ] || fail 'an unmarked directory was emptied'
+[ ! -e "$HOME/notes/.wiki-demo-deployment" ] || fail 'an unmarked directory was claimed'
 assert_lacks "$EVENTS" 'npm'
 assert_lacks "$EVENTS" 'systemctl stop'
 mkdir -p "$HOME/empty"
 p=$(free_port 127.0.0.1)
-deploy --static --dir "$HOME/empty" --port "$p" --no-firewall >"$case_dir/empty" 2>&1 || fail 'an empty directory was refused'
+deploy --static --prefix "$HOME/empty" --port "$p" --no-firewall >"$case_dir/empty" 2>&1 || fail 'an empty directory was refused'
 assert_lacks "$EVENTS" 'ufw'
-undeploy >/dev/null 2>&1
-pass 'refuses ~, /, directories outside ~, above it, unmarked or marked for another deployment, before building'
+undeploy --prefix "$HOME/empty" >/dev/null 2>&1
+pass 'refuses ~, /, directories above ~, unmarked or marked for another deployment, and the checkout, before building'
 
-fixture forced
+# A deployment under a prefix, outside the home directory (WP5.48): the
+# server on SQLite, everywhere on the network, on a user without sudo.
+fixture prefix
 p=$(free_port 127.0.0.1)
-out=$case_dir/forced
-deploy --static --dir "$case_dir/outside" --port "$p" --force >"$out" 2>&1 || fail '--force did not allow a directory outside ~'
-undeploy --purge >/dev/null 2>&1
-[ ! -e "$case_dir/outside" ] || fail 'purge kept a marked directory outside ~'
-pass '--force allows a directory outside ~'
+a=$(other_port "$p")
+pre=$case_dir/srv/wiki
+out=$case_dir/first
+deploy --server --sqlite --prefix "$pre" --port "$p" --admin-port "$a" --bind 0.0.0.0 --no-firewall >"$out" 2>&1 || fail 'the deploy under a prefix failed'
+assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+for file in .wiki-demo-deployment bin/wiki-server bin/wiki app/index.html state/wiki-demo.state toolchain/.wiki-toolchain/node/bin/node; do
+  [ -e "$pre/$file" ] || fail "missing $file under the prefix"
+done
+assert_contains "$HOME/$unit" "ExecStart=\"$pre/bin/wiki-server\" serve --data \"$pre/data\" --static \"$pre/app\" --listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --sqlite \"$pre/data/wiki.sqlite\""
+[ ! -e "$HOME/wiki-demo" ] || fail 'the deployment went to the home directory'
+[ ! -e "$HOME/.config/wiki-demo" ] || fail 'the state went to the home directory'
+[ "$(ls -A "$HOME" | sort | tr '\n' ' ')" = '.config .wiki-toolchain ' ] || fail "the home directory holds more than the unit: $(ls -A "$HOME" | tr '\n' ' ')"
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server under the prefix does not answer'
+[ "$(sed -n 's/^toolchain=//p' "$pre/state/wiki-demo.state")" = "$pre/toolchain" ] || fail 'the state does not record the toolchain'
+assert_contains "$out" "--status --name wiki-demo --prefix $pre"
+assert_contains "$out" "The toolchain the build used is under $pre/toolchain"
+pass 'a deployment under a prefix outside ~ puts its files, state and toolchain there, and nothing in ~ but the unit'
+
+: >"$EVENTS"
+touch "$pre/toolchain/kept" "$pre/app/stale"
+out=$case_dir/again
+deploy --prefix "$pre" --no-build >"$out" 2>&1 || fail 'the redeploy under the prefix failed'
+[ -e "$pre/toolchain/kept" ] || fail 'the redeploy emptied the toolchain'
+[ ! -e "$pre/app/stale" ] || fail 'the redeploy did not empty the page'
+[ -f "$pre/state/wiki-demo.state" ] || fail 'the redeploy lost the state'
+assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p "
+assert_lacks "$EVENTS" 'bootstrap'
+pass 'a redeploy under the prefix keeps the toolchain and the state, and remembers the options'
+
+out=$case_dir/stopped
+deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop under the prefix failed'
+[ "$(sed -n 's/^toolchain=//p' "$pre/state/wiki-demo.state")" = "$pre/toolchain" ] || fail '--stop forgot the toolchain'
+deploy --prefix "$pre" --no-build >"$case_dir/restarted" 2>&1 || fail 'the redeploy after --stop failed'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server did not come back after --stop'
+out=$case_dir/inside
+if deploy --prefix "$pre" --toolchain "$pre/tools" --no-build >"$out" 2>&1; then fail 'a toolchain inside the prefix was accepted'; fi
+assert_contains "$out" "put it at $pre/toolchain, or outside $pre"
+pass '--stop keeps the toolchain choice, and a toolchain inside the prefix other than toolchain/ is refused'
+
+out=$case_dir/no-prefix
+if deploy --status >"$out" 2>&1; then fail '--status without the prefix went on'; fi
+assert_contains "$out" "the deployment wiki-demo is under $pre: run this with --prefix $pre"
+if deploy --no-build >"$out" 2>&1; then fail 'a deploy without the prefix went on'; fi
+assert_contains "$out" "run this with --prefix $pre, or deploy this one under another --name"
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "on 0.0.0.0:$p; its toolchain under $pre/toolchain"
+if undeploy >"$out" 2>&1; then fail 'undeploy without the prefix went on'; fi
+assert_contains "$out" "run this with --prefix $pre"
+[ -f "$HOME/$unit" ] || fail 'undeploy without the prefix removed the unit'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'undeploy without the prefix took the server down'
+undeploy --name other >"$out" 2>&1 || fail 'undeploying a name nobody deployed failed'
+assert_contains "$out" 'nothing is deployed under the name other: a deployment under a prefix is found with --prefix DIR'
+pass 'without --prefix, a deploy, --status and undeploy stop at the unit and say what to give'
+
+: >"$EVENTS"
+out=$case_dir/old-name
+deploy --dir "$pre" --no-build >"$out" 2>&1 || fail '--dir, the old name of --prefix, failed'
+assert_lacks "$out" 'first -O2 build'
+pass '--dir is accepted as the old name of --prefix'
+
+out=$case_dir/purged
+undeploy --prefix "$pre" --purge >"$out" 2>&1 || fail 'undeploy --purge under the prefix failed'
+[ -d "$pre/data" ] || fail '--purge deleted the data'
+[ ! -e "$pre/toolchain" ] && [ ! -e "$pre/bin" ] && [ ! -e "$pre/state" ] || fail '--purge kept the toolchain, the state or the files'
+[ ! -e "$HOME/$unit" ] || fail '--purge kept the unit'
+assert_contains "$out" 'and the toolchain under it'
+pass 'undeploy --purge under the prefix deletes the toolchain and the state too, and keeps the data'
+
+# A deployment stopped without --purge keeps its state and loses its unit;
+# another of the same name made elsewhere meanwhile owns the unit, and a run
+# for the stopped one must not take it.
+fixture two-prefixes
+p=$(free_port 127.0.0.1)
+deploy --static --prefix "$case_dir/a" --port "$p" --no-firewall >"$case_dir/a-first" 2>&1 || fail 'the deployment at a failed'
+deploy --prefix "$case_dir/a" --stop >"$case_dir/a-stop" 2>&1 || fail 'stopping a failed'
+[ -f "$case_dir/a/state/wiki-demo.state" ] || fail 'the stopped deployment lost its state'
+deploy --static --prefix "$case_dir/b" --port "$p" --no-firewall >"$case_dir/b-first" 2>&1 || fail 'the deployment at b failed'
+: >"$EVENTS"
+out=$case_dir/a-undeploy
+if undeploy --prefix "$case_dir/a" >"$out" 2>&1; then fail "undeploying the stopped deployment took b's unit"; fi
+assert_contains "$out" "the deployment wiki-demo is under $case_dir/b: run this with --prefix $case_dir/b"
+out=$case_dir/a-redeploy
+if deploy --prefix "$case_dir/a" --no-build >"$out" 2>&1; then fail "redeploying the stopped deployment took b's unit"; fi
+assert_contains "$out" "run this with --prefix $case_dir/b, or deploy this one under another --name"
+assert_lacks "$EVENTS" 'systemctl'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html; charset=utf-8' ] || fail 'b went down'
+out=$case_dir/home-run
+if deploy --no-build >"$out" 2>&1; then fail "a run in the home directory took b's unit"; fi
+assert_contains "$out" "the deployment wiki-demo is under $case_dir/b"
+undeploy --prefix "$case_dir/b" >/dev/null 2>&1
+out=$case_dir/home-unit
+deploy --static --port "$p" --no-firewall >"$case_dir/home-first" 2>&1 || fail 'the home deployment failed'
+if deploy --prefix "$case_dir/a" --no-build >"$out" 2>&1; then fail "a run under a prefix took the home deployment's unit"; fi
+assert_contains "$out" 'the deployment wiki-demo is in the home directory (its unit names no prefix): run this without --prefix'
+undeploy >/dev/null 2>&1
+pass "a run for a stopped deployment does not take the unit of another deployment of the name, under another prefix or in the home directory"
+
+# A deployment made before --prefix, in the home directory, is adopted when
+# named by --prefix: its state moves under it and its toolchain stays home.
+fixture adopted
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --sqlite --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment failed'
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the home deployment kept no state in the home directory'
+out=$case_dir/status-before
+deploy --status --prefix "$HOME/wiki-demo" >"$out" 2>&1
+assert_contains "$out" "on 127.0.0.1:$p"
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail '--status moved the state'
+: >"$EVENTS"
+out=$case_dir/build-fails
+if FAKE_BUILD_FAIL=1 deploy --prefix "$HOME/wiki-demo" >"$out" 2>&1; then fail 'a failed build adopted'; fi
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'a failed build moved the state'
+: >"$EVENTS"
+out=$case_dir/adopted
+deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting the home deployment failed'
+assert_contains "$out" "adopting wiki-demo: its state moves from $HOME/.config/wiki-demo to $HOME/wiki-demo/state"
+[ ! -e "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the state stayed in the home directory'
+[ -f "$HOME/wiki-demo/state/wiki-demo.state" ] || fail 'the state did not move under the prefix'
+[ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the adopted deployment moved its toolchain'
+assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p "
+assert_contains "$HOME/$unit" "# Prefix: $HOME/wiki-demo"
+: >"$EVENTS"
+deploy --prefix "$HOME/wiki-demo" >"$case_dir/rebuilt" 2>&1 || fail 'rebuilding the adopted deployment failed'
+assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME=
+'
+[ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the rebuild forgot the toolchain choice'
+: >"$EVENTS"
+out=$case_dir/elsewhere
+if deploy --prefix "$HOME/elsewhere" --no-build >"$out" 2>&1; then fail 'a second deployment of the name was made elsewhere'; fi
+assert_contains "$out" "the deployment wiki-demo is under $HOME/wiki-demo: run this with --prefix $HOME/wiki-demo, or deploy this one under another --name"
+assert_lacks "$EVENTS" 'systemctl stop'
+undeploy --prefix "$HOME/wiki-demo" >/dev/null 2>&1
+pass 'a deployment made in the home directory is adopted by a deploy with --prefix, keeping its state, port and toolchain'
+
+# The same on PostgreSQL: the password and the compose files are copied
+# under the prefix and the old ones go once the new unit names the copies;
+# --purge keeps the password with the volume it belongs to.
+fixture adopted-postgres
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment on PostgreSQL failed'
+old_pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+password=$(cat "$old_pgd/db-password")
+out=$case_dir/adopted
+deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting on PostgreSQL failed'
+pgd=$HOME/wiki-demo/state/wiki-demo.postgres
+[ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the password did not come along'
+[ "$(stat -c %a "$pgd/db-password")" = 600 ] || fail 'the copied password is not the owner'"'"'s alone'
+[ ! -e "$old_pgd" ] || fail 'the old PostgreSQL files stayed'
+assert_contains "$HOME/$unit" "--database-password-file \"$pgd/db-password\""
+assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_PASSWORD_FILE='$pgd/db-password'"
+assert_contains "$pgd/pg_dump" "$pgd/docker-compose.yml"
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the adopted server does not answer'
+out=$case_dir/purged
+undeploy --prefix "$HOME/wiki-demo" --purge >"$out" 2>&1 || fail 'undeploy --purge on PostgreSQL failed'
+[ "$(cat "$pgd/db-password")" = "$password" ] || fail '--purge deleted the password of the volume kept'
+[ -f "$FAKE_DOCKER/wiki-demo" ] || fail '--purge deleted the volume'
+[ -d "$HOME/wiki-demo/data" ] || fail '--purge deleted the data'
+[ ! -e "$HOME/wiki-demo/bin" ] && [ ! -e "$HOME/wiki-demo/state/wiki-demo.state" ] || fail '--purge kept the files or the state'
+assert_contains "$out" "and the password of the database in $pgd, with the volume wiki-demo_wiki-db"
+pass 'adoption on PostgreSQL copies the database files under the prefix and --purge keeps the password with the volume'
 
 # sudo that wants a password: the ufw commands are printed, not run. Over
 # plain HTTP, where the Tailscale address is served and ufw has a rule to
@@ -1070,8 +1242,8 @@ fixture moved
 p=$(free_port 127.0.0.1)
 deploy --server --port "$p" --admin-port "$(other_port "$p")" >"$case_dir/first" 2>&1 || fail 'server deploy failed'
 out=$case_dir/out
-if deploy --no-build --dir "$HOME/elsewhere" >"$out" 2>&1; then fail 'moved the deployment away from its data'; fi
-assert_contains "$out" "the wiki's data is in $HOME/wiki-demo/data"
+if deploy --no-build --prefix "$HOME/elsewhere" >"$out" 2>&1; then fail 'moved the deployment away from its data'; fi
+assert_contains "$out" "the wiki's data in $HOME/wiki-demo/data: deploy it there with --prefix $HOME/wiki-demo"
 undeploy --purge-data >/dev/null 2>&1
 pass 'a server deployment is not moved away from its data'
 

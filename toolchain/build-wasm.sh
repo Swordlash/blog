@@ -80,7 +80,7 @@ prerender_bin=$(
   cabal list-bin -v0 "$package:exe:$prerender" --project-file="$native_project" --builddir="$native_build_dir"
 )
 
-. "$HOME/.ghc-wasm/env"
+. "${WIKI_TOOLCHAIN_HOME:-$HOME}/.ghc-wasm/env"
 
 wasm_ghc=$(command -v wasm32-wasi-ghc)
 wasm_ghc_pkg=$(command -v wasm32-wasi-ghc-pkg)

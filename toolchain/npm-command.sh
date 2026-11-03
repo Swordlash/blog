@@ -14,8 +14,9 @@ esac
 # Bootstrap's environment only adjusts the native toolchain PATH. The wasm
 # build script loads its own environment later, keeping wasm CC out of native
 # builds. An already configured shell needs no generated env file.
-if [ -r "$HOME/.wiki-toolchain/env" ]; then
-  . "$HOME/.wiki-toolchain/env"
+toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
+  . "$toolchain_home/.wiki-toolchain/env"
 fi
 # Older generated env files left managed directories behind incompatible
 # tools already on PATH. Apply today's read-only directives as well, without

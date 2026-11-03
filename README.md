@@ -631,7 +631,9 @@ deploys the demo instead, as static files. Later runs deploy what the previous o
 did until told otherwise (`--server`, `--static`), so a deployment keeps its kind
 across redeploys, the demo deployments of earlier versions included.
 
-It runs the bootstrap (`toolchain/bootstrap.sh toolchain`), `npm ci` and
+It runs the bootstrap (`toolchain/bootstrap.sh build`: the compilers, the wasm
+sysroot and Node, with neither Chromium nor fourmolu, so no root for Chromium's
+libraries), `npm ci` and
 `npm run build-wasm-opt`, the `-O2` production build, and stops on any failure
 before touching what is running. The first `-O2` build compiles every dependency
 again and can take over an hour; later ones take minutes. What follows is the
@@ -698,6 +700,44 @@ name>:8080/`; a serve an earlier deploy set is turned off (`tailscale serve
 back. `--bind` with any other address than 127.0.0.1 implies `--http`; `--bind
 0.0.0.0` listens everywhere.
 
+### Everything under one directory
+
+On a machine where the home directory is not the place for it (a company's server,
+on a user without sudo), `--prefix DIR` puts the deployment and everything it needs
+under one directory:
+
+```sh
+sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0 --port 8080 --no-firewall
+```
+
+`/srv/wiki/bin/`, `app/` and `data/` as below, the deployment's state in
+`/srv/wiki/state/` (with the PostgreSQL files, on PostgreSQL), and the toolchain the
+build needs in `/srv/wiki/toolchain/`: ghcup's compilers, the wasm sysroot, Node, the
+cabal store and npm's cache, several gigabytes, once (`--toolchain DIR` puts it
+elsewhere, remembered for the next run; two deployments share one by naming the same
+directory). The home directory holds nothing of it but
+`~/.config/systemd/user/wiki-demo.service`, which systemd reads from there alone.
+Since nothing in the home directory remembers the deployment, every later run names
+it: `--status --prefix /srv/wiki`, `undeploy-local.sh --prefix /srv/wiki` (whose
+`--purge` then deletes the toolchain too, and keeps `data/`). The directory can be
+anywhere but `/`, the home directory and the ones above it, and the checkout must be
+outside it; a directory that is not empty is used only when this script made it. A
+deployment made without `--prefix` (in `~/wiki-demo`, its state in
+`~/.config/wiki-demo`) is adopted when a deploy names its directory with `--prefix`:
+once the build has succeeded its state moves under it (the PostgreSQL files are
+copied, and the old ones go once the new unit names the copies), and the toolchain
+stays in the home directory unless `--toolchain` says otherwise; `--status` reads
+the state where it is. A `--toolchain` inside the prefix can only be
+`<prefix>/toolchain`, since installing empties the rest. `--dir` is the old name of
+`--prefix`.
+
+`--bind 0.0.0.0` listens on every address and serves plain HTTP (`tailscale serve` and
+the Secure cookies are for 127.0.0.1 behind it), over which signing in with a password
+works and passkeys do not; `--no-firewall` leaves ufw alone, which without sudo the
+script could not change anyway. Without sudo there is no lingering either: try
+`loginctl enable-linger` from a session on the machine itself, or ask an
+administrator for it, or the service stops when you log out.
+
 ### What else it does
 
 - When Tailscale does not answer at all, it listens on 127.0.0.1 and says so.
@@ -716,13 +756,12 @@ back. `--bind` with any other address than 127.0.0.1 implies `--http`; `--bind
 - Running it again rebuilds and replaces the deployment: the old service stops
   before its files are replaced, the serve stays as it is, and when the port
   changes the serve (or with `--http` the firewall rule) moves to the new one. Options not given are those of the previous run,
-  kept in `~/.config/wiki-demo/wiki-demo.state`; `--no-build` redeploys the last
-  build as it is, for a quick change of port.
+  kept in `~/.config/wiki-demo/wiki-demo.state` (or `<prefix>/state/`); `--no-build`
+  redeploys the last build as it is, for a quick change of port.
 - It only ever empties a directory it created (it leaves a `.wiki-demo-deployment`
-  marker in it), an empty one or a new one; never `~`, `/` or above `~`, and nothing
-  outside `~` without `--force`.
+  marker in it), an empty one or a new one; never `~`, `/` or above `~`.
 - `--name NAME` (default `wiki-demo`) names the deployment and its unit, so that two
-  can run side by side, each with its own `--dir` (default `~/NAME`) and port.
+  can run side by side, each with its own `--prefix` (default `~/NAME`) and port.
 
 `journalctl --user -u wiki-demo -f` shows the requests, one line each;
 `sh toolchain/deploy-local.sh --status` the deployment, its serve and its service.
@@ -1327,6 +1366,13 @@ and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
+
+`~` above is the home directory, or the directory `WIKI_TOOLCHAIN_HOME` names
+(`toolchain/deploy-local.sh --prefix` names `<prefix>/toolchain`): there ghcup,
+cabal, npm and Playwright keep their files as well, through their own variables,
+which that directory's `.wiki-toolchain/env` exports along with `PATH`, so the npm
+commands and `. <that directory>/.wiki-toolchain/env` find everything with the
+variable set, and nothing lands in the home directory.
 
 What it downloads, and from where, for a network that allows hosts one by one:
 ghcup from `downloads.haskell.org`, and through it the compilers and cabal from
