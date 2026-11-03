@@ -464,6 +464,26 @@ In the order to do it, unless the owner says otherwise.
   its answers (the form's state to arguments, as a plain function the test calls),
   and the wrapper in `test-deploy-local.sh`. Docs: the README's deployment section
   opens with the wizard. After WP5.50, since it adds the HTTPS options.
+- **WP5.52 A server without PostgreSQL** (the owner, 2026-11-03: the work server has
+  an old PostgreSQL and its libpq, against which `postgresql-libpq` 0.11 does not
+  build, and the deployment is SQLite anyway). A cabal flag `postgres` on
+  `wiki-server`, on by default, off when the deployment keeps the wiki in SQLite:
+  with it off, `Wiki.Server.Storage.Postgres` and the `beam-postgres`,
+  `postgresql-simple` and `postgresql-libpq` dependencies are out of the build (CPP
+  where the backend is chosen: the storage, the options, the backup and restore,
+  the console's commands), `--database postgres://…` is refused at start with "built
+  without PostgreSQL", `wiki-server --version` (or the status page) says which
+  backends it has, and the test suite's PostgreSQL group is left out with a note
+  rather than failing. `toolchain/deploy-local.sh --sqlite` builds with the flag off
+  (`--constraint 'wiki-server -postgres'` on the opt project), so a SQLite deployment
+  needs neither libpq nor `pg_config`; `--postgres` builds with it on, and switching
+  rebuilds (cabal does that itself on a changed flag). `toolchain/check-native.sh`
+  takes `--without-postgres` (the deploy passes it for `--sqlite`) and then reports
+  libpq as not needed instead of missing. Tests: the native suite built both ways
+  (CI's `native (unit)` job adds a build of `wiki-server` with the flag off and runs
+  its unit group), the deploy test for `--sqlite` passing the constraint and
+  `--postgres` not, the check with `--without-postgres`. Docs: the README's server
+  section and the library table, wiki-server's CHANGELOG.
 
 ### Later, or waiting for the owner
 
