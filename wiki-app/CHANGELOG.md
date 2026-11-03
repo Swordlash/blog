@@ -1290,9 +1290,9 @@ component's slot, and the editor's keyed title and textarea (a keyed element
 and a textarea with text in it cannot be written in a quote); the Markdown is
 still rendered by `wiki-core`. The library now depends on
 `haskell-halogen-th`, and natively on `haskell-halogen-th-plugin`, whose GHC
-plugin reports an error inside a quote at its line and column. Building it
-compiles `ghc-lib-parser` once per compiler; the wasm build needs native
-`alex` and `happy` below 2.2 on `PATH`, which `toolchain/bootstrap.sh` installs.
+plugin reports an error inside a quote at its line and column. The quotes
+are parsed by the compiler's own `ghc` library, so building them needs no
+other parser and no tools beyond the pinned compilers.
 
 Presentations. A page written as slides (`Wiki.Core.Slides`) has "Present"
 among its actions, for every reader, which opens it at

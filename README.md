@@ -1474,8 +1474,8 @@ docker compose down                 # stop it; the data stays in its volume
 
 The first build installs the toolchain (give Docker around 15 GB of free disk:
 the builder's toolchain takes about 10, and ghcup unpacks each compiler before it
-installs it) and compiles every dependency, those of the wasm build at `-O2`,
-`ghc-lib-parser` among them: well over an hour. Later builds reuse those layers, and the build directories through a BuildKit cache mount, so a
+installs it) and compiles every dependency, those of the wasm build at `-O2`:
+well over an hour. Later builds reuse those layers, and the build directories through a BuildKit cache mount, so a
 change to the sources compiles only what it touches. The image itself is about
 240 MB (60 MB compressed). Only x86_64 Linux is supported, as by the bootstrap.
 The server exports pages as documents with the pandoc linked into it, but the
@@ -1576,9 +1576,7 @@ ghcup's default. Missing tools go to: the wasm sysroot into `~/.ghc-wasm`; Node 
 `~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
 release zip, checked against a pinned hash, or built from Hackage where GitHub's
-downloads are refused, as in Claude Code's cloud sessions); and native `alex` and `happy` (pinned, happy below 2.2) into the same
-directory, which the wasm build of `ghc-lib-parser`, under the `hh` quoter, runs from
-`PATH`. Debian packages it needs (GMP's, libpq's, zlib's and libsodium's headers, `zstd`, `jq`
+downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's, zlib's and libsodium's headers, `zstd`, `jq`
 and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
@@ -1610,8 +1608,8 @@ any changes: inspect it and move it aside yourself if you want a fresh install.
 The bootstrap reuses the project's installed Playwright when it matches the lockfile,
 otherwise keeps its own installation under `~/.wiki-toolchain`. It reuses Chromium's
 cache using the executable path reported by that Playwright's browser registry, and
-checks that the browser launches on each install-mode run. The formatter and parser
-generators must match their exact pins; alex and happy are detected with `--version`.
+checks that the browser launches on each install-mode run. The formatter must match
+its exact pin.
 
 Inspect the decisions without downloading tools, writing logs or changing installations:
 
@@ -1970,8 +1968,8 @@ deploys (see [Deploying on your own machine](#deploying-on-your-own-machine)):
 `cabal-wasm-opt.project` imports `cabal-wasm.project`, so it has the same pins, and
 compiles every package at `-O2`, dependencies included, into its own build directory
 `dist-newstyle/wasm-opt`, so that it and the everyday build never invalidate each
-other. Its first run compiles every dependency again at `-O2`, `ghc-lib-parser`
-among them, and can take over an hour; later runs rebuild only what changed. CI
+other. Its first run compiles every dependency again at `-O2`, and can take over
+an hour; later runs rebuild only what changed. CI
 and `build-wasm` keep the default optimisation.
 
 The native helpers used by wasm builds and smoke tests use

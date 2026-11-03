@@ -29,8 +29,8 @@
 #
 # The first build installs the toolchain (about 10 GB in the builder, and
 # more while ghcup unpacks each compiler: give it around 15 GB free) and
-# compiles every dependency, those of the wasm build at -O2 (ghc-lib-parser
-# among them), which takes well over an hour; later builds reuse those layers
+# compiles every dependency, those of the wasm build at -O2, which takes well
+# over an hour; later builds reuse those layers
 # and, through a cache mount, the build directories, so they compile only what
 # changed. Only x86_64 Linux is supported, as by the bootstrap.
 

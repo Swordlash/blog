@@ -8,8 +8,8 @@
 -- `npm run build-wasm-opt`, which uses its own build directory
 -- (dist-newstyle/wasm-opt), so that switching between this and the everyday
 -- build in dist-newstyle/wasm never invalidates either. The first build
--- compiles every dependency again at -O2, ghc-lib-parser among them, and can
--- take over an hour; later ones only rebuild what changed.
+-- compiles every dependency again at -O2, and can take over an hour; later
+-- ones only rebuild what changed.
 import: cabal-wasm.project
 
 package *

@@ -37,10 +37,6 @@
 #   - fourmolu $FOURMOLU_VERSION, which `npm run format` runs, into ghcup's bin
 #     directory: its release binary, or where that download is refused, built
 #     from Hackage with cabal (about a quarter of an hour, once);
-#   - alex $ALEX_VERSION and happy $HAPPY_VERSION, native, into ghcup's bin
-#     directory, built from Hackage with the host GHC (a couple of minutes,
-#     once): the wasm build of ghc-lib-parser (under haskell-halogen-th) runs
-#     them from PATH;
 #   - the Debian packages these need, Chromium's included, if they are missing
 #     and it can (root or password-less sudo); otherwise it names them and stops.
 #
@@ -81,8 +77,8 @@
 # `native` installs what building wiki-server natively needs and nothing
 # else: GHC and cabal through ghcup, the system packages a native build
 # links with, and cabal's package index; no wasm sysroot, cross compiler,
-# Node, Chromium, fourmolu, alex or happy (cabal builds the last two itself
-# for a native build). toolchain/deploy-local.sh --backend-only runs it, on a
+# Node, Chromium or fourmolu, none of which a native build of wiki-server
+# needs. toolchain/deploy-local.sh --backend-only runs it, on a
 # machine that downloads the page instead of building it. It does not assume
 # Debian: without dpkg-query it installs no system packages. Either way it
 # then runs toolchain/check-native.sh, which checks the commands and C
@@ -96,8 +92,8 @@
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
-# It installs no compilers, wasm sysroot, Chromium, fourmolu, alex or happy,
-# and no system packages, and leaves ~/.ghc-wasm alone.
+# It installs no compilers, wasm sysroot, Chromium or fourmolu, and no
+# system packages, and leaves ~/.ghc-wasm alone.
 # toolchain/deploy-local.sh --static --backend-only runs it: that deployment
 # downloads the demo's page CI built, and needs Node only to serve the page
 # (server.mjs) and to write its brotli copies (compress.mjs). Before a
@@ -133,14 +129,6 @@ PLAYWRIGHT_VERSION=1.63.0
 # it is unpacked.
 FOURMOLU_VERSION=0.21.0.0
 FOURMOLU_SHA256=aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7
-# The lexer and parser generators ghc-lib-parser runs while it compiles. For a
-# cross build cabal makes them for wasm too (alex.wasm, happy.wasm), cannot run
-# those, and falls back to the alex and happy on PATH, which must be native
-# programs and a happy ghc-lib-parser accepts: it refuses 2.2. haskell-halogen's
-# CI installs them the same way (with `--constraint='happy <2.2'`); here they
-# are pinned so that every machine runs the same ones.
-ALEX_VERSION=3.5.4.2
-HAPPY_VERSION=2.1.7
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # Where the toolchain goes: under the home directory, or under the directory
@@ -269,12 +257,6 @@ numeric_version() {
   "$1" --numeric-version 2>/dev/null || true
 }
 
-# Use --version for alex and happy: their older releases do not implement
-# --numeric-version. Match a whole version, not a prefix such as 2.1.70.
-generator_version() {
-  "$1" --version 2>/dev/null | sed -n '1s/^[^0-9]*\([0-9][0-9.]*\).*$/\1/p'
-}
-
 compatible_node() {
   node_major=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
   [ -n "$node_major" ] && [ "$node_major" -ge 24 ] && command -v npm >/dev/null 2>&1
@@ -377,14 +359,6 @@ check() {
   else
     printf 'bootstrap: install Node %s (requires Node >=24 and npm)\n' "$NODE_VERSION"
   fi
-  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
-    name=${spec%%:*} expected=${spec#*:}
-    if [ "$(generator_version "$name")" = "$expected" ]; then
-      printf 'bootstrap: reuse %s %s (%s)\n' "$name" "$expected" "$(command -v "$name")"
-    else
-      printf 'bootstrap: install %s %s (found: %s)\n' "$name" "$expected" "$(generator_version "$name")"
-    fi
-  done
   if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
     printf 'bootstrap: reuse fourmolu %s (%s)\n' "$FOURMOLU_VERSION" "$(command -v fourmolu)"
   else
@@ -414,17 +388,6 @@ require_version() {
   fi
 }
 
-require_generators() {
-  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
-    name=${spec%%:*} expected=${spec#*:}
-    if [ "$(generator_version "$name")" != "$expected" ]; then
-      printf 'bootstrap: not ready: %s%s %s is required on PATH (found: %s; path: %s).\n' \
-        "${ready_context:-}" "$name" "$expected" "$(generator_version "$name")" "$(command -v "$name" || true)" >&2
-      ready_failed=1
-    fi
-  done
-}
-
 # Do not launch Chromium here: its cache can be checked without creating a
 # browser profile or lock files. Install mode verifies runtime libraries by
 # launching it. Wasm's env is loaded only in a subshell, as the build does,
@@ -432,12 +395,10 @@ require_generators() {
 #
 # Each command is checked for what it needs and nothing more, since a machine
 # need not hold the whole toolchain: the native commands need the host GHC and
-# cabal only (a hosted CI runner has just those for the native job; alex and
-# happy are built by cabal itself for a native build, and only the wasm build
-# falls back to PATH for them); the wasm builds need the wasm sysroot, the
-# generators, Node and the npm packages as well; the test commands that open a
-# browser need Chromium on top. fourmolu is nobody's: `npm run format` runs
-# it directly, and `check` reports it.
+# cabal only (a hosted CI runner has just those for the native job); the wasm
+# builds need the wasm sysroot, Node and the npm packages as well; the test
+# commands that open a browser need Chromium on top. fourmolu is nobody's:
+# `npm run format` runs it directly, and `check` reports it.
 ready() {
   target=${2:-build-wasm}
   case $target in
@@ -454,7 +415,6 @@ ready() {
     ready_done "$target"
     return $?
   fi
-  require_generators
   if ! wasm_sysroot_ready; then
     printf 'bootstrap: not ready: the pinned wasm sysroot in %s is missing or incomplete.\n' "$WASM_PREFIX" >&2
     ready_failed=1
@@ -465,7 +425,6 @@ ready() {
     require_version wasm32-wasi-ghc "$WASM_GHC_VERSION"
     require_version ghc "$GHC_VERSION"
     require_version cabal "$CABAL_VERSION"
-    require_generators
     if ! compatible_node; then
       printf 'bootstrap: not ready: the wasm environment must provide Node >=24 and npm.\n' >&2
       ready_failed=1
@@ -550,8 +509,8 @@ run() {
   "$@" >>"$LOG" 2>&1 || fail "$step"
 }
 
-# Run a long step (ghcup installing a compiler, cabal building or updating
-# its index, the wasm sysroot's setup) as run does. In the modes
+# Run a long step (ghcup installing a compiler, cabal updating its index,
+# the wasm sysroot's setup) as run does. In the modes
 # toolchain/deploy-local.sh uses, native and build, its output is also shown
 # as it comes, so that a deploy does not sit silent for minutes. The other
 # modes, which the SessionStart hooks use, keep it in the log alone.
@@ -912,21 +871,6 @@ install_fourmolu() {
   fi
 }
 
-# Native alex and happy at the pins, into ghcup's bin directory, which the env
-# file and `path` put on PATH ahead of anything else; skipped when the ones
-# found there already report the pinned versions.
-install_parser_generators() {
-  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
-    generator=${spec%%:*} wanted=${spec#*:}
-    [ "$(generator_version "$generator")" != "$wanted" ] || continue
-    mkdir -p "$GHCUP_BIN"
-    say "building $generator $wanted from Hackage into $GHCUP_BIN"
-    run_long "building $generator" cabal install "$generator-$wanted" \
-      --ignore-project --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \
-      --install-method=copy --overwrite-policy=always
-  done
-}
-
 update_cabal_index() {
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
   if [ ! -f "$index" ] || [ -n "${1:-}" ]; then
@@ -988,13 +932,12 @@ toolchain() {
   [ "$mode" = build ] || install_chromium
   update_cabal_index
   [ "$mode" = build ] || install_fourmolu
-  install_parser_generators
   write_env
   summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $(node --version)"
   if [ "$mode" = build ]; then
-    summary="$summary, alex $ALEX_VERSION, happy $HAPPY_VERSION; no Chromium or fourmolu (build)"
+    summary="$summary; no Chromium or fourmolu (build)"
   else
-    summary="$summary, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
+    summary="$summary, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU"
   fi
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
