@@ -13,10 +13,11 @@
 module Wiki.App.Backend.Contract.Notifications (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..))
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Comments
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
@@ -273,3 +274,23 @@ choosing = describe "settings" $ do
   it "mail nobody without a verified address" $ \(Fixture run) -> do
     s <- run reader notificationSettings >>= ok
     (s.verifiedEmail, s.mail) `shouldBe` (False, MailOff)
+
+  it "give no address for a feed of notifications until one is made, then that one until a new one replaces it" $ \(Fixture run) ->
+    run reader feedAddress >>= \case
+      -- The demo has no feed: it runs in the browser alone.
+      Left (Invalid _) ->
+        run reader renewFeedAddress >>= \case
+          Left (Invalid _) -> pass
+          other -> expectationFailure ("expected Invalid, got " <> show other)
+      none -> do
+        none `shouldBe` Right FeedAddress {address = Nothing}
+        made <- run reader renewFeedAddress >>= ok
+        address <- maybe (assertFailure "no address") pure made.address
+        address `shouldSatisfy` T.isPrefixOf "me/notifications.atom?token="
+        run reader feedAddress `shouldReturn` Right made
+        renewed <- run reader renewFeedAddress >>= ok
+        renewed.address `shouldNotBe` made.address
+        renewed.address `shouldNotBe` Nothing
+        run reader feedAddress `shouldReturn` Right renewed
+        run Anonymous feedAddress >>= (`shouldFailWith` Forbidden)
+        run Anonymous renewFeedAddress >>= (`shouldFailWith` Forbidden)

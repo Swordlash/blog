@@ -232,7 +232,7 @@ seed st = do
   writing st $ do
     for_ (chunksOf 500 [0 .. users - 1]) $ \chunk ->
       runInsert . insert wikiDb.users $
-        insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True} | i <- chunk]
+        insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing} | i <- chunk]
     for_ [0 .. pages - 1] $ \i -> do
       let p = pageOf space.id now i
       insertPage p

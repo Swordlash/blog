@@ -401,6 +401,8 @@ closes every connection when it stops.
 | PUT | `api/v1/notifications/watches/pages/<page>` | `Watching` `{"watching": bool}` | `Watch` | 404, 403 | `setWatching` |
 | GET | `api/v1/notifications/watches/spaces/<space>` | | `Watch` | 404, 403 | `watching` |
 | PUT | `api/v1/notifications/watches/spaces/<space>` | `Watching` | `Watch` | 404, 403 | `setWatching` |
+| GET | `api/v1/notifications/feed` | | `FeedAddress` `{"address"}`, `null` until made | 403 | `feedAddress` |
+| POST | `api/v1/notifications/feed` | | `FeedAddress`, the new address | 403 | `renewFeedAddress` |
 | POST | `api/v1/unsubscribe/<secret>` | | 204 | 404 | `unsubscribe` |
 
 Mentions, watching and notifications (WP4.13 of the plan,
@@ -455,6 +457,26 @@ the user and is signed by the server, works without signing in (in a closed
 wiki too) and only turns the mail off. Everything else here is the signed-in
 user's own: someone not signed in, and the operator on the admin listener,
 are refused (403); `people` names nobody to someone not signed in.
+
+The user's notifications are also an Atom feed (RFC 4287), for a feed
+reader (WP5.31 of the plan, `Wiki.Server.Feed`), at a secret address:
+`me/notifications.atom?token=<secret>` under the wiki's root, the
+secret 32 random bytes as base64url. `GET notifications/feed` answers that
+address, or `null` while the user has made none, and makes nothing;
+`POST notifications/feed` makes one, or a new one in place of the old,
+which answers 404 from then on. The address appears in no other answer.
+The feed is the bell's list: the latest 50 about pages the user may still
+read, the newest first, each entry titled as the bell says it ("Ada
+mentioned you in Notes"), with the actor as its author, the notification's
+time as its `updated`, and a link to the page where it is now (at the
+comment's thread for a comment), and with no content: a feed reader keeps
+a copy outside the wiki. The secret is in no id and the feed has no self
+link, so a new address leaves the entries as they were. A wrong or missing
+secret, or one of a user who may not sign in, is a 404, not a 401, so the
+address confirms nothing about anyone. The feed answers in a closed wiki
+too, since the secret is what lets its reader in; it is sent with
+`Cache-Control: private, no-store`, kept by no cache, and reading it marks
+nothing read.
 
 ### Stars
 

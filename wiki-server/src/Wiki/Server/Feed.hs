@@ -21,11 +21,19 @@
 -- the server's memory in between ('FeedCache'): a feed reads only the
 -- posts it carries, and the sitemap only where each page is, but crawlers
 -- and feed readers ask often.
+--
+-- A user's own feed of notifications (WP5.31) is the third address,
+-- @\/me\/notifications.atom?token=\<secret>@: the bell's list as an Atom
+-- feed, for the one person who holds the secret. It is private, so it is
+-- written for every request and kept nowhere ('notificationFeed').
 module Wiki.Server.Feed
   ( -- * Serving them
     FeedKind (..)
   , feedApplication
   , sitemapApplication
+  , notificationFeedApplication
+  , notificationFeed
+  , notificationTitle
   , FeedCache
   , newFeedCache
   , feedLifetime
@@ -48,6 +56,7 @@ where
 
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
@@ -59,27 +68,33 @@ import Halogen.Router.Duplex qualified as Duplex
 import Halogen.Static (renderToHtml)
 import Halogen.VDom.DOM.Monad (MemDOM)
 import Network.HTTP.Types (hCacheControl, hContentType, status200, status404)
-import Network.Wai (Application, Response, responseLBS)
+import Network.Wai (Application, Request (queryString), Response, responseLBS)
 import Protolude
+import Wiki.Api.Account (Account (..))
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Links (attachmentUrl)
+import Wiki.Api.Notifications (Notifications (..), feedPath)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces), WikiError (NotFound))
+import Wiki.App.Backend.Notifications (MonadNotifications (notifications))
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
+import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
 import Wiki.Core.Blog (excerpt, posts)
-import Wiki.Core.Id (PageId)
+import Wiki.Core.Id (NotificationId (..), PageId, UserId (..))
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Markdown.Box (BoxKind, Numbering (..))
+import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id))
 import Wiki.Core.Path (TreeNode (..), pathOf)
 import Wiki.Core.Space (Space (blog, boxNumbering, createdAt, description, id, name))
+import Wiki.Core.User (User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
-import Wiki.Server.Storage (Storage, Who (..), feedPosts, readServerSettings, readSettings, runStoredWiki, sitemapPages)
-import Wiki.Server.Storage.Rows (SitemapNode (..))
+import Wiki.Server.Storage (Storage, Who (..), feedPosts, readServerSettings, readSettings, reading, runStoredWiki, sitemapPages)
+import Wiki.Server.Storage.Rows (SitemapNode (..), loadAccount, userByFeedToken)
 
 -- | The two feeds of a blog.
 data FeedKind = Atom | Rss
@@ -134,6 +149,27 @@ publicMinute = "public, max-age=" <> show (round feedLifetime :: Int)
 
 notFound :: Response
 notFound = responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not found\n"
+
+-- | A user's own feed of notifications, for the request's @token@: their
+-- secret, which the account panel gave them. A request without one, or
+-- with one that is nobody's, is a 404, not a 401: the address confirms
+-- nothing about anyone. The answer is one person's, so no cache may keep
+-- it, and the server keeps none either.
+notificationFeedApplication :: Storage -> Text -> Application
+notificationFeedApplication storage mount request respond = do
+  base <- publicAddress storage mount request
+  let token = decodeUtf8With lenientDecode <$> join (lookup "token" (queryString request))
+  maybe (pure Nothing) (notificationFeed storage base) token >>= \case
+    Nothing -> respond notFound
+    Just xml ->
+      respond $
+        responseLBS
+          status200
+          [ (hContentType, "application/atom+xml; charset=utf-8")
+          , (hCacheControl, "private, no-store")
+          , ("X-Content-Type-Options", "nosniff")
+          ]
+          (BSL.fromStrict (encodeUtf8 xml))
 
 -- | Whether the wiki shows anything to someone who has not signed in.
 open :: Storage -> IO Bool
@@ -221,17 +257,20 @@ feed storage cache base kind segments =
           FeedEntry
             { title = p.title
             , url = addressOf base (Duplex.print route (Page spacePath [p.slug]))
+            , entryId = Nothing
             , published = p.createdAt
             , updated = p.updatedAt
             , author = (\a -> a.name) <$> author
             , summary = either (const "") excerpt (Md.parseMarkdown p.body)
-            , html
+            , content = Just html
             }
       let h =
             FeedHead
               { title = space.name
               , description = if T.null space.description then "The posts of " <> space.name <> "." else space.description
               , address
+              , identity = Nothing
+              , self = Just (address <> "feed.xml")
               , updated = foldl' max space.createdAt [e.updated | e <- entries]
               }
       pure (if kind == Atom then atomFeed h entries else rssFeed h entries)
@@ -260,6 +299,69 @@ sitemap storage cache base =
             ]
     pure (Just (sitemapXml (take maxSitemapUrls urls)))
 
+-- | The feed of notifications of the user whose secret this is: the
+-- bell's own list ('notifications' of the storage, as that user: the
+-- newest about pages they may still read, each with where its page is
+-- now), as Atom entries with a title and a link and nothing more, since a
+-- feed read by a feed reader is a copy outside the wiki. 'Nothing' for a
+-- secret that is nobody's, or whose user may not sign in. Reading the
+-- feed marks nothing read.
+notificationFeed :: Storage -> Text -> Text -> IO (Maybe Text)
+notificationFeed storage base token =
+  reading storage (userByFeedToken token) >>= \case
+    Nothing -> pure Nothing
+    Just u -> do
+      told <- runStoredWiki storage (AsUser u) notifications
+      account <- reading storage (loadAccount u)
+      now <- getCurrentTime
+      pure $ case (told, account) of
+        (Right ns, Just a) -> Just (written u a ns now)
+        _ -> Nothing
+  where
+    -- The feed's id is the wiki's address with the feed's path and the
+    -- user's id, so each user's feed has an id of its own. The secret is
+    -- never in it: a new address leaves the feed's id and every entry's id
+    -- as they were. There is no self link for the same reason. The
+    -- alternate link is the wiki itself.
+    written u account ns now =
+      let feedId = addressOf base (T.intercalate "/" feedPath <> "#" <> u.text)
+          entries = map (entryOf feedId) ns.items
+          h =
+            FeedHead
+              { title = "Notifications for " <> account.user.displayName
+              , description = "What " <> account.user.displayName <> " is told of here: mentions, replies, and comments on and changes to the pages they watch."
+              , address = base
+              , identity = Just feedId
+              , self = Nothing
+              , updated = maximumDef now [e.updated | e <- entries]
+              }
+       in atomFeed h entries
+    -- The link the bell follows: the page where it is now, at the thread
+    -- for a comment; the wiki itself for a page that is gone, since an
+    -- entry with no content must have a link.
+    entryOf feedId n =
+      FeedEntry
+        { title = notificationTitle n
+        , url = case n.location of
+            Just l -> addressOf base (Duplex.print route (Page l.space l.page)) <> maybe "" (\t -> "#" <> threadElementId t) n.thread
+            Nothing -> base
+        , entryId = Just (feedId <> "/" <> n.id.text)
+        , published = n.createdAt
+        , updated = n.createdAt
+        , author = Just n.actor.name
+        , summary = ""
+        , content = Nothing
+        }
+
+-- | What a notification says, as a feed entry's title: the bell's words
+-- with the page's name, "Ada mentioned you in Notes".
+notificationTitle :: Notification -> Text
+notificationTitle n = case n.kind of
+  Mentioned -> n.actor.name <> " mentioned you in " <> n.title
+  Replied -> n.actor.name <> " replied in a thread of yours on " <> n.title
+  Commented -> n.actor.name <> " commented on " <> n.title
+  Changed -> n.actor.name <> " changed " <> n.title
+
 --------------------------------------------------------------------------------
 -- A post as HTML
 
@@ -271,7 +373,7 @@ sitemap storage cache base =
 -- the titles the administration's kinds of box give them, and are numbered
 -- as the space says, within the post: a post read in a feed is read on
 -- its own, so its number among the space's pages is left out.
-postHtml :: (TreeNode page, NodeId page ~ PageId) => Text -> [BoxKind] -> [Space] -> Space -> [page] -> Page -> IO Text
+postHtml :: forall page. (TreeNode page, NodeId page ~ PageId) => Text -> [BoxKind] -> [Space] -> Space -> [page] -> Page -> IO Text
 postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
   Left _ -> pure ("<pre>" <> xmlText p.body <> "</pre>")
   Right blocks -> renderToHtml (H.mkComponent H.ComponentSpec {initialState = \_ -> pure (), render = \_ -> HH.div_ (Md.renderBlocks options blocks), eval = H.mkEval H.defaultEval}) ()
@@ -307,25 +409,39 @@ data FeedHead = FeedHead
   { title :: Text
   , description :: Text
   , address :: Text
-  -- ^ The blog's own address (its space's), ending in a slash: the feeds
-  -- are under it.
+  -- ^ The page the feed is about, for its alternate link: the blog's own
+  -- address (its space's), ending in a slash, with the feeds under it, or
+  -- the wiki's for the feed of notifications.
+  , identity :: Maybe Text
+  -- ^ The feed's Atom id, when it is not the same as 'address'.
+  -- 'Nothing' makes the id the address, as for a blog. Every user's feed
+  -- of notifications has the wiki's address, so each one needs an id of
+  -- its own. An RSS channel has no id.
+  , self :: Maybe Text
+  -- ^ The feed's own address, for its self link; none for a feed whose
+  -- address is a secret.
   , updated :: UTCTime
   -- ^ When a post last changed.
   }
 
--- | One post in a feed.
+-- | One entry in a feed: a post, or a notification.
 data FeedEntry = FeedEntry
   { title :: Text
   , url :: Text
+  -- ^ The link, and the id unless 'entryId' gives one.
+  , entryId :: Maybe Text
+  -- ^ An id of its own, for an entry whose link is not its own (a
+  -- notification's is its page's).
   , published :: UTCTime
   -- ^ When it was created: its first version.
   , updated :: UTCTime
   , author :: Maybe Text
   -- ^ Its first version's author's display name; never an address.
   , summary :: Text
-  -- ^ Its excerpt ("Wiki.Core.Blog").
-  , html :: Text
-  -- ^ All of it, as markup ('postHtml').
+  -- ^ Its excerpt ("Wiki.Core.Blog"); empty for none.
+  , content :: Maybe Text
+  -- ^ All of it, as markup ('postHtml'), or nothing for an entry that is
+  -- a title and a link alone.
   }
 
 -- | An Atom feed (RFC 4287). The feed's author is the blog, since a post
@@ -335,22 +451,23 @@ atomFeed h entries =
   T.unlines $
     [ "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
     , "<feed xmlns=\"http://www.w3.org/2005/Atom\">"
-    , "  <id>" <> xmlText h.address <> "</id>"
+    , "  <id>" <> xmlText (fromMaybe h.address h.identity) <> "</id>"
     , "  <title>" <> xmlText h.title <> "</title>"
     ]
       <> ["  <subtitle>" <> xmlText h.description <> "</subtitle>" | not (T.null h.description)]
       <> [ "  <updated>" <> rfc3339 h.updated <> "</updated>"
          , "  <author><name>" <> xmlText h.title <> "</name></author>"
          , "  <link rel=\"alternate\" type=\"text/html\" href=\"" <> xmlText h.address <> "\"/>"
-         , "  <link rel=\"self\" type=\"application/atom+xml\" href=\"" <> xmlText (h.address <> "feed.xml") <> "\"/>"
-         , "  <generator>Wiki</generator>"
+         ]
+      <> ["  <link rel=\"self\" type=\"application/atom+xml\" href=\"" <> xmlText self <> "\"/>" | Just self <- [h.self]]
+      <> [ "  <generator>Wiki</generator>"
          ]
       <> concatMap entry entries
       <> ["</feed>"]
   where
     entry e =
       [ "  <entry>"
-      , "    <id>" <> xmlText e.url <> "</id>"
+      , "    <id>" <> xmlText (fromMaybe e.url e.entryId) <> "</id>"
       , "    <title>" <> xmlText e.title <> "</title>"
       , "    <link rel=\"alternate\" type=\"text/html\" href=\"" <> xmlText e.url <> "\"/>"
       , "    <published>" <> rfc3339 e.published <> "</published>"
@@ -358,9 +475,8 @@ atomFeed h entries =
       ]
         <> ["    <author><name>" <> xmlText a <> "</name></author>" | Just a <- [e.author]]
         <> ["    <summary>" <> xmlText e.summary <> "</summary>" | not (T.null e.summary)]
-        <> [ "    <content type=\"html\">" <> xmlText e.html <> "</content>"
-           , "  </entry>"
-           ]
+        <> ["    <content type=\"html\">" <> xmlText html <> "</content>" | Just html <- [e.content]]
+        <> ["  </entry>"]
 
 -- | An RSS 2.0 feed. An author's name goes in Dublin Core's @creator@,
 -- since RSS's own @author@ is an e-mail address, which the wiki does not
@@ -389,7 +505,7 @@ rssFeed h entries =
       , "      <pubDate>" <> rfc822 e.published <> "</pubDate>"
       ]
         <> ["      <dc:creator>" <> xmlText a <> "</dc:creator>" | Just a <- [e.author]]
-        <> [ "      <description>" <> xmlText e.html <> "</description>"
+        <> [ "      <description>" <> xmlText (fromMaybe e.summary e.content) <> "</description>"
            , "    </item>"
            ]
 

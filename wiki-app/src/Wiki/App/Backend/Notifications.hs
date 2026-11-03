@@ -34,7 +34,7 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
-import Wiki.Api.Notifications (NotificationSettings, NotificationSettingsChange, Notifications, ReadMark)
+import Wiki.Api.Notifications (FeedAddress, NotificationSettings, NotificationSettingsChange, Notifications, ReadMark)
 import Wiki.Api.Security (UnsubscribeToken)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Notification (Watch, WatchTarget)
@@ -113,6 +113,20 @@ class (Monad m) => MonadNotifications m where
   setNotificationSettings :: NotificationSettingsChange -> m (Either WikiError NotificationSettings)
   default setNotificationSettings :: (MonadTrans t, m ~ t n, MonadNotifications n) => NotificationSettingsChange -> m (Either WikiError NotificationSettings)
   setNotificationSettings = lift . setNotificationSettings
+
+  -- | The address of the user's own feed of notifications, an Atom feed
+  -- for a feed reader (WP5.31 of docs/PLAN.md), or none while they have
+  -- made none. 'Invalid' where there is no feed (the demo, which runs in
+  -- the browser alone).
+  feedAddress :: m (Either WikiError FeedAddress)
+  default feedAddress :: (MonadTrans t, m ~ t n, MonadNotifications n) => m (Either WikiError FeedAddress)
+  feedAddress = lift feedAddress
+
+  -- | Make the feed's address, or a new one in place of the old, which
+  -- answers nothing from then on. The result is the new address.
+  renewFeedAddress :: m (Either WikiError FeedAddress)
+  default renewFeedAddress :: (MonadTrans t, m ~ t n, MonadNotifications n) => m (Either WikiError FeedAddress)
+  renewFeedAddress = lift renewFeedAddress
 
   -- | Follow the unsubscribe link in a notification mail: mail to the user
   -- the link names is turned off. 'NotFound' for a link that is not a

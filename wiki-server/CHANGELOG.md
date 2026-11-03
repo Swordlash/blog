@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+A user's notifications as a private Atom feed (WP5.31): migration
+`0006-notification-feed` adds `users.feed_token`, the secret of a user's
+feed, none until they make one. `GET notifications/feed` answers the
+feed's address (or `null`) and `POST notifications/feed` makes it, or a
+new one in place of the old; someone not signed in and the operator are
+refused. The server serves the feed at `me/notifications.atom?token=<secret>`,
+in a closed wiki too: the bell's latest 50, titles and links only, without
+a page the user may no longer read, with `Cache-Control: private,
+no-store`, and never kept in the feed cache. A wrong or missing secret,
+the old one after a renewal, and that of a disabled user are a 404.
+Reading the feed marks nothing read. A blog's feed entries are unchanged.
+
 The wiki's icon (WP5.45): `PUT spaces/<home space>/profile` and the icon's
 upload accept the space behind the home page for an administrator of the
 wiki, and change only its icon. Served pages carry their route's favicon.

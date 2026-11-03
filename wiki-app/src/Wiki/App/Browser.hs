@@ -75,6 +75,7 @@ import Web.Event.Event qualified as Event
 import Web.File.Blob qualified as Blob
 import Web.HTML.HTMLDialogElement qualified as HTMLDialogElement
 import Web.HTML.HTMLElement qualified as HTMLElement
+import Web.HTML.HTMLInputElement qualified as HTMLInputElement
 import Web.HTML.Window qualified as Window
 import Web.UIEvent.MouseEvent (MouseEvent (..))
 import Web.URL qualified as URL
@@ -408,10 +409,12 @@ historyBack = when inBrowser . liftIO $ Window.window >>= \w -> w.history.back
 -- whether it worked. The asynchronous clipboard first; where there is none
 -- (a page served over plain HTTP from another machine) or it refuses, the
 -- element's text is selected and copied the old way, and if even that
--- fails it stays selected, for the reader to copy with the keyboard. This
--- waits for the browser, so a component calls it off its loop ('liftIO'
--- in 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is
--- copied.
+-- fails it stays selected, for the reader to copy with the keyboard. An
+-- @\<input>@'s text is its value, not text inside the element, so an
+-- input is selected with its own @select@; any other element is selected
+-- whole with a range. This waits for the browser, so a component calls it
+-- off its loop ('liftIO' in 'Halogen.HalogenM', not 'Halogen.liftEffect').
+-- Natively nothing is copied.
 copyText :: (MonadIO m) => Element -> Text -> m Bool
 copyText element text = liftIO $ do
   w <- Window.window
@@ -421,12 +424,15 @@ copyText element text = liftIO $ do
   if copied
     then pure True
     else do
-      range <- w.document.createRange
-      range.selectNodeContents (toNode element)
-      found <- w.getSelection
-      for_ found $ \selection -> do
-        selection.removeAllRanges
-        selection.addRange range
+      case HTMLInputElement.fromElement element of
+        Just input -> input.select
+        Nothing -> do
+          range <- w.document.createRange
+          range.selectNodeContents (toNode element)
+          found <- w.getSelection
+          for_ found $ \selection -> do
+            selection.removeAllRanges
+            selection.addRange range
       either (const False) identity <$> try @JSError (w.document.execCommand "copy")
 
 -- | An application address (as 'Router.href' writes it) as a full URL,

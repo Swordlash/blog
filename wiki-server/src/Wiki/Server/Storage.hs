@@ -165,6 +165,8 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
+import Crypto.Random (getRandomBytes)
+import Data.ByteArray.Encoding (Base (Base64URLUnpadded), convertToBase)
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List qualified as List
@@ -181,7 +183,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
-import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, maxPeopleFound, searchable)
+import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, feedAddressOf, maxPeopleFound, searchable)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkHomePage, checkServerSettings, defaultHomePage, kindName, secretState, securityName)
 import Wiki.Api.ServerSettings qualified as SS
@@ -2901,6 +2903,28 @@ setNotificationSettingsTx change = do
   db (Notifications.storeChoices u change.mail change.watchOwn)
   notificationSettingsTx
 
+-- | The address of the user's feed of notifications ("Wiki.Server.Feed"),
+-- if they have made one: the feed's path with their secret.
+feedAddressTx :: Tx FeedAddress
+feedAddressTx = do
+  u <- notified
+  FeedAddress . fmap feedAddressOf <$> db (loadFeedToken u)
+
+-- | Make the user's feed address, or a new one in place of the old: a
+-- fresh secret, 32 random bytes as base64url, which the user keeps; the
+-- old address answers nothing from now on.
+renewFeedAddressTx :: Tx FeedAddress
+renewFeedAddressTx = do
+  u <- notified
+  secret <- liftIO newFeedToken
+  db (storeFeedToken u secret)
+  pure FeedAddress {address = Just (feedAddressOf secret)}
+
+-- | A secret for a feed of notifications: 32 random bytes as base64url,
+-- which an address can carry as it is.
+newFeedToken :: IO Text
+newFeedToken = decodeUtf8 . convertToBase Base64URLUnpadded <$> (getRandomBytes 32 :: IO ByteString)
+
 -- | The users with these logins who may sign in, for a caller who is
 -- signed in. Only those logins are read, through the index on a user's
 -- login, not every user.
@@ -2934,6 +2958,8 @@ instance (MonadIO m) => MonadNotifications (StoredWiki m) where
   setWatching target = run Writes . setWatchingTx target
   notificationSettings = run Reads notificationSettingsTx
   setNotificationSettings = run Writes . setNotificationSettingsTx
+  feedAddress = run Reads feedAddressTx
+  renewFeedAddress = run Writes renewFeedAddressTx
   unsubscribe token =
     run Writes (db (Notifications.unsubscribeUser token) >>= \found -> unless found (failWith NotFound))
 

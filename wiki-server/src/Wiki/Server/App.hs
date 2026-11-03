@@ -65,6 +65,7 @@ import Network.HTTP.Types (Header, hCacheControl, hContentType, hLocation, hSetC
 import Network.Wai (Application, Request (..), mapResponseHeaders, responseLBS)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
+import Wiki.Api.Notifications (feedPath)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend (MonadWiki (getHomeDocument))
 import Wiki.Core.Access (Access (..))
@@ -76,7 +77,7 @@ import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication, currentAssistantHosts)
 import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Events (eventsApplication)
-import Wiki.Server.Feed (FeedKind (..), feedApplication, sitemapApplication)
+import Wiki.Server.Feed (FeedKind (..), feedApplication, notificationFeedApplication, sitemapApplication)
 import Wiki.Server.Health (healthApplication, metricsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Metrics (observe)
@@ -251,6 +252,13 @@ listenerRoutes logger env site l caller request respond = do
             | readOnly
             , Just (path, kind) <- feedOf rest ->
                 feedApplication env.storage env.feeds l.mount kind path request respond
+          -- A user's own feed of notifications, by the secret in its
+          -- address, in a closed wiki too: the secret is what lets its
+          -- reader in ("Wiki.Server.Feed").
+          path
+            | readOnly
+            , path == feedPath ->
+                notificationFeedApplication env.storage l.mount request respond
           rest -> do
             hosts <- currentAssistantHosts env
             maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site

@@ -5,7 +5,20 @@
 -- allowlist with its addresses absolute; then served over HTTP, to the
 -- public and refused for what is not; and what the pages the server
 -- renders say of themselves in their heads.
-module Test.Server.Feed (spec) where
+--
+-- The helpers that read a feed as XML and check it against a schema are
+-- exported for the tests of the feed of notifications
+-- ("Test.Server.Notifications").
+module Test.Server.Feed
+  ( spec
+  , parsed
+  , named
+  , children
+  , textOf
+  , attributeOf
+  , shouldValidate
+  )
+where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
@@ -49,27 +62,29 @@ time :: Int -> UTCTime
 time day = UTCTime (fromGregorian 2026 9 day) 43200
 
 feedHead :: FeedHead
-feedHead = FeedHead {title = "Blog & more", description = "Posts <about> the wiki.", address = "https://wiki.example/s/blog/", updated = time 19}
+feedHead = FeedHead {title = "Blog & more", description = "Posts <about> the wiki.", address = "https://wiki.example/s/blog/", identity = Nothing, self = Just "https://wiki.example/s/blog/feed.xml", updated = time 19}
 
 entries :: [FeedEntry]
 entries =
   [ FeedEntry
       { title = "Notes on \"Haskell\""
       , url = "https://wiki.example/s/blog/p/notes/"
+      , entryId = Nothing
       , published = time 19
       , updated = time 20
       , author = Just "Edgar & Ada"
       , summary = "Laziness, and <tags>."
-      , html = "<div><p>A <b>bold</b> claim &amp; a control\x0001 character.</p></div>"
+      , content = Just "<div><p>A <b>bold</b> claim &amp; a control\x0001 character.</p></div>"
       }
   , FeedEntry
       { title = "Hello, world"
       , url = "https://wiki.example/s/blog/p/hello/"
+      , entryId = Nothing
       , published = time 1
       , updated = time 1
       , author = Nothing
       , summary = ""
-      , html = "<div><p>Hi.</p></div>"
+      , content = Just "<div><p>Hi.</p></div>"
       }
   ]
 
@@ -240,6 +255,8 @@ served backing = describe "served" $ do
     header "Cache-Control" atom `shouldBe` Just "public, max-age=60"
     let atomText = decodeUtf8 (BSL.toStrict atom.body)
     root <- parsed atomText
+    -- A blog's feed has its address as its id.
+    map textOf (children "id" root) `shouldBe` [r.public <> "/s/blog/"]
     map (map textOf . children "title") (children "entry" root) `shouldBe` [["Notes on Haskell"], ["Hello, world"]]
     map (map textOf . children "id") (children "entry" root) `shouldBe` [[r.public <> "/s/blog/p/notes-on-haskell/"], [r.public <> "/s/blog/p/hello-world/"]]
     -- The post whole, its HTML as the wiki renders it.

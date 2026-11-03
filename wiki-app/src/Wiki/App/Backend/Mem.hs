@@ -391,6 +391,10 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
   setNotificationSettings = write . setNotificationSettingsIn
   unsubscribe _ = pure (Left (Invalid "The demo sends no mail, so there is none to turn off."))
 
+  -- The demo runs in the browser alone: nothing outside it could read a feed.
+  feedAddress = pure (Left (Invalid "The demo has no feed of notifications: it runs in this browser alone, with no server for a feed reader to ask."))
+  renewFeedAddress = pure (Left (Invalid "The demo has no feed of notifications: it runs in this browser alone, with no server for a feed reader to ask."))
+
 -- | Stars, on the same wiki, saved like every other write (each user's
 -- are in their record of notifications, "Wiki.App.Backend.Mem.Persist").
 instance (MonadIO m) => MonadStars (MemWiki m) where

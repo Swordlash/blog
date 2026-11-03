@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+A user's feed of notifications (WP5.31): `NotificationsApi` gains `feed`,
+`GET notifications/feed`, the address of the signed-in user's own Atom feed
+of their notifications as a `FeedAddress` (`{"address"}`, `null` until made),
+and `renewFeed`, `POST notifications/feed`, which makes the address or a new
+one in place of the old. The feed itself is served by the server at
+`me/notifications.atom?token=<secret>` (`feedPath`, `feedAddressOf`), outside
+the API.
+
 The server's settings and the session carry `mathMacros` (WP5.41), the
 built-in math macros as the administration keeps them, `null` until an
 administrator first opens the Editor section; at most 20,000 characters.

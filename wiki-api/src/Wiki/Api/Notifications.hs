@@ -23,6 +23,9 @@ module Wiki.Api.Notifications
   , NotificationSettings (..)
   , NotificationSettingsChange (..)
   , Watching (..)
+  , FeedAddress (..)
+  , feedPath
+  , feedAddressOf
   , maxPeopleFound
   , minPeopleSearch
   , searchable
@@ -75,8 +78,33 @@ data NotificationsApi mode = NotificationsApi
   -- ^ @watching@ a space.
   , setSpaceWatch :: mode :- "watches" :> "spaces" :> Capture "space" SpaceId :> ReqBody '[JSON] Watching :> Put '[JSON] Watch
   -- ^ @setWatching@ a space.
+  , feed :: mode :- "feed" :> Get '[JSON] FeedAddress
+  -- ^ @feedAddress@: the address of the user's own feed of notifications,
+  -- or none while they have made none.
+  , renewFeed :: mode :- "feed" :> Post '[JSON] FeedAddress
+  -- ^ @renewFeedAddress@: make the feed's address, or a new one in place of
+  -- the old, which answers nothing from then on.
   }
   deriving stock (Generic)
+
+-- | 'FeedAddress': where the signed-in user reads their notifications as
+-- an Atom feed (WP5.31 of docs/PLAN.md): the path under the wiki's root,
+-- @me/notifications.atom?token=\<secret>@ ('feedAddressOf'), or 'Nothing'
+-- while the user has made none. The secret is the user's alone: whoever
+-- has the address reads their notifications, so it is shown to them in
+-- the account panel and appears in no other answer.
+newtype FeedAddress = FeedAddress {address :: Maybe Text}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The path of the feed of notifications under the wiki's root, as the
+-- server serves it: its segments.
+feedPath :: [Text]
+feedPath = ["me", "notifications.atom"]
+
+-- | The feed's address for a secret: the path under the wiki's root.
+feedAddressOf :: Text -> Text
+feedAddressOf secret = T.intercalate "/" feedPath <> "?token=" <> secret
 
 -- | 'maxPeopleFound' is the most users 'searchPeople' answers with: as
 -- many as a completion list shows without scrolling.

@@ -112,6 +112,9 @@ demo m = describe "over the demo" $ do
     fieldset <- find ui ".notification-mail"
     getAttribute fieldset "disabled" `shouldReturn` Just ""
     find ui ".notification-mail-note" >>= (`shouldContainText` "sends no mail")
+    -- The demo has no feed of notifications, and says why.
+    eventually (find ui ".notification-feed-note" >>= (`shouldContainText` "demo"))
+    length <$> findAll ui ".notification-feed-renew" `shouldReturn` 0
     own <- find ui ".notification-watch-own input"
     getProperty own "checked" `shouldReturn` "true"
     click own
