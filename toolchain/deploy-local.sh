@@ -153,7 +153,8 @@
 #                    tag (its release's page), or a commit hash, whole or a prefix;
 #                    without =REF, this checkout's own commit (git rev-parse HEAD),
 #                    or the newest before it that differs from it in Markdown files
-#                    alone (CI builds no page for those). CI keeps the pages as
+#                    alone, other than the Markdown compiled into the programs (CI
+#                    builds no page for those). CI keeps the pages as
 #                    release assets of the repository origin names
 #                    (.github/workflows/server-page.yml): app-server-<hash>.zip on
 #                    the pre-release main-latest for main's newest five commits, and
@@ -864,11 +865,29 @@ release_assets() {
 # The asset name of a tag's page: a tag may hold a slash, an asset name not.
 tag_asset() { printf 'app-server-%s.zip\n' "$(printf '%s' "$1" | tr / -)"; }
 
-# Whether two commits differ in Markdown files alone (or not at all), which
-# change nothing the page is built from. Fails when git does not know one.
+# Whether a file of the repository is code: something the page or the
+# server is built from. Markdown files are documentation, except the
+# Markdown compiled into the programs: wiki-core's built-in templates, and
+# its Markdown reference, which is docs/markdown.md through a symbolic link
+# in wiki-core/reference (a change to the reference changes
+# docs/markdown.md, not the link). The `paths` filters of
+# .github/workflows/build.yml and server-page.yml must say the same, since
+# CI builds a page only for a commit that changes code.
+is_code() {
+  case $1 in
+    wiki-core/templates/* | wiki-core/reference/* | docs/markdown.md) return 0 ;;
+    *.md) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Whether two commits differ in documentation alone (or not at all), which
+# changes nothing the page is built from. Fails when git does not know one.
 same_code() {
   changed=$(git -C "$ROOT" diff --name-only "$1" "$2" 2>/dev/null) || return 1
-  ! printf '%s\n' "$changed" | grep -v '^$' | grep -q -v '[.]md$'
+  printf '%s\n' "$changed" | while IFS= read -r file; do
+    if [ -n "$file" ] && is_code "$file"; then exit 1; fi
+  done
 }
 
 # Which page --backend-only=REF names: sets page_tag (the release), page_asset
@@ -899,9 +918,9 @@ resolve_page() {
         assets=$(printf '%s\n' "$release_list" | cut -d' ' -f1)
         page_asset=
         if full=$(git -C "$ROOT" rev-parse -q --verify "${ref}^{commit}" 2>/dev/null); then
-          # CI builds no page for a commit that changes Markdown alone, so
-          # the newest commit before it that differs from it in Markdown
-          # alone has the same page.
+          # CI builds no page for a commit that changes documentation
+          # alone (is_code), so the newest commit before it that differs
+          # from it in documentation alone has the same page.
           for commit in $(git -C "$ROOT" rev-list --max-count=20 "$full"); do
             same_code "$commit" "$full" || break
             if printf '%s\n' "$assets" | grep -qx "app-server-${commit}[.]zip"; then

@@ -1606,6 +1606,28 @@ assert_lacks "$out" 'warning: the page is of'
 [ "$(pstate backend_only_commit)" = "$head1" ] || fail 'the page of the commit before was not recorded'
 pass 'a checkout whose commit changes Markdown alone takes the page of the commit before it'
 
+# The built-in templates are Markdown compiled into the application, so a
+# commit that changes one alone changes the page: CI builds a page for it,
+# and the page of the commit before is of another version.
+mkdir -p "$case_dir/repo/wiki-core/templates"
+printf '# Meeting notes\n' >"$case_dir/repo/wiki-core/templates/meeting-notes.md"
+git -C "$case_dir/repo" add wiki-core/templates/meeting-notes.md
+git -C "$case_dir/repo" -c user.name=tester -c user.email=tester@example.com commit -q -m 'Template'
+head3=$(git -C "$case_dir/repo" rev-parse HEAD)
+: >"$EVENTS"
+out=$case_dir/template
+if deploy --prefix "$pre" >"$out" 2>&1; then fail 'a commit changing a template alone took the page of the commit before'; fi
+assert_contains "$out" "no page was built for $head3 on GitHub; push it, or name main, a tag or another hash"
+assert_lacks "$out" 'changes Markdown files alone'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a commit with no page took the server down'
+: >"$EVENTS"
+out=$case_dir/template-other-page
+deploy --prefix "$pre" --backend-only="$head1" >"$out" 2>&1 || fail "--backend-only=$head1 failed"
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$out" "warning: the page is of $head1, and wiki-server is built from this checkout"
+pass 'a commit that changes a built-in template alone has no page of the commit before, and that page is of another version'
+
 : >"$EVENTS"
 out=$case_dir/main
 deploy --prefix "$pre" --backend-only=main >"$out" 2>&1 || fail '--backend-only=main failed'

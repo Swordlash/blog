@@ -21,8 +21,10 @@ name: Server page
 #
 # A push to main that changes Markdown alone builds no page, as CI builds
 # nothing for it: its page is that of the commit before, which the deploy
-# script takes for it. The tag main-latest is made by this workflow
-# through the API, which starts no run of it, and is ignored anyway.
+# script takes for it. The Markdown compiled into the programs is the
+# exception (see the filter below). The tag main-latest is made by this
+# workflow through the API, which starts no run of it, and is ignored
+# anyway.
 #
 # Apart from build.yml so that a tag's push runs this alone, and so that
 # a push to main builds the page whatever build.yml's plan job decides (it
@@ -39,8 +41,15 @@ on:
     tags:
       - '**'
       - '!main-latest'
-    paths-ignore:
-      - '**.md'
+    # Every file but Markdown, and the Markdown compiled into the programs:
+    # the built-in templates and the Markdown reference (docs/markdown.md,
+    # through the link in wiki-core/reference). build.yml says why `paths`.
+    paths:
+      - '**'
+      - '!**.md'
+      - 'wiki-core/templates/**'
+      - 'wiki-core/reference/**'
+      - 'docs/markdown.md'
   workflow_dispatch:
 
 # One build of a ref at a time; a newer push to main waits for the one

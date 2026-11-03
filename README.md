@@ -754,7 +754,9 @@ The page is the one `npm run build-wasm-opt` makes for the server
 `.github/workflows/server-page.yml` and kept as a release asset of the repository
 `origin` names, a zip of `dist-newstyle/wasm-opt/public/app`:
 `app-server-<commit>.zip` on the pre-release `main-latest` for each of main's newest
-five commits (a push to main that changes Markdown alone builds none), and
+five commits (a push to main that changes Markdown alone builds none, unless it is
+Markdown compiled into the programs: `wiki-core/templates/` and the Markdown
+reference, `docs/markdown.md`, linked from `wiki-core/reference/`), and
 `app-server-<tag>.zip` on the release of each tag pushed, for good. The repository
 is public and so are its releases: no token is needed. `curl` lists them through
 `api.github.com` (sixty requests an hour without a token; a deploy makes one or two)
