@@ -7,6 +7,7 @@
 -- > wiki-server users (list | add | password | admin | disable) --data DIR [DATABASE] …
 -- > wiki-server oidc check --data DIR [DATABASE] [NAME]
 -- > wiki-server guide (install | update) --data DIR [DATABASE]
+-- > wiki-server compress DIR
 -- > wiki-server --version
 --
 -- DATABASE is @--database postgres:\/\/USER\@HOST\/NAME
@@ -27,12 +28,17 @@
 -- register with each. @guide install@ puts the guide, the wiki's
 -- documentation as a public space, back into a wiki that has none, and
 -- @guide update@ gives its pages this version's text ("Wiki.Server.Guide").
+-- @compress@ writes a gzip copy beside each of the application's files
+-- worth compressing, for a deployment made without Node
+-- ("Wiki.Server.Compress").
 module Main (main) where
 
 import Options.Applicative
 import Protolude
 import Sel (secureMain)
+import System.Directory (doesDirectoryExist)
 import Wiki.Server (ServerError (..), serve)
+import Wiki.Server.Compress (compressDirectory)
 import Wiki.Server.Console (BackupOutcome (..), GuideCommand, OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runGuide, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (defaultKeep)
@@ -52,6 +58,8 @@ data Command
     Oidc OidcCheck
   | -- | Install the guide, or bring it up to this version.
     Guide GuideCommand
+  | -- | Write the gzip copies of the application's files in a directory.
+    Compress FilePath
 
 commands :: ParserInfo Command
 commands =
@@ -63,6 +71,7 @@ commands =
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
               <> command "guide" (info (Guide <$> guideParser) (progDesc "Install the guide, the wiki's documentation, or give its pages this version's text"))
+              <> command "compress" (info compressCommand (progDesc "Write a gzip copy beside each of the application's files worth compressing, for the server to send"))
           )
           <|> (Serve <$> serveOptions)
       )
@@ -75,6 +84,8 @@ commands =
       Backup
         <$> placeOptions
         <*> option auto (long "keep" <> metavar "N" <> value defaultKeep <> showDefault <> help "How many backups to keep")
+    compressCommand =
+      Compress <$> strArgument (metavar "DIR" <> help "The application's directory, as --static names it")
 
 main :: IO ()
 main =
@@ -113,6 +124,13 @@ main =
           Left why -> do
             putErrText ("wiki-server: " <> why)
             exitWith (ExitFailure 1)
+      Compress dir -> do
+        exists <- doesDirectoryExist dir
+        unless exists $ do
+          putErrText ("wiki-server: there is no directory " <> toS dir)
+          exitWith (ExitFailure 1)
+        written <- compressDirectory dir
+        putText ("Wrote " <> show written <> " gzip copies in " <> toS dir <> ".")
       Oidc c -> do
         (fine, lines') <- runOidcCheck c
         traverse_ putText lines'
