@@ -725,7 +725,9 @@ HTTP on 127.0.0.1), marks the session cookie `Secure`, and gives its own address
 `https://` where no public address is set. It reads the files as it starts, and
 refuses to start, naming the file, when one cannot be read, holds no certificate or
 no key, or the key is not the certificate's. The unit names them by absolute path
-where they are, so they must stay there, readable by your user; a renewed
+where they are, so they must stay there, readable by your user, and outside the
+deployment's directory, which installing empties, or under its `data/` (as
+`~/wiki-demo/data/tls/`; the deploy refuses them anywhere else in it); a renewed
 certificate takes a restart, `systemctl --user restart wiki-demo.service`. The
 files are remembered, and a renewed certificate in a new file is given alone
 (`--tls-cert new.crt`).

@@ -401,7 +401,7 @@ case $name in
       # The server's own HTTPS listener, as curl reaches it: checking its
       # certificate against --cacert, for the URL's name reached at the
       # address --connect-to gives, or not at all with --insecure.
-      https://127.0.0.1:* | https://*.test:*)
+      https://127.*:* | https://*.test:*)
         printf 'curl-tls %s cacert=%s connect=%s insecure=%s\n' "$url" "$cacert" "$connect" "$insecure" >>"$EVENTS"
         exec "$NODE_REAL" -e '
           const [url, output, format, failing, cacert, connect, insecure] = process.argv.slice(1);
@@ -2150,6 +2150,54 @@ if command -v openssl >/dev/null 2>&1; then
   assert_lacks "$EVENTS" 'npm'
   [ ! -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'a refused deploy wrote a state'
   pass 'the ways to serve exclude each other, and a certificate needs its key, a server and readable files, before anything is built'
+
+  # Certificate files inside the deployment's directory, which the install
+  # empties but for data/, state/ and toolchain/: refused before the
+  # service is stopped, under the home directory and under a prefix (there
+  # through a link from outside); under data/tls/ they are kept, and taken.
+  fixture tls-inside
+  p=$(free_port 127.0.0.2)
+  a=$(other_port "$p")
+  deploy --server --sqlite --http --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the plain HTTP deploy failed'
+  cp "$certs/wiki.crt" "$certs/wiki.key" "$HOME/wiki-demo/"
+  cp "$HOME/.config/wiki-demo/wiki-demo.state" "$case_dir/state-before"
+  : >"$EVENTS"
+  out=$case_dir/refused
+  if deploy --no-build --tls-cert "$HOME/wiki-demo/wiki.crt" --tls-key "$HOME/wiki-demo/wiki.key" >"$out" 2>&1; then
+    fail 'certificate files the install would delete were taken'
+  fi
+  assert_contains "$out" "the TLS file $HOME/wiki-demo/wiki.crt is inside $HOME/wiki-demo, which installing empties but for data/, state/ and toolchain/, so it would be deleted: keep it in $HOME/wiki-demo/data/tls/ or outside $HOME/wiki-demo"
+  assert_lacks "$EVENTS" 'systemctl stop'
+  cmp -s "$HOME/.config/wiki-demo/wiki-demo.state" "$case_dir/state-before" || fail 'a refused deploy changed the state'
+  [ -f "$HOME/wiki-demo/wiki.key" ] || fail 'a refused deploy deleted the key'
+  [ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the service stopped answering'
+  mkdir -p "$HOME/wiki-demo/data/tls"
+  mv "$HOME/wiki-demo/wiki.crt" "$HOME/wiki-demo/wiki.key" "$HOME/wiki-demo/data/tls/"
+  out=$case_dir/kept
+  deploy --no-build --tls-cert "$HOME/wiki-demo/data/tls/wiki.crt" --tls-key "$HOME/wiki-demo/data/tls/wiki.key" >"$out" 2>&1 ||
+    fail 'certificate files under data/tls/ were refused'
+  assert_contains "$HOME/$unit" "--tls-cert \"$HOME/wiki-demo/data/tls/wiki.crt\" --tls-key \"$HOME/wiki-demo/data/tls/wiki.key\""
+  [ -f "$HOME/wiki-demo/data/tls/wiki.key" ] || fail 'the install deleted the key under data/tls/'
+  [ "$(https_get "https://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer over HTTPS'
+  undeploy >/dev/null 2>&1
+  fixture tls-inside-prefix
+  pre=$case_dir/srv
+  q=$(free_port 127.0.0.2)
+  b=$(other_port "$q")
+  out=$case_dir/prefix-first
+  deploy --server --sqlite --http --prefix "$pre" --port "$q" --admin-port "$b" >"$out" 2>&1 || fail 'the deploy under a prefix failed'
+  cp "$certs/wiki.pem" "$pre/wiki.pem"
+  ln -s "$pre/wiki.pem" "$case_dir/link.pem"
+  : >"$EVENTS"
+  out=$case_dir/prefix-refused
+  if deploy --no-build --prefix "$pre" --tls-cert "$case_dir/link.pem" --tls-key "$case_dir/link.pem" >"$out" 2>&1; then
+    fail 'a certificate linked into the prefix was taken'
+  fi
+  assert_contains "$out" "the TLS file $pre/wiki.pem is inside $pre, which installing empties"
+  assert_lacks "$EVENTS" 'systemctl stop'
+  [ -f "$pre/wiki.pem" ] || fail 'a refused deploy deleted the .pem under the prefix'
+  undeploy --prefix "$pre" >/dev/null 2>&1
+  pass 'certificate files the install would delete are refused before the service is stopped, through links and under a prefix too; under data/tls/ they are kept'
 else
   printf 'skipped: openssl is not installed, so the cases of a certificate of its own (--tls-cert) do not run\n'
 fi

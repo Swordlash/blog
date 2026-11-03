@@ -141,7 +141,9 @@
 #   --tls-key FILE   (PEM; its chain may follow it in the file) and its private key (the
 #                    same file when one .pem holds both), on the --bind address;
 #                    remembered, by absolute path. Either may later be given alone, for
-#                    a renewed certificate in another file
+#                    a renewed certificate in another file. Inside the deployment's
+#                    directory only data/ will do (<dir>/data/tls/): installing
+#                    empties the rest
 #   --tls-ca FILE    with --tls-cert: after the deploy, check the certificate the server
 #                    serves against this certificate authority; remembered (--tls-ca=
 #                    forgets it)
@@ -926,6 +928,18 @@ fi
 if [ "$mode" = server ] && [ -n "$prev_dir" ] && [ "$prev_dir" != "$dir" ] && [ -d "$prev_dir/data" ] && [ ! -d "$dir/data" ]; then
   die "the wiki's data is in $prev_dir/data: move it to $dir/data yourself first (with the service stopped: sh toolchain/undeploy-local.sh --name $name), or deploy under another --name"
 fi
+# The certificate's files must survive the install, which empties the
+# directory but for data/, state/ and toolchain/: a file elsewhere in it
+# would be deleted, the key with it, and the service could not start. Both
+# paths are real ones (realpath above), so a link cannot hide where a file
+# is.
+for file in "$tls_cert" "$tls_key" "$tls_ca"; do
+  case $file in
+    "$dir"/data/* | "$dir"/state/* | "$dir"/toolchain/*) ;;
+    "$dir"/*)
+      die "the TLS file $file is inside $dir, which installing empties but for data/, state/ and toolchain/, so it would be deleted: keep it in $dir/data/tls/ or outside $dir" ;;
+  esac
+done
 # The directory is claimed now, before the build: under a prefix the
 # toolchain is installed under it first, and a directory that is not empty
 # is emptied only when it carries the marker.
