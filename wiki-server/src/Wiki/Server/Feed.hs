@@ -269,6 +269,7 @@ feed storage cache base kind segments =
               { title = space.name
               , description = if T.null space.description then "The posts of " <> space.name <> "." else space.description
               , address
+              , identity = Nothing
               , self = Just (address <> "feed.xml")
               , updated = foldl' max space.createdAt [e.updated | e <- entries]
               }
@@ -317,9 +318,11 @@ notificationFeed storage base token =
         (Right ns, Just a) -> Just (written u a ns now)
         _ -> Nothing
   where
-    -- The feed's own address is the wiki's with the user: the secret stays
-    -- out of the document, so that a new address leaves every entry's id
-    -- as it was. There is no self link for the same reason.
+    -- The feed's id is the wiki's address with the feed's path and the
+    -- user's id, so each user's feed has an id of its own. The secret is
+    -- never in it: a new address leaves the feed's id and every entry's id
+    -- as they were. There is no self link for the same reason. The
+    -- alternate link is the wiki itself.
     written u account ns now =
       let feedId = addressOf base (T.intercalate "/" feedPath <> "#" <> u.text)
           entries = map (entryOf feedId) ns.items
@@ -328,6 +331,7 @@ notificationFeed storage base token =
               { title = "Notifications for " <> account.user.displayName
               , description = "What " <> account.user.displayName <> " is told of here: mentions, replies, and comments on and changes to the pages they watch."
               , address = base
+              , identity = Just feedId
               , self = Nothing
               , updated = maximumDef now [e.updated | e <- entries]
               }
@@ -405,8 +409,14 @@ data FeedHead = FeedHead
   { title :: Text
   , description :: Text
   , address :: Text
-  -- ^ The blog's own address (its space's), ending in a slash: the feeds
-  -- are under it. Also the feed's id.
+  -- ^ The page the feed is about, for its alternate link: the blog's own
+  -- address (its space's), ending in a slash, with the feeds under it, or
+  -- the wiki's for the feed of notifications.
+  , identity :: Maybe Text
+  -- ^ The feed's Atom id, when it is not the same as 'address'.
+  -- 'Nothing' makes the id the address, as for a blog. Every user's feed
+  -- of notifications has the wiki's address, so each one needs an id of
+  -- its own. An RSS channel has no id.
   , self :: Maybe Text
   -- ^ The feed's own address, for its self link; none for a feed whose
   -- address is a secret.
@@ -441,7 +451,7 @@ atomFeed h entries =
   T.unlines $
     [ "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
     , "<feed xmlns=\"http://www.w3.org/2005/Atom\">"
-    , "  <id>" <> xmlText h.address <> "</id>"
+    , "  <id>" <> xmlText (fromMaybe h.address h.identity) <> "</id>"
     , "  <title>" <> xmlText h.title <> "</title>"
     ]
       <> ["  <subtitle>" <> xmlText h.description <> "</subtitle>" | not (T.null h.description)]

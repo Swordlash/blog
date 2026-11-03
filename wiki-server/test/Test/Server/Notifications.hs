@@ -256,6 +256,15 @@ overHttp backing = describe "over HTTP" $ do
     Xml.named "content" root `shouldBe` []
     -- The secret is in no id, so a new address leaves the entries as they were.
     (token `T.isInfixOf` xml) `shouldBe` False
+    -- The feed's own id is the reader's, with neither the secret nor the
+    -- wiki's address alone, which is every user's feed's link; another
+    -- user's feed has another id.
+    map textOf (children "id" root) `shouldBe` [r.public <> "/me/notifications.atom#user-reader"]
+    map (attributeOf "href") (children "link" root) `shouldBe` [Just (r.public <> "/")]
+    editorFeed :: FeedAddress <- asWithout r (Just people.editor) methodPost links.notifications.renewFeed >>= jsonAs 200
+    editorAddress <- maybe (assertFailure "no address") pure editorFeed.address
+    editorXml <- decodeUtf8 . BSL.toStrict . (.body) <$> getUrl r (onPublic r editorAddress)
+    (map textOf . children "id" <$> parsed editorXml) `shouldReturn` [r.public <> "/me/notifications.atom#user-editor"]
     -- Reading the feed marks nothing read.
     (toldOver r people.reader <&> \n -> n.unread) `shouldReturn` 2
     -- A new address, and the old one answers nothing; nor does a wrong

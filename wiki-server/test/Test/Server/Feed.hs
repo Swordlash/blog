@@ -62,7 +62,7 @@ time :: Int -> UTCTime
 time day = UTCTime (fromGregorian 2026 9 day) 43200
 
 feedHead :: FeedHead
-feedHead = FeedHead {title = "Blog & more", description = "Posts <about> the wiki.", address = "https://wiki.example/s/blog/", self = Just "https://wiki.example/s/blog/feed.xml", updated = time 19}
+feedHead = FeedHead {title = "Blog & more", description = "Posts <about> the wiki.", address = "https://wiki.example/s/blog/", identity = Nothing, self = Just "https://wiki.example/s/blog/feed.xml", updated = time 19}
 
 entries :: [FeedEntry]
 entries =
@@ -255,6 +255,8 @@ served backing = describe "served" $ do
     header "Cache-Control" atom `shouldBe` Just "public, max-age=60"
     let atomText = decodeUtf8 (BSL.toStrict atom.body)
     root <- parsed atomText
+    -- A blog's feed has its address as its id.
+    map textOf (children "id" root) `shouldBe` [r.public <> "/s/blog/"]
     map (map textOf . children "title") (children "entry" root) `shouldBe` [["Notes on Haskell"], ["Hello, world"]]
     map (map textOf . children "id") (children "entry" root) `shouldBe` [[r.public <> "/s/blog/p/notes-on-haskell/"], [r.public <> "/s/blog/p/hello-world/"]]
     -- The post whole, its HTML as the wiki renders it.
