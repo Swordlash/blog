@@ -85,9 +85,12 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
 - Components, specs and helpers are polymorphic in the monad with class constraints
   (`MonadWiki m`, `MonadBrowserTest m`); only an entry point picks one.
 - `RefLabel`s come from `H.newRefLabel` in `initialState`, never a literal.
-- Browser logic lives in `jsbits`-style JavaScript declared once with `browserJS`; a library
-  that needs npm packages is bundled by `web/bundle.sh` and called through globals, as
-  haskell-halogen's material package does.
+- The browser's own objects are read and called through haskell-halogen's Web types and
+  their fields (`w.history.go`, `event.key`; decision 30 in `docs/PLAN.md`), and the
+  wiki's own objects through wiki newtypes with `jsFields`. JavaScript of the wiki's own
+  lives in `jsbits` declared once with `browserJS`; a library that needs npm packages is
+  bundled by `web/bundle.sh` and called through globals, as haskell-halogen's material
+  package does.
 - Markdown is rendered to Halogen `HTML` values, never to an HTML string set through
   `innerHTML`. Mermaid, KaTeX and highlighting fill elements Halogen holds by ref and does not
   look inside.

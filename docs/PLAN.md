@@ -307,6 +307,20 @@ confirms it against reality and the plan is amended if it does not hold.
     editor's Box menu offers "New kind…" in a dialog with the same form as the
     settings' Editor tab, and the kind saved there is in the menu at once, without
     leaving or reloading the editor. Boxes are numbered within the page by default.
+30. **The browser's objects through fields** (the owner, issue #122, built by WP5.46 in
+    haskell-halogen and WP5.47 here). The browser's own objects (the window, the
+    document, elements, events, the history, files, the caches) are read and called
+    from Haskell through haskell-halogen's Web types and their `HasField` instances
+    (`w.history.go`, `event.key`, `file.bytes`), not through a one-line JavaScript
+    function per member. A member the wiki needs and core lacks goes into core, beside
+    its newtype (an instance written here on a core type would be an orphan), in a
+    haskell-halogen pull request before the wiki's. The wiki's own objects (the editor's
+    host and its CodeMirror, the install prompt the loader keeps, the entries of the
+    session history) are wiki newtypes over a `JSVal` with `jsFields`. A single call
+    with an options object is an `inlineJS` expression in Haskell. What stays in
+    `jsbits` is logic of the wiki's own, by decision 25: the zip archive, the reader's
+    selection, the layout and the contents panel, CodeMirror's text and selection in
+    UTF-16 code units, the live preview's channel, the assistant's SDKs and the vault.
 
 ## Repository layout
 
@@ -353,27 +367,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **Issue #122, the Web platform from Haskell** (the owner, 2026-11-02). The browser's
-  own objects (window, navigator, crypto, history, location, document, elements,
-  events) are read and called from Haskell through record fields, rather than through
-  a one-line JavaScript function per field. Today `wiki-app/jsbits` has 141 functions in
-  2012 lines, 96 of them three lines or shorter; about 50 of those only read a property
-  or call one platform method (`navigator.onLine`, `history.go`, `event.key`,
-  `event.detail`, `files[i].name`, `element.focus`, `URL.createObjectURL`). haskell-halogen
-  core does the same in `Web.HTML.Window` and the other `Web.*` modules, through
-  `browserJS` and `jsbits/web_browser.js`, and already has the newtypes (`Window`,
-  `HTMLDocument`, `Element`, `Event`; `Foreign` is a `JSVal`). WP5.46, the fields in
-  haskell-halogen (`Halogen.JSBits.Fields`, Swordlash/haskell-halogen#95), is done, and the
-  wiki's pin is on it (#124). What is left:
-  - **WP5.47 Use them in the wiki.** The one-line functions are replaced file by file (`browser.js`, `offline.js`, `object-url.js`,
-    `search.js`, `slides.js`, `console.js`, and the platform parts of `editor.js`,
-    `comments.js`, `assistant.js`), with the browser tests unchanged as the check. The
-    wiki's own newtypes (a passkey's credential, the editor's host) use the same splice.
-    Not moved, by decision 25: the glue around bundled libraries (`wikiIslands`, the
-    CodeMirror editor object, `wikiArchive`, the assistant's SDKs, the vault's WebAuthn
-    and WebCrypto flows) and the JavaScript-side handle tables (live listeners, preview
-    watches, vault keys).
 
 ### Later, or waiting for the owner
 
@@ -551,6 +544,12 @@ needs. Each was true when its package merged; check before relying on one.
   permissions; they count by the rules all the same (WP3.4, carried since).
 - Slides: no theme from the space's settings (it needs a space field and a migration),
   no speaker notes in a second window (WP4.2, carried).
+- The session history's entries: the shell keeps an entry's number and the preview's
+  mark as text in the entry's state (`"12+preview"`), and still reads the objects the
+  versions before WP5.47 wrote, for a tab open across that deployment; that decoder
+  (`PreviousEntry` in `Wiki.App.Browser`) can go once no such tab can remain. The search
+  box's closing on a press outside is heard in the bubble phase now, not capture; a
+  `pointerdown` stopped on its way to the document would leave the box open (WP5.47).
 - Settings: one changed by another process is seen only after a restart; there is no
   console `settings` command (the admin listener is the recovery); a secret travels once
   in the `PUT` body over the admin listener (plain HTTP on the private network, decision
