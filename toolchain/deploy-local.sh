@@ -20,7 +20,10 @@
 #      libpq, zlib, libsodium) before anything is downloaded or built, and
 #      names their Debian and RHEL packages; a library built elsewhere is
 #      found through LIBRARY_PATH, C_INCLUDE_PATH, CPATH or PKG_CONFIG_PATH,
-#      which reach cabal untouched. Then toolchain/bootstrap.sh build
+#      which reach cabal untouched. On Debian or Ubuntu (dpkg-query on PATH)
+#      a missing package is a warning, since the bootstrap installs it, and
+#      the check runs again after the bootstrap; elsewhere the deploy stops
+#      there. Then toolchain/bootstrap.sh build
 #      (installs or checks the toolchain a build needs: the compilers, the
 #      wasm sysroot and Node, with neither Chromium nor fourmolu, so no root
 #      for Chromium's libraries), npm ci and `npm run build-wasm-opt`, the
@@ -1020,10 +1023,31 @@ server_cabal() {
 # runs before anything is downloaded or built, so that a missing C library
 # stops the deploy at once, with the packages that provide it, and not after
 # an hour of compiling. It sees this script's environment, as the build does.
+# On Debian or Ubuntu (dpkg-query on PATH) the bootstrap installs the
+# missing packages, so a failed check there is a warning: the deploy goes
+# on, and recheck_native runs the check again after the bootstrap. Elsewhere
+# nothing installs them, and the deploy stops.
 check_native() {
   say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-  sh "$ROOT/toolchain/check-native.sh" ||
+  if check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+    printf '%s\n' "$check_output"
+    return 0
+  fi
+  printf '%s\n' "$check_output"
+  command -v dpkg-query >/dev/null 2>&1 ||
     die "the native build of wiki-server needs what is missing above; nothing was changed"
+  check_missing=$(printf '%s\n' "$check_output" | sed -n 's/^Missing for the native build of wiki-server: \(.*\)[.]$/\1/p')
+  warn "missing for the native build of wiki-server: ${check_missing:-see above}; the bootstrap installs the Debian packages next, and the check runs again after it"
+  native_recheck=1
+}
+
+# The check again, after the bootstrap installed the Debian packages that
+# check_native found missing. This time a failure stops the deploy, before
+# anything is built.
+recheck_native() {
+  say "checking again what the native build of wiki-server needs, after the bootstrap"
+  sh "$ROOT/toolchain/check-native.sh" ||
+    die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 
 # wiki-server's build with --backend-only. check_native has run before it,
@@ -1047,6 +1071,7 @@ server_build_native() {
 if [ -n "$build" ]; then
   # wiki-server is built natively in server mode, whether the page is
   # downloaded or built here: its check comes before anything else.
+  native_recheck=
   [ "$mode" != server ] || check_native
   if [ -n "$backend_only" ] && [ "$mode" != server ]; then
     # The demo's page from GitHub: nothing is built here. Node, which
@@ -1069,6 +1094,7 @@ if [ -n "$build" ]; then
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" build
   fi
+  [ -z "$native_recheck" ] || recheck_native
 fi
 # The environment npm's own entry points load, for npm and Node here.
 if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then

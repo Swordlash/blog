@@ -802,8 +802,10 @@ files are gzip copies that `wiki-server compress` writes, rather than brotli cop
 server deploy that builds `wiki-server` (with `--backend-only` or without) first runs
 `toolchain/check-native.sh`, before it downloads or builds anything; the script
 prints `ok` or `missing` for each command and library, names the packages of what is
-missing, and can be run by hand (`sh toolchain/check-native.sh`). SQLite needs
-nothing: the build compiles its own copy.
+missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or Ubuntu
+(`dpkg-query` on `PATH`) a missing package is only a warning, since the bootstrap
+installs it next, and the check runs again after the bootstrap; elsewhere the deploy
+stops there. SQLite needs nothing: the build compiles its own copy.
 
 | Library    | Debian, Ubuntu  | RHEL, Fedora              |
 | ---------- | --------------- | ------------------------- |
