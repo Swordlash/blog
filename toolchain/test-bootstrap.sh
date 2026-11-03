@@ -63,13 +63,42 @@ case $name in
   fourmolu) printf 'fourmolu 0.21.0.0\n' ;;
   dpkg-query) printf 'install ok installed\n' ;;
   curl|apt-get|sudo) printf 'unexpected %s %s\n' "$name" "$*" >>"$EVENTS"; exit 91 ;;
+  git)
+    # The GitHub mirror of ghc-wasm-meta: a checkout of the pinned commit
+    # holds ghcup's metadata and a setup.sh that writes a sysroot like
+    # sysroot() does, saying how it was called.
+    printf 'git %s\n' "$*" >>"$EVENTS"
+    dir=
+    [ "$1" != -C ] || dir=$2
+    case $* in
+      'init -q '*) mkdir -p "$3/.git" ;;
+      *' fetch -q --depth 1 https://github.com/haskell-wasm/ghc-wasm-meta '*) ;;
+      *' checkout -q FETCH_HEAD')
+        printf 'ghcupURL: fake\n' >"$dir/ghcup-wasm-0.0.9.yaml"
+        cp "$FAKE_SETUP" "$dir/setup.sh" ;;
+      *) printf 'unexpected git %s\n' "$*" >>"$EVENTS"; exit 91 ;;
+    esac ;;
   *) exit 91 ;;
 esac
 EOF
   chmod +x "$case_dir/bin/tool"
-  for cmd in ghc cabal wasm32-wasi-ghc node npm alex happy fourmolu dpkg-query curl apt-get sudo; do
+  for cmd in ghc cabal wasm32-wasi-ghc node npm alex happy fourmolu dpkg-query curl apt-get sudo git; do
     ln -s tool "$case_dir/bin/$cmd"
   done
+  FAKE_SETUP=$case_dir/fake-setup.sh
+  export FAKE_SETUP
+  cat >"$FAKE_SETUP" <<'EOF'
+#!/bin/sh
+printf 'setup.sh PREFIX=%s SKIP_GHC=%s FLAVOUR=%s\n' "$PREFIX" "$SKIP_GHC" "$FLAVOUR" >>"$EVENTS"
+rm -rf "$PREFIX"
+mkdir -p "$PREFIX/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi"
+touch "$PREFIX/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libc.a" "$PREFIX/env"
+for binary in add_to_github_path.sh wasi-sdk/bin/wasm32-wasi-clang binaryen/bin/wasm-opt wasmtime/bin/wasmtime nodejs/bin/node; do
+  mkdir -p "$(dirname "$PREFIX/$binary")"
+  printf '#!/bin/sh\nexit 0\n' >"$PREFIX/$binary"
+  chmod +x "$PREFIX/$binary"
+done
+EOF
   mkdir -p "$case_dir/repo/node_modules/playwright-core"
   printf '{"packages":{"node_modules/playwright-core":{"version":"1.63.0"}}}\n' >"$case_dir/repo/package-lock.json"
   printf '{"version":"1.63.0","main":"index.cjs"}\n' >"$case_dir/repo/node_modules/playwright-core/package.json"
@@ -221,6 +250,22 @@ assert_contains "$case_dir/check" 'install Node 24.21.0'
 assert_contains "$case_dir/check" 'install wasm sysroot'
 [ ! -e "$HOME/.wiki-toolchain" ] || fail 'missing-tool inventory wrote state'
 pass 'check lists missing sysroot and incompatible Node without installing'
+
+# No sysroot, and no gitlab.haskell.org: the fake curl refuses every download,
+# as a proxy that blocks the host does, so ghc-wasm-meta comes from the GitHub
+# mirror and its setup.sh installs the sysroot.
+fixture mirror
+bootstrap toolchain >"$case_dir/install"
+assert_contains "$EVENTS" "unexpected curl --fail --location --retry 5 --silent --show-error --output $HOME/.wiki-toolchain/ghc-wasm-meta-$REV.tmp.tar.gz https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$REV/ghc-wasm-meta-$REV.tar.gz"
+assert_contains "$case_dir/install" 'fetching the commit from the GitHub mirror'
+assert_contains "$EVENTS" "git -C $HOME/.wiki-toolchain/ghc-wasm-meta-$REV.tmp fetch -q --depth 1 https://github.com/haskell-wasm/ghc-wasm-meta $REV"
+assert_contains "$EVENTS" "setup.sh PREFIX=$HOME/.ghc-wasm SKIP_GHC=1 FLAVOUR="
+[ -f "$HOME/.wiki-toolchain/ghc-wasm-meta-$REV/ghcup-wasm-0.0.9.yaml" ] || fail 'the mirror checkout was not kept'
+[ ! -e "$HOME/.wiki-toolchain/ghc-wasm-meta-$REV/.git" ] || fail 'the mirror checkout kept its .git'
+[ -f "$HOME/.ghc-wasm/.bootstrap-$REV" ] || fail 'the sysroot from the mirror was not stamped'
+bootstrap check >"$case_dir/check"
+assert_contains "$case_dir/check" 'reuse wasm sysroot'
+pass 'ghc-wasm-meta comes from its GitHub mirror when gitlab.haskell.org refuses the archive'
 
 fixture wrong-playwright
 sysroot

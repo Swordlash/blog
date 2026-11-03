@@ -20,6 +20,8 @@
 #   - ghc-wasm-meta at $GHC_WASM_META_REV (into ~/.ghc-wasm: wasi-sdk,
 #     binaryen, wasmtime and its own Node), and through ghcup the cross compiler
 #     wasm32-wasi-ghc-$WASM_GHC_VERSION, exactly as haskell-halogen's CI does;
+#     the revision comes from gitlab.haskell.org, or from its GitHub mirror
+#     where that host is refused;
 #   - Node $NODE_VERSION, into ~/.wiki-toolchain/node;
 #   - Chromium's headless shell for Playwright, the revision the project's
 #     Playwright (package-lock.json, or $PLAYWRIGHT_VERSION before there is
@@ -579,16 +581,34 @@ install_native() {
 
 # ghc-wasm-meta's setup.sh starts by deleting ~/.ghc-wasm, so the stamp it is
 # given at the end only exists after a complete run, and only for this revision.
+#
+# The pinned revision is one archive from gitlab.haskell.org, the repository's
+# home. A network that refuses that host (a company proxy; the archive endpoint
+# answers 403 there) gets the same commit from the repository's mirror on
+# GitHub, by a shallow fetch of the commit itself. Everything setup.sh then
+# downloads (wasi-sdk, the compilers' bindists, binaryen, wasmtime, Node) is on
+# GitHub already, so that mirror is the only other thing the wasm toolchain
+# needs from gitlab.haskell.org.
 fetch_wasm_meta() {
   if [ ! -f "$META_DIR/ghcup-wasm-0.0.9.yaml" ]; then
     say "fetching ghc-wasm-meta $GHC_WASM_META_REV"
     rm -rf "$META_DIR" "$META_DIR.tmp"
     mkdir -p "$META_DIR.tmp"
-    run "downloading ghc-wasm-meta" fetch \
-      "https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$GHC_WASM_META_REV/ghc-wasm-meta-$GHC_WASM_META_REV.tar.gz" \
-      "$META_DIR.tmp.tar.gz"
-    run "unpacking ghc-wasm-meta" tar xzf "$META_DIR.tmp.tar.gz" --strip-components=1 --directory "$META_DIR.tmp"
-    rm -f "$META_DIR.tmp.tar.gz"
+    printf '+ fetch ghc-wasm-meta %s from gitlab.haskell.org\n' "$GHC_WASM_META_REV" >>"$LOG"
+    if fetch "https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$GHC_WASM_META_REV/ghc-wasm-meta-$GHC_WASM_META_REV.tar.gz" \
+      "$META_DIR.tmp.tar.gz" >>"$LOG" 2>&1; then
+      run "unpacking ghc-wasm-meta" tar xzf "$META_DIR.tmp.tar.gz" --strip-components=1 --directory "$META_DIR.tmp"
+      rm -f "$META_DIR.tmp.tar.gz"
+    else
+      rm -f "$META_DIR.tmp.tar.gz"
+      say "gitlab.haskell.org did not give the archive (the end of $LOG says why); fetching the commit from the GitHub mirror, github.com/haskell-wasm/ghc-wasm-meta"
+      run "starting a repository for ghc-wasm-meta" git init -q "$META_DIR.tmp"
+      run "fetching ghc-wasm-meta from the GitHub mirror" git -C "$META_DIR.tmp" fetch -q --depth 1 \
+        https://github.com/haskell-wasm/ghc-wasm-meta "$GHC_WASM_META_REV"
+      run "checking ghc-wasm-meta out" git -C "$META_DIR.tmp" -c advice.detachedHead=false checkout -q FETCH_HEAD
+      rm -rf "$META_DIR.tmp/.git"
+    fi
+    [ -f "$META_DIR.tmp/ghcup-wasm-0.0.9.yaml" ] || fail "fetching ghc-wasm-meta (no ghcup-wasm-0.0.9.yaml in what arrived)"
     mv "$META_DIR.tmp" "$META_DIR"
   fi
 }
