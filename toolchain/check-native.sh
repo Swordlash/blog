@@ -2,10 +2,12 @@
 # Check what the native build of wiki-server needs from the machine, before
 # anything is downloaded or built.
 #
-#   sh toolchain/check-native.sh [--help]
+#   sh toolchain/check-native.sh [--without-postgres | --help]
 #
 # It prints one line per item, ok or missing, with how the item was found or
-# what was tried, and then a summary. It exits 0 when everything is there and
+# what was tried, and then a summary. With --without-postgres, for a build
+# of wiki-server with the cabal flag postgres off (what the deploy builds
+# for a wiki in SQLite), libpq is reported as not needed and not counted. It exits 0 when everything is there and
 # 1 when something is missing. It installs nothing and changes nothing.
 #
 # toolchain/deploy-local.sh runs it first whenever it builds wiki-server, and
@@ -25,7 +27,9 @@
 #     when PATH has none the check looks there and in Debian's
 #     /usr/lib/postgresql/<NN>/bin, and names the one it finds, to be put on
 #     PATH for the deploy. WIKI_PG_CONFIG_DIRS replaces those directories (a
-#     list separated by spaces), for the tests;
+#     list separated by spaces), for the tests. A build without
+#     PostgreSQL (--without-postgres) has no postgresql-libpq, and needs
+#     no pg_config: libpq is then reported as not needed;
 #   - zlib, for the zlib package, which is built without its bundled copy and
 #     finds the system's zlib through pkg-config (zlib.pc);
 #   - libsodium, for the second factor's codes: libsodium-bindings does not
@@ -42,16 +46,19 @@
 set -eu
 
 usage() {
-  printf 'usage: sh toolchain/check-native.sh [--help]\n'
+  printf 'usage: sh toolchain/check-native.sh [--without-postgres | --help]\n'
 }
 
+postgres=yes
 case ${1:-} in
   '') ;;
+  --without-postgres) postgres= ;;
   -h | --help)
     usage
     printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
     printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, libsodium), one line each,\n'
-    printf 'and exits 1 when one is missing. It installs nothing.\n'
+    printf 'and exits 1 when one is missing. It installs nothing. --without-postgres\n'
+    printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
     exit 0 ;;
   *)
     usage >&2
@@ -107,9 +114,12 @@ fi
 # libpq, through pg_config on PATH, which postgresql-libpq's Setup runs when
 # cabal builds it. When PATH has no pg_config, a pg_config elsewhere is
 # looked for, to name in the hint: the last one the patterns match, which is
-# usually the newest PostgreSQL.
+# usually the newest PostgreSQL. A build without PostgreSQL does not have
+# that package: its line says so, and is not counted among the items.
 pg_config_off_path=
-if path=$(command -v pg_config 2>/dev/null); then
+if [ -z "$postgres" ]; then
+  printf '%-8s %-11s %s\n' skipped libpq 'not needed (built without PostgreSQL)'
+elif path=$(command -v pg_config 2>/dev/null); then
   if includedir=$(pg_config --includedir 2>/dev/null) && [ -n "$includedir" ]; then
     report libpq ok "pg_config at $path, headers in $includedir"
   else

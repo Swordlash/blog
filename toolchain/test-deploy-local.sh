@@ -217,7 +217,9 @@ EOF
   # The bootstrap: it says how it was called and where the toolchain goes,
   # and installs the managed Node (but in its native mode, which installs
   # none) and the environment file there, as the real one does under
-  # WIKI_TOOLCHAIN_HOME.
+  # WIKI_TOOLCHAIN_HOME. Its native mode ends, as the real one's does, with
+  # toolchain/check-native.sh, given the options after the mode, and stops
+  # when something is missing.
   cat >"$case_dir/repo/toolchain/bootstrap.sh" <<'EOF'
 #!/bin/sh
 [ "${1:-}" = env ] && exit 0
@@ -233,6 +235,13 @@ if [ "${1:-}" != native ]; then
   chmod +x "$base/.wiki-toolchain/node/bin/node"
 fi
 : >"$base/.wiki-toolchain/env"
+if [ "${1:-}" = native ]; then
+  shift
+  if ! check_output=$(sh "$(dirname "$0")/check-native.sh" "$@" 2>&1); then
+    printf '%s\nbootstrap: the native build of wiki-server needs what is missing above\n' "$check_output" >&2
+    exit 1
+  fi
+fi
 EOF
   cat >"$case_dir/bin/tool" <<'EOF'
 #!/bin/sh
@@ -745,7 +754,8 @@ a=$(other_port "$p")
 pre=$case_dir/srv/wiki
 out=$case_dir/first
 deploy --server --sqlite --prefix "$pre" --port "$p" --admin-port "$a" --bind 0.0.0.0 --no-firewall >"$out" 2>&1 || fail 'the deploy under a prefix failed'
-assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+# A wiki in SQLite: the bootstrap's build mode asks Debian for no libpq-dev.
+assert_contains "$EVENTS" "bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" "npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 for file in .wiki-demo-deployment bin/wiki-server bin/wiki app/index.html state/wiki-demo.state toolchain/.wiki-toolchain/node/bin/node; do
   [ -e "$pre/$file" ] || fail "missing $file under the prefix"
@@ -865,7 +875,7 @@ assert_contains "$HOME/$unit" "--listen 127.0.0.1:$p "
 assert_contains "$HOME/$unit" "# Prefix: $HOME/wiki-demo"
 : >"$EVENTS"
 deploy --prefix "$HOME/wiki-demo" >"$case_dir/rebuilt" 2>&1 || fail 'rebuilding the adopted deployment failed'
-assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME=
+assert_contains "$EVENTS" 'bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=
 '
 [ "$(sed -n 's/^toolchain=//p' "$HOME/wiki-demo/state/wiki-demo.state")" = "$HOME" ] || fail 'the rebuild forgot the toolchain choice'
 : >"$EVENTS"
@@ -986,6 +996,13 @@ out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+# A wiki in PostgreSQL: wiki-server is built with it, the bootstrap is not
+# told to leave libpq out, and libpq is checked.
+assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME='
+assert_lacks "$EVENTS" 'without-postgres'
+assert_contains "$EVENTS" 'wiki-server:exe:wiki-server --constraint=wiki-server +postgres'
+assert_lacks "$EVENTS" 'wiki-server -postgres'
+assert_contains "$out" 'ok       libpq       pg_config at'
 pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
@@ -1187,6 +1204,13 @@ assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.pr
 assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
 [ "$(line_of "$out" 'building wiki-server at -O2')" -lt "$(line_of "$out" 'Building executable wiki-server')" ] ||
   fail "cabal's output did not come after the deploy's line for the build"
+# A wiki in SQLite: wiki-server is built without PostgreSQL, for the build
+# and for list-bin alike, and the check does not ask for libpq.
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+assert_contains "$EVENTS" 'cabal list-bin -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+assert_lacks "$EVENTS" 'wiki-server +postgres'
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_lacks "$out" 'ok       libpq'
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies --sqlite \"$data/wiki.sqlite\""
 assert_lacks "$EVENTS" 'docker'
 [ "$(state db)" = sqlite ] || fail 'state does not record SQLite'
@@ -1629,6 +1653,20 @@ assert_contains "$out" "ok       libpq       pg_config at $case_dir/pgsql-16/bin
 ln -s tool "$case_dir/bin/pg_config"
 pass 'toolchain/check-native.sh takes libpq only from a pg_config on PATH, not from pkg-config alone, and names a pg_config off PATH to put on it'
 
+# For a build without PostgreSQL, libpq is not needed: its line says so and
+# is not counted.
+out=$case_dir/check-without-postgres
+sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres >"$out" 2>&1 ||
+  fail 'the check --without-postgres failed with everything there'
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-postgres did not report eight items ok'
+assert_lacks "$out" 'missing'
+status=0
+sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "the check with an unknown option exited $status, not 2"
+pass 'toolchain/check-native.sh --without-postgres reports libpq as not needed, and does not count it'
+
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 out=$case_dir/no-zlib
@@ -1674,7 +1712,9 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
   fail 'a Debian machine whose bootstrap installed zlib did not deploy'
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+# The check after the bootstrap is told, as the first was, that a wiki in
+# SQLite needs no libpq: eight items.
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
 assert_contains "$EVENTS" 'bootstrap build'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'
@@ -1785,7 +1825,7 @@ out=$case_dir/first
 company --backend-only >"$out" 2>&1 || fail 'the deploy with --backend-only failed'
 assert_contains "$EVENTS" "curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest"
 assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
-assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap native --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'bootstrap build'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
@@ -1814,6 +1854,46 @@ cmp "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip" "$FAKE_GITHUB/d
 [ -z "$(find "$pre/toolchain/.wiki-toolchain/pages" -name '.*')" ] || fail 'the cache keeps a temporary file'
 assert_contains "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip.meta" "id=$(printf '%s %s' "app-server-$head1.zip" 2026-10-31T10:00:00Z | cksum | cut -d' ' -f1) updated_at=2026-10-31T10:00:00Z size="
 pass '--backend-only downloads the checkout'"'"'s page from its GitHub release, builds wiki-server alone after bootstrap native, without npm or Node, and serves it with gzip copies'
+
+# A wiki in SQLite needs no libpq, in the bootstrap's check either (Codex's
+# first round on #141). On a machine with neither pg_config nor dpkg-query,
+# --sqlite --backend-only passes the deploy's check and the bootstrap's,
+# both told --without-postgres; --postgres on the same machine stops at the
+# deploy's check, naming libpq, before the bootstrap or a build.
+no_libpq=$case_dir/no-libpq
+mkdir "$no_libpq"
+for cmd in "$NO_DPKG"/*; do
+  name=${cmd##*/}
+  [ "$name" != pg_config ] || continue
+  ln -s "$(readlink "$cmd")" "$no_libpq/$name"
+done
+mv "$case_dir/bin/pg_config" "$case_dir/pg_config.aside"
+: >"$EVENTS"
+out=$case_dir/no-libpq-sqlite
+(
+  PATH=$case_dir/bin:$no_libpq WIKI_PG_CONFIG_DIRS=$case_dir/nowhere
+  export PATH WIKI_PG_CONFIG_DIRS
+  company --backend-only
+) >"$out" 2>&1 || fail "--sqlite --backend-only without libpq failed: $(cat "$out")"
+assert_contains "$EVENTS" "bootstrap native --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
+assert_lacks "$out" 'missing'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server -postgres'
+: >"$EVENTS"
+out=$case_dir/no-libpq-postgres
+status=0
+(
+  PATH=$case_dir/bin:$no_libpq WIKI_PG_CONFIG_DIRS=$case_dir/nowhere
+  export PATH WIKI_PG_CONFIG_DIRS
+  deploy --server --postgres --prefix "$pre" --bind 0.0.0.0 --no-firewall --port "$p" --admin-port "$a" --backend-only
+) >"$out" 2>&1 || status=$?
+[ "$status" != 0 ] || fail '--postgres without libpq was deployed'
+assert_contains "$out" 'missing  libpq       no pg_config on PATH'
+assert_contains "$out" 'the native build of wiki-server needs what is missing above; nothing was changed'
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'cabal'
+mv "$case_dir/pg_config.aside" "$case_dir/bin/pg_config"
+pass 'a wiki in SQLite deploys with --backend-only on a machine without libpq, through the bootstrap'"'"'s check too; one in PostgreSQL stops there, naming libpq'
 
 : >"$EVENTS"
 assert_lacks "$HOME/$unit" 'LD_LIBRARY_PATH'
@@ -2056,7 +2136,7 @@ deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'
 : >"$EVENTS"
 out=$case_dir/back
 deploy --prefix "$pre" --no-backend-only >"$out" 2>&1 || fail '--no-backend-only failed'
-assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap build --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 [ -z "$(pstate backend_only)" ] || fail '--no-backend-only was not recorded'
 [ -f "$pre/app/app.wasm.br" ] || fail 'the page built here has no brotli copies'
@@ -2132,7 +2212,7 @@ out=$case_dir/to-server
 deploy --server --sqlite --prefix "$pre" --admin-port "$a" --backend-only >"$out" 2>&1 || fail 'the move from the demo to the server failed'
 assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
 assert_lacks "$EVENTS" 'app-demo-'
-assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap native --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$HOME/$unit" "\"$pre/bin/wiki-server\" serve"

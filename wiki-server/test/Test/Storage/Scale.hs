@@ -40,8 +40,6 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Database.Beam (all_, default_, desc_, filter_, insert, insertExpressions, insertValues, limit_, offset_, orderBy_, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
-import Database.PostgreSQL.Simple qualified as Pg
-import Database.PostgreSQL.Simple.Types qualified as PgTypes
 import Database.SQLite.Simple qualified as SQLite
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -76,9 +74,13 @@ import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
 import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
+#ifdef WIKI_POSTGRES
+import Database.PostgreSQL.Simple qualified as Pg
+import Database.PostgreSQL.Simple.Types qualified as PgTypes
+import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
+#endif
 
 spec :: Backing -> Spec
 spec backing = describe "the storage, at scale" $ do
@@ -195,13 +197,18 @@ planOf st statement = case (storagePlace st).database of
 -- small enough that PostgreSQL would read them whole whatever their
 -- indexes, so this plan says which indexes can answer the statement, not
 -- which a large wiki's would choose: a statement no index can answer is
--- still planned as a sequential scan.
+-- still planned as a sequential scan. A wiki-server built without
+-- PostgreSQL has no plan to give.
 indexPlanOnPostgres :: Storage -> Text -> IO [Text]
+#ifdef WIKI_POSTGRES
 indexPlanOnPostgres st statement = case (storagePlace st).database of
   SqliteFile _ -> pure []
   PostgresAt db -> bracket (openPostgres db) closePostgres $ \c -> do
     _ <- Pg.execute_ c "SET enable_seqscan = off"
     map Pg.fromOnly <$> Pg.query_ c (PgTypes.Query (encodeUtf8 ("EXPLAIN " <> statement)))
+#else
+indexPlanOnPostgres _ _ = pure []
+#endif
 
 -- | The tables a statement reads whole: the steps of its plan that scan a
 -- table, by the table's name. Beam gives each table of a statement an

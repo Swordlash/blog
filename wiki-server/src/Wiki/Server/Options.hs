@@ -60,8 +60,7 @@ import System.Environment (lookupEnv)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (Database (..), Place (..))
-import Wiki.Server.Storage.Layout (PgDatabase (..), defaultDatabase, postgresAt)
-import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
+import Wiki.Server.Storage.Layout (PgDatabase (..), PgPrograms (..), defaultDatabase, defaultPgPrograms, postgresAt, withPostgres, withoutPostgres)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
 -- (port 0 for any free one, which the tests use).
@@ -359,7 +358,10 @@ placeOptions =
 
 -- | Where the wiki is, from the options and the environment: the database
 -- with its password read from its file. The result is why not, when the
--- password file cannot be read.
+-- password file cannot be read, or when the options or the environment
+-- name a PostgreSQL database and this wiki-server was built without
+-- PostgreSQL ('withoutPostgres'). Every command finds its place here, so
+-- that refusal comes at start, before anything is opened.
 resolvePlace :: FilePath -> DatabaseChoice -> PgPrograms -> IO (Either Text Place)
 resolvePlace dataDir choice programs = runExceptT $ do
   database <- case choice of
@@ -381,12 +383,14 @@ resolvePlace dataDir choice programs = runExceptT $ do
       | otherwise = pure given
     -- The password stays apart from the URL ('PgDatabase'), so that
     -- nothing that shows the URL shows it.
-    postgres url = \case
-      Nothing -> pure (postgresAt (encodeUtf8 url))
-      Just file -> do
-        read' <- liftIO (try @SomeException (readFile file))
-        password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
-        pure (PostgresAt PgDatabase {url = encodeUtf8 url, password = Just (Secret password)})
+    postgres url passwordFile
+      | not withPostgres = throwError withoutPostgres
+      | otherwise = case passwordFile of
+          Nothing -> pure (postgresAt (encodeUtf8 url))
+          Just file -> do
+            read' <- liftIO (try @SomeException (readFile file))
+            password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
+            pure (PostgresAt PgDatabase {url = encodeUtf8 url, password = Just (Secret password)})
 
 -- | The options the administration's "Server" section replaced (WP4.4).
 removedOptions :: [[Char]]

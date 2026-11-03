@@ -248,13 +248,18 @@ import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransacti
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
-import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), attachmentsDir, backupsDir, defaultDatabase, postgresAt, temporaryDir)
+import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
 import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
-import Wiki.Server.Storage.Postgres (PgPrograms, defaultPgPrograms, holdDatabaseShared, openPostgres)
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
+#ifdef WIKI_POSTGRES
+import Wiki.Server.Storage.Postgres (holdDatabaseShared, openPostgres)
+#else
+import System.IO.Error (userError)
+import Wiki.Server.Storage.Layout (withoutPostgres)
+#endif
 
 --------------------------------------------------------------------------------
 -- The storage
@@ -382,11 +387,11 @@ openWith collect config place = do
   flip onException (traverse_ unlockDataDir lock) $ do
     release <- case place.database of
       SqliteFile _ -> pure pass
-      PostgresAt pg -> holdDatabaseShared pg >>= maybe (throwIO (DataDirInUse "The PostgreSQL database is being restored (wiki-server restore holds its lock): start the server once the restore has ended.")) pure
+      PostgresAt pg -> holdPostgres pg
     flip onException release $ do
       engine <- case place.database of
         SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
-        PostgresAt pg -> Engine <$> pools (openPostgres pg) (openPostgres pg)
+        PostgresAt pg -> openPostgresEngine pg
       flip onException (closeEngine engine) $ do
         (settings, serverKept) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
@@ -422,6 +427,27 @@ readConnections = 4
 
 closeEngine :: Engine -> IO ()
 closeEngine (Engine p) = destroyAllResources p.readers >> destroyAllResources p.writer
+
+-- | Take a PostgreSQL database's lock, shared, for as long as a storage
+-- has it open. The result releases the lock. A database that a restore
+-- holds alone is refused with 'DataDirInUse'.
+holdPostgres :: PgDatabase -> IO (IO ())
+
+-- | Open the pools of connections to a PostgreSQL database.
+openPostgresEngine :: PgDatabase -> IO Engine
+
+#ifdef WIKI_POSTGRES
+holdPostgres pg = holdDatabaseShared pg >>= maybe (throwIO (DataDirInUse "The PostgreSQL database is being restored (wiki-server restore holds its lock): start the server once the restore has ended.")) pure
+
+openPostgresEngine pg = Engine <$> pools (openPostgres pg) (openPostgres pg)
+#else
+-- A wiki-server built without PostgreSQL refuses the database. The
+-- options refuse it first ("Wiki.Server.Options"); this refusal is for a
+-- program that opens a storage on a place it made itself.
+holdPostgres _ = throwIO (userError (toS withoutPostgres))
+
+openPostgresEngine _ = throwIO (userError (toS withoutPostgres))
+#endif
 
 -- | The error for a data directory that another storage has open, or that
 -- a restore is writing into.

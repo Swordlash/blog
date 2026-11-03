@@ -14,6 +14,10 @@
 -- has: the search is PostgreSQL's full-text search on PostgreSQL, and the
 -- folded-text search of "Wiki.Core.Search" on SQLite.
 --
+-- PostgreSQL's instance exists only in a wiki-server built with the cabal
+-- flag @postgres@ (on by default): without it, the storage runs on SQLite
+-- alone.
+--
 -- The superclasses are what the portable queries need of a database:
 -- running Beam's statements, and reading, writing and comparing the
 -- column types of "Wiki.Server.Storage.Schema" ('Column').
@@ -25,7 +29,6 @@ module Wiki.Server.Storage.Backend
   , Capabilities (..)
   , SearchKind (..)
   , Sqlite
-  , Postgres
   )
 where
 
@@ -33,15 +36,17 @@ import Data.Time (UTCTime)
 import Database.Beam (FromBackendRow, HasQBuilder, HasSqlEqualityCheck, MonadBeam, QExpr)
 import Database.Beam.Backend.SQL (BeamSqlBackend, BeamSqlBackendCanSerialize, BeamSqlBackendIsString, SqlNull)
 import Database.Beam.Backend.SQL.BeamExtensions (BeamHasInsertOnConflict)
-import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
 import Database.Beam.Sqlite (Sqlite, SqliteM, runBeamSqlite, runBeamSqliteDebug)
-import Database.PostgreSQL.Simple qualified as Pg
 import Database.SQLite.Simple qualified as Sqlite
 import Protolude
 import Wiki.Api.Info (Capabilities (..), SearchKind (..))
-import Wiki.Server.Storage.Postgres (beginPostgres, closePostgres, commitPostgres, postgresCodePoints, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
 import Wiki.Server.Storage.Schema (PageNodes)
 import Wiki.Server.Storage.Sqlite (beginSqlite, closeSqlite, commitSqlite, rollbackSqlite, runSqliteScript, sqliteObjects, sqliteSearch)
+#ifdef WIKI_POSTGRES
+import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
+import Database.PostgreSQL.Simple qualified as Pg
+import Wiki.Server.Storage.Postgres (beginPostgres, closePostgres, commitPostgres, postgresCodePoints, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
+#endif
 
 -- | What a database must do with a column type of the schema: write a
 -- value of it, read one back, and compare two with @=@.
@@ -191,6 +196,7 @@ instance Backend Sqlite where
   searchMatches spaces templates ws _ _ = map (\(n, t) -> (n, t, Nothing)) <$> sqliteSearch spaces templates ws
   byCodePoints = identity
 
+#ifdef WIKI_POSTGRES
 instance Backend Postgres where
   type Db Postgres = Pg
   type Connection Postgres = Pg.Connection
@@ -208,3 +214,4 @@ instance Backend Postgres where
   capabilities _ = Capabilities {database = "postgres", search = FullText}
   searchMatches spaces templates _ folded most = map (\(n, t, r) -> (n, t, Just r)) <$> postgresSearch spaces templates folded most
   byCodePoints = postgresCodePoints
+#endif

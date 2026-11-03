@@ -1285,10 +1285,24 @@ download_page() {
 # wiki-server, natively, with this repository's packages at -O2 and the
 # dependencies as the everyday build has them (cabal-native-opt.project), in a
 # build directory of its own so that neither build invalidates the other. The
-# arguments are cabal's command and its flags.
+# arguments are cabal's command and its flags. A wiki in SQLite gets a
+# wiki-server built without PostgreSQL (the cabal flag postgres off), which
+# needs neither libpq nor pg_config; a wiki in PostgreSQL gets one with it.
+# Cabal rebuilds wiki-server when the flag changes, so a deployment that
+# switches database switches build too.
 server_cabal() {
-  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
+  (cd "$ROOT" && cabal "$@" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres")
 }
+
+# The sign of wiki-server's cabal flag postgres for this deployment's
+# database, and the argument that tells toolchain/check-native.sh about it.
+# toolchain/bootstrap.sh native and build take it too: then neither asks
+# Debian for libpq-dev, and native passes it to the same check.
+postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +; fi; }
+# Only the wiki's server on SQLite opts out: the demo's build is left as
+# it was.
+check_postgres=
+if [ "$mode" = server ] && [ "$db" = sqlite ]; then check_postgres=--without-postgres; fi
 
 # The check of what wiki-server's native build needs from the machine
 # (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium. It
@@ -1301,7 +1315,7 @@ server_cabal() {
 # nothing installs them, and the deploy stops.
 check_native() {
   say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-  if check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+  if check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
     printf '%s\n' "$check_output"
     return 0
   fi
@@ -1318,7 +1332,7 @@ check_native() {
 # anything is built.
 recheck_native() {
   say "checking again what the native build of wiki-server needs, after the bootstrap"
-  sh "$ROOT/toolchain/check-native.sh" ||
+  sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ||
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 
@@ -1399,13 +1413,13 @@ if [ -n "$build" ]; then
     resolve_page
     download_page
     say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" native
+    sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"}
   else
     if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
       say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
     fi
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" build
+    sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"}
   fi
   [ -z "$native_recheck" ] || recheck_native
 fi

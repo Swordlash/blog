@@ -87,7 +87,12 @@
 # Debian: without dpkg-query it installs no system packages. Either way it
 # then runs toolchain/check-native.sh, which checks the commands and C
 # libraries wiki-server's build needs and names the Debian and RHEL packages
-# of any that are missing.
+# of any that are missing. `native --without-postgres` is for a
+# wiki-server built without PostgreSQL (the cabal flag postgres off), which
+# needs no libpq: it does not ask Debian for libpq-dev, and passes the
+# option to the check. `build --without-postgres` leaves libpq-dev out the
+# same way. toolchain/deploy-local.sh gives the option to both modes for a
+# wiki in SQLite.
 #
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
@@ -164,10 +169,27 @@ mode=${1:-all}
 case $mode in
   all | toolchain | build | native | node | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|build|native|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres]|native [--without-postgres]|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
+
+# The option of the deploy's two modes, `native` and `build`:
+# --without-postgres, for a wiki-server built without PostgreSQL. Both
+# modes then leave libpq-dev out of the Debian packages (system_packages),
+# and native_check passes the option to toolchain/check-native.sh, so that
+# such a build is not stopped for want of libpq. `all` and `toolchain`, the
+# everyday install for working on the wiki, always ask for libpq-dev.
+check_postgres=
+if { [ "$mode" = native ] || [ "$mode" = build ]; } && [ $# -gt 1 ]; then
+  case $2 in
+    --without-postgres) check_postgres=--without-postgres ;;
+    *)
+      printf 'usage: %s %s [--without-postgres]\n' "$0" "$mode" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
 # or the default one this script installs into. Under a named directory the
@@ -586,19 +608,23 @@ as_root() {
 
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
 # (native programs link libgmp), libpq's (wiki-server reaches PostgreSQL
-# through postgresql-libpq), zlib's (the zlib package links the system's
-# zlib, which it finds through pkg-config), libsodium's (wiki-server's second
-# factor's codes are one-time-password's, over sel's bindings to libsodium),
-# pkg-config, and what ghc-wasm-meta's setup.sh runs.
+# through postgresql-libpq; only for a build with PostgreSQL), zlib's (the
+# zlib package links the system's zlib, which it finds through pkg-config),
+# libsodium's (wiki-server's second factor's codes are one-time-password's,
+# over sel's bindings to libsodium), pkg-config, and what ghc-wasm-meta's
+# setup.sh runs.
 system_packages() {
   missing=
   # A native install needs what wiki-server's build runs and links with,
   # and none of what the wasm toolchain's setup runs (jq, unzip, xz, zstd).
+  # With --without-postgres (native or build) it needs no libpq-dev, so a
+  # machine without it, and without root, is not stopped here.
   if [ "$mode" = native ]; then
-    debian_packages='build-essential curl git libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
+    debian_packages='build-essential curl git libgmp-dev libsodium-dev pkg-config zlib1g-dev'
   else
-    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev'
+    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libsodium-dev pkg-config zlib1g-dev'
   fi
+  [ -n "$check_postgres" ] || debian_packages="$debian_packages libpq-dev"
   if command -v dpkg-query >/dev/null 2>&1; then
     for pkg in $debian_packages; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
@@ -638,9 +664,10 @@ system_packages() {
 # (toolchain/check-native.sh), for `native`. It runs after system_packages,
 # so on Debian it confirms the packages just installed, and elsewhere it is
 # the only check. Its output is shown only when something is missing, so a
-# run with nothing to do stays one line.
+# run with nothing to do stays one line. With --without-postgres the check
+# does not ask for libpq.
 native_check() {
-  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" 2>&1); then
+  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
     printf '%s\n' "$check_output" >&2
     say "the native build of wiki-server needs what is missing above; install it and run this again"
     exit 1

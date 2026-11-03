@@ -52,6 +52,21 @@ common shared
       RequiredTypeArguments
       ExplicitNamespaces
 
+  -- The modules that reach PostgreSQL are compiled only with the flag
+  -- postgres, and the code that chooses a database asks WIKI_POSTGRES.
+  if flag(postgres)
+    cpp-options: -DWIKI_POSTGRES
+
+-- PostgreSQL as a database for the wiki, beside SQLite: on by default. A
+-- deployment that keeps the wiki in SQLite builds with -postgres, and then
+-- needs neither libpq nor pg_config (postgresql-libpq does not build
+-- against an old libpq). Such a server refuses a PostgreSQL database with
+-- "built without PostgreSQL".
+flag postgres
+  description: Keep the wiki in PostgreSQL too, not only in SQLite
+  default:     True
+  manual:      True
+
 -- The server: the storage (the wiki in SQLite and its attachments on disk,
 -- behind the application's MonadWiki), the API's handlers, the application's
 -- files, and the two listeners. Native only, as everything of the server is.
@@ -106,7 +121,6 @@ library
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
-        Wiki.Server.Storage.Postgres
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema
         Wiki.Server.Storage.Sqlite
@@ -124,7 +138,6 @@ library
         async,
         base,
         beam-core >= 0.11.1 && < 0.12,
-        beam-postgres >= 0.6.4 && < 0.7,
         beam-sqlite >= 0.7 && < 0.8,
         bytestring,
         case-insensitive,
@@ -150,7 +163,6 @@ library
         optparse-applicative,
         pandoc,
         pandoc-types,
-        postgresql-simple,
         process,
         protolude,
         qrcode-core >= 0.9.11 && < 0.10,
@@ -187,6 +199,12 @@ library
         wiki-app,
         wiki-core,
         zlib
+    if flag(postgres)
+      exposed-modules:
+          Wiki.Server.Storage.Postgres
+      build-depends:
+          beam-postgres >= 0.6.4 && < 0.7,
+          postgresql-simple
 
 -- Native only: a server has no business in the browser.
 executable wiki-server
@@ -339,8 +357,6 @@ test-suite wiki-server-test
         filepath,
         hspec >= 2,
         http-api-data,
-        postgresql-simple,
-        unix,
         http-client,
         http-client-tls,
         http-types,
@@ -368,3 +384,8 @@ test-suite wiki-server-test
         wiki-server,
         xml-conduit,
         zlib
+    -- unix starts the tests' own PostgreSQL cluster (Test.Database).
+    if flag(postgres)
+      build-depends:
+          postgresql-simple,
+          unix
