@@ -7,6 +7,7 @@
 #                                [--bind ADDRESS] [--admin-port N] [--prefix DIR]
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
+#                                [--backend-only[=REF] | --no-backend-only]
 #                                [--no-build] [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
@@ -22,6 +23,10 @@
 #      with --server also wiki-server, natively with this repository's packages
 #      at -O2 (cabal-native-opt.project, into dist-newstyle/native-opt).
 #      Any failure stops here, before the running service is touched.
+#      With --backend-only the page is not built here: it is downloaded from
+#      the GitHub release where CI keeps it (see --backend-only below), and
+#      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
+#      and cabal alone: no wasm toolchain, no Node, no npm).
 #      With --server the wiki's database is PostgreSQL by default: the
 #      postgres service of docker-compose.yml (postgres:17), run with Docker
 #      as the compose project <name>, its data in the named volume
@@ -56,7 +61,9 @@
 #      toolchain/bootstrap.sh installs into ~/.wiki-toolchain, or else the Node
 #      it found on PATH; or wiki-server, with --data <dir>/data, --listen on the
 #      address and port, its admin listener on 127.0.0.1, and --secure-cookies
-#      over HTTPS), enable it and (re)start it, and check that it answers.
+#      over HTTPS, and with the LD_LIBRARY_PATH of the shell this runs in, if
+#      it has one, since a unit does not inherit it), enable it and (re)start
+#      it, and check that it answers.
 #      With --server, then bring the guide's pages up to the new version
 #      (`wiki-server guide update`): a fresh wiki gets the guide, the space
 #      Guide, as the server first starts, and each deploy after gives its
@@ -139,6 +146,37 @@
 #                    since installing empties the rest
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
+#   --backend-only[=REF]
+#                    --server: build wiki-server only, and download the page CI built
+#                    for REF instead of building it, for a machine without the wasm
+#                    toolchain, npm or Node. REF is main (the newest page of main), a
+#                    tag (its release's page), or a commit hash, whole or a prefix;
+#                    without =REF, this checkout's own commit (git rev-parse HEAD),
+#                    or the newest before it that differs from it in Markdown files
+#                    alone (CI builds no page for those). CI keeps the pages as
+#                    release assets of the repository origin names
+#                    (.github/workflows/server-page.yml): app-server-<hash>.zip on
+#                    the pre-release main-latest for main's newest five commits, and
+#                    app-server-<tag>.zip on each tag's release. They are public, so
+#                    no token is needed: curl downloads them from github.com and lists
+#                    them with api.github.com (sixty requests an hour without a
+#                    token; a deploy makes one or two). The page and the server talk
+#                    over the API, so the page should be of the checkout's commit;
+#                    a warning says when it is not. Reading GitHub's answers and
+#                    unpacking the zip take python3 (or jq and unzip). Nothing in
+#                    this mode uses Node: wiki-server compress writes gzip copies of
+#                    the files in place of the brotli ones, the checks that the
+#                    service answers go through curl, the reading of tailscale status
+#                    through python3 (or jq), and the check that the port is free
+#                    through ss when it is there. Before anything is downloaded or
+#                    built it checks the C libraries wiki-server links with (GMP,
+#                    libpq, libsodium, through cc, pg_config and pkg-config), naming
+#                    their Debian and RHEL packages; one built elsewhere is found
+#                    through PKG_CONFIG_PATH, LIBRARY_PATH, C_INCLUDE_PATH or CPATH,
+#                    which reach cabal untouched. Remembered for the next run;
+#                    --static with it is refused (the demo is built on this machine)
+#   --no-backend-only
+#                    build the page on this machine again, after a run with --backend-only
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
@@ -183,6 +221,7 @@ usage() {
 
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
+opt_backend_only=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -203,6 +242,11 @@ while [ $# -gt 0 ]; do
     --db-port) need_value $# "$1"; opt_db_port=$2; shift ;;
     --db-port=*) opt_db_port=${1#*=} ;;
     --fresh) fresh=1 ;;
+    --backend-only) opt_backend_only='head' ;;
+    --backend-only=*) opt_backend_only=${1#*=}; [ -n "$opt_backend_only" ] || opt_backend_only='head' ;;
+    --no-backend-only) opt_backend_only='none' ;;
+    --github-token-file | --github-token-file=*)
+      die "--github-token-file is not needed: the pages CI builds are public release assets, downloaded without a token" ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
       --smtp-user | --smtp-user=* | --smtp-from | --smtp-from=* | --smtp-password | --smtp-password=* | \
       --public-url | --public-url=* | --oidc | --oidc=* | --oidc-secret | --oidc-secret=* | --no-smtp | --no-oidc)
@@ -260,6 +304,10 @@ prev_serve_port=$(state_get serve_port)
 # holds a wiki.sqlite of the earlier schema.
 prev_db=$(state_get db)
 prev_db_port=$(state_get db_port)
+# Set when the deployment downloads its page from GitHub (--backend-only):
+# the REF it was given, and the commit whose page it downloaded last.
+prev_backend_only=$(state_get backend_only)
+prev_backend_only_commit=$(state_get backend_only_commit)
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -308,6 +356,21 @@ unit_word() {
   printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g' -e 's/[$]/$$/g')"
 }
 
+# Read JSON on standard input with python3, or with jq where there is no
+# python3: $1 is a Python program that finds the parsed document in d, $2
+# the jq filter that prints the same (jq -r). A deployment with
+# --backend-only reads JSON this way, since it has no Node; python3 is on
+# RHEL and Debian alike, and jq often is not.
+json_read() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "import json, sys
+d = json.load(sys.stdin)
+$1"
+  else
+    jq -r "$2"
+  fi
+}
+
 # Where the deployment can be reached: the bind address, or for 0.0.0.0 the
 # Tailscale address, and the MagicDNS name when Tailscale has one.
 tailscale_ip() {
@@ -316,6 +379,13 @@ tailscale_ip() {
   [ -n "$ip" ] && printf '%s\n' "$ip"
 }
 magicdns_name() {
+  if [ -n "${nodeless:-}" ]; then
+    command -v tailscale >/dev/null 2>&1 || return 0
+    timeout 10 tailscale status --json 2>/dev/null |
+      json_read 'n = (d.get("Self") or {}).get("DNSName") or ""
+sys.stdout.write(n[:-1] if n.endswith(".") else n)' '(.Self.DNSName // "") | sub("\\.$"; "")' 2>/dev/null || true
+    return 0
+  fi
   [ -n "${node:-}" ] && command -v tailscale >/dev/null 2>&1 || return 0
   timeout 10 tailscale status --json 2>/dev/null |
     "$node" -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
@@ -332,6 +402,24 @@ magicdns_name() {
 tailscale_https() {
   command -v tailscale >/dev/null 2>&1 || return 1
   ts_json=$(timeout 10 tailscale status --json 2>/dev/null) || return 1
+  if [ -n "${nodeless:-}" ]; then
+    # shellcheck disable=SC2016 # $state and $name are jq's variables.
+    printf '%s' "$ts_json" | json_read 'state = d.get("BackendState")
+if state and state != "Running":
+    sys.exit(1)
+name = (d.get("Self") or {}).get("DNSName") or ""
+name = name[:-1] if name.endswith(".") else name
+magic = "off" if (d.get("CurrentTailnet") or {}).get("MagicDNSEnabled") is False else "on"
+certs = "on" if name and name in (d.get("CertDomains") or []) else "off"
+print(name or "-", magic, certs)' '(.BackendState // "") as $state
+      | if $state != "" and $state != "Running" then error("not running") else . end
+      | ((.Self.DNSName // "") | sub("\\.$"; "")) as $name
+      | [ (if $name == "" then "-" else $name end),
+          (if .CurrentTailnet.MagicDNSEnabled == false then "off" else "on" end),
+          (if $name != "" and ((.CertDomains // []) | any(. == $name)) then "on" else "off" end) ]
+      | join(" ")'
+    return
+  fi
   printf '%s' "$ts_json" | "$node" -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
     let j;
     try { j = JSON.parse(s); } catch { process.exit(1); }
@@ -466,6 +554,9 @@ if [ "$action" = status ]; then
     exit 0
   fi
   say "deployment $name: $prev_dir, on $prev_bind:$prev_port${prev_toolchain:+; its toolchain under $prev_toolchain}"
+  if [ -n "$prev_backend_only" ]; then
+    say "its page is downloaded from GitHub (--backend-only=$prev_backend_only${prev_backend_only_commit:+, the page of $prev_backend_only_commit}), and only wiki-server is built here"
+  fi
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
     case $prev_db in
@@ -525,7 +616,11 @@ if [ "$action" = status ]; then
   fi
   linger_report
   if [ -n "$prev_port" ]; then
-    node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
+    if [ -n "$prev_backend_only" ]; then
+      node='' nodeless=1
+    else
+      node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
+    fi
     printf 'Open:\n'
     print_urls "$prev_bind" "$prev_port"
     [ "$prev_mode" != server ] || printf 'Administration, on this machine: http://127.0.0.1:%s/admin/\n' "$prev_admin_port"
@@ -578,6 +673,36 @@ if [ "$mode" = server ]; then
     docker_ready || die "the wiki's database is PostgreSQL, which runs in Docker (docker compose), and Docker is not installed here or does not answer (docker info): install Docker and its compose plugin, or deploy with --sqlite, which keeps the database a file in the data directory, with no container"
   else
     [ -z "$opt_db_port" ] || die "--db-port is for a database on PostgreSQL: drop --sqlite"
+  fi
+fi
+
+# The page from GitHub (--backend-only), now or on an earlier run, unless
+# --no-backend-only goes back to building it here. Only for the server: the
+# demo is built here, as its pages are prerendered per route.
+case $opt_backend_only in
+  '') backend_only=$prev_backend_only ;;
+  none) backend_only= ;;
+  *) backend_only=$opt_backend_only ;;
+esac
+backend_only_commit=
+nodeless=
+if [ -n "$backend_only" ]; then
+  if [ "$mode" != server ]; then
+    if [ -n "$opt_backend_only" ]; then
+      die "--backend-only deploys the wiki's server with a page CI built; the demo (--static) is built on this machine: drop --static, or --backend-only"
+    fi
+    die "this deployment downloads its page from GitHub (--backend-only=$backend_only), which is for the wiki's server; the demo (--static) is built on this machine: add --no-backend-only"
+  fi
+  backend_only_commit=$prev_backend_only_commit
+  # Nothing in this mode runs Node.
+  nodeless=1
+  command -v curl >/dev/null 2>&1 || die "--backend-only downloads the page with curl, which is not installed here"
+  if ! command -v python3 >/dev/null 2>&1; then
+    if [ -n "$build" ] && ! { command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; }; then
+      die "--backend-only reads GitHub's answers and unpacks the page with python3, which is not installed here (nor jq and unzip, which would do instead)"
+    elif ! command -v jq >/dev/null 2>&1; then
+      die "--backend-only reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
+    fi
   fi
 fi
 
@@ -680,6 +805,167 @@ build_app() {
   (cd "$ROOT" && HALOGEN_BASE_PATH=/ WIKI_BACKEND=$backend npm run build-wasm-opt)
 }
 
+# --- The page from GitHub (--backend-only) ---------------------------------
+#
+# CI (.github/workflows/server-page.yml) builds the server's page as
+# build_app does and keeps it as a zip of the directory's contents, a
+# release asset: app-server-<hash>.zip on the pre-release main-latest for
+# each of main's newest five commits, and app-server-<tag>.zip on a tag's
+# release. Release assets of a public repository need no token, unlike a
+# workflow's artifacts. The listing comes from api.github.com, the zip from
+# github.com.
+
+# owner/repo of the GitHub repository origin names, in its https or ssh form.
+github_repo() {
+  origin=$(git -C "$ROOT" remote get-url origin 2>/dev/null) ||
+    die "--backend-only downloads the page from the GitHub repository origin names, and this checkout has no origin (git remote get-url origin)"
+  case $origin in
+    https://github.com/* | https://*@github.com/* | http://github.com/* | git@github.com:* | ssh://git@github.com/* | ssh://git@github.com:*)
+      repo=${origin#*github.com}
+      repo=${repo#[:/]}
+      repo=${repo%/}
+      repo=${repo%.git} ;;
+    *) die "origin is $origin, not a repository on GitHub: --backend-only downloads the page from the GitHub repository origin names" ;;
+  esac
+  case $repo in
+    */*/* | /* | */ | '') die "cannot tell the GitHub repository from origin's address $origin" ;;
+    */*) printf '%s\n' "$repo" ;;
+    *) die "cannot tell the GitHub repository from origin's address $origin" ;;
+  esac
+}
+
+# The assets of a release into release_list, "name time" per line, the time
+# the one each was uploaded at; empty when there is no such release. Stops
+# the deploy on any other answer.
+release_assets() {
+  release_list=
+  listing=$(mktemp)
+  code=$(curl -sS -L --max-time 60 --retry 3 -H 'Accept: application/vnd.github+json' -o "$listing" -w '%{http_code}' \
+    "https://api.github.com/repos/$github_repo/releases/tags/$1") || {
+    rm -f "$listing"
+    die "could not reach api.github.com to find the page (see above)"
+  }
+  case $code in
+    200)
+      release_list=$(json_read 'for a in d.get("assets") or []:
+    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "")' \
+        '.assets[]? | "\(.name) \(.updated_at // .created_at // "")"' <"$listing") || {
+        rm -f "$listing"
+        die "could not read the answer of api.github.com about the release $1"
+      } ;;
+    404) ;;
+    *)
+      rm -f "$listing"
+      die "api.github.com answered $code about the release $1 (its rate limit without a token is sixty requests an hour)" ;;
+  esac
+  rm -f "$listing"
+}
+
+# The asset name of a tag's page: a tag may hold a slash, an asset name not.
+tag_asset() { printf 'app-server-%s.zip\n' "$(printf '%s' "$1" | tr / -)"; }
+
+# Whether two commits differ in Markdown files alone (or not at all), which
+# change nothing the page is built from. Fails when git does not know one.
+same_code() {
+  changed=$(git -C "$ROOT" diff --name-only "$1" "$2" 2>/dev/null) || return 1
+  ! printf '%s\n' "$changed" | grep -v '^$' | grep -q -v '[.]md$'
+}
+
+# Which page --backend-only=REF names: sets page_tag (the release), page_asset
+# (its asset) and backend_only_commit (the commit the page was built from,
+# empty for a tag this checkout does not have).
+resolve_page() {
+  no_page() {
+    die "no page was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
+  }
+  github_repo=$(github_repo) || exit 1
+  ref=$backend_only
+  case $ref in
+    head | HEAD) ref=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || die "--backend-only without =REF names this checkout's commit, and git rev-parse HEAD fails here: name main, a tag or a hash" ;;
+  esac
+  case $ref in
+    main)
+      page_tag=main-latest
+      release_assets main-latest
+      page_asset=$(printf '%s\n' "$release_list" | grep -E '^app-server-[0-9a-f]{40}[.]zip ' | sort -k 2 -r | head -n 1 | cut -d' ' -f1)
+      [ -n "$page_asset" ] || die "GitHub has no page of main yet (the release main-latest has none): CI makes one on the next push to main"
+      backend_only_commit=${page_asset#app-server-}
+      backend_only_commit=${backend_only_commit%.zip} ;;
+    *)
+      if printf '%s\n' "$ref" | grep -Eqx '[0-9a-fA-F]{7,40}'; then
+        ref=$(printf '%s' "$ref" | tr 'A-F' 'a-f')
+        page_tag=main-latest
+        release_assets main-latest
+        assets=$(printf '%s\n' "$release_list" | cut -d' ' -f1)
+        page_asset=
+        if full=$(git -C "$ROOT" rev-parse -q --verify "${ref}^{commit}" 2>/dev/null); then
+          # CI builds no page for a commit that changes Markdown alone, so
+          # the newest commit before it that differs from it in Markdown
+          # alone has the same page.
+          for commit in $(git -C "$ROOT" rev-list --max-count=20 "$full"); do
+            same_code "$commit" "$full" || break
+            if printf '%s\n' "$assets" | grep -qx "app-server-${commit}[.]zip"; then
+              page_asset=app-server-$commit.zip
+              [ "$commit" = "$full" ] || say "$full changes Markdown files alone since $commit, which has a page on GitHub: taking that one"
+              break
+            fi
+          done
+          [ -n "$page_asset" ] || no_page "$ref"
+        else
+          matches=$(printf '%s\n' "$assets" | grep -E "^app-server-${ref}[0-9a-f]*[.]zip\$" || true)
+          case $(printf '%s' "$matches" | grep -c . || true) in
+            0) no_page "$ref" ;;
+            1) page_asset=$matches ;;
+            *) die "$ref is the start of several commits with a page on GitHub: give more of the hash" ;;
+          esac
+        fi
+        backend_only_commit=${page_asset#app-server-}
+        backend_only_commit=${backend_only_commit%.zip}
+      else
+        page_tag=$ref
+        page_asset=$(tag_asset "$ref")
+        release_assets "$ref"
+        tag_assets=$(printf '%s\n' "$release_list" | cut -d' ' -f1 | grep . || true)
+        [ -n "$tag_assets" ] || die "GitHub has no release $ref with a page, and $ref is neither main nor a commit hash: name main, a tag pushed since CI keeps pages, or a hash"
+        printf '%s\n' "$tag_assets" | grep -qxF "$page_asset" ||
+          die "the release $ref on GitHub has no $page_asset: CI attaches it when the tag is pushed"
+        backend_only_commit=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/${ref}^{commit}" 2>/dev/null || true)
+      fi ;;
+  esac
+}
+
+# Download the page resolve_page found and unpack it into $out, through a
+# directory beside it, so that a failed download leaves the last page as it
+# was. python3 unpacks it (unzip where there is none).
+download_page() {
+  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
+  say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
+  work=$ROOT/dist-newstyle/wasm-opt/download
+  rm -rf "$work"
+  mkdir -p "$work/app"
+  curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m zipfile -e "$work/page.zip" "$work/app" || die "could not unpack $page_asset (see above)"
+  else
+    unzip -q "$work/page.zip" -d "$work/app" || die "could not unpack $page_asset (see above)"
+  fi
+  for file in index.html 404.html app.wasm; do
+    [ -f "$work/app/$file" ] || die "$page_asset lacks $file: it is not a page CI built for the server"
+  done
+  rm -rf "$out"
+  mkdir -p "${out%/*}"
+  mv "$work/app" "$out"
+  rm -rf "$work"
+  # The page and the server talk over the API, so they should be of one
+  # version; a page of another commit is taken, with a warning.
+  checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
+  if [ -z "$backend_only_commit" ]; then
+    warn "cannot tell which commit the page of $page_tag was built from (the tag is not in this checkout); wiki-server is built from ${checkout:-this checkout}, and the two should be of one version"
+  elif [ "$backend_only_commit" != "$checkout" ] && ! same_code "$backend_only_commit" "$checkout"; then
+    warn "the page is of $backend_only_commit, and wiki-server is built from this checkout, ${checkout:-of no commit}: they talk over the API, so keep them of one version (check that commit out, or deploy with --backend-only alone, the checkout's own page)"
+  fi
+}
+
 # wiki-server, natively, with this repository's packages at -O2 and the
 # dependencies as the everyday build has them (cabal-native-opt.project), in a
 # build directory of its own so that neither build invalidates the other.
@@ -687,12 +973,66 @@ server_cabal() {
   (cd "$ROOT" && cabal "$1" -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)
 }
 
-if [ -n "$build" ]; then
-  if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
-    say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
+# wiki-server's build with --backend-only, on a machine that may lack a C
+# library it links with: a failure that names one gets the packages that
+# provide them, on Debian and on RHEL, named.
+server_build_native() {
+  build_log=$(mktemp)
+  if server_cabal build >"$build_log" 2>&1; then
+    cat "$build_log"
+    rm -f "$build_log"
+    return 0
   fi
-  say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
-  sh "$ROOT/toolchain/bootstrap.sh" build
+  cat "$build_log" >&2
+  if grep -Eqi 'pkg-config|cannot find -l|foreign librar|libpq|libsodium|gmp' "$build_log"; then
+    warn "the build of wiki-server lacks a C library or pkg-config (see above). It needs the development packages of GMP, libpq and libsodium, and pkg-config:"
+    printf '    Debian, Ubuntu: sudo apt-get install libgmp-dev libpq-dev libsodium-dev pkg-config\n' >&2
+    printf '    RHEL, Fedora:   sudo dnf install gmp-devel libpq-devel libsodium-devel pkgconf-pkg-config   (libsodium from EPEL on RHEL)\n' >&2
+  fi
+  rm -f "$build_log"
+  die "the build of wiki-server failed (see above), so nothing was changed"
+}
+
+# The C libraries wiki-server links with, checked before anything is
+# downloaded or built with --backend-only, on a machine (RHEL, say) where
+# the bootstrap installs no system packages: libsodium through pkg-config,
+# libpq through pg_config (or pkg-config), GMP's header through the C
+# compiler. A library built from source into a prefix of one's own is found
+# through PKG_CONFIG_PATH (and C_INCLUDE_PATH for a header), which the
+# build is given untouched.
+native_libraries() {
+  missing_libraries=
+  if ! command -v pkg-config >/dev/null 2>&1; then
+    missing_libraries="pkg-config (Debian: pkg-config; RHEL: pkgconf-pkg-config)"
+  elif ! pkg-config --exists libsodium; then
+    missing_libraries="libsodium (Debian: libsodium-dev; RHEL: libsodium-devel, from EPEL; or one built from source, found through PKG_CONFIG_PATH=<its lib/pkgconfig>)"
+  fi
+  if ! command -v pg_config >/dev/null 2>&1 && ! { command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libpq; }; then
+    missing_libraries="${missing_libraries:+$missing_libraries; }libpq (Debian: libpq-dev; RHEL: libpq-devel), which gives pg_config"
+  fi
+  if command -v cc >/dev/null 2>&1 && ! printf '#include <gmp.h>\n' | cc -E -x c - >/dev/null 2>&1; then
+    missing_libraries="${missing_libraries:+$missing_libraries; }GMP's header gmp.h (Debian: libgmp-dev; RHEL: gmp-devel)"
+  fi
+  [ -z "$missing_libraries" ] ||
+    die "wiki-server's build needs C libraries this machine lacks: $missing_libraries. Install them and run this again; a library built elsewhere is found through PKG_CONFIG_PATH in the environment this is run in, as for libsodium: ./configure --prefix=<dir> --disable-shared --enable-static --with-pic && make install, then PKG_CONFIG_PATH=<dir>/lib/pkgconfig"
+}
+
+if [ -n "$build" ]; then
+  if [ -n "$backend_only" ]; then
+    native_libraries
+    # The page first: a REF with no page stops the deploy before anything
+    # is installed or built.
+    resolve_page
+    download_page
+    say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
+    sh "$ROOT/toolchain/bootstrap.sh" native
+  else
+    if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
+      say "first -O2 build: every dependency is compiled again at -O2 for wasm, ghc-lib-parser among them (13.5 minutes at the default level alone), so this can take over an hour once; later runs rebuild only what changed."
+    fi
+    say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
+    sh "$ROOT/toolchain/bootstrap.sh" build
+  fi
 fi
 # The environment npm's own entry points load, for npm and Node here.
 if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
@@ -701,7 +1041,10 @@ if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
 fi
 bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env)
 eval "$bootstrap_env"
-if [ -n "$build" ]; then
+if [ -n "$build" ] && [ -n "$backend_only" ]; then
+  say "building wiki-server at -O2 (cabal-native-opt.project)"
+  server_build_native
+elif [ -n "$build" ]; then
   say "npm ci"
   (cd "$ROOT" && npm ci --no-audit --no-fund)
   say "building the application (npm run build-wasm-opt)"
@@ -725,7 +1068,11 @@ fi
 # through .wiki-toolchain/node, the link the bootstrap moves to a new
 # version, not the versioned directory behind it, which an upgrade leaves
 # behind to be cleaned up.
-if [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
+# A deployment with --backend-only has none (nodeless): it serves with
+# wiki-server, and does the rest with curl, python3 and wiki-server.
+if [ -n "$nodeless" ]; then
+  node=
+elif [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
   node=$toolchain_base/.wiki-toolchain/node/bin/node
 elif node=$(command -v node); then
   node=$(realpath "$node")
@@ -775,6 +1122,16 @@ fi
 # port is not checked: it is about to be freed.
 service_active() { systemctl --user is-active --quiet "$name.service" 2>/dev/null; }
 can_listen() {
+  # Without Node: whether anything listens on the port at all, when ss is
+  # here to tell; the service failing to start is reported anyway.
+  if [ -n "$nodeless" ]; then
+    command -v ss >/dev/null 2>&1 || return 0
+    if [ -n "$(ss -Hltn "sport = :$1" 2>/dev/null)" ]; then
+      printf 'something already listens on port %s (ss -ltn)\n' "$1" >&2
+      return 1
+    fi
+    return 0
+  fi
   "$node" -e '
     const server = require("node:net").createServer();
     server.once("error", (e) => { console.error(e.message); process.exit(1); });
@@ -916,10 +1273,19 @@ fi
 # Precompressed copies, which the server sends to browsers that accept
 # brotli: the build itself writes none, since GitHub Pages compresses on the
 # fly (toolchain/build-wasm.sh).
-find "$dir/app" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.css' \
-  -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -size +1k -print0 |
-  xargs -0 -r "$node" "$ROOT/toolchain/compress.mjs" >/dev/null
-say "copied the page and $(find "$dir/app" -name '*.br' | wc -l | tr -d ' ') brotli'd files"
+# Without Node, wiki-server writes gzip copies of the same files instead.
+if [ -n "$nodeless" ]; then
+  if compressed=$("$dir/bin/wiki-server" compress "$dir/app"); then
+    say "copied the page; gzip copies by wiki-server compress, since there is no Node here for brotli ones: $compressed"
+  else
+    warn "wiki-server compress failed (see above): the server sends the page's files uncompressed"
+  fi
+else
+  find "$dir/app" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.css' \
+    -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -size +1k -print0 |
+    xargs -0 -r "$node" "$ROOT/toolchain/compress.mjs" >/dev/null
+  say "copied the page and $(find "$dir/app" -name '*.br' | wc -l | tr -d ' ') brotli'd files"
+fi
 
 case $bind in
   *:*) listen="[$bind]:$port" ;;
@@ -943,6 +1309,19 @@ if [ "$mode" = server ]; then
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077
 TimeoutStopSec=30"
+  # A systemd user unit does not inherit the shell's environment, so a
+  # server linked against a library in a directory of one's own (named by
+  # LD_LIBRARY_PATH in the shell this runs in) is given that variable in
+  # its unit, or it would not start.
+  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    case $LD_LIBRARY_PATH in
+      *'
+'*) die "LD_LIBRARY_PATH holds a newline, which a unit file cannot hold" ;;
+    esac
+    service_extra="$service_extra
+Environment=\"LD_LIBRARY_PATH=$(printf '%s' "$LD_LIBRARY_PATH" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g')\""
+    say "the unit runs wiki-server with LD_LIBRARY_PATH=$LD_LIBRARY_PATH, as this shell has it: a systemd unit does not inherit the shell's environment"
+  fi
 else
   description="Wiki demo ($name) from $dir on $bind:$port"
   exec_start="\"$node\" \"$dir/server.mjs\" --root \"$dir/app\" --port $port --bind $bind"
@@ -994,6 +1373,10 @@ case $bind in
   *) probe_host=$bind ;;
 esac
 answers() {
+  if [ -n "$nodeless" ]; then
+    [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' "$1" 2>/dev/null)" = 200 ]
+    return
+  fi
   "$node" -e '
     fetch(process.argv[1]).then((r) => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1));
   ' "$1" 2>/dev/null
@@ -1123,6 +1506,11 @@ linger_report
 # The public address the administration's Server section holds, read from
 # the admin listener (empty for none); fails when it cannot be read.
 panel_public_url() {
+  if [ -n "$nodeless" ]; then
+    settings=$(curl -fs --max-time 10 --noproxy '*' "http://127.0.0.1:$admin_port/admin/api/v1/admin/server" 2>/dev/null) || return 1
+    printf '%s' "$settings" | json_read 'sys.stdout.write(d.get("publicUrl") or "")' '.publicUrl // ""' 2>/dev/null
+    return
+  fi
   "$node" -e '
     fetch(process.argv[1])
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))

@@ -96,7 +96,7 @@ fixture() {
   FAKE_DOCKER=$case_dir/docker
   export FAKE_DOCKER
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME FAKE_NO_LIBSODIUM FAKE_CABAL_NO_LIBRARY PKG_CONFIG_PATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -117,6 +117,7 @@ EOF
 printf 'wiki-server %s\n' "\$*" >>"$EVENTS"
 command=\$1
 shift
+target=\${1:-}
 data= listen= admin= static= sqlite= database= dump=
 while [ \$# -gt 0 ]; do
   case \$1 in
@@ -148,6 +149,15 @@ case \$command in
     else
       printf 'There is no database to back up yet.\n'
     fi ;;
+  compress)
+    # As wiki-server compress does: a gzip copy of each file over 1 KiB
+    # with one of the extensions toolchain/compress.mjs is given.
+    written=0
+    for file in \$(find "\$target" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -size +1k); do
+      gzip -9 -k -f "\$file"
+      written=\$((written + 1))
+    done
+    printf 'Wrote %s gzip copies in %s.\n' "\$written" "\$target" ;;
   guide)
     [ -z "\${FAKE_GUIDE_FAIL:-}" ] || { printf 'fake guide failure\n' >&2; exit 1; }
     printf "The guide's pages have this release's text (5 pages).\n" ;;
@@ -181,16 +191,20 @@ esac
 EOF
 
   # The bootstrap: it says how it was called and where the toolchain goes,
-  # and installs the managed Node and the environment file there, as the
-  # real one does under WIKI_TOOLCHAIN_HOME.
+  # and installs the managed Node (but in its native mode, which installs
+  # none) and the environment file there, as the real one does under
+  # WIKI_TOOLCHAIN_HOME.
   cat >"$case_dir/repo/toolchain/bootstrap.sh" <<'EOF'
 #!/bin/sh
 [ "${1:-}" = env ] && exit 0
 printf 'bootstrap %s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
 base=${WIKI_TOOLCHAIN_HOME:-$HOME}
-mkdir -p "$base/.wiki-toolchain/node/bin"
-printf '#!/bin/sh\nexec "$NODE_REAL" "$@"\n' >"$base/.wiki-toolchain/node/bin/node"
-chmod +x "$base/.wiki-toolchain/node/bin/node"
+mkdir -p "$base/.wiki-toolchain"
+if [ "${1:-}" != native ]; then
+  mkdir -p "$base/.wiki-toolchain/node/bin"
+  printf '#!/bin/sh\nexec "$NODE_REAL" "$@"\n' >"$base/.wiki-toolchain/node/bin/node"
+  chmod +x "$base/.wiki-toolchain/node/bin/node"
+fi
 : >"$base/.wiki-toolchain/env"
 EOF
   cat >"$case_dir/bin/tool" <<'EOF'
@@ -223,11 +237,25 @@ case $name in
     case $1 in
       build)
         [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
+        printf 'cabal build PKG_CONFIG_PATH=%s\n' "${PKG_CONFIG_PATH:-}" >>"$EVENTS"
+        if [ -n "${FAKE_CABAL_NO_LIBRARY:-}" ]; then
+          printf "Error: The pkg-config package 'libsodium' is required but it could not be found.\n" >&2
+          exit 1
+        fi
         mkdir -p "${bin%/*}"
         cp "$FAKE_SERVER" "$bin"
         chmod +x "$bin" ;;
       list-bin) printf '%s\n' "$bin" ;;
     esac ;;
+  pkg-config)
+    # libsodium is found, unless FAKE_NO_LIBSODIUM hides the system's and
+    # PKG_CONFIG_PATH names no directory with its libsodium.pc.
+    [ "$*" = '--exists libsodium' ] || [ "$*" = '--exists libpq' ] || exit 1
+    [ -n "${FAKE_NO_LIBSODIUM:-}" ] || exit 0
+    [ "$*" = '--exists libsodium' ] || exit 0
+    [ -f "${PKG_CONFIG_PATH:-/nowhere}/libsodium.pc" ] ;;
+  pg_config) printf '/usr/lib/postgresql/17/bin\n' ;;
+  cc) cat >/dev/null ;;
   sudo)
     if [ "${1:-}" = -n ]; then
       shift
@@ -287,6 +315,43 @@ case $name in
     # The HTTPS address answers what the serve configuration proxies to.
     for url do :; done
     printf 'curl %s\n' "$url" >>"$EVENTS"
+    # GitHub, as FAKE_GITHUB holds it (releases/<tag>.json, and the assets
+    # under download/<tag>/), and the listeners on this machine, which a
+    # deployment without Node probes with curl: with -o, -w '%{http_code}'
+    # and -f as curl reads them.
+    output='' format='' failing=''
+    while [ $# -gt 1 ]; do
+      case $1 in
+        -o) output=$2; shift ;;
+        -w) format=$2; shift ;;
+        --*) ;;
+        -*f*) failing=1 ;;
+      esac
+      shift
+    done
+    case $url in
+      https://api.github.com/repos/Owner/blog/releases/tags/*)
+        release=$FAKE_GITHUB/releases/${url##*/}.json
+        if [ -f "$release" ]; then code=200; else code=404; release=/dev/null; fi
+        if [ -n "$output" ]; then cat "$release" >"$output"; else cat "$release"; fi
+        [ -z "$format" ] || printf '%s' "$code"
+        exit 0 ;;
+      https://github.com/Owner/blog/releases/download/*)
+        asset=$FAKE_GITHUB/download/${url#https://github.com/Owner/blog/releases/download/}
+        [ -f "$asset" ] || exit 22
+        cp "$asset" "$output"
+        exit 0 ;;
+      http://127.0.0.1:* | 'http://[::1]:'*)
+        exec "$NODE_REAL" -e '
+          const [url, output, format, failing] = process.argv.slice(1);
+          fetch(url).then(async (r) => {
+            const body = Buffer.from(await r.arrayBuffer());
+            if (failing && r.status >= 400) process.exit(22);
+            if (output) require("node:fs").writeFileSync(output, body); else process.stdout.write(body);
+            if (format) process.stdout.write(String(r.status));
+          }, () => { if (format) process.stdout.write("000"); process.exit(7); });
+        ' "$url" "$output" "$format" "$failing" ;;
+    esac
     [ -z "${FAKE_HTTPS_DOWN:-}" ] || exit 35
     case $url in https://box.tail1234.ts.net/*) ;; *) exit 6 ;; esac
     [ -s "$FAKE_TS_SERVE" ] || exit 7
@@ -380,7 +445,7 @@ EOF
   chmod +x "$case_dir/bin/tool"
   FAKE_SERVER=$case_dir/fake-wiki-server
   export FAKE_SERVER
-  for cmd in id npm cabal sudo ufw loginctl tailscale curl systemctl docker; do
+  for cmd in id npm cabal sudo ufw loginctl tailscale curl systemctl docker pkg-config pg_config cc; do
     ln -s tool "$case_dir/bin/$cmd"
   done
 }
@@ -1397,6 +1462,238 @@ assert_contains "$HOME/$unit" "--port $p2 --bind 127.0.0.1"
 assert_contains "$EVENTS" "tailscale serve --bg http://127.0.0.1:$p2"
 undeploy >/dev/null 2>&1
 pass '--bind with another address than 127.0.0.1 implies --http; --https drops a remembered one'
+
+# A deployment that downloads its page from GitHub (--backend-only, WP5.49),
+# as on a machine with no npm registry and no Node: the fixture's repository
+# is a git checkout whose origin is on GitHub, the fake curl answers for
+# GitHub's releases (FAKE_GITHUB), and there is no Node, managed or on PATH
+# (the deploy's own; the fakes still use the real one).
+github_page_fixture() {
+  fixture "$1"
+  rm -rf "$HOME/.wiki-toolchain"
+  (
+    cd "$case_dir/repo"
+    git init -q
+    git add -A
+    git -c user.name=tester -c user.email=tester@example.com commit -q -m 'The checkout'
+    git remote add origin "${2:-git@github.com:Owner/blog.git}"
+  )
+  head1=$(git -C "$case_dir/repo" rev-parse HEAD)
+  FAKE_GITHUB=$case_dir/github
+  export FAKE_GITHUB
+  mkdir -p "$FAKE_GITHUB/releases" "$FAKE_GITHUB/download/main-latest"
+  # The page CI builds for the server, its files at the zip's root.
+  page=$case_dir/page
+  mkdir -p "$page/s"
+  printf '<!doctype html><title>wiki</title>%2000s' '' >"$page/index.html"
+  printf '<!doctype html><title>missing</title>' >"$page/404.html"
+  head -c 4096 /dev/zero >"$page/app.wasm"
+  printf 'console.log(1);\n' >"$page/index.js"
+  other=1111111111111111111111111111111111111111
+  newest=2222222222222222222222222222222222222222
+  for commit in "$other" "$newest" "$head1"; do
+    page_zip "$FAKE_GITHUB/download/main-latest/app-server-$commit.zip"
+  done
+}
+page_zip() {
+  python3 -c '
+import os, sys, zipfile
+root, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for d, _, files in os.walk(root):
+        for f in files:
+            z.write(os.path.join(d, f), os.path.relpath(os.path.join(d, f), root))
+' "$page" "$1"
+}
+# A release's JSON as the API gives it: its tag, and its assets with the
+# times they were uploaded at, given as name time pairs.
+release() {
+  tag=$1
+  shift
+  {
+    printf '{"tag_name":"%s","prerelease":true,"assets":[' "$tag"
+    sep=
+    while [ $# -gt 0 ]; do
+      printf '%s{"name":"%s","updated_at":"%s","browser_download_url":"https://github.com/Owner/blog/releases/download/%s/%s"}' "$sep" "$1" "$2" "$tag" "$1"
+      sep=,
+      shift 2
+    done
+    printf ']}\n'
+  } >"$FAKE_GITHUB/releases/$tag.json"
+}
+pstate() { sed -n "s/^$1=//p" "$pre/state/wiki-demo.state"; }
+
+github_page_fixture backend-only
+pre=$case_dir/srv/wiki
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+# The command for the company machine, with the ports of the test.
+company() { deploy --server --sqlite --prefix "$pre" --bind 0.0.0.0 --no-firewall --port "$p" --admin-port "$a" "$@"; }
+release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-server-$newest.zip" 2026-11-02T10:00:00Z
+out=$case_dir/no-page
+if company --backend-only >"$out" 2>&1; then fail 'a checkout with no page on GitHub was deployed'; fi
+assert_contains "$out" "no page was built for $head1 on GitHub; push it, or name main, a tag or another hash"
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'cabal'
+assert_lacks "$EVENTS" 'npm'
+: >"$EVENTS"
+out=$case_dir/static
+if deploy --static --backend-only --prefix "$pre" --port "$p" >"$out" 2>&1; then fail '--static --backend-only was taken'; fi
+assert_contains "$out" "--backend-only deploys the wiki's server with a page CI built"
+assert_lacks "$EVENTS" 'curl'
+assert_lacks "$EVENTS" 'bootstrap'
+pass '--backend-only for a commit with no page on GitHub, and --static with it, are refused before anything is built'
+
+release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-server-$newest.zip" 2026-11-02T10:00:00Z "app-server-$head1.zip" 2026-10-31T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/first
+company --backend-only >"$out" 2>&1 || fail 'the deploy with --backend-only failed'
+assert_contains "$EVENTS" "curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest"
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_contains "$EVENTS" "bootstrap native WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_lacks "$EVENTS" 'bootstrap build'
+assert_lacks "$EVENTS" 'npm'
+assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+{ [ "$(line_of "$EVENTS" 'curl https://github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ] &&
+  [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
+  fail 'the page was not downloaded before the toolchain and the build'
+assert_contains "$EVENTS" "wiki-server compress $pre/app"
+for file in app/index.html app/404.html app/app.wasm app/app.wasm.gz app/index.html.gz bin/wiki-server; do
+  [ -f "$pre/$file" ] || fail "missing $file"
+done
+[ ! -e "$pre/app/index.js.gz" ] || fail 'a file under 1 KiB was compressed'
+[ -z "$(find "$pre/app" -name '*.br')" ] || fail 'brotli copies without Node'
+[ ! -e "$pre/toolchain/.wiki-toolchain/node" ] && [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'a Node was installed'
+assert_contains "$out" 'gzip copies by wiki-server compress, since there is no Node here for brotli ones: Wrote 2 gzip copies'
+assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --sqlite"
+assert_contains "$out" "answers on http://127.0.0.1:$p/api/v1/info"
+assert_contains "$out" "its admin listener answers on http://127.0.0.1:$a/admin/"
+assert_lacks "$out" 'warning: the page is of'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the downloaded page is not served'
+{ [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ] && [ "$(pstate https)" = no ]; } ||
+  fail 'the state does not record the page from GitHub'
+pass '--backend-only downloads the checkout'"'"'s page from its GitHub release, builds wiki-server alone after bootstrap native, without npm or Node, and serves it with gzip copies'
+
+: >"$EVENTS"
+assert_lacks "$HOME/$unit" 'LD_LIBRARY_PATH'
+out=$case_dir/no-build
+LD_LIBRARY_PATH=/opt/libs/lib deploy --prefix "$pre" --no-build >"$out" 2>&1 || fail 'the redeploy with --no-build failed'
+assert_contains "$HOME/$unit" 'Environment="LD_LIBRARY_PATH=/opt/libs/lib"'
+assert_contains "$out" 'the unit runs wiki-server with LD_LIBRARY_PATH=/opt/libs/lib'
+assert_lacks "$EVENTS" 'curl https://'
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'npm'
+{ [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ]; } || fail '--no-build forgot the page from GitHub'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after --no-build'
+out=$case_dir/status
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "its page is downloaded from GitHub (--backend-only=head, the page of $head1)"
+pass 'a redeploy with --no-build keeps the page and the choice, and gives the unit the LD_LIBRARY_PATH of its shell; --status says where the page comes from'
+
+# A commit that changes Markdown alone has no page of its own (CI ignores
+# it); the page of the commit before it is the same.
+printf 'notes\n' >"$case_dir/repo/NOTES.md"
+git -C "$case_dir/repo" add NOTES.md
+git -C "$case_dir/repo" -c user.name=tester -c user.email=tester@example.com commit -q -m 'Notes'
+: >"$EVENTS"
+out=$case_dir/markdown
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the deploy of a commit changing Markdown alone failed'
+assert_lacks "$HOME/$unit" 'LD_LIBRARY_PATH'
+assert_contains "$out" "changes Markdown files alone since $head1, which has a page on GitHub: taking that one"
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$head1.zip"
+assert_lacks "$out" 'warning: the page is of'
+[ "$(pstate backend_only_commit)" = "$head1" ] || fail 'the page of the commit before was not recorded'
+pass 'a checkout whose commit changes Markdown alone takes the page of the commit before it'
+
+: >"$EVENTS"
+out=$case_dir/main
+deploy --prefix "$pre" --backend-only=main >"$out" 2>&1 || fail '--backend-only=main failed'
+assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-server-$newest.zip"
+assert_contains "$out" "warning: the page is of $newest, and wiki-server is built from this checkout"
+{ [ "$(pstate backend_only)" = main ] && [ "$(pstate backend_only_commit)" = "$newest" ]; } || fail 'the state does not record main'
+: >"$EVENTS"
+deploy --prefix "$pre" >"$out" 2>&1 || fail 'the redeploy of main failed'
+assert_contains "$EVENTS" "app-server-$newest.zip"
+[ "$(pstate backend_only)" = main ] || fail 'a redeploy without the flag forgot main'
+pass '--backend-only=main takes the newest page of main, warns that it is of another commit, and is remembered'
+
+: >"$EVENTS"
+out=$case_dir/prefix
+deploy --prefix "$pre" --backend-only=11111111 >"$out" 2>&1 || fail 'a hash prefix failed'
+assert_contains "$EVENTS" "app-server-$other.zip"
+[ "$(pstate backend_only_commit)" = "$other" ] || fail 'the hash prefix did not take its page'
+out=$case_dir/unknown
+if deploy --prefix "$pre" --backend-only=abcdef12 >"$out" 2>&1; then fail 'a hash with no page was deployed'; fi
+assert_contains "$out" 'no page was built for abcdef12 on GitHub; push it, or name main, a tag or another hash'
+mkdir -p "$FAKE_GITHUB/download/v9.9"
+page_zip "$FAKE_GITHUB/download/v9.9/app-server-v9.9.zip"
+release v9.9 app-server-v9.9.zip 2026-10-01T10:00:00Z
+: >"$EVENTS"
+out=$case_dir/tag
+deploy --prefix "$pre" --backend-only=v9.9 >"$out" 2>&1 || fail 'a tag failed'
+assert_contains "$EVENTS" 'curl https://github.com/Owner/blog/releases/download/v9.9/app-server-v9.9.zip'
+assert_contains "$out" 'cannot tell which commit the page of v9.9 was built from'
+{ [ "$(pstate backend_only)" = v9.9 ] && [ -z "$(pstate backend_only_commit)" ]; } || fail 'the state does not record the tag'
+out=$case_dir/no-tag
+if deploy --prefix "$pre" --backend-only=v0.0-none >"$out" 2>&1; then fail 'a tag with no release was deployed'; fi
+assert_contains "$out" 'GitHub has no release v0.0-none with a page'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a refused REF took the server down'
+pass '--backend-only takes a hash prefix, a tag'"'"'s release, and refuses a hash or a tag with no page'
+
+: >"$EVENTS"
+out=$case_dir/no-libsodium
+if FAKE_NO_LIBSODIUM=1 deploy --prefix "$pre" >"$out" 2>&1; then fail 'a machine without libsodium deployed'; fi
+assert_contains "$out" 'libsodium (Debian: libsodium-dev; RHEL: libsodium-devel'
+assert_contains "$out" 'PKG_CONFIG_PATH=<dir>/lib/pkgconfig'
+assert_lacks "$EVENTS" 'curl https://'
+assert_lacks "$EVENTS" 'bootstrap'
+assert_lacks "$EVENTS" 'cabal'
+mkdir -p "$case_dir/libsodium/lib/pkgconfig"
+touch "$case_dir/libsodium/lib/pkgconfig/libsodium.pc"
+: >"$EVENTS"
+out=$case_dir/own-libsodium
+FAKE_NO_LIBSODIUM=1 PKG_CONFIG_PATH=$case_dir/libsodium/lib/pkgconfig deploy --prefix "$pre" >"$out" 2>&1 ||
+  fail 'a libsodium named by PKG_CONFIG_PATH was not taken'
+assert_contains "$EVENTS" "cabal build PKG_CONFIG_PATH=$case_dir/libsodium/lib/pkgconfig"
+: >"$EVENTS"
+out=$case_dir/no-library
+if FAKE_CABAL_NO_LIBRARY=1 deploy --prefix "$pre" >"$out" 2>&1; then fail 'a build that lacks a library deployed'; fi
+assert_contains "$out" 'libgmp-dev libpq-dev libsodium-dev pkg-config'
+assert_contains "$out" 'gmp-devel libpq-devel libsodium-devel pkgconf-pkg-config'
+assert_lacks "$EVENTS" 'systemctl stop'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
+pass 'a machine without libsodium is refused before the build, naming its packages and PKG_CONFIG_PATH, which the build is given; a build that lacks a library names the packages on Debian and on RHEL'
+
+out=$case_dir/stop
+deploy --prefix "$pre" --stop >"$out" 2>&1 || fail '--stop failed'
+[ "$(pstate backend_only)" = v9.9 ] || fail '--stop forgot the page from GitHub'
+: >"$EVENTS"
+out=$case_dir/back
+deploy --prefix "$pre" --no-backend-only >"$out" 2>&1 || fail '--no-backend-only failed'
+assert_contains "$EVENTS" "bootstrap build WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
+[ -z "$(pstate backend_only)" ] || fail '--no-backend-only was not recorded'
+[ -f "$pre/app/app.wasm.br" ] || fail 'the page built here has no brotli copies'
+undeploy --prefix "$pre" >/dev/null 2>&1
+pass '--stop keeps the choice, and --no-backend-only builds the page here again'
+
+# Over HTTPS through tailscale serve, the status of Tailscale and the
+# administration's settings are read with python3 rather than Node.
+github_page_fixture backend-https https://github.com/Owner/blog
+release main-latest "app-server-$head1.zip" 2026-11-01T10:00:00Z
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+out=$case_dir/first
+deploy --server --sqlite --backend-only --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with --backend-only over HTTPS failed'
+assert_contains "$EVENTS" "tailscale serve --bg http://127.0.0.1:$p"
+assert_contains "$out" "it answers on ${https_url}api/v1/info"
+assert_contains "$out" "The wiki has no public address yet: set it to $https_url"
+assert_contains "$HOME/$unit" '--secure-cookies'
+[ "$(state https_host)" = box.tail1234.ts.net ] || fail 'HTTPS was not recorded'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'a Node was installed'
+undeploy >/dev/null 2>&1
+pass '--backend-only serves HTTPS through tailscale serve, reading Tailscale and the settings without Node'
 
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"
