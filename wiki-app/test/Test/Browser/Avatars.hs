@@ -18,12 +18,15 @@ import Data.ByteString.Base64 qualified as Base64
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
-import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits (Inert (..), JSText, JSVal, Safety (..), browserJS, inBrowser, toJSText)
+import Halogen.JSBits.Fields (Member (..), jsFields)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, start, startChanged)
 import Test.Hspec.Halogen
+import Web.DOM.Internal.Types qualified as DOM
+import Web.HTML.Window qualified as Window
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..), createPageIn, savePageIn, setAvatarIn, setPersonalSpaceIn)
 import Wiki.App.Islands (MonadIslands)
@@ -34,9 +37,34 @@ import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space qualified as S
 
 $( browserJS
-     ["jsbits/test-files.js", "jsbits/test-layout.js"]
+     ["jsbits/test-files.js"]
      [ ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
-     , ("js_rect", "wiki_test_rect", Safe, [t|JSText -> IO JSText|])
+     ]
+ )
+
+-- | An element, measured: the browser's @getBoundingClientRect@, which
+-- haskell-halogen's 'DOM.Element' does not offer yet. Its result is a
+-- 'Rect', read through its fields.
+newtype Measured = Measured DOM.Element
+  deriving newtype (Inert)
+
+-- | Where an element is drawn, in the window's coordinates (CSS pixels),
+-- its CSS transform included, as a picture Cropper.js scales is drawn.
+newtype Rect = Rect JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''Measured
+     [ Method "getBoundingClientRect" [t|IO Rect|]
+     ]
+ )
+
+$( jsFields
+     ''Rect
+     [ Fixed "left" ''Double
+     , Fixed "top" ''Double
+     , Fixed "right" ''Double
+     , Fixed "bottom" ''Double
      ]
  )
 
@@ -174,11 +202,13 @@ spec m = do
     -- The box of the first element a selector finds, and the window's
     -- width and height.
     rect :: Text -> PageM s (Maybe (Box, (Double, Double)))
-    rect selector = do
-      shown <- unsafeIOToPageM (fromJSText <$> (evaluate =<< js_rect (toJSText selector)))
-      pure $ case mapMaybe readMaybe (T.words shown) of
-        [l, t, r, b, w, h] -> Just (Box l t r b, (w, h))
-        _ -> Nothing
+    rect selector = unsafeIOToPageM $ do
+      w <- Window.window
+      size <- (,) <$> (fromIntegral <$> w.innerWidth) <*> (fromIntegral <$> w.innerHeight)
+      found <- w.document.querySelector selector
+      for found $ \element -> do
+        r <- (Measured element).getBoundingClientRect
+        pure (Box r.left r.top r.right r.bottom, size)
     -- Whether a box lies inside another (or the window's), to half a pixel.
     within :: Box -> Box -> Bool
     within outer box = box.left >= outer.left - 0.5 && box.top >= outer.top - 0.5 && box.right <= outer.right + 0.5 && box.bottom <= outer.bottom + 0.5
