@@ -8,13 +8,15 @@ module Test.Links (spec) where
 
 import Protolude
 import Test.Hspec
-import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..))
+import Wiki.Api.Export (ExportFormat (..), opensInline)
 import Wiki.Api.Links
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Url (Url (..))
+import Wiki.Core.User (Avatar (..))
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -50,6 +52,14 @@ spec = describe "Wiki.Api.Links" $ do
     links.archive.export `shouldBe` "api/v1/export"
     links.archive.importPreview `shouldBe` "api/v1/import/preview"
     links.archive.importApply `shouldBe` "api/v1/import/apply"
+    links.account.setAvatar `shouldBe` "api/v1/account/avatar"
+    links.users.avatar (UserId "u1") (BlobId "b1") `shouldBe` "api/v1/users/u1/avatar/b1"
+
+  it "gives a user's avatar an address with its picture's blob in it" $
+    avatarUrl (UserId "u1") Avatar {blob = BlobId "b2", mediaType = MimeType "image/png"} `shouldBe` "api/v1/users/u1/avatar/b2"
+
+  it "opens the PDFs in a tab, and downloads every other export" $ do
+    filter opensInline [minBound .. maxBound] `shouldBe` [Pdf, BeamerPdf]
 
   it "escapes what an id or a name holds that an address cannot" $ do
     links.spaces.rename (SpaceId "a b/c?") `shouldBe` "api/v1/spaces/a%20b%2Fc%3F/name"

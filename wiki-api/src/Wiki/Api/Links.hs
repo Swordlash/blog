@@ -3,7 +3,7 @@
 -- These links are for two uses. The application puts some of them into
 -- its pages, for the browser to follow or load rather than for the
 -- application to fetch: an attachment's bytes ('attachmentUrl'), a
--- space's icon ('spaceIconUrl'), the exports ('pageExportUrl',
+-- space's icon ('spaceIconUrl'), a user's avatar ('avatarUrl'), the exports ('pageExportUrl',
 -- 'spaceExportUrl', 'archiveExportUrl'). And the server's tests of the API
 -- send their requests to 'links' and 'searchUrl'.
 --
@@ -26,6 +26,7 @@ module Wiki.Api.Links
   , linkText
   , attachmentUrl
   , spaceIconUrl
+  , avatarUrl
   , pageExportUrl
   , spaceExportUrl
   , archiveExportUrl
@@ -39,13 +40,14 @@ import Protolude
 import Servant.API (Link, toUrlPiece)
 import Servant.Links (AsLink, allLinks')
 import Servant.Multipart.API (Tmp)
-import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..), api)
+import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..), api)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Id (PageId, SpaceId)
+import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
+import Wiki.Core.User (Avatar (..))
 
 -- | Every endpoint's URL, as a function of its captures and parameters:
 -- @links.spaces.rename spaceId@ is @api\/v1\/spaces\/\<id>\/name@. An
@@ -71,6 +73,13 @@ spaceIconUrl :: Space -> Text
 spaceIconUrl s = case s.icon of
   Just (IconImage blob _) -> links.spaces.icon s.id blob
   _ -> ""
+
+-- | The URL a browser fetches a user's avatar from: @avatarUrl@ over HTTP,
+-- @api\/v1\/users\/\<id>\/avatar\/\<blob>@. The blob is in the URL, so
+-- that a new picture has a new URL and a browser's cached copy of the old
+-- one is never shown for it.
+avatarUrl :: UserId -> Avatar -> Text
+avatarUrl u a = links.users.avatar u a.blob
 
 -- | The URL a browser downloads a page from, exported as a document: a
 -- link the application renders for the browser to follow, never fetched

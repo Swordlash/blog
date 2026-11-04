@@ -18,7 +18,7 @@
 -- with signing in and out and reading the session. docs/api.md lists every
 -- endpoint with its method, path, body, response and errors.
 --
--- The records with an upload ('WikiApi', 'SpacesApi', 'PagesApi',
+-- The records with an upload ('WikiApi', 'AccountApi', 'SpacesApi', 'PagesApi',
 -- 'ArchiveApi') take the multipart backend of their forms as a parameter
 -- (@form@, "Wiki.Api.Upload"). The server serves 'Api', whose forms are
 -- 'Tmp': an upload is written to a temporary file as it arrives. The
@@ -66,6 +66,7 @@ module Wiki.Api
   , AdminApi (..)
   , InvitationsApi (..)
   , AccountApi (..)
+  , UsersApi (..)
   , PasswordResetApi (..)
   , CommentsApi (..)
   , NotificationsApi (..)
@@ -116,7 +117,7 @@ import Wiki.Core.Permission (SpaceAccess)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space, SpaceProfile)
-import Wiki.Core.User (Group)
+import Wiki.Core.User (Group, User)
 import Wiki.Core.Version (Version, VersionInfo)
 
 -- | The whole API, at @\/api\/v1@, as the server serves it: uploads are
@@ -186,7 +187,9 @@ data WikiApi form mode = WikiApi
   -- 'Wiki.Api.Error.Conflict', and too many attempts from one address are
   -- 'Wiki.Api.Error.TooManyRequests'.
   , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
-  , account :: mode :- "account" :> NamedRoutes AccountApi
+  , account :: mode :- "account" :> NamedRoutes (AccountApi form)
+  , users :: mode :- "users" :> NamedRoutes UsersApi
+  -- ^ The users' public faces: their avatars ("Wiki.Core.User.Avatar").
   , homeDocument :: mode :- "home" :> Get '[JSON] (Space, Page)
   , spaces :: mode :- "spaces" :> NamedRoutes (SpacesApi form)
   , pages :: mode :- "pages" :> NamedRoutes (PagesApi form)
@@ -559,7 +562,7 @@ data InvitationsApi mode = InvitationsApi
 -- navigates to rather than fetches. A visitor who is not signed in is
 -- refused with 'Wiki.Api.Error.Unauthenticated', and the server's
 -- operator, who has no account, with 'Wiki.Api.Error.Invalid'.
-data AccountApi mode = AccountApi
+data AccountApi form mode = AccountApi
   { identities :: mode :- "identities" :> Get '[JSON] SignInMethods
   -- ^ Whether the user has a password, and their identities.
   , unlinkIdentity :: mode :- "identities" :> Capture "provider" Text :> Delete '[JSON] SignInMethods
@@ -631,12 +634,32 @@ data AccountApi mode = AccountApi
   , setPersonalSpace :: mode :- "personal-space" :> ReqBody '[JSON] PersonalSpaceSwitch :> Put '[JSON] Space
   -- ^ @setPersonalSpace@: turn the user's personal space on, making it the
   -- first time, or off. The response is the space.
+  , setAvatar :: mode :- "avatar" :> MultipartForm form (AttachmentUpload form) :> Put '[JSON] User
+  -- ^ @setAvatar@: a picture for the user's avatar, as a form's file part,
+  -- as for a space's icon ("Wiki.Api.Upload"; the part's file name is
+  -- ignored). It is checked by the rules of a space's icon (the same image
+  -- types, at most 1 MB: 'Wiki.Api.Error.Invalid' otherwise), replaces the
+  -- avatar the user had, and the response is the user with it.
+  , removeAvatar :: mode :- "avatar" :> Delete '[JSON] User
+  -- ^ @removeAvatar@: the user no longer has an avatar. The response is the
+  -- user without it.
   , setEmail :: mode :- "email" :> ReqBody '[JSON] EmailChange :> Put '[JSON] EmailState
   -- ^ Set the user's e-mail address, or remove it. A new address is not
   -- verified until the user follows the link sent to it. Changing or
   -- removing the address needs the current password where the user has
   -- one (a wrong password is 'Wiki.Api.Error.Unauthenticated', counted as
   -- a failed sign-in). Without a mail server it is 'Wiki.Api.Error.Invalid'.
+  }
+  deriving stock (Generic)
+
+-- | 'UsersApi': what anyone who may read the wiki may fetch of its users.
+data UsersApi mode = UsersApi
+  { avatar :: mode :- Capture "user" UserId :> "avatar" :> Capture "blob" BlobId :> RawM
+  -- ^ A user's avatar, at the URL @avatarUrl@ returns
+  -- ("Wiki.Api.Links.avatarUrl"). The URL contains the picture's blob id,
+  -- so that a new picture has a new URL; a blob id that is not the user's
+  -- avatar is 'Wiki.Api.Error.NotFound'. Served as a space's icon is, to
+  -- anyone a closed wiki lets in.
   }
   deriving stock (Generic)
 

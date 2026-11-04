@@ -45,11 +45,13 @@
   ],
   "users": [
     {
+      "avatar": null,
       "displayName": "Ada",
       "id": "u1",
       "login": "ada"
     },
     {
+      "avatar": null,
       "displayName": "Edgar",
       "id": "u2",
       "login": "edgar"

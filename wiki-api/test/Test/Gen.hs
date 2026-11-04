@@ -54,12 +54,13 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types
+import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxKind (..), themeColours)
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Avatar (..), Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
@@ -107,7 +108,7 @@ genUser = do
   id <- genUserId
   login <- Login <$> genText
   displayName <- genText
-  pure User {id, login, displayName}
+  pure User {id, login, displayName, avatar = Nothing}
 
 genSubject :: Gen Subject
 genSubject = oneof [SubjectUser <$> genUserId, SubjectGroup <$> genGroupId]
@@ -186,7 +187,10 @@ genDraftEdit :: Gen DraftEdit
 genDraftEdit = DraftEdit <$> genUtcTime <*> genText <*> genText
 
 genAuthor :: Gen Author
-genAuthor = Author <$> genUserId <*> genText
+genAuthor = Author <$> genUserId <*> genText <*> genMaybe genAvatar
+
+genAvatar :: Gen Avatar
+genAvatar = Avatar <$> (BlobId <$> genText) <*> elements [MimeType "image/png", MimeType "image/webp"]
 
 genVersionInfo :: Gen VersionInfo
 genVersionInfo = VersionInfo <$> genPageId <*> genUtcTime <*> genText <*> oneof [pure Nothing, Just <$> genAuthor] <*> chooseInt (1, 10000)

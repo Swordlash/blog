@@ -13,6 +13,7 @@ module Test.Sample
   , version
   , hit
   , sessionInfo
+  , user
   , account
   , importPlan
   , inlineThread
@@ -94,7 +95,7 @@ import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -181,6 +182,8 @@ page =
     , updatedAt = time
     , position = 2
     , template = False
+    , createdBy = Just author
+    , updatedBy = Just Author {id = UserId "u1", name = "Ada", avatar = Nothing}
     }
 
 draft :: Draft
@@ -201,7 +204,7 @@ versionInfo =
     { page = PageId "p1"
     , updatedAt = time
     , title = "Tour"
-    , author = Just Author {id = UserId "u1", name = "Ada"}
+    , author = Just Author {id = UserId "u1", name = "Ada", avatar = Nothing}
     , number = 2
     }
 
@@ -213,7 +216,7 @@ version =
     , updatedAt = time
     , title = "Tour"
     , body = "# Tour\n\n![A diagram](diagram.png)"
-    , author = Just Author {id = UserId "u1", name = "Ada"}
+    , author = Just Author {id = UserId "u1", name = "Ada", avatar = Nothing}
     }
 
 hit :: SearchHit
@@ -227,10 +230,14 @@ hit =
     , snippet = Snippet [Piece "… a " False, Piece "tour" True, Piece " of the wiki …" False]
     }
 
+-- | The signed-in user, without an avatar.
+user :: User
+user = User {id = UserId "u1", login = Login "ada", displayName = "Ada", avatar = Nothing}
+
 sessionInfo :: SessionInfo
 sessionInfo =
   SessionInfo
-    { user = Just User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
+    { user = Just User {id = UserId "u1", login = Login "ada", displayName = "Ada", avatar = Nothing}
     , groups = Set.fromList [GroupId "g1"]
     , grants =
         Grants
@@ -250,7 +257,7 @@ sessionInfo =
 account :: Account
 account =
   Account
-    { user = User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
+    { user = User {id = UserId "u1", login = Login "ada", displayName = "Ada", avatar = Nothing}
     , hasPassword = True
     , disabled = False
     }
@@ -353,8 +360,8 @@ directory :: Directory
 directory =
   Directory
     { users =
-        [ User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
-        , User {id = UserId "u2", login = Login "edgar", displayName = "Edgar"}
+        [ User {id = UserId "u1", login = Login "ada", displayName = "Ada", avatar = Nothing}
+        , User {id = UserId "u2", login = Login "edgar", displayName = "Edgar", avatar = Nothing}
         ]
     , administrators = Set.fromList [UserId "u1"]
     , creators = Set.fromList [UserId "u1"]
@@ -549,7 +556,7 @@ providerCheck =
 -- | A reply to 'inlineThread', edited since.
 -- | Someone as a comment and the live channel name them.
 author :: Author
-author = Author {id = UserId "u2", name = "Bea"}
+author = Author {id = UserId "u2", name = "Bea", avatar = Just Avatar {blob = BlobId "b3", mediaType = MimeType "image/png"}}
 
 -- | What a post is listed with: its first author and its comments.
 postDetails :: PostDetails
@@ -560,7 +567,7 @@ reply =
   Comment
     { id = CommentId "c2"
     , thread = CommentThreadId "t1"
-    , author = Author {id = UserId "u2", name = "Bea"}
+    , author = Author {id = UserId "u2", name = "Bea", avatar = Nothing}
     , body = "Agreed, *and* the next one."
     , createdAt = later
     , editedAt = Just later
@@ -576,7 +583,7 @@ inlineThread =
     , resolved = False
     , createdAt = time
     , comments =
-        [ Comment {id = CommentId "c1", thread = CommentThreadId "t1", author = Author {id = UserId "u1", name = "Ada"}, body = "Which **diagram**?", createdAt = time, editedAt = Nothing}
+        [ Comment {id = CommentId "c1", thread = CommentThreadId "t1", author = Author {id = UserId "u1", name = "Ada", avatar = Nothing}, body = "Which **diagram**?", createdAt = time, editedAt = Nothing}
         , reply
         ]
     }
@@ -590,7 +597,7 @@ pageThread =
     , anchor = Nothing
     , resolved = False
     , createdAt = later
-    , comments = [Comment {id = CommentId "c3", thread = CommentThreadId "t2", author = Author {id = UserId "u1", name = "Ada"}, body = "A good tour.", createdAt = later, editedAt = Nothing}]
+    , comments = [Comment {id = CommentId "c3", thread = CommentThreadId "t2", author = Author {id = UserId "u1", name = "Ada", avatar = Nothing}, body = "A good tour.", createdAt = later, editedAt = Nothing}]
     }
 
 -- | Bea's reply, as the notification its thread's opener is told of it.

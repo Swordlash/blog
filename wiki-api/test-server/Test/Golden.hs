@@ -22,7 +22,7 @@ import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName 
 import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers (..), ServerMessage (..))
 import Wiki.Api.Info (Capabilities (..), Health (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Notifications (NotificationSettingsChange (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
@@ -38,7 +38,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (summaryOf)
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space, SpaceProfile (..))
-import Wiki.Core.User (Password (..))
+import Wiki.Core.User (Avatar (..), Password (..), User (..))
 import Wiki.Core.Version (VersionInfo (..))
 
 -- | A golden file: its name, and the value it holds.
@@ -81,6 +81,7 @@ spec = describe "golden JSON" $ do
     golden "server-status" Sample.serverStatus
     golden "directory" Sample.directory
     golden "account" Sample.account
+    golden "user-with-avatar" User {id = Sample.user.id, login = Sample.user.login, displayName = Sample.user.displayName, avatar = Just Avatar {blob = BlobId "b2", mediaType = MimeType "image/webp"}}
     golden "space-access" Sample.spaceAccess
     golden "settings" Sample.settings
     golden "invitations" Sample.invitations
@@ -110,7 +111,7 @@ spec = describe "golden JSON" $ do
     golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1"), StartEditing (PageId "p1"), StopEditing (PageId "p1")]
     golden
       "server-messages"
-      [ Subscribed (PageId "p1") [Sample.inlineThread, Sample.pageThread] [Sample.author]
+      [ Subscribed (PageId "p1") [Sample.inlineThread, Sample.pageThread] [Sample.author] Readers {some = [Sample.author], total = 17, visitors = 2}
       , Refused (PageId "p2")
       , Event (PageId "p1") (ThreadOpened Sample.pageThread)
       , Event (PageId "p1") (CommentAdded Sample.reply)
@@ -119,6 +120,7 @@ spec = describe "golden JSON" $ do
       , Event (PageId "p1") (ThreadResolved (CommentThreadId "t1") True)
       , Event (PageId "p1") (ThreadDeleted (CommentThreadId "t2"))
       , Event (PageId "p1") (Editing [Sample.author])
+      , Event (PageId "p1") (Reading Readers {some = [Sample.author], total = 1, visitors = 0})
       , Event (PageId "p1") (PageChanged Sample.later)
       , Notified Sample.notification
       ]

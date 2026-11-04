@@ -2,6 +2,10 @@
   "items": [
     {
       "actor": {
+        "avatar": {
+          "blob": "b3",
+          "mediaType": "image/png"
+        },
         "id": "u2",
         "name": "Bea"
       },
@@ -24,6 +28,10 @@
     },
     {
       "actor": {
+        "avatar": {
+          "blob": "b3",
+          "mediaType": "image/png"
+        },
         "id": "u2",
         "name": "Bea"
       },

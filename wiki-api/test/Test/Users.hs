@@ -34,7 +34,7 @@ people =
     , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u5"])]
     }
   where
-    user i l n = User {id = UserId i, login = Login l, displayName = n}
+    user i l n = User {id = UserId i, login = Login l, displayName = n, avatar = Nothing}
 
 -- | Queries, built whole: a record update would be ambiguous, since other
 -- records of "Wiki.Api.Admin" have fields of these names.

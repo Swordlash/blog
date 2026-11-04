@@ -13,6 +13,14 @@
   ],
   "body": "# Tour\n\n![A diagram](diagram.png)",
   "createdAt": "2026-10-24T09:30:12.345678Z",
+  "createdBy": {
+    "avatar": {
+      "blob": "b3",
+      "mediaType": "image/png"
+    },
+    "id": "u2",
+    "name": "Bea"
+  },
   "id": "p1",
   "parent": null,
   "position": 2,
@@ -20,5 +28,10 @@
   "space": "s1",
   "template": false,
   "title": "Tour",
-  "updatedAt": "2026-10-24T09:30:12.345678Z"
+  "updatedAt": "2026-10-24T09:30:12.345678Z",
+  "updatedBy": {
+    "avatar": null,
+    "id": "u1",
+    "name": "Ada"
+  }
 }

@@ -2,10 +2,28 @@
   {
     "editing": [
       {
+        "avatar": {
+          "blob": "b3",
+          "mediaType": "image/png"
+        },
         "id": "u2",
         "name": "Bea"
       }
     ],
+    "readers": {
+      "some": [
+        {
+          "avatar": {
+            "blob": "b3",
+            "mediaType": "image/png"
+          },
+          "id": "u2",
+          "name": "Bea"
+        }
+      ],
+      "total": 17,
+      "visitors": 2
+    },
     "subscribed": "p1",
     "threads": [
       {
@@ -17,6 +35,7 @@
         "comments": [
           {
             "author": {
+              "avatar": null,
               "id": "u1",
               "name": "Ada"
             },
@@ -28,6 +47,7 @@
           },
           {
             "author": {
+              "avatar": null,
               "id": "u2",
               "name": "Bea"
             },
@@ -48,6 +68,7 @@
         "comments": [
           {
             "author": {
+              "avatar": null,
               "id": "u1",
               "name": "Ada"
             },
@@ -75,6 +96,7 @@
         "comments": [
           {
             "author": {
+              "avatar": null,
               "id": "u1",
               "name": "Ada"
             },
@@ -98,6 +120,7 @@
     "event": {
       "comment": {
         "author": {
+          "avatar": null,
           "id": "u2",
           "name": "Bea"
         },
@@ -115,6 +138,7 @@
     "event": {
       "comment": {
         "author": {
+          "avatar": null,
           "id": "u2",
           "name": "Bea"
         },
@@ -155,11 +179,35 @@
     "event": {
       "editors": [
         {
+          "avatar": {
+            "blob": "b3",
+            "mediaType": "image/png"
+          },
           "id": "u2",
           "name": "Bea"
         }
       ],
       "type": "editing"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "readers": {
+        "some": [
+          {
+            "avatar": {
+              "blob": "b3",
+              "mediaType": "image/png"
+            },
+            "id": "u2",
+            "name": "Bea"
+          }
+        ],
+        "total": 1,
+        "visitors": 0
+      },
+      "type": "readers"
     },
     "page": "p1"
   },
@@ -173,6 +221,10 @@
   {
     "notification": {
       "actor": {
+        "avatar": {
+          "blob": "b3",
+          "mediaType": "image/png"
+        },
         "id": "u2",
         "name": "Bea"
       },

@@ -8,6 +8,7 @@
     "comments": [
       {
         "author": {
+          "avatar": null,
           "id": "u1",
           "name": "Ada"
         },
@@ -19,6 +20,7 @@
       },
       {
         "author": {
+          "avatar": null,
           "id": "u2",
           "name": "Bea"
         },
@@ -39,6 +41,7 @@
     "comments": [
       {
         "author": {
+          "avatar": null,
           "id": "u1",
           "name": "Ada"
         },
