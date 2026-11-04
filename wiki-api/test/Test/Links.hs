@@ -9,7 +9,7 @@ module Test.Links (spec) where
 import Protolude
 import Test.Hspec
 import Wiki.Api (AccountApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..))
-import Wiki.Api.Export (ExportFormat (..), opensInline)
+import Wiki.Api.Export (ExportFormat (..), dispositionFileName, documentDisposition, opensInline)
 import Wiki.Api.Links
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
@@ -60,6 +60,13 @@ spec = describe "Wiki.Api.Links" $ do
 
   it "opens the PDFs in a tab, and downloads every other export" $ do
     filter opensInline [minBound .. maxBound] `shouldBe` [Pdf, BeamerPdf]
+
+  it "names an exported document in its Content-Disposition, and reads the name back" $ do
+    documentDisposition Pdf "tour.pdf" `shouldBe` "inline; filename=\"tour.pdf\""
+    documentDisposition Docx "tour.docx" `shouldBe` "attachment; filename=\"tour.docx\""
+    for_ [minBound .. maxBound] $ \f -> dispositionFileName (documentDisposition f "a-b.x") `shouldBe` Just "a-b.x"
+    dispositionFileName "attachment; filename=plain.txt; size=3" `shouldBe` Just "plain.txt"
+    dispositionFileName "attachment" `shouldBe` Nothing
 
   it "escapes what an id or a name holds that an address cannot" $ do
     links.spaces.rename (SpaceId "a b/c?") `shouldBe` "api/v1/spaces/a%20b%2Fc%3F/name"

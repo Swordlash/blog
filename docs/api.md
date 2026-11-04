@@ -564,20 +564,29 @@ equations), `html` (one standalone page, its images inside it and its
 formulas as MathML), `epub`, `pdf` (typeset by `xelatex`), and for a page
 written as a deck only, `pptx`, `beamer-tex` (the LaTeX source of a Beamer
 presentation) and `beamer-pdf`. The server makes them with pandoc, linked
-into it; only the PDFs need a program, `xelatex`, which the server looks for
-on its `PATH` at each request: `exports` in the session lists what it
-offers, and a PDF asked for without it is 400. So is a presentation of a
-page that is not a deck, or of a space, and a document pandoc or TeX could
-not make, with their reason. Whoever may read the page (view the space)
-may export it. A PDF (`pdf`, `beamer-pdf`) is answered `inline`, to open in
-a tab of the browser, and every other format as an `attachment`, to
-download (`Wiki.Api.Export.opensInline`, which the application's menu
-follows too): Chromium's browsers block downloads from a wiki served over
-plain HTTP, and a PDF shown in a tab is not a download, so on such a wiki
-the PDFs can still be exported, while the other formats need HTTPS. Each
-person makes one export at a time (a user by their id,
-someone not signed in by their address): another asked for meanwhile is
-429. One that takes longer than 60 seconds is stopped and refused with 400.
+into it; only the PDFs need a program, `xelatex`. The server tries it when
+it starts, and again when the administration asks
+(`api/v1/admin/tex-engine/check`, [below](#the-tex-engine)): it looks for it
+on its `PATH` and typesets a one-line document with it, under the same limits
+as an export. `exports` in the session lists the PDFs only while the last try
+made a PDF. A PDF asked for otherwise is 400, with one sentence:
+`PDF needs xelatex, which this server's machine does not have.` where it
+was not found, and `PDF needs xelatex, which was found at <path> but does not
+work on this server; the administration's Server section shows why.` where it
+failed. So is a presentation of a page that is not a deck, or of a space,
+and a document pandoc or TeX could not make, with their reason. Whoever may
+read the page (view the space) may export it. A PDF (`pdf`, `beamer-pdf`)
+is answered `inline` and every other format as an `attachment`
+(`Wiki.Api.Export.documentDisposition`, after
+`Wiki.Api.Export.opensInline`). The application does not link to these
+addresses: it fetches the document, shows a refusal's reason instead of
+saving it, and saves the document from a `blob:` URL under the file name
+`Content-Disposition` gives, or opens a PDF in a tab from one. A Chromium
+browser blocks a download from a wiki served over plain HTTP, but not one
+from a `blob:` URL the page made. Each person makes one export at a time (a
+user by their id, someone not signed in by their address): another asked
+for meanwhile is 429. One that takes longer than 60 seconds is stopped and
+refused with 400.
 
 What a document holds is the page as the wiki shows it, as far as the format
 can: the page's images (its attachments' that the server keeps) inside it;
@@ -1178,6 +1187,38 @@ was not. The demo's backend keeps the settings for the tab's life, answers
 `wiki-server oidc check --data DIR [NAME]` does what `check` does, from the
 machine, for the providers set in that data directory, and prints each
 redirect URI.
+
+### The TeX engine
+
+| Method | Path | Body | Response | Errors | `MonadAdmin` |
+| ------ | ---- | ---- | -------- | ------ | ------------ |
+| GET | `api/v1/admin/tex-engine` | | `TexEngine` `{"status", "path", "output", "checkedAt"}`: what the server found when it last tried `xelatex` | 403 | `texEngine` |
+| POST | `api/v1/admin/tex-engine/check` | | `TexEngine` as the server finds it now | 403 | `checkTexEngine` |
+
+The PDF exports ([Documents](#documents)) need `xelatex`, and finding it is
+not enough: on a machine where its format file is missing, or where the
+server's service sees another TeX tree than the shell does, it is there and
+every PDF fails. So the server tries it (WP5.56, `Wiki.Api.Admin.TexEngine`):
+when it starts, logged as the event `tex-engine` with its `status` and
+`path`, and again at each `check`. It looks for `xelatex` on its `PATH` and
+typesets a one-line document with it in a temporary directory, with the
+limits an export has, for a minute at most. `status` is `working` (it made a
+PDF), `failing` (it was found and did not) or `not-found`; `path` is where it
+was found (`null` when it was not); `output` is, for `failing` only, the
+errors its log names or else the end of what it printed, 2000 characters at
+most; `checkedAt` is when it was tried. The session's `exports` offer the
+PDFs while the status is `working`, so installing or repairing TeX takes
+effect at the next `check`, or the next start. The demo's backend has no
+server: its `texEngine` is `Nothing`, and it offers no export at all.
+
+```json
+{
+  "status": "failing",
+  "path": "/usr/bin/xelatex",
+  "output": "I can't find the format file `xelatex.fmt'!",
+  "checkedAt": "2026-11-04T09:12:31Z"
+}
+```
 
 ## Health and metrics
 

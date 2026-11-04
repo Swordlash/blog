@@ -1064,9 +1064,10 @@ try {
   console.log("ok: a fresh browser finds the space, the page, its edits and its attachment on the server");
 
   // The page as a Word document, from its "Export" menu: made by the pandoc
-  // linked into the server, and downloaded under the page's title.
+  // linked into the server, fetched by the application and saved from a
+  // blob: URL under the page's title.
   await fresh.locator("#app .page-view .export-menu summary").click();
-  const [docxDownload] = await Promise.all([fresh.waitForEvent("download"), fresh.locator("#app .export-formats a.export-docx").click()]);
+  const [docxDownload] = await Promise.all([fresh.waitForEvent("download"), fresh.locator("#app .export-formats button.export-docx").click()]);
   assert.equal(docxDownload.suggestedFilename(), "first-page.docx");
   const docx = await readFile(await docxDownload.path());
   assert.equal(docx.subarray(0, 2).toString("latin1"), "PK", "the exported document is not a zip");

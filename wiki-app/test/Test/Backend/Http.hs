@@ -26,6 +26,7 @@ import Wiki.Api (NotificationsApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
+import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Links (searchUrl)
 import Wiki.Api.ServerSettings (defaultHomePage)
@@ -103,6 +104,33 @@ spec = describe "Wiki.App.Backend.Http" $ do
   caching
   accounts
   preload
+  exports
+
+-- | A page or a space fetched as a document (WP5.56 of docs/PLAN.md): its
+-- bytes with the name and the media type the server's answer gives, or the
+-- server's refusal with its reason, which the Export menu shows.
+exports :: Spec
+exports = describe "its exports" $ do
+  it "fetches a document at its address, named as the answer's Content-Disposition names it" $ do
+    (env, asked) <- backend (const (Right (responseWith 200 [("Content-Type", "application/pdf"), ("Content-Disposition", "inline; filename=\"tour.pdf\"")] "%PDF-1.5")))
+    runHttpWiki env (fetchExport (ExportPage (PageId "p1")) Pdf) `shouldReturn` Right Document {fileName = "tour.pdf", mediaType = "application/pdf", bytes = "%PDF-1.5"}
+    map (\r -> (methodOf r, requestUrl r)) <$> readIORef asked `shouldReturn` [("GET", "api/v1/pages/p1/export/pdf")]
+
+  it "names a document whose answer names none after its format" $ do
+    (env, _) <- backend (const (Right (responseWith 200 [] "PK")))
+    runHttpWiki env (fetchExport (ExportSpace (SpaceId "s1")) Docx)
+      `shouldReturn` Right Document {fileName = "export.docx", mediaType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes = "PK"}
+
+  it "gives the server's refusal with its reason, rather than a document" $ do
+    (env, _) <- backend (const (status 400 "{\"error\":\"Invalid\",\"message\":\"PDF needs xelatex.\"}"))
+    runHttpWiki env (fetchExport (ExportSpace (SpaceId "s1")) Pdf) `shouldReturn` Left (Invalid "PDF needs xelatex.")
+
+  it "waits longer for a document than for any other read, since a PDF takes up to a minute to make" $ do
+    (env, asked) <- backend (const (Right (responseWith 200 [] "")))
+    _ <- runHttpWiki env (fetchExport (ExportPage (PageId "p1")) BeamerPdf)
+    _ <- runHttpWiki env (fetchExport (ExportSpace (SpaceId "s1")) Html)
+    _ <- runHttpWiki env (getPage (SpaceId "s1") (slugs "export/pdf"))
+    map timeLimit <$> readIORef asked `shouldReturn` [requestTimeout, exportTimeout, exportTimeout]
 
 -- | What the browser's transport makes of what @fetch@ did, which natively
 -- is only that there is no network.
@@ -605,7 +633,7 @@ preload = describe "what a page it is rendered into carries" $ do
 
   it "writes what is not kept as nothing, and nothing as null" $
     encodePreload (withSpaceAt (slugs "away") (Left (Unreachable "offline")) emptyCache)
-      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"homeDocument\":null,\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"stars\":null,\"status\":null,\"threads\":null,\"userPages\":null,\"versionLists\":[],\"versions\":[],\"watches\":null}"
+      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"homeDocument\":null,\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"stars\":null,\"status\":null,\"texEngine\":null,\"threads\":null,\"userPages\":null,\"versionLists\":[],\"versions\":[],\"watches\":null}"
 
   it "says why a payload cannot be read" $
     decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft

@@ -1164,6 +1164,10 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   getVersion pid = run Reads . getVersionTx pid
   restoreVersion pid at = saving . (withWriters <=< restoreVersionTx pid at)
 
+  -- A document is made by the server's API, which runs pandoc and the TeX
+  -- engine ("Wiki.Server.Export") and reads the page through this backend.
+  fetchExport _ _ = pure (Left (Invalid "Only the server's API makes documents."))
+
 -- | The administration operations, as the class's Haddock describes them
 -- ("Wiki.App.Backend.Admin"). Each operation is one transaction that
 -- first checks that the caller holds the global administer: the
@@ -1277,6 +1281,8 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   -- answers for it ("Wiki.Server.Api").
   activity q = run Reads (requireAdministrator >> db (loadActivity q))
   serverStatus = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API says how the server is."))
+  texEngine = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API tries the TeX engine."))
+  checkTexEngine = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API tries the TeX engine."))
   installGuide = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API and its console install the guide (Wiki.Server.Guide)."))
 
 -- | The backups, for an administrator: their settings (with only whether

@@ -131,7 +131,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Activity (Activity, ActivityQuery)
-import Wiki.Api.Admin (Directory, Invitations, Invited, MacroUse, ServerStatus, UserPage, UserQuery, WikiSettings)
+import Wiki.Api.Admin (Directory, Invitations, Invited, MacroUse, ServerStatus, TexEngine, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
@@ -346,6 +346,21 @@ class (Monad m) => MonadAdmin m where
   serverStatus :: m (Either WikiError (Maybe ServerStatus))
   default serverStatus :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError (Maybe ServerStatus))
   serverStatus = lift serverStatus
+
+  -- | What the server found when it last tried its TeX engine, which the
+  -- PDF exports need (WP5.56 of docs/PLAN.md, "Wiki.Api.Admin"'s
+  -- 'TexEngine'): 'Nothing' where there is no server (the demo, which
+  -- exports nothing).
+  texEngine :: m (Either WikiError (Maybe TexEngine))
+  default texEngine :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError (Maybe TexEngine))
+  texEngine = lift texEngine
+
+  -- | Have the server try its TeX engine again now, and say what it found.
+  -- The session's formats follow it: the PDFs are offered only when it
+  -- worked. 'Nothing' where there is no server.
+  checkTexEngine :: m (Either WikiError (Maybe TexEngine))
+  default checkTexEngine :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError (Maybe TexEngine))
+  checkTexEngine = lift checkTexEngine
 
   -- | Install the guide, the public space at @/guide@ that holds the
   -- wiki's documentation (WP5.29 of docs/PLAN.md), into a wiki that has

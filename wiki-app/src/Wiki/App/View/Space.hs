@@ -51,15 +51,14 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Wiki.Api.Export (spaceFormats)
-import Wiki.Api.Links (spaceExportUrl)
-import Wiki.App.Backend (MonadLoad, MonadWiki (..), Session (exports), WikiError)
+import Wiki.Api.Export (ExportFormat, spaceFormats)
+import Wiki.App.Backend (ExportTarget (..), MonadLoad, MonadWiki (..), Session (exports), WikiError)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.App.View.Export (exportMenu)
+import Wiki.App.View.Export qualified as ExportView
 import Wiki.App.View.SpaceSettings qualified as SpaceSettings
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Id (PageId, SpaceId)
@@ -101,7 +100,7 @@ data State = State
 
 -- | The formula the macros are tried on, typeset as the space's pages
 -- would typeset it.
-type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ()) .+ ("watch" .== H.Slot (Const Void) Void ())
+type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ()) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
 
 data Action
   = Receive Input
@@ -164,6 +163,11 @@ component =
         pageControls p atTop atBottom =
           [moveButtons p.title atTop atBottom (ShiftPage p.id) | space.pageOrder == ByHand, mayEdit ctx space.id]
 
+    -- The "Export" menu, on a backend that makes documents
+    -- ("Wiki.App.View.Export").
+    exportMenu :: [ExportFormat] -> ExportTarget -> [H.ComponentHTML Action Slots m]
+    exportMenu formats target = [HH.slot_ "export" () ExportView.component ExportView.Input {formats, target} | not (null formats)]
+
     actions :: Context -> Space -> Mode -> [H.ComponentHTML Action Slots m]
     actions ctx space mode =
       [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button"] [HH.text "New page"] | mayEdit ctx space.id]
@@ -179,7 +183,7 @@ component =
         <> [button "Delete" (Open ConfirmingDelete) | admin]
         -- Its pages as one document, for anyone who may view it, as for a
         -- page.
-        <> exportMenu (spaceFormats ctx.session.exports) (spaceExportUrl space.id) space.name
+        <> exportMenu (spaceFormats ctx.session.exports) (ExportSpace space.id)
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id

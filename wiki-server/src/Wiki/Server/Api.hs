@@ -95,7 +95,7 @@ import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName 
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Export (formatMediaType, opensInline)
+import Wiki.Api.Export (documentDisposition, formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
@@ -125,7 +125,7 @@ import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settingsChanged)
 import Wiki.Server.Events (Hub, openConnections)
-import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
+import Wiki.Server.Export (Engine, Exported (..), Exports, availableFormats, checkEngine, currentEngine, engineReport, exportPage, exportSpace, logEngine)
 import Wiki.Server.Feed (FeedCache)
 import Wiki.Server.Guide (canInstallGuide)
 import Wiki.Server.Guide qualified as Guide
@@ -179,6 +179,9 @@ data Env = Env
   , exports :: Exports
   -- ^ The exports in progress ("Wiki.Server.Export"), at most one per
   -- person.
+  , texEngine :: Engine
+  -- ^ The last try of the TeX engine the PDFs are made with
+  -- ("Wiki.Server.Export"): the PDFs are offered while it worked.
   , backups :: BackupService
   -- ^ The thread that backs the server up ("Wiki.Server.Backups").
   , resets :: Limiter
@@ -612,7 +615,7 @@ handlers env caller =
           , postDetails = wiki . postDetails
           , pageAt = \s path -> versioned <$> wiki (getPage s path)
           , createPage = \s new -> versioned <$> wiki (createPage s new.parent new.title new.body)
-          , export = \s format request respond -> liftIO (exporting request respond (\key -> exportSpace env.exports key env.storage who s format))
+          , export = \s format request respond -> liftIO (exporting request respond (\key -> exportSpace env.exports env.texEngine key env.storage who s format))
           }
     , pages =
         PagesApi
@@ -628,7 +631,7 @@ handlers env caller =
           , versions = \p before limit -> wiki (listVersions p (VersionsQuery ((\v -> v.time) <$> before) (fromMaybe versionsPageSize limit)))
           , version = \p at -> wiki (getVersion p at.time)
           , restore = \p at current -> versioned <$> wiki (restoreVersion p at.time current.time)
-          , export = \p format request respond -> liftIO (exporting request respond (\key -> exportPage env.exports key env.storage who p format))
+          , export = \p format request respond -> liftIO (exporting request respond (\key -> exportPage env.exports env.texEngine key env.storage who p format))
           }
     , attachments =
         AttachmentsApi
@@ -719,6 +722,14 @@ handlers env caller =
               liftIO (settingsChanged env.backups)
               liftIO (currentBackups env.backups who) >>= either (throwError . wikiError) pure
           , backUpNow = liftIO (requestBackup env.backups who) >>= either (throwError . wikiError) pure
+          , -- The server's own machine: the storage has nothing to say
+            -- about it, so only an administrator is checked for here.
+            texEngine = administrator >> liftIO (engineReport <$> currentEngine env.texEngine)
+          , checkTexEngine = do
+              administrator
+              found <- liftIO (checkEngine env.texEngine)
+              liftIO (logEngine env.logger found)
+              pure (engineReport found)
           }
     , -- The storage checks who may, and tells the live channel
       -- ("Wiki.Server.Events") what changed.
@@ -853,7 +864,7 @@ handlers env caller =
     sessionInfo :: Session -> Handler SessionInfo
     sessionInfo s = do
       providers <- liftIO (currentProviders env)
-      exports <- liftIO availableFormats
+      exports <- liftIO (availableFormats env.texEngine)
       settings <- liftIO (readServerSettings env.storage)
       pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage}
     -- The signed-in user, for what only a signed-in user has. Refused to
@@ -878,7 +889,11 @@ handlers env caller =
     exporting request respond make
       | requestMethod request `notElem` [methodGet, methodHead] =
           respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An export is fetched with GET.")))
-      | otherwise = make exportKey >>= respond . either refusal exportedResponse
+      | otherwise = do
+          -- Warp closes a connection that sends nothing for 30 seconds,
+          -- and a PDF may take up to 'exportTimeout' to make.
+          pauseTimeout request
+          make exportKey >>= respond . either refusal exportedResponse
     -- The whole wiki as a zip file, written to a temporary file in the
     -- data directory and sent from there, then deleted. Writing it first
     -- costs disk rather than memory, and the answer can still say that the
@@ -1171,7 +1186,8 @@ waitText seconds
 
 -- | The response for an exported document: a download under its file
 -- name, or for a PDF the document shown in the browser's tab under its
--- file name ('opensInline'), with its media type and no type sniffing.
+-- file name ('Wiki.Api.Export.documentDisposition'), with its media type
+-- and no type sniffing.
 -- The document holds what a page's author wrote, served from the wiki's
 -- own origin, so it is sandboxed in case a browser shows it instead of
 -- saving it (an HTML export above all).
@@ -1181,7 +1197,7 @@ exportedResponse e =
     status200
     [ (hContentType, encodeUtf8 (formatMediaType e.format))
     , ("X-Content-Type-Options", "nosniff")
-    , ("Content-Disposition", (if opensInline e.format then "inline" else "attachment") <> "; filename=\"" <> encodeUtf8 e.fileName <> "\"")
+    , ("Content-Disposition", encodeUtf8 (documentDisposition e.format e.fileName))
     , ("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self' data:; style-src 'unsafe-inline'; font-src data:; sandbox")
     ]
     (BSL.fromStrict e.bytes)

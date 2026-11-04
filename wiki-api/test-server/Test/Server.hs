@@ -27,7 +27,7 @@ import Test.Sample qualified as Sample
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), MacroUse, NewInvitation (..), UserQuery (..), defaultSettings, pageOfDirectory, userQueryOf)
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), MacroUse, NewInvitation (..), TexEngine (..), TexStatus (..), UserQuery (..), defaultSettings, pageOfDirectory, userQueryOf)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
@@ -303,6 +303,9 @@ stubs =
           , -- What was sent, the configuration said to be set if it was given.
             setBackups = \change -> pure (Sample.backupsAfter change)
           , backUpNow = pure Sample.backups {running = True}
+          , texEngine = pure Sample.texEngine
+          , -- A check made later, which found it working.
+            checkTexEngine = pure Sample.texEngine {status = TexWorking, output = Nothing, checkedAt = Sample.later}
           }
     , comments = \page ->
         let here :: Handler a -> Handler a
@@ -767,6 +770,13 @@ spec = describe "a server of the API's type" $ do
     it "sends a test mail" $ do
       links.admin.testMail `shouldBe` "api/v1/admin/server/mail/test"
       answers (sendJson methodPost links.admin.testMail MailTest {to = "ada@example.org"}) 200 MailTestResult {failure = Nothing}
+
+  describe "the TeX engine" $ do
+    it "says what the server last found, and checks it again, at tex-engine" $ do
+      links.admin.texEngine `shouldBe` "api/v1/admin/tex-engine"
+      links.admin.checkTexEngine `shouldBe` "api/v1/admin/tex-engine/check"
+      answers (getAt links.admin.texEngine) 200 Sample.texEngine
+      answers (request methodPost links.admin.checkTexEngine [] "") 200 Sample.texEngine {status = TexWorking, output = Nothing, checkedAt = Sample.later}
 
   describe "the backups" $ do
     it "reads them, writes a change, and makes one now, at server/backups" $ do

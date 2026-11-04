@@ -1,0 +1,6 @@
+{
+  "checkedAt": "2026-10-24T09:30:12.345678Z",
+  "output": "I can't find the format file `xelatex.fmt'!",
+  "path": "/usr/bin/xelatex",
+  "status": "failing"
+}

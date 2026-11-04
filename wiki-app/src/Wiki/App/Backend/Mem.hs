@@ -262,6 +262,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
     SourceUrl url -> pure url.text
     SourceBlob blob -> blobUrl a.mediaType blob
 
+  -- The demo has no pandoc, offers no formats, and makes no document.
+  fetchExport _ _ = pure (Left (Invalid "The demo makes no documents: exporting needs the server, which makes them with pandoc."))
+
 -- | The URL of bytes the store holds, with a media type: an object URL,
 -- made the first time it is asked for and then remembered. The empty text
 -- for bytes the store does not have. Bytes kept in IndexedDB and not in
@@ -393,6 +396,8 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   -- sections say so.
   activity _ = query activityIn
   serverStatus = query serverStatusIn
+  texEngine = query (\st -> Nothing <$ serverStatusIn st)
+  checkTexEngine = query (\st -> Nothing <$ serverStatusIn st)
   installGuide = query (\st -> serverStatusIn st >> Left (Invalid "The demo's guide is its Docs space."))
 
 -- | A page's comments, on the same wiki, saved like every other write

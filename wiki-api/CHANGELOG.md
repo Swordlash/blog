@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Exports that say what went wrong (WP5.56). `AdminApi` gains
+`texEngine`, `GET admin/tex-engine`, and `checkTexEngine`, `POST
+admin/tex-engine/check`, both answering a `TexEngine` (`Wiki.Api.Admin`:
+`{"status", "path", "output", "checkedAt"}`, the status `working`,
+`failing` or `not-found`). `Wiki.Api.Export` gains `documentDisposition`, the
+`Content-Disposition` of an exported document, and `dispositionFileName`,
+which reads its file name back.
+
 Avatars, readers and inline PDFs (WP5.55). `AccountApi` now takes the
 multipart backend of its forms as a parameter, as `SpacesApi` does, and
 gains `setAvatar`, `PUT account/avatar` with the picture as a form's file
