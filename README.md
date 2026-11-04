@@ -1995,7 +1995,12 @@ What limits the exposure here: code from outside (a fork, a bot) is sent to the
 hosted runners, and a fork's only once the owner has approved its run; the runner runs as a
 user of its own, without `sudo` (as set up below), so a job reaches what that
 user can and no more; and the workflow uses no secret but the run's own token,
-which may only read the repository (and its Actions runs, in `plan`).
+which may only read the repository (and its Actions runs, in `plan`), except
+that `native` and `wasm` may also delete the repository's Actions caches
+(`actions: write`), to prune the older copies of the caches they save (see
+below). The wasm job holds that token on the owner's machine too, where it
+prunes nothing: code that runs there can delete the caches, which costs a
+cold build at worst.
 
 What remains:
 
@@ -2041,7 +2046,8 @@ compares the groups' full spec paths, including duplicate descriptions, against
 the unsplit suite. Only PostgreSQL starts a container; unit installs the small
 system dependencies and xmllint, while the database jobs also install TeX.
 All three restore the same dependency and build caches; unit saves the Cabal
-store and complete build snapshot, and postgres saves the apt archives.
+store and complete build snapshot (and prunes their older copies, see below), and
+postgres saves the apt archives.
 
 The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
@@ -2051,17 +2057,34 @@ avoids downloading the TeX packages again; it does not skip package setup.
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
 `dist-newstyle/native-fast` helpers and its wasm objects, interfaces and Cabal
-metadata. The keys include the runner environment, OS and architecture and
-compiler pins. The exact snapshot also records Cabal and source inputs, but the fallback crosses project,
-flag and Cabal changes: Cabal and GHC check which objects remain valid. Identical source reuses the
-same immutable snapshot rather than uploading another one. Every build and test
-still runs: Cabal resolves dependencies against the current package index, and
-Cabal and GHC decide which modules need recompiling. If dependency versions change
-without a source change, they rebuild as needed; the snapshot remains an older
-starting point until the next source change gives it a new key. A pull request's
-cache belongs to that pull request; after merging this workflow change, run it
-once on `main` with `runner: hosted` to seed the default-branch incremental caches
-that other branches can restore. The weekly hosted run keeps those caches warm.
+metadata. Each of the four caches (the native and the wasm store, the native and
+the wasm snapshot) works the same way:
+
+- **Restored whatever the sources say.** A cache's key names only the compiler
+  pins, the runner's kind, OS and architecture, and a version tag (`v1`, `v2`)
+  bumped by hand to start afresh, then the run's id and attempt, since a key
+  cannot be overwritten. The restore takes the newest copy under that prefix: a
+  new dependency is one more directory in the store, and Cabal and GHC check which
+  objects in a snapshot remain valid and rebuild the rest. Every build and test
+  still runs.
+- **Saved by every hosted run, and one copy kept.** The stores are saved once
+  their dependencies have built (before the build, so a failure in the wiki's own
+  code still keeps them), the native snapshot once the build has passed, and the
+  wasm snapshot at the end of a job that passed. After each save,
+  `toolchain/ci-prune-caches.sh` deletes the older copies under the same prefix on
+  the same ref, so a ref holds one copy per cache. Before, every run added a copy
+  of each, and the repository's 10 GB limit evicted the older ones, `main`'s among
+  them. The script deletes nothing when the copy just saved is not listed (its
+  save failed), and never fails the job: a fork's pull request has a read-only
+  token, so its older copies stay until GitHub evicts them.
+- **Visible to pull requests from `main`.** A run restores the caches of its own
+  ref, then those of `main`. So only copies on the same ref are pruned: a pull
+  request that deleted `main`'s copy would leave every other pull request without
+  one. `main`'s hosted copies come from its hosted runs: the weekly scheduled run,
+  which always takes the hosted runners, a push to `main` that found the owner's
+  machine busy, and a run by hand with `runner: hosted` (the native caches also
+  from every push to `main` whose build jobs run). A push to `main` whose wasm job
+  takes the owner's machine saves no wasm cache to GitHub.
 
 On the owner's runner, checkout retains `dist-newstyle/native`, `dist-newstyle/native-fast` and
 `dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
