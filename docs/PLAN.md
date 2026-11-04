@@ -526,14 +526,20 @@ In the order to do it, unless the owner says otherwise.
   is shown as text in the title's place, not as a field (a disabled input gets no click,
   so it is not one); a click on it puts the caret on the text's first line after `# `,
   scrolls it into view and focuses the text (a new island entry next to `focus`). A
-  template's title stays an editable field. Tests: server (upload, a wrong type or size
+  template's title stays an editable field. (e) *A line continuation* (the owner,
+  2026-11-04): a newline in the Markdown is a line break in the page, so a line that
+  ends with a backslash continues on the next line instead, rendered as one line with a
+  space at the join, decided in the renderer (a backslash in code or math stays what it
+  is); whether two trailing spaces still break depends on the parser telling the two
+  forms apart. Tests: server (upload, a wrong type or size
   refused, the URL, the default icon, readers over the live channel next to
   `Test.Server.Presence` and the comments channel tests, `createdBy` and `updatedBy`);
   browser (the avatar in the header and at a comment through the demo, the readers'
   stack from a given list, who wrote under the title, the title's click in the editor,
   the readers over HTTP in `Test.Browser.Http` next to "who is editing"). The wiki-api
-  goldens change (`User` and `Author` carry the field). Docs: `docs/api.md`, the README,
-  the guide where it shows the header or comments, the four CHANGELOGs.
+  goldens change (`User` and `Author` carry the field); the Markdown specs for the
+  continuation. Docs: `docs/api.md`, the README, the guide where it shows the header,
+  comments or the Markdown's line breaks, the four CHANGELOGs.
 
 ### Later, or waiting for the owner
 
