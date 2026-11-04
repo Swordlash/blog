@@ -598,6 +598,28 @@ In the order to do it, unless the owner says otherwise.
   backdrop; browser tests for its opening, the fit and the close. Docs: the
   guide's sentence on the settings, wiki-app's CHANGELOG.
 
+- **WP5.60 The assistant's addresses come from the server** (the owner, 2026-11-04,
+  after WP5.59; one pull request on WP5.59's branch). A user can type any base URL
+  in the assistant's settings, and every address but Anthropic's, OpenAI's and the
+  administration's hosts is refused by the page's CSP, with an error that explains
+  nothing to them. The administration's list of the assistant's hosts (WP5.21, origins
+  for the CSP only) becomes a list of the assistant's services: each with a name, a
+  base URL and the API it speaks (Anthropic's or OpenAI's), edited in the Server
+  section as the sign-in providers are; the CSP takes each one's origin (and the
+  `--assistant-hosts` of the command line as today), and every session carries the
+  list (`SessionInfo.assistantServices`). Old settings with `assistantHosts` read as
+  services speaking OpenAI's API, named by their host. In the assistant's settings the
+  base URL field becomes a choice per provider: the provider's own service, then the
+  server's services that speak its API; choosing one sets the base URL the kept
+  settings already carry (`baseUrl`), so `readyFor`, the vault and the model list
+  stay as they are. No free field: the demo, which has no server, offers the
+  provider's own only. A kept base URL that no service offers any more is shown as
+  such and replaced by the next choice. Tests: wiki-api (the settings' JSON, old and
+  new, the CSP's origins), server (the session's list, the administration's edit),
+  browser (the choice offered from the session, the chosen address reaching the
+  request, the stale address). Docs: `docs/api.md`, the README's assistant section,
+  the guide, the CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
