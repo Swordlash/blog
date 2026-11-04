@@ -963,6 +963,13 @@ needs. Each was true when its package merged; check before relying on one.
   TeX, up to 60 s with a hanging one), and a TeX repaired afterwards takes effect at
   "Check again" or a restart; the export buttons do nothing until the program has
   loaded, where the old links worked before it.
+- A flaky server test (seen 2026-11-04 on #153, a run of `main`'s code): "the live
+  channel checks once for each user whether they may read a page an event is about,
+  not once for each tab" (`wiki-server/test/Test/Storage/Scale.hs`) counts the `BEGIN`
+  statements while a hundred tabs hear an event and expects one per user; other
+  transactions of the server that begin in that window (a "last seen" write, a
+  notification) are counted too, so under load it sees more. Count the permission
+  checks themselves, or the readers' transactions only, when it next fails.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
