@@ -597,10 +597,14 @@ In the order to do it, unless the owner says otherwise.
   `api.anthropic.com`, and the choice is kept with the settings (and the vault). The
   field's help says the host must be among the administration's assistant hosts, and
   the "cannot reach" warning names that list as a cause. A token that expires is pasted
-  again (a known gap: nothing refreshes it). Tests: wiki-core (settings round-trips with
-  the new fields, `usable` and `serviceName` for Anthropic elsewhere), browser (the
-  settings' fields, and the assistant's request carrying `Authorization: Bearer` and
-  the base URL when chosen, through the tests' own fetch). Docs: the README's assistant
+  again (nothing refreshes it), and the assistant says so: when a provider answers 401
+  (the SDK's authentication error), the message shown names the service and says the
+  key or token was refused and has probably expired or been revoked, with a link to the
+  assistant's settings to paste a new one; the same for the settings' "Check" and the
+  model list. Tests: wiki-core (settings round-trips with the new fields, `usable` and
+  `serviceName` for Anthropic elsewhere), browser (the settings' fields, the
+  assistant's request carrying `Authorization: Bearer` and the base URL when chosen,
+  and the 401 message, through the tests' own fetch). Docs: the README's assistant
   section, the guide, wiki-core's and wiki-app's CHANGELOGs.
 
 ### Later, or waiting for the owner
