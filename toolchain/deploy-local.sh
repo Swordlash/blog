@@ -943,6 +943,9 @@ tex_step() {
     return 0
   fi
   if ! install_texlive; then
+    # An install of the remembered installation's year removed it first:
+    # then nothing is remembered, rather than a directory that is gone.
+    [ -n "$(texlive_bin "$texlive_dir" || true)" ] || texlive_dir=
     warn "TeX Live was not installed (see above), so $offer_off; the next deploy tries again (--no-texlive stops it)"
     return 0
   fi
