@@ -139,6 +139,32 @@ spec = describe "Anchor" $ do
       let doc = blocksOf "# Cat\n\nA cat sat.\n\nThe cat sat."
       textFragment doc (quoting "cat sat" doc.text) `shouldBe` ":~:text=A-,cat%20sat,-."
 
+    it "takes an island as a break the words around it do not cross" $ do
+      -- "The formula $x$ is useful.", the formula an island.
+      let doc = renderedBlocks ([HH.p_ [HH.text "The formula ", Core.widget (), HH.text " is useful."]] :: [HH.HTML () ()])
+      doc.text `shouldBe` "The formula  is useful."
+      textFragment doc (quoting "The formula  is useful." doc.text) `shouldBe` ":~:text=The%20formula,is%20useful."
+      textFragment doc (quoting "formula " doc.text) `shouldBe` ":~:text=formula"
+      textFragment doc (quoting " is use" doc.text) `shouldBe` ":~:text=is%20useful"
+    it "widens a word only up to an island beside it" $ do
+      let doc = renderedBlocks ([HH.p_ [HH.text "Area πr", Core.widget (), HH.text "ab today"]] :: [HH.HTML () ()])
+      textFragment doc (quoting "π" doc.text) `shouldBe` ":~:text=%CF%80r"
+      textFragment doc (quoting "b" doc.text) `shouldBe` ":~:text=ab"
+
+    it "takes an image as a break, as an island" $ do
+      let doc = blocksOf "See ![a dot](dot.png) here, and go."
+      textFragment doc (quoting "See  here" doc.text) `shouldBe` ":~:text=See,here"
+    it "takes a line break in a paragraph as a space, not a break" $ do
+      let doc = blocksOf "# T\n\nOne two\nthree four."
+      textFragment doc (quoting "two\nthree" doc.text) `shouldBe` ":~:text=two%20three"
+    it "reads a footnote's number, inline code and a mention as the text they show" $ do
+      let doc = blocksOf "A word[^n] in `code` by @ada.\n\n[^n]: The note."
+      textFragment doc (quoting "word1 in code by @ada" doc.text) `shouldBe` ":~:text=word1%20in%20code%20by%20%40ada"
+    it "takes a task's checkbox as a break" $ do
+      let doc = blocksOf "- [x] done it"
+      doc.text `shouldBe` " done it"
+      textFragment doc (quoting "done" doc.text) `shouldBe` ":~:text=done"
+
   describe "renderedBlocks" $ do
     it "is the rendered text, with where each block starts and ends" $ do
       let doc = blocksOf "# Title\n\nA *b*.\n\n- one\n- two"

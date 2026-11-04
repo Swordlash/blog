@@ -189,11 +189,14 @@ commonSuffixLength x y = commonPrefixLength (T.reverse x) (T.reverse y)
 -- | 'BlockText' is a page's rendered text ('renderedText') with where its
 -- blocks begin and end: the offsets in the text, in characters, at which a
 -- paragraph, a heading, a list item, a table's cell or any other block
--- starts or ends ('renderedBlocks'). 'renderedText' joins the blocks with
--- nothing between them, as the browser's selection reads them, so the end
--- of one block and the start of the next look like one word there; a
--- text fragment ('textFragment') has to see the boundary, since the
--- browser looks for its words block by block.
+-- starts or ends ('renderedBlocks'), and where an island is (a formula, a
+-- diagram, a picture, code: a child component, whose text is not the
+-- page's). 'renderedText' joins the blocks with nothing between them, as
+-- the browser's selection reads them, and leaves the islands out, so the
+-- words on either side of a block's edge or of an island look like one
+-- text there. A text fragment ('textFragment') has to see those breaks:
+-- the browser looks for its words block by block, and an island's own
+-- text, which the browser does see, stands between the words around it.
 data BlockText = BlockText
   { text :: Text
   , breaks :: [Int]
@@ -202,7 +205,11 @@ data BlockText = BlockText
   deriving stock (Eq, Show)
 
 -- | A rendered document's 'BlockText': its 'renderedText', and where its
--- block elements begin and end in it.
+-- block elements begin and end in it, and its islands and its images,
+-- videos and other elements that are not text are. An island
+-- inline (a formula in a sentence) is a break inside its block; one that
+-- is a block is a block with nothing in it. Either way the words before
+-- it and after it are not one text.
 renderedBlocks :: [HH.HTML w i] -> BlockText
 renderedBlocks doc = BlockText {text = T.concat pieces, breaks = ordNub (go 0 (concatMap (\(HTML v) -> walk v) doc))}
   where
@@ -212,16 +219,29 @@ renderedBlocks doc = BlockText {text = T.concat pieces, breaks = ordNub (go 0 (c
       Text t -> [Left t]
       Elem _ (ElemName name) _ children
         | name `elem` blockElements -> [Right ()] <> concatMap walk children <> [Right ()]
+        | name `elem` replacedElements -> [Right ()]
         | otherwise -> concatMap walk children
       Keyed _ (ElemName name) _ children
         | name `elem` blockElements -> [Right ()] <> concatMap (walk . snd) children <> [Right ()]
         | otherwise -> concatMap (walk . snd) children
-      Widget _ -> []
+      Widget _ -> [Right ()]
       Grafted g -> walk (runGraft g)
     go at = \case
       [] -> []
       Left t : rest -> go (at + T.length t) rest
       Right () : rest -> at : go at rest
+
+-- | What 'textFragment' puts in the page's text at each of its breaks: a
+-- character no rendered text has, which is neither a word's nor
+-- whitespace.
+breakChar :: Char
+breakChar = '\0'
+
+-- | Elements the browser shows as something other than text, inside a
+-- line: an image, a video, a checkbox. The words on either side of one
+-- are not one text, as on either side of an island.
+replacedElements :: [Text]
+replacedElements = ["audio", "canvas", "embed", "iframe", "img", "input", "object", "svg", "video"]
 
 -- | The elements a browser lays out as blocks, between which a text
 -- fragment's words are not looked for together.
@@ -286,10 +306,12 @@ blockElements =
 textFragment :: BlockText -> Anchor -> Text
 textFragment page a = ":~:text=" <> T.intercalate "," (prefixPart <> map encodeFragmentPart body <> suffixPart)
   where
-    -- The page's text with a line break at each block boundary, and the
-    -- quote's place in it, widened to whole words.
+    -- The page's text with 'breakChar' at each break (a block's edge, an
+    -- island), and the quote's place in it, widened to whole words. A line
+    -- break in a paragraph is a "\n" of the text itself: whitespace, as
+    -- the browser reads it, not a break.
     cuts = filter (\b -> b > 0 && b < T.length page.text) page.breaks
-    separated = T.intercalate "\n" (pieces page.text (0 : cuts))
+    separated = T.intercalate (T.singleton breakChar) (pieces page.text (0 : cuts))
     pieces t = \case
       [] -> []
       [o] -> [T.drop o t]
@@ -307,19 +329,19 @@ textFragment page a = ":~:text=" <> T.intercalate "," (prefixPart <> map encodeF
          in (T.take s separated, T.take (e - s) (T.drop s separated), T.drop e separated)
       Orphaned -> (a.prefix, a.exact, a.suffix)
     wordChar c = isAlphaNum c || c == '_'
-    blocks = filter (not . null) (map T.words (T.splitOn "\n" quote))
+    blocks = filter (not . null) (map T.words (T.splitOn (T.singleton breakChar) quote))
     quoteWords = concat blocks
     body = case blocks of
       [single] | length single <= fragmentWords -> [T.unwords single]
       _ -> [T.unwords (take 3 (fromMaybe [] (head blocks))), T.unwords (lastN 3 (fromMaybe [] (lastMay blocks)))]
     lastN n xs = drop (length xs - n) xs
     firstTerm = T.toCaseFold (fromMaybe "" (head body))
-    repeated = sum [T.count firstTerm (T.toCaseFold (T.unwords (T.words b))) | b <- T.splitOn "\n" separated, not (T.null firstTerm)] > 1
+    repeated = sum [T.count firstTerm (T.toCaseFold (T.unwords (T.words b))) | b <- T.splitOn (T.singleton breakChar) separated, not (T.null firstTerm)] > 1
     -- The last words before the quote in its first block, and the first
     -- after it in its last, at most three of each: whole words, since the
     -- quote was widened to them.
-    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, not (null quoteWords), let ws = lastN 3 (T.words (T.takeWhileEnd (/= '\n') before)), not (null ws)]
-    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, not (null quoteWords), let ws = take 3 (T.words (T.takeWhile (/= '\n') after)), not (null ws)]
+    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, not (null quoteWords), let ws = lastN 3 (T.words (T.takeWhileEnd (/= breakChar) before)), not (null ws)]
+    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, not (null quoteWords), let ws = take 3 (T.words (T.takeWhile (/= breakChar) after)), not (null ws)]
 
 -- | How many words a text fragment's quote may have before only its first
 -- and last three are written.

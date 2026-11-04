@@ -17,10 +17,13 @@ selection (the title as its text when nothing is selected), with the cursor
 after it. `Wiki.Core.Anchor` gains `textFragment`, a quote's text fragment
 (`:~:text=…`, widened to whole words, with the words around it when the
 page has it more than once), and `encodeFragmentPart`, its percent-encoding.
-`textFragment` reads the page's text with its blocks apart (`BlockText`,
-from `renderedBlocks`), since the browser looks for a fragment's words
-within one block: a block's edge is a word's edge, and a quote across
-blocks is written as its first and last words (`text=start,end`).
+`textFragment` reads the page's text with its breaks (`BlockText`, from
+`renderedBlocks`): the edges of its blocks, since the browser looks for a
+fragment's words within one block, and its islands (formulas, diagrams,
+pictures, code blocks) and images, videos and checkboxes, which stand
+between the words around them. A break is a word's edge, and a quote
+across one is written as its first and last words (`text=start,end`). A
+line break inside a paragraph is whitespace, as the browser reads it.
 
 The built-in math macros may be the server's own copy (WP5.41):
 `Wiki.Core.Math` gains `wikiMacros`, which marks that block (a TeX comment,
