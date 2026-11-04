@@ -33,6 +33,10 @@ space i parent =
     , slug = either (panic . show) identity (mkSlug i)
     , parent
     , public = False
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros = ""
     , createdAt = UTCTime (ModifiedJulianDay 60000) 0
     , position = 0

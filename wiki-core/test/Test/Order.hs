@@ -50,6 +50,10 @@ space i name parent made position subspaceOrder =
     , slug = slug i
     , parent = SpaceId <$> parent
     , public = False
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros = ""
     , createdAt = day made
     , position

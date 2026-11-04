@@ -912,7 +912,12 @@ parseNamed = withObject "author" $ \o -> do
 -- does not know), @description@ (empty if missing), @blog@ (whether it
 -- is shown as a blog, "Wiki.Core.Blog"; false if missing) and
 -- @boxNumbering@ (how its boxes are numbered, "Wiki.Core.Markdown.Box";
--- within the page if missing, or of a way this program does not know).
+-- within the page if missing, or of a way this program does not know),
+-- @sealed@ (whether it is private from its parent; false if missing),
+-- @owner@ (the id of the user whose personal space it is; none if
+-- missing), @active@ (whether a personal space is shown; true if missing)
+-- and @personalContainer@ (whether it is the container of personal
+-- spaces; false if missing).
 --
 -- This is the record of version 1 and of the demo's IndexedDB, where an
 -- image's file is @icons\/\<space id>@. In version 2, @space.json@ is the
@@ -940,6 +945,10 @@ spaceFields iconFile s =
     <> ["description" .= s.description | not (T.null s.description)]
     <> ["blog" .= True | s.blog]
     <> ["boxNumbering" .= s.boxNumbering | s.boxNumbering /= InPage]
+    <> ["sealed" .= True | s.sealed]
+    <> ["owner" .= o.text | Just o <- [s.owner]]
+    <> ["active" .= False | not s.active]
+    <> ["personalContainer" .= True | s.personalContainer]
 
 -- | A space's icon as its record writes it: an image names the archive
 -- file its bytes are in.
@@ -967,7 +976,11 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   description <- o .:? "description" .!= ""
   blog <- o .:? "blog" .!= False
   boxNumbering <- fromMaybe InPage . (>>= readNumbering) <$> o .:? "boxNumbering"
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  sealed <- o .:? "sealed" .!= False
+  owner <- fmap UserId <$> o .:? "owner"
+  active <- o .:? "active" .!= True
+  personalContainer <- o .:? "personalContainer" .!= False
+  pure Space {id, name, slug, parent, public, sealed, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

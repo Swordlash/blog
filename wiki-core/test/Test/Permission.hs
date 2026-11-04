@@ -24,6 +24,10 @@ space s parent public =
     , slug = either (panic . show) identity (mkSlug s)
     , parent = (\p -> p.id) <$> parent
     , public
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros = ""
     , createdAt = UTCTime (fromGregorian 2026 1 1) 0
     , position = 0
@@ -160,6 +164,64 @@ spec = describe "Permission" $ do
     it "still gives its grants on top" $
       perms (as "wanda") draftsC `shouldBe` viewEdit
 
+  describe "a sealed space" $ do
+    -- The backend's api, sealed, with a grant of its own to erin, and the
+    -- blog's drafts, sealed and public.
+    let sealedApi = api {sealed = True}
+        sealedApiC = [eng, backend, sealedApi]
+        privateDrafts = drafts {sealed = True}
+        sealedDraftsC = [blog, privateDrafts]
+        publicDrafts = drafts {sealed = True, public = True}
+        own = grants <> Grants {global = [], spaces = [SpaceGrant {space = api.id, subject = SubjectUser (usr "erin"), permission = Edit}], access = Open}
+    it "is not seen by those who read its parent" $ do
+      spacePermissions (as "alice") own backendC `shouldBe` viewEdit
+      spacePermissions (as "alice") own sealedApiC `shouldBe` none
+      spacePermissions (as "bob") own sealedApiC `shouldBe` none
+      spacePermissions (as "carol") own sealedApiC `shouldBe` none
+    it "is not public because a space above it is" $ do
+      perms anonymous sealedDraftsC `shouldBe` none
+      perms (as "mallory") sealedDraftsC `shouldBe` none
+    it "keeps its own grants" $ do
+      spacePermissions (as "erin") own sealedApiC `shouldBe` viewEdit
+      perms (as "wanda") sealedDraftsC `shouldBe` viewEdit
+    it "keeps its own public flag" $ do
+      perms anonymous [blog, publicDrafts] `shouldBe` viewOnly
+      perms (as "wanda") [blog, publicDrafts] `shouldBe` viewEdit
+    it "is still seen by a global administrator" $
+      perms (as "dave") sealedApiC `shouldBe` everything
+    it "passes its own grants on to its subspaces, and nothing from above" $ do
+      let below = space "below" (Just sealedApi) False
+          belowC = sealedApiC <> [below]
+      spacePermissions (as "erin") own belowC `shouldBe` viewEdit
+      spacePermissions (as "alice") own belowC `shouldBe` none
+      perms (as "wanda") (sealedDraftsC <> [space "notes" (Just privateDrafts) False]) `shouldBe` viewEdit
+    it "cuts the chain at the last sealed space in it" $ do
+      let inner = (space "inner" (Just sealedApi) False) {sealed = True}
+          innerC = sealedApiC <> [inner]
+      sealedChain innerC `shouldBe` [inner]
+      sealedChain sealedApiC `shouldBe` [sealedApi]
+      sealedChain apiC `shouldBe` apiC
+      spacePermissions (as "erin") own innerC `shouldBe` none
+
+  describe "a personal space" $ do
+    let container = (space "users" Nothing False) {personalContainer = True}
+        mine = (space "ada" (Just container) True) {owner = Just (usr "ada")}
+        mineC = [container, mine]
+        ownGrant = grants <> Grants {global = [], spaces = [SpaceGrant {space = mine.id, subject = SubjectUser (usr "ada"), permission = AdministerSpace}], access = Open}
+    it "is read by everyone it is public to, and administered by its owner" $ do
+      spacePermissions anonymous ownGrant mineC `shouldBe` viewOnly
+      spacePermissions (as "mallory") ownGrant mineC `shouldBe` viewOnly
+      spacePermissions (as "ada") ownGrant mineC `shouldBe` everything
+    it "is absent for everyone while it is inactive, global administrators included" $ do
+      let hidden = mine {active = False}
+          below = space "notes" (Just hidden) True
+      for_ [anonymous, as "ada", as "mallory", as "dave"] $ \who -> do
+        spacePermissions who ownGrant [container, hidden] `shouldBe` none
+        spacePermissions who ownGrant [container, hidden, below] `shouldBe` none
+    it "lives in a container nobody may view, global administrators included" $
+      for_ [anonymous, as "ada", as "dave"] $ \who ->
+        spacePermissions who ownGrant [container] `shouldBe` none
+
   describe "in a closed wiki" $ do
     let closed = grants {access = Closed}
     it "a public space may not be read by anyone not signed in" $ do
@@ -249,10 +311,14 @@ spec = describe "Permission" $ do
     prop "closing the wiki takes nothing from anyone signed in" $
       forAll genPrincipal $ \p -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
         spacePermissions (Just p) gs {access = Closed} chain === spacePermissions (Just p) gs {access = Open} chain
-    prop "a subspace has at least what its parent has" $
+    prop "a subspace has at least what its parent has, unless it is sealed" $
       forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
-        spacePermissions who gs (initSafe chain) `Set.isSubsetOf` spacePermissions who gs chain
+        maybe True (\s -> s.sealed) (lastMay chain)
+          || spacePermissions who gs (initSafe chain) `Set.isSubsetOf` spacePermissions who gs chain
+    prop "a sealed space has what its own grants give, as if it had no parent" $
+      forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
+        spacePermissions who gs chain === spacePermissions who gs (sealedChain chain)
     prop "someone not signed in may at most view, and only a public tree" $
       forAll genGrants $ \gs -> forAll genChain $ \chain ->
         spacePermissions Nothing gs chain
-          === (if any (\s -> s.public) chain && gs.access == Open then viewOnly else none)
+          === (if any (\s -> s.public) (sealedChain chain) && gs.access == Open then viewOnly else none)

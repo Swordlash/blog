@@ -5,11 +5,18 @@
 module Wiki.Core.Space
   ( Space (..)
   , positionSpace
+  , withName
   , withMathMacros
   , subspaceOrderOf
   , subspacesOf
   , spaceTreeOrder
   , topLevelOf
+
+    -- * Personal spaces
+  , isPersonal
+  , personalName
+  , containerName
+  , containerSlug
 
     -- * How a space is pictured
   , Icon (..)
@@ -61,6 +68,28 @@ data Space = Space
   , public :: Bool
   -- ^ Whether anyone may read it, signed in or not; its subspaces inherit
   -- that as they inherit any grant (see "Wiki.Core.Permission").
+  , sealed :: Bool
+  -- ^ Whether it is private from its parent: when set, nothing granted on
+  -- the spaces above it counts in it, neither a grant nor a public flag,
+  -- and only its own grants and public flag do (and those of its
+  -- subspaces, in them). A global administrator still sees it
+  -- ("Wiki.Core.Permission"'s 'Wiki.Core.Permission.spacePermissions').
+  , owner :: Maybe UserId
+  -- ^ The user whose personal space it is, or 'Nothing' for any other
+  -- space. A personal space lives in the container of personal spaces
+  -- ('personalContainer') and cannot leave it. Its name is derived from
+  -- its owner's display name ('personalName') wherever spaces are read.
+  , active :: Bool
+  -- ^ Whether it is shown. Only a personal space is ever inactive: its
+  -- owner turned it off from the account menu. An inactive space, and
+  -- everything in it, is absent for everyone, administrators included,
+  -- until its owner turns it on again; its content is kept.
+  , personalContainer :: Bool
+  -- ^ Whether it is the container of personal spaces, the top-level
+  -- space "User subspaces" ('containerName') that the backend makes when
+  -- the first user turns on a personal space. Nobody may view it itself,
+  -- so it is listed only above a personal space someone may view, and
+  -- cannot be renamed, moved, deleted or given subspaces by hand.
   , mathMacros :: Text
   -- ^ TeX macros for the formulas of its pages and of its subspaces'
   -- pages, as @\\newcommand@ lines (or any definitions KaTeX reads); empty
@@ -136,11 +165,40 @@ topLevelOf spaces sid = go (32 :: Int) sid
     go 0 _ = Nothing
     go n i = find (\s -> s.id == i) spaces >>= \s -> maybe (Just s) (go (n - 1)) s.parent
 
+--------------------------------------------------------------------------------
+-- Personal spaces
+
+-- | Whether a space is someone's personal space.
+isPersonal :: Space -> Bool
+isPersonal s = isJust s.owner
+
+-- | The name of a personal space whose owner has this display name. The
+-- name is not chosen by anyone: the backends give a personal space this
+-- name wherever they read it, so that it follows its owner's name.
+personalName :: Text -> Text
+personalName displayName = "Space of " <> T.strip displayName
+
+-- | The name of the container of personal spaces ('personalContainer').
+containerName :: Text
+containerName = "User subspaces"
+
+-- | The slug the container of personal spaces is made with, unless a
+-- top-level space has it already (then the next free one, as
+-- 'Wiki.Core.Slug.freshSlug' makes it).
+containerSlug :: Slug
+containerSlug = either (panic . show) identity (mkSlug "users")
+
 -- | The space with other math macros. (A function, since a record update
 -- of @mathMacros@ cannot tell a space's field from the server's settings'
 -- or a session's where they are in scope.)
 withMathMacros :: Text -> Space -> Space
 withMathMacros mathMacros s = s {mathMacros}
+
+-- | The space with another name. (A function, since a record update of
+-- @name@ cannot tell a space's field from a group's where both are in
+-- scope.)
+withName :: Text -> Space -> Space
+withName name s = s {name}
 
 -- | The space at another position among its siblings. (A function, since
 -- a record update of @position@ cannot tell a space's field from a page's
@@ -274,6 +332,10 @@ withProfile p s =
     , slug = s.slug
     , parent = s.parent
     , public = s.public
+    , sealed = s.sealed
+    , owner = s.owner
+    , active = s.active
+    , personalContainer = s.personalContainer
     , mathMacros = s.mathMacros
     , createdAt = s.createdAt
     , position = s.position
