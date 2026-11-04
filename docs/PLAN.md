@@ -582,6 +582,27 @@ In the order to do it, unless the owner says otherwise.
   its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
   and wiki-app's CHANGELOGs.
 
+- **WP5.57 Claude at another address, with a bearer token** (the owner, 2026-11-04,
+  after WP5.56; one pull request). The owner's organisation reaches Claude through a
+  gateway that speaks the Messages API at its own address (Claude Code's
+  `ANTHROPIC_BASE_URL`), gives each user a key of their own (its `apiKeyHelper`) and
+  takes it as `Authorization: Bearer`, not `x-api-key`; the owner checked from a browser
+  that the gateway answers CORS preflights, lists models and completes a message that
+  way, once its host is among the administration's assistant hosts (WP5.21's CSP). The
+  assistant's settings get, for Anthropic as for OpenAI today, a base URL ("Another
+  service that speaks Anthropic's API": `baseUrlOf` no longer OpenAI-only, the model
+  list fetched there, the service named by its host as `serviceName` does), and next to
+  the key a choice of how it is sent, "API key (`x-api-key`)" or "Bearer token
+  (`Authorization`)", the SDK's `apiKey` or `authToken`; the default stays the key at
+  `api.anthropic.com`, and the choice is kept with the settings (and the vault). The
+  field's help says the host must be among the administration's assistant hosts, and
+  the "cannot reach" warning names that list as a cause. A token that expires is pasted
+  again (a known gap: nothing refreshes it). Tests: wiki-core (settings round-trips with
+  the new fields, `usable` and `serviceName` for Anthropic elsewhere), browser (the
+  settings' fields, and the assistant's request carrying `Authorization: Bearer` and
+  the base URL when chosen, through the tests' own fetch). Docs: the README's assistant
+  section, the guide, wiki-core's and wiki-app's CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
