@@ -35,9 +35,11 @@ import Halogen.JSBits (Safety (..), browserJS)
 import Halogen.JSBits.Promise (Promise, wait)
 import Halogen.TH (hh)
 import Protolude hiding (State, wait)
+-- With their constructors: the FFI passes the value inside each newtype,
+-- which it can only see through a constructor in scope.
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event)
-import Web.File.File (File)
+import Web.File.File (File (..))
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles)
 import Wiki.App.View.Common
