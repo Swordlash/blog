@@ -61,8 +61,9 @@
 -- page's 'Wiki.Core.Page.createdBy' and 'Wiki.Core.Page.updatedBy'. A page
 -- with no known author says when it last changed. When the page's Markdown
 -- starts with its own title (as a page the editor saved does), the line is
--- put in the article after that heading, marked as no part of the page's
--- text (@jsbits/comments.js@ skips it, and 'Wiki.Core.Anchor.renderedText'
+-- put in the article after that heading (the only place between the title
+-- and the text), as a @div@ rather than a paragraph of the page, and
+-- marked as no part of the page's text (@jsbits/comments.js@ skips it, and 'Wiki.Core.Anchor.renderedText'
 -- is read before it is put there), so that comments' quotes are found as
 -- before.
 --
@@ -945,7 +946,7 @@ peopleOf loaded threads readers = [(a.id, a.avatar) | a <- writers <> authors <>
 -- is known, each name with its avatar.
 byline :: Map UserId Text -> Page -> HH.HTML w i
 byline urls page =
-  [hh|<p class="page-byline">{{ said }}</p>|]
+  [hh|<div class="page-byline">{{ said }}</div>|]
   where
     onDay = [HH.text " on ", when']
     when' = [hh|<time {{ [attr "datetime" (toS (iso8601Show page.updatedAt))] }}>{{ dateOf page.updatedAt }}</time>|]
