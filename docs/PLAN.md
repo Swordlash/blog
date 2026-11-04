@@ -905,6 +905,21 @@ needs. Each was true when its package merged; check before relying on one.
   libpq is found through `pg_config` on PATH alone (`postgresql-libpq` does not use
   pkg-config), and `check-native.sh` names a `pg_config` found under `/usr/pgsql-*/bin`
   (#140).
+- CI's hosted caches (#153, the owner, 2026-11-04): the four build caches (the native
+  and wasm cabal stores, the native and wasm `dist-newstyle` snapshots) are keyed by
+  the compiler pins, the runner kind, a hand-bumped tag and the run id, never by a hash
+  of the sources: a run restores the newest copy under the prefix and cabal and GHC
+  decide what to rebuild; after each save `toolchain/ci-prune-caches.sh` deletes the
+  ref's older copies, so each ref holds one copy per cache and the repository's 10 GB
+  limit no longer evicts `main`'s. The hosted `native` and `wasm` jobs hold
+  `actions: write` for it (the wasm job on the owner's machine too, since permissions
+  are per job). A pull request's run sees only its own ref's copies and `main`'s;
+  `main`'s hosted wasm copy comes from the weekly scheduled run, from pushes that find
+  the owner's machine busy, and from runs by hand with `runner: hosted`, so a first
+  hosted wasm run on a fresh ref is cold (about 35 minutes) until one of those has
+  saved a copy. The stores keep a transitional restore key for the copies saved before
+  the tag; drop it at the next tag bump. The self-hosted runner's store and build
+  directories live on its disk and are untouched.
 - Without PostgreSQL (WP5.52): `toolchain/test-native-groups.mjs` expects a binary
   built with the flag on (its postgres group asks for `WIKI_TEST_DATABASE_URL`); a
   haddock on `Storage.release` names `Postgres.holdDatabaseShared`, which a flag-off
