@@ -236,6 +236,14 @@ take that from themself, which the space's view does not offer.
 | PUT | `api/v1/pages/<page>/template` | `PageTemplate` `{"template": bool}` | `Page`; not a save, its `updatedAt` stays | 404, 403, 400 (a space's home page) | `setPageTemplate` |
 | DELETE | `api/v1/pages/<page>` | | 204 | 404, 403 | `deletePage` |
 
+A `Page` is a `PageSummary` with its `body`, its `attachments`, and who
+wrote it (WP5.55): `createdBy`, the `Author` of its first version, and
+`updatedBy`, the `Author` of its latest, each `null` for a page without
+such a version (one an import brought whole) or whose version nobody is
+known to have saved, named as a version's author is. They are read from the
+history wherever a whole page is answered, and are never part of a request,
+of an export or of a `PageSummary`.
+
 ### Attachments
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
@@ -342,7 +350,7 @@ Every message is a JSON text frame. The tab sends `{"subscribe": "<page>"}`
 and `{"unsubscribe": "<page>"}`, and `{"editing": "<page>"}` when it opens
 the page's editor and `{"stopped": "<page>"}` when it closes it; the server
 answers a subscription with `{"subscribed": "<page>", "threads": [Thread],
-"editing": [Author]}`, or `{"refused": "<page>"}` for a page that is not
+"editing": [Author], "readers": Readers}`, or `{"refused": "<page>"}` for a page that is not
 there or that the connection's user may not read, and then sends `{"page":
 "<page>", "event": PageEvent}` for each change to the page's comments and
 each save of it, once it is committed, and each change of who edits it, to
@@ -358,6 +366,17 @@ connections, each person once (their id and display name, as a comment's
 author), so a tab never hears of itself but does hear of its own user in
 another tab; the answer to a subscription's `editing` says who it is then. A
 tab that connects again says again which pages it edits.
+
+A connection subscribed to a page is reading it (WP5.55). Each time the
+page's readers change (a connection subscribes to it, unsubscribes or
+closes), every connection subscribed to it is sent who else reads it, and
+the answer to a subscription's `readers` says who does then: `Readers`
+`{"some": [Author], "total": n, "visitors": v}`. `some` is the signed-in
+users of the other connections, each user once and never the connection's
+own user (in whatever tab), the first 15 by name; `total` is how many there
+are; `visitors` is how many connections of someone not signed in (in an
+open wiki) read it, the connection itself left out: they have no name, and
+each connection counts once. The server's operator is not counted.
 
 The answer's `threads` are the page's threads as `GET
 api/v1/pages/<page>/threads` would give the connection's user at that
@@ -380,6 +399,7 @@ its subscription, and asks for nothing more to catch up.
 | `thread-resolved` | `thread`: id, `resolved`: bool | a thread was resolved or reopened |
 | `thread-deleted` | `thread`: id | a thread was deleted, or its first comment with it |
 | `editing` | `editors`: [`Author`] | who else edits the page changed: these do now |
+| `readers` | `readers`: `Readers` | who else reads the page changed: these do now |
 | `page-changed` | `updatedAt`: time | the page was saved (or a version restored): its new version's time |
 
 Besides what happens to the pages it subscribed to, a connection opened by a
@@ -536,7 +556,7 @@ the query's words marked.
 
 | Method | Path | Body | Response | Errors |
 | ------ | ---- | ---- | -------- | ------ |
-| GET, HEAD | `api/v1/pages/<page>/export/<format>` | | the page as a document of that format, with its media type and `Content-Disposition: attachment; filename="<title>.<extension>"` | 404, 400, 429 |
+| GET, HEAD | `api/v1/pages/<page>/export/<format>` | | the page as a document of that format, with its media type and `Content-Disposition: attachment; filename="<title>.<extension>"`, or `inline; filename="…"` for the PDFs | 404, 400, 429 |
 | GET, HEAD | `api/v1/spaces/<space>/export/<format>` | | the space's pages as one document, in the space's order, after a title page and a table of contents | 404, 400, 429 |
 
 The formats (`Wiki.Api.Export`) are `docx` (Word, its formulas as Word's
@@ -549,7 +569,13 @@ on its `PATH` at each request: `exports` in the session lists what it
 offers, and a PDF asked for without it is 400. So is a presentation of a
 page that is not a deck, or of a space, and a document pandoc or TeX could
 not make, with their reason. Whoever may read the page (view the space)
-may export it. Each person makes one export at a time (a user by their id,
+may export it. A PDF (`pdf`, `beamer-pdf`) is answered `inline`, to open in
+a tab of the browser, and every other format as an `attachment`, to
+download (`Wiki.Api.Export.opensInline`, which the application's menu
+follows too): Chromium's browsers block downloads from a wiki served over
+plain HTTP, and a PDF shown in a tab is not a download, so on such a wiki
+the PDFs can still be exported, while the other formats need HTTPS. Each
+person makes one export at a time (a user by their id,
 someone not signed in by their address): another asked for meanwhile is
 429. One that takes longer than 60 seconds is stopped and refused with 400.
 
@@ -765,6 +791,32 @@ form for the code, which it posts to `auth/<provider>/second-factor` with the
 `wiki_pending` cookie; the right code sets the session's cookie and goes on
 to `next`, a wrong one answers the form again (401), five end the sign-in.
 
+### Avatars
+
+A `User` is `{"id", "login", "displayName", "avatar"}` and an `Author` (a
+version's, a comment's, an editor or reader of a page, a page's
+`createdBy` and `updatedBy`) is `{"id", "name", "avatar"}` (WP5.55 of the
+plan). `avatar` is `null`, or absent in what an older server writes, for a
+user without one, and otherwise `{"blob": <blob>, "mediaType":
+"image/png"}`: the picture the user uploaded, kept under its hash as an
+attachment's bytes are, and fetched at `api/v1/users/<user>/avatar/<blob>`
+(`Wiki.Api.Links.avatarUrl`), whose address changes with the picture. An
+author's avatar is never stored with a version or a comment: the server
+reads it with the author's name, so every one of them shows the picture the
+user has now. The application crops the picture to a square of 256 pixels
+before it uploads it; the server checks its type and size, as a space
+icon's, and not its shape. The picture an avatar replaces, or that is
+removed, and the avatar of a removed account, are deleted with the files
+nothing refers to, when the server next starts. Avatars do not travel in an
+export: its `users.json` has none, and an import leaves the avatars alone.
+
+A personal space whose `icon` is `null` is answered with its owner's
+avatar as its icon (`{"image": <the avatar's blob>, …}`), at the space's
+icon address, wherever the API answers with spaces; what is stored, and
+exported, is the space's own icon. A profile that names that image keeps no
+icon of its own, so the space goes on showing the avatar as it changes; an
+icon chosen in its settings wins.
+
 ### One's own password
 
 | Method | Path | Body | Response | Errors | |
@@ -806,6 +858,9 @@ password included.
 | PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password where the user has one, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
 | GET | `api/v1/account/personal-space` | | `Space` or `null`: the user's personal space, on or off (its `active`) | 401, 400 (the operator) | `personalSpace` |
 | PUT | `api/v1/account/personal-space` | `PersonalSpaceSwitch` `{"enabled": bool}` | `Space`: turned on, and made the first time (with the container "User subspaces" if no user has had one), or turned off, its content kept | 401, 400 (the operator), 404 (turning off a space the user does not have) | `setPersonalSpace` |
+| PUT | `api/v1/account/avatar` | multipart form, one file part named `file`, as a space's icon is uploaded: its `Content-Type` the image's media type, its file name not looked at | `User`, with its `avatar`: the picture replaces the one the user had | 401, 400 (the operator; not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `setAvatar` |
+| DELETE | `api/v1/account/avatar` | | `User`, without an `avatar` | 401, 400 (the operator) | `removeAvatar` |
+| GET, HEAD | `api/v1/users/<user>/avatar/<blob>` | | the avatar's bytes, with its media type, served as a space's icon is | 404 (not that user's avatar), 401 (a closed wiki, to someone not signed in) | `avatarUrl` gives this address |
 | POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
 | POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
 | POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 (a password that cannot be one, or a user who has no password to set) | (`resetPassword`) |

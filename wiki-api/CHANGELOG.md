@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Avatars, readers and inline PDFs (WP5.55). `AccountApi` now takes the
+multipart backend of its forms as a parameter, as `SpacesApi` does, and
+gains `setAvatar`, `PUT account/avatar` with the picture as a form's file
+part, and `removeAvatar`, `DELETE account/avatar`, both answering the
+`User`. `WikiApi` gains `users`, a `UsersApi` with `avatar`, `GET
+users/<user>/avatar/<blob>`, the picture's bytes; `Wiki.Api.Links.avatarUrl`
+gives its address. The JSON of a `User` and of an `Author` has an `avatar`
+field, and a `Page` `createdBy` and `updatedBy`. On the live channel the
+answer to a subscription carries `readers` (a `Readers`: the first 15
+signed-in readers by name, how many there are, and how many visitors), and
+a `readers` event (`Reading`) follows each change; an older server's answer
+without them reads as nobody reading. `Wiki.Api.Export.opensInline` says
+which exports open in the browser rather than download: the PDFs.
+
 Private subspaces and personal spaces (WP5.54). `SpacesApi` gains
 `setSealed`, `PUT spaces/<space>/sealed` with a `SpaceSealed`
 (`{"sealed"}`). `AccountApi` gains `personalSpace`, `GET

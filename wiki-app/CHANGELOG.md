@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Avatars, readers, who wrote a page, the editor's title and the page's
+width (WP5.55). `MonadWiki` gains `setAvatar`, `removeAvatar` and
+`avatarUrl`, which the demo and the HTTP backend implement and the
+contract tests check; the HTTP backend announces the session with the
+new user through `sessionChanges`, and the shell, for the same user with
+the same rights, reads only the session and the spaces again. The
+account panel (the server's and the demo's) has an "Avatar" section
+(`Wiki.App.View.Avatar`): a picture is chosen, cropped to a square in a
+dialog with Cropper.js (`web/src/avatar.js`, loaded as `islands/avatar.js`
+the first time), and uploaded as a PNG of 256 pixels. `avatar` in
+`Wiki.App.View.Common` draws a user everywhere: the header, each comment,
+the byline, the readers; the first letter of the name on a colour of its own without a
+picture. The page view shows under its title who created the page and who
+last edited it, in place of the footer's "Last changed", and, on the live
+channel, beside its title, a stack of who else reads it (at most five,
+then "+N", then a circle for the visitors), whose circles lift on hover
+or focus and whose list opens under it; the feed keeps the readers
+(`Feed.readersOf`). The editor shows a page's title as text, and a click
+on it goes to the end of the text's first line (a new `titleLine` entry
+of the CodeMirror island). The page's bar ends with a switch between a
+compact layout and the full width, kept in local storage (`page-width`),
+which lays the page out on a wide screen with the bar across it and the
+side column at the right. The export menu opens the PDFs in a new tab
+rather than downloading them.
+
 Private subspaces and personal spaces (WP5.54). `MonadWiki` gains
 `setSpaceSealed`, `personalSpace` and `setPersonalSpace`, which the demo
 and the HTTP backend implement and the contract tests check. A subspace's
