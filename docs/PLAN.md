@@ -556,6 +556,32 @@ In the order to do it, unless the owner says otherwise.
   README, the guide where it shows the header, comments, the page's bar or the
   Markdown's line breaks, the four CHANGELOGs.
 
+- **WP5.56 Exports that say what went wrong** (the owner, 2026-11-04, after WP5.55;
+  one pull request). On the owner's server `xelatex` is on the PATH but has no format
+  file, so the server offers the PDFs (it only looks for the executable) and every PDF
+  export answers 400 with TeX's raw error; the export link being `<a download>`, the
+  browser saved that JSON as the document, and a Chromium block on HTTP downloads hid
+  even that. Two changes. (a) *The server probes the engine.* At start, and again when
+  the administration asks, the server typesets a one-line document with `xelatex` in a
+  temporary directory; the PDFs are offered only when that succeeds, and the Server
+  section of the administration shows the outcome: offered; not found (as today, with
+  the install hint); or found at this path but failing, with the engine's last lines of
+  output and the usual causes in a sentence (a missing format: `fmtutil-sys --byfmt
+  xelatex`; a service user without the TeX directories; missing packages), and a
+  "Check again" button. The export's 400 keeps the reason but says in one sentence what
+  it is and where the administration shows it. (b) *The application fetches exports.*
+  The Export menu no longer links `<a download>`: the application fetches the document
+  (same origin, the session cookie), and on success saves it from a `blob:` URL under
+  its file name (a Chromium browser does not block that on plain HTTP, checked by the
+  owner on 2026-11-04), a PDF opened in a tab from the same blob; on an error it shows
+  the server's reason in the page's status line instead of saving it. WP5.55's `inline`
+  for PDFs stays. Tests: server (the probe passing with a fake engine, failing with one
+  that exits non-zero, and absent; the session's exports following it; the 400's
+  wording), browser (a failed export shows the reason and saves nothing; a successful
+  one saves, through the demo's own exports or a stubbed fetch), the admin's section in
+  its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
+  and wiki-app's CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
