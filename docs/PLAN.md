@@ -540,7 +540,12 @@ In the order to do it, unless the owner says otherwise.
   reading width and is centred between the sidebar and the side column (the contents
   panel with the comments under it), which is pinned to the right edge; in full width
   the text takes everything up to the side column. Narrower screens keep today's
-  layout. Tests: server (upload, a wrong type or size
+  layout. (g) *PDF exports open in a tab* (the owner, 2026-11-04): Chromium browsers
+  block downloads over plain HTTP and Edge gives no way past it, so on an HTTP
+  deployment nothing could be exported; the two PDF formats are now answered `inline`
+  and linked without `download`, in a new tab, which is a navigation and not blocked;
+  the other formats stay downloads and need HTTPS there (to say in the README). Tests:
+  server (upload, a wrong type or size
   refused, the URL, the default icon, readers over the live channel next to
   `Test.Server.Presence` and the comments channel tests, `createdBy` and `updatedBy`);
   browser (the avatar in the header and at a comment through the demo, the readers'
