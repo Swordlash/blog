@@ -143,6 +143,7 @@ spec m = do
     eventually $ editorSelection ui `shouldReturn` (7, 7)
     press "!"
     markdown ui `shouldReturn` "# Hello!\n\nText."
+    setMarkdown ui "# Hello, world again\n\nText."
     -- The # stays: Backspace just after it does nothing, the cursor
     -- cannot go before it, and all of the text deleted leaves it.
     unsafeIOToPageM (js_live_cursor 2)

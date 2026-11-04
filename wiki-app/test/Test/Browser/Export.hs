@@ -55,8 +55,13 @@ spec m = do
     ui <- startServer m (Page docs (slugs ["markdown-guide", "presentations"]))
     find ui ".export-menu summary" >>= click
     formats <- traverse textContent =<< findAll ui ".export-formats a"
-    formats `shouldBe` ["Word (.docx)", "Web page (.html)", "E-book (.epub)", "PDF", "PowerPoint (.pptx)", "Beamer source (.tex)", "Beamer PDF"]
-    find ui ".export-formats a.export-beamer-pdf" >>= (\a -> getAttribute a "download") >>= (`shouldBe` Just "presentations.pdf")
+    formats `shouldBe` ["Word (.docx)", "Web page (.html)", "E-book (.epub)", "PDF (opens in a tab)", "PowerPoint (.pptx)", "Beamer source (.tex)", "Beamer PDF (opens in a tab)"]
+    -- A PDF opens in a tab rather than downloading (a browser blocks a
+    -- download over plain HTTP); the other formats download.
+    beamer <- find ui ".export-formats a.export-beamer-pdf"
+    getAttribute beamer "download" `shouldReturn` Nothing
+    getAttribute beamer "target" `shouldReturn` Just "_blank"
+    find ui ".export-formats a.export-pptx" >>= (\a -> getAttribute a "download") >>= (`shouldBe` Just "presentations.pptx")
 
   it "offers a space's pages as one document, never as a presentation" $ runPage $ do
     serverStarts
@@ -65,7 +70,7 @@ spec m = do
     ui <- startServer m (SpacePages docs)
     find ui ".space-view .actions .export-menu summary" >>= click
     formats <- traverse textContent =<< findAll ui ".export-formats a"
-    formats `shouldBe` ["Word (.docx)", "Web page (.html)", "E-book (.epub)", "PDF"]
+    formats `shouldBe` ["Word (.docx)", "Web page (.html)", "E-book (.epub)", "PDF (opens in a tab)"]
     href <- find ui ".export-formats a.export-pdf" >>= (`getAttribute` "href")
     href `shouldSatisfy` maybe False (\h -> "api/v1/spaces/" `T.isPrefixOf` h && "/export/pdf" `T.isSuffixOf` h)
 

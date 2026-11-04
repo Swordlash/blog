@@ -30,7 +30,7 @@ spec m = do
   it "offers a deck from its page, shows one slide at a time, and goes back to the page" $ runPage $ do
     ui <- start m Nothing (Page docs presentations)
     find ui ".page-body h1" >>= (`shouldHaveText` "Presentations")
-    actions <- traverse textContent =<< findAll ui ".page-view .actions > *"
+    actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
     actions `shouldBe` ["View source", "History", "Present", "Comments (0)"]
     find ui ".page-view .actions a.page-present" >>= click
     _ <- find ui ".slides-view"

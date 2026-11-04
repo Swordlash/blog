@@ -23,12 +23,13 @@ import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend.Mem.State (MemState (..), savePageIn, setAvatarIn, setPersonalSpaceIn)
+import Wiki.App.Backend.Mem.State (MemState (..), createPageIn, savePageIn, setAvatarIn, setPersonalSpaceIn)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (slugText)
+import Wiki.Core.Space qualified as S
 
 $( browserJS
      ["jsbits/test-files.js"]
@@ -102,15 +103,23 @@ spec m = do
     unmount ui
 
   it "says under a page's title who created it and who last edited it, with their avatars" $ runPage $ do
-    ui <- startChanged m (savedBy "user-editor") Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    -- A page Edgar made and Ada edited, Ada with an avatar.
+    ui <- startChanged m (withAvatar "user-admin" . madeAndEdited) Nothing (Page (slugs ["blog"]) (slugs ["notes"]))
     byline <- find ui ".page-view .page-byline"
-    textContent byline >>= (`shouldSatisfy` T.isInfixOf "last edited by Edgar Editor on ")
+    textContent byline >>= (`shouldSatisfy` T.isPrefixOf "Created by Edgar Editor, last edited by Ada Admin on ")
     _ <- find ui ".page-view .page-byline time[datetime]"
     names <- traverse textContent =<< findAll ui ".page-byline .page-byline-name"
-    names `shouldSatisfy` elem "Edgar Editor"
-    void (find ui ".page-byline .page-byline-author .avatar")
-    -- Not in the footer any more.
+    names `shouldBe` ["Edgar Editor", "Ada Admin"]
+    void (find ui ".page-byline .page-byline-author .avatar-initials[aria-label='Edgar Editor']")
+    void (find ui ".page-byline .page-byline-author img.avatar[alt='Ada Admin']")
+    -- Not a paragraph of the page, and not in the footer any more.
+    length <$> findAll ui ".page-body p.page-byline" `shouldReturn` 0
     length <$> findAll ui ".page-meta" `shouldReturn` 0
+    unmount ui
+
+  it "says who last edited a page nobody is known to have made: the demo's own" $ runPage $ do
+    ui <- startChanged m (savedBy "user-editor") Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    find ui ".page-view .page-byline" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Last edited by Edgar Editor on ")
     unmount ui
   where
     initialsOf ui selector = find ui selector >>= (`getAttribute` "data-initials")
@@ -123,6 +132,18 @@ spec m = do
     -- The demo with this user's personal space turned on.
     personalFor user st =
       either (panic . show) (\(made, _) -> made {current = st.current}) (setPersonalSpaceIn (UTCTime (fromGregorian 2026 1 1) 0) True st {current = Just (UserId user)})
+
+    -- The demo with the blog's first post saved by this user.
+    -- The demo with a page of the blog made by Edgar and edited by Ada.
+    madeAndEdited st0 =
+      let blog = case [x | (x :: S.Space) <- Map.elems st0.spaces, slugText x.slug == "blog"] of
+            x : _ -> x
+            [] -> panic "the demo has no blog"
+          day n = UTCTime (fromGregorian 2026 11 n) 0
+          run user f st = either (panic . show) identity (f st {current = Just (UserId user)})
+          (st1, made) = run "user-editor" (createPageIn blog.id Nothing "Notes" "# Notes\n\nFirst." (day 1)) st0
+          (st2, _) = run "user-admin" (savePageIn made.id made.updatedAt "Notes" "# Notes\n\nSecond." (day 2)) st1
+       in st2 {current = st0.current}
 
     -- The demo with the blog's first post saved by this user.
     savedBy user st = case [p | p <- Map.elems st.pages, slugText p.slug == "hello-world"] of
