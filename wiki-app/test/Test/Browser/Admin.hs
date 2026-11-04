@@ -517,5 +517,5 @@ spec m = do
 withUsers :: Int -> MemState -> MemState
 withUsers n st = st {users = Map.union st.users (Map.fromList [(u.id, u) | u <- extra])}
   where
-    extra = [User {id = UserId ("user-person-" <> two i), login = Login ("person-" <> two i), displayName = "Person " <> show i} | i <- [1 .. n]]
+    extra = [User {id = UserId ("user-person-" <> two i), login = Login ("person-" <> two i), displayName = "Person " <> show i, avatar = Nothing} | i <- [1 .. n]]
     two i = T.justifyRight 2 '0' (show i)

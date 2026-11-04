@@ -22,7 +22,9 @@
 #                    and assistant.js (web/src/assistant.js), the writing
 #                    assistant's providers with Anthropic's and OpenAI's
 #                    SDKs, which it imports the first time the assistant
-#                    is used;
+#                    is used, and avatar.js (web/src/avatar.js), Cropper.js
+#                    for the account's avatar, which it imports the first
+#                    time a picture is cropped;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
 #                    its worker patched by web/src/tikz-patch.mjs), which
 #                    tikz.js runs, with the worker that starts it
@@ -89,6 +91,12 @@ npx esbuild web/src/assistant.js \
   --bundle --minify --format=esm --target=es2022 --platform=browser --log-level=warning \
   --alias:standardwebhooks=./web/src/no-webhooks.js \
   --metafile="$meta/assistant.json" --outfile="$out_dir/islands/assistant.js"
+
+# The avatar's cropper, Cropper.js: one file in islands/ too, fetched the
+# first time someone crops a picture for their avatar.
+npx esbuild web/src/avatar.js \
+  --bundle --minify --format=esm --target=es2022 --log-level=warning \
+  --metafile="$meta/avatar.json" --outfile="$out_dir/islands/avatar.js"
 
 # TikZJax's files, copied from its npm package: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are

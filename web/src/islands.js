@@ -15,6 +15,7 @@
 //   wikiIslands.highlight(element, language, code)
 //   wikiIslands.attachEditor(textarea, host, original)
 //   wikiIslands.assistant(): Promise<module>
+//   wikiIslands.cropAvatar(host, file): Promise<void>
 //
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
@@ -32,7 +33,10 @@
 // fenced code, which is why it is here. assistant is not one either: it
 // loads the writing assistant's providers (assistant.js, bundled into
 // islands/assistant.js with Anthropic's and OpenAI's SDKs) the first time
-// the editor's assistant is used, for wiki-app/jsbits/assistant.js.
+// the editor's assistant is used, for wiki-app/jsbits/assistant.js. Nor is
+// cropAvatar: it puts Cropper.js in the account's avatar dialog (avatar.js,
+// bundled into islands/avatar.js and fetched the first time the dialog
+// opens), for wiki-app/jsbits/avatar.js.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -125,6 +129,7 @@ const loadMermaid = lazily("islands/mermaid.js");
 const loadTikz = lazily("islands/tikz.js");
 const loadEditor = lazily("islands/editor.js");
 const loadAssistant = lazily("islands/assistant.js");
+const loadAvatar = lazily("islands/avatar.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -294,6 +299,14 @@ const attachEditor = (textarea, host, original) => {
     .catch((error) => console.error("The editor's formatting could not be loaded:", error));
 };
 
+// The cropper in the avatar's dialog, once its module has loaded. A module
+// that does not load leaves the dialog without one, and says so in the
+// console; the dialog then has nothing to upload.
+const cropAvatar = (host, file) =>
+  loadAvatar()
+    .then((avatar) => avatar.crop(host, file))
+    .catch((error) => console.error("The avatar's cropper could not be loaded:", error));
+
 // The built-in macros the wiki ships with, as written: what the editor's
 // settings start the server's own copy from.
 const builtinMacros = () => String(builtinTex);
@@ -307,4 +320,5 @@ globalThis.wikiIslands = Object.freeze({
   highlight,
   attachEditor,
   assistant: loadAssistant,
+  cropAvatar,
 });

@@ -136,7 +136,7 @@ live m = describe "over the backend over HTTP" $
               , kind = Replied
               , page = PageId "page-hello"
               , thread = Nothing
-              , actor = Author {id = UserId "user-reader", name = "Rita Reader"}
+              , actor = Author {id = UserId "user-reader", name = "Rita Reader", avatar = Nothing}
               , title = "Hello, world"
               , excerpt = "Thanks."
               , createdAt = UTCTime (fromGregorian 2026 10 26) 0

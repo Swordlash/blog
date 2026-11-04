@@ -26,6 +26,8 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["@codemirror/language", ["@codemirror/language"]],
   ["@codemirror/lang-markdown", ["@codemirror/lang-markdown"]],
   ["@lezer/highlight", ["@lezer/highlight"]],
+  // The avatar's cropper (web/src/avatar.js).
+  ["cropperjs", ["cropperjs"]],
   // The writing assistant's providers (web/src/assistant.js).
   ["@anthropic-ai/sdk", ["@anthropic-ai/sdk"]],
   ["openai", ["openai"]],

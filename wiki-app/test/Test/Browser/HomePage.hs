@@ -37,10 +37,10 @@ spec m = do
   it "opens the full editor, formats text, previews islands, saves and stays, then saves and closes" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") Home
     find ui ".edit-home" >>= click
-    -- The title is the text's first line, which the title field shows.
+    -- The title is the text's first line, which the title shows.
     setMarkdown ui "# Knowledge"
     clearBody ui
-    find ui ".editor-title input" >>= \t -> getProperty t "value" `shouldReturn` "Knowledge"
+    eventually (find ui ".editor-title-text" >>= (`shouldHaveText` "Knowledge"))
     text <- editorText ui
     typeText text "welcome"
     press "Shift+Home"

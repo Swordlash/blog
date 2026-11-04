@@ -467,7 +467,7 @@ caching = describe "what it keeps" $ do
 signedIn, nobody :: SessionInfo
 signedIn =
   SessionInfo
-    { user = Just User {id = UserId "user-admin", login = Login "admin", displayName = "Ada Admin"}
+    { user = Just User {id = UserId "user-admin", login = Login "admin", displayName = "Ada Admin", avatar = Nothing}
     , groups = mempty
     , grants = mempty
     , standing = SignedIn

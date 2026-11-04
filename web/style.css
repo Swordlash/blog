@@ -492,46 +492,111 @@ select {
   background: var(--surface);
 }
 
-.space-icon-blue {
+.space-icon-blue,
+.avatar-blue {
   background: var(--icon-blue);
 }
 
-.space-icon-teal {
+.space-icon-teal,
+.avatar-teal {
   background: var(--icon-teal);
 }
 
-.space-icon-green {
+.space-icon-green,
+.avatar-green {
   background: var(--icon-green);
 }
 
-.space-icon-olive {
+.space-icon-olive,
+.avatar-olive {
   background: var(--icon-olive);
 }
 
-.space-icon-orange {
+.space-icon-orange,
+.avatar-orange {
   background: var(--icon-orange);
 }
 
-.space-icon-red {
+.space-icon-red,
+.avatar-red {
   background: var(--icon-red);
 }
 
-.space-icon-pink {
+.space-icon-pink,
+.avatar-pink {
   background: var(--icon-pink);
 }
 
-.space-icon-purple {
+.space-icon-purple,
+.avatar-purple {
   background: var(--icon-purple);
 }
 
-.space-icon-indigo {
+.space-icon-indigo,
+.avatar-indigo {
   background: var(--icon-indigo);
 }
 
-.space-icon-slate {
+.space-icon-slate,
+.avatar-slate {
   background: var(--icon-slate);
 }
 
+
+/* A user's avatar (Wiki.App.View.Common.avatar, WP5.55): their picture,
+   cropped square and shown round, or the initials of their name on a colour
+   of the spaces' icons (the rules above), picked from the name. Small beside
+   a name in a line of text, large in the account panel. */
+.avatar {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: middle;
+  overflow: hidden;
+  background-color: var(--surface);
+}
+
+.avatar-initials {
+  color: #ffffff;
+  font-size: 0.75em;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+/* Drawn from the attribute, so that the circle adds no text to what it is
+   in. */
+.avatar-initials::before {
+  content: attr(data-initials);
+}
+
+.avatar-small.avatar-initials {
+  width: 2em;
+  height: 2em;
+}
+
+.avatar-large {
+  width: 4.5rem;
+  height: 4.5rem;
+}
+
+.avatar-large.avatar-initials {
+  font-size: 1.6rem;
+}
+
+/* Beside the user's name in the header, and in the demo's menu of users. */
+.user-name,
+.user-switcher-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 
 /* A list of spaces, each its icon and name: the sidebar's outside a space,
    and a space's subspaces in it. */
@@ -1581,10 +1646,194 @@ select {
   color: var(--muted);
 }
 
-.page-meta {
-  margin-top: 2rem;
+/* Who wrote the page and when it last changed, in small print under its
+   title (WP5.55): "Created by X, last edited by Y on <date>", each name with
+   its avatar. When the Markdown has its own title, the line is in the
+   article, after that heading. */
+.page-byline {
+  margin: -0.25rem 0 1rem;
   font-size: 0.85rem;
   color: var(--muted);
+  user-select: none;
+}
+
+.page-byline-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  vertical-align: middle;
+}
+
+.page-byline-name {
+  color: var(--text);
+}
+
+.page-byline .avatar {
+  width: 1.4em;
+  height: 1.4em;
+}
+
+/* The title, with who else reads the page at its right. When the
+   Markdown has its own title, the stack floats at the right of the
+   article's first heading instead. */
+.page-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.page-title-row > .page-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.page-text > .page-readers {
+  float: right;
+  margin: 0.6rem 0 0 1rem;
+}
+
+/* Who else reads the page (WP5.55): a stack of overlapping avatars, each
+   over a third of the one before it, with a ring of the page's background
+   between them; then a translucent "+N", then the visitors' grey circle.
+   The circle under the pointer, or with the keyboard's focus, comes to the
+   top of the stack and lifts a little; hovering or focusing the stack shows
+   the names under it. */
+.page-readers {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 3;
+}
+
+.page-readers-stack {
+  display: flex;
+  align-items: center;
+  padding: 0.35rem 0 0.35rem 0.6rem;
+}
+
+.page-reader {
+  position: relative;
+  display: inline-flex;
+  margin-left: -0.6rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--background);
+  transition:
+    transform 150ms ease,
+    z-index 0s 150ms;
+}
+
+.page-reader > .avatar {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+.page-reader > .avatar-initials {
+  font-size: 0.75rem;
+}
+
+.page-reader:hover,
+.page-reader:focus-visible {
+  z-index: 2;
+  transform: translateY(-3px) scale(1.08);
+  transition:
+    transform 150ms ease,
+    z-index 0s;
+  outline: none;
+}
+
+.page-reader:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 4px var(--accent);
+}
+
+.page-readers-more,
+.page-readers-visitors {
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.page-readers-more {
+  color: var(--text);
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
+/* The visitors who have not signed in: a person's outline, with how many
+   in a badge at its corner. */
+.page-readers-visitors {
+  color: #ffffff;
+  background: var(--icon-slate);
+}
+
+.page-readers-glyph {
+  width: 1.1rem;
+  height: 1.1rem;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.page-readers-count {
+  position: absolute;
+  right: -0.35rem;
+  bottom: -0.25rem;
+  min-width: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 0.5rem;
+  font-size: 0.65rem;
+  line-height: 1rem;
+  text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.page-readers-list {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  display: none;
+  min-width: 12rem;
+  max-width: 20rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.15);
+}
+
+.page-readers:hover > .page-readers-list,
+.page-readers:focus-within > .page-readers-list {
+  display: block;
+}
+
+.page-readers-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+.page-readers-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.15rem 0;
+}
+
+.page-readers-others,
+.page-readers-visitors-line {
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-reader,
+  .page-reader:hover,
+  .page-reader:focus-visible {
+    transition: none;
+  }
 }
 
 /* ---- A page's source ------------------------------------------------------- */
@@ -2370,6 +2619,20 @@ body:has(.slides-view) {
 
 .editor-title input {
   font-size: 1.05rem;
+}
+
+/* A page's title in the editor, read from the text's first line: shown as
+   a heading rather than a field (WP5.55). A click on it goes to that line. */
+.editor-title-line {
+  cursor: text;
+}
+
+.editor-title-text {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .editor-actions {
@@ -5122,6 +5385,10 @@ mark.comment-mark-focused {
   font-weight: 600;
 }
 
+.comment-meta > .avatar {
+  align-self: center;
+}
+
 .comment-body > :first-child {
   margin-top: 0.2rem;
 }
@@ -6859,4 +7126,215 @@ a.mention {
   margin: 0 0 1rem;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+/* ---- Avatars in the account panel (WP5.55) -------------------------------- */
+
+/* The user's avatar, large: the circle is what changes it. Its file input
+   covers it, unseen, so that a click anywhere on it, or Enter on it with
+   the keyboard's focus, opens the file picker; a camera on a dark disc
+   shows over it on hover and on focus. "Remove" is a small text button
+   under it. */
+.avatar-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.avatar-change {
+  position: relative;
+  display: inline-flex;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.avatar-change input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.avatar-change-icon {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  color: #ffffff;
+  background: rgb(0 0 0 / 0.55);
+  opacity: 0;
+  transition: opacity 150ms ease;
+  pointer-events: none;
+}
+
+.avatar-change-icon .icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+}
+
+.avatar-change:hover .avatar-change-icon,
+.avatar-change:focus-within .avatar-change-icon {
+  opacity: 1;
+}
+
+.avatar-change:has(input:focus-visible) {
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 4px var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-change-icon {
+    transition: none;
+  }
+}
+
+.avatar-crop-dialog {
+  flex-basis: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.avatar-crop-dialog[hidden] {
+  display: none;
+}
+
+/* Cropper.js's canvas, which fills the element it is put in. */
+.avatar-crop {
+  height: 18rem;
+  margin: 0.5rem 0;
+}
+
+.avatar-crop cropper-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+/* The square kept, shown round, with what is cut away dimmed. */
+.avatar-crop cropper-selection {
+  border-radius: 50%;
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.5);
+}
+
+/* ---- The page's width (WP5.55) --------------------------------------------- */
+
+/* The switch at the end of the page's bar: "Compact" or "Full width". It
+   changes the layout of a wide screen only, and is hidden on a narrower
+   one. */
+.page-width-switch {
+  display: none;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.page-width-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: transparent;
+}
+
+.page-width-option + .page-width-option {
+  border-left: 1px solid var(--border);
+}
+
+.page-width-option[aria-checked="true"] {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.page-width-option .icon {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+
+/* On a wide screen the page view takes the content's whole width: its bar
+   of actions on one row across it, the text at a reading width in the
+   middle of the room the side column leaves, or as wide as that room in
+   full width, and the side column (the contents, the comments) at the
+   right edge. The page's other parts (the title, the attachments, the
+   comments under the text) are in the text's column. */
+@media (min-width: 1200px) {
+  .page-width-switch {
+    display: inline-flex;
+  }
+
+  .wiki-content:has(.page-view),
+  .wiki-content:has(.page-main.with-contents):has(.page-view),
+  .wiki-content:has(.page-main.with-comments):has(.page-view) {
+    max-width: none;
+  }
+
+  .page-view {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 54rem) minmax(0, 1fr);
+    column-gap: 1.5rem;
+    align-items: start;
+  }
+
+  .page-view:has(> .page-main.with-side) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 54rem) minmax(0, 1fr) minmax(16rem, 22rem);
+  }
+
+  .page-view.page-width-full {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-view.page-width-full:has(> .page-main.with-side) {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  }
+
+  .page-view > * {
+    grid-column: 2;
+  }
+
+  .page-view.page-width-full > * {
+    grid-column: 1;
+  }
+
+  .page-view > .page-actions {
+    grid-column: 1 / -1;
+  }
+
+  .page-view > .page-main.with-side {
+    grid-column: 2 / -1;
+    grid-template-columns: subgrid;
+    gap: 1rem 1.5rem;
+  }
+
+  .page-view.page-width-full > .page-main.with-side {
+    grid-column: 1 / -1;
+  }
+
+  .page-view > .page-main.with-side > .page-text {
+    grid-column: 1;
+  }
+
+  .page-view > .page-main.with-side > .page-side {
+    grid-column: -2;
+  }
 }

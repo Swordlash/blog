@@ -39,8 +39,10 @@
 -- answer is the same whether or not that matches anyone. The account panel
 -- ends with the account's security ("Wiki.App.View.Security": sessions,
 -- the second factor, the e-mail address) and the switch of the user's
--- personal space ("Wiki.App.View.PersonalSpace"), which tells the shell
--- when the spaces are to be listed again ('SpacesChanged').
+-- personal space ("Wiki.App.View.PersonalSpace") and the user's avatar
+-- ("Wiki.App.View.Avatar"), which tell the shell when the session and the
+-- spaces are to be read again ('SpacesChanged'). The header shows the
+-- user's avatar beside their name.
 --
 -- Signing in or out tells the shell the new session ('AccountChanged'),
 -- which reloads everything as that user. The shell can also open the form
@@ -99,7 +101,8 @@ import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.Security (MonadSecurity)
-import Wiki.App.View.Common (ViewOutput, ariaBool, errorMessage)
+import Wiki.App.View.Avatar qualified as AvatarView
+import Wiki.App.View.Common (AvatarSize (..), ViewOutput, ariaBool, avatar, errorMessage)
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Security qualified as SecurityView
@@ -110,6 +113,9 @@ import Wiki.Core.User (Email (..), Password (..), SignInProvider (..), Standing 
 data Input m = Input
   { accounts :: Accounts m
   , session :: Session
+  , avatar :: Maybe Text
+  -- ^ The URL of the signed-in user's avatar, if they have one, which the
+  -- header shows beside their name.
   , here :: Text
   -- ^ The page's address, as the router writes it: where signing in with
   -- a provider returns to.
@@ -124,8 +130,8 @@ data Query a = Prompt Text a
 data Output
   = -- | Someone signed in or out: the new session.
     AccountChanged Session
-  | -- | The user turned their personal space on or off: the spaces are
-    -- to be listed again.
+  | -- | The user turned their personal space on or off, or changed their
+    -- avatar: the session and the spaces are to be read again.
     SpacesChanged
 
 -- | Which step of signing in the form is at.
@@ -138,7 +144,7 @@ data Step
     AtReset
   deriving stock (Eq)
 
-type Slots = ("security" .== H.Slot (Const Void) Void ()) .+ ("notifications" .== H.Slot (Const Void) Void ()) .+ ("personal" .== H.Slot (Const Void) ViewOutput ())
+type Slots = ("security" .== H.Slot (Const Void) Void ()) .+ ("notifications" .== H.Slot (Const Void) Void ()) .+ ("personal" .== H.Slot (Const Void) ViewOutput ()) .+ ("avatar" .== H.Slot (Const Void) ViewOutput ())
 
 data State m = State
   { input :: Input m
@@ -184,7 +190,7 @@ data State m = State
   }
 
 data Action
-  = Receive Session Text
+  = Receive Session (Maybe Text) Text
   | Toggle
   | Close
   | TypedLogin Text
@@ -267,14 +273,14 @@ component =
     -- The input changes when the shell's session does; the form stays as
     -- it is.
     receive :: Input m -> Action
-    receive input = Receive input.session input.here
+    receive input = Receive input.session input.avatar input.here
 
     render :: State m -> H.ComponentHTML Action Slots m
     render st = case st.input.session of
       Session {user = Just u, standing = SignedIn} ->
         [hh|
           <div class="account">
-            <button type="button" class="user-name account-toggle" aria-expanded={{ ariaBool st.accountOpen }} onClick={{ const ToggleAccount }}>{{ u.displayName }}</button>
+            <button type="button" class="user-name account-toggle" aria-expanded={{ ariaBool st.accountOpen }} onClick={{ const ToggleAccount }}>{{ avatar SmallAvatar st.input.avatar u.displayName }}{{ u.displayName }}</button>
             <button type="button" class="sign-out" disabled={{ st.busy }} onClick={{ const SignOut }}>Sign out</button>
             {% if st.accountOpen %}
               {{ accountPanel st }}
@@ -437,6 +443,11 @@ component =
           <h2>How you sign in</h2>
           {{ body }}
           {{ HH.slot_ "security" () SecurityView.component () }}
+          <section class="account-avatar" aria-label="Avatar">
+            <h3>Avatar</h3>
+            <p class="account-note">A picture of you, shown round beside your name, at your comments and to the readers of a page.</p>
+            {{ HH.slot "avatar" () AvatarView.component AvatarView.Input {user = st.input.session.user} (const FromPersonal) }}
+          </section>
           <section class="account-personal" aria-label="Personal space">
             <h3>Personal space</h3>
             <p class="account-note">A space of your own, under User subspaces, which you administer.</p>
@@ -547,7 +558,7 @@ component =
 
     handleAction :: Action -> H.HalogenM (State m) Action Slots Output m ()
     handleAction = \case
-      Receive session here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, here, router = st.input.router}})
+      Receive session face here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, avatar = face, here, router = st.input.router}})
       Followed f -> do
         modify (\st -> st {accountOpen = False})
         gets (\st -> st.input.router) >>= (`Router.follow` f)

@@ -70,9 +70,9 @@ demoDatabase = memDatabase "wiki-demo"
 demoState :: UTCTime -> MemState
 demoState now = ensureHomeDocument now $ flip execState emptyState $ do
   modify $
-    insertUser User {id = adminId, login = Login "admin", displayName = "Ada Admin"}
-      . insertUser User {id = editorId, login = Login "editor", displayName = "Edgar Editor"}
-      . insertUser User {id = readerId, login = Login "reader", displayName = "Rita Reader"}
+    insertUser User {id = adminId, login = Login "admin", displayName = "Ada Admin", avatar = Nothing}
+      . insertUser User {id = editorId, login = Login "editor", displayName = "Edgar Editor", avatar = Nothing}
+      . insertUser User {id = readerId, login = Login "reader", displayName = "Rita Reader", avatar = Nothing}
       . insertGroup Group {id = writers, name = "writers"} [editorId]
       . grantGlobal (SubjectUser adminId) Administer
       . grantGlobal (SubjectUser editorId) CreateSpaces
@@ -179,7 +179,7 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
             [ Comment
                 { id = CommentId (tid <> "-" <> show n)
                 , thread = CommentThreadId tid
-                , author = Author {id = who, name = who.text}
+                , author = Author {id = who, name = who.text, avatar = Nothing}
                 , body
                 , createdAt = ago days
                 , editedAt = Nothing

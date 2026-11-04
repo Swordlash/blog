@@ -172,6 +172,8 @@ module Wiki.App.Backend
   , shutOut
   , sessionPrincipal
   , currentUser
+  , withOwnUser
+  , sameAsking
 
     -- * Limits
   , maxAttachmentSize
@@ -198,7 +200,7 @@ import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePerm
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space, SpaceProfile)
-import Wiki.Core.User (SignInProvider, Standing (..), User (..))
+import Wiki.Core.User (Avatar, SignInProvider, Standing (..), User (..))
 import Wiki.Core.Version (Version, VersionInfo, VersionsQuery)
 
 -- | Why a request was not carried out. See the module's Haddock for which is
@@ -294,6 +296,18 @@ shutOut s = s.grants.access == Closed && isNothing s.user
 -- or 'Nothing' when nobody is signed in.
 sessionPrincipal :: Session -> Maybe Principal
 sessionPrincipal s = (\u -> Principal {user = u.id, groups = s.groups}) <$> s.user
+
+-- | The session with the signed-in user's record as it now is, after a
+-- change of their own (their avatar), which changes nothing else of it.
+withOwnUser :: User -> Session -> Session
+withOwnUser u s = Session {user = Just u, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports, homePage = s.homePage, boxes = s.boxes, mathMacros = s.mathMacros}
+
+-- | Whether two sessions are of the same requester with the same rights:
+-- the same user (or nobody), groups, grants and standing. The user's own
+-- record (their name, their avatar) may differ: a session announced after
+-- such a change needs nothing reloaded but what shows the user.
+sameAsking :: Session -> Session -> Bool
+sameAsking a b = ((\u -> u.id) <$> a.user) == ((\u -> u.id) <$> b.user) && a.groups == b.groups && a.grants == b.grants && a.standing == b.standing
 
 -- | The user who is signed in, if anyone is.
 currentUser :: (MonadWiki m) => m (Maybe User)
@@ -403,6 +417,37 @@ class (Monad m) => MonadWiki m where
   setPersonalSpace :: Bool -> m (Either WikiError Space)
   default setPersonalSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => Bool -> m (Either WikiError Space)
   setPersonalSpace = lift . setPersonalSpace
+
+  -- * Avatars
+
+  -- | Give the current user an avatar ('Wiki.Core.User.Avatar'): its media
+  -- type and its bytes, checked as 'Wiki.Core.Space.checkAvatarUpload'
+  -- checks them ('Invalid' if they do not pass). The bytes are stored as a
+  -- space icon's are, and the picture replaces the one the user had. The
+  -- result is the user with it. Someone not signed in, and the server's
+  -- operator, have no account to give one: 'Forbidden'.
+  --
+  -- A personal space with no icon of its own shows its owner's avatar
+  -- ('Wiki.Core.Space.withOwnerAvatar'), wherever the backend answers with
+  -- it. Every comment, version and page author shows the avatar the user
+  -- has now: nothing is stored with them.
+  setAvatar :: Text -> ByteString -> m (Either WikiError User)
+  default setAvatar :: (MonadTrans t, m ~ t n, MonadWiki n) => Text -> ByteString -> m (Either WikiError User)
+  setAvatar t = lift . setAvatar t
+
+  -- | Take the current user's avatar away; the result is the user without
+  -- it. Refused as 'setAvatar' is.
+  removeAvatar :: m (Either WikiError User)
+  default removeAvatar :: (MonadTrans t, m ~ t n, MonadWiki n) => m (Either WikiError User)
+  removeAvatar = lift removeAvatar
+
+  -- | The URL a browser fetches a user's avatar from, as 'spaceIconUrl'
+  -- gives a space's icon: an object URL in the demo (a @data:@ URL
+  -- natively), the server's address for it on the HTTP backend. The empty
+  -- text for an avatar whose bytes the backend does not have.
+  avatarUrl :: UserId -> Avatar -> m Text
+  default avatarUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => UserId -> Avatar -> m Text
+  avatarUrl u = lift . avatarUrl u
 
   -- | Give a space its math macros ('Wiki.Core.Space.mathMacros'), which
   -- its subspaces inherit; the empty text for none. Blank lines at either

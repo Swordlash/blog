@@ -143,7 +143,7 @@ withoutHistory st = imported {counter = nextCounter imported}
       Comment
         { id = c.id
         , thread = c.thread
-        , author = maybe (absentAuthor c.author.id) (\u -> Author {id = u.id, name = u.displayName}) (Map.lookup c.author.id st.users)
+        , author = maybe (absentAuthor c.author.id) (\u -> Author {id = u.id, name = u.displayName, avatar = Nothing}) (Map.lookup c.author.id st.users)
         , body = c.body
         , createdAt = c.createdAt
         , editedAt = c.editedAt

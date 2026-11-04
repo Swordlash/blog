@@ -270,6 +270,7 @@ import Wiki.App.Editor.Browser
   , focusElement
   , focusText
   , forgetPreviewEntry
+  , goToTitleLine
   , guardUnload
   , historyBack
   , insertAtCursor
@@ -557,6 +558,7 @@ data Action
   | Receive Input
   | Followed (Follow Route)
   | TypedTitle Text
+  | GoToTitle
   | Typed Text
   | Key EditorKey
   | Submit
@@ -1234,27 +1236,33 @@ component =
         </div>
       |]
 
-    -- The title's input, keyed by the load (see the module's comment). The
-    -- title is read from the text's first line (WP5.39 of docs/PLAN.md),
-    -- and the input only shows it, greyed out and read-only. Its text is the
+    -- The title, keyed by the load (see the module's comment). A page's
+    -- title is read from the text's first line (WP5.39 of docs/PLAN.md), so
+    -- it is shown as text, styled as a heading, and not as a field (WP5.55):
+    -- a click on it puts the caret at the end of that line's text in the
+    -- editor, and gives the text the focus ('GoToTitle'). The wrapper
+    -- takes the click, which a disabled field would not get. A template's
+    -- title is its own, and stays a field to type it in; its text is the
     -- @value@ attribute rather than the property, which a quasi-quoted
-    -- @value={{ … }}@ would set: a prerendered page shows the attribute, and
-    -- the browser goes on showing it as it changes, since nothing sets the
-    -- property of a field nobody can type into.
+    -- @value={{ … }}@ would set, so that a prerendered page shows it.
     titleField :: State -> Work -> H.ComponentHTML Action Slots m
-    titleField st work =
-      HH.keyed
-        @I.HTMLlabel
-        (HH.ElemName "label")
-        [HP.class_ "field editor-title"]
-        [ ("caption", if work.page.template then [hh|<span>Title</span>|] else [hh|<span>Title <small>(the first line, after #)</small></span>|])
-        ,
-          ( loadKey st
-          , if work.page.template
-              then [hh|<input type="text" {{ attr "value" work.loadedTitle }} onValueInput={{ TypedTitle }} required>|]
-              else [hh|<input type="text" readonly tabindex="-1" {{ attr "value" work.title }}>|]
-          )
-        ]
+    titleField st work
+      | work.page.template =
+          HH.keyed
+            @I.HTMLlabel
+            (HH.ElemName "label")
+            [HP.class_ "field editor-title"]
+            [ ("caption", [hh|<span>Title</span>|])
+            , (loadKey st, [hh|<input type="text" {{ attr "value" work.loadedTitle }} onValueInput={{ TypedTitle }} required>|])
+            ]
+      | otherwise =
+          HH.keyed
+            @I.HTMLdiv
+            (HH.ElemName "div")
+            [HP.class_ "field editor-title editor-title-line", HE.onClick (const GoToTitle)]
+            [ ("caption", [hh|<span>Title <small>(the first line, after #)</small></span>|])
+            , (loadKey st, [hh|<span class="editor-title-text" title="Edit the title in the text's first line">{{ work.title }}</span>|])
+            ]
 
     -- The Markdown's textarea, keyed by the load like the title, with its
     -- starting text as its content rather than its value (see the module's
@@ -1429,6 +1437,8 @@ component =
       -- A template's title is its name, typed in the title field; its first
       -- line is the heading of the pages made from it, @# {{title}}@.
       TypedTitle t -> edit (\w -> if w.page.template then w {title = t} else w)
+      -- In the text's first line, whose text the title is.
+      GoToTitle -> gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . goToTitleLine)
       Typed t -> edit (\w -> w {body = t, title = if w.page.template then w.title else fromMaybe w.title (titleLine t)})
       Key key -> case key of
         SaveKey -> save Stay

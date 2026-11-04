@@ -1012,6 +1012,14 @@ export function attach(textarea, host, original, codeTokens) {
       view.focus();
     },
     focus: () => view.focus(),
+    // The caret at the end of the first line, the page's title line (after
+    // its "# ", or wherever the line ends), the line scrolled into view and
+    // the text focused: a click on the editor's title (WP5.55).
+    titleLine: () => {
+      const first = view.state.doc.line(1);
+      view.dispatch({ selection: { anchor: first.to }, effects: EditorView.scrollIntoView(first.from, { y: "nearest" }) });
+      view.focus();
+    },
     // The component's answer to the question `id` about a mention: the
     // users, as [{login, name}], or null when they could not be found.
     mentioned: (id, people) => completion.answer(id, people),

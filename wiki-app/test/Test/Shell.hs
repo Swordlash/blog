@@ -243,7 +243,8 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` ">Discard it and go back to the saved page</button>"
     -- With the draft's title as the text's first line (WP5.39).
     html `contains` "># Hello, draft\n\nUnsaved words</textarea>"
-    html `contains` "value=\"Hello, draft\""
+    html `contains` "class=\"editor-title-text\""
+    html `contains` ">Hello, draft</span>"
     -- Cancel asks what becomes of the draft rather than leaving.
     html `lacks` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
 
@@ -276,7 +277,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "offers every reader of a page its source, and only an editor the rest" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button></div>"
+    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
@@ -508,9 +509,9 @@ spec = describe "Wiki.App.Shell, rendered" $ do
         html `lacks` "admin-users"
 
   describe "who is editing, in words" $ do
-    let ada = Author {id = UserId "user-admin", name = "Ada Admin"}
-        edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
-        rita = Author {id = UserId "user-reader", name = "Rita Reader"}
+    let ada = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
+        edgar = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
+        rita = Author {id = UserId "user-reader", name = "Rita Reader", avatar = Nothing}
     it "names one person, several, and nobody" $ do
       whoIs Nothing [edgar] `shouldBe` "Edgar Editor is"
       whoIs Nothing [edgar, ada] `shouldBe` "Edgar Editor and Ada Admin are"

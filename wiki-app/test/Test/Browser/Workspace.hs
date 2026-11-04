@@ -17,8 +17,8 @@ import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, i
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Mount (slugs, start)
-import Test.Browser.Text (editorText, markdown, setMarkdown)
+import Test.Browser.Mount (slugs, start, startAgain)
+import Test.Browser.Text (editorSelection, editorText, markdown, setMarkdown)
 import Test.Hspec.Halogen
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
@@ -61,6 +61,27 @@ spec m = do
     storedBool "sidebar-folded" `shouldReturn` Just False
     unmount ui
 
+  it "lays pages out compact or at full width, as chosen in the page's bar, and keeps the choice" $ runPage $ do
+    ui <- start m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    view <- find ui ".page-view"
+    classes view >>= (`shouldSatisfy` elem "page-width-compact")
+    compact <- find ui ".page-actions .page-width-switch [role=radio].page-width-option-compact"
+    getAttribute compact "aria-checked" `shouldReturn` Just "true"
+    find ui ".page-actions .page-width-option-full" >>= click
+    eventually $ find ui ".page-view" >>= classes >>= (`shouldSatisfy` elem "page-width-full")
+    eventually $ find ui ".page-width-option-full" >>= \o -> getAttribute o "aria-checked" `shouldReturn` Just "true"
+    storedText "page-width" `shouldReturn` Just "full"
+    -- Every page is laid out so, and so it is after a reload.
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
+    eventually $ find ui ".page-view" >>= classes >>= (`shouldSatisfy` elem "page-width-full")
+    unmount ui
+    again <- startAgain m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    eventually $ find again ".page-view" >>= classes >>= (`shouldSatisfy` elem "page-width-full")
+    find again ".page-width-option-compact" >>= click
+    eventually $ find again ".page-view" >>= classes >>= (`shouldSatisfy` elem "page-width-compact")
+    storedText "page-width" `shouldReturn` Just "compact"
+    unmount again
+
   it "makes the Markdown's font smaller and larger, and keeps its size" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
     _ <- editorText ui
@@ -101,18 +122,27 @@ spec m = do
     eventually $ computedStyle ".editor-preview" "overflow-y" `shouldReturn` "visible"
     unmount ui
 
-  it "keeps the title on the text's first line, with its # in place" $ runPage $ do
+  it "keeps the title on the text's first line, with its # in place, shows it as text, and goes to that line when it is clicked" $ runPage $ do
     ui <- start m (Just "user-editor") helloEditor
     text <- editorText ui
-    title <- find ui ".editor-title input"
-    getAttribute title "readonly" `shouldReturn` Just ""
-    getAttribute title "value" `shouldReturn` Just "Hello, world"
+    -- Shown as text, not as a field.
+    length <$> findAll ui ".editor-title input" `shouldReturn` 0
+    title <- find ui ".editor-title-text"
+    title `shouldHaveText` "Hello, world"
     -- Typed on the first line, the title changes with it.
     setMarkdown ui "# Hello, world\n\nText."
     unsafeIOToPageM (js_live_cursor 14)
     typeText text " again"
     markdown ui `shouldReturn` "# Hello, world again\n\nText."
-    eventually $ getAttribute title "value" `shouldReturn` Just "Hello, world again"
+    eventually $ find ui ".editor-title-text" >>= (`shouldHaveText` "Hello, world again")
+    -- A click on the title puts the caret at the end of the first line,
+    -- in the text, which has the focus.
+    setMarkdown ui "# Hello\n\nText."
+    unsafeIOToPageM (js_live_cursor 12)
+    find ui ".editor-title-line" >>= click
+    eventually $ editorSelection ui `shouldReturn` (7, 7)
+    press "!"
+    markdown ui `shouldReturn` "# Hello!\n\nText."
     -- The # stays: Backspace just after it does nothing, the cursor
     -- cannot go before it, and all of the text deleted leaves it.
     unsafeIOToPageM (js_live_cursor 2)
@@ -253,6 +283,8 @@ spec m = do
     -- it reads it.
     storedBool :: Text -> PageM s (Maybe Bool)
     storedBool key = (rightToMaybe =<<) <$> unsafeIOToPageM (runTest (Storage.getItem LocalStorage key :: m (Maybe (Either _ Bool))))
+    storedText :: Text -> PageM s (Maybe Text)
+    storedText key = (rightToMaybe =<<) <$> unsafeIOToPageM (runTest (Storage.getItem LocalStorage key :: m (Maybe (Either _ Text))))
     storedInt :: Text -> PageM s (Maybe Int)
     storedInt key = (rightToMaybe =<<) <$> unsafeIOToPageM (runTest (Storage.getItem LocalStorage key :: m (Maybe (Either _ Int))))
     computedStyle :: Text -> Text -> PageM s Text

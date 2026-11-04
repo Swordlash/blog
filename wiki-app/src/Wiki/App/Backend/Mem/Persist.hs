@@ -211,7 +211,7 @@ accountsKey = "accounts"
 records :: MemState -> Records
 records st =
   LazyMap.fromList
-    [ (usersStore, encoded [(u.id.text, encodeJson (encodeUser u)) | u <- Map.elems st.users])
+    [ (usersStore, encoded [(u.id.text, encodeJson (storedUser u)) | u <- Map.elems st.users])
     , (groupsStore, encoded [(g.id.text, encodeJson (encodeGroup g (Map.findWithDefault mempty g.id st.membership))) | g <- Map.elems st.groups])
     , (spacesStore, encoded [(s.id.text, encodeJson (encodeSpace s)) | s <- Map.elems st.spaces])
     , (pagesStore, encoded [(p.id.text, encodeJson (storedPage p)) | p <- Map.elems st.pages])
@@ -402,6 +402,20 @@ storedPage p = case encodePage p of
   Object o -> Object (KeyMap.insert "attachments" (toJSON [encodeAttachment p.id x | x <- p.attachments]) o)
   other -> other
 
+-- | A user as the store keeps them: as an archive writes a user, with
+-- their avatar, which an archive does not carry (its bytes are among the
+-- attachments' bytes in the store).
+storedUser :: User -> Value
+storedUser u = case (encodeUser u, u.avatar) of
+  (Object o, Just a) -> Object (KeyMap.insert "avatar" (toJSON a) o)
+  (other, _) -> other
+
+parseStoredUser :: Value -> Parser User
+parseStoredUser value = do
+  u <- parseUser value
+  avatar <- withObject "user" (\o -> o .:? "avatar") value
+  pure User {id = u.id, login = u.login, displayName = u.displayName, avatar}
+
 parseStoredPage :: Value -> Parser Page
 parseStoredPage value = do
   page <- parsePage value
@@ -482,7 +496,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     homePage <- maybe (Right defaultHomePage) (decoding metaStore "homePage" parseJSON) (Map.lookup "homePage" (holding metaStore))
     global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
     (disabled, passwords, removed) <- maybe (Right mempty) (decoding metaStore accountsKey parseAccounts) (Map.lookup accountsKey (holding metaStore))
-    users <- keyed usersStore parseUser (\u -> u.id.text) UserId
+    users <- keyed usersStore parseStoredUser (\u -> u.id.text) UserId
     groupsAndMembers <- keyed groupsStore parseGroup (\(g, _) -> g.id.text) GroupId
     pages <- keyed pagesStore parseStoredPage (\p -> p.id.text) PageId
     -- A space saved before spaces had a creation time is taken to have

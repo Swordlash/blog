@@ -60,7 +60,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.Core.Anchor (Anchor (..), Located (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
-import Wiki.Core.Id (CommentId (..), CommentThreadId (..), PageId, SpaceId)
+import Wiki.Core.Id (CommentId (..), CommentThreadId (..), PageId, SpaceId, UserId)
 import Wiki.Core.Markdown (IslandKey (..))
 import Wiki.Core.Version (Author (..))
 
@@ -100,6 +100,9 @@ data Input = Input
   , quoting :: Maybe Anchor
   -- ^ A quote of the page the reader chose to comment on: a new inline
   -- thread, in the panel beside the page.
+  , avatars :: Map UserId Text
+  -- ^ The URLs of the comments' authors' avatars, by user, which the page
+  -- view keeps ('avatarUrls').
   }
 
 -- | What the comments view sends to the page view.
@@ -247,6 +250,7 @@ component =
       [hh|
         <li class="comment" id={{ "comment-" <> c.id.text }}>
           <div class="comment-meta">
+            {{ avatarOf SmallAvatar st.input.avatars c.author }}
             <span class="comment-author">{{ c.author.name }}</span>
             {{ time c.id.text c.createdAt }}
             {% if isJust c.editedAt %}<span class="comment-edited">(edited)</span>{% end %}

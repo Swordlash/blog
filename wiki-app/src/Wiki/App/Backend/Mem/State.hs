@@ -61,6 +61,9 @@ module Wiki.App.Backend.Mem.State
   , personalSpaceIn
   , setPersonalSpaceIn
   , withPersonalNames
+  , setAvatarIn
+  , removeAvatarIn
+  , withWriters
   , setSpaceMathMacrosIn
   , macroUsesInState
   , setSpaceProfileIn
@@ -226,9 +229,9 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
 
@@ -476,7 +479,7 @@ getHomeDocumentIn st = do
   (space, c) <- findSpace st d.space
   requireView st c
   page <- findPage st d.page
-  pure (space, page)
+  pure (space, withWriters st page)
 
 -- | The signed-in user, in the form the permission rules take.
 currentPrincipal :: MemState -> Maybe Principal
@@ -609,6 +612,8 @@ insertPage space parent title body now st0 =
           , updatedAt = now
           , position = nextPosition (childrenOf (pagesOf space st) parent)
           , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
           }
    in (recordVersion Nothing page st {pages = Map.insert page.id page st.pages, searchText = Map.insert page.id (prepare page) st.searchText}, page)
 
@@ -791,6 +796,8 @@ repage space parent slug position p =
     , updatedAt = p.updatedAt
     , position
     , template = p.template
+    , createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 --------------------------------------------------------------------------------
@@ -876,8 +883,15 @@ getPageIn sid path st = do
   (_, c) <- findSpace st sid
   requireView st c
   case resolvePath (findChild (pagesOf sid st)) path of
-    Right ps | Just p <- lastMay ps -> pure p
+    Right ps | Just p <- lastMay ps -> pure (withWriters st p)
     _ -> Left NotFound
+
+-- | A page with who wrote it ('Page.createdBy', 'Page.updatedBy'): the
+-- authors of its first version and of the version it is now, as the
+-- server reads them. A version not read from the browser's store yet
+-- counts as unknown, so the caller reads them first.
+withWriters :: MemState -> Page -> Page
+withWriters st p = p {createdBy = authorOf st <$> makerOf st p.id, updatedBy = authorOf st <$> (Map.lookup p.id st.versions >>= Map.lookup p.updatedAt >>= \v -> v.author)}
 
 -- | The pages the current user may view that match a query, in the spaces
 -- it asks for, with the same visibility check as 'listPagesIn', space by
@@ -994,8 +1008,36 @@ withPersonalNames :: MemState -> MemState
 withPersonalNames st = st {spaces = Map.map afterOwner st.spaces}
   where
     afterOwner s = case s.owner >>= (`Map.lookup` st.users) of
-      Just u -> withName (personalName u.displayName) s
+      Just u -> withOwnerAvatar u.avatar (withName (personalName u.displayName) s)
       Nothing -> s
+
+-- | Give the current user an avatar: the picture's bytes, stored as a
+-- space icon's are, in place of the one they had, which is deleted.
+setAvatarIn :: Text -> ByteString -> Write User
+setAvatarIn mediaType bytes st = do
+  uid <- signedIn st
+  u <- findUser st uid
+  mt <- first Invalid (checkAvatarUpload mediaType (fromIntegral (BS.length bytes)))
+  let (b, st1) = newId "blob" (dropAvatar u st)
+      u' = withAvatar (Just Avatar {blob = BlobId b, mediaType = mt}) u
+  pure (st1 {blobs = Map.insert (BlobId b) bytes st1.blobs, users = Map.insert uid u' st1.users}, u')
+
+-- | Take the current user's avatar away, and delete its bytes.
+removeAvatarIn :: Write User
+removeAvatarIn st = do
+  uid <- signedIn st
+  u <- findUser st uid
+  let u' = withAvatar Nothing u
+  pure ((dropAvatar u st) {users = Map.insert uid u' st.users}, u')
+
+-- | A user with another avatar. (A function, since a record update of
+-- @avatar@ cannot tell a user's field from an author's.)
+withAvatar :: Maybe Avatar -> User -> User
+withAvatar avatar u = User {id = u.id, login = u.login, displayName = u.displayName, avatar}
+
+-- | Delete the bytes of a user's avatar, if they have one.
+dropAvatar :: User -> MemState -> MemState
+dropAvatar u = maybe identity (\a -> dropSource (SourceBlob a.blob)) u.avatar
 
 -- | The current user's personal space, shown or not, if they have one.
 personalSpaceIn :: MemState -> Either WikiError (Maybe Space)
@@ -1059,7 +1101,7 @@ setSpaceProfileIn sid given st = do
   (s, c) <- findSpace st sid
   home <- requireIconAdminister st sid c
   -- The wiki home's space takes only an icon: the rest is its own.
-  let p = if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given
+  let p = ownProfile (s.owner >>= (`Map.lookup` st.users) >>= \u -> u.avatar) (if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given)
   checked <- first Invalid (checkProfile s (map (\x -> x.id) (pagesOf sid st)) p)
   let s' = withProfile checked s
       st1 = if s'.icon == s.icon then st else dropIcon s st
@@ -1375,7 +1417,7 @@ discardDraftIn pid st = do
 -- 'C.formerAuthor', as the server names them.
 authorOf :: MemState -> UserId -> Author
 authorOf st u = case Map.lookup u st.users of
-  Just x -> Author {id = u, name = x.displayName}
+  Just x -> V.authorOf x
   Nothing -> absentAuthor (maybe u C.formerAuthor (Map.lookup u st.removed))
 
 -- | A page's version in the form the class returns it.
@@ -1498,7 +1540,7 @@ createUserIn new st = do
   for_ (find (\u -> T.toCaseFold u.login.text == T.toCaseFold login.text) (Map.elems st.users)) $ \_ ->
     Left (Conflict ("There is a user with the login " <> login.text <> " already."))
   let (i, st1) = newId "user" st
-      u = User {id = UserId i, login, displayName = fromMaybe login.text (mfilter (not . T.null) (Just (T.strip new.displayName)))}
+      u = User {id = UserId i, login, displayName = fromMaybe login.text (mfilter (not . T.null) (Just (T.strip new.displayName))), avatar = Nothing}
       st2 = (insertUser u st1) {passwords = Set.insert u.id st1.passwords}
   pure (st2, accountIn st2 u)
 
@@ -1547,7 +1589,8 @@ removeUserIn uid st = do
   let former = C.formerAuthor u.login.text
       -- Their personal space belongs to them, and goes with the account,
       -- as on the server.
-      st0 = maybe st (\p -> removeSpace p.id st) (find (\p -> p.owner == Just uid) (Map.elems st.spaces))
+      -- So does their avatar's picture.
+      st0 = dropAvatar u (maybe st (\p -> removeSpace p.id st) (find (\p -> p.owner == Just uid) (Map.elems st.spaces)))
       keptComment c = if c.author.id == uid then c {C.author = absentAuthor former} else c
       keptNotice n
         | n.actor.id == uid =
@@ -1556,7 +1599,7 @@ removeUserIn uid st = do
               , Notice.kind = n.kind
               , Notice.page = n.page
               , Notice.thread = n.thread
-              , Notice.actor = Author {id = former, name = n.actor.name}
+              , Notice.actor = Author {id = former, name = n.actor.name, avatar = Nothing}
               , Notice.title = n.title
               , Notice.excerpt = n.excerpt
               , Notice.createdAt = n.createdAt

@@ -135,7 +135,7 @@ import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, shutOut)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
@@ -156,6 +156,7 @@ import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
+import Wiki.App.View.Avatar qualified as AvatarView
 import Wiki.App.View.Backups qualified as BackupsView
 import Wiki.App.View.Bell qualified as BellView
 import Wiki.App.View.Blog qualified as BlogView
@@ -273,6 +274,7 @@ data ViewSlot
   | GroupsSlot
   | StatusSlot
   | PersonalSpaceSlot
+  | AvatarSlot
   deriving stock (Eq, Ord)
 
 -- | 'PartSlot' is the index of a child under the label "part". The output
@@ -324,6 +326,9 @@ data State m = State
   , icons :: Map SpaceId Text
   -- ^ The URLs of the spaces' icon images, for spaces whose icon is an
   -- image, the wiki home's too.
+  , avatars :: Map UserId Text
+  -- ^ The URLs of the avatars of the signed-in user and of the demo's
+  -- users, for those who have one: the header shows them.
   , home :: Maybe Space
   -- ^ The space behind the wiki's home page, whose icon is the wiki's
   -- ("Wiki.App.Favicon").
@@ -331,6 +336,9 @@ data State m = State
   , switcherOpen :: Bool
   -- ^ Whether the sidebar's menu of spaces to switch to is open.
   , sidebarFolded :: Bool
+  , chosenWidth :: PageWidth
+  -- ^ How wide pages are laid out, as this browser keeps it
+  -- ('pageWidthKey').
   -- ^ Whether the sidebar is folded away on a wide screen, to give its
   -- width to the page (WP5.36 of docs/PLAN.md); the browser keeps it.
   , generation :: Int
@@ -438,7 +446,7 @@ component =
             world <- fetchWorld demo
             here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
-          let (Around signedIn users spaces home icons kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty False, NoSpace) loaded
+          let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
           pure
             State
               { router
@@ -455,9 +463,11 @@ component =
               , spaces
               , home
               , icons
+              , avatars
               , here
               , switcherOpen = False
               , sidebarFolded = False
+              , chosenWidth = Compact
               , generation = 0
               , menuOpen = False
               , demoAccountOpen = False
@@ -651,8 +661,13 @@ component =
       Nothing
         | st.world /= WorldReady -> Nothing
         | Just accounts <- st.accounts ->
-            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session, here = Router.href st.router st.route, router = st.router} FromAccount)
-        | otherwise -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
+            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session, avatar = ownAvatar st, here = Router.href st.router st.route, router = st.router} FromAccount)
+        | Just u <- st.session.user -> Just [hh|<span class="user-name">{{ avatar SmallAvatar (ownAvatar st) u.displayName }}{{ u.displayName }}</span>|]
+        | otherwise -> Just [hh|<span class="user-name">Not signed in</span>|]
+
+    -- The URL of the signed-in user's avatar, if they have one.
+    ownAvatar :: State m -> Maybe Text
+    ownAvatar st = st.session.user >>= \u -> Map.lookup u.id st.avatars
 
     -- The demo's menu of who one is: nobody, or one of its users.
     userSwitcher :: State m -> H.ComponentHTML Action Slots m
@@ -660,6 +675,7 @@ component =
       [hh|
         <div class="user-switcher">
           <button type="button" class="user-switcher-toggle" aria-expanded={{ ariaBool st.menuOpen }} onClick={{ const ToggleMenu }}>
+            {% for u in maybeToList st.session.user %}{{ avatar SmallAvatar (ownAvatar st) u.displayName }}{% end %}
             {{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}
           </button>
           {% if st.menuOpen %}
@@ -694,6 +710,10 @@ component =
             <section class="account-panel demo-account-panel" aria-label="Your account">
               <h2>Your account</h2>
               <p class="account-note">The demo has no passwords: you switch between its users above.</p>
+              <section class="account-avatar" aria-label="Avatar">
+                <h3>Avatar</h3>
+                {{ HH.slot "view" AvatarSlot AvatarView.component AvatarView.Input {user = st.session.user} FromView }}
+              </section>
               {{ HH.slot_ "part" DemoAccountSlot SecurityView.component () }}
               <section class="account-notifications" aria-label="Notifications">
                 <h3>Notifications</h3>
@@ -836,6 +856,11 @@ component =
     -- The browser's key for whether the sidebar is folded.
     sidebarFoldedKey :: Text
     sidebarFoldedKey = "sidebar-folded"
+
+    -- The key of local storage that keeps how wide pages are laid out:
+    -- @"compact"@ or @"full"@.
+    pageWidthKey :: Text
+    pageWidthKey = "page-width"
 
     -- Inside a space, that space alone; elsewhere, the spaces.
     sidebar :: State m -> H.ComponentHTML Action Slots m
@@ -1113,6 +1138,9 @@ component =
         -- After the first render, which a prerendered page shows unfolded.
         folded <- H.liftEffect (Storage.getItem LocalStorage sidebarFoldedKey)
         when (folded == Just (Right True)) $ modify (\st -> st {sidebarFolded = True})
+        -- And how wide pages are, which a prerendered page shows compact.
+        wide <- H.liftEffect (Storage.getItem LocalStorage pageWidthKey)
+        when (wide == Just (Right ("full" :: Text))) $ modify (\st -> st {chosenWidth = FullWidth})
         -- Made in 'H.liftEffect', before anything here waits, so that the
         -- shell listens to the browser from the moment it has started.
         whenM (gets overNetwork) $ do
@@ -1245,6 +1273,9 @@ component =
           _ -> pass
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
+      FromView (ChoseWidth width) -> do
+        modify (\st -> st {chosenWidth = width})
+        H.liftEffect (Storage.setItem LocalStorage pageWidthKey (case width of Compact -> "compact" :: Text; FullWidth -> "full"))
       FromView (Showing page) -> modify (\st -> st {shown = Just page})
       FromView Entered -> do
         now <- H.liftEffect historyEntry
@@ -1254,17 +1285,23 @@ component =
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
-      -- The user turned their personal space on or off.
+      -- The user turned their personal space on or off, or changed their
+      -- avatar.
       FromAccount SignInView.SpacesChanged -> reload Nothing
       -- The session ended by itself (or changed elsewhere): reload
-      -- everything as the current user, and if that is nobody, show the way
-      -- to sign in again, saying why.
-      SessionChanged s -> do
-        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
-        restartFeed
-        reload Nothing
-        when (isNothing s.user) $
-          H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
+      -- everything as the current user ('sessionEnded'). Unless it is the
+      -- same user, with the same rights, whose own record changed
+      -- (their avatar, from the account panel): only what shows the user
+      -- is read again, with the spaces (a personal space shows its owner's
+      -- avatar).
+      SessionChanged s
+        | Just _ <- s.user ->
+            gets (\st -> sameAsking st.session s) >>= \case
+              -- (The generation, unchanged, tells the record updated: a
+              -- view's context has a session too.)
+              True -> modify (\st -> st {session = s, generation = st.generation}) >> loadWorld
+              False -> sessionEnded s
+        | otherwise -> sessionEnded s
       OpenSignIn -> H.tell "signIn" () (SignInView.Prompt "Sign in with your login and password.")
       -- An invitation created its account and signed the new user in: the
       -- wiki as them, from its front page.
@@ -1295,6 +1332,17 @@ component =
         | now /= st.route -> handleAction (Arrived now)
         | isAdminRoute st.route -> Router.redirect st.router st.route
         | otherwise -> pass
+
+    -- The session ended by itself, or changed elsewhere: everything is
+    -- reloaded as the current user, and if that is nobody, the way to sign
+    -- in again is shown, saying why.
+    sessionEnded :: Session -> H.HalogenM (State m) Action Slots output m ()
+    sessionEnded s = do
+      modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+      restartFeed
+      reload Nothing
+      when (isNothing s.user) $
+        H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
 
     -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
@@ -1356,7 +1404,7 @@ component =
     loadWorld = do
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
-        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, kept = w.kept, world = WorldReady})
+        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady})
         Left e -> modify (\st -> st {world = WorldFailed e})
 
     -- Load the space the route is in, unless it is the one loaded already
@@ -1423,6 +1471,7 @@ data Around = Around
   , spaces :: [Space]
   , home :: Maybe Space
   , icons :: Map SpaceId Text
+  , avatars :: Map UserId Text
   , kept :: Bool
   }
 
@@ -1439,8 +1488,9 @@ fetchWorld demo = do
   -- wiki's favicon away from the spaces (WP5.45 of docs/PLAN.md).
   home <- if shutOut asking then pure Nothing else either (const Nothing) (Just . fst) <$> getHomeDocument
   icons <- Map.fromList <$> sequence [(x.id,) <$> spaceIconUrl x | x <- spaces <> toList home, Just (IconImage _ _) <- [x.icon]]
+  avatars <- avatarUrls [(u.id, u.avatar) | u <- toList asking.user <> users]
   kept <- maybe (pure False) (\d -> d.demoKept) demo
-  pure Around {asking, users, spaces, home, icons, kept}
+  pure Around {asking, users, spaces, home, icons, avatars, kept}
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
@@ -1501,7 +1551,7 @@ isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Admini
     ctx = context st
 
 context :: State m -> Context
-context st = Context {router = st.router, session = st.session, spaces = available, icons = st.icons, revision = st.generation}
+context st = Context {router = st.router, session = st.session, spaces = available, icons = st.icons, revision = st.generation, pageWidth = st.chosenWidth}
   where
     available =
       st.spaces <> case st.here of
