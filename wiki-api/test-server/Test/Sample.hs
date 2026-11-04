@@ -41,6 +41,7 @@ module Test.Sample
   , serverChange
   , macroUse
   , providerCheck
+  , texEngine
   , backups
   , backupChange
   , backupsAfter
@@ -66,7 +67,7 @@ import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), MacroUse (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), MacroUse (..), ServerStatus (..), TexEngine (..), TexStatus (..), WikiSettings (..))
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
@@ -302,6 +303,17 @@ importSummary =
     , pagesKept = 0
     , pagesSkipped = 0
     , attachments = 1
+    }
+
+-- | The TeX engine as a server finds it where its format file is missing:
+-- found, and failing with what it printed.
+texEngine :: TexEngine
+texEngine =
+  TexEngine
+    { status = TexFailing
+    , path = Just "/usr/bin/xelatex"
+    , output = Just "I can't find the format file `xelatex.fmt'!"
+    , checkedAt = time
     }
 
 -- | A server's status, as its operator reads it.

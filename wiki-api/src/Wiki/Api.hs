@@ -93,7 +93,7 @@ import Servant.API hiding (Vault)
 import Servant.Multipart.API (MultipartForm, Tmp)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, UserPage, WikiSettings)
+import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
@@ -360,12 +360,13 @@ data PagesApi form mode = PagesApi
   -- ^ The page as a document ("Wiki.Api.Export"), for anyone who may read
   -- it, as a download (@Content-Disposition: attachment@) named after its
   -- title. Raw, because the response's media type is the format's, and
-  -- servant's types cannot make it depend on a capture. A format the
-  -- server cannot produce (a PDF without a TeX engine, a presentation of a
-  -- page that is not a deck) is 'Wiki.Api.Error.Invalid', and so is a
-  -- document pandoc or TeX failed to produce, with the reason. An export
-  -- requested while the same user's previous export is still running is
-  -- 'Wiki.Api.Error.TooManyRequests'.
+  -- servant's types cannot make it depend on a capture. The application
+  -- fetches it and saves what it gets, so that a refusal is shown rather
+  -- than saved. A format the server cannot produce (a PDF without a TeX
+  -- engine that works, a presentation of a page that is not a deck) is
+  -- 'Wiki.Api.Error.Invalid', and so is a document pandoc or TeX failed to
+  -- produce, with the reason. An export requested while the same user's
+  -- previous export is still running is 'Wiki.Api.Error.TooManyRequests'.
   }
   deriving stock (Generic)
 
@@ -537,6 +538,15 @@ data AdminApi mode = AdminApi
   -- ^ @backUpNow@: make a backup now, if backups are on. The response
   -- comes when the backup is done, or after a timeout with the backup
   -- still in progress.
+  , -- The TeX engine the PDFs are made with (WP5.56 of docs/PLAN.md,
+    -- "Wiki.Api.Admin"'s 'TexEngine').
+    texEngine :: mode :- "tex-engine" :> Get '[JSON] TexEngine
+  -- ^ @texEngine@: what the server found when it last tried @xelatex@,
+  -- when it started or when it was last asked to check.
+  , checkTexEngine :: mode :- "tex-engine" :> "check" :> Post '[JSON] TexEngine
+  -- ^ @checkTexEngine@: try @xelatex@ again now, typesetting a one-line
+  -- document, and answer what was found. The PDFs are offered from then on
+  -- only if it made one.
   }
   deriving stock (Generic)
 

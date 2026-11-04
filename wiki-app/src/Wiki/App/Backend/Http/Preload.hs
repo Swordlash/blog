@@ -97,6 +97,7 @@ preloadJSON c =
     , "backups" .= answer "backups" c.backups
     , "activity" .= answer "activity" c.activity
     , "status" .= answer "status" c.status
+    , "texEngine" .= answer "texEngine" c.texEngine
     , "userPages" .= orNull (answers "users" (\q -> ["query" .= q]) c.userPages)
     , "postDetails" .= orNull (answers "details" (\space -> ["space" .= space]) c.postDetails)
     , "threads" .= orNull (answers "threads" (\page -> ["page" .= page]) c.threads)
@@ -164,6 +165,7 @@ parsePreload = withObject "the page's payload" $ \o -> do
   backups <- traverse (withObject "an answer" (answerIn "backups")) =<< o .:? "backups"
   activity <- traverse (withObject "an answer" (answerIn "activity")) =<< o .:? "activity"
   status <- traverse (withObject "an answer" (answerIn "status")) =<< o .:? "status"
+  texEngine <- traverse (withObject "an answer" (answerIn "texEngine")) =<< o .:? "texEngine"
   userPages <- byArguments "users" (.: "query") . fold =<< o .:? "userPages"
   postDetails <- byArguments "details" (.: "space") . fold =<< o .:? "postDetails"
   threads <- byArguments "threads" (.: "page") . fold =<< o .:? "threads"

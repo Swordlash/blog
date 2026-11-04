@@ -30,6 +30,7 @@ module Wiki.App.Backend.Http.Transport
   , timeLimit
   , requestTimeout
   , uploadTimeout
+  , exportTimeout
 
     -- * Failures
   , fetchFailure
@@ -101,12 +102,30 @@ requestTimeout = 30_000
 uploadTimeout :: Int
 uploadTimeout = 6 * 60_000
 
+-- | How long the export of a page or a space as a document waits, and a
+-- check of the server's TeX engine: the server gives pandoc and TeX up to
+-- a minute to make a document, and the TeX engine up to a minute to show
+-- that it works, and the answer still has to come down the line after
+-- that.
+exportTimeout :: Int
+exportTimeout = 2 * 60_000
+
 -- | How long a request may take, in milliseconds: 'uploadTimeout' for an
--- upload (a multipart form), 'requestTimeout' for anything else.
+-- upload (a multipart form); 'exportTimeout' for a document exported
+-- (@api\/v1\/pages\/\<page>\/export\/\<format>@ and the same for a
+-- space) and for a check of the TeX engine
+-- (@api\/v1\/admin\/tex-engine\/check@), whose engine may hang until the
+-- server stops it; 'requestTimeout' for anything else.
 timeLimit :: HttpRequest -> Int
 timeLimit r = case r.requestBody of
   Just (_, mediaType) | mainType mediaType == "multipart" -> uploadTimeout
+  _ | typesetting (T.splitOn "/" r.requestPath) -> exportTimeout
   _ -> requestTimeout
+  where
+    typesetting = \case
+      ["api", "v1", kind, _, "export", _] -> kind `elem` ["pages", "spaces"]
+      ["api", "v1", "admin", "tex-engine", "check"] -> True
+      _ -> False
 
 -- | The browser's @fetch@, with 'timeLimit''s limits. Natively there is no
 -- network, and every request fails, saying so.

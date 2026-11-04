@@ -4,8 +4,12 @@
 -- allowlist, the islands, links, decks cut into slides, a space's pages as
 -- one document), natively; then each format over HTTP, from a server with
 -- the demo's wiki, checked for its media type, its name and what its file
--- holds; who may export what; one export at a time each; and the PDFs, where
--- the machine has @xelatex@ (skipped, saying so, where it has not).
+-- holds; who may export what; one export at a time each; the server's try
+-- of its TeX engine, with fake engines first on the @PATH@ (one that makes
+-- a PDF, one that stops for want of its format file, none at all), and what
+-- the session, the administration and a PDF export say after each; and the
+-- PDFs, where the machine has @xelatex@ (skipped, saying so, where it has
+-- not).
 module Test.Server.Export (spec, environmentSpec) where
 
 import Codec.Compression.Zlib qualified as Zlib
@@ -14,18 +18,23 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, getCurrentTime)
 import Network.HTTP.Types (methodPost)
 import Protolude
+import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setOwnerWritable, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
+import System.FilePath (takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
+import System.Timeout (timeout)
 import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
 import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Walk (query)
-import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Admin (TexEngine (..), TexStatus (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Export (ExportFormat (..), formatMediaType, opensInline)
 import Wiki.Api.Links (attachmentUrl, links)
@@ -42,8 +51,9 @@ import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Server.Export (availableFormats, newExports, oneAtATime, restrictTeX, texEngine, texLimits)
+import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, restrictTeX, texEngine, texLimits, writeDocument)
 import Wiki.Server.Export.Document
+import Wiki.Server.Options (ServeOptions (..))
 
 spec :: Backing -> Spec
 spec backing = describe "export with pandoc" $ do
@@ -606,6 +616,18 @@ oneAtATimeEach = describe "one export at a time" $ do
 
 pdfs :: Backing -> Spec
 pdfs backing = describe "PDFs, typeset by xelatex" $ do
+  -- pandoc runs the engine of an export, and stops it when the export's
+  -- time is up (its process is terminated with the thread that waits for
+  -- it): an engine that loops, as an old TeX Live's does on unicode-math's
+  -- table, does not outlive its export.
+  it "stop the TeX engine of an export that takes too long" $
+    withFakeTeX Sleeping $ \engine -> do
+      made <- timeout 2_000_000 (writeDocument (Just engine) Pdf mempty False (P.Pandoc mempty [P.Para [P.Str "x"]]))
+      isNothing made `shouldBe` True
+      pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
+      length pids `shouldBe` 1
+      for_ pids $ \pid -> eventuallyGone (toS pid)
+
   it "keep TeX to its working directory, with no programs, through kpathsea's variables" $ do
     restrictTeX
     for_ texLimits $ \(name, value) -> lookupEnv name `shouldReturn` Just value
@@ -621,18 +643,99 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     BSL.toStrict reply.body `shouldSatisfy` (not . ("root:" `BS.isInfixOf`))
     when (reply.status == 200) (BS.take 5 (BSL.toStrict reply.body) `shouldBe` "%PDF-")
 
-  it "are offered exactly where the machine has xelatex" $ withRunning backing $ \r -> do
-    tex <- isJust <$> texEngine
-    formats <- availableFormats
-    session <- ok200 (getUrl r (r.public <> "/" <> links.session))
-    (session :: SessionInfo).exports `shouldBe` formats
-    (Pdf `elem` formats, BeamerPdf `elem` formats) `shouldBe` (tex, tex)
+  it "are offered where the xelatex the server found made a PDF when it tried it" $
+    withFakeTeX Typesetting $ \engine -> withRunning backing $ \r -> do
+      session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+      (session :: SessionInfo).exports `shouldBe` [minBound .. maxBound]
+      found <- engineOn r
+      (found.status, found.path, found.output) `shouldBe` (TexWorking, Just (toS engine), Nothing)
 
+  it "are not offered where xelatex is found but fails, which the administration reads with its output" $
+    withFakeTeX Broken $ \engine -> withDemoRunning backing identity $ \r -> do
+      session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+      (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
+      found <- engineOn r
+      (found.status, found.path) `shouldBe` (TexFailing, Just (toS engine))
+      found.output `shouldSatisfy` maybe False (T.isInfixOf "I can't find the format file `xelatex.fmt'!")
+      -- An export asked for anyway is refused in one sentence, which says
+      -- where the reason is shown.
+      (_, pages) <- docsIds r
+      getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf)
+        >>= jsonAs 400
+        >>= (`shouldBe` Invalid ("PDF needs xelatex, which was found at " <> toS engine <> " but does not work on this server; the administration's Server section shows why."))
+      -- Only an administrator reads it.
+      getUrl r (r.public <> "/" <> links.admin.texEngine) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+      send r methodPost (r.public <> "/" <> links.admin.checkTexEngine) [] "" >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+
+  -- The server starts with its own PATH (one on PostgreSQL runs its tools
+  -- as it starts), and finds no xelatex when the administration checks
+  -- again with the PATH hidden.
   it "are refused, saying why, where it has not" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
     withoutTeX $ do
       texEngine `shouldReturn` Nothing
+      found <- checkOn r
+      (found.status, found.path, found.output) `shouldBe` (TexNotFound, Nothing, Nothing)
+      engineOn r `shouldReturn` found
+      session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+      (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
       getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
+
+  it "follow the administration's check: a repaired engine offers them, with the time of the check" $
+    withFakeTeX Broken $ \engine -> withRunning backing $ \r -> do
+      broken <- engineOn r
+      broken.status `shouldBe` TexFailing
+      fakeEngine engine Typesetting
+      threadDelay 10_000
+      repaired <- checkOn r
+      repaired.status `shouldBe` TexWorking
+      repaired.checkedAt `shouldSatisfy` (> broken.checkedAt)
+      -- Read again, it is the check's.
+      engineOn r `shouldReturn` repaired
+      session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+      (session :: SessionInfo).exports `shouldBe` [minBound .. maxBound]
+
+  it "stop an engine that never ends, with every process it started, and say so with what it wrote" $
+    withFakeTeX Hanging $ \engine -> do
+      found <- engineReport <$> probeTexEngineWithin 1_000_000
+      (found.status, found.path) `shouldBe` (TexFailing, Just (toS engine))
+      found.output `shouldSatisfy` maybe False (T.isPrefixOf "xelatex did not finish within 1 second, and was stopped.")
+      -- What it wrote on its error output, as kpathsea writes a refusal.
+      found.output `shouldSatisfy` maybe False (T.isInfixOf "Not reading from /usr/share/texlive/texmf-dist/tex/latex/unicode-math/unicode-math-table.tex (openin_any = p)")
+      -- The engine, and the process it started, are gone.
+      pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
+      length pids `shouldBe` 2
+      for_ pids $ \pid -> eventuallyGone (toS pid)
+
+  -- What the owner's TeX Live 2020 did: the engine never ends. Neither the
+  -- server's start nor the administration's check over HTTP waits for it
+  -- longer than the probe's limit, and the check answers the diagnosis.
+  it "give up an engine that never ends, at start and when checked over HTTP, and say why" $
+    withFakeTeX Hanging $ \engine -> do
+      started <- getCurrentTime
+      withRunningAs backing (\o -> o {texProbeTimeout = 1_000_000}) $ \r -> do
+        ready <- getCurrentTime
+        diffUTCTime ready started `shouldSatisfy` (< 30)
+        first' <- engineOn r
+        first'.status `shouldBe` TexFailing
+        checked <- checkOn r
+        (checked.status, checked.path) `shouldBe` (TexFailing, Just (toS engine))
+        checked.output `shouldSatisfy` maybe False (T.isPrefixOf "xelatex did not finish within 1 second, and was stopped.")
+        checked.output `shouldSatisfy` maybe False (T.isInfixOf "Not reading from /usr/share/texlive/texmf-dist/tex/latex/unicode-math/unicode-math-table.tex (openin_any = p)")
+        checked.checkedAt `shouldSatisfy` (> first'.checkedAt)
+        session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+        (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
+      -- Both tries' processes are gone.
+      pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
+      length pids `shouldBe` 4
+      for_ pids $ \pid -> eventuallyGone (toS pid)
+
+  it "keep the engine's reason, bounded, when it prints a long log and stops" $
+    withFakeTeX Long $ \_ -> do
+      found <- engineReport <$> probeTexEngine
+      found.status `shouldBe` TexFailing
+      T.length (fromMaybe "" found.output) `shouldSatisfy` (<= probeOutputLimit)
+      found.output `shouldSatisfy` maybe False (T.isSuffixOf "the last line")
 
   it "are made of a page that needs nothing beyond LaTeX where it has" $ withDemoRunning backing identity $ \r -> do
     tex <- texEngine
@@ -665,6 +768,94 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     pdfPages pdf `shouldReturn` (1 + sum (map (\s -> s.steps) (either (panic . show) deckOf (parseMarkdown stepsDeck)).slides))
     -- The headers say nothing a browser would act on but the download.
     lookup "X-Content-Type-Options" reply.headers `shouldBe` Just "nosniff"
+
+-- | What the server last found of its TeX engine, as the administration
+-- reads it on the admin listener; and a check of it there.
+engineOn :: (HasCallStack) => Running -> IO TexEngine
+engineOn r = ok200 (getUrl r (r.admin <> "/admin/" <> links.admin.texEngine))
+
+checkOn :: (HasCallStack) => Running -> IO TexEngine
+checkOn r = ok200 (send r methodPost (r.admin <> "/admin/" <> links.admin.checkTexEngine) [] "")
+
+-- | What a fake @xelatex@ does when it is run: typeset (write the PDF
+-- and end well), stop for want of its format file as a real one does,
+-- print far more than the probe keeps and stop, complain as kpathsea does
+-- and wait for ever with a process of its own started, or only wait.
+data FakeTeX = Typesetting | Broken | Long | Hanging | Sleeping
+
+-- | Run with a fake @xelatex@ first on the @PATH@, given its path. Only
+-- the exclusive group may: the @PATH@ is the process's.
+withFakeTeX :: FakeTeX -> (FilePath -> IO a) -> IO a
+withFakeTeX fake test = withSystemTempDirectory "wiki-fake-tex" $ \dir -> do
+  let engine = dir <> "/xelatex"
+  fakeEngine engine fake
+  bracket (lookupEnv "PATH") (maybe (unsetEnv "PATH") (setEnv "PATH")) $ \path -> do
+    setEnv "PATH" (dir <> maybe "" (":" <>) path)
+    test engine
+
+-- | Write a fake @xelatex@ at a path, executable. It is given the
+-- arguments pandoc gives, @-output-directory@ among them, and the file to
+-- typeset last.
+fakeEngine :: FilePath -> FakeTeX -> IO ()
+fakeEngine engine fake = do
+  writeFile engine $ case fake of
+    Typesetting ->
+      T.unlines
+        [ "#!/bin/sh"
+        , "out=."
+        , "for arg; do if [ \"$previous\" = -output-directory ]; then out=$arg; fi; previous=$arg; done"
+        , "printf '%%PDF-1.5\\n%%%%EOF\\n' > \"$out/$(basename \"$previous\" .tex).pdf\""
+        ]
+    Broken ->
+      T.unlines
+        [ "#!/bin/sh"
+        , "echo 'This is XeTeX, Version 3.141592653-2.6-0.999995 (TeX Live 2023/Debian) (preloaded format=xelatex)'"
+        , "echo \"I can't find the format file \\`xelatex.fmt'!\""
+        , "exit 1"
+        ]
+    -- Starts a process of its own, then waits for ever, each writing its
+    -- process id down first.
+    Hanging ->
+      T.unlines
+        [ "#!/bin/sh"
+        , "here=$(dirname \"$0\")"
+        , "echo 'Not reading from /usr/share/texlive/texmf-dist/tex/latex/unicode-math/unicode-math-table.tex (openin_any = p).' >&2"
+        , "sh -c 'echo $$ >> \"$1/pids\"; exec sleep 300' child \"$here\" &"
+        , "echo $$ >> \"$here/pids\""
+        , "exec sleep 300"
+        ]
+    -- Waits for ever, having written its process id down.
+    Sleeping ->
+      T.unlines
+        [ "#!/bin/sh"
+        , "echo $$ >> \"$(dirname \"$0\")/pids\""
+        , "exec sleep 300"
+        ]
+    Long ->
+      T.unlines
+        [ "#!/bin/sh"
+        , "i=0; while [ $i -lt 500 ]; do echo \"line $i of what TeX printed\"; i=$((i + 1)); done"
+        , "echo 'the last line'"
+        , "exit 1"
+        ]
+  -- Writable too, so that a test can rewrite it ("repair" the engine): a
+  -- suite that does not run as root may not write a file without it.
+  setPermissions engine (setOwnerWritable True (setOwnerExecutable True (setOwnerReadable True emptyPermissions)))
+
+-- | Wait, for at most five seconds, until the process with this id is gone
+-- (not even a zombie waiting to be reaped).
+eventuallyGone :: (HasCallStack) => Text -> IO ()
+eventuallyGone pid = go (50 :: Int)
+  where
+    go n = do
+      status <- try @SomeException (readFile ("/proc/" <> toS pid <> "/stat"))
+      let alive = case status of
+            Left _ -> False
+            Right stat -> case T.words (T.drop 1 (snd (T.breakOnEnd ")" stat))) of
+              code : _ -> code /= "Z"
+              [] -> False
+      when alive $
+        if n <= 0 then expectationFailure ("process " <> toS pid <> " is still running") else threadDelay 100_000 >> go (n - 1)
 
 -- | withoutTeX hides programs from the exclusive server test that checks
 -- PDF refusal. The original PATH is restored even when the assertion fails.

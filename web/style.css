@@ -5542,19 +5542,98 @@ mark.comment-mark-focused {
   box-shadow: 0 6px 16px rgb(0 0 0 / 0.15);
 }
 
-.export-formats a {
+/* Each format is a button that fetches the document (WP5.56), drawn as an
+   entry of the list rather than as a button. */
+.export-formats button {
   display: block;
+  width: 100%;
   padding: 0.3rem 0.8rem;
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
   color: var(--text);
+  background: none;
+  cursor: pointer;
 }
 
-.export-formats a:hover {
+.export-formats button:hover:not(:disabled) {
   background: var(--surface);
-  text-decoration: none;
+}
+
+.export-formats button:disabled {
+  color: var(--muted);
+  cursor: progress;
+}
+
+.export-formats button[aria-busy="true"] {
+  font-style: italic;
+}
+
+/* What became of the last export, in the corner of the window, as a copied
+   link's notice is: the server's reason when the export was refused. */
+.export-notice {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.45rem 0.6rem 0.45rem 0.9rem;
+  border-radius: 6px;
+  color: var(--background);
+  background: var(--tip);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.export-notice.export-refused {
+  background: var(--danger);
+}
+
+.export-notice:empty {
+  padding: 0;
+  box-shadow: none;
+}
+
+.export-notice-dismiss {
+  flex: none;
+  padding: 0 0.3rem;
+  border: none;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1.2;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+}
+
+/* The engine's own words, in the administration's Server section. */
+.server-export-output {
+  max-height: 20rem;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  background: var(--code);
+  border-radius: 6px;
+}
+
+.server-export-check {
+  align-items: center;
+}
+
+.server-export-checked {
+  font-size: 0.875rem;
+  color: var(--muted);
 }
 
 @media print {
-  .export-menu {
+  .export-menu,
+  .export-notice {
     display: none;
   }
 }

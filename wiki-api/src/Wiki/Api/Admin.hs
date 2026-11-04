@@ -19,6 +19,8 @@ module Wiki.Api.Admin
   ( -- * The server
     ServerStatus (..)
   , LoggedError (..)
+  , TexEngine (..)
+  , TexStatus (..)
 
     -- * The wiki's people
   , Directory (..)
@@ -55,7 +57,8 @@ module Wiki.Api.Admin
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Control.Monad.Fail (fail)
+import Data.Aeson (FromJSON (..), ToJSON (..), withText)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -118,6 +121,52 @@ data LoggedError = LoggedError
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | 'TexEngine' is what the server found when it last tried its TeX
+-- engine, @xelatex@, which the PDF exports need ("Wiki.Api.Export"): the
+-- response to @GET \/api\/v1\/admin\/tex-engine@ and to
+-- @POST \/api\/v1\/admin\/tex-engine\/check@ (WP5.56 of docs/PLAN.md).
+--
+-- The server tries the engine when it starts, and again when the
+-- administration asks: it looks for @xelatex@ on its @PATH@ and typesets a
+-- one-line document with it. Finding the program is not enough. On a
+-- machine where its format file is missing, or where the server's service
+-- sees another TeX tree than the shell does, @xelatex@ is there and every
+-- PDF fails. So the server offers the PDFs only when the last try made a
+-- PDF.
+data TexEngine = TexEngine
+  { status :: TexStatus
+  , path :: Maybe Text
+  -- ^ Where @xelatex@ was found; 'Nothing' when it was not.
+  , output :: Maybe Text
+  -- ^ What the engine wrote when it failed, at most 2000 characters: a
+  -- line that says how it ended (stopped with an exit code, or stopped by
+  -- the server after a minute), what it wrote on its error output, and the
+  -- errors its log names or the end of its log. 'Nothing' unless it failed.
+  , checkedAt :: UTCTime
+  -- ^ When the server tried it.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'TexStatus' is the outcome of the last try of the TeX engine: it made a
+-- PDF (@working@), it was found and did not (@failing@), or it was not
+-- found (@not-found@).
+data TexStatus = TexWorking | TexFailing | TexNotFound
+  deriving stock (Eq, Show, Enum, Bounded)
+
+instance ToJSON TexStatus where
+  toJSON = \case
+    TexWorking -> "working"
+    TexFailing -> "failing"
+    TexNotFound -> "not-found"
+
+instance FromJSON TexStatus where
+  parseJSON = withText "working, failing or not-found" $ \case
+    "working" -> pure TexWorking
+    "failing" -> pure TexFailing
+    "not-found" -> pure TexNotFound
+    other -> fail ("not working, failing or not-found: " <> toS other)
 
 -- | 'Directory': the response to @GET \/api\/v1\/admin\/directory@. It
 -- holds all of the wiki's users and groups as the administration shows

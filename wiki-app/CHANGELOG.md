@@ -14,6 +14,29 @@ key has probably expired or been revoked, with a link to the settings
 and the provider's own words in smaller text under it; "Test the key"
 and the model list say the same.
 
+Exports that say what went wrong (WP5.56). The Export menu
+(`Wiki.App.View.Export`, now a component) has buttons instead of links: it
+fetches the document through `MonadWiki`'s new `fetchExport` (an
+`ExportTarget`, a page or a space, and a format, answering a `Document`
+with the file name from `Content-Disposition`, the media type and the
+bytes), saves it from a `blob:` URL under its file name, and opens a PDF in a
+tab from one (`Wiki.App.Browser.openInTab`), saving it instead when the
+browser opens no tab. A refusal shows the server's reason in a notice in the
+corner of the window, until it is dismissed or for 15 seconds, and saves
+nothing; while a document is made its entry says so ("Making the PDF…") and
+the entries wait. The demo answers `fetchExport` with a refusal, and the
+server's storage too (its API makes the documents). The HTTP backend gives
+an export, and a check of the TeX engine, two minutes (`exportTimeout`). `MonadAdmin` gains `texEngine` and
+`checkTexEngine` (`Nothing` in the demo; refused to whoever does not
+administer the wiki, which the contract tests check); the HTTP backend reads
+the first from the prerendered page once, as the server's status, and the
+preload carries it as `texEngine`. The administration's Server section shows
+what the server found: xelatex working at its path, not found with the
+install hint, or failing with what it printed (folded under a `<details>`
+past 12 lines) and the usual causes (a TeX Live older than 2021 among
+them), with "Check again" and the time of the
+check; a check tells the shell, which reads the session's formats again.
+
 Avatars, readers, who wrote a page, the editor's title and the page's
 width (WP5.55). `MonadWiki` gains `setAvatar`, `removeAvatar` and
 `avatarUrl`, which the demo and the HTTP backend implement and the

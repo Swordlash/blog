@@ -105,9 +105,8 @@ import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
-import Wiki.Api.Export (pageFormats)
-import Wiki.Api.Links (pageExportUrl)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
+import Wiki.Api.Export (ExportFormat, pageFormats)
+import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
@@ -119,7 +118,7 @@ import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
-import Wiki.App.View.Export (exportMenu)
+import Wiki.App.View.Export qualified as ExportView
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
@@ -155,7 +154,7 @@ data Input = Input
   -- ^ The tab's live channel, on a backend that has one.
   }
 
-type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ())
+type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
 
 -- | The page's threads, as far as they have been loaded.
 data Threads
@@ -356,6 +355,11 @@ component =
                 , byline st.avatars page
                 ]
 
+    -- The "Export" menu, on a backend that makes documents
+    -- ("Wiki.App.View.Export").
+    exportMenu :: [ExportFormat] -> ExportTarget -> [H.ComponentHTML Action Slots m]
+    exportMenu formats target = [HH.slot_ "export" () ExportView.component ExportView.Input {formats, target} | not (null formats)]
+
     actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
     actions input page deck comments
       | mayEdit input.context page.space =
@@ -391,7 +395,7 @@ component =
         present = [Router.link input.context.router Followed (documentRoute input.context page.space (PageSlides spacePath input.path 1 1)) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
-        export = exportMenu (pageFormats deck input.context.session.exports) (pageExportUrl page.id) page.title
+        export = exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
         -- Make it the page the space opens at, for an administrator of the
         -- space: offered on every page except the current home page.
         setHome =

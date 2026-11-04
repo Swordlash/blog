@@ -3,7 +3,8 @@
 -- | The few browser features the shell needs that Halogen does not
 -- provide: the link a click in a rendered page landed on, scrolling to a
 -- heading or a footnote, the document's title and favicon, the position in
--- the session history, the clipboard, a modal dialog, a file saved, and a
+-- the session history, the clipboard, a modal dialog, a file saved or
+-- opened in a tab, and a
 -- time written in the reader's time zone and language. They are read and
 -- called through the Web types' fields ("Web.HTML.Window" and the rest);
 -- only the demo's zip files (making and reading them, @jsbits/archive.js@),
@@ -34,6 +35,7 @@ module Wiki.App.Browser
   , zipFiles
   , unzipFiles
   , download
+  , openInTab
   , localTime
   , consoleWarn
   , keepHeights
@@ -104,6 +106,11 @@ $( browserJS
      , ("js_reveal_fragment", "wiki_reveal_fragment", Safe, [t|IO ()|])
      ]
  )
+
+-- A new tab at an address, and whether the browser opened it:
+-- @window.open@ answers @null@ when it blocked the tab. The window's Web
+-- type has no @open@ field.
+$(inlineJS "js_open_tab" "window.open($1, \"_blank\") !== null" [t|JSText -> IO Bool|])
 
 -- A time written as the reader's language writes a date and a time, in
 -- their time zone: the one call with an options object, which no field
@@ -505,6 +512,23 @@ download name mediaType bytes = liftIO . when inBrowser $ do
   for_ (HTMLElement.fromElement anchor) (.click)
   anchor.remove
   void . forkIO $ threadDelay 60_000_000 >> URL.revokeObjectURL url
+
+-- | Open bytes in a new tab of the browser, as a document of this media
+-- type: a PDF export ("Wiki.App.View.Export"). The tab shows an object URL,
+-- which is let go after a minute, once the tab has loaded it. The result
+-- says whether the browser opened the tab. A browser opens one only shortly
+-- after the click that asked for it, and a slow export can come too late;
+-- the caller then saves the document instead. Natively nothing is opened.
+openInTab :: (MonadIO m) => Text -> ByteString -> m Bool
+openInTab mediaType bytes
+  | not inBrowser = pure False
+  | otherwise = liftIO $ do
+      url <- URL.createObjectURL =<< Blob.fromBytes bytes (MediaType mediaType)
+      opened <- js_open_tab (toJSText url)
+      if opened
+        then void . forkIO $ threadDelay 60_000_000 >> URL.revokeObjectURL url
+        else URL.revokeObjectURL url
+      pure opened
 
 -- | A time as the reader reads it: in their time zone, written the way
 -- their browser's language writes a date and a time. Natively, where there

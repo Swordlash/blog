@@ -139,10 +139,12 @@ module Wiki.App.Backend.Http.Cache
   , withBackups
   , withActivity
   , withStatus
+  , withTexEngine
   , withUserPage
   , forgetUserPage
   , forgetActivity
   , forgetStatus
+  , forgetTexEngine
   , withThreads
   , withPeople
   , withNotices
@@ -164,7 +166,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (Directory, Invitations, ServerStatus, UserPage, UserQuery, WikiSettings)
+import Wiki.Api.Admin (Directory, Invitations, ServerStatus, TexEngine, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Notifications (Notifications (..))
@@ -236,6 +238,10 @@ data Cache = Cache
   , status :: Maybe (Either WikiError ServerStatus)
   -- ^ 'Wiki.App.Backend.Admin.serverStatus', cached and removed in the
   -- same way as 'activity'.
+  , texEngine :: Maybe (Either WikiError TexEngine)
+  -- ^ 'Wiki.App.Backend.Admin.texEngine', cached and removed in the same
+  -- way as 'activity': what the server last found of its TeX engine
+  -- changes when the administration checks it again.
   , userPages :: Map UserQuery (Either WikiError UserPage)
   -- ^ 'Wiki.App.Backend.Admin.userPage', by query: the page of users the
   -- server put into the prerendered users section. Each is used for one
@@ -309,6 +315,7 @@ emptyCache =
     , backups = Nothing
     , activity = Nothing
     , status = Nothing
+    , texEngine = Nothing
     , userPages = mempty
     , threads = mempty
     , people = mempty
@@ -412,6 +419,13 @@ forgetActivity c = c {activity = Nothing}
 -- | Remove the cached server status, once it has been used for a read.
 forgetStatus :: Cache -> Cache
 forgetStatus c = c {status = Nothing}
+
+withTexEngine :: Either WikiError TexEngine -> Cache -> Cache
+withTexEngine e c = c {texEngine = Just e}
+
+-- | Remove the cached TeX engine, once it has been used for a read.
+forgetTexEngine :: Cache -> Cache
+forgetTexEngine c = c {texEngine = Nothing}
 
 withUserPage :: UserQuery -> Either WikiError UserPage -> Cache -> Cache
 withUserPage q p c = c {userPages = Map.insert q p c.userPages}

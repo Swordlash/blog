@@ -25,11 +25,19 @@
 -- (its name, its description, when it was exported) and a table of
 -- contents.
 --
--- The PDFs need @xelatex@, which is looked for on the server's @PATH@ each
--- time it matters ('texEngine'), so that installing it needs no restart.
--- The session tells the application which formats are offered
--- ('availableFormats'), and a PDF requested without it is refused, saying
--- so.
+-- The PDFs need @xelatex@, and finding it on the server's @PATH@ is not
+-- enough: on a machine where its format file is missing, or where the
+-- server's service sees another TeX tree than the shell does, the program
+-- is there and every PDF fails. So the server tries it ('probeTexEngine'):
+-- it typesets a one-line document in a temporary directory, under the same
+-- limits as an export. It does that when it starts, and again when the
+-- administration asks ('checkEngine'); the result is kept with the time it
+-- was found ('Engine'). The PDFs are offered only while the last try made
+-- a PDF: the session tells the application which formats are offered
+-- ('availableFormats'), and a PDF requested otherwise is refused with one
+-- sentence that says why and where the administration shows more
+-- ('requiringTeX'). Installing or repairing TeX therefore takes effect when
+-- the administration checks again, or at the next start.
 --
 -- TeX is a programming language with access to files and a shell, and a
 -- PDF gives it what authors wrote: a TikZ picture is LaTeX by design, and
@@ -61,13 +69,27 @@ module Wiki.Server.Export
   , restrictTeX
   , texLimits
 
+    -- * The TeX engine, tried
+  , Engine
+  , newEngine
+  , checkEngine
+  , currentEngine
+  , Probe (..)
+  , Probed (..)
+  , probeTexEngine
+  , probeTexEngineWithin
+  , probeTimeout
+  , engineReport
+  , logEngine
+  , probeOutputLimit
+
     -- * Writing
   , writeDocument
   , beamerLook
   )
 where
 
-import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVar, writeTVar)
+import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.FileEmbed (embedStringFile, makeRelativeToProject)
@@ -77,7 +99,11 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Protolude
 import System.Directory (doesFileExist, findExecutable)
-import System.Environment (setEnv)
+import System.Environment (getEnvironment, setEnv)
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Signals (sigKILL, signalProcessGroup)
+import System.Process (CreateProcess (..), StdStream (..), getPid, proc, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
 import Text.Pandoc (PandocError, PandocIO, Verbosity (..), WriterOptions (..), compileDefaultTemplate, def, renderError, runIO, setMediaBag, setVerbosity, writeBeamer, writeDocx, writeEPUB3, writeHtml5String, writeLaTeX, writePowerpoint)
 import Text.Pandoc.Builder qualified as B
@@ -87,6 +113,7 @@ import Text.Pandoc.Options (MathMethod (..))
 import Text.Pandoc.PDF (makePDF)
 import Text.Pandoc.SelfContained (makeSelfContained)
 import Text.Pandoc.Walk (query)
+import Wiki.Api.Admin (TexEngine (..), TexStatus (..))
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (ExportFormat (..), exportFileName, forDecks, formatLabel, needsTeX)
@@ -105,6 +132,7 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export.Document
+import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runStoredWiki, spacePages)
 
 -- | Whose exports are in progress: at most one each.
@@ -126,9 +154,183 @@ data Exported = Exported
   , bytes :: ByteString
   }
 
--- | The TeX engine the PDFs are made with, if the server's machine has one.
+-- | The TeX engine the PDFs are made with, if the server's @PATH@ has one.
+-- Having it is not enough to make a PDF: 'probeTexEngine' tries it.
 texEngine :: IO (Maybe FilePath)
 texEngine = findExecutable "xelatex"
+
+-- | 'Probe' is what trying the TeX engine found: no @xelatex@ on the
+-- @PATH@; one that made a PDF; or one that did not, with what it wrote
+-- ('probeOutputLimit' characters at most).
+data Probe
+  = EngineNotFound
+  | EngineWorking FilePath
+  | EngineFailing FilePath Text
+  deriving stock (Eq, Show)
+
+-- | 'Probed' is a 'Probe' with the time it was made.
+data Probed = Probed
+  { probe :: Probe
+  , checkedAt :: UTCTime
+  }
+  deriving stock (Eq, Show)
+
+-- | 'Engine' is the server's last try of the TeX engine, which the PDF
+-- exports and the session's formats follow. It changes when the
+-- administration asks for another try ('checkEngine'). One try runs at a
+-- time: a second request waits for the first to end, then tries again.
+data Engine = Engine
+  { probed :: TVar Probed
+  , trying :: MVar ()
+  , limit :: Int
+  -- ^ How long a try may take, in microseconds: 'probeTimeout', except in
+  -- the tests, which do not wait a minute for an engine that never ends.
+  }
+
+-- | Try the TeX engine, giving each try at most this long (in
+-- microseconds), and keep what was found: what the server does as it
+-- starts.
+newEngine :: Int -> IO Engine
+newEngine limit = do
+  tried <- probeTexEngineWithin limit
+  probed <- newTVarIO tried
+  trying <- newMVar ()
+  pure Engine {probed, trying, limit}
+
+-- | Try the TeX engine again, keep what was found and return it.
+checkEngine :: Engine -> IO Probed
+checkEngine engine = withMVar engine.trying $ \_ -> do
+  found <- probeTexEngineWithin engine.limit
+  atomically (writeTVar engine.probed found)
+  pure found
+
+-- | What the last try of the TeX engine found.
+currentEngine :: Engine -> IO Probed
+currentEngine engine = readTVarIO engine.probed
+
+-- | How long a try of the TeX engine may take, in microseconds: a minute,
+-- which a working engine needs a fraction of. kpathsea may try to build a
+-- missing format file first, which can take a while; an engine that takes
+-- longer than this counts as failing.
+probeTimeout :: Int
+probeTimeout = 60_000_000
+
+-- | The most of the engine's output a failed try keeps, in characters: its
+-- end, where TeX says what stopped it.
+probeOutputLimit :: Int
+probeOutputLimit = 2000
+
+-- | Try the TeX engine: find @xelatex@ on the @PATH@ ('texEngine'), and
+-- typeset a one-line document with it in a temporary directory, as pandoc
+-- runs it for an export (@-halt-on-error@, no interaction, the output in
+-- that directory, with @TEXMFOUTPUT@ there too) and under the same limits
+-- ('restrictTeX'), for at most 'probeTimeout'. The document loads what
+-- pandoc's LaTeX template loads for @xelatex@ (fontspec, unicode-math, Latin
+-- Modern) and sets a formula, because that is where an old or odd TeX
+-- installation fails: a TeX Live older than 2021 refuses, under the
+-- limits, the table unicode-math reads by its full path, and then loops.
+-- It works if it ends well and leaves the PDF behind.
+probeTexEngine :: IO Probed
+probeTexEngine = probeTexEngineWithin probeTimeout
+
+-- | 'probeTexEngine' with another time limit, in microseconds: the tests'
+-- engine that never ends is not waited for a minute.
+--
+-- When the engine fails, its reason is kept: what it wrote on its error
+-- output (kpathsea's refusals go there), then the errors its log names
+-- ('texError'), or the end of its log, or, when it wrote no log (a missing
+-- format file stops it before it opens one), the end of what it printed.
+-- An engine that takes too long is killed with every process it started:
+-- it runs in a process group of its own, which is killed as a whole.
+probeTexEngineWithin :: Int -> IO Probed
+probeTexEngineWithin limit = do
+  probe <-
+    texEngine >>= \case
+      Nothing -> pure EngineNotFound
+      Just engine -> withSystemTempDirectory "wiki-tex-probe" $ \dir -> do
+        writeFile (dir </> "probe.tex") probeDocument
+        restrictTeX
+        environment <- getEnvironment
+        let run =
+              (proc engine ["-halt-on-error", "-interaction", "nonstopmode", "-output-directory", dir, "probe.tex"])
+                { cwd = Just dir
+                , env = Just (("TEXMFOUTPUT", dir) : filter ((/= "TEXMFOUTPUT") . fst) environment)
+                , std_in = NoStream
+                , create_group = True
+                }
+        ran <- try @IOException $
+          withFile (dir </> "probe.stdout") WriteMode $ \out ->
+            withFile (dir </> "probe.stderr") WriteMode $ \err ->
+              withCreateProcess run {std_out = UseHandle out, std_err = UseHandle err} $ \_ _ _ process ->
+                (timeout limit (waitForProcess process) `onException` stopGroup process) >>= \case
+                  Just code -> pure (Just code)
+                  Nothing -> stopGroup process $> Nothing
+        made <- readIfThere (dir </> "probe.pdf")
+        case ran of
+          Right (Just ExitSuccess) | "%PDF" `BS.isPrefixOf` made -> pure (EngineWorking engine)
+          Left e -> pure (EngineFailing engine (bounded ("xelatex could not be run: " <> toS (displayException e)) ""))
+          Right outcome -> do
+            printed <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.stdout")
+            complained <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.stderr")
+            logged <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.log")
+            let headline = case outcome of
+                  Nothing -> "xelatex did not finish within " <> seconds limit <> ", and was stopped."
+                  Just ExitSuccess -> "xelatex ended without making a PDF."
+                  Just (ExitFailure n) -> "xelatex stopped with exit code " <> show n <> "."
+                fromLog
+                  | any ("!" `T.isPrefixOf`) (T.lines logged) = texError logged
+                  | not (T.null (T.strip logged)) = T.unlines (lastLines 20 logged)
+                  | otherwise = T.unlines (lastLines 20 printed)
+            pure (EngineFailing engine (bounded headline (T.intercalate "\n" (filter (not . T.null) (map T.strip [T.unlines (lastLines 10 complained), fromLog])))))
+  Probed probe <$> getCurrentTime
+  where
+    -- The headline, and as much of the end of the rest as the limit leaves.
+    bounded headline rest =
+      let room = max 0 (probeOutputLimit - T.length headline - 1)
+       in T.strip (headline <> "\n" <> T.takeEnd room (T.strip rest))
+    lastLines n = reverse . take n . reverse . filter (not . T.null . T.strip) . T.lines
+    readIfThere file = doesFileExist file >>= \there -> if there then BS.readFile file else pure ""
+    seconds micro = case micro `div` 1_000_000 of
+      1 -> "1 second"
+      n -> show n <> " seconds"
+    stopGroup process = do
+      getPid process >>= traverse_ (\pid -> void (try @IOException (signalProcessGroup sigKILL pid)))
+      void (waitForProcess process)
+
+-- | The document 'probeTexEngine' typesets: what pandoc's LaTeX template
+-- loads for @xelatex@, and a formula, on one line of text.
+probeDocument :: Text
+probeDocument =
+  T.unlines
+    [ "\\documentclass{article}"
+    , "\\usepackage{fontspec}"
+    , "\\usepackage{unicode-math}"
+    , "\\usepackage{lmodern}"
+    , "\\begin{document}"
+    , "x $x^2$"
+    , "\\end{document}"
+    ]
+
+-- | Log a try of the TeX engine, as the event @tex-engine@ with its status
+-- and the engine's path: when the server starts, and when the
+-- administration checks again. A failing engine is a warning, with the last
+-- line it wrote; the administration shows the rest.
+logEngine :: Logger -> Probed -> IO ()
+logEngine logger p = case p.probe of
+  EngineNotFound -> logWith logger Info [event, ("status", "not-found")]
+  EngineWorking engine -> logWith logger Info [event, ("status", "working"), ("path", toS engine)]
+  EngineFailing engine said ->
+    logWith logger Warning [event, ("status", "failing"), ("path", toS engine), ("reason", T.take 200 (fromMaybe "" (lastMay (filter (not . T.null) (map T.strip (T.lines said))))))]
+  where
+    event = ("event", "tex-engine")
+
+-- | A try of the TeX engine as the administration reads it
+-- ("Wiki.Api.Admin"'s 'TexEngine').
+engineReport :: Probed -> TexEngine
+engineReport p = case p.probe of
+  EngineNotFound -> TexEngine {status = TexNotFound, path = Nothing, output = Nothing, checkedAt = p.checkedAt}
+  EngineWorking engine -> TexEngine {status = TexWorking, path = Just (toS engine), output = Nothing, checkedAt = p.checkedAt}
+  EngineFailing engine said -> TexEngine {status = TexFailing, path = Just (toS engine), output = Just said, checkedAt = p.checkedAt}
 
 -- | What TeX may do, as kpathsea's variables, which override its
 -- configuration from the environment: read and write files only under the
@@ -145,18 +347,21 @@ texLimits = [("openin_any", "p"), ("openout_any", "p"), ("shell_escape", "f")]
 restrictTeX :: IO ()
 restrictTeX = traverse_ (uncurry setEnv) texLimits
 
--- | The formats the server can make documents in: all of them where it has
--- a TeX engine, and all except the PDFs where it has not.
-availableFormats :: IO [ExportFormat]
-availableFormats = do
-  tex <- isJust <$> texEngine
+-- | The formats the server can make documents in: all of them where the
+-- last try of its TeX engine made a PDF, and all except the PDFs otherwise.
+availableFormats :: Engine -> IO [ExportFormat]
+availableFormats engine = do
+  tex <-
+    currentEngine engine <&> \p -> case p.probe of
+      EngineWorking _ -> True
+      _ -> False
   pure [f | f <- [minBound .. maxBound], tex || not (needsTeX f)]
 
 -- | Export a page as a document, for someone who may read it; only a deck
 -- as a presentation. The key identifies whose export it is, for the limit
 -- of one at a time.
-exportPage :: Exports -> Text -> Storage -> Who -> PageId -> ExportFormat -> IO (Either ApiError Exported)
-exportPage exports key storage who pid format = oneAtATime exports key . requiringTeX format $ do
+exportPage :: Exports -> Engine -> Text -> Storage -> Who -> PageId -> ExportFormat -> IO (Either ApiError Exported)
+exportPage exports engine key storage who pid format = oneAtATime exports key . requiringTeX engine format $ \tex -> do
   loaded <- runStoredWiki storage who $ runExceptT $ do
     page <- ExceptT (exportedPage pid)
     spaces <- lift listSpaces
@@ -182,13 +387,13 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
               let doc
                     | forDecks format = slidesDocument page.title (beamerLook looks.options) blocks
                     | otherwise = withDate now (pageDocument page.title blocks)
-              written <- writeDocument format bag False doc
+              written <- writeDocument tex format bag False doc
               pure (Exported (exportFileName page.title format) format <$> written)
 
 -- | Export a space's pages as one document, for someone who may view the
 -- space.
-exportSpace :: Exports -> Text -> Storage -> Who -> SpaceId -> ExportFormat -> IO (Either ApiError Exported)
-exportSpace exports key storage who sid format = oneAtATime exports key . requiringTeX format $ do
+exportSpace :: Exports -> Engine -> Text -> Storage -> Who -> SpaceId -> ExportFormat -> IO (Either ApiError Exported)
+exportSpace exports engine key storage who sid format = oneAtATime exports key . requiringTeX engine format $ \tex -> do
   loaded <- runStoredWiki storage who $ runExceptT $ do
     -- The pages first: fetching them says whether the space exists and
     -- may be read, as the API's own listing does.
@@ -218,7 +423,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
             Right documentPages -> do
               let made = toS (formatTime defaultTimeLocale "%e %B %Y" now)
                   doc = spaceDocument space ("Exported from the wiki on " <> T.strip made) documentPages
-              written <- writeDocument format bag True doc
+              written <- writeDocument tex format bag True doc
               pure (Exported (exportFileName space.name format) format <$> written)
 
 -- | What kind of document a format is, as far as reading a page cares.
@@ -232,14 +437,18 @@ outputOf = \case
   Html -> ToOther
   Epub -> ToOther
 
--- | Check the format before anything is read: a PDF needs a TeX engine.
-requiringTeX :: ExportFormat -> IO (Either ApiError a) -> IO (Either ApiError a)
-requiringTeX format go
+-- | Check the format before anything is read: a PDF needs a TeX engine
+-- that made a PDF when it was last tried, and is made with that engine. A
+-- refusal is one sentence: the engine's own output is the
+-- administration's to read ('engineReport'), not every reader's.
+requiringTeX :: Engine -> ExportFormat -> (Maybe FilePath -> IO (Either ApiError a)) -> IO (Either ApiError a)
+requiringTeX engine format go
   | needsTeX format =
-      texEngine >>= \case
-        Nothing -> pure (Left (ApiError.Invalid (formatLabel format <> " needs xelatex, which this server's machine does not have.")))
-        Just _ -> go
-  | otherwise = go
+      (\p -> p.probe) <$> currentEngine engine >>= \case
+        EngineNotFound -> pure (Left (ApiError.Invalid (formatLabel format <> " needs xelatex, which this server's machine does not have.")))
+        EngineFailing path _ -> pure (Left (ApiError.Invalid (formatLabel format <> " needs xelatex, which was found at " <> toS path <> " but does not work on this server; the administration's Server section shows why.")))
+        EngineWorking path -> go (Just path)
+  | otherwise = go Nothing
 
 -- | Allow one export at a time per key, and none longer than
 -- 'exportTimeout'.
@@ -353,16 +562,18 @@ beamerLook o =
 -- | Write a document in a format, with its images from the media bag, and
 -- with a table of contents when asked. What pandoc or TeX could not make
 -- is refused with their reason.
-writeDocument :: ExportFormat -> MediaBag -> Bool -> P.Pandoc -> IO (Either ApiError ByteString)
-writeDocument format bag toc doc = do
-  tex <- texEngine
+--
+-- A PDF is made with the TeX engine given, the one 'requiringTeX' found
+-- working; without one it is refused.
+writeDocument :: Maybe FilePath -> ExportFormat -> MediaBag -> Bool -> P.Pandoc -> IO (Either ApiError ByteString)
+writeDocument tex format bag toc doc = do
   result <- runIO $ do
     -- What pandoc would warn about (a formula texmath cannot convert,
     -- which it then writes as TeX) is not a failure, and not the server's
     -- to log.
     setVerbosity ERROR
     setMediaBag bag
-    write tex (withPreamble doc)
+    write (withPreamble doc)
   -- Forced here, inside the caller's timeout, rather than when it is
   -- sent.
   case result of
@@ -383,8 +594,8 @@ writeDocument format bag toc doc = do
           , writerSlideLevel = if forDecks format then Just 2 else Nothing
           }
     plain = def {writerTableOfContents = toc, writerTOCDepth = 3, writerSlideLevel = if forDecks format then Just 2 else Nothing}
-    write :: Maybe FilePath -> P.Pandoc -> PandocIO (Either Text ByteString)
-    write tex d = case format of
+    write :: P.Pandoc -> PandocIO (Either Text ByteString)
+    write d = case format of
       Docx -> Right . BSL.toStrict <$> writeDocx plain d
       Pptx -> Right . BSL.toStrict <$> writePowerpoint plain d
       Epub -> do
@@ -396,9 +607,9 @@ writeDocument format bag toc doc = do
       BeamerTex -> do
         o <- standalone "beamer"
         Right . encodeUtf8 <$> writeBeamer o d
-      Pdf -> pdf tex writeLaTeX "latex" d
-      BeamerPdf -> pdf tex writeBeamer "beamer" d
-    pdf tex writer name d = case tex of
+      Pdf -> pdf writeLaTeX "latex" d
+      BeamerPdf -> pdf writeBeamer "beamer" d
+    pdf writer name d = case tex of
       Nothing -> pure (Left (formatLabel format <> " needs xelatex, which this server's machine does not have."))
       Just engine -> do
         o <- standalone name

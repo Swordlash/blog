@@ -58,6 +58,7 @@ import Options.Applicative
 import Protolude
 import System.Environment (lookupEnv)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import Wiki.Server.Export (probeTimeout)
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (Database (..), Place (..))
 import Wiki.Server.Storage.Layout (PgDatabase (..), PgPrograms (..), defaultDatabase, defaultPgPrograms, postgresAt, withPostgres, withoutPostgres)
@@ -201,6 +202,11 @@ data ServeOptions = ServeOptions
   , guide :: Bool
   -- ^ Whether a first start, with no spaces, installs the guide
   -- ("Wiki.Server.Guide"); @--no-guide@ says not to.
+  , texProbeTimeout :: Int
+  -- ^ How long a try of the TeX engine may take, in microseconds
+  -- ("Wiki.Server.Export"'s 'probeTimeout', a minute). No option sets
+  -- it: the tests shorten it, so that an engine that never ends is given
+  -- up in a second.
   }
   deriving stock (Eq, Show)
 
@@ -223,6 +229,7 @@ defaultServeOptions dataDir =
     , rclone = "rclone"
     , assistantHosts = []
     , guide = True
+    , texProbeTimeout = probeTimeout
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
@@ -272,6 +279,7 @@ serveOptions = do
       , rclone
       , assistantHosts
       , guide = not noGuide
+      , texProbeTimeout = probeTimeout
       }
   where
     address = eitherReader (first toS . parseListen . toS)

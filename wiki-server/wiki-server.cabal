@@ -177,6 +177,7 @@ library
         smtp-mail >= 0.5.0.1,
         sqlite-simple,
         stm,
+        temporary,
         texmath,
         text,
         text-display,

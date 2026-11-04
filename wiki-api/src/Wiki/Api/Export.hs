@@ -9,7 +9,9 @@
 -- library, so most formats need nothing else installed. The two PDF
 -- formats are the exception: pandoc writes LaTeX and a TeX engine,
 -- @xelatex@, turns it into a PDF, so a server offers them only where it
--- finds one ('needsTeX'). A backend reports the formats it offers in the
+-- has one that works ('needsTeX'; the server tries it, and the
+-- administration reads what it found, "Wiki.Api.Admin"'s @TexEngine@). A
+-- backend reports the formats it offers in the
 -- session (@Wiki.App.Backend.Session@'s @exports@), so that the
 -- application shows only those. The demo, which has no pandoc, offers
 -- none.
@@ -25,6 +27,8 @@ module Wiki.Api.Export
   , spaceFormats
   , exportFileName
   , opensInline
+  , documentDisposition
+  , dispositionFileName
   )
 where
 
@@ -82,14 +86,33 @@ formatLabel = \case
 -- navigation, which they let through; so on a wiki served over HTTP a PDF
 -- can still be exported, and saved from the browser's viewer under its
 -- file name. The server answers with @Content-Disposition: inline@ for
--- these and @attachment@ for the rest, and the export menu links to these
--- without @download@, in a new tab: both ask this function, so that they
--- cannot disagree.
+-- these and @attachment@ for the rest ('documentDisposition'), and the
+-- application, which fetches the document, opens these in a new tab and
+-- saves the rest: both ask this function, so that they cannot disagree.
 opensInline :: ExportFormat -> Bool
 opensInline = \case
   Pdf -> True
   BeamerPdf -> True
   _ -> False
+
+-- | The @Content-Disposition@ the server sends an exported document with:
+-- @inline@ for a format that opens in a tab ('opensInline'), @attachment@
+-- for the rest, with the file name it is saved under ('exportFileName',
+-- plain ASCII, so quoted as it is).
+documentDisposition :: ExportFormat -> Text -> Text
+documentDisposition format name = (if opensInline format then "inline" else "attachment") <> "; filename=\"" <> name <> "\""
+
+-- | The file name a @Content-Disposition@ gives, as 'documentDisposition'
+-- writes it: the application saves a document it fetched under it.
+-- 'Nothing' for a header without one.
+dispositionFileName :: Text -> Maybe Text
+dispositionFileName header = case T.breakOn "filename=" header of
+  (_, rest)
+    | T.null rest -> Nothing
+    | otherwise ->
+        let value = T.strip (T.takeWhile (/= ';') (T.drop (T.length "filename=") rest))
+            unquoted = fromMaybe value (T.stripPrefix "\"" value >>= T.stripSuffix "\"")
+         in mfilter (not . T.null) (Just unquoted)
 
 -- | Its file extension, without the dot.
 formatExtension :: ExportFormat -> Text

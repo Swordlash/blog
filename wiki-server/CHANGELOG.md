@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+Exports that say what went wrong (WP5.56). The server tries its TeX
+engine instead of only looking for it (`Wiki.Server.Export`'s
+`probeTexEngine`): it finds `xelatex` on its `PATH` and typesets a one-line
+document with it in a temporary directory, loading fontspec, unicode-math
+and Latin Modern and setting a formula as pandoc's documents do, under the
+export's limits and for a minute at most; an engine that runs out of time
+is killed with its whole process group, and what it wrote on its error
+output and in its log is kept. It does that when it starts, logged as the event
+`tex-engine` (`status=working|failing|not-found`, the path, and for a
+failing engine a warning with its last line), and again on `POST
+admin/tex-engine/check`; `GET admin/tex-engine` answers the last result,
+both for an administrator. The result is kept in `Env` (`texEngine`, an
+`Engine`); the session's `exports` offer the PDFs only while it worked, and
+installing TeX now takes effect at the next check or start rather than at
+the next request. A PDF asked for while the engine fails is refused with one
+sentence that names the engine's path and the administration's Server
+section, instead of TeX's raw error. `exportPage`, `exportSpace` and
+`availableFormats` take the `Engine`, and `writeDocument` the engine's path.
+An export and a check of the TeX engine pause Warp's idle timeout, as the
+wiki's export does, since a PDF or a hanging engine may take up to its
+minute (`Caller` carries `pauseIdle` for that). A request is now counted in
+`/metrics` as its response starts, before it is sent, and its duration there
+is the time until then; counted after the send, a client's next request could
+scrape before it was counted. How long a try of the engine
+may take is `ServeOptions`' `texProbeTimeout`, a minute, which no option
+sets; the tests shorten it. The library depends on `temporary`.
+
 Avatars, readers, who wrote a page and inline PDFs (WP5.55). Migration
 0008 adds `avatar_blob` and `avatar_media_type` to `users`, on SQLite and
 PostgreSQL, and makes a change of either bump the permission context's

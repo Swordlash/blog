@@ -77,6 +77,7 @@ module Wiki.App.Backend.Http
   , timeLimit
   , requestTimeout
   , uploadTimeout
+  , exportTimeout
   , fetchFailure
   , noAnswerIn
   )
@@ -91,7 +92,7 @@ import Data.Map.Strict qualified as Map
 import Halogen.Subscription (Subscribe (..))
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
-import Network.HTTP.Types (Status, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Status, methodGet, statusCode, statusIsSuccessful)
 import Protolude
 import Servant.API (NoContent, getResponse)
 import Servant.Client.Core (BaseUrl (..), ClientError (..), RunClient (..), Scheme (..), clientIn)
@@ -107,6 +108,7 @@ import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
+import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
@@ -120,7 +122,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
+import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
@@ -462,6 +464,22 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an API address, which the
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
+
+  -- The document's address answers with its bytes, or with the API's
+  -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").
+  -- Nothing is cached: each export is made afresh.
+  fetchExport target format = fmap documentOf <$> send (endpoint methodGet)
+    where
+      endpoint = case target of
+        ExportPage pid -> endpoints.pages.export pid format
+        ExportSpace sid -> endpoints.spaces.export sid format
+      documentOf (r :: Servant.Response) =
+        Document
+          { fileName = fromMaybe ("export." <> formatExtension format) (headerText "Content-Disposition" r >>= dispositionFileName)
+          , mediaType = fromMaybe (formatMediaType format) (headerText "Content-Type" r)
+          , bytes = toS r.responseBody
+          }
+      headerText name r = decodeUtf8With lenientDecode . snd <$> find ((== name) . fst) (toList r.responseHeaders)
   searchPages q =
     orThrow $
       pageContent
@@ -559,6 +577,13 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
       activityOf a = endpoints.admin.activity a.actor (mfilter (> 0) (Just a.offset)) a.before
   serverStatus = fmap Just <$> once (\c -> c.status) forgetStatus endpoints.admin.status withStatus
   installGuide = write_ endpoints.admin.installGuide
+
+  -- What the server found of its TeX engine changes when it is checked
+  -- again, so it is read 'once' from the prerendered page, as the status
+  -- is. Checking it again may change the session's formats, so it is a
+  -- write: the cache, the session included, is emptied.
+  texEngine = fmap Just <$> once (\c -> c.texEngine) forgetTexEngine endpoints.admin.texEngine withTexEngine
+  checkTexEngine = fmap Just <$> write endpoints.admin.checkTexEngine
 
 -- | A page's comments, over the API's @pages\/\<page>\/threads@. A page's
 -- threads are cached like any read, so that a page the server prerendered

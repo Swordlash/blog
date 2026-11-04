@@ -754,14 +754,17 @@ backingUp = describe "backups, setBackupSettings and backUpNow" $
       run who (setBackupSettings defaultBackupSettings {enabled = True}) >>= (`shouldFailWith` Forbidden)
       run who backUpNow >>= (`shouldFailWith` Forbidden)
 
--- | The audit log and the server's status (WP4.10 of docs/PLAN.md): what
--- each backend has of them differs (the demo keeps no log and has no
--- server), but only an administrator of the wiki reads either.
+-- | The audit log, the server's status (WP4.10 of docs/PLAN.md) and the
+-- server's TeX engine (WP5.56): what each backend has of them differs (the
+-- demo keeps no log and has no server), but only an administrator of the
+-- wiki reads any of them.
 observing :: (MonadAdmin m) => SpecWith (Fixture m)
-observing = describe "activity and serverStatus" $
+observing = describe "activity, serverStatus and the TeX engine" $
   it "are refused to whoever does not administer the wiki" $ \(Fixture run) -> do
     for_ [editor, reader] $ \who -> do
       run who (activity firstPage) >>= (`shouldFailWith` Forbidden)
       run who serverStatus >>= (`shouldFailWith` Forbidden)
+      run who texEngine >>= (`shouldFailWith` Forbidden)
+      run who checkTexEngine >>= (`shouldFailWith` Forbidden)
     logged <- run admin (activity firstPage) >>= ok
     length logged.entries `shouldSatisfy` (<= 50)

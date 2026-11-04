@@ -18,7 +18,7 @@ import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), TexEngine (..), TexStatus (..))
 import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
@@ -97,6 +97,9 @@ spec = describe "golden JSON" $ do
     golden "macro-uses" [Sample.macroUse]
     golden "provider-check" Sample.providerCheck
     golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
+    golden "tex-engine-failing" Sample.texEngine
+    golden "tex-engine-working" Sample.texEngine {status = TexWorking, output = Nothing}
+    golden "tex-engine-not-found" Sample.texEngine {status = TexNotFound, path = Nothing, output = Nothing}
     golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}
     golden "backups" Sample.backups
     golden "backups-failed" Sample.backups {last = (\r -> r {file = Nothing, size = Nothing, failure = Just "The disk is full.", offSite = Nothing, trigger = Manual}) <$> Sample.backups.last, running = True}

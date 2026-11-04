@@ -48,7 +48,7 @@ import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
 import Wiki.Server.Backups (newBackupService, runScheduler)
 import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
-import Wiki.Server.Export (newExports)
+import Wiki.Server.Export (currentEngine, logEngine, newEngine, newExports)
 import Wiki.Server.Feed (newFeedCache)
 import Wiki.Server.Guide (installOnFirstStart)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
@@ -137,6 +137,11 @@ withServerUsing given raw sendMail action = do
   events <- newHub
   wake <- newWake
   exports <- newExports
+  -- The TeX engine, tried once before anything is served, so that the
+  -- first session already offers the PDFs or not (WP5.56 of docs/PLAN.md).
+  -- A working engine takes a fraction of a second; a broken one is given
+  -- up after a minute at most.
+  texEngine <- newEngine options.texProbeTimeout
   feeds <- newFeedCache
   -- A data directory another server has open is a configuration this one
   -- cannot run with, reported like the others.
@@ -164,6 +169,7 @@ withServerUsing given raw sendMail action = do
               , flows
               , events
               , exports
+              , texEngine
               , backups
               , resets
               , resetTasks
@@ -199,6 +205,7 @@ withServerUsing given raw sendMail action = do
         logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
       for_ configured.providers $ \p ->
         logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", (redirectUri u p.name).text) | Just u <- [configured.publicUrl]])
+      currentEngine texEngine >>= logEngine logger
       -- A first start, with no spaces, installs the guide (WP5.29 of
       -- docs/PLAN.md), before anyone can ask for a page.
       when options.guide $

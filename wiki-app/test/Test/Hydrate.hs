@@ -39,7 +39,7 @@ import Web.Storage.Storage qualified as Storage
 import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
-import Wiki.Api.Admin (LoggedError (..), ServerStatus (..), UserQuery (..))
+import Wiki.Api.Admin (LoggedError (..), ServerStatus (..), TexEngine (..), TexStatus (..), UserQuery (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (searchQueryOf)
@@ -357,6 +357,7 @@ apiOver providers seed = do
               : (endpointUrl (\e -> e.admin.backups), answerOf kept)
               : (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing), answerOf logged)
               : (endpointUrl (\e -> e.admin.status), answerOf (Right status :: Either WikiError ServerStatus))
+              : (endpointUrl (\e -> e.admin.texEngine), answerOf (Right engine :: Either WikiError TexEngine))
               : (endpointUrl (\e -> e.notifications.list), answerOf told)
               : (endpointUrl (\e -> e.stars.list), answerOf stars)
               : (endpointUrl (\e -> e.invitations.details (InvitationToken "valid")), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
@@ -387,6 +388,8 @@ apiOver providers seed = do
         , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
         , guideInstallable = False
         }
+    -- A TeX engine that fails, so that the Server section shows the most.
+    engine = TexEngine {status = TexFailing, path = Just "/usr/bin/xelatex", output = Just "I can't find the format file `xelatex.fmt'!", checkedAt = demoNow}
     answerOf :: (ToJSON a) => Either WikiError a -> Response
     answerOf = \case
       Right a -> jsonResponse 200 (encode a)

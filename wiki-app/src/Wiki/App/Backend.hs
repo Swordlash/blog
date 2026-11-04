@@ -175,6 +175,10 @@ module Wiki.App.Backend
   , withOwnUser
   , sameAsking
 
+    -- * Exports
+  , ExportTarget (..)
+  , Document (..)
+
     -- * Limits
   , maxAttachmentSize
   )
@@ -312,6 +316,23 @@ sameAsking a b = ((\u -> u.id) <$> a.user) == ((\u -> u.id) <$> b.user) && a.gro
 -- | The user who is signed in, if anyone is.
 currentUser :: (MonadWiki m) => m (Maybe User)
 currentUser = (\s -> s.user) <$> session
+
+-- | 'ExportTarget' is what an export is made of: a page, or a space's
+-- pages as one document ('fetchExport').
+data ExportTarget
+  = ExportPage PageId
+  | ExportSpace SpaceId
+  deriving stock (Eq, Show)
+
+-- | 'Document' is an exported document as the backend fetched it: the file
+-- name the server gave it (from its @Content-Disposition@), its media type
+-- and its bytes.
+data Document = Document
+  { fileName :: Text
+  , mediaType :: Text
+  , bytes :: ByteString
+  }
+  deriving stock (Eq, Show)
 
 -- | The largest attachment a backend accepts, in bytes: 50 MB.
 maxAttachmentSize :: Natural
@@ -660,6 +681,21 @@ class (Monad m) => MonadWiki m where
   attachmentUrl :: Attachment -> m Text
   default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m Text
   attachmentUrl = lift . attachmentUrl
+
+  -- * Exports
+
+  -- | A page, or a space's pages, as a document in one of the formats the
+  -- session offers ('Session' @exports@, "Wiki.Api.Export"), for the
+  -- application to save (WP5.56 of docs/PLAN.md). Fetched rather than
+  -- linked to, so that a refusal (a PDF the server's TeX engine could not
+  -- make) is shown to the reader with its reason, instead of being saved
+  -- as the document. Whoever may read the page or view the space may
+  -- export it; the errors are those of reading it, then 'Invalid' with the
+  -- reason for a format the backend cannot make. The demo, which has no
+  -- pandoc and offers no formats, refuses every one with 'Invalid'.
+  fetchExport :: ExportTarget -> ExportFormat -> m (Either WikiError Document)
+  default fetchExport :: (MonadTrans t, m ~ t n, MonadWiki n) => ExportTarget -> ExportFormat -> m (Either WikiError Document)
+  fetchExport t = lift . fetchExport t
 
   -- * Search
 

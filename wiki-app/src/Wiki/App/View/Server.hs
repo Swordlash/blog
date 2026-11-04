@@ -4,8 +4,10 @@
 -- docs/PLAN.md, "Wiki.Api.ServerSettings"): the wiki's public address,
 -- the mail server invitations are sent through, and the sign-in
 -- providers and the assistant's hosts; and, not a setting but a
--- property of the server's machine, whether it
--- exports PDFs. This is the only place they are set (the
+-- property of the server's machine, whether it exports PDFs: what the
+-- server found when it last tried its TeX engine, with the engine's own
+-- words when it failed, and a button that has it try again (WP5.56 of
+-- docs/PLAN.md). This is the only place they are set (the
 -- owner's decision of 2026-10-25): the server's admin listener serves it
 -- before anyone can sign in, and a change takes effect with the next
 -- request, without a restart. It is one component over the
@@ -16,7 +18,8 @@
 -- ("Wiki.App.View.Status", "Wiki.App.View.Backups",
 -- "Wiki.App.View.EditorSettings").
 --
--- Everything it shows comes from one read, as in the other sections: at
+-- Everything it shows comes from one read of the settings and one of the
+-- TeX engine, as in the other sections: at
 -- once where the backend answers at once (the demo, and a page the server
 -- prerendered, which carries the settings), and otherwise in its
 -- initializer.
@@ -54,12 +57,14 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Export (ExportFormat, formatLabel, needsTeX)
+import Wiki.Api.Admin (TexEngine (..), TexStatus (..))
+import Wiki.Api.Export (ExportFormat, formatLabel)
 import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -128,6 +133,11 @@ data State = State
   -- ^ The result of checking each saved provider.
   , testTo :: Text
   , tested :: Maybe (Either WikiError MailTestResult)
+  , engine :: Maybe (Either WikiError (Maybe TexEngine))
+  -- ^ What the server last found of its TeX engine, once read: 'Nothing'
+  -- inside means there is no server (the demo).
+  , checkingEngine :: Bool
+  -- ^ Whether the server is trying the TeX engine again.
   }
 
 data Action
@@ -166,14 +176,16 @@ data Action
   | EditHosts
   | TypedHosts Text
   | SaveHosts
+  | CheckEngine
 
 component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
-          loaded <- maybe Loading (either Failed Ready) <$> atOnce serverSettings
-          pure State {input, loaded, editing = NotEditing, busy = False, refusal = Nothing, checks = mempty, testTo = "", tested = Nothing}
+          read' <- atOnce ((,) <$> serverSettings <*> texEngine)
+          let loaded = maybe Loading (either Failed Ready . fst) read'
+          pure State {input, loaded, editing = NotEditing, busy = False, refusal = Nothing, checks = mempty, testTo = "", tested = Nothing, engine = snd <$> read', checkingEngine = False}
       , render
       , eval =
           H.mkEval
@@ -211,16 +223,17 @@ component =
           {{ mailView st settings }}
           {{ providersView st settings }}
           {{ hostsView st settings }}
-          {{ exportView st.input.context.session.exports }}
+          {{ exportView st st.input.context.session.exports }}
         </div>
       |]
 
     -- The formats pages and spaces export to (WP4.16 of docs/PLAN.md),
-    -- and above all whether PDF is among them: it needs a TeX engine on the
-    -- server's machine, which the server looks for at each request, so
-    -- that installing one takes effect without a restart.
-    exportView :: [ExportFormat] -> H.ComponentHTML Action Slots m
-    exportView formats =
+    -- and above all whether PDF is among them: it needs a TeX engine that
+    -- works on the server's machine. The server tries it when it starts
+    -- and when "Check again" asks, and offers the PDFs only when it made
+    -- one; this says what it found, and when.
+    exportView :: State -> [ExportFormat] -> H.ComponentHTML Action Slots m
+    exportView st formats =
       [hh|
         <div class="server-part server-export">
           <h3>Export</h3>
@@ -228,14 +241,62 @@ component =
             <p class="server-export-none">This wiki exports nothing: documents are made by the server, with pandoc.</p>
           {% else %}
             <p class="server-export-formats">Pages and spaces export as {{ T.intercalate ", " (map formatLabel formats) }}.</p>
-            {% if any needsTeX formats %}
-              <p class="server-export-tex">xelatex was found: PDFs are made with it.</p>
-            {% else %}
-              <p class="server-export-tex server-export-no-tex">xelatex was not found, so nothing exports as PDF. Install it on the server's machine (<code>apt install texlive-xetex</code>) and the PDFs are offered at once.</p>
-            {% end %}
+            {{ engineView }}
           {% end %}
         </div>
       |]
+      where
+        engineView = case st.engine of
+          Nothing -> [[hh|<p class="server-export-tex loading">Loading…</p>|]]
+          Just (Right Nothing) -> []
+          Just (Left e) ->
+            [ [hh|<p class="server-export-tex server-export-unknown">What the server found of xelatex could not be read. {{ errorMessage e }}</p>|]
+            , checkAgain Nothing
+            ]
+          Just (Right (Just found)) -> case found.status of
+            TexWorking ->
+              [ [hh|<p class="server-export-tex server-export-working">xelatex was found at <code>{{ pathOf found }}</code>: PDFs are made with it.</p>|]
+              , checkAgain (Just found.checkedAt)
+              ]
+            TexNotFound ->
+              [ [hh|<p class="server-export-tex server-export-no-tex">xelatex was not found, so nothing exports as PDF. Install it on the server's machine (<code>apt install texlive-xetex</code>), then check again.</p>|]
+              , checkAgain (Just found.checkedAt)
+              ]
+            TexFailing ->
+              [ [hh|<p class="server-export-tex server-export-failing">xelatex was found at <code>{{ pathOf found }}</code> but fails, so nothing exports as PDF.</p>|]
+              , outputView (fromMaybe "" found.output)
+              , [hh|
+                  <p class="server-export-causes">
+                    The usual causes: its format file is missing (make it with <code>fmtutil-sys --byfmt xelatex</code> as root, or <code>fmtutil-user --byfmt xelatex</code> as the server's user);
+                    the server's service runs with a <code>PATH</code> or <code>HOME</code> other than your shell's, so that xelatex finds another TeX tree or none (set them in the service, with <code>systemctl edit</code>, or <code>systemctl --user edit</code> for a user's service);
+                    a TeX Live older than 2021, whose kpathsea refuses, in the wiki's paranoid mode, files that TeX reads by their full path (unicode-math's table: "Not reading from …"), after which xelatex runs until it is stopped: install a newer TeX Live (a user install under the service's home is enough) and put its <code>bin</code> first on the service's <code>PATH</code>;
+                    or a LaTeX package the documents load is not installed.
+                  </p>
+                |]
+              , checkAgain (Just found.checkedAt)
+              ]
+        pathOf found = fromMaybe "" found.path
+        -- What xelatex printed, as it printed it: in full when it is a few
+        -- lines, and folded away when it is more.
+        outputView said
+          | length (T.lines said) <= outputLines = [hh|<pre class="server-export-output">{{ said }}</pre>|]
+          | otherwise =
+              [hh|
+                <details class="server-export-details">
+                  <summary>What xelatex printed</summary>
+                  <pre class="server-export-output">{{ said }}</pre>
+                </details>
+              |]
+        checkAgain :: Maybe UTCTime -> H.ComponentHTML Action Slots m
+        checkAgain at =
+          [hh|
+            <div class="actions server-export-check">
+              <button type="button" class="server-export-check-again" disabled={{ st.checkingEngine }} onClick={{ const CheckEngine }}>{{ if st.checkingEngine then "Checking…" else "Check again" :: Text }}</button>
+              {% for t in maybeToList at %}
+                <span class="server-export-checked">Checked {{ checkedText t }}.</span>
+              {% end %}
+            </div>
+          |]
 
     -- The addresses the writing assistant may reach besides Anthropic's
     -- and OpenAI's APIs: the page's Content Security Policy refuses every
@@ -631,6 +692,13 @@ component =
         gets (\st -> st.editing) >>= \case
           EditingHosts typed -> save (\s -> (unchanged s) {assistantHosts = filter (not . T.null) (map T.strip (T.lines typed))})
           _ -> pass
+      -- The server tries its TeX engine again. The session's formats
+      -- follow what it found, so the shell is told, as after a save.
+      CheckEngine -> do
+        modify (\st -> st {checkingEngine = True})
+        result <- lift checkTexEngine
+        modify (\st -> st {checkingEngine = False, engine = Just result})
+        when (isRight result) (H.raise (Changed Nothing))
       TypedTestTo t -> modify (\st -> st {testTo = t})
       SendTest -> do
         to' <- gets (\st -> st.testTo)
@@ -670,7 +738,18 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       result <- lift serverSettings
-      modify (\st -> st {loaded = either Failed Ready result, busy = False})
+      engine <- lift texEngine
+      modify (\st -> st {loaded = either Failed Ready result, busy = False, engine = Just engine})
+
+-- | How many lines of xelatex's output are shown as they are; more are
+-- folded under a @\<details>@.
+outputLines :: Int
+outputLines = 12
+
+-- | When the TeX engine was tried, as the other administration sections
+-- write a time.
+checkedText :: UTCTime -> Text
+checkedText = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC"
 
 -- | The settings as read, as a change that changes nothing: every secret
 -- kept.
