@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Private subspaces and personal spaces (WP5.54). Migration 0007 adds
+the columns `sealed`, `owner`, `active` and `personal_container` to
+`spaces`, on SQLite and PostgreSQL, with unique indexes for one personal
+space per user and one container. The server serves `PUT
+spaces/<space>/sealed` (audit `space.sealed`; whoever seals a space and
+would lose its administration is granted administer on it) and `GET`
+and `PUT account/personal-space` (audit `space.personal`, with `active`).
+A personal space is named after its owner as the spaces are read, and
+renaming or moving it is refused. Removing an account deletes its
+personal space, through the new column's foreign key. An import into a
+wiki that has content brings personal spaces in as ordinary spaces.
+
 A wiki-server without PostgreSQL (WP5.52): the cabal flag `postgres`, on by
 default, can be turned off (`--constraint='wiki-server -postgres'`) for a
 wiki kept in SQLite. Such a build leaves out `Wiki.Server.Storage.Postgres`

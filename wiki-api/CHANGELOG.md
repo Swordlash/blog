@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Private subspaces and personal spaces (WP5.54). `SpacesApi` gains
+`setSealed`, `PUT spaces/<space>/sealed` with a `SpaceSealed`
+(`{"sealed"}`). `AccountApi` gains `personalSpace`, `GET
+account/personal-space`, the user's personal space or `null`, and
+`setPersonalSpace`, `PUT account/personal-space` with a
+`PersonalSpaceSwitch` (`{"enabled"}`), which answers the space. The JSON
+of a `Space` has four more fields, `sealed`, `owner`, `active` and
+`personalContainer`, which a client must send back where it sends a
+`Space`.
+
 A user's feed of notifications (WP5.31): `NotificationsApi` gains `feed`,
 `GET notifications/feed`, the address of the signed-in user's own Atom feed
 of their notifications as a `FeedAddress` (`{"address"}`, `null` until made),

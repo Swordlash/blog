@@ -159,6 +159,7 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | POST | `api/v1/spaces` | `NewSpace` `{"parent": id or null, "name"}` | 201 `Space`, with its home page made | 404, 403, 400 | `createSpace` |
 | PUT | `api/v1/spaces/<space>/name` | `SpaceName` `{"name"}` | `Space` | 404, 403, 400 | `renameSpace` |
 | PUT | `api/v1/spaces/<space>/public` | `SpacePublic` `{"public": bool}` | `Space` | 404, 403 | `setSpacePublic` |
+| PUT | `api/v1/spaces/<space>/sealed` | `SpaceSealed` `{"sealed": bool}`: private from its parent, inheriting no grant and no public flag from above | `Space`; whoever seals it and would no longer administer it is granted administer on it | 404, 403 | `setSpaceSealed` |
 | PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 (for whoever may not edit the whole space, WP5.41) | `setSpaceMathMacros` |
 | PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "homePage": page id or null}` | `Space` | 404, 403, 400 | `setSpaceProfile` |
 | POST | `api/v1/spaces/<space>/icon` | multipart form, one file part named `file`: its `Content-Type` the image's media type, its file name not looked at | `Space`, its icon the image | 404, 403, 400 (not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `uploadSpaceIcon` |
@@ -170,9 +171,16 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | GET | `api/v1/spaces/<space>/grants` | | `SpaceAccess` `{"grants", "users", "groups"}`: the grants on the space and then on each of its ancestors, up (each `SpaceGrant` `{"space", "subject", "permission"}` names the space it is on), every `User` by login and every `Group` by name | 404, 403 | `spaceAccess` |
 | PUT | `api/v1/spaces/<space>/grants` | `SpaceGrantChange` `{"subject", "permission", "granted": bool}` | 204 | 404, 403, 400 | `setSpaceGrant` |
 
-A `Space` is `{"id", "name", "slug", "parent", "public", "mathMacros",
-"createdAt", "position", "subspaceOrder", "pageOrder", "homePage", "icon",
-"description", "blog", "boxNumbering"}`. Its `homePage` is the id of the page it opens at, one of its
+A `Space` is `{"id", "name", "slug", "parent", "public", "sealed", "owner",
+"active", "personalContainer", "mathMacros", "createdAt", "position",
+"subspaceOrder", "pageOrder", "homePage", "icon", "description", "blog",
+"boxNumbering"}`. `sealed` is whether it is private from its parent;
+`owner` is the user id of the user whose personal space it is, or `null`;
+`active` is false for a personal space its owner turned off, which nobody
+is then shown; `personalContainer` marks "User subspaces", the space that
+holds the personal spaces and that nobody may view itself. A personal
+space's `name` is "Space of " and its owner's display name, and cannot be
+changed (400), nor can the space be moved (400). Its `homePage` is the id of the page it opens at, one of its
 own, or `null`; a space made through the API comes with one, a page titled
 "Home" whose first version is its creator's, and a page that is deleted, or
 moved to another space, leaves its space without one. Its `icon` is `null`
@@ -796,6 +804,8 @@ password included.
 | POST | `api/v1/account/second-factor/remove` | `OneTimeCode` (a code or a recovery code) | `SecondFactorState` | 401 (a wrong code, counted), 429, 404 (none on) | (`removeOwnSecondFactor`) |
 | GET | `api/v1/account/email` | | `EmailState` `{"email", "verified", "mailing", "mailError", "asksPassword"}` | 401 | (`ownEmail`) |
 | PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password where the user has one, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
+| GET | `api/v1/account/personal-space` | | `Space` or `null`: the user's personal space, on or off (its `active`) | 401, 400 (the operator) | `personalSpace` |
+| PUT | `api/v1/account/personal-space` | `PersonalSpaceSwitch` `{"enabled": bool}` | `Space`: turned on, and made the first time (with the container "User subspaces" if no user has had one), or turned off, its content kept | 401, 400 (the operator), 404 (turning off a space the user does not have) | `setPersonalSpace` |
 | POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
 | POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
 | POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 (a password that cannot be one, or a user who has no password to set) | (`resetPassword`) |
