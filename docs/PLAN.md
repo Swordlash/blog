@@ -551,6 +551,31 @@ In the order to do it, unless the owner says otherwise.
   its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
   and wiki-app's CHANGELOGs.
 
+- **WP5.58 The deploy installs a TeX that works** (the owner, 2026-11-04; one pull
+  request, beside WP5.56). The owner's server has TeX Live 2020, whose kpathsea refuses,
+  in the wiki's paranoid mode, the table `unicode-math` reads by its full path, so every
+  PDF export looped to its limit while a one-line `article` typeset fine (WP5.56's probe
+  will show it). The deploy takes care of it: `toolchain/check-tex.sh` typesets the
+  document WP5.56's probe typesets (`fontspec`, `unicode-math`, `lmodern`, a formula)
+  under the export's limits with a timeout, in the environment the service will have
+  (systemd's PATH, not the shell's), and says working, failing (with the log's tail) or
+  not found. `deploy-local.sh --server` runs it after the toolchain step and, when the
+  engine is missing or failing, offers to install TeX Live under the toolchain's
+  directory (`<toolchain>/texlive`): `install-tl` from a CTAN mirror (`--texlive-mirror
+  URL`, the default mirror otherwise, through the proxy the environment names),
+  `scheme-basic` without docs and sources, then `tlmgr install` of the packages the
+  exports need (one list, `toolchain/texlive-packages.txt`, with WP5.49's test packages),
+  the size and the time said before asking; `--texlive` and `--no-texlive` answer
+  without asking, the choice is kept in the state file and reused; a working
+  installation is checked again and the unit gets its `bin` first on `PATH`; declining
+  leaves the PDFs off, which the administration's Server section says. `--status` shows
+  the engine's state. The wizard gets the choice on the server screen, prefilled from
+  the state as everything is (the wizard reads the deployment's state file): the TeX on
+  this machine, TeX Live under the toolchain, or no PDFs. Tests: `test-bootstrap.sh`-style
+  cases with a fake `xelatex` that fails or hangs and a fake `install-tl`, the state's
+  round-trip, the wizard's option coverage and `test-configure.sh`. Docs: the README's
+  deploy and exports sections, the wizard's help.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
