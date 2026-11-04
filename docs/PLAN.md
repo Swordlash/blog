@@ -531,15 +531,25 @@ In the order to do it, unless the owner says otherwise.
   ends with a backslash continues on the next line instead, rendered as one line with a
   space at the join, decided in the renderer (a backslash in code or math stays what it
   is); whether two trailing spaces still break depends on the parser telling the two
-  forms apart. Tests: server (upload, a wrong type or size
+  forms apart. (f) *The page's width* (the owner, 2026-11-04): the content column is
+  capped at 54rem, which leaves a wide screen mostly empty and wraps the action bar's
+  buttons although there is room. The page view's action bar gets, at its end, a
+  two-position switch with icons, "Compact | Full width", remembered globally in the
+  browser (localStorage; default compact) and applied to the page view only. On a wide
+  screen the action bar spans the content area; in compact the text column keeps the
+  reading width and is centred between the sidebar and the side column (the contents
+  panel with the comments under it), which is pinned to the right edge; in full width
+  the text takes everything up to the side column. Narrower screens keep today's
+  layout. Tests: server (upload, a wrong type or size
   refused, the URL, the default icon, readers over the live channel next to
   `Test.Server.Presence` and the comments channel tests, `createdBy` and `updatedBy`);
   browser (the avatar in the header and at a comment through the demo, the readers'
   stack from a given list, who wrote under the title, the title's click in the editor,
   the readers over HTTP in `Test.Browser.Http` next to "who is editing"). The wiki-api
   goldens change (`User` and `Author` carry the field); the Markdown specs for the
-  continuation. Docs: `docs/api.md`, the README, the guide where it shows the header,
-  comments or the Markdown's line breaks, the four CHANGELOGs.
+  continuation; the width switch and its memory in the browser. Docs: `docs/api.md`, the
+  README, the guide where it shows the header, comments, the page's bar or the
+  Markdown's line breaks, the four CHANGELOGs.
 
 ### Later, or waiting for the owner
 
