@@ -367,6 +367,8 @@ updateGuide st actor address = do
               , updatedAt = micro now
               , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = False
+              , createdBy = Nothing
+              , updatedBy = Nothing
               }
       insertPage page
       insertVersion page Nothing

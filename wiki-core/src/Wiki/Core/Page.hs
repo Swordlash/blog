@@ -32,6 +32,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..), findChild)
 import Wiki.Core.Slug
+import Wiki.Core.Version (Author)
 
 -- | 'Page': a page. Pages form a tree within one space, so a page's parent,
 -- and the lookups "Wiki.Core.Path" is given for pages, are among the pages
@@ -63,6 +64,15 @@ data Page = Page
   -- the space's permissions), but it is listed under the space's
   -- "Templates" rather than in its tree, left out of a search that does
   -- not ask for templates, and offered as the start of a new page.
+  , createdBy :: Maybe Author
+  -- ^ Who wrote the page's first version, as the page view's byline says
+  -- (WP5.55 of docs/PLAN.md): read by the backend from the history, as
+  -- the blog's author of a post is ('Wiki.Core.Blog.PostDetails'), and
+  -- never stored with the page. 'Nothing' for a page without such a
+  -- version (an imported page, the guide's) or one nobody is known to
+  -- have saved. In JSON the field may be absent, which means 'Nothing'.
+  , updatedBy :: Maybe Author
+  -- ^ Who saved the page's latest version, read the same way.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -179,6 +189,8 @@ positionPage position p =
     , updatedAt = p.updatedAt
     , position
     , template = p.template
+    , createdBy = p.createdBy
+    , updatedBy = p.updatedBy
     }
 
 -- | A page saved with a new title and text at a time: its new version. The
@@ -186,7 +198,8 @@ positionPage position p =
 -- otherwise, so that no two versions of a page have the same time and an
 -- editor open on the page sees that it has changed. A save, an import
 -- that takes the imported page, and the guide's update all make a new
--- version this way.
+-- version this way. Who saved it is not known here: 'updatedBy' stays as it
+-- was, for the backend to read again from the version it keeps.
 savedAs :: UTCTime -> Text -> Text -> Page -> Page
 savedAs time title body p =
   Page
@@ -201,6 +214,8 @@ savedAs time title body p =
     , updatedAt = if time > p.updatedAt then time else addUTCTime 0.000001 p.updatedAt
     , position = p.position
     , template = p.template
+    , createdBy = p.createdBy
+    , updatedBy = p.updatedBy
     }
 
 -- | 'titleLine' is the title a page's Markdown gives on its first line, a

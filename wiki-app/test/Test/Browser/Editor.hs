@@ -146,7 +146,7 @@ spec m = do
     -- Made, empty, before anything is written.
     made <- readPage wiki ["blog"] ["third-post"]
     made.body `shouldBe` ""
-    find ui ".editor-title input" >>= \t -> getProperty t "value" `shouldReturn` "Third post"
+    find ui ".editor-title-text" >>= (`shouldHaveText` "Third post")
     editorText ui >>= (`typeText` "Some **news**.")
     -- Shown on its own, the preview has the draft at once; Save is there.
     find ui ".editor-show-preview" >>= click
@@ -917,10 +917,10 @@ spec m = do
     -- display name, one whose login a mention cannot name, and one who
     -- does not start so.
     withMentionable =
-      insertUser User {id = UserId "user-anna", login = Login "anna", displayName = "Anna Nowak"}
-        . insertUser User {id = UserId "user-jsmith", login = Login "jsmith", displayName = "Annabel Smith"}
-        . insertUser User {id = UserId "user-annex", login = Login "annex@example.org", displayName = "Annex Corp"}
-        . insertUser User {id = UserId "user-bob", login = Login "bob", displayName = "Bob Banner"}
+      insertUser User {id = UserId "user-anna", login = Login "anna", displayName = "Anna Nowak", avatar = Nothing}
+        . insertUser User {id = UserId "user-jsmith", login = Login "jsmith", displayName = "Annabel Smith", avatar = Nothing}
+        . insertUser User {id = UserId "user-annex", login = Login "annex@example.org", displayName = "Annex Corp", avatar = Nothing}
+        . insertUser User {id = UserId "user-bob", login = Login "bob", displayName = "Bob Banner", avatar = Nothing}
     -- Type keys after the first n characters of the line.
     typeAfter n keys = do
       press "Home"

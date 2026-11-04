@@ -30,6 +30,8 @@ page spaceSlug title body path =
       , updatedAt = epoch
       , position = 0
       , template = False
+      , createdBy = Nothing
+      , updatedBy = Nothing
       }
     [slug spaceSlug]
     (map slug path)

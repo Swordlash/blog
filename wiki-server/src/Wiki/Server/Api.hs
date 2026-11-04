@@ -86,6 +86,7 @@ import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerEr
 import Servant.Multipart (MultipartOptions (..), Tmp, TmpBackendOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
+import System.FilePath (takeFileName)
 import System.IO (hClose, openBinaryTempFile)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
@@ -94,7 +95,7 @@ import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName 
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Export (formatMediaType)
+import Wiki.Api.Export (formatMediaType, opensInline)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
@@ -566,6 +567,8 @@ handlers env caller =
               emailStateOf u Nothing
           , personalSpace = signedInUser >> wiki personalSpace
           , setPersonalSpace = \body -> signedInUser >> wiki (setPersonalSpace body.enabled)
+          , setAvatar = \u -> signedInUser >> wiki (setAvatarFile u.mediaType u.payload)
+          , removeAvatar = signedInUser >> wiki removeAvatar
           , setEmail = \body -> do
               u <- signedInUser
               mailer <- liftIO (currentMailer env)
@@ -584,6 +587,7 @@ handlers env caller =
               sent <- liftIO (traverse (mailVerification u) made)
               emailStateOf u (join sent)
           }
+    , users = UsersApi {avatar = \u b request respond -> liftIO (imageContent env caller.who (avatarFile u b) request respond)}
     , homeDocument = wiki getHomeDocument
     , spaces =
         SpacesApi
@@ -597,7 +601,7 @@ handlers env caller =
           , setMathMacros = \s body -> wiki (setSpaceMathMacros s body.mathMacros)
           , setProfile = \s body -> wiki (setSpaceProfile s body)
           , uploadIcon = \s u -> wiki (uploadSpaceIconFile s u.mediaType u.payload)
-          , icon = \s b request respond -> liftIO (iconContent env caller.who s b request respond)
+          , icon = \s b request respond -> liftIO (imageContent env caller.who (spaceIconFile s b) request respond)
           , setOrder = \s body -> wiki (setSpaceOrder s body.children body.order)
           , move = \s body -> wiki (moveSpace s body.parent)
           , shift = \s body -> wiki (shiftSpace s body.shift)
@@ -1166,17 +1170,18 @@ waitText seconds
   | otherwise = let m = (seconds + 59) `div` 60 in show m <> (if m == 1 then " minute" else " minutes")
 
 -- | The response for an exported document: a download under its file
--- name, with its media type and no type sniffing. The document holds what
--- a page's author wrote, served from the wiki's own origin, so it is
--- sandboxed in case a browser shows it instead of saving it (an HTML
--- export above all).
+-- name, or for a PDF the document shown in the browser's tab under its
+-- file name ('opensInline'), with its media type and no type sniffing.
+-- The document holds what a page's author wrote, served from the wiki's
+-- own origin, so it is sandboxed in case a browser shows it instead of
+-- saving it (an HTML export above all).
 exportedResponse :: Exported -> Response
 exportedResponse e =
   responseLBS
     status200
     [ (hContentType, encodeUtf8 (formatMediaType e.format))
     , ("X-Content-Type-Options", "nosniff")
-    , ("Content-Disposition", "attachment; filename=\"" <> encodeUtf8 e.fileName <> "\"")
+    , ("Content-Disposition", (if opensInline e.format then "inline" else "attachment") <> "; filename=\"" <> encodeUtf8 e.fileName <> "\"")
     , ("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self' data:; style-src 'unsafe-inline'; font-src data:; sandbox")
     ]
     (BSL.fromStrict e.bytes)
@@ -1229,25 +1234,28 @@ attachmentContent env who aid name request respond
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
 
--- | Serve a space's icon image at its URL: from its file, with its media
--- type, revalidated by its content hash, kept by the browser for five
--- minutes, and with the same protections as an attachment's bytes (see
--- 'attachmentContent'). Its URL names the image's hash, so a new image
--- has a new URL. Only image types a browser shows by themselves can be
--- icons ('Wiki.Core.Space.iconMediaTypes').
-iconContent :: Env -> Who -> SpaceId -> BlobId -> Request -> (Response -> IO a) -> IO a
-iconContent env who sid blob request respond
+-- | Serve an image at its URL, a space's icon or a user's avatar, as the
+-- storage finds it for the 'Who' asking (@lookUp@: its media type and its
+-- file): from its file, with its media type, revalidated by its content
+-- hash, kept by the browser for five minutes, and with the same
+-- protections as an attachment's bytes (see 'attachmentContent'). Its URL
+-- names the image's hash, so a new image has a new URL. Only image types a
+-- browser shows by themselves can be icons or avatars
+-- ('Wiki.Core.Space.iconMediaTypes').
+imageContent :: Env -> Who -> StoredWiki IO (Either WikiError (MimeType, FilePath)) -> Request -> (Response -> IO a) -> IO a
+imageContent env who lookUp request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
-      respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An icon is fetched with GET or HEAD.")))
+      respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An image is fetched with GET or HEAD.")))
   | otherwise =
-      runStoredWiki env.storage who (spaceIconFile sid blob) >>= \case
+      runStoredWiki env.storage who lookUp >>= \case
         Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
         Right (mediaType, file) -> do
           present <- doesFileExist file
           if not present
             then respond (refusal ApiError.NotFound)
             else do
-              let tag = "\"" <> encodeUtf8 blob.text <> "\""
+              -- The file is named by its content's hash.
+              let tag = "\"" <> encodeUtf8 (toS (takeFileName file) :: Text) <> "\""
                   headers =
                     [ (hContentType, encodeUtf8 (safeMediaType mediaType))
                     , ("X-Content-Type-Options", "nosniff")

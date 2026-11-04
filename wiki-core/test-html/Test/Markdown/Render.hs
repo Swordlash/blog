@@ -25,8 +25,17 @@ spec = describe "Markdown.Render" $ do
   describe "text" $ do
     it "writes a paragraph's text as one text node" $
       "Hello, *world* & `code`." `shows'` "<p>Hello, <em>world</em> &amp; <code>code</code>.</p>"
-    it "writes every line break as br, a line ended plainly as one ended with two spaces" $
-      "a\nb  \nc" `shows'` "<p>a<br>\nb<br>\nc</p>"
+    it "writes a line ended plainly as br" $
+      "a\nb\nc" `shows'` "<p>a<br>\nb<br>\nc</p>"
+    it "joins a line ended with a backslash to the next, with one space between, in one text node" $ do
+      "foo\\\nbar" `shows'` "<p>foo bar</p>"
+      "a\nfoo\\\nbar\nc" `shows'` "<p>a<br>\nfoo bar<br>\nc</p>"
+    it "joins a line ended with two spaces too, CommonMark's other hard break, which the parser does not tell apart" $
+      "a  \nb" `shows'` "<p>a b</p>"
+    it "keeps a backslash at the end of a paragraph, of a line of code and of inline code" $ do
+      "foo\\" `shows'` "<p>foo\\</p>"
+      "```\nfoo\\\nbar\n```" `shows'` "<pre><code>foo\\\nbar\n</code></pre>"
+      "`foo\\`\nbar" `shows'` "<p><code>foo\\</code><br>\nbar</p>"
     it "writes strong emphasis and strikethrough" $
       "**a** ~~b~~" `shows'` "<p><strong>a</strong> <del>b</del></p>"
     it "writes emoji with their shortcode as a title" $

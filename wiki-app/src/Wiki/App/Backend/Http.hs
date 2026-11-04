@@ -120,7 +120,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
@@ -136,7 +136,7 @@ import Wiki.App.Security (MonadSecurity (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.User (Standing (..), User)
 import Wiki.Core.Version (VersionsQuery (..), versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
@@ -298,6 +298,15 @@ recheckSession env before = do
       atomicModifyIORef' env.cache (const (withSession after emptyCache, ()))
       env.changes.listener.notify after
 
+-- | The signed-in user's own record changed (their avatar): keep the
+-- session with the new record, and announce it through 'sessionChanges',
+-- so that the header shows the change without anything else reloaded.
+ownUserChanged :: (MonadIO m) => Maybe Session -> User -> HttpWiki m ()
+ownUserChanged before u = for_ before $ \s -> do
+  let after = withOwnUser u s
+  modifyCache (withSession after)
+  HttpWiki (ask >>= \env -> liftIO (env.changes.listener.notify after))
+
 -- | Start the cache over with the session that signing in or out
 -- returned: everything cached before was read as someone else.
 startOver :: (MonadIO m) => Session -> HttpWiki m ()
@@ -402,6 +411,22 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   setSpaceSealed sid sealed = write (endpoints.spaces.setSealed sid SpaceSealed {sealed})
   personalSpace = send endpoints.account.personalSpace
   setPersonalSpace enabled = write (endpoints.account.setPersonalSpace PersonalSpaceSwitch {enabled})
+
+  -- Sent as a space's icon is. The user's record changed, so the shell is
+  -- told of the session with it ('ownUserChanged').
+  setAvatar mediaType bytes = do
+    before <- (\c -> c.session) <$> readCache
+    result <- write (withBoundary endpoints.account.setAvatar AttachmentUpload {name = "avatar", mediaType, payload = toS bytes})
+    traverse_ (ownUserChanged before) result
+    pure result
+  removeAvatar = do
+    before <- (\c -> c.session) <$> readCache
+    result <- write endpoints.account.removeAvatar
+    traverse_ (ownUserChanged before) result
+    pure result
+
+  -- At an address of the API's, as a space's icon is.
+  avatarUrl u = pure . Links.avatarUrl u
   setSpaceMathMacros sid mathMacros = write (endpoints.spaces.setMathMacros sid SpaceMathMacros {mathMacros})
   setSpaceProfile sid profile = write (endpoints.spaces.setProfile sid profile)
 

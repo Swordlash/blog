@@ -53,6 +53,26 @@
 -- reopens) carries the page's threads, which replace what is shown, so
 -- whatever changed since they were read is caught up.
 --
+-- = Who wrote it, who reads it
+--
+-- Under the title, in small print, the page says who created it and who
+-- last edited it, and when (WP5.55 of docs/PLAN.md): "Created by Ada, last
+-- edited by Edgar on 4 November 2026", each name with its avatar, from the
+-- page's 'Wiki.Core.Page.createdBy' and 'Wiki.Core.Page.updatedBy'. A page
+-- with no known author says when it last changed. When the page's Markdown
+-- starts with its own title (as a page the editor saved does), the line is
+-- put in the article after that heading (the only place between the title
+-- and the text), as a @div@ rather than a paragraph of the page, and
+-- marked as no part of the page's text (@jsbits/comments.js@ skips it, and 'Wiki.Core.Anchor.renderedText'
+-- is read before it is put there), so that comments' quotes are found as
+-- before.
+--
+-- On a backend with a live channel, the title's row shows who else is
+-- reading the page: a stack of their avatars, at most five, then a "+N"
+-- for the rest, then one circle for the visitors who have not signed in.
+-- Each circle can take the keyboard's focus; hovering or focusing the
+-- stack shows the list of names. The demo has no channel and shows none.
+--
 -- = Who edits it, and its saves
 --
 -- Over the same channel (WP4.12 of docs/PLAN.md) the view learns who has
@@ -72,7 +92,7 @@ where
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Text qualified as T
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -84,7 +104,7 @@ import Halogen.Router.Duplex (encodeComponent)
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
-import Wiki.Api.Events (PageEvent (..), applyEvent)
+import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (pageFormats)
 import Wiki.Api.Links (pageExportUrl)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
@@ -111,17 +131,18 @@ import Wiki.Core.Id
   , CommentThreadId (..)
   , PageId
   , SpaceId
+  , UserId
   )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, template, title, updatedAt), PageSummary (id, parent, slug, title), retitled)
+import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent, slug, space, template, title, updatedAt, updatedBy), PageSummary (id, parent, slug, title), retitled)
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (blog, boxNumbering, description, homePage, icon, id, name), SpaceProfile (..))
 import Wiki.Core.Template (placeholderNames)
-import Wiki.Core.User (User (id))
-import Wiki.Core.Version (Author)
+import Wiki.Core.User (Avatar, User (id))
+import Wiki.Core.Version (Author (..))
 
 -- | The page view's input: the page at a path in a space the shell has
 -- loaded, with the space's pages (for the links between them).
@@ -179,6 +200,11 @@ data State = State
   -- ^ The listener for the current feed, removed when the feed is unavailable.
   , editors :: [Author]
   -- ^ Who has the page's editor open, as the live channel last said.
+  , readers :: Readers
+  -- ^ Who else reads the page, as the live channel last said.
+  , avatars :: Map UserId Text
+  -- ^ The URLs of the avatars of the people the view shows: who wrote the
+  -- page, the comments' authors, the readers ('avatarUrls').
   , changed :: Bool
   -- ^ Whether the page has been saved since it was loaded, while the
   -- reader was busy with it: the bar then offers the new version.
@@ -229,6 +255,7 @@ data Action
   | SetTemplate Bool
   | ShowChanged
   | CopySelection BlockText
+  | ChooseWidth PageWidth
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -244,6 +271,7 @@ component =
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
+          avatars <- fromMaybe mempty <$> atOnce (avatarUrls (peopleOf loaded threads noReaders))
           text <- H.newRefLabel "page-text"
           copiedText <- H.newRefLabel "page-copied-address"
           pure
@@ -260,6 +288,8 @@ component =
               , watching = Nothing
               , subscription = Nothing
               , editors = []
+              , readers = noReaders
+              , avatars
               , changed = False
               , text
               , people
@@ -284,9 +314,8 @@ component =
       Failed e -> failureView e Retry
       Ready page urls deck contents ->
         [hh|
-          <div class="page-view">
+          <div class="page-view {{ widthClass input.context.pageWidth }}">
             {{ parts }}
-            <footer class="page-meta">Last changed {{ day page.updatedAt }}</footer>
             <div class="link-copied" role="status">
               {% for c in maybeToList st.copied %}
                 <span class="link-copied-label">{{ copiedLabel c }}</span>
@@ -302,11 +331,11 @@ component =
             -- It has its own class too: the bar stays under the header
             -- while the page scrolls (web/style.css), so that a long page
             -- can be edited without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> toList (templateNote page)
-                <> Body.heading page.title page.body
+                <> titleRow
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> attachments page urls
@@ -316,6 +345,16 @@ component =
           -- highlighted, and its text is where the quotes are looked for.
           rendered = Body.rendered place page.body
           text = either (const "") renderedText rendered
+          -- The title and who reads the page, on one row, with who wrote
+          -- it under them; when the Markdown has its own title, the
+          -- readers and the byline go with the article instead
+          -- ('textAndPanel').
+          titleRow
+            | Body.startsWithHeading page.body = []
+            | otherwise =
+                [ [hh|<div class="page-title-row">{{ Body.heading page.title page.body }}{{ readersStack st }}</div>|]
+                , byline st.avatars page
+                ]
 
     actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
     actions input page deck comments
@@ -460,7 +499,8 @@ component =
       [hh|
         <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
           <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
-            {{ Body.articleOf FollowLink place page.body marked }}
+            {% if titled %}{{ readersStack st }}{% end %}
+            {{ Body.articleOf FollowLink place page.body withByline }}
           </div>
           {% for s in maybeToList st.selected %}
             <div class="selection-actions" style={{ position s }}>
@@ -490,6 +530,12 @@ component =
         -- page's contents, and the panel of comments when it is open.
         side = isJust contents || st.panelOpen
         marked = highlight (markings st text) <$> rendered
+        -- The page's own title is the article's first block: the byline
+        -- goes after it, once its quotes are marked.
+        titled = Body.startsWithHeading page.body
+        withByline
+          | titled = (\nodes -> take 1 nodes <> [byline st.avatars page] <> drop 1 nodes) <$> marked
+          | otherwise = marked
         commentsEnabled = not (homeSpace st.input.context st.input.space.id)
         quoteClicks = [HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread) | commentsEnabled]
         position :: Selected -> Text
@@ -515,6 +561,7 @@ component =
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
           , focused = st.focused
           , quoting = st.quoting
+          , avatars = st.avatars
           }
         FromComments
 
@@ -535,6 +582,11 @@ component =
             |]
       where
         me = (\u -> u.id) <$> st.input.context.session.user
+
+    -- Who else reads the page: a stack of their avatars, as the module's
+    -- Haddock says; nothing when nobody does.
+    readersStack :: State -> [H.ComponentHTML Action Slots m]
+    readersStack st = maybeToList (readersView st.avatars st.readers)
 
     -- "Comments (n)", counting the unresolved inline threads, which opens
     -- their panel.
@@ -602,7 +654,7 @@ component =
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path
         when elsewhere $ do
           unwatchAll
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = []})
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -684,6 +736,7 @@ component =
         here <- gets (\st -> st.watching)
         case heard of
           Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
+          Live.Heard page (Reading readers) | Just page == here -> modify (\st -> st {readers}) >> resolveAvatars
           -- Saved, by anyone (this tab's own save is reported too, and is
           -- the version shown already): shown at once if the reader is not
           -- busy with the page, otherwise offered.
@@ -724,6 +777,7 @@ component =
         reveal ("#" <> CommentsView.threadElementId tid)
       -- The shell reloads what it shows, including the page and its tree.
       ShowChanged -> H.raise (Changed Nothing)
+      ChooseWidth width -> H.raise (ChoseWidth width)
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
         setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog, boxNumbering = space.boxNumbering} >>= done (const Nothing)
@@ -768,6 +822,15 @@ component =
         lift (attempt (Body.askPeople logins)) >>= \case
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
+      resolveAvatars
+
+    -- The URLs of the avatars of the people shown: who wrote the page,
+    -- the comments' authors and the readers.
+    resolveAvatars :: H.HalogenM State Action Slots ViewOutput m ()
+    resolveAvatars = do
+      st <- get
+      avatars <- lift (avatarUrls (peopleOf st.loaded st.threads st.readers))
+      modify (\s -> s {avatars})
 
     -- Watch the page shown, and nothing else.
     watch :: H.HalogenM State Action Slots ViewOutput m ()
@@ -793,7 +856,7 @@ component =
     disconnectFeed = do
       unwatchAll
       gets (\st -> st.subscription) >>= traverse_ H.unsubscribe
-      modify (\st -> st {subscription = Nothing, editors = []})
+      modify (\st -> st {subscription = Nothing, editors = [], readers = noReaders})
 
     unwatchAll :: H.HalogenM State Action Slots ViewOutput m ()
     unwatchAll = do
@@ -868,8 +931,112 @@ findPage ps pid = find (\p -> p.id == pid) ps
 spaceName :: Context -> Space -> Text
 spaceName ctx s = mconcat (intersperse " / " (map (\c -> c.name) (chainOf ctx s.id)))
 
-day :: UTCTime -> Text
-day = toS . formatTime defaultTimeLocale "%-d %B %Y"
+-- | The people whose avatars the view shows, with their avatars: who
+-- wrote the page, the comments' authors and the readers.
+peopleOf :: Loaded -> Threads -> Readers -> [(UserId, Maybe Avatar)]
+peopleOf loaded threads readers = [(a.id, a.avatar) | a <- writers <> authors <> readers.some]
+  where
+    writers = maybe [] (\p -> catMaybes [p.createdBy, p.updatedBy]) (pageOf loaded)
+    authors = case threads of
+      ThreadsReady ts -> [c.author | t <- ts, c <- t.comments]
+      _ -> []
+
+-- | Who wrote a page and when it last changed, in small print under its
+-- title: "Created by X, last edited by Y on <date>", or as much of it as
+-- is known, each name with its avatar.
+byline :: Map UserId Text -> Page -> HH.HTML w i
+byline urls page =
+  [hh|<div class="page-byline">{{ said }}</div>|]
+  where
+    onDay = [HH.text " on ", when']
+    when' = [hh|<time {{ [attr "datetime" (toS (iso8601Show page.updatedAt))] }}>{{ dateOf page.updatedAt }}</time>|]
+    named a = [hh|<span class="page-byline-author">{{ avatarOf SmallAvatar urls a }}<span class="page-byline-name">{{ a.name }}</span></span>|]
+    once = page.createdAt == page.updatedAt
+    said = case (page.createdBy, page.updatedBy) of
+      (Just c, _) | once -> [HH.text "Created by ", named c] <> onDay
+      (Just c, Just u)
+        | c.id == u.id -> [HH.text "Created and last edited by ", named c] <> onDay
+        | otherwise -> [HH.text "Created by ", named c, HH.text ", last edited by ", named u] <> onDay
+      (Just c, Nothing) -> [HH.text "Created by ", named c, HH.text ", last edited"] <> onDay
+      (Nothing, Just u) -> [HH.text "Last edited by ", named u] <> onDay
+      (Nothing, Nothing) -> [HH.text "Last changed ", when']
+
+-- | Who else reads a page, as a stack of overlapping avatars: at most
+-- 'shownReaders' of them, then a translucent "+N" for the other signed-in
+-- readers, then one grey circle with the number of visitors who have not
+-- signed in. Each circle takes the keyboard's focus, which (as hovering)
+-- lifts it above its neighbours; hovering or focusing the stack shows the
+-- list of the names the server sent ('maxReaders' at most), "and N more"
+-- for the rest, and the visitors. 'Nothing' when nobody else reads it.
+readersView :: Map UserId Text -> Readers -> Maybe (HH.HTML w i)
+readersView urls r
+  | r.total <= 0 && r.visitors <= 0 = Nothing
+  | otherwise =
+      Just
+        [hh|
+          <div class="page-readers" role="group" aria-label={{ summary }}>
+            <div class="page-readers-stack">
+              {% for a in take shownReaders r.some %}
+                <span class="page-reader" tabindex="0" title={{ a.name }}>{{ avatarOf SmallAvatar urls a }}</span>
+              {% end %}
+              {% if more > 0 %}
+                <span class="page-reader page-readers-more" tabindex="0" title={{ show more <> " more reading" :: Text }}>{{ "+" <> show more :: Text }}</span>
+              {% end %}
+              {% if r.visitors > 0 %}
+                <span class="page-reader page-readers-visitors" tabindex="0" title={{ visitorsText }} aria-label={{ visitorsText }}><span class="page-readers-glyph" aria-hidden="true"></span><span class="page-readers-count" aria-hidden="true">{{ show r.visitors :: Text }}</span></span>
+              {% end %}
+            </div>
+            <div class="page-readers-list">
+              <ul>
+                {% for a in r.some %}
+                  <li class="page-readers-name">{{ avatarOf SmallAvatar urls a }}<span>{{ a.name }}</span></li>
+                {% end %}
+                {% if unnamed > 0 %}
+                  <li class="page-readers-others">{{ "and " <> show unnamed <> " more" :: Text }}</li>
+                {% end %}
+                {% if r.visitors > 0 %}
+                  <li class="page-readers-visitors-line">{{ visitorsText }}</li>
+                {% end %}
+              </ul>
+            </div>
+          </div>
+        |]
+  where
+    more = r.total - min shownReaders (length r.some)
+    unnamed = r.total - length r.some
+    visitorsText = show r.visitors <> (if r.visitors == 1 then " visitor" else " visitors") <> " not signed in" :: Text
+    readersText = show r.total <> (if r.total == 1 then " person" else " people") <> " reading this page" :: Text
+    summary = T.intercalate ", " ([readersText | r.total > 0] <> [visitorsText | r.visitors > 0])
+
+-- | The page view's class for how wide it lays the page out.
+widthClass :: PageWidth -> Text
+widthClass = \case
+  Compact -> "page-width-compact"
+  FullWidth -> "page-width-full"
+
+-- | The switch between a compact page and a page as wide as the window, at
+-- the end of the bar of actions (WP5.55 of docs/PLAN.md): two radio
+-- buttons, each with a small picture of what it does. It changes the
+-- layout on a wide screen only; on a narrower one both are the same, and
+-- the stylesheet hides the switch.
+widthSwitch :: PageWidth -> HH.HTML w Action
+widthSwitch width =
+  [hh|
+    <div class="page-width-switch" role="radiogroup" aria-label="Page width">
+      <button type="button" role="radio" class="page-width-option page-width-option-compact" aria-checked={{ ariaBool (width == Compact) }} title="The text at a reading width, in the middle" onClick={{ const (ChooseWidth Compact) }}>
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2.5h13v11h-13z M5.5 4.5v7 M10.5 4.5v7"></path></svg>
+        <span>Compact</span>
+      </button>
+      <button type="button" role="radio" class="page-width-option page-width-option-full" aria-checked={{ ariaBool (width == FullWidth) }} title="The text as wide as the window" onClick={{ const (ChooseWidth FullWidth) }}>
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2.5h13v11h-13z M3.5 4.5h9 M3.5 8h9 M3.5 11.5h9"></path></svg>
+        <span>Full width</span>
+      </button>
+    </div>
+  |]
+
+-- | The most readers the stack shows a circle for.
+shownReaders :: Int
+shownReaders = 5
 
 -- | The threads a fetch's result shows.
 threadsOf :: Either WikiError [Thread] -> Threads

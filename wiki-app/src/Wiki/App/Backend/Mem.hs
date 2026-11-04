@@ -102,7 +102,7 @@ import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Avatar (..), User (..))
 
 -- The browser's side of the attachments uploaded into the demo; see
 -- jsbits/object-url.js. Natively these are inert, and 'objectUrl' does not
@@ -176,6 +176,12 @@ memUsers = (\st -> sortOn (\u -> u.login) [u | u <- Map.elems st.users, not (Set
 readState :: (MonadIO m) => MemWiki m MemState
 readState = MemWiki (ask >>= \env -> liftIO (withPersonalNames <$> readIORef env.wiki))
 
+-- | The wiki as it is stored, with each personal space named after its
+-- owner but with the icon it has of its own, not its owner's avatar
+-- ('withOwnerNames'): what an export writes.
+readStored :: (MonadIO m) => MemWiki m MemState
+readStored = MemWiki (ask >>= \env -> liftIO (withOwnerNames <$> readIORef env.wiki))
+
 -- | A read: a pure function applied to the wiki as it is now.
 query :: (MonadIO m) => (MemState -> a) -> MemWiki m a
 query f = f <$> readState
@@ -195,7 +201,10 @@ writeAt f = liftIO getCurrentTime >>= write . f
 
 instance (MonadIO m) => MonadWiki (MemWiki m) where
   session = query sessionOf
-  getHomeDocument = query getHomeDocumentIn
+  getHomeDocument =
+    query getHomeDocumentIn >>= \case
+      Right (_, p) -> needWriters p >> query getHomeDocumentIn
+      refused -> pure refused
   listSpaces = query listSpacesIn
   getSpace = query . getSpaceIn
   createSpace parent = writeAt . createSpaceIn parent
@@ -204,6 +213,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   setSpaceSealed sid = write . setSpaceSealedIn sid
   personalSpace = query personalSpaceIn
   setPersonalSpace = writeAt . flip setPersonalSpaceIn
+  setAvatar mediaType = write . setAvatarIn mediaType
+  removeAvatar = write removeAvatarIn
+  avatarUrl _ a = blobUrl a.mediaType a.blob
   setSpaceMathMacros sid = write . setSpaceMathMacrosIn sid
   setSpaceProfile sid = write . setSpaceProfileIn sid
   uploadSpaceIcon sid mediaType = write . uploadSpaceIconIn sid mediaType
@@ -217,16 +229,22 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   deleteSpace = write . deleteSpaceIn
   setSpaceOrder sid kind = write . setSpaceOrderIn sid kind
   shiftSpace sid = write . shiftSpaceIn sid
-  shiftPage pid = write . shiftPageIn pid
+  shiftPage pid by = write (shiftPageIn pid by) >>= withWritersRead
   listPages = query . listPagesIn
   postDetails sid = do
     needVersions (\st -> unreadFirstVersions [p.id | p <- Map.elems st.pages, p.space == sid] st)
     query (postDetailsIn sid)
-  getPage sid = query . getPageIn sid
-  createPage sid parent title body = writeAt (createPageIn sid parent title body)
-  savePage pid base title body = needFirstVersion pid >> writeAt (savePageIn pid base title body)
-  movePage pid sid = write . movePageIn pid sid
-  setPageTemplate pid = write . setPageTemplateIn pid
+
+  -- Who wrote the page is read from its first and latest versions, which
+  -- may still be in the browser's store only.
+  getPage sid path =
+    query (getPageIn sid path) >>= \case
+      Right p -> needWriters p >> query (getPageIn sid path)
+      refused -> pure refused
+  createPage sid parent title body = writeAt (createPageIn sid parent title body) >>= withWritersRead
+  savePage pid base title body = needFirstVersion pid >> writeAt (savePageIn pid base title body) >>= withWritersRead
+  movePage pid sid parent = write (movePageIn pid sid parent) >>= withWritersRead
+  setPageTemplate pid template = write (setPageTemplateIn pid template) >>= withWritersRead
   deletePage = write . deletePageIn
   uploadAttachment pid name mediaType = write . uploadAttachmentIn pid name mediaType
   deleteAttachment aid = do
@@ -239,7 +257,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   discardDraft = write . discardDraftIn
   listVersions pid q = needVersions (unreadHistory pid) >> query (listVersionsIn pid q)
   getVersion pid at = needVersions (unreadHistory pid) >> query (getVersionIn pid at)
-  restoreVersion pid at base = needVersions (unreadHistory pid) >> writeAt (restoreVersionIn pid at base)
+  restoreVersion pid at base = needVersions (unreadHistory pid) >> writeAt (restoreVersionIn pid at base) >>= withWritersRead
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url.text
     SourceBlob blob -> blobUrl a.mediaType blob
@@ -304,6 +322,15 @@ needVersions which = MemWiki $ do
       warn ("A page's history could not be read from this browser (" <> describe e <> ").")
     let got = [(pid, at, readVersion pid at =<< bytes) | (pid, at, Right bytes) <- found]
     unless (null got) $ atomicModifyIORef' env.wiki (\st -> (versionsRead got st, ()))
+
+-- | Read the versions who wrote a page is read from ('withWriters'), if
+-- they are not in memory: its first and its latest.
+needWriters :: (MonadIO m) => Page -> MemWiki m ()
+needWriters p = needVersions (\st -> unreadFirstVersions [p.id] st <> [(p.id, p.updatedAt) | maybe False (Set.member p.updatedAt) (Map.lookup p.id st.unreadVersions)])
+
+-- | A page a write returned, with who wrote it ('withWriters').
+withWritersRead :: (MonadIO m) => Either WikiError Page -> MemWiki m (Either WikiError Page)
+withWritersRead = traverse (\p -> needWriters p >> query (`withWriters` p))
 
 -- | Read a page's first version, if it is not in memory: the page's
 -- creator is needed.
@@ -564,7 +591,7 @@ memArchive :: (MonadIO m) => Text -> MemWiki m Archive
 memArchive app = do
   needVersions (\st -> maybe [] (\d -> unreadHistory d.page st) st.server.homePage.document)
   now <- liftIO getCurrentTime
-  st <- readState
+  st <- readStored
   unread <- for (Set.toList st.unreadBlobs) (\b -> fmap (b,) <$> readBlob b)
   pure (toArchive now app st {blobs = st.blobs <> Map.fromList (catMaybes unread)})
 
@@ -573,7 +600,7 @@ memArchive app = do
 -- changed. It is what a wiki loaded again is compared with in the tests.
 readWholly :: (MonadIO m) => MemWiki m MemState
 readWholly = do
-  st <- readState
+  st <- readStored
   blobs <- for (Set.toList st.unreadBlobs) (\b -> (b,) <$> readBlob b)
   history <- MemWiki $ do
     env <- ask

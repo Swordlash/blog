@@ -23,17 +23,18 @@ import Protolude
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
+import Wiki.Core.User (Avatar)
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Rows (avatarOf, micro)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 
 -- | Every thread of a page, in the order they were opened, each with its
 -- comments in the order they were made, their authors named by the given
--- function (from their id and the name the users table has for them, if
--- any).
-loadThreads :: (Backend be) => (UserId -> Maybe Text -> Author) -> PageId -> Db be [Thread]
+-- function (from their id, and the name and avatar the users table has for
+-- them, if any).
+loadThreads :: (Backend be) => (UserId -> Maybe Text -> Maybe Avatar -> Author) -> PageId -> Db be [Thread]
 loadThreads named page = do
   threads <- runSelectReturningList (select (orderBy_ (\t -> asc_ t.seq) (filter_ (\t -> t.page_id ==. val_ page.text) (all_ wikiDb.threads))))
   comments <- commentsWhere named (\t -> t.page_id ==. val_ page.text)
@@ -42,7 +43,7 @@ loadThreads named page = do
 -- | Every thread of every page, by page, each with its comments, as
 -- 'loadThreads' gives them. The export reads them all at once, with two
 -- queries rather than two per page.
-loadAllThreads :: (Backend be) => (UserId -> Maybe Text -> Author) -> Db be (Map PageId [Thread])
+loadAllThreads :: (Backend be) => (UserId -> Maybe Text -> Maybe Avatar -> Author) -> Db be (Map PageId [Thread])
 loadAllThreads named = do
   threads <- runSelectReturningList (select (orderBy_ (\t -> (asc_ t.page_id, asc_ t.seq)) (all_ wikiDb.threads)))
   comments <- commentsWhere named (const (val_ True))
@@ -56,16 +57,16 @@ withComments comments threads = [t {comments = Map.findWithDefault [] t.id byThr
 
 -- | The comments of the threads a condition picks, each thread's in
 -- order, their authors named.
-commentsWhere :: (Backend be) => (UserId -> Maybe Text -> Author) -> (forall s. S.Threads (QExpr be s) -> QExpr be s Bool) -> Db be [Comment]
+commentsWhere :: (Backend be) => (UserId -> Maybe Text -> Maybe Avatar -> Author) -> (forall s. S.Threads (QExpr be s) -> QExpr be s Bool) -> Db be [Comment]
 commentsWhere named cond = do
   rows <- runSelectReturningList . select . orderBy_ (\(c, _) -> (asc_ c.thread_id, asc_ c.seq)) $ do
     c <- all_ wikiDb.comments
     _ <- join_ wikiDb.threads (\t -> t.id ==. c.thread_id &&. cond t)
     u <- leftJoin_ (all_ wikiDb.users) (\u -> u.id ==. c.author)
-    pure (c, u.display_name)
+    pure (c, (u.display_name, u.avatar_blob, u.avatar_media_type))
   pure
-    [ Comment {id = CommentId c.id, thread = CommentThreadId c.thread_id, author = named (UserId c.author) name, body = c.body, createdAt = c.created_at, editedAt = c.edited_at}
-    | (c, name) <- rows
+    [ Comment {id = CommentId c.id, thread = CommentThreadId c.thread_id, author = named (UserId c.author) name (avatarOf (join b) (join m)), body = c.body, createdAt = c.created_at, editedAt = c.edited_at}
+    | (c, (name, b, m)) <- rows
     ]
 
 threadOf :: S.Threads Identity -> Thread

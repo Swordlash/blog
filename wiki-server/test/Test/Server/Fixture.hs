@@ -23,6 +23,7 @@ module Test.Server.Fixture
   , sendBare
   , sendJson
   , multipart
+  , multipartWith
   , header
   , json
   , jsonAs
@@ -322,8 +323,13 @@ sendJson r m url value = send r m url [(hContentType, "application/json")] (enco
 -- | A multipart form, as a browser's FormData sends it: text parts, then
 -- file parts (part name, file name, media type, bytes).
 multipart :: Running -> Text -> [(Text, Text)] -> [(Text, Text, Text, LByteString)] -> IO Reply
-multipart r url inputs files =
-  send r "POST" url [(hContentType, "multipart/form-data; boundary=" <> boundary)] formBody
+multipart r = multipartWith r "POST" []
+
+-- | 'multipart', with another method and headers of its own (a session's
+-- cookie).
+multipartWith :: Running -> Method -> [Header] -> Text -> [(Text, Text)] -> [(Text, Text, Text, LByteString)] -> IO Reply
+multipartWith r m hs url inputs files =
+  send r m url ((hContentType, "multipart/form-data; boundary=" <> boundary) : hs) formBody
   where
     boundary = "wiki-server-test-boundary"
     line t = BSL.fromStrict (encodeUtf8 t) <> "\r\n"

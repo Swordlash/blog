@@ -1,6 +1,10 @@
 {
   "p1": {
     "author": {
+      "avatar": {
+        "blob": "b3",
+        "mediaType": "image/png"
+      },
       "id": "u2",
       "name": "Bea"
     },

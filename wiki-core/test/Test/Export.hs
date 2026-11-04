@@ -40,12 +40,12 @@ slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
 
 alice, bob, administrator :: User
-alice = User {id = UserId "u1", login = Login "alice", displayName = "Alice"}
-bob = User {id = UserId "u2", login = Login "bob", displayName = "Bob"}
+alice = User {id = UserId "u1", login = Login "alice", displayName = "Alice", avatar = Nothing}
+bob = User {id = UserId "u2", login = Login "bob", displayName = "Bob", avatar = Nothing}
 
 -- | A comment author who is not among the users, as the server's
 -- administrator is not.
-administrator = User {id = UserId "~administrator", login = Login "administrator", displayName = "Administrator"}
+administrator = User {id = UserId "~administrator", login = Login "administrator", displayName = "Administrator", avatar = Nothing}
 
 spaceOf :: Text -> Maybe Text -> Text -> Space
 spaceOf i parent s =
@@ -85,6 +85,8 @@ pageOf i s parent sl body =
     , updatedAt = at 2
     , position = 0
     , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 -- | An attachment whose bytes the wiki keeps, under a blob named for it.
@@ -99,7 +101,7 @@ said :: Text -> Text -> Author -> Integer -> Comment
 said thread i author minute = Comment {id = CommentId i, thread = CommentThreadId thread, author, body = "Said " <> i, createdAt = at minute, editedAt = Nothing}
 
 as :: User -> Author
-as u = Author {id = u.id, name = u.displayName}
+as u = Author {id = u.id, name = u.displayName, avatar = Nothing}
 
 -- | A wiki with some of everything: spaces and pages three deep, slugs that
 -- are Windows device names, a page whose slug is @pages@, attachments of
@@ -301,7 +303,7 @@ spec = describe "Wiki.Core.Export" $ do
 
   describe "comments' authors" $ do
     it "are matched by login with the users of the wiki that imports them, and are otherwise kept by name" $ do
-      let elsewhere = [User {id = UserId "x-alice", login = Login "alice", displayName = "Alice Elsewhere"}, User {id = UserId "x-root", login = Login "administrator", displayName = "Root"}]
+      let elsewhere = [User {id = UserId "x-alice", login = Login "alice", displayName = "Alice Elsewhere", avatar = Nothing}, User {id = UserId "x-root", login = Login "administrator", displayName = "Root", avatar = Nothing}]
           authors = [(c.author.id, c.author.name) | ts <- Map.elems (threadsAmong elsewhere wiki), t <- ts, c <- t.comments]
       authors
         `shouldBe` [ (UserId "x-alice", "Alice Elsewhere")

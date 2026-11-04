@@ -161,7 +161,7 @@ spec = describe "Notification" $ do
 
   describe "digest" $ do
     let at n = UTCTime (ModifiedJulianDay 60000) (fromIntegral (n :: Int))
-        item i p n k = Notification {id = NotificationId i, kind = k, page = PageId p, thread = Nothing, actor = Author {id = grace, name = "Grace"}, title = "Title of " <> p, excerpt = "", createdAt = at n, read = False, location = Nothing}
+        item i p n k = Notification {id = NotificationId i, kind = k, page = PageId p, thread = Nothing, actor = Author {id = grace, name = "Grace", avatar = Nothing}, title = "Title of " <> p, excerpt = "", createdAt = at n, read = False, location = Nothing}
     it "groups by page, the latest page first, each page's items as they happened" $ do
       let groups = digest [item "1" "a" 1 Changed, item "2" "b" 2 Mentioned, item "3" "a" 3 Commented]
       map (\g -> (g.page, map (\n -> n.id) g.items)) groups `shouldBe` [(PageId "a", [NotificationId "1", NotificationId "3"]), (PageId "b", [NotificationId "2"])]

@@ -37,8 +37,8 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
-import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..))
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (VersionsQuery), latestVersions)
+import Wiki.Core.User (Avatar (..), Group (..), Login (..), Standing (..), User (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (VersionsQuery), authorOf, latestVersions)
 
 -- | Who a request is made as: nobody, or the demo's user with this login
 -- (@admin@, @editor@, @reader@).
@@ -77,6 +77,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   deletingSpaces
   sealedSpaces
   personalSpaces
+  avatars
   ordering
   creatingPages
   savingPages
@@ -766,6 +767,78 @@ personalSpaces = describe "personal spaces" $ do
     void (pageAt run Anonymous "users/editor" "home")
 
 --------------------------------------------------------------------------------
+-- Avatars
+
+avatars :: (MonadWiki m) => SpecWith (Fixture m)
+avatars = describe "setAvatar, removeAvatar and avatarUrl" $ do
+  it "gives the user an avatar, which their session, the URL and their pages' and versions' authors carry, and takes it away" $ \(Fixture run) -> do
+    me <- run editor (setAvatar "image/png" png) >>= ok
+    avatar <- maybe (assertFailure "no avatar") pure me.avatar
+    avatar.mediaType `shouldBe` MimeType "image/png"
+    run editor currentUser `shouldReturn` Just me
+    url <- run editor (avatarUrl me.id avatar)
+    url `shouldSatisfy` (not . T.null)
+    -- Whoever reads the history sees the author's avatar as it is now.
+    hello <- pageAt run admin "blog" "hello-world"
+    saved <- run editor (savePage hello.id hello.updatedAt "Hello" "Again.") >>= ok
+    saved.updatedBy `shouldBe` Just (authorOf me)
+    versions <- versionsOf run Anonymous hello.id
+    (head versions >>= \v -> v.author) `shouldBe` Just (authorOf me)
+    gone <- run editor removeAvatar >>= ok
+    gone.avatar `shouldBe` Nothing
+    run editor currentUser `shouldReturn` Just gone
+    found <- pageAt run Anonymous "blog" "hello-world"
+    ((\a -> a.avatar) <$> found.updatedBy) `shouldBe` Just Nothing
+
+  it "refuses an image of another type, an empty one and one too large, and anyone without an account" $ \(Fixture run) -> do
+    run editor (setAvatar "image/svg+xml" "<svg/>") >>= shouldBeInvalid
+    run editor (setAvatar "text/html" "<p>") >>= shouldBeInvalid
+    run editor (setAvatar "image/png" "") >>= shouldBeInvalid
+    run editor (setAvatar "image/png" (BS.replicate (fromIntegral maxIconSize + 1) 0)) >>= shouldBeInvalid
+    run editor currentUser >>= \u -> ((\x -> x.avatar) <$> u) `shouldBe` Just Nothing
+    run Anonymous (setAvatar "image/png" png) >>= (`shouldFailWith` Forbidden)
+    run Anonymous removeAvatar >>= (`shouldFailWith` Forbidden)
+
+  it "shows a personal space without an icon of its own with its owner's avatar, until it is given one" $ \(Fixture run) -> do
+    mine <- run editor (setPersonalSpace True) >>= ok
+    me <- run editor (setAvatar "image/png" png) >>= ok
+    avatar <- maybe (assertFailure "no avatar") pure me.avatar
+    let shownWith = Just (IconImage avatar.blob avatar.mediaType)
+    for_ [Anonymous, editor, admin] $ \who -> do
+      found <- spaceAt run who "users/editor"
+      found.icon `shouldBe` shownWith
+      listed <- run who listSpaces
+      [x.icon | x <- listed, x.id == mine.id] `shouldBe` [shownWith]
+    run Anonymous (spaceIconUrl =<< (either (panic . show) identity <$> getSpace (path "users/editor"))) >>= (`shouldSatisfy` (not . T.null))
+    -- The settings send the icon the space is shown with back: that is
+    -- no icon of its own, so a new avatar shows at once.
+    shown <- spaceAt run editor "users/editor"
+    void (run editor (setSpaceProfile mine.id (profileOf shown)) >>= ok)
+    again <- run editor (setAvatar "image/png" (png <> "\0")) >>= ok
+    newer <- maybe (assertFailure "no avatar") pure again.avatar
+    newer.blob `shouldNotBe` avatar.blob
+    (\s -> s.icon) <$> spaceAt run Anonymous "users/editor" `shouldReturn` Just (IconImage newer.blob newer.mediaType)
+    -- An icon of its own wins; none shows the avatar again.
+    void (run editor (setSpaceProfile mine.id (profile "" (Just (IconEmoji "🦉")) Nothing)) >>= ok)
+    (\s -> s.icon) <$> spaceAt run Anonymous "users/editor" `shouldReturn` Just (IconEmoji "🦉")
+    void (run editor (setSpaceProfile mine.id (profile "" Nothing Nothing)) >>= ok)
+    (\s -> s.icon) <$> spaceAt run Anonymous "users/editor" `shouldReturn` Just (IconImage newer.blob newer.mediaType)
+    -- No avatar, no image.
+    void (run editor removeAvatar >>= ok)
+    (\s -> s.icon) <$> spaceAt run Anonymous "users/editor" `shouldReturn` Nothing
+
+  it "says who created a page and who last edited it" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    made <- run editor (createPage blog.id Nothing "Notes" "First.") >>= ok
+    edgar <- authorAs run editor
+    ada <- authorAs run admin
+    (made.createdBy, made.updatedBy) `shouldBe` (Just edgar, Just edgar)
+    saved <- run admin (savePage made.id made.updatedAt "Notes" "Second.") >>= ok
+    (saved.createdBy, saved.updatedBy) `shouldBe` (Just edgar, Just ada)
+    found <- pageAt run Anonymous "blog" "notes"
+    (found.createdBy, found.updatedBy) `shouldBe` (Just edgar, Just ada)
+
+--------------------------------------------------------------------------------
 -- Order
 
 ordering :: (MonadWiki m) => SpecWith (Fixture m)
@@ -1354,7 +1427,7 @@ versionsOf run who p = run who (listVersions p latestVersions) >>= ok
 authorAs :: (HasCallStack, MonadWiki m) => Run m -> As -> IO Author
 authorAs run who =
   run who currentUser >>= \case
-    Just u -> pure Author {id = u.id, name = u.displayName}
+    Just u -> pure (authorOf u)
     Nothing -> assertFailure "expected someone signed in"
 
 history :: (MonadWiki m) => SpecWith (Fixture m)

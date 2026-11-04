@@ -218,7 +218,7 @@ html = describe "a post's HTML" $
             , blog = True
             , boxNumbering = InPage
             }
-        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False}
+        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False, createdBy = Nothing, updatedBy = Nothing}
         tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
         post =
           pageOf

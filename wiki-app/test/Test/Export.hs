@@ -143,7 +143,7 @@ withoutHistory st = imported {counter = nextCounter imported}
       Comment
         { id = c.id
         , thread = c.thread
-        , author = maybe (absentAuthor c.author.id) (\u -> Author {id = u.id, name = u.displayName}) (Map.lookup c.author.id st.users)
+        , author = maybe (absentAuthor c.author.id) (\u -> Author {id = u.id, name = u.displayName, avatar = Nothing}) (Map.lookup c.author.id st.users)
         , body = c.body
         , createdAt = c.createdAt
         , editedAt = c.editedAt
@@ -261,6 +261,25 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     refused "icon" (readArchive (Map.delete "spaces/docs/spaces/exported/icon.png" files))
     let elsewhere = editRecords "/space.json" (\o -> if KeyMap.lookup "name" o == Just (String "Blog") then KeyMap.insert "homePage" (toJSON ("page-no-such" :: Text)) o else o) files
     refused "home page" (readArchive elsewhere)
+
+  it "writes a personal space's own icon, not the owner's avatar it is shown with, and no avatar at all" $ do
+    ref <- newMemWiki (demoState demoNow)
+    archive <- runMemWiki ref $ do
+      switchUser (Just (UserId "user-editor"))
+      either (panic . show) (const pass) =<< setPersonalSpace True
+      either (panic . show) (const pass) =<< setAvatar "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 4, 5, 6])
+      shown <- either (panic . show) pure =<< personalSpace
+      liftIO
+        ( ((\x -> x.icon) <$> shown) `shouldSatisfy` \case
+            Just (Just (IconImage _ _)) -> True
+            _ -> False
+        )
+      memArchive "test"
+    [x.icon | x <- archive.spaces, isJust x.owner] `shouldBe` [Nothing]
+    readBackArchive <- either (assertFailure . toS) pure (readArchive (filesOf archive))
+    [x.icon | x <- readBackArchive.spaces, isJust x.owner] `shouldBe` [Nothing]
+    [u.avatar | u <- readBackArchive.users] `shouldSatisfy` all isNothing
+    [p | p <- Map.keys (filesOf archive), "/icon." `T.isInfixOf` p, "users" `T.isInfixOf` p] `shouldBe` []
 
   it "carries the comments' authors by login, and shows one no user has as not a user here" $ do
     st <- edited

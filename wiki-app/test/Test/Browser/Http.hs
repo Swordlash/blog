@@ -831,7 +831,7 @@ views m = describe "the application over it" $ do
     serveDemo
     hello <- unsafeIOToPageM helloWorld
     let older = addUTCTime (negate 86400) hello.updatedAt
-        ada = Just Author {id = UserId "user-admin", name = "Ada Admin"}
+        ada = Just Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
         current = VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = ada, number = 2}
     answerWith "GET" (endpointUrl (\e -> e.pages.versions hello.id Nothing Nothing)) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing, number = 1}]
     answerWith "GET" (endpointUrl (\e -> e.pages.version hello.id (VersionTime older))) 200 Version {page = hello.id, updatedAt = older, title = "Hello", body = "# Hello\n", author = Nothing}
@@ -1032,7 +1032,7 @@ comments m = describe "a page's comments" $ do
     find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
     eventually $ said `shouldReturn` [Subscribe hello.id]
     -- A new comment about the page, sent to the server, shown as it answered.
-    let ada = Author {id = UserId "user-admin", name = "Ada Admin"}
+    let ada = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
         comment' tid cid body = Comment {id = CommentId cid, thread = CommentThreadId tid, author = ada, body, createdAt = demoNow, editedAt = Nothing}
         made = Thread {id = CommentThreadId "thread-new", page = hello.id, anchor = Nothing, resolved = False, createdAt = demoNow, comments = [comment' "thread-new" "comment-new" "Sent."]}
     answerWith "POST" (endpointUrl (\e -> (e.comments hello.id).open NewThread {anchor = Nothing, body = ""})) 201 made
@@ -1054,7 +1054,7 @@ comments m = describe "a page's comments" $ do
     before <- readsSoFar
     unsafeIOToPageM js_server_hang_up
     eventually $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id]
-    tell (Subscribed hello.id [made] [])
+    tell (Subscribed hello.id [made] [] Events.noReaders)
     eventually $ length <$> findAll ui ".page-comments .comment-thread" `shouldReturn` 1
     readsSoFar `shouldReturn` before
     length <$> findAll ui "mark.comment-mark" `shouldReturn` 0
@@ -1093,7 +1093,7 @@ comments m = describe "a page's comments" $ do
     eventually $ said `shouldReturn` [Subscribe hello.id]
     -- Someone commented after the page was read and before the tab
     -- subscribed: the answer has it, and the page shows it.
-    let grace = Author {id = UserId "user-editor", name = "Grace Editor"}
+    let grace = Author {id = UserId "user-editor", name = "Grace Editor", avatar = Nothing}
         meanwhile =
           Thread
             { id = CommentThreadId "thread-meanwhile"
@@ -1103,7 +1103,7 @@ comments m = describe "a page's comments" $ do
             , createdAt = demoNow
             , comments = [Comment {id = CommentId "comment-meanwhile", thread = CommentThreadId "thread-meanwhile", author = grace, body = "Made meanwhile.", createdAt = demoNow, editedAt = Nothing}]
             }
-    tell (Subscribed hello.id (preloaded <> [meanwhile]) [])
+    tell (Subscribed hello.id (preloaded <> [meanwhile]) [] Events.noReaders)
     find ui ".page-comments #comment-thread-thread-meanwhile .comment-body" >>= (`shouldHaveText` "Made meanwhile.")
     find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
     asked `shouldReturn` []
@@ -1118,9 +1118,9 @@ comments m = describe "a page's comments" $ do
 -- says it stopped when it goes away, says it again on a new connection,
 -- and says when someone else has saved the page meanwhile.
 presence :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
-presence m = describe "who is editing" $ do
-  let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
-      rita = Author {id = UserId "user-reader", name = "Rita Reader"}
+presence m = describe "who is editing and reading" $ do
+  let edgar = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
+      rita = Author {id = UserId "user-reader", name = "Rita Reader", avatar = Nothing}
       blog = slugs ["blog"]
       helloAt = slugs ["hello-world"]
       demoHello = unsafeIOToPageM $ do
@@ -1232,6 +1232,42 @@ presence m = describe "who is editing" $ do
     unmount ui
     serverStops
 
+  it "shows who else reads the page shown as a stack of avatars, the rest counted, and the visitors" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _) <- demoHello
+    ui <- startServer m (Page blog helloAt)
+    _ <- find ui ".page-view .page-body"
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    length <$> findAll ui ".page-readers" `shouldReturn` 0
+    -- The answer to the subscription says who reads it.
+    tell (Subscribed hello.id [] [] Events.Readers {some = [edgar, rita], total = 2, visitors = 0})
+    _ <- find ui ".page-readers"
+    circles <- findAll ui ".page-readers .page-reader"
+    traverse (`getAttribute` "title") circles `shouldReturn` [Just "Edgar Editor", Just "Rita Reader"]
+    find ui ".page-readers .page-reader .avatar-initials" >>= \a -> getAttribute a "data-initials" `shouldReturn` Just "E"
+    names <- traverse textContent =<< findAll ui ".page-readers-list .page-readers-name"
+    names `shouldBe` ["Edgar Editor", "Rita Reader"]
+    -- A crowd: five circles, then the rest counted, then the visitors.
+    let crowd = [Author {id = UserId ("user-" <> show i), name = "Reader " <> show (10 + i), avatar = Nothing} | i <- [1 .. 15 :: Int]]
+    tell (Event hello.id (Events.Reading Events.Readers {some = crowd, total = 20, visitors = 3}))
+    eventually $ length <$> findAll ui ".page-readers .page-reader" `shouldReturn` 7
+    find ui ".page-readers-more" >>= (`shouldHaveText` "+15")
+    visitors <- find ui ".page-readers-visitors"
+    getAttribute visitors "title" `shouldReturn` Just "3 visitors not signed in"
+    find ui ".page-readers-visitors .page-readers-count" >>= (`shouldHaveText` "3")
+    length <$> findAll ui ".page-readers-list .page-readers-name" `shouldReturn` 15
+    find ui ".page-readers-list .page-readers-others" >>= (`shouldHaveText` "and 5 more")
+    find ui ".page-readers-list .page-readers-visitors-line" >>= (`shouldHaveText` "3 visitors not signed in")
+    -- One visitor alone, then nobody.
+    tell (Event hello.id (Events.Reading Events.Readers {some = [], total = 0, visitors = 1}))
+    eventually $ find ui ".page-readers-visitors" >>= \v -> getAttribute v "title" `shouldReturn` Just "1 visitor not signed in"
+    length <$> findAll ui ".page-readers-more" `shouldReturn` 0
+    tell (Event hello.id (Events.Reading Events.noReaders))
+    eventually $ length <$> findAll ui ".page-readers" `shouldReturn` 0
+    unmount ui
+    serverStops
+
   it "asks before editing a page someone else edits, says it edits it once told to go on, and stops when it goes" $ runPage $ do
     serverStarts
     serveDemo
@@ -1239,7 +1275,7 @@ presence m = describe "who is editing" $ do
     ui <- startServer m (EditPage blog helloAt)
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     eventually $ said `shouldReturn` [Subscribe hello.id]
-    tell (Subscribed hello.id [] [edgar])
+    tell (Subscribed hello.id [] [edgar] Events.noReaders)
     find ui ".editor-presence-warning p" >>= (`shouldHaveText` "Edgar Editor is editing this page. Open the editor anyway?")
     -- Not said until the author goes on.
     said `shouldReturn` [Subscribe hello.id]
@@ -1271,7 +1307,7 @@ presence m = describe "who is editing" $ do
     (hello, _) <- demoHello
     ui <- startServer m (EditPage blog helloAt)
     eventually $ said `shouldReturn` [Subscribe hello.id]
-    tell (Subscribed hello.id [] [])
+    tell (Subscribed hello.id [] [] Events.noReaders)
     eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id]
     length <$> findAll ui ".editor-presence-warning" `shouldReturn` 0
     length <$> findAll ui ".editor-others" `shouldReturn` 0

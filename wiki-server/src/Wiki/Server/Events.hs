@@ -52,6 +52,18 @@
 -- editing at that moment. The storage also tells the hub of every save of
 -- a page ('PageChanged'), as it does for comments.
 --
+-- = Who reads
+--
+-- A connection subscribed to a page is reading it (WP5.55 of
+-- docs/PLAN.md), as the user it was opened as ('authorOf', read with the
+-- subscription's threads), or as a visitor for a connection of someone not
+-- signed in. The server's operator is neither, and is not counted. The
+-- hub records it per connection in the presence too, and each time a
+-- page's readers change (a subscription, an unsubscription, a connection
+-- that closes), every connection subscribed to the page is told who else
+-- reads it ('Reading', "Wiki.Server.Presence"'s 'readersFor'), and the
+-- answer to a subscription says who reads it at that moment.
+--
 -- = Notifications
 --
 -- The storage also tells the hub of every notification a write made
@@ -95,7 +107,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Core.Id (PageId, UserId)
 import Wiki.Core.Notification (Notification)
-import Wiki.Server.Presence (Key, Presence, editorsFor, leave, nobodyEditing, startEditing, stopEditing)
+import Wiki.Server.Presence (Key, PageReader (..), Presence, editorsFor, leave, leaveReading, nobodyEditing, readersFor, startEditing, startReading, stopEditing, stopReading)
 import Wiki.Server.Storage (Storage, Who (..), editorOf, mayReadPage, threadsThen)
 
 -- | 'Hub': every open connection, what each is subscribed to, and what
@@ -103,7 +115,7 @@ import Wiki.Server.Storage (Storage, Who (..), editorOf, mayReadPage, threadsThe
 data Hub = Hub
   { connections :: TVar (Map Key Connection)
   , presence :: TVar Presence
-  -- ^ Who is editing which page, by connection.
+  -- ^ Who is editing and reading which page, by connection.
   , next :: TVar Key
   , closing :: TVar Bool
   -- ^ Set when the server stops: no new connection is accepted.
@@ -221,6 +233,23 @@ tellEditors hub page = do
   now <- readTVar hub.presence
   tellSubscribers page (Map.toList connections) (\k -> Editing (editorsFor k page now))
 
+-- | Tell every connection subscribed to a page who else reads it, as the
+-- presence now says, in the transaction that changed it; but the one
+-- given, which has just been answered with it.
+tellReaders :: Hub -> Maybe Key -> PageId -> STM ()
+tellReaders hub answered page = do
+  connections <- readTVar hub.connections
+  now <- readTVar hub.presence
+  tellSubscribers page [(k, c) | (k, c) <- Map.toList connections, Just k /= answered] (\k -> Reading (readersFor k page now))
+
+-- | Change the presence, and if that changed who reads a page, tell its
+-- subscribers.
+changeReading :: Hub -> PageId -> (Presence -> (Presence, Bool)) -> STM ()
+changeReading hub page change = do
+  (now, changed) <- change <$> readTVar hub.presence
+  writeTVar hub.presence now
+  when changed (tellReaders hub Nothing page)
+
 -- | Change the presence, and if that changed who is editing a page, tell
 -- its subscribers.
 changePresence :: Hub -> PageId -> (Presence -> (Presence, Bool)) -> STM ()
@@ -275,13 +304,15 @@ serve storage hub who pending = do
         writeTVar hub.next (k + 1)
         modifyTVar' hub.connections (Map.insert k connection)
         pure k
-      -- Closed: it edits nothing any more, which the subscribers of the
-      -- pages it edited are told.
+      -- Closed: it edits and reads nothing any more, which the
+      -- subscribers of the pages it edited and read are told.
       let gone = atomically $ do
             modifyTVar' hub.connections (Map.delete key)
             (now, edited) <- leave key <$> readTVar hub.presence
-            writeTVar hub.presence now
+            let (now', read') = leaveReading key now
+            writeTVar hub.presence now'
             traverse_ (tellEditors hub) edited
+            traverse_ (tellReaders hub Nothing) read'
       flip finally gone . WS.withPingThread socket 20 pass $
         race_ (sending socket connection) (receiving key socket connection)
           `catch` \(_ :: WS.ConnectionException) -> pass
@@ -297,16 +328,26 @@ serve storage hub who pending = do
         -- else write: every change committed after that read is sent after
         -- the answer. Who else is editing the page is included, read in the
         -- same transaction as the subscription is made, so that every
-        -- change to it after the answer is sent after it.
+        -- change to it after the answer is sent after it. So is who reads
+        -- it, this connection now among them, which the page's other
+        -- subscribers are told.
         Just (Subscribe page) -> do
-          read' <- threadsThen storage who page $ \threads -> atomically $ do
+          read' <- threadsThen storage who page $ \(threads, author) -> atomically $ do
             modifyTVar' connection.pages (Set.insert page)
-            editors <- editorsFor key page <$> readTVar hub.presence
-            enqueue connection (Say (Subscribed page threads editors))
+            let readingAs = case who of
+                  Anonymous -> Just Visitor
+                  AsUser _ -> Named <$> author
+                  Administrator -> Nothing
+            (now, changed) <- maybe (,False) (startReading key page) readingAs <$> readTVar hub.presence
+            writeTVar hub.presence now
+            enqueue connection (Say (Subscribed page threads (editorsFor key page now) (readersFor key page now)))
+            when changed (tellReaders hub (Just key) page)
           when (isLeft read') $ atomically $ do
             modifyTVar' connection.pages (Set.delete page)
             enqueue connection (Say (Refused page))
-        Just (Unsubscribe page) -> atomically (modifyTVar' connection.pages (Set.delete page))
+        Just (Unsubscribe page) -> atomically $ do
+          modifyTVar' connection.pages (Set.delete page)
+          changeReading hub page (stopReading key page)
         -- Accepted from someone who may edit the page, named as the
         -- storage names them; from anyone else, ignored.
         Just (StartEditing page) ->

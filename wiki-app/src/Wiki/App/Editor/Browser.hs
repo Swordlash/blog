@@ -39,6 +39,7 @@ module Wiki.App.Editor.Browser
   , applyCommand
   , insertAtCursor
   , focusText
+  , goToTitleLine
   , focusElement
   , LiveFeed
   , listenLive
@@ -131,6 +132,7 @@ $( browserJS
      , ("js_propose", "wiki_editor_propose", Safe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
      , ("js_settle", "wiki_editor_settle", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
+     , ("js_title_line", "wiki_editor_title_line", Safe, [t|Element -> IO ()|])
      ]
  )
 
@@ -324,6 +326,13 @@ focusText host =
     codeMirror host >>= \case
       Just editor -> editor.focus
       Nothing -> textareaOf host >>= traverse_ (HTMLElement.focusWithoutScrolling . coerce)
+
+-- | Put the caret at the end of the text's first line, the page's title
+-- line (after its @# @), scroll the line into view, and give the text the
+-- focus: what a click on the editor's title does. Run it in
+-- 'Halogen.liftEffect'.
+goToTitleLine :: (MonadIO m) => Element -> m ()
+goToTitleLine = liftIO . js_title_line
 
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()

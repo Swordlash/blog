@@ -35,7 +35,7 @@ import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
-import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
+import Wiki.Api.Links (attachmentUrl, avatarUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
 import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..), feedAddressOf)
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), SecondFactorState (..), SessionRef (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
@@ -59,7 +59,7 @@ import Wiki.Core.Page qualified as Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Core.Version (VersionInfo)
 
 -- | Refuse a request as the server's handlers will: the error's status, and
@@ -79,6 +79,14 @@ stubs :: WikiApi Tmp AsServer
 stubs =
   WikiApi
     { info = pure ServerInfo {name = "Stub", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
+    , users =
+        UsersApi
+          { avatar = \u b req respond ->
+              liftIO . respond $
+                if u == Sample.user.id && b == BlobId "b2" && requestMethod req == methodGet
+                  then responseLBS (toEnum 200) [(hContentType, "image/png")] "PNG avatar"
+                  else responseLBS (toEnum 404) [(hContentType, "application/json")] (encode NotFound)
+          }
     , homeDocument = pure (Sample.space, Sample.page)
     , session = pure Sample.sessionInfo
     , signIn = \c ->
@@ -144,6 +152,8 @@ stubs =
           , setEmail = \body -> pure EmailState {email = Just (Email body.email), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
           , personalSpace = pure (Just Sample.personalSpace)
           , setPersonalSpace = \body -> pure Sample.personalSpace {Space.active = body.enabled}
+          , setAvatar = \u -> pure (withAvatar (Just Avatar {blob = BlobId "b2", mediaType = Attachment.MimeType u.mediaType}) Sample.user)
+          , removeAvatar = pure (withAvatar Nothing Sample.user)
           }
     , spaces =
         SpacesApi
@@ -261,7 +271,7 @@ stubs =
           , deleteGroup = \g -> if g == GroupId "g1" then pure NoContent else refuse NotFound
           , addMember = \g u -> if (g, u) == (GroupId "g1", UserId "u1") then pure NoContent else refuse NotFound
           , removeMember = \g u -> if (g, u) == (GroupId "g1", UserId "u2") then pure NoContent else refuse NotFound
-          , createUser = \new -> pure Account {user = User {id = UserId "new", login = Login new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
+          , createUser = \new -> pure Account {user = User {id = UserId "new", login = Login new.login, displayName = new.displayName, avatar = Nothing}, hasPassword = True, disabled = False}
           , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
           , sendPasswordLink = \u -> if u == UserId "u1" then pure NoContent else refuse (Invalid "No verified address.")
           , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
@@ -358,7 +368,7 @@ invitedAs email =
 
 -- | The sample account's user, with another id.
 adaAs :: UserId -> User
-adaAs u = User {id = u, login = Login "ada", displayName = "Ada"}
+adaAs u = User {id = u, login = Login "ada", displayName = "Ada", avatar = Nothing}
 
 app :: Application
 app = serve api stubs
@@ -381,8 +391,12 @@ sendJson method address body = request method address [(hContentType, "applicati
 -- | A multipart form, as a browser's FormData sends it: text parts, then
 -- file parts (part name, file name, media type, bytes).
 multipart :: Text -> [(Text, Text)] -> [(Text, Text, Text, LByteString)] -> IO SResponse
-multipart address inputs files =
-  request methodPost address [(hContentType, "multipart/form-data; boundary=" <> boundary)] body
+multipart = multipartWith methodPost
+
+-- | 'multipart', with another method.
+multipartWith :: Method -> Text -> [(Text, Text)] -> [(Text, Text, Text, LByteString)] -> IO SResponse
+multipartWith method address inputs files =
+  request method address [(hContentType, "multipart/form-data; boundary=" <> boundary)] body
   where
     boundary = "wiki-api-test-boundary"
     line t = BSL.fromStrict (encodeUtf8 t) <> "\r\n"
@@ -718,7 +732,7 @@ spec = describe "a server of the API's type" $ do
       answers (getAt (links.admin.activity Nothing Nothing Nothing)) 200 Sample.activity {more = False}
 
     it "makes a user with a password, sets one, and disables a login" $ do
-      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = Password "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = Login "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
+      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = Password "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = Login "bea", displayName = "Bea", avatar = Nothing}, hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = Password "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
@@ -836,6 +850,19 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPost links.secondFactor OneTimeCode {code = "287082"}) 200 Sample.sessionInfo
       answers (sendJson methodPost links.secondFactor OneTimeCode {code = "000000"}) 401 Unauthenticated
 
+    it "uploads the user's avatar as a multipart form with PUT, removes it, and serves it at the address the user's avatar names" $ do
+      links.account.setAvatar `shouldBe` "api/v1/account/avatar"
+      r <- multipartWith methodPut links.account.setAvatar [] [("file", "avatar", "image/png", "PNG!")]
+      status r `shouldBe` 200
+      let uploaded = jsonBody r :: Maybe User
+      ((\u -> u.avatar) <$> uploaded) `shouldBe` Just (Just Avatar {blob = BlobId "b2", mediaType = Attachment.MimeType "image/png"})
+      for_ (uploaded >>= \u -> (u.id,) <$> u.avatar) $ \(u, a) -> do
+        avatarUrl u a `shouldBe` "api/v1/users/u1/avatar/b2"
+        served <- getAt (avatarUrl u a)
+        (status served, simpleBody served, header "Content-Type" served) `shouldBe` (200, "PNG avatar", Just "image/png")
+      (status <$> getAt (links.users.avatar (UserId "u1") (BlobId "b1"))) `shouldReturn` 404
+      answers (request methodDelete links.account.removeAvatar [] "") 200 (withAvatar Nothing Sample.user)
+
     it "reads the user's personal space, and turns it on or off" $ do
       answers (getAt links.account.personalSpace) 200 (Just Sample.personalSpace)
       answers (sendJson methodPut links.account.setPersonalSpace PersonalSpaceSwitch {enabled = False}) 200 Sample.personalSpace {Space.active = False}
@@ -904,4 +931,9 @@ spec = describe "a server of the API's type" $ do
 
 -- | The user the stub of the people's search finds.
 ada :: User
-ada = User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
+ada = User {id = UserId "u1", login = Login "ada", displayName = "Ada", avatar = Nothing}
+
+-- | A user with another avatar. (A function, since a record update of
+-- @avatar@ cannot tell a user's field from an author's.)
+withAvatar :: Maybe Avatar -> User -> User
+withAvatar avatar u = User {id = u.id, login = u.login, displayName = u.displayName, avatar}

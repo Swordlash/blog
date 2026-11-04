@@ -118,6 +118,8 @@ pageWith i s parent sl body position attachments =
     , updatedAt = time
     , position
     , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 -- | An attachment kept in an archive, under a blob of the archive's own.
@@ -131,7 +133,7 @@ archive spaces pages =
   Archive
     { createdAt = time
     , app = "the tests"
-    , users = [User {id = UserId "u1", login = Login "alice", displayName = "Alice"}]
+    , users = [User {id = UserId "u1", login = Login "alice", displayName = "Alice", avatar = Nothing}]
     , groups = []
     , membership = mempty
     , grants = Grants {global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = Administer}], spaces = [], access = Open}
@@ -427,7 +429,7 @@ discussed :: Archive
 discussed =
   docs
     { threads = Map.fromList [(PageId "p1", [aboutThePage, inline])]
-    , commentAuthors = [User {id = UserId "u7", login = Login "bob", displayName = "Bob"}]
+    , commentAuthors = [User {id = UserId "u7", login = Login "bob", displayName = "Bob", avatar = Nothing}]
     }
   where
     aboutThePage =
@@ -449,7 +451,7 @@ discussed =
         , comments = [comment "t2" "c3" (formerAuthor "Carol") "Fixed." Nothing]
         }
     comment thread i author text editedAt =
-      Comment {id = CommentId i, thread = CommentThreadId thread, author = Author {id = author, name = author.text}, body = text, createdAt = time, editedAt}
+      Comment {id = CommentId i, thread = CommentThreadId thread, author = Author {id = author, name = author.text, avatar = Nothing}, body = text, createdAt = time, editedAt}
 
 later :: UTCTime
 later = addUTCTime 60 time

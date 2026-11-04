@@ -119,5 +119,7 @@ makeHomeDocument d slug time h =
       , P.updatedAt = time
       , P.position = 0
       , P.template = False
+      , P.createdBy = Nothing
+      , P.updatedBy = Nothing
       }
   )

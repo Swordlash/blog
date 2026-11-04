@@ -6,6 +6,7 @@ module Test.Browser.Mount
   ( start
   , startWith
   , startChanged
+  , startAgain
   , adopt
   , startKept
   , startKeptWith
@@ -77,6 +78,21 @@ startChanged
 startChanged m change who at = do
   (wiki, router) <- prepare who at
   unsafeIOToPageM (modifyIORef' wiki change)
+  mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
+
+-- | 'start', keeping what the browser's local storage holds from before:
+-- the shell mounted again, as after a reload, for a test of what the
+-- application remembers.
+startAgain
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startAgain m who at = do
+  wiki <- unsafeIOToPageM (newMemWiki ((demoState demoNow) {current = UserId <$> who}))
+  router <- unsafeIOToPageM testRouter
+  unsafeIOToPageM (Router.redirect router at)
   mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
 
 -- | 'start', in a container that holds the shell's HTML for the route

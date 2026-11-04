@@ -19,7 +19,7 @@ spec m = do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
     -- Nothing else among the page's actions for someone who may only read it.
-    actions <- traverse textContent =<< findAll ui ".page-view .actions > *"
+    actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
     actions `shouldBe` ["View source", "History", "Comments (0)"]
     find ui ".page-view .actions a[href$='#/s/docs/p/tour/source/']" >>= click
     find ui ".source-view h1" >>= (`shouldHaveText` "Tour")

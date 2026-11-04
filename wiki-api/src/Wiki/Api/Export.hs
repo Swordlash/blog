@@ -24,6 +24,7 @@ module Wiki.Api.Export
   , pageFormats
   , spaceFormats
   , exportFileName
+  , opensInline
   )
 where
 
@@ -74,6 +75,21 @@ formatLabel = \case
   Pptx -> "PowerPoint (.pptx)"
   BeamerTex -> "Beamer source (.tex)"
   BeamerPdf -> "Beamer PDF"
+
+-- | Whether an exported document opens in a tab of the browser rather than
+-- downloading: the PDFs. Chromium's browsers block a download over plain
+-- HTTP (and Edge offers no way past it), while a PDF shown in a tab is a
+-- navigation, which they let through; so on a wiki served over HTTP a PDF
+-- can still be exported, and saved from the browser's viewer under its
+-- file name. The server answers with @Content-Disposition: inline@ for
+-- these and @attachment@ for the rest, and the export menu links to these
+-- without @download@, in a new tab: both ask this function, so that they
+-- cannot disagree.
+opensInline :: ExportFormat -> Bool
+opensInline = \case
+  Pdf -> True
+  BeamerPdf -> True
+  _ -> False
 
 -- | Its file extension, without the dot.
 formatExtension :: ExportFormat -> Text

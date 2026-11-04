@@ -18,6 +18,8 @@ module Test.Gen
   , genIcon
   , genPage
   , genUser
+  , genAvatar
+  , genAuthor
   , genGroup
   , genMembership
   , genSubject
@@ -49,6 +51,7 @@ import Wiki.Core.Slug
 import Wiki.Core.Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User
+import Wiki.Core.Version (Author (..))
 
 -- | Any text, Unicode included.
 genText :: Gen Text
@@ -153,14 +156,27 @@ genPage = do
   updatedAt <- genUtcTime
   position <- arbitrary
   template <- arbitrary
-  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template}
+  createdBy <- oneof [pure Nothing, Just <$> genAuthor]
+  updatedBy <- oneof [pure Nothing, Just <$> genAuthor]
+  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template, createdBy, updatedBy}
+
+genAvatar :: Gen Avatar
+genAvatar = Avatar <$> genBlobId <*> elements iconMediaTypes
+
+genAuthor :: Gen Author
+genAuthor = do
+  id <- genUserId
+  name <- genText
+  avatar <- oneof [pure Nothing, Just <$> genAvatar]
+  pure Author {id, name, avatar}
 
 genUser :: Gen User
 genUser = do
   id <- genUserId
   login <- Login <$> genText
   displayName <- genText
-  pure User {id, login, displayName}
+  avatar <- oneof [pure Nothing, Just <$> genAvatar]
+  pure User {id, login, displayName, avatar}
 
 genGroup :: Gen Group
 genGroup = do

@@ -40,7 +40,10 @@ Markdown).
 
 One thing differs from plain Markdown: a line break in the text is a line break
 on the page, in quotations and boxes too, so a paragraph is written on one line,
-however long, and a line is broken where a break is meant.
+however long, and a line is broken where a break is meant. A line that ends
+with a backslash (`\`) goes on in the next one instead: the page shows the two
+as one line, with a space between them (two spaces at the end of a line do the
+same, as CommonMark's other way of writing that break).
 
 ### Mathematics, with KaTeX
 
@@ -475,7 +478,16 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **History**: every save a version, its changes shown word by word, and any
   version restored.
 - **Comments** on a quote of the page or on the whole page, in threads, with
-  replies and resolving, arriving live in every tab over `wiki-server`.
+  replies and resolving, arriving live in every tab over `wiki-server`, each
+  with its author's avatar.
+- **Avatars**: each user may upload a picture of themselves from the account
+  panel, cropped to a circle in the browser; it shows beside their name in the
+  header, at their comments, under a page's title ("Created by …, last edited
+  by … on …") and, over `wiki-server`, in the stack of who else is reading a
+  page beside its title (with a count of the visitors not signed in). A user
+  without one is shown by the first letter of their name on a colour of
+  their own. A personal
+  space without an icon of its own shows its owner's avatar.
 - **Mentions and notifications**: `@login` tells someone, under a bell in the
   header, as do comments on and changes to the pages they watch; over
   `wiki-server`, by mail too, and as a private Atom feed whose address the
@@ -502,7 +514,12 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   Connect provider, and invitations.
 - **Export** of a page or a space as Word, a web page, an e-book, a PDF, a deck
   as PowerPoint or Beamer (over `wiki-server`), and of the whole wiki as a zip
-  file, which another wiki, the demo's or a server's, imports.
+  file, which another wiki, the demo's or a server's, imports. On a wiki served
+  over plain HTTP, Chromium's browsers block downloads: the PDFs open in a tab
+  (saved from there), and the other formats need HTTPS.
+- **Compact or full width**: a switch at the end of a page's bar lays pages out
+  at a reading width in the middle of a wide window, or as wide as it, as this
+  browser remembers.
 - **Every route at an address of its own**, prerendered for the demo and
   rendered per request by `wiki-server`, so a page arrives complete and the
   program adopts it rather than draw it again.

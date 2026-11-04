@@ -51,7 +51,7 @@ spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIsl
 spec m = do
   it "lets someone not signed in open a page's history from the page, and come back" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
-    actions <- traverse textContent =<< findAll ui ".page-view .actions > *"
+    actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
     actions `shouldBe` ["View source", "History", "Comments (0)"]
     find ui ".page-view .actions a[href$='#/s/docs/p/tour/history/']" >>= click
     find ui ".history-view h1" >>= (`shouldHaveText` "Tour")

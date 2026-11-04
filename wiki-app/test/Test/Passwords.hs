@@ -65,7 +65,7 @@ mailingOr mailing =
     , membership = mempty
     }
   where
-    person login = User {id = uid login, login = Login login, displayName = login}
+    person login = User {id = uid login, login = Login login, displayName = login, avatar = Nothing}
 
 uid :: Text -> UserId
 uid login = UserId ("user-" <> login)

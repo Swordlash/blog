@@ -4,6 +4,7 @@
 -- password hashes and sessions belong to the server (@wiki-server@).
 module Wiki.Core.User
   ( User (..)
+  , Avatar (..)
   , Login (..)
   , Password (..)
   , Email (..)
@@ -29,6 +30,7 @@ import Data.Text qualified as T
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import Wiki.Core.Attachment (MimeType)
 import Wiki.Core.Id
 
 -- | 'User': an account that can sign in.
@@ -38,6 +40,23 @@ data User = User
   -- ^ The name they sign in with; unique.
   , displayName :: Text
   -- ^ The name pages show for them.
+  , avatar :: Maybe Avatar
+  -- ^ The picture they chose of themselves, if any (WP5.55 of
+  -- docs/PLAN.md). In JSON the field may be absent, which means none, so
+  -- that a record written before avatars existed still reads.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'Avatar' is the picture a user uploaded of themselves: its bytes,
+-- stored as an attachment's are (by their blob id), and their media type.
+-- The browser crops the picture to a square before it is uploaded, and the
+-- page shows it round. The backend gives its URL
+-- ('Wiki.App.Backend.avatarUrl'). A user without one is shown by the
+-- first letter of their name instead.
+data Avatar = Avatar
+  { blob :: BlobId
+  , mediaType :: MimeType
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

@@ -254,7 +254,7 @@ crowd st users watches = do
   now <- micro <$> getCurrentTime
   writing st $ do
     for_ (chunksOf 200 [1 .. users]) $ \is ->
-      runInsert (insert wikiDb.users (insertValues [UserRow {id = crowdUser i, login = "crowd" <> show i, display_name = "Crowd " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing} | i <- is]))
+      runInsert (insert wikiDb.users (insertValues [UserRow {id = crowdUser i, login = "crowd" <> show i, display_name = "Crowd " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing, avatar_blob = Nothing, avatar_media_type = Nothing} | i <- is]))
     for_ [1 .. 10 :: Int] $ \i ->
       insertPage
         Page
@@ -269,6 +269,8 @@ crowd st users watches = do
           , updatedAt = now
           , position = 100 + i
           , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
           }
     for_ (chunksOf 200 [0 .. watches - 1]) $ \is ->
       runInsert (insert wikiDb.watches (insertValues [WatchRow {user_id = crowdUser (1 + i `mod` users), page_id = Just (crowdPage (1 + i `div` users)).text, space_id = Nothing, watching = True} | i <- is]))
@@ -333,6 +335,8 @@ addPagesWith st space name body n = do
           , updatedAt = now
           , position = 1000 + i
           , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
           }
   pure ids
 

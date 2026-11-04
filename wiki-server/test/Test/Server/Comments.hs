@@ -34,7 +34,7 @@ import Wiki.Api (AdminApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..),
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers (..), ServerMessage (..), eventsPath, noReaders)
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (PageEdit (..))
 import Wiki.Api.Version (pageVersion)
@@ -183,9 +183,25 @@ channel r headers = WS.runClientWith "127.0.0.1" (portOf r.public) ("/" <> toS e
 say :: WS.Connection -> ClientMessage -> IO ()
 say c = WS.sendTextData c . encode
 
--- | The next message, within five seconds.
+-- | The next message but who reads the page, within five seconds. Who
+-- reads a page changes with every tab that subscribes to it ('Reading'),
+-- which the tests of other things do not count; 'hearReaders' hears that.
 hear :: (HasCallStack) => WS.Connection -> IO ServerMessage
 hear c =
+  heard c >>= \case
+    Event _ (Reading _) -> hear c
+    other -> pure other
+
+-- | The next message that says who reads a page, skipping any other.
+hearReaders :: (HasCallStack) => WS.Connection -> IO Readers
+hearReaders c =
+  heard c >>= \case
+    Event _ (Reading readers) -> pure readers
+    _ -> hearReaders c
+
+-- | The next message of any kind, within five seconds.
+heard :: (HasCallStack) => WS.Connection -> IO ServerMessage
+heard c =
   timeout 5_000_000 (WS.receiveData c) >>= \case
     Nothing -> assertFailure "nothing heard in five seconds"
     Just bytes -> either (\e -> assertFailure ("not a message of the server's: " <> e)) pure (eitherDecode bytes)
@@ -195,7 +211,7 @@ answer :: (HasCallStack) => WS.Connection -> PageId -> IO [Thread]
 answer c p = do
   say c (Subscribe p)
   hear c >>= \case
-    Subscribed q threads _ | q == p -> pure threads
+    Subscribed q threads _ _ | q == p -> pure threads
     other -> assertFailure ("not the answer to the subscription: " <> show other)
 
 subscribe :: (HasCallStack) => WS.Connection -> PageId -> IO ()
@@ -257,8 +273,8 @@ live backing = describe "the live channel" $ do
   it "tells a page's tabs who opens its editor and closes it, and that a lost connection closes it" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
     p <- notesOf r
-    let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
-        ada = Author {id = UserId "user-admin", name = "Ada Admin"}
+    let edgar = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
+        ada = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
     channel r [people.reader] $ \reading -> do
       subscribe reading p
       channel r [people.editor] $ \editing -> do
@@ -271,7 +287,7 @@ live backing = describe "the live channel" $ do
         channel r [] $ \late -> do
           say late (Subscribe p)
           hear late >>= \case
-            Subscribed q _ editors | q == p -> editors `shouldBe` [edgar]
+            Subscribed q _ editors _ | q == p -> editors `shouldBe` [edgar]
             other -> assertFailure ("not the answer to the subscription: " <> show other)
         -- Another editor, in two tabs, is one person; the first tab hears
         -- of them, and they hear of each other's tab and of Edgar.
@@ -298,6 +314,41 @@ live backing = describe "the live channel" $ do
         hear reading `shouldReturn` Event p (Editing [edgar])
       -- The editor's tab is gone without a word: its connection was.
       hear reading `shouldReturn` Event p (Editing [])
+
+  it "tells a page's tabs who else reads it: each signed-in user once, never their own user, and visitors counted, not named" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    p <- notesOf r
+    let edgar = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
+        rita = Author {id = UserId "user-reader", name = "Rita Reader", avatar = Nothing}
+        -- The answer to a subscription, with who reads the page then.
+        readersAnswer c = do
+          say c (Subscribe p)
+          heard c >>= \case
+            Subscribed q _ _ readers | q == p -> pure readers
+            other -> assertFailure ("not the answer to the subscription: " <> show other)
+    channel r [people.reader] $ \reading -> do
+      readersAnswer reading `shouldReturn` noReaders
+      channel r [people.editor] $ \editing -> do
+        readersAnswer editing `shouldReturn` Readers {some = [rita], total = 1, visitors = 0}
+        hearReaders reading `shouldReturn` Readers {some = [edgar], total = 1, visitors = 0}
+        -- Edgar's second tab is the same reader, and changes nothing; it
+        -- is not told of Edgar.
+        channel r [people.editor] $ \again -> do
+          readersAnswer again `shouldReturn` Readers {some = [rita], total = 1, visitors = 0}
+          -- A visitor who has not signed in is counted, without a name,
+          -- by every tab, and is told of the signed-in readers by name.
+          channel r [] $ \visitor -> do
+            readersAnswer visitor `shouldReturn` Readers {some = [edgar, rita], total = 2, visitors = 0}
+            hearReaders reading `shouldReturn` Readers {some = [edgar], total = 1, visitors = 1}
+            hearReaders editing `shouldReturn` Readers {some = [rita], total = 1, visitors = 1}
+            hearReaders again `shouldReturn` Readers {some = [rita], total = 1, visitors = 1}
+          -- The visitor's connection is gone.
+          hearReaders reading `shouldReturn` Readers {some = [edgar], total = 1, visitors = 0}
+          hearReaders editing `shouldReturn` Readers {some = [rita], total = 1, visitors = 0}
+          say again (Unsubscribe p)
+      -- Edgar's other tab still reads the page; when it closes, Edgar is
+      -- gone.
+      hearReaders reading `shouldReturn` noReaders
 
   it "takes nobody's word for editing a page they may not edit" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r

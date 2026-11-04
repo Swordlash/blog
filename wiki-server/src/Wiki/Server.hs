@@ -40,7 +40,7 @@ import Network.Wai.Handler.WarpTLS (runTLSSocket)
 import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Import (ImportSummary (..))
-import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
+import Wiki.Api.Links (attachmentUrl, avatarUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Api (Env (..))
@@ -146,7 +146,7 @@ withServerUsing given raw sendMail action = do
   handle (\(DataDirInUse why) -> throwIO (ServerError [why]))
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
-    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
+    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
     $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage
       let notifier = newNotifier logger sendMail wake storage

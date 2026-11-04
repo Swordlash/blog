@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+Avatars, who wrote a page, and lines that go on (WP5.55). `User` and
+`Author` gain `avatar :: Maybe Avatar`, a new record of the picture's
+blob and media type; the JSON field may be absent, which reads as none.
+`authorOf` makes an author of a user, `namedAuthor` one without an
+avatar. `checkAvatarUpload` checks a picture by the rules of a space's
+icon, `colourFor` picks one of `iconColours` from any text (the default
+colour of a space is now `colourFor` of its id), `withOwnerAvatar` shows
+a personal space without an icon of its own with its owner's avatar, and
+`ownProfile` takes that avatar, sent back in a space's profile, for no
+icon of its own. `Page` gains `createdBy` and `updatedBy :: Maybe Author`,
+the authors of its first and latest versions, which a backend fills where
+it answers with a whole page; a `Page` built by hand needs them
+(`Nothing`), and the export's page record does not carry them. The
+Markdown renderer shows a line that ends with a backslash (CommonMark's
+hard break, which two trailing spaces also make) as going on in the next
+line, with a space, instead of a line break; a plain line ending is still
+a line break.
+
 Private subspaces and personal spaces (WP5.54). `Space` gains four
 fields: `sealed`, whether the space is private from its parent; `owner`,
 the user whose personal space it is; `active`, false for a personal space

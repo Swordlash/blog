@@ -242,3 +242,23 @@ function wikiFollowLine(container, line) {
     target.scrollIntoView({ block: "start" });
   }
 }
+
+// Put the caret at the end of the text's first line, the page's title line,
+// scroll it into view and give the text the focus: what a click on the
+// editor's title does (WP5.55). CodeMirror's own entry does it there
+// (web/src/editor.js); the textarea before CodeMirror has loaded does it
+// itself.
+function wiki_editor_title_line(host) {
+  const editor = host.wikiEditor;
+  if (editor) {
+    editor.titleLine();
+    return;
+  }
+  const textarea = wikiTextarea(host);
+  if (textarea === null) return;
+  const end = textarea.value.indexOf("\n");
+  const at = end < 0 ? textarea.value.length : end;
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(at, at);
+  textarea.scrollTop = 0;
+}

@@ -87,7 +87,7 @@ data Telling = Telling
 tellingOf :: Map UserId Mark -> S.Users Identity -> Telling
 tellingOf allMarks r =
   Telling
-    { user = User {id = UserId r.id, login = Login r.login, displayName = r.display_name}
+    { user = User {id = UserId r.id, login = Login r.login, displayName = r.display_name, avatar = Nothing}
     , watchOwn = r.watch_own
     , marks = Map.findWithDefault mempty (UserId r.id) allMarks
     , mailing = isJust r.email_verified_at && (r.notification_mail >>= readMailMode) /= Just MailOff
@@ -255,7 +255,7 @@ insertNotification u n mail =
 
 notificationOf :: S.Notifications Identity -> Maybe Notification
 notificationOf r =
-  (\k -> Notification {id = NotificationId r.id, kind = k, page = PageId r.page_id, thread = CommentThreadId <$> r.thread_id, actor = Author {id = UserId r.actor, name = r.actor_name}, title = r.title, excerpt = r.excerpt, createdAt = r.created_at, read = isJust r.read_at, location = Nothing})
+  (\k -> Notification {id = NotificationId r.id, kind = k, page = PageId r.page_id, thread = CommentThreadId <$> r.thread_id, actor = Author {id = UserId r.actor, name = r.actor_name, avatar = Nothing}, title = r.title, excerpt = r.excerpt, createdAt = r.created_at, read = isJust r.read_at, location = Nothing})
     <$> readKind r.kind
 
 -- | Some of a user's notifications, the newest first, without where their
@@ -318,7 +318,7 @@ loadPending = do
     ns <- mapMaybe notificationOf <$> runSelectReturningList (select (orderBy_ (\n -> asc_ n.seq) (filter_ (\n -> n.user_id ==. val_ r.id &&. n.mail ==. val_ True) (all_ wikiDb.notifications))))
     pure
       Pending
-        { user = User {id = UserId r.id, login = Login r.login, displayName = r.display_name}
+        { user = User {id = UserId r.id, login = Login r.login, displayName = r.display_name, avatar = Nothing}
         , email = Email <$> r.email
         , verified = isJust r.email_verified_at
         , mail = r.notification_mail >>= readMailMode

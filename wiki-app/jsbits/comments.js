@@ -11,7 +11,9 @@
 // renderer as the text Haskell reads, so the two agree character for
 // character, and Wiki.Core.Anchor.locate finds the quote again.
 
-const WIKI_ISLANDS = ".wiki-math, .wiki-code, .wiki-mermaid, .wiki-tikz, .wiki-time";
+// The page's byline (who wrote it), which the page view puts after the
+// article's own title, is no part of the page's text either.
+const WIKI_ISLANDS = ".wiki-math, .wiki-code, .wiki-mermaid, .wiki-tikz, .wiki-time, .page-byline";
 
 // How many characters of context an anchor keeps on each side
 // (Wiki.Core.Anchor.contextLength).

@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+
 -- | The live channel (decision 23 of docs/PLAN.md): one WebSocket per
 -- browser tab, at @api\/v1\/events@. On it the tab says which pages it
 -- shows and which it edits, and the server sends it the changes to those
@@ -13,7 +15,7 @@
 --   opens the page's editor and @{"stopped": "\<page>"}@ when it closes
 --   the editor ('ClientMessage');
 -- * from the server: @{"subscribed": "\<page>", "threads": […], "editing":
---   […]}@ or @{"refused": "\<page>"}@ in response (a page that does not
+--   […], "readers": {…}}@ or @{"refused": "\<page>"}@ in response (a page that does not
 --   exist, or that the connection's user may not read, is refused),
 --   @{"page": "\<page>", "event": …}@ for each change to a subscribed page,
 --   and @{"notification": …}@ for each notification created for the
@@ -28,7 +30,7 @@
 -- The response to a subscription carries the page's threads at the time
 -- of the subscription, filtered as the connection's user may read them
 -- (as @GET pages\/\<page>\/threads@ returns them), and the users editing
--- the page at that time. Every event sent afterwards happened after that
+-- and reading the page at that time. Every event sent afterwards happened after that
 -- read. So a tab that takes the response as the page's current state, and
 -- applies the events it receives afterwards, misses nothing between its
 -- first fetch of the page and its subscription. Nothing else is replayed:
@@ -46,10 +48,30 @@
 -- other editors ('Editing'): everyone editing it on another connection,
 -- each user once. So a tab is never listed to itself, but its own user,
 -- editing in another tab, is listed.
+--
+-- = Who is reading
+--
+-- A connection subscribed to a page is reading it (WP5.55 of the plan).
+-- Whenever the readers of a page change (a connection subscribes to it,
+-- unsubscribes or closes), every connection subscribed to the page
+-- receives them ('Reading', @{"type": "readers", "readers": {"some": […],
+-- "total": n, "visitors": v}}@), and the answer to a subscription carries
+-- them as they are then ('Readers'). The readers a connection is told of
+-- are the signed-in users of the other connections, each user once, the
+-- connection's own user left out (whatever tab they read in), named as
+-- editors are; the server sends at most 'maxReaders' of them, by name, and
+-- how many there are in all. Connections of visitors who have not signed
+-- in (in an open wiki) have no name to give: each counts as one visitor,
+-- in @visitors@, the connection itself excepted.
 module Wiki.Api.Events
   ( -- * Events
     PageEvent (..)
   , applyEvent
+
+    -- * Readers
+  , Readers (..)
+  , noReaders
+  , maxReaders
 
     -- * Messages
   , ClientMessage (..)
@@ -87,6 +109,9 @@ data PageEvent
     -- by id and display name, and never by login, since a page's readers
     -- may be anyone.
     Editing [Author]
+  | -- | The people now reading the page, besides the receiving tab's user,
+    -- sent whenever they change.
+    Reading Readers
   | -- | The page was saved: the time of its new version. A tab showing an
     -- older version fetches the page again.
     PageChanged UTCTime
@@ -104,6 +129,7 @@ instance ToJSON PageEvent where
     ThreadResolved t r -> object ["type" .= ("thread-resolved" :: Text), "thread" .= t, "resolved" .= r]
     ThreadDeleted t -> object ["type" .= ("thread-deleted" :: Text), "thread" .= t]
     Editing editors -> object ["type" .= ("editing" :: Text), "editors" .= editors]
+    Reading readers -> object ["type" .= ("readers" :: Text), "readers" .= readers]
     PageChanged at -> object ["type" .= ("page-changed" :: Text), "updatedAt" .= at]
     Unknown kind -> object ["type" .= kind]
 
@@ -117,6 +143,7 @@ instance FromJSON PageEvent where
       "thread-resolved" -> ThreadResolved <$> o .: "thread" <*> o .: "resolved"
       "thread-deleted" -> ThreadDeleted <$> o .: "thread"
       "editing" -> Editing <$> o .: "editors"
+      "readers" -> Reading <$> o .: "readers"
       "page-changed" -> PageChanged <$> o .: "updatedAt"
       other -> pure (Unknown other)
 
@@ -133,8 +160,31 @@ applyEvent = \case
   ThreadResolved t r -> resolvedAs t r
   ThreadDeleted t -> withoutThread t
   Editing _ -> identity
+  Reading _ -> identity
   PageChanged _ -> identity
   Unknown _ -> identity
+
+-- | 'Readers' is who reads a page, as a connection is told: the first
+-- 'maxReaders' signed-in readers by name ('some'), how many signed-in
+-- readers there are in all ('total', each user once), and how many
+-- connections of visitors who have not signed in read it ('visitors').
+-- The server caps the names so that a page read by a crowd costs a small
+-- message to each of them.
+data Readers = Readers
+  { some :: [Author]
+  , total :: Int
+  , visitors :: Int
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | Nobody reading: what a server older than the readers sends nothing of.
+noReaders :: Readers
+noReaders = Readers {some = [], total = 0, visitors = 0}
+
+-- | The most readers a 'Readers' names.
+maxReaders :: Int
+maxReaders = 15
 
 -- | 'ClientMessage': a message from a tab.
 data ClientMessage
@@ -171,8 +221,9 @@ instance FromJSON ClientMessage where
 -- | 'ServerMessage': a message from the server.
 data ServerMessage
   = -- | The tab now receives this page's changes. The page's threads are
-    -- these, and these users edit it besides the tab (as in 'Editing').
-    Subscribed PageId [Thread] [Author]
+    -- these, these users edit it besides the tab (as in 'Editing'), and
+    -- these read it (as in 'Reading').
+    Subscribed PageId [Thread] [Author] Readers
   | -- | The tab may not receive this page's changes: the page does not
     -- exist, or the connection's user may not read it.
     Refused PageId
@@ -184,7 +235,7 @@ data ServerMessage
 
 instance ToJSON ServerMessage where
   toJSON = \case
-    Subscribed p ts editors -> object ["subscribed" .= p, "threads" .= ts, "editing" .= editors]
+    Subscribed p ts editors readers -> object ["subscribed" .= p, "threads" .= ts, "editing" .= editors, "readers" .= readers]
     Refused p -> object ["refused" .= p]
     Event p e -> object ["page" .= p, "event" .= e]
     Notified n -> object ["notification" .= n]
@@ -199,7 +250,8 @@ instance FromJSON ServerMessage where
         notification <- o .:? "notification"
         case (subscribed, refused, page, notification) of
           -- A server older than the presence feature sends no editors.
-          (Just p, _, _, _) -> Subscribed p <$> o .: "threads" <*> o .:? "editing" .!= []
+          -- Nor readers, before WP5.55.
+          (Just p, _, _, _) -> Subscribed p <$> o .: "threads" <*> o .:? "editing" .!= [] <*> o .:? "readers" .!= noReaders
           (_, Just p, _, _) -> pure (Refused p)
           (_, _, Just p, _) -> Event p <$> (o .: "event" :: Parser PageEvent)
           (_, _, _, Just n) -> pure (Notified n)

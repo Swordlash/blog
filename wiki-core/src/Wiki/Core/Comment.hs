@@ -132,7 +132,7 @@ formerPrefix = "~former:"
 -- their name, marked as not a user here. Any other id is shown as it is,
 -- since the id is all that is left of that person.
 absentAuthor :: UserId -> Author
-absentAuthor u = Author {id = u, name = maybe u.text (<> " (not a user here)") (formerAuthorName u)}
+absentAuthor u = Author {id = u, name = maybe u.text (<> " (not a user here)") (formerAuthorName u), avatar = Nothing}
 
 -- | Whether a user may comment on a page of the space at the end of the
 -- chain: they are signed in, and may read the page.

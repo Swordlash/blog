@@ -6,6 +6,7 @@
 module Wiki.App.View.Common
   ( -- * From the shell to a view, and back
     Context (..)
+  , PageWidth (..)
   , ViewOutput (..)
 
     -- * Permissions, as the client hides what they forbid
@@ -32,6 +33,10 @@ module Wiki.App.View.Common
   , errorMessage
   , pageTree
   , spaceIcon
+  , AvatarSize (..)
+  , avatar
+  , avatarOf
+  , avatarUrls
   , homeOf
   , moveButtons
   , button
@@ -57,7 +62,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend (Session (grants, homePage, mathMacros, standing, user), WikiError (..), sessionPrincipal)
+import Wiki.App.Backend (MonadWiki (avatarUrl), Session (grants, homePage, mathMacros, standing, user), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.HomePage (HomePage (showAnonymous))
 import Wiki.Core.HomePage qualified as Home
@@ -68,8 +73,8 @@ import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canView, hasGlobalPermission, spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourFor, colourOf, iconLetter)
+import Wiki.Core.User (Avatar, Standing (..))
 import Wiki.Core.Version (Author (..))
 
 -- | 'Context': what the shell knows that every view needs. That is the
@@ -85,7 +90,17 @@ data Context = Context
   , spaces :: [Space]
   , icons :: Map SpaceId Text
   , revision :: Int
+  , pageWidth :: PageWidth
+  -- ^ How wide the page view lays a page out, as this browser chose it.
   }
+
+-- | 'PageWidth' is how wide the page view lays a page out on a wide screen
+-- (WP5.55 of docs/PLAN.md), as the reader chose it with the switch in the
+-- page's bar of actions: 'Compact', the text at a reading width in the
+-- middle, or 'FullWidth', the text as wide as the window lets it. The
+-- shell keeps the choice in the browser's local storage, for every page.
+data PageWidth = Compact | FullWidth
+  deriving stock (Eq, Show)
 
 -- | What a view sends back to the shell.
 data ViewOutput
@@ -103,6 +118,8 @@ data ViewOutput
     -- shown (the editor's "Show preview"): the shell numbers it as the
     -- route's entry, the one to return to after staying ('historyEntry').
     Entered
+  | -- | The reader chose how wide pages are laid out: the shell keeps it.
+    ChoseWidth PageWidth
 
 -- | The wiki's built-in math macros as the administration keeps them, as
 -- the first block of a formula's macros, marked so that the islands read
@@ -243,6 +260,41 @@ spaceIcon urls s = case s.icon of
     , not (T.null url) ->
         [hh|<img class="space-icon space-icon-image" src={{ url }} alt="" aria-hidden="true">|]
   _ -> [hh|<span class="space-icon space-icon-{{ colourOf s }}" aria-hidden="true">{{ iconLetter s.name }}</span>|]
+
+-- | How big a user's avatar is drawn: 'SmallAvatar' beside a name in a
+-- line of text (the header, a comment, a byline, the readers of a page),
+-- 'LargeAvatar' in the account panel.
+data AvatarSize = SmallAvatar | LargeAvatar
+
+-- | A user's avatar, round (WP5.55 of docs/PLAN.md): their picture, from
+-- its URL, with their name as its text; or, for a user without one, a
+-- circle with the first letter of their name, as a space's coloured icon
+-- shows its name's ('Wiki.Core.Space.iconLetter'), on a colour picked from
+-- the name ('Wiki.Core.Space.colourFor'), so that the same user always has
+-- the same colour. Every place that shows a user's
+-- avatar draws it with this.
+avatar :: AvatarSize -> Maybe Text -> Text -> HH.HTML w i
+avatar size url name = case mfilter (not . T.null) url of
+  Just u -> [hh|<img class="avatar {{ sizeClass }}" src={{ u }} alt={{ name }}>|]
+  -- The letter is drawn by the stylesheet from an attribute, so that the
+  -- element holds no text: the text of whatever it is in (a name beside it,
+  -- a comment's line) stays what it was.
+  Nothing -> [hh|<span class="avatar {{ sizeClass }} avatar-initials avatar-{{ colourFor name }}" role="img" aria-label={{ name }} data-initials={{ iconLetter name }}></span>|]
+  where
+    sizeClass = case size of
+      SmallAvatar -> "avatar-small" :: Text
+      LargeAvatar -> "avatar-large"
+
+-- | An author's avatar, from the URLs a view has ('avatarUrls').
+avatarOf :: AvatarSize -> Map UserId Text -> Author -> HH.HTML w i
+avatarOf size urls a = avatar size (Map.lookup a.id urls) a.name
+
+-- | The URLs of the avatars of these people, by user, for the ones who
+-- have one: what a view keeps to draw them ('avatarOf'). On the HTTP
+-- backend the URL is made without a request, so a view can ask for them
+-- in its initial state ('Wiki.App.Backend.atOnce').
+avatarUrls :: (MonadWiki m) => [(UserId, Maybe Avatar)] -> m (Map UserId Text)
+avatarUrls people = Map.fromList <$> traverse (\(u, a) -> (u,) <$> avatarUrl u a) [(u, a) | (u, Just a) <- people]
 
 -- | The page a space opens at, if it has one among its pages.
 homeOf :: Space -> [PageSummary] -> Maybe PageSummary

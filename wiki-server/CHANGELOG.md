@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+Avatars, readers, who wrote a page and inline PDFs (WP5.55). Migration
+0008 adds `avatar_blob` and `avatar_media_type` to `users`, on SQLite and
+PostgreSQL, and makes a change of either bump the permission context's
+generation. The server serves `PUT` and `DELETE account/avatar` (audit
+`account.avatar`, with `set` or `removed`) and `GET users/<user>/avatar/<blob>`,
+as a space's icon is served. A comment's, a version's, a post's and an
+editor's author carry the avatar the users table has; a page answered
+whole carries `createdBy` and `updatedBy`. A personal space without an icon
+of its own is answered with its owner's avatar, and its icon address serves
+it; what is stored and exported is its own icon. The avatars' blobs are
+among the files a database refers to, so a replaced or removed avatar, and
+a removed account's, are deleted with the other unreferenced files at the
+next start. The live channel records who reads each page (a subscribed
+connection) in `Wiki.Server.Presence`, answers a subscription with them and
+sends a `readers` event to the page's subscribers when they change. A PDF
+export is answered `Content-Disposition: inline`, every other format
+`attachment`.
+
 Private subspaces and personal spaces (WP5.54). Migration 0007 adds
 the columns `sealed`, `owner`, `active` and `personal_container` to
 `spaces`, on SQLite and PostgreSQL, with unique indexes for one personal

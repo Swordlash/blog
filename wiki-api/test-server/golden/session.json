@@ -52,6 +52,7 @@
   ],
   "standing": "SignedIn",
   "user": {
+    "avatar": null,
     "displayName": "Ada",
     "id": "u1",
     "login": "ada"

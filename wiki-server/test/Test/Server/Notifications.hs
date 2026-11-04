@@ -171,7 +171,7 @@ overHttp backing = describe "over HTTP" $ do
 
   it "finds the users whose login or display name starts with some letters, ten at most, for someone signed in" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
-    let user login name = User {id = UserId ("user-" <> login), login = Login login, displayName = name}
+    let user login name = User {id = UserId ("user-" <> login), login = Login login, displayName = name, avatar = Nothing}
         filler i = (if i == 2 then (<> "-") else identity) ("fill" <> number i)
         number i = T.justifyRight 2 '0' (show (i :: Int))
     withStorageAside r.place $ \st -> writing st $ do
@@ -494,7 +494,7 @@ inTheStorage backing = describe "in the storage" $ do
             , kind = Changed
             , page = notes.id
             , thread = Nothing
-            , actor = Author {id = UserId "user-editor", name = "Edgar Editor"}
+            , actor = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
             , title = "Notes " <> show i
             , excerpt = ""
             , createdAt = addUTCTime (fromIntegral i) now

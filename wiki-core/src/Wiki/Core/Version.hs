@@ -28,6 +28,8 @@ module Wiki.Core.Version
   ( VersionInfo (..)
   , Version (..)
   , Author (..)
+  , authorOf
+  , namedAuthor
   , versionInfo
   , VersionsQuery (..)
   , latestVersions
@@ -41,16 +43,32 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.User (Avatar, User (..))
 
--- | 'Author': who saved a version, as the history shows them.
+-- | 'Author': who saved a version, as the history shows them; also who
+-- wrote a comment, who is editing or reading a page, and who caused a
+-- notification.
 data Author = Author
   { id :: UserId
   , name :: Text
   -- ^ Their display name; for a user who no longer exists in the wiki,
   -- their id, which is the only thing left of them.
+  , avatar :: Maybe Avatar
+  -- ^ Their avatar as the users table has it now. It is never stored with
+  -- a version or a comment: the backend reads it with the name. In JSON the
+  -- field may be absent, which means none.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | A user as an author: their id, display name and avatar.
+authorOf :: User -> Author
+authorOf u = Author {id = u.id, name = u.displayName, avatar = u.avatar}
+
+-- | An author known only by an id and a name, without an avatar: the
+-- server's operator, or someone who is not a user here.
+namedAuthor :: UserId -> Text -> Author
+namedAuthor i n = Author {id = i, name = n, avatar = Nothing}
 
 -- | 'VersionInfo': one version of a page as its history lists it: when it
 -- was saved, by whom, and under what title. The body is fetched

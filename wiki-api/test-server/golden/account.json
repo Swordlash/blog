@@ -2,6 +2,7 @@
   "disabled": false,
   "hasPassword": true,
   "user": {
+    "avatar": null,
     "displayName": "Ada",
     "id": "u1",
     "login": "ada"
