@@ -63,6 +63,8 @@ module Wiki.Core.Anchor
   , highlight
 
     -- * Linking to them
+  , BlockText (..)
+  , renderedBlocks
   , textFragment
   , encodeFragmentPart
   )
@@ -184,44 +186,140 @@ commonPrefixLength x y = maybe 0 (\(common, _, _) -> T.length common) (T.commonP
 commonSuffixLength :: Text -> Text -> Int
 commonSuffixLength x y = commonPrefixLength (T.reverse x) (T.reverse y)
 
+-- | 'BlockText' is a page's rendered text ('renderedText') with where its
+-- blocks begin and end: the offsets in the text, in characters, at which a
+-- paragraph, a heading, a list item, a table's cell or any other block
+-- starts or ends ('renderedBlocks'). 'renderedText' joins the blocks with
+-- nothing between them, as the browser's selection reads them, so the end
+-- of one block and the start of the next look like one word there; a
+-- text fragment ('textFragment') has to see the boundary, since the
+-- browser looks for its words block by block.
+data BlockText = BlockText
+  { text :: Text
+  , breaks :: [Int]
+  -- ^ The offsets of the block boundaries, in order, each once.
+  }
+  deriving stock (Eq, Show)
+
+-- | A rendered document's 'BlockText': its 'renderedText', and where its
+-- block elements begin and end in it.
+renderedBlocks :: [HH.HTML w i] -> BlockText
+renderedBlocks doc = BlockText {text = T.concat pieces, breaks = ordNub (go 0 (concatMap (\(HTML v) -> walk v) doc))}
+  where
+    pieces = [t | Left t <- concatMap (\(HTML v) -> walk v) doc]
+    walk :: VDom a w -> [Either Text ()]
+    walk = \case
+      Text t -> [Left t]
+      Elem _ (ElemName name) _ children
+        | name `elem` blockElements -> [Right ()] <> concatMap walk children <> [Right ()]
+        | otherwise -> concatMap walk children
+      Keyed _ (ElemName name) _ children
+        | name `elem` blockElements -> [Right ()] <> concatMap (walk . snd) children <> [Right ()]
+        | otherwise -> concatMap (walk . snd) children
+      Widget _ -> []
+      Grafted g -> walk (runGraft g)
+    go at = \case
+      [] -> []
+      Left t : rest -> go (at + T.length t) rest
+      Right () : rest -> at : go at rest
+
+-- | The elements a browser lays out as blocks, between which a text
+-- fragment's words are not looked for together.
+blockElements :: [Text]
+blockElements =
+  [ "address"
+  , "article"
+  , "aside"
+  , "blockquote"
+  , "dd"
+  , "details"
+  , "div"
+  , "dl"
+  , "dt"
+  , "figcaption"
+  , "figure"
+  , "footer"
+  , "h1"
+  , "h2"
+  , "h3"
+  , "h4"
+  , "h5"
+  , "h6"
+  , "header"
+  , "hr"
+  , "li"
+  , "nav"
+  , "ol"
+  , "p"
+  , "pre"
+  , "section"
+  , "summary"
+  , "table"
+  , "tbody"
+  , "td"
+  , "tfoot"
+  , "th"
+  , "thead"
+  , "tr"
+  , "ul"
+  ]
+
 -- | The text fragment of a quote, @:~:text=…@, which goes after the @#@
 -- of a page's address: the browsers (Chromium, Safari, Firefox) scroll a
 -- page opened at such an address to the quote and highlight it, by
 -- themselves. "Copy link" on a selection writes one (the owner, issue
 -- #120); nothing of the wiki's reads it back.
 --
--- The browser looks for the text in the page as whole words, so the
--- quote is widened to the words it starts and ends in, in the page's
--- text given ('renderedText'). A quote of more than 'fragmentWords' words
--- is written as its first and last few (@text=start,end@), which keeps
--- the address short and lets the browser find it across the paragraphs
--- it spans. When the quote occurs more than once in the page (in any
--- case: the browser ignores it), the words before and after it are added
--- as its prefix and suffix (@text=prefix-,quote,-suffix@), as the
--- anchor's context places it. Each part is percent-encoded
+-- The quote is found in the page's text ('locate'), and read again with
+-- its blocks apart: the browser looks for the words of a fragment within
+-- one block, and as whole words, a block's edge being a word's edge. So
+-- the quote is widened to the words it starts and ends in, within their
+-- blocks. A quote within one block of at most 'fragmentWords' words is
+-- written whole (@text=quote@); a longer one, or one across blocks, as its
+-- first few words (in its first block) and its last few (in its last
+-- block), @text=start,end@, which the browser reads as everything between
+-- them. When the quote's first words occur more than once in the page (in
+-- any case: the browser ignores it), the words before and after it in its
+-- blocks are added as its prefix and suffix
+-- (@text=prefix-,quote,-suffix@). Each part is percent-encoded
 -- ('encodeFragmentPart').
-textFragment :: Text -> Anchor -> Text
-textFragment text a = ":~:text=" <> T.intercalate "," (prefixPart <> body <> suffixPart)
+textFragment :: BlockText -> Anchor -> Text
+textFragment page a = ":~:text=" <> T.intercalate "," (prefixPart <> map encodeFragmentPart body <> suffixPart)
   where
-    -- Where the quote is, widened to whole words; the anchor alone when
-    -- the page no longer has it.
-    (before, quote, after) = case locate text a of
+    -- The page's text with a line break at each block boundary, and the
+    -- quote's place in it, widened to whole words.
+    cuts = filter (\b -> b > 0 && b < T.length page.text) page.breaks
+    separated = T.intercalate "\n" (pieces page.text (0 : cuts))
+    pieces t = \case
+      [] -> []
+      [o] -> [T.drop o t]
+      o : rest@(n : _) -> T.take (n - o) (T.drop o t) : pieces t rest
+    -- A boundary at or before a quote's first character is before it; one
+    -- at its end is after it.
+    startIn s = s + length (filter (<= s) cuts)
+    endIn e = e + length (filter (< e) cuts)
+    (before, quote, after) = case locate page.text a of
       Found r ->
-        let s = if maybe False (wordChar . fst) (T.uncons a.exact) then r.start - T.length (T.takeWhileEnd wordChar (T.take r.start text)) else r.start
-            e = if maybe False (wordChar . snd) (T.unsnoc a.exact) then r.end + T.length (T.takeWhile wordChar (T.drop r.end text)) else r.end
-         in (T.take s text, T.take (e - s) (T.drop s text), T.drop e text)
+        let s0 = startIn r.start
+            e0 = endIn r.end
+            s = if maybe False (wordChar . fst) (T.uncons a.exact) then s0 - T.length (T.takeWhileEnd wordChar (T.take s0 separated)) else s0
+            e = if maybe False (wordChar . snd) (T.unsnoc a.exact) then e0 + T.length (T.takeWhile wordChar (T.drop e0 separated)) else e0
+         in (T.take s separated, T.take (e - s) (T.drop s separated), T.drop e separated)
       Orphaned -> (a.prefix, a.exact, a.suffix)
     wordChar c = isAlphaNum c || c == '_'
-    quoteWords = T.words quote
-    body
-      | length quoteWords > fragmentWords = [encodeFragmentPart (T.unwords (take 3 quoteWords)), encodeFragmentPart (T.unwords (lastN 3 quoteWords))]
-      | otherwise = [encodeFragmentPart (T.unwords quoteWords)]
+    blocks = filter (not . null) (map T.words (T.splitOn "\n" quote))
+    quoteWords = concat blocks
+    body = case blocks of
+      [single] | length single <= fragmentWords -> [T.unwords single]
+      _ -> [T.unwords (take 3 (fromMaybe [] (head blocks))), T.unwords (lastN 3 (fromMaybe [] (lastMay blocks)))]
     lastN n xs = drop (length xs - n) xs
-    repeated = T.count (T.toCaseFold (T.unwords quoteWords)) (T.toCaseFold (T.unwords (T.words text))) > 1
-    -- The last words before the quote, and the first after it, at most
-    -- three of each: whole words, since the quote was widened to them.
-    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, let ws = lastN 3 (T.words before), not (null ws)]
-    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, let ws = take 3 (T.words after), not (null ws)]
+    firstTerm = T.toCaseFold (fromMaybe "" (head body))
+    repeated = sum [T.count firstTerm (T.toCaseFold (T.unwords (T.words b))) | b <- T.splitOn "\n" separated, not (T.null firstTerm)] > 1
+    -- The last words before the quote in its first block, and the first
+    -- after it in its last, at most three of each: whole words, since the
+    -- quote was widened to them.
+    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, not (null quoteWords), let ws = lastN 3 (T.words (T.takeWhileEnd (/= '\n') before)), not (null ws)]
+    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, not (null quoteWords), let ws = take 3 (T.words (T.takeWhile (/= '\n') after)), not (null ws)]
 
 -- | How many words a text fragment's quote may have before only its first
 -- and last three are written.

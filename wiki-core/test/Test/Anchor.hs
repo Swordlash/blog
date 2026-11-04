@@ -111,21 +111,39 @@ spec = describe "Anchor" $ do
 
   describe "textFragment" $ do
     it "is the quote alone when the page has it once" $
-      textFragment "The quick brown fox jumps." (quoting "brown fox" "The quick brown fox jumps.") `shouldBe` ":~:text=brown%20fox"
+      textFragment (oneBlock "The quick brown fox jumps.") (quoting "brown fox" "The quick brown fox jumps.") `shouldBe` ":~:text=brown%20fox"
     it "widens a quote to the words it starts and ends in" $
-      textFragment "The quick brown fox jumps." (quoting "ick brown fo" "The quick brown fox jumps.") `shouldBe` ":~:text=quick%20brown%20fox"
+      textFragment (oneBlock "The quick brown fox jumps.") (quoting "ick brown fo" "The quick brown fox jumps.") `shouldBe` ":~:text=quick%20brown%20fox"
     it "adds the words before and after a quote the page has more than once" $ do
       let text = "One cat sat here. Then a cat sat there, by the door."
           again = anchorAt text (Range 25 32)
-      textFragment text again `shouldBe` ":~:text=here.%20Then%20a-,cat%20sat,-there%2C%20by%20the"
+      textFragment (oneBlock text) again `shouldBe` ":~:text=here.%20Then%20a-,cat%20sat,-there%2C%20by%20the"
     it "counts a quote again in any case, as the browser does" $ do
       let text = "Note this. note that."
-      textFragment text (quoting "note" text) `shouldBe` ":~:text=Note%20this.-,note,-that."
+      textFragment (oneBlock text) (quoting "note" text) `shouldBe` ":~:text=Note%20this.-,note,-that."
     it "writes a long quote as its first and last words" $ do
       let text = "one two three four five six seven eight nine ten"
-      textFragment text (quoting "two three four five six seven eight nine ten" text) `shouldBe` ":~:text=two%20three%20four,eight%20nine%20ten"
+      textFragment (oneBlock text) (quoting "two three four five six seven eight nine ten" text) `shouldBe` ":~:text=two%20three%20four,eight%20nine%20ten"
     it "writes an orphaned quote as the anchor has it" $
-      textFragment "Gone." (Anchor "the old words" "" "") `shouldBe` ":~:text=the%20old%20words"
+      textFragment (oneBlock "Gone.") (Anchor "the old words" "" "") `shouldBe` ":~:text=the%20old%20words"
+
+    it "takes a block's edge as a word's edge, at the start and the end of a paragraph" $ do
+      let doc = blocksOf "# Title\n\nHello world.\n\nNext one."
+      textFragment doc (quoting "Hello" doc.text) `shouldBe` ":~:text=Hello"
+      textFragment doc (quoting "world." doc.text) `shouldBe` ":~:text=world."
+      textFragment doc (quoting "Next" doc.text) `shouldBe` ":~:text=Next"
+    it "writes a quote across two paragraphs as the first words of one and the last of the other" $ do
+      let doc = blocksOf "# T\n\nOne two three.\n\nFour five six."
+      textFragment doc (quoting "two three.Four five" doc.text) `shouldBe` ":~:text=two%20three.,Four%20five"
+    it "takes the prefix and the suffix from the quote's own block" $ do
+      let doc = blocksOf "# Cat\n\nA cat sat.\n\nThe cat sat."
+      textFragment doc (quoting "cat sat" doc.text) `shouldBe` ":~:text=A-,cat%20sat,-."
+
+  describe "renderedBlocks" $ do
+    it "is the rendered text, with where each block starts and ends" $ do
+      let doc = blocksOf "# Title\n\nA *b*.\n\n- one\n- two"
+      doc.text `shouldBe` "TitleA b.onetwo"
+      doc.breaks `shouldBe` [0, 5, 9, 12, 15]
 
   describe "encodeFragmentPart" $ do
     it "encodes as encodeURIComponent does, and the dash too" $
@@ -143,6 +161,14 @@ spec = describe "Anchor" $ do
     it "leaves out what a child component (an island) draws" $ do
       let doc = [HH.p_ [HH.text "before "], Core.widget (), HH.p_ [HH.text "after"]] :: [HH.HTML () ()]
       renderedText doc `shouldBe` "before after"
+
+-- | A text that is one block, as a text fragment reads it.
+oneBlock :: Text -> BlockText
+oneBlock text = BlockText {text, breaks = []}
+
+-- | A page's text, with its blocks, as rendered.
+blocksOf :: Text -> BlockText
+blocksOf = renderedBlocks . either (panic . show) identity . renderMarkdown defaultOptions
 
 -- | A text of words and a range of it that has something to read in it.
 textAndRange :: Gen (Text, Range)

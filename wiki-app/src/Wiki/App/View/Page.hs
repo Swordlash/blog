@@ -102,7 +102,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Watch qualified as WatchView
-import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText, textFragment)
+import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
@@ -228,7 +228,7 @@ data Action
   | SetAsHome
   | SetTemplate Bool
   | ShowChanged
-  | CopySelection Text
+  | CopySelection BlockText
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -467,7 +467,7 @@ component =
               {% if mayCommentHere st %}
                 <button type="button" class="comment-on-selection" onClick={{ const CommentOnSelection }}>Comment</button>
               {% end %}
-              <button type="button" class="copy-selection-link" title="Copy a link to this text: the browser scrolls to it and highlights it" onClick={{ const (CopySelection text) }}>Copy link</button>
+              <button type="button" class="copy-selection-link" title="Copy a link to this text: the browser scrolls to it and highlights it" onClick={{ const (CopySelection (either (const (BlockText "" [])) renderedBlocks rendered)) }}>Copy link</button>
             </div>
           {% end %}
           {% if side %}
@@ -623,13 +623,13 @@ component =
       -- The address of the page with the browser's own text fragment for
       -- the selection ("Wiki.Core.Anchor"'s 'textFragment'), found in the
       -- page's text as rendered.
-      CopySelection text ->
+      CopySelection blocks ->
         gets (\st -> st.selected)
           >>= traverse_
             ( \s -> do
                 modify (\st -> st {selected = Nothing})
                 here <- gets pageAddress >>= absoluteUrl
-                copyAddress (here <> "#" <> textFragment text s.anchor)
+                copyAddress (here <> "#" <> textFragment blocks s.anchor)
             )
       Open mode -> modify (\st -> st {mode, problem = Nothing})
       Typed t -> modify $ \st -> case st.mode of
