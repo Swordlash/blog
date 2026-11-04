@@ -700,7 +700,9 @@ data Naming = Naming
 
 -- | Whatever in a parsed archive does not fit together: duplicates,
 -- references to nothing, cycles, siblings with one slug, an attachment's
--- name twice on a page, bytes without a file.
+-- name twice on a page, bytes without a file, and personal spaces that
+-- the storage could not hold (an owner who is not a user, two spaces of
+-- one owner, two containers, a personal space outside the container).
 checkArchive :: Naming -> Archive -> [AttachmentRecord] -> Either Text ()
 checkArchive naming a attachments = do
   unique "user" [(u.id.text, "users.json") | u <- a.users]
@@ -724,6 +726,23 @@ checkArchive naming a attachments = do
     unless (Map.member parent spacesById) $
       Left (naming.spaceAt s.id <> ": the space " <> show s.id.text <> " is under " <> show parent.text <> ", which is not in the archive.")
   acyclic (\s -> naming.spaceAt s) "space" (\s -> s.parent) (\k -> k.text) spacesById
+  -- Personal spaces: each owned by a user of the archive, one a user, in
+  -- the one container of personal spaces, which is at the top level; and
+  -- only a personal space may be turned off.
+  unique "personal space of the user" [(o.text, naming.spaceAt s.id) | s <- a.spaces, Just o <- [s.owner]]
+  case filter (\s -> s.personalContainer) a.spaces of
+    _ : another : _ -> Left (naming.spaceAt another.id <> ": there are two containers of personal spaces.")
+    _ -> Right ()
+  for_ a.spaces $ \s -> do
+    for_ s.owner $ \o -> do
+      unless (Set.member o userIds) $
+        Left (naming.spaceAt s.id <> ": the space " <> show s.id.text <> " is the personal space of " <> show o.text <> ", who is not in users.json.")
+      unless (maybe False (\p -> p.personalContainer) (s.parent >>= (`Map.lookup` spacesById))) $
+        Left (naming.spaceAt s.id <> ": the personal space " <> show s.id.text <> " is not in the container of personal spaces.")
+    when (s.personalContainer && (isJust s.parent || isJust s.owner)) $
+      Left (naming.spaceAt s.id <> ": the container of personal spaces " <> show s.id.text <> " is not a top-level space of nobody's.")
+    unless (s.active || isJust s.owner) $
+      Left (naming.spaceAt s.id <> ": the space " <> show s.id.text <> " is turned off, which only a personal space can be.")
   siblings "spaces" [((s.parent, s.slug), naming.spaceAt s.id) | s <- a.spaces]
   for_ a.pages $ \p -> do
     unless (Map.member p.space spacesById) $

@@ -17,7 +17,11 @@ Nothing`, `active = True`, `personalContainer = False` for an ordinary
 space). New helpers: `isPersonal`, `personalName` ("Space of " and the
 owner's display name), `containerName`, `containerSlug` and `withName`.
 The export writes the fields only when they differ from those defaults, so
-its format version stays 2.
+its format version stays 2. `readArchive` refuses an archive whose personal
+spaces the storage could not hold: an owner who is not among its users,
+two spaces of one owner, two containers, a personal space outside the
+container or a container below another space, and a space turned off that
+is not a personal space.
 
 Boxes have ids, and pages can be linked to by section (WP5.53). `BoxHead`
 gains `id`: a numbered box gets `box-<kind>-<n>`, its number among the

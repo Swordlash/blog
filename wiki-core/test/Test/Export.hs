@@ -381,5 +381,25 @@ spec = describe "Wiki.Core.Export" $ do
     it "a thread without comments" $
       refused "has no comments" (readArchive (Map.insert "spaces/docs/pages/intro/pages/prn_/comments.json" "[{\"id\": \"t3\", \"createdAt\": \"2026-10-01T00:30:00Z\", \"comments\": []}]" files))
 
+    describe "a personal space" $ do
+      let container = (spaceOf "s5" Nothing "users") {personalContainer = True}
+          mine = (spaceOf "s6" (Just "s5") "alice") {owner = Just alice.id, public = True}
+          with extra = readArchive (Map.fromList (writeArchive wiki {Export.spaces = wiki.spaces <> extra}))
+          spacesOf = fmap (\a -> sortOn (\x -> x.id.text) a.spaces)
+      it "is read back, on or off, in its container" $ do
+        let off = mine {active = False}
+        spacesOf (with [container, off]) `shouldBe` Right (sortOn (\x -> x.id.text) (wiki.spaces <> [container, off]))
+      it "whose owner is not a user of the archive" $
+        refused "is the personal space of \"u9\", who is not in users.json" (with [container, mine {owner = Just (UserId "u9")}])
+      it "a second one of the same owner" $
+        refused "two of the personal space of the user \"u1\"" (with [container, mine, (spaceOf "s7" (Just "s5") "alice-2") {owner = Just alice.id}])
+      it "a second container" $
+        refused "there are two containers of personal spaces" (with [container, (spaceOf "s7" Nothing "users-2") {personalContainer = True}])
+      it "outside the container, or a container that is not at the top level" $ do
+        refused "is not in the container of personal spaces" (with [container, (spaceOf "s6" (Just "s1") "alice") {owner = Just alice.id}])
+        refused "is not a top-level space of nobody's" (with [(spaceOf "s5" (Just "s1") "users") {personalContainer = True}])
+      it "a space turned off that is not a personal space" $
+        refused "which only a personal space can be" (with [(spaceOf "s7" Nothing "off") {active = False}])
+
     it "a thread twice, naming both places" $
       refused "There are two of the thread \"t3\", in spaces/docs/pages/intro/pages/prn_/comments.json and in spaces/docs/pages/intro/pages/prn_/pages/deep/comments.json." (readArchive (Map.insert "spaces/docs/pages/intro/pages/prn_/pages/deep/comments.json" (fromMaybe "" (Map.lookup "spaces/docs/pages/intro/pages/prn_/comments.json" files)) files))
