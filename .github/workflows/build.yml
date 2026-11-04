@@ -44,10 +44,13 @@ on:
   # (plan sends a scheduled run there): GitHub evicts a cache nobody has
   # read for seven days, and the hosted wasm caches on main (the cabal store,
   # the wasm toolchain, Chromium) are read only when wasm goes hosted, a
-  # fork's or a bot's pull request or a busy week. The run reads them, and
-  # saves them again, so a pull request that lands on the hosted runners
-  # never starts from an empty store (the wasm store takes three quarters
-  # of an hour to build there).
+  # fork's or a bot's pull request or a busy week. A push to main usually
+  # takes the owner's machine, where nothing is saved to GitHub, so this run
+  # is what saves main's hosted wasm copies. The run reads them, and saves
+  # them again, so a pull request that lands on the hosted runners never
+  # starts from an empty store (the wasm store takes three quarters of an
+  # hour to build there). A pull request can restore only its own caches
+  # and main's.
   schedule:
     - cron: '17 3 * * 1'
 
@@ -101,8 +104,12 @@ permissions:
 # request's run takes this file and the script from the pull request's own
 # tree, so a fork could change either, and approving a fork's run means
 # reading what it changes here and in toolchain/ci-pick-runner.sh first.
-# No job uses a secret but the run's own read-only token. See the README's
-# CI section.
+# No job uses a secret but the run's own token. It may only read, except
+# in native and wasm, which may also delete the repository's Actions caches
+# (`actions: write`), to prune the older copies of the caches they save
+# (toolchain/ci-prune-caches.sh); the wasm job has that token on the
+# owner's machine too, where it prunes nothing. See the README's CI
+# section.
 #
 # The two kinds of runner get the toolchain differently, and every step that
 # differs says which it is for with `runner.environment`. A hosted runner
@@ -191,6 +198,10 @@ jobs:
     if: needs.plan.outputs.tested != 'true'
     name: native (${{ matrix.group }})
     runs-on: ubuntu-latest
+    # actions: write to prune the older copies of the caches it saves.
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -261,32 +272,38 @@ jobs:
 
     # As haskell-halogen's workflow does, and for its reasons: the store is
     # additive and partitioned by compiler, so it is carried forward from run
-    # to run rather than rebuilt when the dependencies change. The key is
-    # unique to the run, so it is always written back (an exact hit would
-    # never be saved again, and a store that had grown would be lost); the
-    # restore keys take the newest store made from the same project files,
-    # package descriptions and haskell-halogen pin (cabal.project holds the
-    # tag), and failing that the newest of any.
+    # to run rather than rebuilt when the dependencies change. A new
+    # dependency is one more directory in it. So the store is restored
+    # whatever the project files say: the newest copy of this ref (or of
+    # main) whose key names the same compilers, runner kind and version tag.
+    # Bump the tag (v1) by hand to start from an empty store. The key ends in
+    # the run's id because a key cannot be overwritten; after each save the
+    # older copies of the ref are deleted (see the save). The second restore
+    # key also takes the copies saved before the tag existed, whose keys
+    # carried a hash of the project files instead: remove it at the next bump,
+    # or it would take the old tag's copies.
     - name: Restore cached dependencies
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v5
       id: cache
       env:
         key: ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
-        plan: ${{ hashFiles('cabal.project', '**/*.cabal') }}
+        tag: ${{ runner.environment }}-v1
       with:
         path: ${{ steps.setup.outputs.cabal-store }}
-        key: ${{ env.key }}-${{ env.plan }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ env.key }}-${{ env.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ env.key }}-${{ env.plan }}-
+          ${{ env.key }}-${{ env.tag }}-
           ${{ env.key }}-
 
     # The store holds dependencies; this snapshot also keeps the wiki's own
-    # object and interface files. A source edit restores a compatible older
-    # snapshot, then Cabal and GHC rebuild what changed. An exact hit still
-    # runs every build and test step and creates no duplicate snapshot.
-    # Only the compiler/platform bounds the fallback: a new module or flag
-    # change does not discard all existing objects. Cabal validates its plan.
+    # object and interface files. It is restored whatever the sources say:
+    # the newest copy of this ref (or of main) made by the same compiler on
+    # the same kind of runner, then Cabal and GHC rebuild what changed and
+    # validate the rest. Only the compiler, the platform and the version tag
+    # (v1, bumped by hand) bound the fallback: a new module or flag change
+    # does not discard all existing objects. As for the store, the key ends
+    # in the run's id and the older copies are deleted after the save.
     - name: Restore native build directories
       uses: actions/cache/restore@v5
       id: native-build
@@ -294,7 +311,7 @@ jobs:
         compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}
       with:
         path: dist-newstyle/native
-        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
+        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: ${{ env.compatibility }}-
 
     # Cheap when the restored store already satisfies the plan, and it keeps
@@ -303,7 +320,10 @@ jobs:
       run: cabal build all --builddir=dist-newstyle/native --only-dependencies
 
     # Before the build, so a run that fails on our own code still banks the
-    # dependencies it compiled.
+    # dependencies it compiled; after them, so a store whose dependencies
+    # failed to build never replaces a good one. Then the ref's older copies
+    # are deleted, so the store takes one entry of the repository's 10 GB
+    # per ref rather than one per run (the limit evicted main's copy).
     - name: Save cached dependencies
       if: matrix.group == 'unit'
       uses: actions/cache/save@v5
@@ -311,17 +331,34 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
+    - name: Prune older copies of the dependencies
+      if: matrix.group == 'unit'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}-
+        SAVED: ${{ steps.cache.outputs.cache-primary-key }}
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
+
     - name: Build
       run: npm run build-native
 
     # Build all native components once per job; the unit job publishes the
-    # complete snapshot even if a later test fails. Database jobs only read it.
+    # complete snapshot once the build has passed, even if a later test
+    # fails, and deletes the ref's older copies. Database jobs only read it.
     - name: Save native build directories
-      if: matrix.group == 'unit' && steps.native-build.outputs.cache-hit != 'true'
+      if: matrix.group == 'unit'
       uses: actions/cache/save@v5
       with:
         path: dist-newstyle/native
         key: ${{ steps.native-build.outputs.cache-primary-key }}
+
+    - name: Prune older copies of the native build directories
+      if: matrix.group == 'unit'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}-
+        SAVED: ${{ steps.native-build.outputs.cache-primary-key }}
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
     - name: Check native test groups cover the full suite
       if: matrix.group == 'unit'
@@ -372,6 +409,10 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-ci-pick-runner.sh
 
+    - name: Test ci-prune-caches.sh
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-ci-prune-caches.sh
+
     # The README's screenshots are taken by hand (npm run screenshots, which
     # needs a wasm build and Chromium), so nothing in CI runs the script:
     # parsing it at least catches a syntax error before someone next needs it.
@@ -399,6 +440,11 @@ jobs:
     if: needs.plan.outputs.tested != 'true'
     # The runner plan picked; see the top.
     runs-on: ${{ needs.plan.outputs.runner }}
+    # actions: write to prune the older copies of the caches it saves, on a
+    # hosted runner only (see the top).
+    permissions:
+      contents: read
+      actions: write
     # The page is built, tested and kept for GitHub Pages, which serves a
     # project's site under the repository's name: every run builds it so,
     # pull requests too, since main is fast-forwarded to a pull request's
@@ -542,30 +588,36 @@ jobs:
       run: cabal update
 
     # One store for both compilers (cabal partitions it by compiler), restored
-    # and saved as in the native job.
+    # and saved, and its older copies pruned, as in the native job; the
+    # second restore key is transitional there too.
     - name: Restore cached dependencies
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v5
       id: cache
       env:
         key: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}
-        plan: ${{ hashFiles('cabal.project', 'cabal-wasm.project', '**/*.cabal') }}
+        tag: ${{ runner.environment }}-v1
       with:
         path: ${{ env.CABAL_DIR }}/store
-        key: ${{ env.key }}-${{ env.plan }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ env.key }}-${{ env.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ env.key }}-${{ env.plan }}-
+          ${{ env.key }}-${{ env.tag }}-
           ${{ env.key }}-
 
     # Separate from native's snapshot: the wasm job also builds native
     # prerender, browser-test and smoke-test programs. Only Cabal's build
     # directories are cached; public/ is generated afresh by build-wasm.sh.
-    # Project and Cabal changes can reuse objects from the same compilers;
-    # Cabal and GHC validate their own metadata and rebuild affected modules.
-    # Hosted and self-hosted stores have different registration paths.
-    - name: Cache wasm and native build directories
+    # Restored whatever the sources say, as native's snapshot is: the newest
+    # copy of this ref (or of main) from the same compilers, runner kind and
+    # version tag (v2, bumped by hand); Cabal and GHC validate their own
+    # metadata and rebuild affected modules. Hosted and self-hosted stores
+    # have different registration paths. Saved at the end of the job, once
+    # everything has passed, as before (the step that both restored and
+    # saved did so then), and the ref's older copies deleted after it.
+    - name: Restore wasm and native build directories
       if: runner.environment == 'github-hosted'
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
+      id: wasm-build
       env:
         compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}
       with:
@@ -575,7 +627,7 @@ jobs:
           dist-newstyle/wasm/cache
           dist-newstyle/wasm/packagedb
           dist-newstyle/wasm/src
-        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
+        key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: ${{ env.compatibility }}-
 
     # Everything the later steps take from the store, built here so that it
@@ -604,6 +656,14 @@ jobs:
       with:
         path: ${{ env.CABAL_DIR }}/store
         key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Prune older copies of the dependencies
+      if: runner.environment == 'github-hosted'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-
+        SAVED: ${{ steps.cache.outputs.cache-primary-key }}
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
     - name: Build
       run: npm run build-wasm
@@ -666,6 +726,27 @@ jobs:
       run: |
         du -sh dist-newstyle/native-fast | tee -a "$GITHUB_STEP_SUMMARY"
         du -sh --exclude=public dist-newstyle/wasm | tee -a "$GITHUB_STEP_SUMMARY"
+
+    # The paths are the restore step's.
+    - name: Save wasm and native build directories
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          dist-newstyle/native-fast
+          dist-newstyle/wasm/build
+          dist-newstyle/wasm/cache
+          dist-newstyle/wasm/packagedb
+          dist-newstyle/wasm/src
+        key: ${{ steps.wasm-build.outputs.cache-primary-key }}
+
+    - name: Prune older copies of the wasm and native build directories
+      if: runner.environment == 'github-hosted'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}-
+        SAVED: ${{ steps.wasm-build.outputs.cache-primary-key }}
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
     # The built page, kept with the run as the artifact `app`: the deploy job
     # publishes it, from this run or, on a push to main the plan job
