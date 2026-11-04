@@ -38,6 +38,8 @@ page i title parent made position =
     , updatedAt = day made
     , position
     , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 -- | A space: id, name, its parent's id, the day it was made, its position,

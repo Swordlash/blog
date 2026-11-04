@@ -55,7 +55,7 @@ grants :: Grants
 grants = Grants {global = [], spaces = [SpaceGrant {space = blog.id, subject = SubjectUser ada.user, permission = AdministerSpace}], access = Open}
 
 comment :: Text -> Principal -> Text -> Comment
-comment i who body = Comment {id = CommentId i, thread = CommentThreadId "t", author = Author {id = who.user, name = who.user.text}, body, createdAt = time, editedAt = Nothing}
+comment i who body = Comment {id = CommentId i, thread = CommentThreadId "t", author = Author {id = who.user, name = who.user.text, avatar = Nothing}, body, createdAt = time, editedAt = Nothing}
 
 thread :: Text -> [Comment] -> Thread
 thread i cs = Thread {id = CommentThreadId i, page = PageId "p", anchor = Nothing, resolved = False, createdAt = time, comments = map (\c -> c {thread = CommentThreadId i}) cs}

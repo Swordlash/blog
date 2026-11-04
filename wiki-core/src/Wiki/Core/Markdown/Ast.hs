@@ -163,8 +163,12 @@ data Block
 data Inline
   = -- | Text. Adjacent text is always one 'Str'.
     Str Text
-  | SoftBreak
-  | LineBreak
+  | -- | A line ended plainly, which the page shows as a line break.
+    SoftBreak
+  | -- | A line ended with a backslash (or two spaces): CommonMark's hard
+    -- break, which the page shows as one line going on, a space in place of
+    -- the break ("Wiki.Core.Markdown.Render").
+    LineBreak
   | Emph [Inline]
   | Strong [Inline]
   | Strikeout [Inline]

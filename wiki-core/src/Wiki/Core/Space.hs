@@ -23,11 +23,15 @@ module Wiki.Core.Space
   , iconColours
   , iconColourName
   , defaultColour
+  , colourFor
   , colourOf
   , iconLetter
   , iconMediaTypes
   , maxIconSize
   , checkIconUpload
+  , checkAvatarUpload
+  , withOwnerAvatar
+  , ownProfile
 
     -- * Its profile
   , SpaceProfile (..)
@@ -55,6 +59,7 @@ import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
+import Wiki.Core.User (Avatar (..))
 
 -- | A space, or a subspace of another.
 data Space = Space
@@ -259,7 +264,13 @@ iconColourName c = maybe c (\(h, t) -> T.cons (toUpper h) t) (T.uncons c)
 -- picked from its id, so that it stays the same when the space is renamed
 -- and two spaces side by side are likely to differ.
 defaultColour :: SpaceId -> Text
-defaultColour sid = fromMaybe "blue" (atMay iconColours (sum (map ord (T.unpack sid.text)) `mod` length iconColours))
+defaultColour sid = colourFor sid.text
+
+-- | One of 'iconColours', picked from a text, so that the same text always
+-- gets the same colour: a space's default colour from its id, and the
+-- colour of the initials of a user without an avatar from their name.
+colourFor :: Text -> Text
+colourFor t = fromMaybe "blue" (atMay iconColours (sum (map ord (T.unpack t)) `mod` length iconColours))
 
 -- | The colour of a space's icon square: the chosen one, or its default.
 -- An image or an emoji has none, but gets the default for whatever is
@@ -290,13 +301,45 @@ maxIconSize = 1024 * 1024
 -- | Check an upload for a space's icon. The result is its media type,
 -- normalised, or why it cannot be an icon.
 checkIconUpload :: Text -> Natural -> Either Text MimeType
-checkIconUpload mediaType size
-  | essence `notElem` iconMediaTypes = Left "A space's icon has to be a PNG, JPEG, GIF, WebP or AVIF image."
+checkIconUpload = checkImageUpload "A space's icon"
+
+-- | Check an upload for a user's avatar ('Wiki.Core.User.Avatar'), by the
+-- rules of a space's icon: the same types, at most 'maxIconSize'. The
+-- browser crops the picture to a square, but its shape is not checked: a
+-- picture of another shape is shown cropped by the page.
+checkAvatarUpload :: Text -> Natural -> Either Text MimeType
+checkAvatarUpload = checkImageUpload "An avatar"
+
+-- | Check an image upload, named in the reasons as given.
+checkImageUpload :: Text -> Text -> Natural -> Either Text MimeType
+checkImageUpload what mediaType size
+  | essence `notElem` iconMediaTypes = Left (what <> " has to be a PNG, JPEG, GIF, WebP or AVIF image.")
   | size == 0 = Left "The image is empty."
-  | size > maxIconSize = Left "A space's icon can be at most 1 MB."
+  | size > maxIconSize = Left (what <> " can be at most 1 MB.")
   | otherwise = Right essence
   where
     essence = MimeType (mimeEssence (MimeType mediaType))
+
+-- | The space as the application is shown it, given its owner's avatar: a
+-- personal space with no icon of its own shows its owner's avatar as its
+-- image (WP5.55 of docs/PLAN.md). The backends apply this to the spaces
+-- they answer with, never to what they store or export, so that an icon
+-- chosen later in the space's settings wins, and choosing none there shows
+-- the avatar again. Any other space is as it is.
+withOwnerAvatar :: Maybe Avatar -> Space -> Space
+withOwnerAvatar avatar s = case (s.owner, s.icon, avatar) of
+  (Just _, Nothing, Just a) -> withProfile SpaceProfile {description = s.description, icon = Just (IconImage a.blob a.mediaType), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
+  _ -> s
+
+-- | A profile for a personal space as the space keeps it, given its
+-- owner's avatar. The space's settings show the icon the space is shown
+-- with ('withOwnerAvatar') and send it back with the rest of the profile;
+-- the avatar's image there means the space keeps no icon of its own, and
+-- goes on showing the avatar as it changes.
+ownProfile :: Maybe Avatar -> SpaceProfile -> SpaceProfile
+ownProfile avatar p = case (p.icon, avatar) of
+  (Just (IconImage b _), Just a) | b == a.blob -> SpaceProfile {description = p.description, icon = Nothing, homePage = p.homePage, blog = p.blog, boxNumbering = p.boxNumbering}
+  _ -> p
 
 --------------------------------------------------------------------------------
 -- Profiles

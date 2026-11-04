@@ -669,13 +669,13 @@ readVersion2 manifest entries = do
     -- such an author is kept by their name ('formerAuthor').
     authorFrom :: Map Login User -> Set UserId -> Named -> (Author, Maybe User)
     authorFrom byLogin userIds n = case n.login >>= (`Map.lookup` byLogin) of
-      Just u -> (Author {id = u.id, name = u.displayName}, Nothing)
+      Just u -> (Author {id = u.id, name = u.displayName, avatar = Nothing}, Nothing)
       Nothing ->
         let i = case n.id of
               Just kept | Set.notMember kept userIds -> kept
               _ -> formerAuthor n.displayName
-            author = if isJust (formerAuthorName i) then absentAuthor i else Author {id = i, name = n.displayName}
-         in (author, (\login -> User {id = i, login, displayName = n.displayName}) <$> n.login)
+            author = if isJust (formerAuthorName i) then absentAuthor i else Author {id = i, name = n.displayName, avatar = Nothing}
+         in (author, (\login -> User {id = i, login, displayName = n.displayName, avatar = Nothing}) <$> n.login)
 
 -- | A JSON object with these fields set, in place of any it had.
 withFields :: [Pair] -> Value -> Value
@@ -841,7 +841,7 @@ threadsAmong here a = map (map thread) a.threads
     author :: Author -> Author
     author given = case Map.lookup given.id archived of
       Just person
-        | Just u <- Map.lookup person.login byLogin -> Author {id = u.id, name = u.displayName}
+        | Just u <- Map.lookup person.login byLogin -> Author {id = u.id, name = u.displayName, avatar = Nothing}
         | otherwise -> absentAuthor (formerAuthor person.displayName)
       Nothing -> absentAuthor (formerAuthor (fromMaybe given.name (formerAuthorName given.id)))
 
@@ -1073,7 +1073,7 @@ parsePage = withObject "page" $ \o -> do
   updatedAt <- o .:? "updatedAt" .!= createdAt
   position <- o .:? "position" .!= 0
   template <- o .:? "template" .!= False
-  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template}
+  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template, createdBy = Nothing, updatedBy = Nothing}
 
 -- | An attachment's record as it was parsed: the page it is attached to,
 -- the attachment, and the archive file its bytes are in, if it names one.
@@ -1138,7 +1138,7 @@ parseUser = withObject "user" $ \o -> do
   id <- UserId <$> o .: "id"
   login <- o .: "login"
   displayName <- o .:? "displayName" .!= login
-  pure User {id, login = Login login, displayName}
+  pure User {id, login = Login login, displayName, avatar = Nothing}
 
 -- | @{"id", "name", "members"}@, the members by user id; none if missing.
 encodeGroup :: Group -> Set UserId -> Value

@@ -355,7 +355,11 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
     renderInline inLink = \case
       Str t -> pure [PText t]
       SoftBreak -> pure [PNode HH.br_, PText "\n"]
-      LineBreak -> pure [PNode HH.br_, PText "\n"]
+      -- A line ended with a backslash goes on in the next (WP5.55 of
+      -- docs/PLAN.md): the two lines are one, a space between them, since
+      -- a plain line break is a break already. CommonMark's two trailing
+      -- spaces are the same node, and join the lines too.
+      LineBreak -> pure [PText " "]
       Emph xs -> node HH.em_ . fromPieces <$> inlinePieces inLink xs
       Strong xs -> node HH.strong_ . fromPieces <$> inlinePieces inLink xs
       Strikeout xs -> node HH.del_ . fromPieces <$> inlinePieces inLink xs
