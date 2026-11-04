@@ -159,7 +159,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_TEXLIVE FAKE_TLMGR_FAIL WIKI_TEX_TIMEOUT
+    FAKE_TEXLIVE FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -2693,9 +2693,13 @@ fake_xelatex() {
 }
 # TeX Live's installer as the fake CTAN mirror serves it (FAKE_TEXLIVE):
 # install-tl-20260301/ with release-texlive.txt and an install-tl that
-# says how it was called and makes <texdir>/bin/x86_64-linux with a
-# working xelatex and a tlmgr that says how it was called (and fails with
-# FAKE_TLMGR_FAIL).
+# says how it was called and does what the scheme basic does: it makes
+# <texdir>/bin/x86_64-linux with tlmgr and no xelatex (and with
+# FAKE_INSTALL_TL_NO_BIN, no bin directory at all). The fake tlmgr says how
+# it was called, fails with FAKE_TLMGR_FAIL, and makes the working xelatex
+# beside itself when it is asked for the package xetex, as the real one
+# installs XeTeX. So a deploy that looked for xelatex before running tlmgr
+# would fail here as it fails with the real installer.
 fake_texlive() {
   tl=$case_dir/texlive-mirror/install-tl-20260301
   mkdir -p "$tl"
@@ -2709,11 +2713,23 @@ for arg do
 done
 [ -n "$texdir" ] || { printf 'install-tl: no --texdir\n' >&2; exit 1; }
 printf 'Installing TeX Live 2026 into %s (the fake installer)\n' "$texdir"
+mkdir -p "$texdir/texmf-dist"
+[ -z "${FAKE_INSTALL_TL_NO_BIN:-}" ] || exit 0
 bin=$texdir/bin/x86_64-linux
 mkdir -p "$bin"
-printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$bin/xelatex"
-printf '#!/bin/sh\nprintf "tlmgr %%s\\n" "$*" >>"$EVENTS"\n[ -z "${FAKE_TLMGR_FAIL:-}" ] || { printf "tlmgr: package repository unreachable\\n" >&2; exit 1; }\n' >"$bin/tlmgr"
-chmod +x "$bin/xelatex" "$bin/tlmgr"
+cat >"$bin/tlmgr" <<'TLMGR'
+#!/bin/sh
+printf 'tlmgr %s\n' "$*" >>"$EVENTS"
+[ -z "${FAKE_TLMGR_FAIL:-}" ] || { printf 'tlmgr: package repository unreachable\n' >&2; exit 1; }
+[ "${1:-}" = install ] || exit 0
+for package do
+  [ "$package" = xetex ] || continue
+  bin=$(cd "$(dirname "$0")" && pwd)
+  printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$bin/xelatex"
+  chmod +x "$bin/xelatex"
+done
+TLMGR
+chmod +x "$bin/tlmgr"
 TL
   chmod +x "$tl/install-tl"
   (cd "$case_dir/texlive-mirror" && tar -czf ../install-tl-unx.tar.gz install-tl-20260301)
@@ -2843,9 +2859,10 @@ assert_contains "$out" "the TeX Live the deploy installed stays in $texlive_root
 [ "$(state texlive)" = yes ] || fail 'the undeploy forgot the answer'
 pass '--texlive installs TeX Live under the toolchain once, the unit puts its bin first on PATH, and a second run reuses it'
 
-# An install that fails (tlmgr cannot reach its repository) leaves the
-# PDFs off and records no installation, and the deploy goes on; the next
-# run tries again, as texlive=yes says. A Perl without its standard
+# An install that fails (tlmgr cannot reach its repository, or the
+# installer leaves no bin directory with tlmgr) leaves the PDFs off and
+# records no installation, and the deploy goes on; the next run tries
+# again, as texlive=yes says. A Perl without its standard
 # modules (RHEL's perl-interpreter alone) is named before any download.
 fixture texlive-fails
 p=$(free_port 127.0.0.1)
@@ -2862,6 +2879,15 @@ assert_contains "$out" 'TeX Live was not installed (see above)'
 [ -z "$(state texlive_dir)" ] || fail 'a failed installation was remembered'
 assert_lacks "$HOME/$unit" 'Environment="PATH='
 : >"$EVENTS"
+out=$case_dir/no-bin
+FAKE_INSTALL_TL_NO_BIN=1 deploy --no-build >"$out" 2>&1 || fail 'the deploy whose installer made no bin stopped'
+assert_contains "$EVENTS" 'install-tl --no-interaction'
+assert_lacks "$EVENTS" 'tlmgr'
+assert_contains "$out" "TeX Live's installer left no bin/<platform>/tlmgr under $HOME/.wiki-toolchain/texlive/2026"
+assert_contains "$out" 'TeX Live was not installed (see above)'
+[ -z "$(state texlive_dir)" ] || fail 'an installation without bin was remembered'
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+: >"$EVENTS"
 printf '#!/bin/sh\nprintf "Can'"'"'t locate Digest/SHA.pm in @INC\\n" >&2\nexit 2\n' >"$case_dir/bin/perl"
 chmod +x "$case_dir/bin/perl"
 out=$case_dir/no-perl
@@ -2876,7 +2902,7 @@ assert_contains "$EVENTS" 'install-tl --no-interaction'
 [ "$(state texlive_dir)" = "$HOME/.wiki-toolchain/texlive/2026" ] || fail 'the second install was not remembered'
 assert_contains "$HOME/$unit" 'Environment="PATH='
 undeploy >/dev/null 2>&1
-pass 'a failed TeX Live install leaves the PDFs off and is tried again; missing Perl modules are named'
+pass 'a failed TeX Live install (tlmgr fails, or no bin) leaves the PDFs off and is tried again; missing Perl modules are named'
 
 # The question, on a terminal (script(1) gives the deploy one): no is
 # remembered as texlive=no, and nothing is installed.

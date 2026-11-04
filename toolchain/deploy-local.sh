@@ -769,11 +769,14 @@ manager_path() {
 }
 
 # The bin directory of a TeX Live installation (bin/<platform>, such as
-# bin/x86_64-linux) that holds xelatex; fails when there is none.
+# bin/x86_64-linux) that holds the program $2 (xelatex unless given); fails
+# when there is none. The scheme basic has no XeTeX: a fresh installation's
+# bin directory is found by its tlmgr, and holds xelatex only once tlmgr
+# has installed the package xetex.
 texlive_bin() {
   [ -n "$1" ] || return 1
   for candidate in "$1"/bin/*/; do
-    if [ -x "${candidate}xelatex" ]; then
+    if [ -x "${candidate}${2:-xelatex}" ]; then
       printf '%s\n' "${candidate%/}"
       return 0
     fi
@@ -870,12 +873,18 @@ install_texlive() {
   texlive_step "TeX Live's installer" "$installer/install-tl" --no-interaction --scheme=basic \
     --texdir="$texlive_new" --texuserdir="$texlive_root/user" --no-doc-install --no-src-install \
     --repository "$repository" || return 1
-  new_bin=$(texlive_bin "$texlive_new") || { warn "TeX Live's installer left no xelatex under $texlive_new/bin"; return 1; }
+  # The scheme basic installs tlmgr but not XeTeX, which the list's xetex
+  # brings: the bin directory is found by tlmgr here, and by xelatex after
+  # the packages.
+  tlmgr_bin=$(texlive_bin "$texlive_new" tlmgr) ||
+    { warn "TeX Live's installer left no bin/<platform>/tlmgr under $texlive_new (see $texlive_log)"; return 1; }
   # The list's words, without its comments.
   packages=$(sed 's/#.*//' "$ROOT/toolchain/texlive-packages.txt" | tr -s ' \t\n' ' ')
   say "installing the packages the PDF exports need (toolchain/texlive-packages.txt) with tlmgr"
   # shellcheck disable=SC2086 # the packages are words.
-  texlive_step "tlmgr install" "$new_bin/tlmgr" install $packages || return 1
+  texlive_step "tlmgr install" "$tlmgr_bin/tlmgr" install $packages || return 1
+  new_bin=$(texlive_bin "$texlive_new") ||
+    { warn "tlmgr installed the packages, but there is no xelatex under $texlive_new/bin (see $texlive_log)"; return 1; }
   rm -rf "$installer_dir"
 }
 
