@@ -329,18 +329,27 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       titles titled' `shouldSatisfy` elem [P.Str "Ask", P.Space, P.Span ("", ["spoiler"], []) [P.Str "him"]]
       [ident | P.Header _ (ident, _, _) _ <- titled'] `shouldBe` ["a-hidden-heading"]
       show titled' `shouldNotSatisfy` T.isInfixOf "wikibox"
-    it "gives headings with an inline spoiler identifiers of their own, as the wiki gives them" $ do
+    it "gives the headings the identifiers the wiki gives them, with an inline spoiler or not, and keeps the ones written" $ do
       let ids bs = [ident | P.Header _ (ident, _, _) _ <- bs]
           targets = query (\case P.Link _ _ (url, _) -> [url]; _ -> [])
-      twice <- blocksOf ToOther place "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo, and [the second](#answer-2).\n"
-      ids twice `shouldBe` ["answer", "answer-2"]
+          wikiIds source = [ident | Right doc <- [parseMarkdown source], Heading _ attrs _ <- doc, Just ident <- [lookup "id" attrs]]
+          -- The document's identifiers, and the wiki's for the same page.
+          same source expected = do
+            written <- blocksOf ToOther place source
+            (source, ids written, wikiIds source) `shouldBe` (source, expected, expected)
+            pure written
+      twice <- same "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo, and [the second](#answer-2).\n" ["answer", "answer-2"]
       targets twice `shouldBe` ["#answer-2"]
-      plainFirst <- blocksOf ToOther place "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n"
-      ids plainFirst `shouldBe` ["answer", "answer-2"]
-      -- The wiki gives the same identifiers to the page's headings.
-      let wikiIds source = [ident | Right doc <- [parseMarkdown source], Heading _ attrs _ <- doc, Just ident <- [lookup "id" attrs]]
-      wikiIds "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo.\n" `shouldBe` ["answer", "answer-2"]
-      wikiIds "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n" `shouldBe` ["answer", "answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n" ["answer", "answer-2"]
+      spoilerFirst <- same "## ||Answer||\n\nOne.\n\n## Answer\n\nTwo, and [the second](#answer-2).\n" ["answer", "answer-2"]
+      [ident | P.Header _ (ident, _, _) xs <- spoilerFirst, P.Str "Answer" `elem` xs] `shouldBe` ["answer-2"]
+      targets spoilerFirst `shouldBe` ["#answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer", "answer-2"]
+      -- An identifier written is kept, and the heading's text is not
+      -- taken by it.
+      _ <- same "## Title {#custom}\n\nOne.\n\n## Title\n\nTwo.\n" ["custom", "title"]
+      _ <- same "## Start\n\n## Intro {#start}\n" ["start-2", "start"]
+      pass
     it "nests spoilers, and finds them in a quotation and a list item" $ do
       nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
       boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]

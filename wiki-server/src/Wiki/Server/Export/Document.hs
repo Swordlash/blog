@@ -123,6 +123,7 @@ import Text.Pandoc (PandocError, ReaderOptions (..), def, readHtml, readMarkdown
 import Text.Pandoc.Builder qualified as B
 import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Extensions (Extension (..), Extensions, extensionsFromList)
+import Text.Pandoc.Shared (inlineListToIdentifier)
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinitions)
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
@@ -135,7 +136,7 @@ import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (title))
-import Wiki.Core.Slug (Slug, freshName)
+import Wiki.Core.Slug (Slug, freshName, headingSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 
@@ -435,7 +436,7 @@ withBoxesRead defined numbering page = go page.markers page.spoilers
           straySpoilers = Set.fromList [line | (placeholder, (line, _)) <- Map.toList spoilerBoxes, any (placeholder `T.isInfixOf`) found]
           unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` straySpoilers && (case e of CloseBox start -> start `Set.notMember` straySpoilers; _ -> True)) spoilers
       if Set.null stray && Set.null straySpoilers
-        then pure (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars)
+        then pure (reidentified (maybe identity withoutPlaceholders bars) (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
         else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
     texts :: [P.Block] -> [Text]
@@ -641,26 +642,10 @@ placeholdersIn (Bars family) t = case T.breakOn ("|" <> family) t of
 -- | Any placeholder of an inline spoiler's bars left in code, math or raw
 -- text (where pandoc read the source otherwise than the wiki) is its bars
 -- again.
---
--- A heading's identifier, which pandoc made from its text with the
--- placeholders in it, is made again without them ('reidentified'). Pandoc
--- made the identifiers unique with the placeholders in them, so two
--- headings @## ||Answer||@ are told apart only by their placeholders; once
--- these are gone, each such heading takes the first identifier that no
--- heading of the document has, as the wiki gives its headings theirs
--- ('freshName': @answer@, then @answer-2@).
 restoreBars :: Bars -> [P.Block] -> [P.Block]
-restoreBars bars@(Bars family) = reidentified unplaceId . walk inBlock . walk inInline
+restoreBars bars = walk inBlock . walk inInline
   where
     unplace t = T.concat [either (const "||") identity p | p <- placeholdersIn bars t]
-    unplaceId ident = case T.breakOn family ident of
-      (before, "") -> before
-      (before, rest) ->
-        let after = T.drop (T.length family) rest
-            (digits, more) = T.span isDigit (T.drop 1 after)
-         in if T.take 1 after `elem` ["o", "c"] && not (T.null digits) && "z" `T.isPrefixOf` more
-              then before <> unplaceId (T.drop 1 more)
-              else before <> T.take (T.length family) rest <> unplaceId after
     inInline = \case
       P.Code attrs t -> P.Code attrs (unplace t)
       P.Math kind t -> P.Math kind (unplace t)
@@ -671,23 +656,84 @@ restoreBars bars@(Bars family) = reidentified unplaceId . walk inBlock . walk in
       P.RawBlock f t -> P.RawBlock f (unplace t)
       b -> b
 
--- | Headings whose identifier this changes, given new identifiers, in the
--- order of the document: each the changed one if no other heading has
--- it, or else the first of @-2@, @-3@, … after it that none has
--- ('freshName'). The identifiers taken are those of every heading the
--- change leaves as it is, and those given so far.
+-- | An identifier pandoc made from a heading's text with the placeholders
+-- of inline spoilers' bars in it ('Bars'), without them: what pandoc would
+-- have made without the bars, which it leaves out of an identifier.
+withoutPlaceholders :: Bars -> Text -> Text
+withoutPlaceholders (Bars family) ident = case T.breakOn family ident of
+  (before, "") -> before
+  (before, rest) ->
+    let after = T.drop (T.length family) rest
+        (digits, more) = T.span isDigit (T.drop 1 after)
+     in if T.take 1 after `elem` ["o", "c"] && not (T.null digits) && "z" `T.isPrefixOf` more
+          then before <> withoutPlaceholders (Bars family) (T.drop 1 more)
+          else before <> T.take (T.length family) rest <> withoutPlaceholders (Bars family) after
+
+-- | The document with the identifier of every heading that has none of its
+-- own made as the wiki makes it ("Wiki.Core.Markdown.Ast"'s
+-- withHeadingIds), so that a link written on the page to a section lands
+-- on it in the document too, and the writer's table of contents links to
+-- the same identifiers. Pandoc makes them otherwise: a second @Answer@ is
+-- @answer-1@ for it and @answer-2@ for the wiki, and a heading with an
+-- inline spoiler had the spoiler's placeholders in its identifier while
+-- pandoc made the identifiers unique.
+--
+-- The identifiers given in the source (@## Title {#custom}@) are kept,
+-- and taken before the others, with those of fenced divs and code blocks,
+-- as the wiki takes them. Pandoc's reader does not mark which identifiers
+-- it made, so one is taken as made by pandoc when it is the one pandoc
+-- makes from the heading's text, with or without the number pandoc adds
+-- to tell two apart (after the placeholders are taken out of it, as the
+-- function given does), and as given in the source otherwise. Then, in
+-- the order of the document, each heading pandoc gave its identifier gets
+-- the slug of its text, or the first of @-2@, @-3@, … after it that is
+-- free ('freshName').
 reidentified :: (Text -> Text) -> [P.Block] -> [P.Block]
-reidentified change blocks = evalState (walkM renamed blocks) kept
+reidentified unplace blocks = evalState (walkM renamed blocks) written
   where
-    kept = Set.fromList (query (\case P.Header _ (ident, _, _) _ | change ident == ident -> [ident]; _ -> []) blocks)
+    automatic ident xs =
+      let made = unplace ident
+          base = inlineListToIdentifier wikiExtensions xs
+       in made == base || maybe False (\n -> not (T.null n) && T.all isDigit n) (T.stripPrefix (base <> "-") made)
+    written =
+      Set.fromList $
+        query (\case P.Header _ (ident, _, _) xs | not (T.null ident), not (automatic ident xs) -> [ident]; _ -> []) blocks
+          <> query (\case P.Div (ident, _, _) _ | not (T.null ident) -> [ident]; P.CodeBlock (ident, _, _) _ | not (T.null ident) -> [ident]; _ -> []) blocks
     renamed :: P.Block -> State (Set Text) P.Block
     renamed = \case
       P.Header level (ident, cls, kvs) xs
-        | change ident /= ident -> do
-            fresh <- gets (\taken -> freshName (`Set.member` taken) (change ident))
+        | automatic ident xs -> do
+            fresh <- gets (\taken -> freshName (`Set.member` taken) (headingSlug (headingText xs)))
             modify (Set.insert fresh)
             pure (P.Header level (fresh, cls, kvs) xs)
       b -> pure b
+
+-- | A heading's text as the wiki reads it for its identifier
+-- ("Wiki.Core.Markdown.Ast"'s plainText): the words without their markup,
+-- code and formulas as written, a link's and an image's text, and nothing
+-- of a footnote or of raw HTML.
+headingText :: [P.Inline] -> Text
+headingText = foldMap $ \case
+  P.Str t -> t
+  P.Space -> " "
+  P.SoftBreak -> " "
+  P.LineBreak -> " "
+  P.Code _ t -> t
+  P.Math _ t -> t
+  P.Emph xs -> headingText xs
+  P.Strong xs -> headingText xs
+  P.Strikeout xs -> headingText xs
+  P.Underline xs -> headingText xs
+  P.Superscript xs -> headingText xs
+  P.Subscript xs -> headingText xs
+  P.SmallCaps xs -> headingText xs
+  P.Quoted _ xs -> headingText xs
+  P.Cite _ xs -> headingText xs
+  P.Span _ xs -> headingText xs
+  P.Link _ xs _ -> headingText xs
+  P.Image _ xs _ -> headingText xs
+  P.Note _ -> ""
+  P.RawInline _ _ -> ""
 
 -- | The number of each numbered box of a page ('withBoxes'), by its
 -- placeholder, as the page's renderer numbers it ("Wiki.Core.Markdown.Box"):
