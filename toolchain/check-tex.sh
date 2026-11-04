@@ -124,7 +124,7 @@ fi
 
 printf 'failing %s\n' "$engine"
 case $status in
-  124 | 137) printf 'It did not finish within %s seconds, and was stopped: an engine that loops on unicode-math'"'"'s table is a TeX Live older than 2021, whose kpathsea refuses the read under openin_any=p.\n' "$limit" ;;
+  124 | 137) printf 'It did not finish within %s seconds, and was stopped. A TeX Live older than 2021 does this: under openin_any=p its kpathsea refuses the table unicode-math reads, and the engine loops.\n' "$limit" ;;
   0) printf 'It exited 0 but wrote no probe.pdf.\n' ;;
   *) printf 'It exited %s.\n' "$status" ;;
 esac
