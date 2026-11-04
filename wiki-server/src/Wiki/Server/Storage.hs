@@ -1513,6 +1513,7 @@ sessionTx = do
       (anonymousIn ctx.grants.access)
         { B.homePage = if ctx.grants.access == Closed && not ctx.server.homePage.showAnonymous then defaultHomePage else ctx.server.homePage
         , B.mathMacros = ctx.server.mathMacros
+        , B.assistantServices = ctx.server.assistantServices
         }
     Just (u, p) ->
       Session
@@ -1540,6 +1541,8 @@ sessionTx = do
         , -- The built-in macros are the server's settings too, but no
           -- secret: every session has them, whoever asks.
           mathMacros = ctx.server.mathMacros
+        , -- The assistant's services, as every session has them.
+          assistantServices = ctx.server.assistantServices
         }
 
 listSpacesTx :: Tx [Space]

@@ -4742,6 +4742,7 @@ table.invitations td {
 .server-mail-form,
 .server-url-form,
 .server-provider-form,
+.server-service-form,
 .server-mail-test {
   display: flex;
   flex-direction: column;
@@ -4753,6 +4754,7 @@ table.invitations td {
 .server-mail-form .field,
 .server-url-form .field,
 .server-provider-form .field,
+.server-service-form .field,
 .server-mail-test .field {
   flex: none;
 }
@@ -4834,13 +4836,15 @@ div.server-secret > span:first-child {
   color: var(--muted);
 }
 
-.server-provider-list {
+.server-provider-list,
+.server-service-list {
   margin: 0.4rem 0;
   padding: 0;
   list-style: none;
 }
 
-.server-provider {
+.server-provider,
+.server-service {
   padding: 0.6rem 0.8rem;
   margin-bottom: 0.6rem;
   border: 1px solid var(--border);
@@ -4850,6 +4854,28 @@ div.server-secret > span:first-child {
 .server-provider-kind {
   margin-left: 0.5rem;
   color: var(--muted);
+}
+
+/* The assistant's services (WP5.60): a name, a base URL and the API. */
+.server-service-url {
+  margin-left: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.server-service-api {
+  margin-left: 0.5rem;
+  color: var(--muted);
+}
+
+.server-service-api-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .server-provider-redirect {

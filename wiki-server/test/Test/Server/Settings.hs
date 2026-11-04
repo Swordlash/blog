@@ -84,7 +84,7 @@ reading backing = describe "reading and writing them" $ do
 
   it "gives the kinds of box to every reader's session, and the pages the server renders draw them" $ withDemoRunning backing identity $ \r -> do
     let exercise = BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}
-    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [exercise], homePage = defaultHomePage, mathMacros = Nothing}
+    set <- setServer r ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantServices = [], boxes = [exercise], homePage = defaultHomePage, mathMacros = Nothing}
     set.boxes `shouldBe` [exercise]
     session <- getUrl r (onPublic r links.session) >>= jsonAs 200
     (session :: Types.SessionInfo).boxes `shouldBe` [exercise]
@@ -93,6 +93,21 @@ reading backing = describe "reading and writing them" $ do
     page.status `shouldBe` 200
     decodeUtf8 (BSL.toStrict page.body)
       `shouldSatisfy` T.isInfixOf "<div class=\"alert alert-exercise\" id=\"box-exercise-1\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\"><p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it 1<a "
+
+  it "keeps the assistant's services, and gives them to every session, signed in or not (WP5.60)" $ withDemoRunning backing identity $ \r -> do
+    let service name url api = AssistantService {name, baseUrl = Url url, api}
+        gateway = service "Corporate gateway" "https://claude-gateway.example.com/v1" AnthropicApi
+        ollama = service "Ollama" "http://localhost:11434/v1" OpenAiApi
+        refused services = sendJson r "PUT" (onAdmin r links.admin.setServer) (noServerSettings {assistantServices = services} :: ServerSettingsChange) >>= jsonAs 400
+    set <- setServer r noServerSettings {assistantServices = [service "Corporate gateway" " https://claude-gateway.example.com/v1/ " AnthropicApi, ollama]}
+    set.assistantServices `shouldBe` [gateway, ollama]
+    (\s -> s.assistantServices) <$> serverAs r `shouldReturn` [gateway, ollama]
+    session <- getUrl r (onPublic r links.session) >>= jsonAs 200
+    (session :: Types.SessionInfo).assistantServices `shouldBe` [gateway, ollama]
+    -- A bad address or a name used twice is refused, and nothing changes.
+    refused [service "Gateway" "https://a.example; script-src *" AnthropicApi] >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+    refused [gateway, service "corporate GATEWAY" "https://b.example" OpenAiApi] >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+    (\s -> s.assistantServices) <$> serverAs r `shouldReturn` [gateway, ollama]
 
   it "answers the operator and an administrator's session, and nobody else" $ withAdminSession backing identity $ \r admin -> do
     (getUrlWith r (onPublic r links.admin.server) [admin] >>= jsonAs 200)

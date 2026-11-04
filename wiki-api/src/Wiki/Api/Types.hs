@@ -45,7 +45,7 @@ import Data.Aeson (FromJSON (..), ToJSON, withObject, (.!=), (.:), (.:?))
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
-import Wiki.Api.ServerSettings (HomePage, defaultHomePage)
+import Wiki.Api.ServerSettings (AssistantService, HomePage, defaultHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
@@ -84,14 +84,20 @@ data SessionInfo = SessionInfo
   -- ^ The wiki's built-in math macros as the administration keeps them
   -- ('Wiki.Api.ServerSettings.mathMacros'), which every formula is set
   -- with; 'Nothing' for the ones the wiki ships with.
+  , assistantServices :: [AssistantService]
+  -- ^ The services besides Anthropic's and OpenAI's own that the writing
+  -- assistant may use, as the administration lists them
+  -- ('Wiki.Api.ServerSettings.assistantServices'): the assistant's
+  -- settings offer them. Every session carries them, signed in or not,
+  -- since the page's Content Security Policy names their addresses anyway.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON)
 
 -- | Read by hand rather than derived, so that a session written before
--- @boxes@ or @mathMacros@ existed (in a page an offline copy kept, with the
--- responses it was rendered from) reads as having no kinds of box and the
--- built-in macros the wiki ships with.
+-- @boxes@, @mathMacros@ or @assistantServices@ existed (in a page an offline copy kept, with the
+-- responses it was rendered from) reads as having no kinds of box, the
+-- built-in macros the wiki ships with, and no service of the assistant.
 instance FromJSON SessionInfo where
   parseJSON = withObject "SessionInfo" $ \o ->
     SessionInfo
@@ -105,6 +111,7 @@ instance FromJSON SessionInfo where
       <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
       <*> o .:? "mathMacros"
+      <*> o .:? "assistantServices" .!= []
 
 -- | 'NewSpace': a space to create, @createSpace@.
 data NewSpace = NewSpace

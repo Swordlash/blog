@@ -1,6 +1,10 @@
 {
-  "assistantHosts": [
-    "https://openrouter.ai"
+  "assistantServices": [
+    {
+      "api": "anthropic",
+      "baseUrl": "https://claude-gateway.example.com",
+      "name": "Corporate gateway"
+    }
   ],
   "boxes": [
     {

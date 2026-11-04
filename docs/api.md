@@ -103,7 +103,7 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion", "capabilities"}`: `capabilities` is `Capabilities` `{"database", "search"}`, the database the server keeps the wiki in (`"postgres"` or `"sqlite"`) and how its search finds pages (`"FullText"` or `"FoldedText"`, see [Search](#search)) | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports", "boxes", "homePage", "mathMacros"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), the formats pages and spaces export as (see [Documents](#documents)), the kinds of box the administration defined, as in the server's settings below, which every page is rendered with, the front page's configuration, and the built-in math macros as the administration keeps them (`null` for the ones the wiki ships with) | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports", "boxes", "homePage", "mathMacros", "assistantServices"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), the formats pages and spaces export as (see [Documents](#documents)), the kinds of box the administration defined, as in the server's settings below, which every page is rendered with, the front page's configuration, the built-in math macros as the administration keeps them (`null` for the ones the wiki ships with), and the assistant's services, as in the server's settings below, which the assistant's settings offer (the same to everyone, signed in or not) | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 | POST | `api/v1/session/second-factor` | `OneTimeCode` `{"code"}`, with the `wiki_pending` cookie | as `POST session` | 401 (a wrong code, counted as a failed sign-in), 429, 400 (no sign-in waiting in this browser, or it expired) | (`confirmSecondFactor`) |
@@ -1091,7 +1091,7 @@ The activity log records option changes as `settings.home-page`.
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts", "boxes", "homePage", "mathMacros"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantServices", "boxes", "homePage", "mathMacros"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
 | GET | `api/v1/admin/macro-uses?name=<macro>&name=…` | | `[MacroUse]` `{"usedOn", "inSpace", "pageTitle", "uses"}`: every page that uses one of the macros (`\Prob`, by its whole name) without defining it, with the ones it uses | 403 | `macroUses` |
 | PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
 | POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
@@ -1115,7 +1115,8 @@ it, and a wiki made before them goes on with no mail and passwords only.
            "user": "wiki", "password": "set", "from": "Wiki <wiki@example.org>"},
   "providers": [{"name": "google", "kind": "google", "clientId": "1234-abc.apps.googleusercontent.com",
                  "issuer": null, "secret": "set"}],
-  "assistantHosts": ["http://localhost:11434"],
+  "assistantServices": [{"name": "Corporate gateway", "baseUrl": "https://claude-gateway.example.com", "api": "anthropic"},
+                        {"name": "Ollama", "baseUrl": "http://localhost:11434/v1", "api": "openai"}],
   "boxes": [{"name": "exercise", "label": "Exercise", "colour": "teal", "icon": "pencil"}]
 }
 ```
@@ -1144,12 +1145,21 @@ and every session carries it (`SessionInfo`'s `mathMacros`). Before a block
 that takes macros out is saved, the Editor section asks `macro-uses` which
 pages use them, and names them.
 
-`assistantHosts` (WP5.21) are the addresses the writing assistant may reach
-from the browser besides Anthropic's and OpenAI's APIs, as origins: every
-page's Content Security Policy allows them in `connect-src`, with those of
-`--assistant-hosts`. A base URL is taken down to its origin; anything else
-than an `https:` or `http:` origin is refused (400). Settings without the
-field read as having none.
+`assistantServices` (WP5.60) are the services the writing assistant may use
+besides Anthropic's and OpenAI's own: each with a `name` (trimmed, not
+empty, used once whatever its case), a `baseUrl` (an `https:` or `http:`
+address with a host and no fragment or `*`, kept as typed but for slashes at
+its end, as the provider's SDK takes it) and the `api` it speaks,
+`"anthropic"` or `"openai"`; anything else is refused (400). Every session
+carries them (`SessionInfo`'s `assistantServices`), and the assistant's
+settings offer each under the provider whose API it speaks. Every page's
+Content Security Policy allows the origin of each one's base URL in
+`connect-src`, with those of `--assistant-hosts`, which are allowed but not
+offered. They are stored as JSON in the setting `assistant-services`.
+Settings without the field read as having none; settings from before it,
+with `assistantHosts` (WP5.21, a list of origins), read each origin as a
+service at it speaking OpenAI's API, named by its host (`localhost:11434`),
+and so does a database that still has the setting `assistant-hosts`.
 
 `security` is `tls` (implicit, port 465), `starttls` or `plain`; `kind` is
 `google`, `apple`, `github` or `oidc` (any OpenID Connect provider, at its

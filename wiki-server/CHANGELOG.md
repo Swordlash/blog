@@ -29,6 +29,15 @@ scrape before it was counted. How long a try of the engine
 may take is `ServeOptions`' `texProbeTimeout`, a minute, which no option
 sets; the tests shorten it. The library depends on `temporary`.
 
+The assistant's services (WP5.60). The server's settings keep the
+administration's services of the assistant as JSON in the setting
+`assistant-services`; a database with the older `assistant-hosts` reads
+each host as a service speaking OpenAI's API, and the next save writes
+the new setting. Every session carries the services, signed in or not, and
+the page's Content Security Policy allows the origin of each one's base
+URL, with the origins of `--assistant-hosts`, whose help now says that
+they are allowed but not offered to users.
+
 Avatars, readers, who wrote a page and inline PDFs (WP5.55). Migration
 0008 adds `avatar_blob` and `avatar_media_type` to `users`, on SQLite and
 PostgreSQL, and makes a change of either bump the permission context's

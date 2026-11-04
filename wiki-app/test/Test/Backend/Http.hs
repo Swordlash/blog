@@ -511,8 +511,9 @@ signedIn =
     , boxes = []
     , homePage = defaultHomePage
     , mathMacros = Nothing
+    , assistantServices = []
     }
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
 
 accounts :: Spec
 accounts = describe "signing in and out" $ do

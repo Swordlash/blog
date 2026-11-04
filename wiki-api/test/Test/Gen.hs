@@ -52,7 +52,7 @@ import Test.QuickCheck
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
-import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.ServerSettings (AssistantService (..), defaultHomePage)
 import Wiki.Api.Types
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Draft (Draft (..))
@@ -60,6 +60,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxKind (..), themeColours)
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
@@ -133,7 +134,8 @@ genSessionInfo = do
   exports <- sublistOf [minBound .. maxBound]
   boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements (CustomColour "#1a7f37" : themeColours) <*> elements [minBound .. maxBound]))
   mathMacros <- oneof [pure Nothing, Just <$> genText]
-  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros}
+  assistantServices <- resize 3 (listOf (AssistantService <$> genText <*> (Url <$> genText) <*> elements [minBound .. maxBound]))
+  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros, assistantServices}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> (Password <$> genText)

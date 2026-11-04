@@ -140,6 +140,49 @@ demo m = describe "over the demo's wiki" $ do
     eventually (length <$> findAll ui ".server-provider" `shouldReturn` 0)
     unmount ui
 
+  it "lists the assistant's services, adds, changes and removes one, and refuses a bad address and a name used twice" $ runPage $ do
+    ui <- start m (Just "user-admin") (Admin R.Server)
+    find ui ".server-assistant-services .admin-intro" >>= (`shouldContainText` "Besides Anthropic's and OpenAI's own services, which every wiki offers.")
+    find ui ".server-services-none" >>= (`shouldContainText` "None")
+    let fill name url api = do
+          nameField <- find ui ".server-service-form input[name=service-name]"
+          clear nameField
+          typeText nameField name
+          urlField <- find ui ".server-service-form input[name=service-url]"
+          clear urlField
+          typeText urlField url
+          find ui (".server-service-form input[name=service-api][value=" <> api <> "]") >>= click
+          find ui ".server-service-form button[type=submit]" >>= click
+        row name = ".server-service[data-name='" <> name <> "'] "
+    -- A gateway that speaks Anthropic's API, its address kept as typed but
+    -- for the slash at its end.
+    find ui ".server-service-add" >>= click
+    oneColumn ".server-service-form"
+    find ui ".server-service-form input[name=service-api][value=openai]" >>= (`getProperty` "checked") >>= (`shouldBe` "true")
+    fill "Corporate gateway" "https://claude-gateway.example.com/v1/" "anthropic"
+    eventually (find ui (row "Corporate gateway" <> ".server-service-url") >>= (`shouldHaveText` "https://claude-gateway.example.com/v1"))
+    find ui (row "Corporate gateway" <> ".server-service-api") >>= (`shouldHaveText` "Anthropic's API")
+    -- A second, with the same name in other letters: refused, the form stays.
+    find ui ".server-service-add" >>= click
+    fill "corporate GATEWAY" "http://localhost:11434/v1" "openai"
+    find ui ".admin-server .error" >>= (`shouldContainText` "two services of the assistant named")
+    -- And an address that is not one: refused too.
+    fill "Ollama" "ftp://localhost:11434/v1" "openai"
+    find ui ".admin-server .error" >>= (`shouldContainText` "base URL")
+    fill "Ollama" "http://localhost:11434/v1" "openai"
+    eventually (find ui (row "Ollama" <> ".server-service-api") >>= (`shouldHaveText` "OpenAI's API"))
+    length <$> findAll ui ".server-service" `shouldReturn` 2
+    -- Changed: its name and its API.
+    find ui (row "Ollama" <> ".server-service-edit") >>= click
+    find ui ".server-service-form input[name=service-url]" >>= (`getProperty` "value") >>= (`shouldBe` "http://localhost:11434/v1")
+    fill "LM Studio" "http://localhost:1234/v1" "openai"
+    eventually (find ui (row "LM Studio" <> ".server-service-url") >>= (`shouldHaveText` "http://localhost:1234/v1"))
+    length <$> findAll ui (row "Ollama") `shouldReturn` 0
+    -- Removed.
+    find ui (row "Corporate gateway" <> ".server-service-remove") >>= click
+    eventually (length <$> findAll ui ".server-service" `shouldReturn` 1)
+    unmount ui
+
   it "explains each field of a provider, and the redirect URI to register as it can be known" $ runPage $ do
     ui <- start m (Just "user-admin") (Admin R.Server)
     let hint field = find ui (".server-provider-form .server-provider-hint-" <> field)
@@ -233,7 +276,7 @@ overHttp m = describe "over HTTP" $
       serverStarts
       serveDemo
       let corp = ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = Set}
-          set = ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+          set = ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp], assistantServices = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
           found = Discovered {issuer = Url "https://id.example.org/realms/corp", authorization = Url "https://id.example.org/auth", token = Url "https://id.example.org/token", userinfo = Nothing}
       answerWith "GET" "api/v1/admin/server" 200 set
       answerWith "POST" "api/v1/admin/server/providers/corp/check" 200 ProviderCheck {redirectUri = Just (Url "https://wiki.example.org/auth/corp/callback"), clientSecret = Set, discovered = Just found, problem = Nothing}

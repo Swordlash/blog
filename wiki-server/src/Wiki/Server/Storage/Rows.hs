@@ -224,7 +224,7 @@ import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
 import Wiki.Api.Admin (Invitation (..), UserQuery (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
-import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, defaultMailPort, kindName, legacyService, readKind, readSecurity, securityFor, securityName)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
@@ -1745,7 +1745,9 @@ grantCreateSpaces u = setGlobalGrant True GlobalGrant {subject = SubjectUser u, 
 -- > mail-password   its password
 -- > mail-from       Wiki <wiki@example.org>
 --
--- > assistant-hosts the writing assistant's hosts (WP5.21), one per line
+-- > assistant-services the writing assistant's services (WP5.60), a JSON
+-- >                 array; before it, assistant-hosts, the hosts (WP5.21)
+-- >                 one per line, read as services until the next save
 -- > boxes           the kinds of box (WP5.29), a JSON array
 -- > math-macros     the built-in math macros (WP5.41), as written; an
 -- >                 empty text is a block with nothing in it, and no row
@@ -1756,7 +1758,7 @@ grantCreateSpaces u = setGlobalGrant True GlobalGrant {subject = SubjectUser u, 
 -- out, and a mail server without a host counts as none.
 loadServerSettings :: (Backend be) => Db be Kept
 loadServerSettings = do
-  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "boxes", settingsLike "home-page", settingsLike "math-macros", settingsLike "mail-"]
+  rows <- concat <$> sequence [settingsLike "public-url", settingsLike "assistant-hosts", settingsLike "assistant-services", settingsLike "boxes", settingsLike "home-page", settingsLike "math-macros", settingsLike "mail-"]
   providerRows <- runSelectReturningList (select (orderBy_ (\p -> (asc_ p.position, asc_ p.name)) (all_ wikiDb.sign_in_providers)))
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
@@ -1778,7 +1780,11 @@ loadServerSettings = do
           | p <- providerRows
           , Just kind <- [readKind p.kind]
           ]
-      , assistantHosts = maybe [] (filter (not . T.null) . map T.strip . T.lines) (valueOf "assistant-hosts")
+      , -- The services as JSON; before WP5.60, the hosts one per line,
+        -- read as services as the settings' JSON reads them.
+        assistantServices = case valueOf "assistant-services" of
+          Just stored -> fromMaybe [] (decodeStrict' (encodeUtf8 stored))
+          Nothing -> maybe [] (mapMaybe legacyService . filter (not . T.null) . map T.strip . T.lines) (valueOf "assistant-hosts")
       , homePage = fromMaybe defaultHomePage (valueOf "home-page" >>= decodeStrict' . encodeUtf8)
       , -- A value this program cannot read (a newer one's colour or icon)
         -- reads as no kinds rather than failing every page.
@@ -1791,6 +1797,7 @@ storeServerSettings :: (Backend be) => Kept -> Db be ()
 storeServerSettings s = do
   deleteSettingsLike "public-url" []
   deleteSettingsLike "assistant-hosts" []
+  deleteSettingsLike "assistant-services" []
   deleteSettingsLike "boxes" []
   deleteSettingsLike "math-macros" []
   deleteSettingsLike "home-page" []
@@ -1798,7 +1805,7 @@ storeServerSettings s = do
   let rows =
         [("home-page", decodeUtf8 (BSL.toStrict (encode s.homePage)))]
           <> [("public-url", u.text) | Just u <- [s.publicUrl]]
-          <> [("assistant-hosts", T.unlines s.assistantHosts) | not (null s.assistantHosts)]
+          <> [("assistant-services", decodeUtf8 (BSL.toStrict (encode s.assistantServices))) | not (null s.assistantServices)]
           <> [("boxes", decodeUtf8 (BSL.toStrict (encode s.boxes))) | not (null s.boxes)]
           <> [("math-macros", m) | Just m <- [s.mathMacros]]
           <> case s.mail of

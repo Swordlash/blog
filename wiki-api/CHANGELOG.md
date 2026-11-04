@@ -10,6 +10,19 @@ admin/tex-engine/check`, both answering a `TexEngine` (`Wiki.Api.Admin`:
 `Content-Disposition` of an exported document, and `dispositionFileName`,
 which reads its file name back.
 
+The assistant's addresses come from the server (WP5.60).
+`ServerSettings.assistantHosts`, a list of origins, is replaced by
+`assistantServices`, a list of `AssistantService {name, baseUrl, api}`,
+`api` being `AnthropicApi` or `OpenAiApi` (JSON `"anthropic"` or
+`"openai"`). `checkServerSettings` trims each name and refuses an empty
+one or one used twice (in any case), and takes a base URL that is an
+`http:` or `https:` address with a host, without a fragment or a `*`,
+kept as typed but for slashes at its end. Settings without the field and
+with `assistantHosts` read each origin as a service speaking OpenAI's API,
+named by its host (`legacyService`). `serviceOrigin` gives the origin the
+page's Content Security Policy allows. `SessionInfo` gains
+`assistantServices`, read as none when absent.
+
 Avatars, readers and inline PDFs (WP5.55). `AccountApi` now takes the
 multipart backend of its forms as a parameter, as `SpacesApi` does, and
 gains `setAvatar`, `PUT account/avatar` with the picture as a form's file

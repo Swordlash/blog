@@ -100,7 +100,7 @@ import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
-import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState, serviceOrigin)
 import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -206,8 +206,9 @@ data Env = Env
   -- ("Wiki.Server.Feed").
   , assistantHosts :: [Text]
   -- ^ The assistant's hosts given on the command line
-  -- (@--assistant-hosts@); 'currentAssistantHosts' adds the
-  -- administration's.
+  -- (@--assistant-hosts@): origins for the page's Content Security Policy
+  -- only, which no user is offered; 'currentAssistantHosts' adds the
+  -- origins of the administration's services.
   , ceremonies :: Ceremonies
   -- ^ The passkeys' challenges waiting for the browser's answer
   -- ("Wiki.Server.Vault").
@@ -874,7 +875,7 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO (availableFormats env.texEngine)
       settings <- liftIO (readServerSettings env.storage)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage}
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage, assistantServices = settings.assistantServices}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.
@@ -1128,12 +1129,13 @@ currentMailer env = mailerFrom env.sendMail <$> readServerSettings env.storage
 
 -- | The addresses the writing assistant may reach from the browser besides
 -- the providers' APIs, which every page's Content Security Policy allows
--- ("Wiki.Api.ContentPolicy"): those of the command line, then those of the
--- administration's "Server" section, each once. They are read for each
+-- ("Wiki.Api.ContentPolicy"): those of the command line, then the origins
+-- of the assistant's services of the administration's "Server" section,
+-- each once. They are read for each
 -- page, so that a change in the administration applies to the next page
 -- loaded.
 currentAssistantHosts :: Env -> IO [Text]
-currentAssistantHosts env = (\s -> ordNub (env.assistantHosts <> s.assistantHosts)) <$> readServerSettings env.storage
+currentAssistantHosts env = (\s -> ordNub (env.assistantHosts <> mapMaybe serviceOrigin s.assistantServices)) <$> readServerSettings env.storage
 
 -- | The providers people may sign in with, as the settings are now.
 currentProviders :: Env -> IO [Provider]

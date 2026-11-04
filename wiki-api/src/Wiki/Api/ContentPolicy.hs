@@ -41,11 +41,11 @@
 -- be inline, and no text may be evaluated as code.
 --
 -- The assistant reaches its providers from the browser. Their API
--- addresses are in @connect-src@ ('providerHosts'). An administrator adds
--- the addresses of other services the assistant may use (a base URL of
--- the assistant's settings: Ollama, LM Studio, a proxy) as the server's
--- assistant hosts ('parseAssistantHost'), which the server folds into
--- @connect-src@ ('pagePolicy').
+-- addresses are in @connect-src@ ('providerHosts'). An administrator lists
+-- the other services the assistant may use (a gateway, Ollama, LM Studio,
+-- a proxy) in the server's settings, and the server folds the origin of
+-- each one's base URL ('parseAssistantHost') into @connect-src@
+-- ('pagePolicy'), with those of its @--assistant-hosts@ option.
 module Wiki.Api.ContentPolicy
   ( -- * The policies
     basePolicy

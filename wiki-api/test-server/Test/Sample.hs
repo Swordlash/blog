@@ -73,7 +73,7 @@ import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), Notifications (..), feedAddressOf)
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
-import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
+import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..), Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
@@ -252,6 +252,7 @@ sessionInfo =
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     , homePage = defaultHomePage
     , mathMacros = Just "\\newcommand{\\Prob}{\\operatorname{P}}"
+    , assistantServices = [AssistantService {name = "Corporate gateway", baseUrl = Url "https://claude-gateway.example.com", api = AnthropicApi}]
     }
 
 -- | A user's account, as the administration sees it.
@@ -471,7 +472,7 @@ serverSettings =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Set}
         , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = NotSet}
         ]
-    , assistantHosts = ["http://localhost:11434"]
+    , assistantServices = [AssistantService {name = "Ollama", baseUrl = Url "http://localhost:11434/v1", api = OpenAiApi}]
     , boxes = [BoxKind {name = "exercise", label = "Exercise", colour = Teal, icon = Pencil}]
     , homePage = defaultHomePage
     , mathMacros = Just "\\newcommand{\\Prob}{\\operatorname{P}}"
@@ -492,7 +493,7 @@ serverChange =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Just "a new secret"}
         , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
         ]
-    , assistantHosts = ["https://openrouter.ai"]
+    , assistantServices = [AssistantService {name = "Corporate gateway", baseUrl = Url "https://claude-gateway.example.com", api = AnthropicApi}]
     , boxes = [BoxKind {name = "aside", label = "By the way", colour = CustomColour "#1a7f37", icon = NoIcon}]
     , homePage = defaultHomePage
     , mathMacros = Nothing
