@@ -4,21 +4,24 @@
 
 The key is tested before it is kept (WP5.59). In the assistant's
 settings, the key form's button is now "Test and keep the key" (Enter in
-the field does the same): it asks the provider with the typed key, at
-the base URL if one is set, and keeps the key (in this browser, in the
-vault when syncing is on) and fetches the model list only when the
-provider accepts it. A refused key is not kept: the reason shows by the
-field, a 401 with the sentence that says the key has probably expired,
-and the key stays in the field to be corrected. While the check runs,
-the field and the button are disabled and the button says "Checking…".
-A service that has no model of the name checked (GitHub Models names
-OpenAI's models differently) is asked for its list of models with the
-key instead: the key is kept if the list comes, with a note to choose a
-model from it, and refused with the list's error if not.
-"Test the connection" is now "Test the connection (no key)", and shows
-only while nothing is typed in the key field; it says "The connection
-works without a key" when it does. The scripted provider keeps each check
-in `script.checks`, for the browser tests to read the key checked.
+the field does the same). With the typed key, at the base URL if one is
+set, it first fetches the provider's model list and shows it. A refused
+key (a 401) stops there, with the sentence that says the key has
+probably expired; any other failure of the list goes on, since a gateway
+may have no list. Then it tries the key with the model chosen, or with
+the list's first model if the list does not have it, and only when that
+passes keeps the key (in this browser, in the vault when syncing is on)
+and that model. On a failure nothing is kept: the reason shows by the
+field, the key stays in the field, and the list stays shown, to choose
+another model and press the button again. While it runs, the key field,
+the button, the base URL, the model and the effort are disabled and the
+button says "Checking…"; an answer for a base URL no longer set keeps
+nothing. "Test the connection" is now "Test the connection (no key)",
+and shows only while nothing is typed in the key field; it says "The
+connection works without a key" when it does. The scripted provider
+keeps each check in `script.checks`, for the browser tests to read the
+key and the model checked, and can answer after `script.checkWait`
+milliseconds.
 
 The avatar's crop dialog (WP5.59, the owner's addendum) is a modal
 `<dialog>`, shown as the editor's "Link to a page" dialog is: centred in

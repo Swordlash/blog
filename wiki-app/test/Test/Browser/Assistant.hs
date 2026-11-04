@@ -58,7 +58,7 @@ import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode)
+import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode, withModel)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 
@@ -650,30 +650,80 @@ spec m = do
     findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-token")
     (map (fieldText ["baseUrl"]) <$> checks) `shouldReturn` [Just gateway]
 
-  it "checks a typed key by the service's list of models when the service has no model of the name checked" $ runPage $ do
+  it "refuses a typed key with which the service refuses its model list (a 401), and keeps nothing" $ runPage $ do
     let refused = object ["error" .= object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int), "message" .= ("bad token" :: Text)]]
-    scriptWith [] (object ["openai" .= refused])
-    keep m (UserId "user-editor") (withBaseUrl OpenAI "https://models.github.ai/inference" defaultSettings)
+    scriptWith [] (object ["anthropic" .= refused])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
     (ui, _) <- startWith m (Just "user-editor") AssistantSettings
-    openai <- find ui ".assistant-provider-settings[data-provider='openai']"
-    unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["kind" .= ("not_found" :: Text), "status" .= (404 :: Int)])))))) >>= (`shouldBe` True)
-    -- No such model, and the list refused to the key: the key is not kept.
-    findIn openai ".assistant-key" >>= (`typeText` "wrong-token")
-    findIn openai ".assistant-key-form button[type='submit']" >>= click
-    eventually $ findIn openai ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "models.github.ai refused the key")
-    (\s -> (settingsOf OpenAI s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
-    findIn openai ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "wrong-token")
-    -- No such model, but the list comes with the key: the key is kept, and
-    -- the service's own models are offered.
-    setLists (object ["openai" .= [object ["id" .= ("openai/gpt-5" :: Text), "created" .= (20 :: Int)]]])
-    field <- findIn openai ".assistant-key"
-    clear field
-    typeText field "github-token"
-    findIn openai ".assistant-key-form button[type='submit']" >>= click
-    eventually $ findIn openai ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
-    findIn openai ".assistant-check-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The key works and is kept, but models.github.ai has no model")
-    eventually $ (\s -> (settingsOf OpenAI s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "github-token"))
-    eventually $ findAllIn openai ".assistant-model-choice option" >>= traverse textContent >>= (`shouldContain` ["openai/gpt-5"])
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-wrong")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "claude-gateway.example.com refused the key: it has probably expired or been revoked.")
+    (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+    findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-wrong")
+    -- The list's refusal is enough: no message test was made.
+    checks `shouldReturn` []
+
+  it "keeps a typed key whose list comes and whose message test passes, with a model from the list, and shows the list" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    -- A model chosen earlier that the gateway does not list.
+    keep m (UserId "user-editor") (withModel Anthropic "claude-retired-1" (withBaseUrl Anthropic gateway defaultSettings))
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-token")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    findIn anthropic ".assistant-check-kept" >>= (`shouldHaveText` "The key works and is kept.")
+    findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
+    -- Tested, and kept, with the list's first model, in place of the one
+    -- the gateway does not have.
+    (map (fieldText ["model"]) <$> checks) `shouldReturn` [Just "claude-opus-5-5"]
+    kept <- settingsOf Anthropic <$> settingsFor m (UserId "user-editor")
+    kept.key `shouldBe` Just (ApiKey "gw-token")
+    kept.model `shouldBe` Just (ModelName "claude-opus-5-5")
+    isJust kept.fetched `shouldBe` True
+    findIn anthropic ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
+
+  it "keeps nothing when the message test fails with the model, and keeps the key with another model chosen from the list" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    let fail404 = encode (object ["kind" .= ("not_found" :: Text), "status" .= (404 :: Int)])
+        keyNow = (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor")
+    unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict fail404)))) >>= (`shouldBe` True)
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-token")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The provider has no such model")
+    keyNow `shouldReturn` Nothing
+    findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-token")
+    -- The list stays, to choose another model from.
+    findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
+    eventually $ findIn anthropic ".assistant-model" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-provider-settings[data-provider='anthropic'] .assistant-model-choice") (toJSText "claude-sonnet-5-5"))
+    eventually $ (\s -> (settingsOf Anthropic s).model) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ModelName "claude-sonnet-5-5"))
+    -- The gateway has that one: pressed again, the key is kept with it.
+    unsafeIOToPageM (js_check (toJSText "null")) >>= (`shouldBe` True)
+    eventually $ findIn anthropic ".assistant-key-form button[type='submit']" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    (map (fieldText ["model"]) <$> checks) `shouldReturn` [Just "claude-opus-5-5", Just "claude-sonnet-5-5"]
+    keyNow `shouldReturn` Just (ApiKey "gw-token")
+    (\s -> (settingsOf Anthropic s).model) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ModelName "claude-sonnet-5-5"))
+
+  it "keeps a typed key at a gateway without a model list when the message test passes with the model chosen" $ runPage $ do
+    let missing = object ["error" .= object ["kind" .= ("not_found" :: Text), "status" .= (404 :: Int), "message" .= ("no such route" :: Text)]]
+    scriptWith [] (object ["anthropic" .= missing])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-token")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    findIn anthropic ".assistant-check-kept" >>= (`shouldHaveText` "The key works and is kept.")
+    findIn anthropic ".assistant-not-listed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The list of models could not be fetched.")
+    (map (fieldText ["model"]) <$> checks) `shouldReturn` [Just "claude-opus-5-5"]
+    (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "gw-token"))
 
 -- | The address of an organisation's gateway in front of Anthropic's API.
 gateway :: Text

@@ -19,11 +19,12 @@
 -- only to its provider, never to the wiki's server. The page says so, and
 -- also that every request sends the wiki's Markdown reference, which the
 -- providers cache where they can. A typed key is kept only once it works
--- (WP5.59): "Test and keep the key" (or Enter in the key's field) makes
--- the smallest possible request with the typed key (looking up the model,
--- which is free), and keeps the key only when the provider accepts it. A
--- refused key is not kept: the page shows why, and the key stays in the
--- field to be corrected. "Test the key" checks a kept key the same way.
+-- (WP5.59): "Test and keep the key" (or Enter in the key's field) fetches
+-- the model list with the typed key, then makes the smallest possible
+-- request with it (looking up the model, which is free), and keeps the
+-- key and the model only when the provider accepts both. A refused key is
+-- not kept: the page shows why, and the key stays in the field to be
+-- corrected. "Test the key" checks a kept key with that small request.
 -- "Forget" deletes the key. Once kept, a key is never shown again; the
 -- page only shows that one is set.
 --
@@ -76,7 +77,7 @@ import Wiki.App.Editor.Browser (clearField)
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (..)
-  , ErrorKind (NoSuchModel, Unreachable)
+  , ErrorKind (BadKey, Unreachable)
   , Model (..)
   , ModelChoices (..)
   , ModelName (..)
@@ -119,10 +120,8 @@ newtype Input = Input {context :: Context}
 
 -- | 'Check': the result of "Test the key", "Test the connection (no
 -- key)" or "Test and keep the key". 'Kept' is a typed key that worked and
--- is now kept. 'KeptWithoutModel' is a typed key with which the service
--- has no model of the name checked (given), but lists its models: the key
--- is kept, and the list offers the models the service has.
-data Check = Checking | Works | Kept | KeptWithoutModel ModelName | Fails Text
+-- is now kept.
+data Check = Checking | Works | Kept | Fails Text
 
 -- | 'Listing': the state of fetching a provider's model list.
 data Listing = Listing | Fetched Int | NotFetched Text
@@ -504,7 +503,6 @@ component =
             | p /= Scripted && isNothing ps.key -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The connection works without a key, and {{ chosen.text }} is there.</p>|]
             | otherwise -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
           Just Kept -> Just [hh|<p class="assistant-check assistant-check-works assistant-check-kept" role="status">The key works and is kept.</p>|]
-          Just (KeptWithoutModel missing) -> Just [hh|<p class="warning assistant-check assistant-check-kept" role="status">The key works and is kept, but {{ serviceName p ps }} has no model {{ missing.text }}: choose one from the list.</p>|]
           Just (Fails why) -> Just [hh|<p class="error assistant-check assistant-check-fails" role="alert">{{ why }}</p>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -526,16 +524,22 @@ component =
           modify (\st -> st {settings = Nothing, typedKeys = mempty, typedModels = mempty, checks = mempty, listings = mempty, otherModels = mempty, problem = Nothing})
           load
       TypedKey p k -> modify (\st -> st {typedKeys = Map.insert p k st.typedKeys})
-      -- The typed key is checked first, and kept only if the provider
-      -- accepts it, so that a wrong key is never kept. A refused key stays
-      -- in the field, with the reason beside it.
+      -- "Test and keep the key" (the owner, 2026-11-04). The typed key is
+      -- tried before it is kept, so that a wrong key is never kept, in two
+      -- steps. First the model list is fetched with it: a refused key (a
+      -- 401) stops there. Any other failure of the list goes on with the
+      -- model chosen, since a gateway may have no list. Then the message
+      -- test ('checkKey') runs with the model chosen if the list has it,
+      -- else with the list's first model. Only when it passes are the key
+      -- and that model kept. On a failure nothing is kept: the reason
+      -- shows by the field, the key stays in it, and the list stays shown,
+      -- so that another model can be chosen and the button pressed again.
       TestAndKeep p ->
         gets (\st -> (st.user, st.settings, Map.findWithDefault "" p st.typedKeys)) >>= \case
-          (Just user, Just (Right s), typed) | Just r <- readyWith typed p s -> do
-            modify (\st -> st {checks = Map.insert p Checking st.checks})
-            result <- lift (checkKey r)
-            -- The provider's other inputs are disabled while the check
-            -- runs, but the settings may still change meanwhile (another
+          (Just user, Just (Right s), typed) | Just asked <- readyWith typed p s -> do
+            modify (\st -> st {checks = Map.insert p Checking st.checks, listings = Map.insert p Listing st.listings})
+            -- The provider's other inputs are disabled while the key is
+            -- tried, but the settings may still change meanwhile (another
             -- device's change, taken in by 'change'). An answer counts only
             -- for the same user and the same address: another user's
             -- settings are not the ones the key was typed into, and an
@@ -546,27 +550,36 @@ component =
                   if user' /= Just user
                     then pure False
                     else
-                      if address == Just (Right r.baseUrl)
+                      if address == Just (Right asked.baseUrl)
                         then pure True
                         else do
                           modify (\st -> st {checks = Map.insert p (Fails moved) st.checks})
                           pure False
                 moved = "The base URL changed while the key was tested, so the key was not kept: test it again."
                 refuse e = do
-                  modify (\st -> st {checks = Map.insert p (Fails (errorText (serviceOf r) (Just r.key) e)) st.checks})
+                  modify (\st -> st {checks = Map.insert p (Fails (errorText (serviceOf asked) (Just asked.key) e)) st.checks})
                   change (withReached p (e.kind /= Unreachable))
-            whenM same $ case result of
-              Nothing -> keepTyped p typed Kept
-              -- The service has no model of that name. Such a service
-              -- (GitHub Models, for one) names its models otherwise, and
-              -- lists them only for a key. So the key is checked by
-              -- fetching the list with it: kept if the list comes, and
-              -- refused with the list's error if not. A service that
-              -- answers 404 to every request never gets a key kept.
-              Just e | e.kind == NoSuchModel -> do
-                listed <- lift (listModels r)
-                whenM same $ either refuse (const (keepTyped p typed (KeptWithoutModel r.model))) listed
-              Just e -> refuse e
+            now <- liftIO getCurrentTime
+            listed <- lift (listModels asked)
+            whenM same $ case listed of
+              Left e | e.kind == BadKey -> do
+                modify (\st -> st {listings = Map.delete p st.listings})
+                refuse e
+              Left e -> do
+                modify (\st -> st {listings = Map.insert p (NotFetched (errorText (serviceOf asked) (Just asked.key) e)) st.listings})
+                tryModel p user typed asked same refuse identity asked.model
+              Right models -> do
+                -- Shown at once, so that another model can be chosen if
+                -- the message test fails with this one.
+                change (withModels p models now)
+                modify (\st -> st {listings = Map.insert p (Fetched (length models)) st.listings})
+                listedSettings <- gets (\st -> either (const Nothing) Just =<< st.settings)
+                let ps = maybe (settingsOf p s) (settingsOf p) listedSettings
+                    choices = modelChoices p ps
+                    offered = map (\m -> m.id) (choices.recommended <> choices.others)
+                    chosen = chosenModel p ps
+                    model = if chosen `elem` offered then chosen else fromMaybe chosen (head offered)
+                tryModel p user typed asked same refuse (withModels p models now) model
           _ -> pass
       Forget p -> do
         change (withKey p Nothing)
@@ -624,19 +637,36 @@ component =
           Just (Right s) | usable p (settingsOf p s) && isJust (baseUrlOf p (settingsOf p s)) -> fetchModels p
           _ -> pass
 
-    -- Keep a typed key that the provider accepted, show the check's result,
-    -- and fetch the model list with the key. Once the browser stores the
-    -- key, the page's state no longer holds it. When storing fails, the
-    -- key stays typed and the page shows why ('change').
-    keepTyped :: Provider -> Text -> Check -> H.HalogenM State Action Empty output m ()
-    keepTyped p typed outcome = do
-      change (withKey p (Just typed))
-      kept <- gets (\st -> either (const False) (\s -> isJust (settingsOf p s).key) (fromMaybe (Left "") st.settings))
-      if kept
-        then do
-          modify (\st -> st {typedKeys = Map.delete p st.typedKeys, checks = Map.insert p outcome st.checks})
-          fetchModels p
-        else modify (\st -> st {checks = Map.delete p st.checks})
+    -- The message test of "Test and keep the key", with a typed key and a
+    -- model; then, if it passes, the key and the model kept. Keeping the
+    -- key discards the model list stored before it ('withKey'), so the
+    -- list fetched with the key is stored again with it ('relisted').
+    -- Once the browser stores the key, the page's state no longer holds
+    -- it. When storing fails, the key stays typed and the page shows why
+    -- ('change').
+    tryModel
+      :: Provider
+      -> UserId
+      -> Text
+      -> Ready
+      -> H.HalogenM State Action Empty output m Bool
+      -> (AssistantError -> H.HalogenM State Action Empty output m ())
+      -> (Settings -> Settings)
+      -> ModelName
+      -> H.HalogenM State Action Empty output m ()
+    tryModel p user typed asked same refuse relisted model = do
+      let r = Ready {provider = asked.provider, model, key = asked.key, effort = asked.effort, baseUrl = asked.baseUrl}
+      result <- lift (checkKey r)
+      whenM same $ case result of
+        Just e -> refuse e
+        Nothing -> do
+          let keepModel ns = if chosenModel p (settingsOf p ns) == model then ns else withModel p model.text ns
+          change (keepModel . relisted . withKey p (Just typed))
+          kept <- gets (\st -> st.user == Just user && either (const False) (\ns -> isJust (settingsOf p ns).key) (fromMaybe (Left "") st.settings))
+          modify $ \st ->
+            if kept
+              then st {typedKeys = Map.delete p st.typedKeys, checks = Map.insert p Kept st.checks}
+              else st {checks = Map.delete p st.checks}
 
     -- Fetch a provider's model list with its key, and store it. The fetch
     -- also tells whether the provider can be reached from here.
