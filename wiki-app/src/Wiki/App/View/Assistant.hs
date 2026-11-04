@@ -514,7 +514,8 @@ component =
     usingLine st = case st.input.settings of
       Just (Right s) ->
         let ps = settingsOf s.provider s
-            -- A service other than OpenAI is named by its URL's host.
+            -- A provider at another address (a gateway, a server on this
+            -- machine) is named by its URL's host.
             service = if isJust (baseUrlOf s.provider ps) then serviceName s.provider ps else providerLabel s.provider
          in modelLabel s.provider ps (chosenModel s.provider ps) <> " \183 " <> service
       _ -> ""
