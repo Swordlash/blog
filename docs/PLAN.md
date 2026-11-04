@@ -441,6 +441,31 @@ confirms it against reality and the plan is amended if it does not hold.
     as ordinary spaces, a turned-off one with its whole subtree private and the top of
     each run of hidden spaces the import creates sealed, so nothing it hid becomes
     readable.
+38. **Avatars, who is reading, who wrote, the editor's title, a line continuation, the
+    page's width and PDFs in a tab** (the owner, 2026-11-04, built by WP5.55). `User` and
+    `Version.Author` carry `avatar` (a blob and its media type), joined from the users
+    table wherever an author is named and never stored on a comment or a version;
+    `PUT` and `DELETE account/avatar` (the icon's media types, 1 MB at most), served at
+    `users/<id>/avatar/<blob>` as an icon is, under the closed wiki's rule. The crop is
+    made in the browser with Cropper.js from npm, bundled as a lazy island chunk (no
+    CDN), a 256 px square shown round by CSS; a user without a picture is the first
+    letter of their name on a colour from the name. A personal space with no icon of
+    its own is answered with its owner's avatar as its icon in the application's reads
+    only: writes, the transaction and the export keep the stored icon, an icon set in
+    the settings wins, "none" falls back. Who is reading: a subscription on the live
+    channel is reading; the server sends the readers (at most 15 names, each user once,
+    the tab's own user left out, visitors not signed in counted) with the
+    subscription's answer and on every change, and the page shows a stack of at most 5
+    avatars, "+N" and a visitors' circle, the hovered one lifting. Who wrote: `Page`
+    carries `createdBy` and `updatedBy` from its first and latest versions, and a byline
+    under the title replaces the footer's "Last changed". The editor's title of a normal
+    page is text, and a click puts the caret on the first line. A line ending with a
+    backslash continues on the next, decided in the renderer; two trailing spaces join
+    too, since the parser gives one node for both. The page bar ends with "Compact |
+    Full width", remembered in the browser: on a wide screen the bar spans the content,
+    the text is centred at the reading width or fills it, and the contents panel is
+    pinned right. PDF exports are answered `inline` and opened in a tab, since Chromium
+    browsers block downloads over plain HTTP.
 
 ## Repository layout
 
@@ -487,74 +512,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.55 Avatars, who is reading, who wrote, and the editor's title** (the owner,
-  2026-11-04; one pull request for the four). (a) *Avatars.* A user uploads a picture of
-  themselves, cropped to a circle. `User` and `Version.Author` gain `avatar :: Maybe
-  (BlobId, MimeType)`, never stored on a comment or a version but joined from the users
-  table as `Author.name` is (a migration adds the two columns). `PUT account/avatar` (the
-  image's bytes; `iconMediaTypes`, at most `maxIconSize`) and `DELETE account/avatar`,
-  audit `account.avatar`; the bytes are stored like a space icon's and served at
-  `users/<id>/avatar/<blob>` as an icon is (same headers and cache); the old blob goes
-  when replaced or removed, and with the account. The crop is made in the browser with a
-  cropper from npm, bundled as a lazy island chunk as the editor's CodeMirror is (its
-  licence in `licenses.txt`): a square comes out, shown round by CSS; the server checks
-  type and size, not shape. The avatar shows in the header next to the user's name, at
-  each comment next to its author, and in (b); a user without one gets an initials
-  circle, the same helper everywhere; the header updates through the session changes,
-  without a reload. A personal space with no icon of its own shows its owner's avatar as
-  its icon, derived where spaces are answered to the application (as `personalName` is)
-  and resolved by the icon URL, never written to the archive; an icon set in its settings
-  wins, and "none" there falls back to the avatar. Avatars do not travel in the archive
-  (a known gap to record). (b) *Who is reading.* A connection subscribed to a page on the
-  live channel is reading it: `Wiki.Server.Presence` gains readers next to editors, the
-  answer to a subscription carries them and a `Readers` message follows each change, as
-  `Editing` does: the signed-in users of the other connections, each once, the tab's own
-  user excluded, capped by the server at 15 authors plus the total, and the number of
-  connections without a user (visitors not signed in; the owner, 2026-11-04). The page
-  view shows next to the title a stack of overlapping avatar circles, at most 5, then a
-  grey translucent circle "+N" for the rest, then, at the bottom of the stack, a default
-  circle with the visitors' number; hover and focus show the list, at most 15 names,
-  "and N more" and the visitors' line; the hovered or focused circle rises to the top
-  of the stack as the pointer moves across it (CSS only). The demo has no live channel
-  and shows nothing. (c) *Who wrote.* `Page` gains `createdBy` and `updatedBy :: Maybe
-  Author` (the first and the latest version's authors, filled by the backends on a full
-  page read, absent for a page without a version; `PageSummary` untouched), and the page
-  view shows under the title, in small print, "Created by X, last edited by Y on <date>"
-  (one name when both are the same), which replaces the footer's "Last changed"; the
-  blog's "Posted" line stays. (d) *The editor's title.* The title of a non-template page
-  is shown as text in the title's place, not as a field (a disabled input gets no click,
-  so it is not one); a click on it puts the caret on the text's first line after `# `,
-  scrolls it into view and focuses the text (a new island entry next to `focus`). A
-  template's title stays an editable field. (e) *A line continuation* (the owner,
-  2026-11-04): a newline in the Markdown is a line break in the page, so a line that
-  ends with a backslash continues on the next line instead, rendered as one line with a
-  space at the join, decided in the renderer (a backslash in code or math stays what it
-  is); whether two trailing spaces still break depends on the parser telling the two
-  forms apart. (f) *The page's width* (the owner, 2026-11-04): the content column is
-  capped at 54rem, which leaves a wide screen mostly empty and wraps the action bar's
-  buttons although there is room. The page view's action bar gets, at its end, a
-  two-position switch with icons, "Compact | Full width", remembered globally in the
-  browser (localStorage; default compact) and applied to the page view only. On a wide
-  screen the action bar spans the content area; in compact the text column keeps the
-  reading width and is centred between the sidebar and the side column (the contents
-  panel with the comments under it), which is pinned to the right edge; in full width
-  the text takes everything up to the side column. Narrower screens keep today's
-  layout. (g) *PDF exports open in a tab* (the owner, 2026-11-04): Chromium browsers
-  block downloads over plain HTTP and Edge gives no way past it, so on an HTTP
-  deployment nothing could be exported; the two PDF formats are now answered `inline`
-  and linked without `download`, in a new tab, which is a navigation and not blocked;
-  the other formats stay downloads and need HTTPS there (to say in the README). Tests:
-  server (upload, a wrong type or size
-  refused, the URL, the default icon, readers over the live channel next to
-  `Test.Server.Presence` and the comments channel tests, `createdBy` and `updatedBy`);
-  browser (the avatar in the header and at a comment through the demo, the readers'
-  stack from a given list, who wrote under the title, the title's click in the editor,
-  the readers over HTTP in `Test.Browser.Http` next to "who is editing"). The wiki-api
-  goldens change (`User` and `Author` carry the field); the Markdown specs for the
-  continuation; the width switch and its memory in the browser. Docs: `docs/api.md`, the
-  README, the guide where it shows the header, comments, the page's bar or the
-  Markdown's line breaks, the four CHANGELOGs.
 
 - **WP5.56 Exports that say what went wrong** (the owner, 2026-11-04, after WP5.55;
   one pull request). On the owner's server `xelatex` is on the PATH but has no format
@@ -891,6 +848,13 @@ needs. Each was true when its package merged; check before relying on one.
   space imported by a merge becomes an ordinary private, sealed space that only
   administrators read until someone grants it (the archive's users and grants do not
   come along).
+- Avatars and readers (WP5.55): the server's prerendered page is compact until the
+  application applies the browser's width choice (no inline script, by the CSP); a
+  notification's actor has no avatar on the server, which stores the actor's name;
+  the `wiki_blobs` metrics do not count avatar-only blobs; avatars do not travel in
+  the archive and an import leaves them alone; the demo's own pages say "Last edited
+  by" alone, their first version having no author; the operator is neither a reader
+  nor a visitor; the width switch is hidden below 1200 px.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
