@@ -237,6 +237,32 @@ personalSpaces backing = describe "a personal space" $ do
       publicly headers ["users", "alice", "notes"] `shouldReturn` 404
       status headers (links.spaces.pageAt notesSpace.id [slug "n1"]) `shouldReturn` 404
 
+  it "under a space the server already has, keeps what it hid hidden, and the server's space as it was" $ withRunning backing $ \r -> do
+    let public x = void (ok200 @Space (sendJson r methodPut (admin r (links.spaces.setPublic x.id)) SpacePublic {public = True}))
+    users <- makeSpace r "users"
+    public users
+    alice <- sendJson r methodPost (admin r links.spaces.create) NewSpace {parent = Just users.id, name = "alice"} >>= jsonAs @Space 201
+    public alice
+    let container = (space "s1" Nothing "users") {personalContainer = True}
+        hiddenSpace = (spaceWith "s2" (Just "s1") "alice" True "" ByName ByName) {owner = Just (UserId "u1"), active = False}
+        notes = spaceWith "s3" (Just "s2") "notes" True "" ByName ByName
+        theirs = archive [container, hiddenSpace, notes] [page "p1" "s3" Nothing "n1" "Hidden."]
+    apply r theirs importEverything `shouldReturn` summary {spacesCreated = 1, spacesMerged = 2, pagesCreated = 1}
+    -- The server's spaces are as they were; the new one is sealed and
+    -- private.
+    kept <- traverse (spaceAt r) [["users"], ["users", "alice"]]
+    [(x.id, x.public, x.sealed, x.owner) | x <- kept] `shouldBe` [(users.id, True, False, Nothing), (alice.id, True, False, Nothing)]
+    notesSpace <- spaceAt r ["users", "alice", "notes"]
+    (notesSpace.sealed, notesSpace.public) `shouldBe` (True, False)
+    void (pageAt r ["users", "alice", "notes"] ["n1"])
+    _ <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= jsonAs @Account 201
+    token <- signInAs r "bea" "bea's long password"
+    let status headers address = (\x -> x.status) <$> getUrlWith r (r.public <> "/" <> address) headers
+    for_ [[], [cookie token]] $ \headers -> do
+      status headers (links.spaces.atPath (map slug ["users", "alice"])) `shouldReturn` 200
+      status headers (links.spaces.atPath (map slug ["users", "alice", "notes"])) `shouldReturn` 404
+      status headers (links.spaces.pageAt notesSpace.id [slug "n1"]) `shouldReturn` 404
+
 merging :: Backing -> Spec
 merging backing = describe "a space at the same path" $ do
   it "is merged: its pages added after the server's, its settings the server's but empty math macros" $ withRunning backing $ \r -> do
