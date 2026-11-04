@@ -20,6 +20,12 @@ only while nothing is typed in the key field; it says "The connection
 works without a key" when it does. The scripted provider keeps each check
 in `script.checks`, for the browser tests to read the key checked.
 
+The avatar's crop dialog (WP5.59, the owner's addendum) is a modal
+`<dialog>`, shown as the editor's "Link to a page" dialog is: centred in
+the window above the account panel, with a title, a line of help, the
+picture fitted whole into a square cropper of up to 28rem, and "Cancel",
+Escape or a click on the backdrop closing it without an upload.
+
 Claude at another address (WP5.57). The assistant's settings show the
 "Base URL" field for Anthropic as for OpenAI, with a hint that names a
 gateway and where the administrator allows its address (Administration,

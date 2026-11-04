@@ -29,8 +29,12 @@ const element = (name, attributes) => {
 export const crop = (host, file) => {
   host.wikiAvatar?.destroy();
   const url = URL.createObjectURL(file);
-  const canvas = element("cropper-canvas", { background: "" });
-  const image = element("cropper-image", { src: url, alt: "The picture to crop", "initial-center-size": "cover", translatable: "", scalable: "" });
+  // The canvas is a square the page's CSS sizes; its checked background
+  // shows where the picture is not. The picture starts fitted whole inside
+  // it ("contain"), centred, so that nothing of it is cut off before the
+  // user chooses; the wheel zooms it by scale-step a notch.
+  const canvas = element("cropper-canvas", { background: "", "scale-step": "0.1" });
+  const image = element("cropper-image", { src: url, alt: "The picture to crop", "initial-center-size": "contain", translatable: "", scalable: "" });
   const selection = element("cropper-selection", { "aspect-ratio": "1", "initial-coverage": "0.8", movable: "", resizable: "", outlined: "" });
   selection.append(
     element("cropper-handle", { action: "move", "theme-color": "rgba(255, 255, 255, 0.35)" }),

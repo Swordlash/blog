@@ -19,6 +19,17 @@ function wiki_test_box(selector) {
   return box.top + " " + box.bottom + " " + window.innerHeight;
 }
 
+// The whole box of the first element a selector finds, in the window's
+// coordinates, and the window's size: "left top right bottom width
+// height", or "" when there is none. The box includes the element's CSS
+// transform, as a picture Cropper.js scales is drawn.
+function wiki_test_rect(selector) {
+  const element = document.querySelector(selector);
+  if (!element) return "";
+  const box = element.getBoundingClientRect();
+  return [box.left, box.top, box.right, box.bottom, window.innerWidth, window.innerHeight].join(" ");
+}
+
 // Scroll the window so that the element a selector finds is at the top,
 // as following a link to it would (its scroll-margin kept), and wait for
 // two frames, as wiki_test_scroll_to does.

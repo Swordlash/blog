@@ -7291,22 +7291,55 @@ a.mention {
   }
 }
 
+/* The avatar's crop dialog (Wiki.App.View.Avatar): a modal <dialog>, in
+   the browser's top layer and centred in the window, drawn as the editor's
+   dialogs are. The cropper's canvas is a square of up to 28rem, smaller
+   where the window is: the dialog's padding, title, help and buttons fit
+   around it. */
 .avatar-crop-dialog {
-  flex-basis: 100%;
-  padding: 0.75rem;
+  --avatar-crop-size: min(calc(100vw - 4.5rem), calc(100vh - 14rem), 28rem);
+  width: auto;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 2rem);
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
 }
 
-.avatar-crop-dialog[hidden] {
-  display: none;
+.avatar-crop-dialog::backdrop {
+  background: var(--dialog-backdrop);
 }
 
-/* Cropper.js's canvas, which fills the element it is put in. */
+.avatar-crop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.avatar-crop-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.avatar-crop-help {
+  max-width: var(--avatar-crop-size);
+  margin: 0;
+}
+
+.avatar-crop-body .actions {
+  margin: 0;
+}
+
+/* Cropper.js's canvas fills this square; the picture is fitted whole
+   inside it (web/src/avatar.js). */
 .avatar-crop {
-  height: 18rem;
-  margin: 0.5rem 0;
+  width: var(--avatar-crop-size);
+  height: var(--avatar-crop-size);
 }
 
 .avatar-crop cropper-canvas {
