@@ -6,9 +6,12 @@ Links to pages and sections (WP5.53, issue #120). The editor's toolbar has
 "Link to a page" beside "Link" (Ctrl+Shift+K), which opens a dialog with the
 search box's input, space selector and hits: picking a page writes a link to
 it around the selection, or with the page's title as its text, through the
-new command `LinkTo`. The address is the page's path from the wiki's root
-(`/docs/markdown-guide/diagrams`), which a link written by hand also uses,
-so it does not depend on where the wiki is served. With "Link a section"
+new command `LinkTo`. The address is the page's own route, as the route
+codec writes it (`/s/docs/p/markdown-guide/diagrams/`), so it does not
+depend on where the wiki is served or on the router's mode, and it names
+the page even where a subspace of its space has the page's slug.
+`resolvePageLink` reads such an address first, as that page; a path of
+slugs from the root is still read as before. With "Link a section"
 ticked, the dialog reads the page and lists its headings and boxes, and the
 link gets the chosen one's `#id`. The search box's picking part is a
 component of its own, `Wiki.App.View.PagePicker`, which the header's box

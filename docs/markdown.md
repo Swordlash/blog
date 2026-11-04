@@ -39,7 +39,7 @@ Task lists show a checkbox:
 
 ## Links
 
-A link to a page of the wiki is a path, relative to the current page or, starting with `/`, to the wiki: [the guide](guide), [setup](../setup), [a team's page](/engineering/onboarding). A wiki link is shorter: [[onboarding]] links to the page `onboarding`, and [[onboarding|our onboarding]] does too, with another label.
+A link to a page of the wiki is a path, relative to the current page or, starting with `/`, to the wiki: [the guide](guide), [setup](../setup), [a team's page](/engineering/onboarding). A page's own address in the wiki, `/s/engineering/p/onboarding/` (what the address bar shows after the wiki's own part), links to that page too, even where a subspace has the page's name; the editor's "Link to a page" (Ctrl+Shift+K) writes links this way, after you pick the page, and one of its sections if you like. A wiki link is shorter: [[onboarding]] links to the page `onboarding`, and [[onboarding|our onboarding]] does too, with another label.
 
 A link to the web is a URL: <https://example.com>, or [with a label](https://example.com "and a title"). A bare URL such as https://example.com is a link too. Links that leave the wiki get `rel="noopener"`. A `javascript:` link is shown as its text.
 

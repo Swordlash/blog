@@ -238,7 +238,8 @@ The editor writes these for you when a file is dropped or pasted into it.
 ### Links between pages
 
 A link to another page is its path, from this page or (with a leading `/`)
-from the wiki's root, and a wiki link is shorter still:
+from the wiki's root, or the page's own address in the wiki
+(`/s/docs/p/markdown-guide/diagrams/`), and a wiki link is shorter still:
 
 ```markdown
 Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~, `inline code` and links, to the web (<https://commonmark.org>) or to other pages by their path from this one: [diagrams](markdown-guide/diagrams), or the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]
@@ -251,10 +252,11 @@ A link to a page that is not there is shown as broken.
 The editor writes these links for you. **Link to a page** (Ctrl+Shift+K), next
 to **Link**, opens the search box in a dialog: pick a page by its title or its
 text, and the link goes around the selected text, or with the page's title as
-its text, as `[Mathematics](/docs/markdown-guide/mathematics)`, the page's path
-from the wiki's root. With **Link a section** ticked, the dialog then lists the
-page's headings and boxes, and the link goes to the one chosen
-(`/docs/markdown-guide/mathematics#macros`). Every heading and every box
+its text, as `[Mathematics](/s/docs/p/markdown-guide/mathematics/)`, the
+page's own address without the server's part, which names that page even where
+a subspace has its name. With **Link a section** ticked, the dialog then lists
+the page's headings and boxes, and the link goes to the one chosen
+(`/s/docs/p/markdown-guide/mathematics/#macros`). Every heading and every box
 has a `#` that shows when the pointer is on it: a click copies the address
 of that section, and a box's address has its kind and number, `#box-tip-2`.
 Text selected in a page gets **Copy link** beside **Comment**: its address

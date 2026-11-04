@@ -500,10 +500,16 @@ data PageLink = PageLink Route Text
 -- top-level pages leads nowhere. The page has to be among the space's pages;
 -- the empty path is the space itself.
 --
--- A path starting with @\/@ is from the top of the wiki: the longest
--- leading part of it that is a space's path names the space, and the rest
--- (if any) a page there. A page in another space is not checked, since its
--- pages are not at hand; the route shows that it is missing if it is.
+-- A path starting with @\/@ is from the top of the wiki. A page's own
+-- address, as the route codec writes it without the deployment's prefix
+-- (@\/s\/docs\/p\/guide\/@), is that page: what the editor's "Link to a
+-- page" writes, since it names one page however the space's pages and
+-- subspaces are named. Any other path from the top is a space's path and
+-- a page's: the longest leading part of it that is a space's path names
+-- the space, and the rest (if any) a page there. So a page that shares its
+-- slug with a subspace of its space is reached by its own address, not by
+-- the path. A page in another space is not checked, since its pages are
+-- not at hand; the route shows that it is missing if it is.
 --
 -- A segment that is not a slug is read as a title would be ('slugify'), so
 -- that a wiki link names a page by its title: @[[On-call]]@.
@@ -525,10 +531,20 @@ resolvePageLink spaces spacePath pages pagePath destination = do
       pathPart = T.takeWhile (/= '?') beforeFragment
       segments = T.splitOn "/" pathPart
   target <- case T.uncons pathPart of
-    Just ('/', _) -> absolute (filter (not . T.null) segments)
+    Just ('/', _)
+      | Right (Page sp pp) <- Duplex.parse route pathPart -> addressed sp pp
+      | otherwise -> absolute (filter (not . T.null) segments)
     _ -> relative segments
   pure (PageLink target fragment)
   where
+    -- A page by its own address: its space has to be one the reader can
+    -- see, and a page of this space one it has.
+    addressed sp pp = do
+      _ <- rightToMaybe (resolvePath (findChild spaces) sp)
+      if sp == spacePath
+        then Page sp pp <$ rightToMaybe (resolvePath (findChild pages) pp)
+        else pure (Page sp pp)
+
     relative segments = do
       path <- foldM step (take (length pagePath - 1) pagePath) segments
       if null path

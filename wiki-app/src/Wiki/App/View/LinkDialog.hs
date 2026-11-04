@@ -10,12 +10,13 @@
 -- ('Wiki.Core.Markdown.Toc.anchors'), and the link goes to the one
 -- chosen, with its @#id@. "The whole page" links the page itself.
 --
--- The address written is the wiki's own path of the page, from the top of
--- the wiki: its space's slugs, then its own (@\/docs\/markdown-guide\/diagrams@),
--- as a link written by hand names a page in another space
--- ("Wiki.App.Route"'s 'Wiki.App.Route.resolvePageLink'). It is neither the
--- browser's address of the page nor an absolute URL, so the link keeps
--- working when the wiki moves to another address or prefix.
+-- The address written is the page's own address in the wiki, as the route
+-- codec writes it (@\/s\/docs\/p\/markdown-guide\/diagrams\/@), which
+-- "Wiki.App.Route"'s 'Wiki.App.Route.resolvePageLink' reads as that page.
+-- A path of slugs (@\/docs\/markdown-guide\/diagrams@) would lead to a
+-- subspace instead when one has the page's slug. The address has neither
+-- the server nor the deployment's prefix, so the link keeps working when
+-- the wiki moves to another address or prefix, whatever the router's mode.
 --
 -- It is a @\<dialog>@ shown as a modal ('showDialog'), as the editor's
 -- "New kind…" dialog is ("Wiki.App.View.NewKindDialog"): the rest of the
@@ -37,18 +38,20 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
+import Halogen.Router.Duplex qualified as Duplex
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Browser (closeDialog, showDialog)
+import Wiki.App.Route (Route (..), route)
 import Wiki.App.View.Common
 import Wiki.App.View.PagePicker qualified as Picker
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Markdown.Toc qualified as Toc
 import Wiki.Core.Page (Page (body))
 import Wiki.Core.Search (SearchHit (..), snippetText)
-import Wiki.Core.Slug (Slug, slugText)
+import Wiki.Core.Slug (Slug)
 
 newtype Input = Input {context :: Context}
 
@@ -190,11 +193,10 @@ component =
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
         H.raise (Chosen (snippetText hit.title) (pageAddress hit.spacePath hit.pagePath <> foldMap ("#" <>) fragment))
 
--- | A page's address in a link written in another page: the wiki's own
--- path, from the top of the wiki, of its space and then of the page
--- (@\/docs\/markdown-guide\/diagrams@).
+-- | A page's address in a link written in another page: its route's path
+-- (@\/s\/docs\/p\/markdown-guide\/diagrams\/@).
 pageAddress :: [Slug] -> [Slug] -> Text
-pageAddress spacePath pagePath = "/" <> T.intercalate "/" (map slugText (spacePath <> pagePath))
+pageAddress spacePath pagePath = Duplex.print route (Page spacePath pagePath)
 
 -- | The anchors a link may go to in a page: its headings and boxes, but
 -- not the title line the page starts with, which is the page itself.

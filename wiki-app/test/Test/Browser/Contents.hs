@@ -106,8 +106,14 @@ spec m = do
     find ui ".page-body h2#code" >>= (`shouldHaveText` "Code")
     -- Shown on hover only, by the stylesheet.
     getAttribute anchor "aria-label" `shouldReturn` Just "Link to this section"
+    -- A click copies the section's address rather than following it
+    -- (WP5.53), and the page stays as it is: the browser may refuse the
+    -- clipboard here, and the notice shows the address either way.
     click anchor
-    eventually $ current ui `shouldReturn` ["#code"]
+    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "/#code")
+    find ui ".link-copied-label" >>= textContent >>= (`shouldSatisfy` (`elem` ["Link copied:", "The link could not be copied. It is selected, to copy by hand:"]))
+    getAttribute anchor "href" `shouldReturn` Just "#code"
+    find ui ".page-body h2#code" >>= (`shouldHaveText` "Code")
 
   -- Back to the reference is the browser's, under the application's
   -- router (Wiki.App.Browser.followArticleLink); the test router keeps the
