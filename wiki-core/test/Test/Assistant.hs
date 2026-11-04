@@ -204,9 +204,8 @@ modelsSpec = describe "the models offered" $ do
     -- A server on this machine needs no key.
     ready onMachine `shouldBe` Right (Ready OpenAI (ModelName "gpt-6.1-sol") (ApiKey "") "medium" (Just (Url "http://localhost:11434/v1")))
     usable OpenAI ps `shouldBe` True
-    usable Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "http://localhost:1/v1" defaultSettings)) `shouldBe` False
     serviceName OpenAI ps `shouldBe` "localhost:11434"
-    serviceName Anthropic ps `shouldBe` "Anthropic"
+    serviceName Anthropic (settingsOf Anthropic onMachine) `shouldBe` "Anthropic"
     -- Its models are its own: all of them, newest first, none dropped.
     let served = [Listed (ModelName "llama4:8b") Nothing (Just 20), Listed (ModelName "qwen3-coder") Nothing (Just 30), Listed (ModelName "nomic-embed-text") Nothing (Just 10)]
         fetched = settingsOf OpenAI (withModels OpenAI served today onMachine)
@@ -218,6 +217,39 @@ modelsSpec = describe "the models offered" $ do
     (settingsOf OpenAI (withBaseUrl OpenAI "https://models.github.ai/inference" (withModels OpenAI served today onMachine))).fetched `shouldBe` Nothing
     (settingsOf OpenAI (withBaseUrl OpenAI "" onMachine)).baseUrl `shouldBe` Nothing
     blankSettings (withBaseUrl OpenAI "" (withBaseUrl OpenAI "http://localhost:1" defaultSettings)) `shouldBe` True
+
+  it "take another address for Anthropic's API, a gateway, named by its host" $ do
+    let gateway = withKey Anthropic (Just "gw-token") (withBaseUrl Anthropic " https://claude-gateway.example.com/ " defaultSettings)
+        ps = settingsOf Anthropic gateway
+        url = Url "https://claude-gateway.example.com"
+    ps.baseUrl `shouldBe` Just url
+    baseUrlOf Anthropic ps `shouldBe` Just url
+    serviceName Anthropic ps `shouldBe` "claude-gateway.example.com"
+    -- The request goes there, with the key, and the errors name it.
+    ready gateway `shouldBe` Right (Ready Anthropic (ModelName "claude-opus-5-5") (ApiKey "gw-token") "medium" (Just url))
+    serviceOf <$> ready gateway `shouldBe` Right "claude-gateway.example.com"
+    serviceOf <$> ready (withKey Anthropic (Just "sk-a") defaultSettings) `shouldBe` Right "Anthropic"
+    -- Usable without a key, as another address of OpenAI's is: a gateway
+    -- that needs one refuses the request, and says so.
+    let keyless = settingsOf Anthropic (withBaseUrl Anthropic "https://claude-gateway.example.com" defaultSettings)
+    usable Anthropic keyless `shouldBe` True
+    (\r -> r.key) <$> readyFor Anthropic (withBaseUrl Anthropic "https://claude-gateway.example.com" defaultSettings) `shouldBe` Right (ApiKey "")
+    usable Anthropic (settingsOf Anthropic defaultSettings) `shouldBe` False
+    -- Its models: those of the short list recommended, the others offered too.
+    let served = [Listed (ModelName "claude-opus-5-5") (Just "Claude Opus 5.5") (Just 30), Listed (ModelName "claude-opus-6-preview") Nothing (Just 40)]
+        fetched = settingsOf Anthropic (withModels Anthropic served today gateway)
+    modelChoices Anthropic fetched `shouldBe` ModelChoices [Model (ModelName "claude-opus-5-5") "Claude Opus 5.5"] [Model (ModelName "claude-opus-6-preview") "claude-opus-6-preview"]
+    -- Kept with the rest of the settings, and read back.
+    toJSON gateway `shouldSatisfy` \case
+      Object o -> (KM.lookup "anthropic" o >>= \case Object a -> KM.lookup "baseUrl" a; _ -> Nothing) == Just (String "https://claude-gateway.example.com")
+      _ -> False
+    decode (encode gateway) `shouldBe` Just gateway
+    -- Another address is another service: what was learnt goes; and none
+    -- is the provider's own again.
+    (settingsOf Anthropic (withBaseUrl Anthropic "https://other.example.com" (withModels Anthropic served today gateway))).fetched `shouldBe` Nothing
+    serviceName Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "" gateway)) `shouldBe` "Anthropic"
+    -- The scripted provider sends nothing anywhere.
+    baseUrlOf Scripted ps `shouldBe` Nothing
 
   it "say which addresses are plain HTTP to another machine" $ do
     map insecureUrl ["https://models.github.ai/inference", "http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://[::1]:8080", "HTTP://LocalHost/v1"]
@@ -306,13 +338,23 @@ openAiList =
 errorSpec :: Spec
 errorSpec = describe "an error" $ do
   it "says what the provider's kind of error means, with its words and status" $ do
+    let e = AssistantError {kind = RateLimited, status = Just 429, message = "slow down"}
+    errorText "Anthropic" Nothing e `shouldBe` "The provider is limiting requests, or the account's credit or limits are used up. The provider said: slow down (429)"
+    errorText "Anthropic" Nothing e {message = ""} `shouldBe` "The provider is limiting requests, or the account's credit or limits are used up. (429)"
+
+  it "says a refused key has probably expired, names the service, and says to paste a new one" $ do
     let e = AssistantError {kind = BadKey, status = Just 401, message = "invalid x-api-key"}
-    errorText Nothing e `shouldBe` "The provider did not accept the key. The provider said: invalid x-api-key (401)"
+        meaning = "claude-gateway.example.com refused the key: it has probably expired or been revoked. Paste a new one in the assistant's settings."
+    errorMeaning "claude-gateway.example.com" e `shouldBe` meaning
+    errorDetail Nothing e `shouldBe` "The provider said: invalid x-api-key (401)"
+    errorText "claude-gateway.example.com" Nothing e `shouldBe` meaning <> " The provider said: invalid x-api-key (401)"
+    errorDetail Nothing e {message = "", status = Nothing} `shouldBe` ""
+    errorText "Anthropic" Nothing e {message = "", status = Nothing} `shouldBe` "Anthropic refused the key: it has probably expired or been revoked. Paste a new one in the assistant's settings."
 
   it "never shows the key, nor anything that looks like one" $ do
     let key = "sk-proj-abcdefghijklmnop1234"
         e = AssistantError {kind = BadKey, status = Just 401, message = "Incorrect API key provided: " <> key <> ". Also sk-proj-****1234 was seen."}
-        shown = errorText (Just (ApiKey key)) e
+        shown = errorText "OpenAI" (Just (ApiKey key)) e
     shown `shouldNotSatisfy` T.isInfixOf key
     shown `shouldNotSatisfy` T.isInfixOf "1234"
     shown `shouldSatisfy` T.isInfixOf "[your key]"

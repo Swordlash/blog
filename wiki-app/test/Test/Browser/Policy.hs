@@ -77,7 +77,7 @@ spec m = do
     unsafeIOToPageM (js_forget (toJSText "https://blocked.example"))
     refused <- unsafeIOToPageM (runTest (checkKey (ready (Just (Url blocked))) :: m (Maybe AssistantError)))
     (\e -> e.kind) <$> refused `shouldBe` Just Blocked
-    let said = maybe "" (errorText Nothing) refused
+    let said = maybe "" (errorText "blocked.example" Nothing) refused
     said `shouldSatisfy` T.isInfixOf "https://blocked.example is not among the addresses they allow: https://api.anthropic.com, https://api.openai.com."
     said `shouldSatisfy` T.isInfixOf "assistant's hosts"
     -- Nothing was sent, so nothing was refused by the browser.

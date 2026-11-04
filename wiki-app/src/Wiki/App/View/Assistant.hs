@@ -106,7 +106,7 @@ import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (kind)
-  , ErrorKind (Unreachable)
+  , ErrorKind (BadKey, Unreachable)
   , Mode (..)
   , Model (..)
   , ModelChoices (..)
@@ -119,6 +119,8 @@ import Wiki.Core.Assistant
   , chosenModel
   , effortOf
   , efforts
+  , errorDetail
+  , errorMeaning
   , errorText
   , modeLabel
   , modelChoices
@@ -126,6 +128,7 @@ import Wiki.Core.Assistant
   , providerLabel
   , ready
   , serviceName
+  , serviceOf
   , settingsOf
   , withMode
   , withModel
@@ -199,6 +202,10 @@ data Entry
     FromModel Reply
   | -- | An error.
     Trouble Text
+  | -- | A key the provider refused (a 401): what it means, which says to
+    -- paste a new key, and the provider's own message, shown smaller
+    -- under a link to the settings.
+    KeyRefused Text Text
   | -- | A note from the panel about the conversation itself.
     Notice Text
 
@@ -607,6 +614,18 @@ component =
           </div>
         |]
       Trouble why -> [hh|<p class="error assistant-error" role="alert">{{ why }}</p>|]
+      KeyRefused meaning detail ->
+        [hh|
+          <div class="error assistant-error assistant-key-refused" role="alert">
+            <p>
+              {{ meaning <> " " }}
+              <a class="assistant-settings-open" {{ Router.linkProps st.input.context.router Followed AssistantSettings }}>Open the assistant's settings</a>
+            </p>
+            {% if not (T.null detail) %}
+              <p class="assistant-error-detail">{{ detail }}</p>
+            {% end %}
+          </div>
+        |]
       Notice what -> [hh|<p class="assistant-notice" role="status">{{ what }}</p>|]
       where
         -- The line that says the model is at work while nothing arrives,
@@ -770,8 +789,13 @@ component =
       HeardStopped -> finish Stopped
       HeardFailed e -> do
         finish Ended
-        key <- gets (\st -> (\r -> r.key) <$> st.using)
-        addEntry (Trouble (errorText key e))
+        using <- gets (\st -> st.using)
+        let key = (\r -> r.key) <$> using
+            service = maybe "The provider" serviceOf using
+        addEntry $
+          if e.kind == BadKey
+            then KeyRefused (errorMeaning service e) (errorDetail key e)
+            else Trouble (errorText service key e)
         -- Any response, including a refusal, comes from the provider; no
         -- response means it cannot be reached.
         reached (e.kind /= Unreachable)

@@ -65,6 +65,7 @@ module Wiki.Core.Assistant
   , insecureUrl
   , usable
   , serviceName
+  , serviceOf
   , Ready (..)
   , ready
   , readyFor
@@ -73,6 +74,8 @@ module Wiki.Core.Assistant
   , ErrorKind (..)
   , AssistantError (..)
   , errorText
+  , errorMeaning
+  , errorDetail
   , redact
   )
 where
@@ -239,10 +242,13 @@ data ModelChoices = ModelChoices
 -- The scripted provider's list is grouped like Anthropic's, since it
 -- receives Anthropic's request.
 --
--- The list of a service other than OpenAI that implements OpenAI's API
--- (the 'Bool', see 'baseUrlOf') has models with names of its own, and is
--- not filtered: all its models are offered, newest first, and the
--- recommended ones are only those of the short list it has, if any.
+-- The list of another service that implements the provider's API (the
+-- 'Bool', see 'baseUrlOf') has models with names of its own, and is not
+-- filtered: all its models are offered, newest first, and the recommended
+-- ones are only those of the short list it has, if any. A gateway in front
+-- of Anthropic's API that lists Claude's models by their own ids so gets
+-- the short list's models recommended, and its other models under all
+-- the others.
 groupModels :: Provider -> Bool -> [Listed] -> ModelChoices
 groupModels p elsewhere listing =
   ModelChoices
@@ -369,8 +375,8 @@ data ProviderSettings = ProviderSettings
   -- ^ The effort chosen for new conversations ('efforts'), if any.
   -- 'Nothing' means 'defaultEffort' ('effortOf').
   , baseUrl :: Maybe Url
-  -- ^ The base URL requests go to, if not the provider's own: for OpenAI,
-  -- any service that implements its API ('baseUrlOf').
+  -- ^ The base URL requests go to, if not the provider's own: any service
+  -- that implements the provider's API ('baseUrlOf').
   , fetched :: Maybe ModelList
   -- ^ The provider's model list, as last fetched with the key.
   , unreachable :: Bool
@@ -480,11 +486,14 @@ trimmed = mfilter (not . T.null) . fmap T.strip
 chooseProvider :: Provider -> Settings -> Settings
 chooseProvider p s = Settings {provider = p, byProvider = s.byProvider, chatMode = s.chatMode}
 
--- | The base URL of a service other than OpenAI that implements OpenAI's
--- API (Azure OpenAI, GitHub Models, OpenRouter, a server on this machine
--- such as Ollama or LM Studio). Only OpenAI's settings have one.
+-- | The base URL of another service that implements the provider's API,
+-- if one is set. For OpenAI's API that is Azure OpenAI, GitHub Models,
+-- OpenRouter, or a server on this machine such as Ollama or LM Studio.
+-- For Anthropic's API it is a gateway, such as an organisation's own in
+-- front of Anthropic (what Claude Code takes as @ANTHROPIC_BASE_URL@,
+-- WP5.57). The scripted provider sends nothing anywhere, so it has none.
 baseUrlOf :: Provider -> ProviderSettings -> Maybe Url
-baseUrlOf p ps = if p == OpenAI then ps.baseUrl else Nothing
+baseUrlOf p ps = if p == Scripted then Nothing else ps.baseUrl
 
 -- | Whether a URL is plain HTTP to a machine other than this one, which
 -- anyone on the network path can read: a key sent there is no longer
@@ -500,15 +509,25 @@ insecureUrl url = case T.stripPrefix "http://" (T.toLower (T.strip url)) of
        in if "[" `T.isPrefixOf` afterUser then T.takeWhile (/= ']') afterUser <> "]" else T.takeWhile (/= ':') afterUser
 
 -- | Whether requests can be sent to a provider: always to the scripted
--- one, to another with a key, and also without a key to OpenAI's API at
--- another base URL (a server on this machine needs none).
+-- one, to another with a key, and also without a key to another base URL
+-- (a server on this machine needs none; a gateway that does need one
+-- refuses the request, and the error says to paste a key).
 usable :: Provider -> ProviderSettings -> Bool
 usable p ps = p == Scripted || isJust ps.key || isJust (baseUrlOf p ps)
 
--- | The service named in a message saying the provider cannot be reached:
--- the provider, or the host of its other base URL.
+-- | The service named in a message saying the provider cannot be reached
+-- or refused the key: the provider, or the host of its other base URL.
 serviceName :: Provider -> ProviderSettings -> Text
-serviceName p ps = case baseUrlOf p ps of
+serviceName p ps = serviceAt p (baseUrlOf p ps)
+
+-- | The service a request goes to, named as 'serviceName' names it. The
+-- chat names it in the errors of a conversation, whose settings it keeps
+-- as a 'Ready'.
+serviceOf :: Ready -> Text
+serviceOf r = serviceAt r.provider r.baseUrl
+
+serviceAt :: Provider -> Maybe Url -> Text
+serviceAt p = \case
   Just url -> T.takeWhile (`notElem` ("/?#" :: [Char])) (snd (T.breakOnEnd "://" url.text))
   Nothing -> case p of
     Anthropic -> "Anthropic"
@@ -648,28 +667,42 @@ instance FromJSON AssistantError where
         "blocked" -> pure Blocked
         _ -> pure Failed
 
--- | The message the panel and the settings show for an error: what it
--- means, then the provider's own message and the status, with the key
--- removed ('redact') wherever it appears, since a provider may quote it.
--- A 'Blocked' address is no provider's answer: its message is the wiki's
--- own, and follows the meaning as it is.
-errorText :: Maybe ApiKey -> AssistantError -> Text
-errorText key e
-  | e.kind == Blocked = meaning <> (if T.null said then "" else " " <> said)
-  | otherwise = meaning <> (if T.null said then "" else " The provider said: " <> said) <> maybe "" (\s -> " (" <> show s <> ")") e.status
+-- | The message the settings show for an error: 'errorMeaning', then
+-- 'errorDetail'. The service is the one the request went to
+-- ('serviceName', 'serviceOf').
+errorText :: Text -> Maybe ApiKey -> AssistantError -> Text
+errorText service key e = errorMeaning service e <> (if T.null detail then "" else " " <> detail)
+  where
+    detail = errorDetail key e
+
+-- | What an error means, in a sentence or two of the wiki's own. A refused
+-- key ('BadKey', a 401) is named for the service that refused it. The
+-- usual cause is a key or token that expired or was revoked: nothing
+-- refreshes a key, so the user pastes a new one, and the sentence says so.
+errorMeaning :: Text -> AssistantError -> Text
+errorMeaning service e = case e.kind of
+  BadKey -> service <> " refused the key: it has probably expired or been revoked. Paste a new one in the assistant's settings."
+  NotAllowed -> "The key may not do this."
+  NoSuchModel -> "The provider has no such model, or the key may not use it."
+  RateLimited -> "The provider is limiting requests, or the account's credit or limits are used up."
+  Overloaded -> "The provider is overloaded or failing; try again in a while."
+  Unreachable -> "The provider could not be reached."
+  Declined -> "The model declined to answer."
+  BadRequest -> "The provider refused the request."
+  Blocked -> "This wiki's pages do not let the assistant reach that address, so the browser sent nothing."
+  Failed -> "The request failed."
+
+-- | The provider's own message and the status, with the key removed
+-- ('redact') wherever it appears, since a provider may quote it; empty
+-- when the provider said nothing and gave no status. A 'Blocked' address
+-- is no provider's answer: its message is the wiki's own, and is given as
+-- it is.
+errorDetail :: Maybe ApiKey -> AssistantError -> Text
+errorDetail key e
+  | e.kind == Blocked = said
+  | otherwise = T.strip ((if T.null said then "" else "The provider said: " <> said) <> maybe "" (\s -> " (" <> show s <> ")") e.status)
   where
     said = redact key (T.strip e.message)
-    meaning = case e.kind of
-      BadKey -> "The provider did not accept the key."
-      NotAllowed -> "The key may not do this."
-      NoSuchModel -> "The provider has no such model, or the key may not use it."
-      RateLimited -> "The provider is limiting requests, or the account's credit or limits are used up."
-      Overloaded -> "The provider is overloaded or failing; try again in a while."
-      Unreachable -> "The provider could not be reached."
-      Declined -> "The model declined to answer."
-      BadRequest -> "The provider refused the request."
-      Blocked -> "This wiki's pages do not let the assistant reach that address, so the browser sent nothing."
-      Failed -> "The request failed."
 
 -- | A message with the key removed: the key itself, wherever it appears,
 -- and anything that looks like a key or a part of one (a word starting

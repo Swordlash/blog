@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Claude at another address (WP5.57). `baseUrlOf` now gives the base URL
+of any provider but the scripted one, so Anthropic's settings take one
+too, for a gateway that speaks Anthropic's API. `usable`, `readyFor`,
+`serviceName` and `modelChoices` follow: Anthropic at another address is
+usable without a key, its request carries the base URL, it is named by
+its host, and its model list is the service's own, the short list's
+models recommended and all the others offered. `serviceOf` names the
+service of a `Ready`. `errorText` takes the service's name as its first
+argument, and a refused key (`BadKey`, a 401) now reads "<service>
+refused the key: it has probably expired or been revoked. Paste a new
+one in the assistant's settings."; `errorMeaning` and `errorDetail` give
+the two parts of the message, the wiki's sentence and the provider's own
+words with the status.
+
 Avatars, who wrote a page, and lines that go on (WP5.55). `User` and
 `Author` gain `avatar :: Maybe Avatar`, a new record of the picture's
 blob and media type; the JSON field may be absent, which reads as none.
