@@ -399,6 +399,23 @@ confirms it against reality and the plan is amended if it does not hold.
     the two cannot drift; `--args-from FILE` runs the answers without screens for the
     tests (`toolchain/test-configure.sh`, run by the deploy test with
     `WIKI_TEST_WIZARD=1`, not in CI: it compiles brick).
+36. **Links to pages, sections, boxes and selected text; the home page's options in
+    its editor** (the owner, 2026-11-03, issue #120, built by WP5.53). The editor's
+    "Link to a page" (Ctrl+Shift+K) picks a page through the search's picker (the
+    header's box and the dialog share it) and, with "link a section", one of the
+    page's anchors (`Toc.anchors`: headings and boxes with ids); the link's address is
+    the route's own path (`/s/…/p/…`), which `resolvePageLink` reads first, the path
+    form written by hand still read after it; the title goes through `labelText`
+    (brackets as character references, since `\[…\]` would be display math). A box
+    has an id (`box-<kind>-<n>` by its kind's count in the page, a starred box its
+    title's slug) and the same hover `#` as a heading; in the page view that `#`
+    copies the absolute address instead of navigating ("Link copied" in the corner;
+    the href stays for a middle click). A selection's "Copy link" uses the browser's
+    own text fragment (`#:~:text=`), built from the rendered text with breaks at block
+    edges, islands and elements without text, a quote across a break written
+    `start,end`; nothing of ours reads it. The home page's Show Spaces, Show Recently
+    visited, Show to signed-out visitors and the icon are edited with the home page
+    (`EditHome`) and saved with it, no longer in its view.
 
 ## Repository layout
 
@@ -446,48 +463,15 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.53 Links to pages and sections, and the home page's options in its editor**
-  (the owner, 2026-11-03, issue #120; one pull request for the three). (a) *A link to
-  a page from the editor.* Next to Link, a "Link to a page" button (and Ctrl+Shift+K)
-  that opens a dialog with the search box's parts (the input, the space selector,
-  the hits, the arrows and Enter: the picking part of `View/Search.hs` becomes a
-  component of its own, which the header's box and this dialog both use), so the
-  writer picks a page instead of finding its address; choosing one writes
-  `[title](/s/…/p/…)` around the selection as Link does (the selected text stays
-  the link's text; nothing selected, the page's title), through the same pure edit
-  functions. A checkbox "link a section" lists the chosen page's anchors (its
-  headings with their ids, and its boxes, (b)), read from the page's Markdown with a
-  wiki-core function `anchors :: Document -> [Anchor]` (id and label) that the table
-  of contents' walk is built on, and the link gets the `#id`. (b) *Links to sections,
-  boxes and selected text, as Confluence has them.* A box (`> [!KIND]`) gets an id:
-  `box-<kind>-<number>` when it is numbered, else `box-<kind>-<slug of its title>`
-  when it has a title, made unique as heading ids are; none otherwise. The hover
-  button every heading already has (`heading-anchor`, the `#`) copies the section's
-  absolute address with its fragment to the clipboard on a click, instead of
-  navigating (its href stays, so "copy link" and a middle click keep working), shows
-  "Copied" for a moment, and puts the fragment in the address bar; a box's title gets
-  the same button. The click is handled where the article's clicks already are
-  (`Browser.articleLink`), so the prerendered page needs nothing. Selected text: the
-  popover the inline comments show on a selection gains "Copy link", whose address
-  uses the browser's own text fragment (`#:~:text=…`, URL-encoded, with a prefix and
-  suffix when the quote is not unique, as `Wiki.Core.Anchor` already computes), which
-  Chromium, Safari and Firefox scroll to and highlight by themselves; nothing of ours
-  reads it. (c) *The home page's options in its editor.* Show Spaces, Show Recently
-  visited, Show to signed-out visitors and the icon leave the home page's view
-  (`View/Directory.hs`) and appear in the editor when it edits the home document
-  (`EditHome`): a "Home page" group above the text, saved with Save (the page, then
-  `setHomePage`) and dropped by Cancel. Tests: native for box ids, `anchors` and the
-  text-fragment address; hspec-halogen for the dialog (search, pick, the link
-  written, with and without a section), the copy button (the clipboard test hook)
-  and the home editor's options (saved, cancelled, gone from the view). Docs: the
-  README's editing section (the two buttons, the links), wiki-app's and wiki-core's
-  CHANGELOGs.
 
 ### Later, or waiting for the owner
 
-- **Issue #120, the owner's editor improvements** (the owner, 2026-10-31). WP5.37 to
-  WP5.45 did all of it; an editor that did not widen when the sidebar is folded was
-  not reproduced by either side and is dropped (the owner, 2026-11-03). Left out:
+- **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
+  2026-11-04). WP5.37 to WP5.45 did all of it, and WP5.53 the three requests added on
+  2026-11-03 (a link to a page from the editor, links to sections and selected text,
+  the home page's options in its editor); an editor that did not widen when the
+  sidebar is folded was not reproduced by either side and is dropped (the owner,
+  2026-11-03). Left out:
   C-like preprocessor macros (the owner: "probably not"; math macros and boxes cover
   the need); grammar checking beyond the browser's spelling, which CodeMirror already
   has on (later, perhaps LanguageTool; Grammarly offers no SDK any more).
@@ -748,6 +732,15 @@ needs. Each was true when its package merged; check before relying on one.
   --backend-only`), and on a machine other than Debian stops when libsodium or zlib
   is missing, as the bootstrap's own check would; brick and vty compile once, some
   minutes. Its command-line tests run only with `WIKI_TEST_WIZARD=1` (not in CI).
+- Links and text fragments (WP5.53): a hand-written `/s/x/p/y` is read as the route
+  `Page [x] [y]`, so a top-level space slugged `s` with that layout is reached through
+  its route address only; a hit in the home space gets a route path rather than `/`;
+  the "occurs more than once" check looks at a quote's first part, so a long quote
+  that repeats only later is written without context; an image with no space around
+  it inside a word assumes the browser's matcher sees a non-word character there;
+  Ctrl+Shift+K is Firefox's web console shortcut (the default is prevented, Firefox's
+  behaviour unchecked). The wiki's icon still saves as soon as it is set; the home
+  page's three switches do not count as unsaved work.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
