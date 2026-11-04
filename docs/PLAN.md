@@ -648,14 +648,21 @@ In the order to do it, unless the owner says otherwise.
 
 - **WP5.62 Spoilers, and code listings that scroll** (the owner, 2026-11-04, issue
   #152; one pull request). Two additions to the Markdown. (a) *Spoilers.* A block
-  spoiler is a box of a new built-in kind, `> [!SPOILER]` (with a title as the other
-  kinds take one), rendered as a `<details class="alert alert-spoiler">` whose
-  `<summary>` is the label ("Spoiler", or the title) and whose content is hidden until
-  opened; never numbered. An inline spoiler, `||hidden||`, as the strikethrough and
+  spoiler is a named pair of markers, so that any blocks go inside without a prefix on
+  every line and spoilers nest (the owner, 2026-11-04, over a box kind): a line
+  `::: spoiler Name` opens one, `::: end Name` closes the innermost open spoiler of
+  that name; an end marker of another name, or a start marker without a name, is an
+  error line in red that opens or closes nothing; an unclosed spoiler renders in red
+  from its marker down (the marker as an error line saying what to add, its content as
+  the blocks it is), which the editor's preview shows as one types. A closed spoiler is
+  a `<details class="spoiler">` whose summary is the name, closed by default; open or
+  closed is remembered per user, page and name in the browser's storage (a server-side
+  store may come later). An inline spoiler, `||hidden||`, as the strikethrough and
   the highlight are parsed (a two-character delimiter), is a `<span class="spoiler">`
   blurred until the reader clicks it (focus reveals it; a second click hides it
-  again). The editor's box menu gains "Spoiler" and the text tools an inline spoiler
-  button; the preview and the page agree. Exports (PDF, Word, the feed) show the
+  again). The toolbar's block tools gain a spoiler button writing the pair around the
+  selected lines, and the text tools an inline spoiler button; the preview and the page
+  agree. Exports (PDF, Word, the feed) show the
   content as a box titled "Spoiler" and the inline one as its text: a document
   cannot hide. The plain-text views (search, anchors) keep the text. (b) *Scrolling
   listings.* A fence may say how many rows are visible: ```` ```haskell {rows=20}
@@ -665,8 +672,8 @@ In the order to do it, unless the owner says otherwise.
   package chooses and says why), `rows` without a value or not a positive number is
   ignored. The toolbar's code block command is unchanged; the guide's Markdown
   section shows both. Tests: wiki-core (the spoiler's parse and render, block and
-  inline, with and without a title; `rows` parsed, ignored when wrong; the plain
-  text; the export's forms), browser (a block spoiler closed and opened, an inline
+  inline, nested, with code inside, the error lines, the unclosed one; `rows` parsed, ignored when wrong; the plain
+  text; the export's forms), browser (a block spoiler closed, opened and remembered, an inline
   one revealed by a click and hidden again, the toolbar writing both; a listing
   with `rows` scrolling: its height is the rows' and `scrollHeight` exceeds it),
   server (an export with a spoiler). Docs: the README's Markdown section, the guide,
