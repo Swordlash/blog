@@ -401,9 +401,18 @@ const openAround = (element) => {
   return opened;
 };
 
+// The key each spoiler was last opened or closed by, so that a spoiler is
+// restored once for its name and page, when it appears or its key
+// changes: the reader's own click is never undone by a render that moves
+// the spoiler about before the click's toggle has been remembered.
+const restoredKeys = new WeakMap();
+
 const restoreSpoiler = (details) => {
   const key = spoilerKey(details);
-  if (key !== null) details.open = rememberedOpen(key);
+  if (key !== null && restoredKeys.get(details) !== key) {
+    restoredKeys.set(details, key);
+    details.open = rememberedOpen(key);
+  }
   // A spoiler that holds the place the address names is opened for it.
   const target = fragmentTarget(location.hash);
   if (target !== null && details.contains(target) && openAround(target)) target.scrollIntoView();
@@ -430,6 +439,26 @@ document.addEventListener(
     for (const other of scope.querySelectorAll("details.spoiler")) {
       if (other !== details && other.dataset.spoiler === details.dataset.spoiler && other.open !== details.open) other.open = details.open;
     }
+  },
+  true,
+);
+
+// A click on a spoiler's summary is remembered at once, before the toggle
+// it causes is dispatched: a render that puts a new element in the
+// spoiler's place meanwhile opens the new one as the reader left it.
+document.addEventListener(
+  "click",
+  (event) => {
+    const summary = event.target instanceof Element ? event.target.closest("details.spoiler > summary") : null;
+    if (summary === null || event.target.closest("a[href]") !== null) return;
+    const details = summary.parentElement;
+    const key = spoilerKey(details);
+    if (key === null) return;
+    try {
+      if (details.open) localStorage.removeItem(key);
+      else localStorage.setItem(key, "open");
+    } catch {}
+    restoredKeys.set(details, key);
   },
   true,
 );

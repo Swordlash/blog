@@ -6,7 +6,9 @@
 -- click; a block spoiler closed until its summary is clicked, nested ones
 -- each on their own, and the open ones open again when the page is shown
 -- again in this browser; a spoiler that wraps a section opened by its
--- entry in the page's contents and by a link to its heading; and a code
+-- entry in the page's contents and by a link to its heading, and marked
+-- in the contents as the section read only while it is open
+-- (jsbits/toc.js); and a code
 -- block with @rows=3@ three lines high, scrolling inside. The behaviour is
 -- the islands' script's (web/src/islands.js), which the test page loads.
 module Test.Browser.Spoilers (spec) where
@@ -14,9 +16,10 @@ module Test.Browser.Spoilers (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, startChanged, startChangedAgain)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
@@ -33,8 +36,16 @@ $( browserJS
      ["jsbits/test-style.js", "jsbits/test-layout.js"]
      [ ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_listing", "wiki_test_listing", Safe, [t|JSText -> IO JSText|])
+     , ("js_scroll_into_viewPromise", "wiki_test_scroll_into_view", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_scroll_toPromise", "wiki_test_scroll_to", Safe, [t|Int -> IO (Promise ())|])
      ]
  )
+
+js_scroll_to :: Int -> IO ()
+js_scroll_to a1 = if inBrowser then wait =<< js_scroll_toPromise a1 else pure inert
+
+js_scroll_into_view :: JSText -> IO ()
+js_scroll_into_view a1 = if inBrowser then wait =<< js_scroll_into_viewPromise a1 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = describe "spoilers and listings in a page" $ do
@@ -97,6 +108,30 @@ spec m = describe "spoilers and listings in a page" $ do
     eventually $ opened ui `shouldReturn` Nothing
     find ui ".page-body p a[href='#solutions']" >>= click
     eventually $ opened ui `shouldReturn` Just ""
+
+  it "marks a section a spoiler wraps as the one read once it is open and scrolled to, and not while it is closed" $ runPage $ do
+    let long = T.intercalate "\n\n" (replicate 30 "A paragraph of text, to take room on the page.")
+        -- The spoiler's summary near the top of the window, where it is
+        -- clicked; enough after it for its heading to be scrolled to the
+        -- top.
+        body = "## Intro\n\nA short introduction.\n\n[[spoiler]]{results}(The results)\n## Results\n\n" <> long <> "\n[[/spoiler]]{results}\n\n## After\n\n" <> long
+        current ui = do
+          marked <- findAll ui ".toc-list a[data-current]"
+          ordNub . catMaybes <$> traverse (`getAttribute` "href") marked
+        opened ui = find ui ".page-body details.spoiler" >>= (`getAttribute` "open")
+    ui <- page m body
+    eventually $ current ui `shouldReturn` ["#intro"]
+    find ui ".page-body details.spoiler > summary" >>= click
+    eventually $ opened ui `shouldReturn` Just ""
+    unsafeIOToPageM (evaluate =<< js_scroll_into_view (toJSText ("#results" :: Text)))
+    eventually $ current ui `shouldReturn` ["#results"]
+    -- Closed, its heading is not read, wherever the window is.
+    unsafeIOToPageM (evaluate =<< js_scroll_to 0)
+    find ui ".page-body details.spoiler > summary" >>= click
+    eventually $ opened ui `shouldReturn` Nothing
+    eventually $ current ui `shouldReturn` ["#intro"]
+    unsafeIOToPageM (evaluate =<< js_scroll_into_view (toJSText ("#after" :: Text)))
+    eventually $ current ui `shouldReturn` ["#after"]
 
   it "shows three lines of a listing with rows=3, and scrolls inside it" $ runPage $ do
     ui <- page m "```haskell {rows=3}\none = 1\ntwo = 2\nthree = 3\nfour = 4\nfive = 5\nsix = 6\n```"
