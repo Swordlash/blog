@@ -40,6 +40,7 @@ import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 import Test.Browser.Spaces qualified as Spaces
+import Test.Browser.Spoilers qualified as Spoilers
 import Test.Browser.Stars qualified as Stars
 import Test.Browser.Vault qualified as Vault
 import Test.Browser.Workspace qualified as Workspace
@@ -104,6 +105,7 @@ spec = do
   describe "Wiki.App.Favicon" (Favicon.spec BrowserDOM)
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
+  describe "Spoilers and listings that scroll" (Spoilers.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
 #endif

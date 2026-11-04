@@ -581,6 +581,38 @@ spec m = do
     markdown ui `shouldReturn` "# Hello, world\n\n> [!EXERCISE]\n> Read this first"
     previewHas ui ".alert-exercise .alert-title" "Exercise 1"
 
+  it "hides the selected words as an inline spoiler from the toolbar, and the selected lines as a block spoiler" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clearBody ui
+    typeText text "Some words"
+    press "Control+Shift+ArrowLeft"
+    find ui ".editor-toolbar button[aria-label='Inline spoiler']" >>= click
+    markdown ui `shouldReturn` "# Hello, world\n\nSome ||words||"
+    previewHas ui "span.spoiler" "words"
+    -- The line, from its start, in a block spoiler, its name selected to
+    -- be typed over.
+    press "End"
+    press "Shift+Home"
+    find ui ".editor-toolbar button[aria-label='Block spoiler']" >>= click
+    markdown ui `shouldReturn` "# Hello, world\n\n[[spoiler]]{name}(Description)\nSome ||words||\n[[/spoiler]]{name}"
+    editorSelection ui `shouldReturn` (28, 32)
+    eventually $ find ui ".editor-preview details.spoiler > summary" >>= (`shouldHaveText` "Description")
+
+  it "shows a spoiler that is not closed in red in the preview as it is typed, and as a spoiler once it is" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clearBody ui
+    typeText text "[[spoiler]]{answer}(The answer)\nForty-two."
+    previewHas ui ".spoiler-error .spoiler-error-reason" "Spoiler “answer” is not closed: add [[/spoiler]]{answer}"
+    previewHas ui ".spoiler-unclosed p" "Forty-two."
+    computedStyle ".editor-preview .spoiler-unclosed" "color" >>= (`shouldNotBe` "")
+    typeText text "\n[[/spoiler]]{answer}"
+    eventually $ find ui ".editor-preview details.spoiler[data-spoiler='answer'] > summary" >>= (`shouldHaveText` "The answer")
+    length <$> findAll ui ".editor-preview .spoiler-error" `shouldReturn` 0
+
   it "defines a new kind of box in a dialog, without leaving the page, writes a box of it, and lists it at once" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") helloEditor
     find ui ".editor-toolbar button[aria-label='Box']" >>= click

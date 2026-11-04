@@ -38,6 +38,19 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
     Strikethrough `turns` "‸" `into` "~~«struck text»~~"
     Strikethrough `turns` "«~~gone~~»" `into` "«gone»"
 
+  describe "Spoiler" $ do
+    Spoiler `turns` "a «secret» b" `into` "a ||«secret»|| b"
+    Spoiler `turns` "‸" `into` "||«hidden text»||"
+    Spoiler `turns` "«||secret||»" `into` "«secret»"
+    Spoiler `turns` "||«secret»||" `into` "«secret»"
+
+  describe "SpoilerBlock" $ do
+    SpoilerBlock `turns` "‸" `into` "[[spoiler]]{«name»}(Description)\n\n[[/spoiler]]{name}"
+    it "wraps the lines touched, blank ones and code among them, and selects the name" $
+      run SpoilerBlock "«a\n\n```\nx\n```»" `shouldBe` "[[spoiler]]{«name»}(Description)\na\n\n```\nx\n```\n[[/spoiler]]{name}"
+    it "keeps it apart from the paragraphs around it" $
+      run SpoilerBlock "intro\n«a»\nafter" `shouldBe` "intro\n\n[[spoiler]]{«name»}(Description)\na\n[[/spoiler]]{name}\n\nafter"
+
   describe "InlineCode" $ do
     InlineCode `turns` "«x + 1»" `into` "`«x + 1»`"
     InlineCode `turns` "‸" `into` "`«code»`"

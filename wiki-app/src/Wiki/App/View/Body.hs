@@ -77,15 +77,16 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (PageLink (..), Route (Search), resolvePageLink)
 import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
-import Wiki.Core.Id (AttachmentId)
+import Wiki.Core.Id (AttachmentId, UserId (..))
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Markdown.Box (Numbering (..), noNumbers)
 import Wiki.Core.Math (spaceMacros)
 import Wiki.Core.Notification (mentionedIn)
 import Wiki.Core.Page (PageSummary, pageNumber)
 import Wiki.Core.Slides qualified as Slides
-import Wiki.Core.Slug (Slug)
+import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (boxNumbering, id, pageOrder))
+import Wiki.Core.User (User (..))
 import Wiki.Core.Version (Author (..))
 
 -- | The place a page's Markdown is read in: what its links and
@@ -208,7 +209,7 @@ articleOf
   -> Either Md.ParseError [H.ComponentHTML action slots m]
   -> H.ComponentHTML action slots m
 articleOf onLink place source = \case
-  Right nodes -> [hh|<article class="page-body" {{ followingLinks onLink place }}>{{ nodes }}</article>|]
+  Right nodes -> [hh|<article class="page-body" data-spoilers={{ spoilerScope place }} {{ followingLinks onLink place }}>{{ nodes }}</article>|]
   Left e ->
     [hh|
       <div>
@@ -273,7 +274,7 @@ options place =
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
 islandOptions ctx spaceOwn =
   Md.defaultOptions
-    { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)
+    { Md.codeBlock = \k language rows code -> island k (Islands.CodeBlock language rows code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
     , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
@@ -287,6 +288,21 @@ islandOptions ctx spaceOwn =
     -- The wiki's built-in macros as the administration keeps them, if it
     -- does, before the space's.
     spaceDefined = wikiMacrosOf ctx.session <> spaceOwn
+
+-- | 'spoilerScope' is the key under which the reader's browser keeps which
+-- block spoilers of the page are open: the reader (their user id, or
+-- @anonymous@), the space's path and the page's path. The islands' script
+-- reads it from the article's @data-spoilers@ and adds each spoiler's
+-- name (web/src/islands.js), so the state is the reader's and the page's,
+-- in this browser only. The editor's preview of the page has the same
+-- key, so a spoiler opened there is open on the page too.
+spoilerScope :: Place -> Text
+spoilerScope place =
+  maybe "anonymous" (\u -> u.id.text) place.context.session.user
+    <> ":"
+    <> T.intercalate "/" (map slugText (spacePathOf place.context.spaces place.space.id))
+    <> "/p/"
+    <> T.intercalate "/" (map slugText place.path)
 
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of

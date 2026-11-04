@@ -158,6 +158,7 @@ test-suite wiki-core-test
       Test.Markdown.Edit
       Test.Markdown.Link
       Test.Markdown.Mention
+      Test.Markdown.Spoiler
       Test.Markdown.Tikz
       Test.Markdown.Toc
       Test.Math

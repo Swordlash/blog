@@ -61,6 +61,26 @@
 -- stylesheet draws.
 -- Only @id@ and @class@ attributes from braces reach the HTML (and @width@
 -- and @height@ in pixels on an embed): any other could be an event handler.
+-- A fence's @rows=N@ is read by the renderer instead ('codeRows'): the
+-- code block gets the class @code-scroll@ and a @style@ of
+-- @max-height: Nlh; overflow: auto@, so it shows N lines of code and
+-- scrolls inside. The @lh@ unit is the block's own line height, and an
+-- inline style works in a page prerendered on the server before any
+-- script runs; the stylesheet's @code-scroll@ makes the box's lines and
+-- its @lh@ the same height (web/style.css).
+--
+-- __Spoilers.__ An inline spoiler, @||text||@, is a
+-- @\<span class=\"spoiler\" tabindex=\"0\" role=\"button\">@ whose text
+-- the stylesheet blurs until the islands' script gives it the class
+-- @shown@, on a click or on Enter or Space (web/src/islands.js). A block
+-- spoiler is @\<details class=\"spoiler\" data-spoiler=\"name\">@, closed,
+-- its @\<summary>@ the description; the islands' script opens again the
+-- ones a reader left open, by their name and page. A spoiler the parser
+-- found wrong ('SpoilerProblem'), and a broken marker line
+-- ('SpoilerError'), show a @\<p class=\"spoiler-error\">@ with the line as
+-- written and the reason; the wrong spoiler's blocks follow, as they are,
+-- in a @\<div class=\"spoiler-unclosed\">@, which the stylesheet draws in
+-- red. So the editor's preview shows the mistake as it is typed.
 --
 -- __Line breaks.__ A line break in the source is a line break on the page,
 -- a @\<br>@, wherever text is: in paragraphs, list items, quotations,
@@ -84,6 +104,7 @@ module Wiki.Core.Markdown.Render
   , renderSections
   , renderRawHtml
   , boxOf
+  , scrollingCode
   )
 where
 
@@ -111,8 +132,10 @@ import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
 -- type for a page: 'resolveLink' returns it, and 'pageHref' makes a link
 -- to it.
 data Options page w i = Options
-  { codeBlock :: IslandKey -> Maybe Text -> Text -> HH.HTML w i
-  -- ^ A code block: its language, if it has one, and its code.
+  { codeBlock :: IslandKey -> Maybe Text -> Maybe Int -> Text -> HH.HTML w i
+  -- ^ A code block: its language, if it has one, the number of lines it
+  -- shows before it scrolls, if its fence says ('codeRows'; see
+  -- 'scrollingCode'), and its code.
   , mathInline :: IslandKey -> Macros -> Text -> HH.HTML w i
   -- ^ Inline math, @$…$@: the formulas before it that define macros, and
   -- its TeX.
@@ -174,8 +197,8 @@ data IslandKey = IslandKey
 defaultOptions :: Options Text w i
 defaultOptions =
   Options
-    { codeBlock = \_ lang code ->
-        HH.pre_ [HH.code (foldMap (\l -> [HP.class_ (HH.ClassName ("language-" <> l))]) lang) [HH.text code]]
+    { codeBlock = \_ lang rows code ->
+        HH.pre (scrollingCode rows []) [HH.code (foldMap (\l -> [HP.class_ (HH.ClassName ("language-" <> l))]) lang) [HH.text code]]
     , mathInline = \_ _ tex -> HH.span [HP.class_ (HH.ClassName "math inline")] [HH.text tex]
     , mathDisplay = \_ _ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
@@ -250,7 +273,7 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       -- taken it out by now. A page shows nothing for it.
       Pause -> pure []
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
-      CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
+      CodeBlock attrs lang code -> island code <&> \k -> [opts.codeBlock k lang (codeRows attrs) code]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
       -- A block of nothing but definitions (a page's macros, WP5.41) shows
@@ -268,6 +291,15 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
         inner <- renderBlocks' bs
         let anchor = if opts.headingAnchors then concatMap (\i -> headingAnchor [("id", i)]) box.id else []
         pure [boxWith defined kind box.id (title <> anchor) inner]
+      Spoiler h bs -> case h.problem of
+        Nothing -> do
+          summary <- renderInlines (map displayInline h.description)
+          inner <- renderBlocks' bs
+          pure [HH.details [classesProp ["spoiler"], HP.attr (HH.AttrName "data-spoiler") h.name] (HH.summary_ summary : inner)]
+        Just problem -> do
+          inner <- renderBlocks' bs
+          pure [spoilerError h.marker (spoilerProblemText h problem), HH.div [classesProp ["spoiler-unclosed"]] inner]
+      SpoilerError written why -> pure [spoilerError written why]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -363,6 +395,10 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       Emph xs -> node HH.em_ . fromPieces <$> inlinePieces inLink xs
       Strong xs -> node HH.strong_ . fromPieces <$> inlinePieces inLink xs
       Strikeout xs -> node HH.del_ . fromPieces <$> inlinePieces inLink xs
+      Hidden xs ->
+        node (HH.span [classesProp ["spoiler"], HP.tabIndex 0, HP.attr (HH.AttrName "role") "button", HP.attr (HH.AttrName "aria-label") "Spoiler: click to reveal"])
+          . fromPieces
+          <$> inlinePieces inLink xs
       Code attrs code -> pure [PNode (HH.code (idAndClasses attrs []) [HH.text code])]
       Link _ _ _ xs | inLink -> inlinePieces True xs
       Link attrs dest title xs -> renderLink attrs dest title xs
@@ -499,6 +535,7 @@ noteTexts sections = M.fromList [(n, noteText bs) | Footnote n _ bs <- concatMap
       Div _ bs -> concatMap notesIn bs
       BlockQuote bs -> concatMap notesIn bs
       Alert _ _ bs -> concatMap notesIn bs
+      Spoiler _ bs -> concatMap notesIn bs
       _ -> []
 
 -- | A footnote's text, as the title of a reference to it shows it: the
@@ -519,6 +556,8 @@ noteText = T.unwords . T.words . T.unwords . map blockText
       Table _ header rows -> T.unwords (map plainText (header <> concat rows))
       Div _ bs -> noteText bs
       Alert _ box bs -> T.unwords (maybe [] (pure . plainText) box.title <> [noteText bs])
+      Spoiler h bs -> T.unwords [plainText h.description, noteText bs]
+      SpoilerError written _ -> written
       RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
       _ -> ""
 
@@ -589,6 +628,23 @@ boxWith defined kind ident title inner =
   where
     icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]
 
+-- | The properties of a code block's @\<pre>@ that make it show this many
+-- lines and scroll inside, if a number is given ('codeRows'), with the
+-- element's own classes before: the class @code-scroll@, and the height
+-- and the scrolling in its @style@ (the module's comment says why). The
+-- default code block and the application's highlighted one
+-- ("Wiki.App.Islands") both use it.
+scrollingCode :: (HasType "class" Text r, HasType "style" Text r) => Maybe Int -> [Text] -> [HP.IProp r i]
+scrollingCode rows own = case rows of
+  Nothing -> [classesProp own | not (null own)]
+  Just n -> [classesProp (own <> ["code-scroll"]), HP.styleText ("max-height: " <> show n <> "lh; overflow: auto")]
+
+-- | A line the page shows in red: a spoiler's marker as written, and what
+-- is wrong with it, also as the line's title.
+spoilerError :: Text -> Text -> HH.HTML w i
+spoilerError written why =
+  HH.p [classesProp ["spoiler-error"], HP.title why] [HH.text written, HH.span [classesProp ["spoiler-error-reason"]] [HH.text why]]
+
 -- | Display math in a box's title, @$$…$$@, set on the title's line in
 -- display style: a title is one line, and a block of display math in it
 -- would break the line. Math inside emphasis or a link's text is set the
@@ -600,6 +656,7 @@ displayInline = \case
   Emph xs -> Emph (map displayInline xs)
   Strong xs -> Strong (map displayInline xs)
   Strikeout xs -> Strikeout (map displayInline xs)
+  Hidden xs -> Hidden (map displayInline xs)
   Link attrs dest title xs -> Link attrs dest title (map displayInline xs)
   Image attrs dest title xs -> Image attrs dest title (map displayInline xs)
   other -> other

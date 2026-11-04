@@ -105,5 +105,11 @@ function wiki_reveal_fragment() {
     id = decodeURIComponent(id);
   } catch {}
   const element = document.getElementById(id);
-  if (element !== null) element.scrollIntoView();
+  if (element === null) return;
+  // A heading in a closed spoiler is hidden; its spoilers are opened
+  // first, as the islands' script opens them for a link (web/src/islands.js).
+  for (let spoiler = element.closest("details.spoiler"); spoiler; spoiler = spoiler.parentElement?.closest("details.spoiler") ?? null) {
+    spoiler.open = true;
+  }
+  element.scrollIntoView();
 }

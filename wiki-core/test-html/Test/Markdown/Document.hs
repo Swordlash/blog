@@ -26,7 +26,7 @@ spec = describe "docs/markdown.md" $ do
   it "parses into every kind of block it describes" $ do
     doc <- either (panic . show) identity . parseMarkdown <$> readGuide
     let kinds = map kind (universe doc)
-    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "table", "footnotes", "alert", "div"] $ \k ->
+    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "table", "footnotes", "alert", "div", "spoiler"] $ \k ->
       (k, k `elem` kinds) `shouldBe` (k, True)
 
   it "renders, with the constructs it shows" $ do
@@ -56,6 +56,10 @@ spec = describe "docs/markdown.md" $ do
       , "<section class=\"footnotes\"><ol><li id=\"fn-1\">"
       , "<div class=\"alert alert-warning\" id=\"box-warning-1\">"
       , "<div class=\"summary\">"
+      , "<details class=\"spoiler\" data-spoiler=\"answer\"><summary>The answer, and how to <em>find</em> it</summary><p>Forty-two, by this program:</p>"
+      , "<details class=\"spoiler\" data-spoiler=\"solution\"><summary>Then the solution</summary><p>Forty-two.</p></details></details>"
+      , "the culprit is <span aria-label=\"Spoiler: click to reveal\" class=\"spoiler\" role=\"button\" tabindex=\"0\">the butler</span>."
+      , "<pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">-- Only three"
       , "<kbd>Ctrl</kbd>+<kbd>S</kbd>"
       , "<abbr title=\"HyperText Markup Language\">HTML</abbr>"
       , "<mark>this is <em>emphasised</em></mark>"
@@ -76,6 +80,7 @@ universe = concatMap $ \b -> b : universe (children b)
       List _ items -> concat [bs | ListItem _ bs <- items]
       Div _ bs -> bs
       Alert _ _ bs -> bs
+      Spoiler _ bs -> bs
       Footnotes notes -> concat [bs | Footnote _ _ bs <- notes]
       _ -> []
 
@@ -97,6 +102,8 @@ kind = \case
   Table {} -> "table"
   Div {} -> "div"
   Alert {} -> "alert"
+  Spoiler {} -> "spoiler"
+  SpoilerError {} -> "spoiler error"
   Footnotes _ -> "footnotes"
   RawHtmlBlock _ -> "raw"
   TableOfContents -> "toc"

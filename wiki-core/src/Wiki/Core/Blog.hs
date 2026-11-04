@@ -164,6 +164,9 @@ inlineText = foldMap $ \case
   Emph xs -> inlineText xs
   Strong xs -> inlineText xs
   Strikeout xs -> inlineText xs
+  -- An excerpt is read before the page is opened, so it does not give a
+  -- spoiler away.
+  Hidden _ -> "…"
   Code _ _ -> " "
   Link _ _ _ xs -> inlineText xs
   Image {} -> " "
@@ -187,11 +190,13 @@ firstImage = head . concatMap inBlock
       Table _ header rows -> concatMap (concatMap inInline) (header <> concat rows)
       Div _ bs -> concatMap inBlock bs
       Alert _ _ bs -> concatMap inBlock bs
+      Spoiler _ bs -> concatMap inBlock bs
       _ -> []
     inInline = \case
       Image _ destination _ _ -> [destination]
       Emph xs -> concatMap inInline xs
       Strong xs -> concatMap inInline xs
       Strikeout xs -> concatMap inInline xs
+      Hidden xs -> concatMap inInline xs
       Link _ _ _ xs -> concatMap inInline xs
       _ -> []

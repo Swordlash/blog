@@ -294,6 +294,36 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) spelled `shouldBe` [[P.Str "Mine"]]
     [() | P.BlockQuote _ <- spelled] `shouldBe` [()]
 
+  describe "spoilers" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+        titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        paragraphs = query (\case P.Para xs -> [stringify xs]; _ -> [])
+        stringify = T.concat . query (\case P.Str t -> [t]; P.Space -> [" "]; P.SoftBreak -> [" "]; P.LineBreak -> [" "]; _ -> [])
+    it "makes a block spoiler a box titled with its description, its content shown, and an inline spoiler its text" $ do
+      shown <- blocksOf ToOther place "[[spoiler]]{answer}(The *answer*)\nForty-two.\n\n- a\n[[/spoiler]]{answer}\n\nAfter ||hidden **bold**|| and a || b.\n"
+      boxClasses shown `shouldBe` [["alert-spoiler"]]
+      titles shown `shouldBe` [[P.Str "The", P.Space, P.Emph [P.Str "answer"]]]
+      paragraphs shown `shouldSatisfy` elem "Forty-two."
+      length (query (\case P.BulletList _ -> [()]; _ -> []) shown) `shouldBe` 1
+      query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> []) shown `shouldBe` [[P.Str "hidden", P.Space, P.Strong [P.Str "bold"]]]
+      paragraphs shown `shouldSatisfy` elem "After hidden bold and a || b."
+      show shown `shouldNotSatisfy` T.isInfixOf "wikibox"
+      show shown `shouldNotSatisfy` T.isInfixOf "spoiler]]"
+    it "nests spoilers, and finds them in a quotation and a list item" $ do
+      nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
+      boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]
+      titles nested `shouldBe` [[P.Str "A"], [P.Str "B"], [P.Str "C"], [P.Str "D"]]
+      [inner | P.Div (_, ["alert-spoiler"], _) (_ : inner) <- nested, P.Div (_, ["alert-spoiler"], _) _ <- inner] `shouldSatisfy` (not . null)
+    it "shows a spoiler the page shows in red as its marker and the reason, then its blocks, and a broken line as text" $ do
+      unclosed <- blocksOf ToOther place "[[spoiler]]{x}(D)\na\n\n[[/spoiler]]{y}\n"
+      boxClasses unclosed `shouldBe` []
+      paragraphs unclosed `shouldBe` ["[[spoiler]]{x}(D) — Spoiler “x” is not closed: add [[/spoiler]]{x}", "a", "[[/spoiler]]{y} — no open spoiler of this name"]
+      cut <- blocksOf ToOther place "[[spoiler]]{s}(D)\ntext\n\n## Heading\n[[/spoiler]]{s}\n\nafter\n"
+      boxClasses cut `shouldBe` []
+      take 1 (paragraphs cut) `shouldSatisfy` all (T.isInfixOf "cuts a section")
+      paragraphs cut `shouldSatisfy` elem "after"
+      length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
+
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"
     other <- blocksOf ToOther place source

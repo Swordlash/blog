@@ -270,12 +270,14 @@ footnoteRefs = concatMap ofBlock
       Table _ header rows -> concatMap ofInlines header <> concatMap (concatMap ofInlines) rows
       Div _ bs -> footnoteRefs bs
       Alert _ box bs -> foldMap ofInlines box.title <> footnoteRefs bs
+      Spoiler h bs -> ofInlines h.description <> footnoteRefs bs
       _ -> []
     ofInlines = concatMap $ \case
       FootnoteRef n _ -> [n]
       Emph xs -> ofInlines xs
       Strong xs -> ofInlines xs
       Strikeout xs -> ofInlines xs
+      Hidden xs -> ofInlines xs
       Link _ _ _ xs -> ofInlines xs
       Image _ _ _ xs -> ofInlines xs
       _ -> []
@@ -331,6 +333,7 @@ blockSteps :: Bool -> Int -> Block -> State Counter Block
 blockSteps incremental at = \case
   Div attrs bs -> Div attrs <$> piecesOf (incrementalIn attrs) at bs
   Alert kind title bs -> Alert kind title <$> piecesOf incremental at bs
+  Spoiler h bs -> Spoiler h <$> piecesOf incremental at bs
   List kind items -> List kind <$> traverse item items
   other -> pure other
   where
@@ -386,6 +389,7 @@ atStep k s = blocks s.body
       Div attrs bs | Just (item, at) <- markOf attrs -> if item || at > k then [] else blocks bs
       Div attrs bs -> [Div attrs (blocks bs)]
       Alert kind title bs -> [Alert kind title (blocks bs)]
+      Spoiler h bs -> [Spoiler h (blocks bs)]
       List kind items -> case [ListItem task (blocks bs) | ListItem task bs <- items, shown bs] of
         [] -> []
         shownItems -> [List kind shownItems]
@@ -403,6 +407,7 @@ showingStep k s = Slide {title = s.title, body = map block s.body, notes = s.not
       Div attrs bs | Just (item, at) <- markOf attrs -> Div [("class", T.unwords ((if item then "slide-step-item" else "slide-step") : ["slide-step-later" | at > k])), ("data-step", show at)] (map block bs)
       Div attrs bs -> Div attrs (map block bs)
       Alert kind title bs -> Alert kind title (map block bs)
+      Spoiler h bs -> Spoiler h (map block bs)
       List kind items -> List kind [ListItem task (map block bs) | ListItem task bs <- items]
       other -> other
 

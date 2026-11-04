@@ -19,7 +19,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Guide
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
-import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Link, SoftBreak, Strikeout, Strong), ListItem (..), parseMarkdown, plainText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Hidden, Link, SoftBreak, Strikeout, Strong), ListItem (..), SpoilerHead (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -66,6 +66,7 @@ softBreaks = sum . map block
       Table _ header rows -> sum (map inlines (header <> concat rows))
       Div _ bs -> softBreaks bs
       Alert _ _ bs -> softBreaks bs
+      Spoiler _ bs -> softBreaks bs
       Footnotes notes -> sum [softBreaks bs | Footnote _ _ bs <- notes]
       _ -> 0
     inlines = sum . map inline
@@ -74,6 +75,7 @@ softBreaks = sum . map block
       Emph xs -> inlines xs
       Strong xs -> inlines xs
       Strikeout xs -> inlines xs
+      Hidden xs -> inlines xs
       Link _ _ _ xs -> inlines xs
       _ -> 0
 
@@ -144,6 +146,18 @@ spec = describe "Wiki.App.Guide" $ do
       (k, k `elem` map fst shown) `shouldBe` (k, True)
     shown `shouldSatisfy` elem (Custom "exercise", Just "The area of a circle, \\pi r^2")
     boxHeads parsed `shouldSatisfy` elem (Note, Nothing, False)
+
+  it "shows spoilers in the Markdown guide: an inline one, nested ones, one that wraps a section, none in red" $ do
+    let parsed = either (const []) identity . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")
+        spoilers = concatMap $ \case
+          Spoiler h bs -> (h.name, h.problem, take 1 [level | Heading level _ _ <- take 1 bs]) : spoilers bs
+          _ -> []
+        hidden = concatMap $ \case
+          Para xs -> [plainText ys | Hidden ys <- xs]
+          _ -> []
+    spoilers parsed `shouldBe` [("hint", Nothing, []), ("answer", Nothing, []), ("exercise-answers", Nothing, [3])]
+    hidden parsed `shouldBe` ["the butler"]
+    [() | SpoilerError {} <- parsed] `shouldBe` []
 
   it "has the demo define the kind of box the Markdown guide shows" $ do
     (demoState demoNow).server.boxes `shouldBe` [exerciseBox]

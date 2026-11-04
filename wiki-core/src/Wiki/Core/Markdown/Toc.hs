@@ -50,9 +50,17 @@ data Entry = Entry
 -- after it. So a skipped level (an @h4@ under an @h2@) nests one level, not
 -- two, and a document whose first headings are deeper than the later ones
 -- lists those first headings at the same level as the later ones.
+--
+-- A section a spoiler wraps is a section all the same: the headings in a
+-- spoiler are listed where they are ("Wiki.Core.Markdown.Ast"'s
+-- 'Wiki.Core.Markdown.Ast.Spoiler'), and the islands' script opens the
+-- spoiler when its entry is followed.
 tableOfContents :: [Block] -> [Entry]
-tableOfContents doc = nest [(level, ident, plainText xs) | Heading level attrs xs <- doc, Just ident <- [attribute "id" attrs]]
+tableOfContents doc = nest [(level, ident, plainText xs) | Heading level attrs xs <- sections doc, Just ident <- [attribute "id" attrs]]
   where
+    sections = concatMap $ \case
+      Spoiler _ bs -> sections bs
+      b -> [b]
     nest = \case
       [] -> []
       (level, ident, text) : rest ->
@@ -104,6 +112,7 @@ anchors doc = evalState (concat <$> traverse block doc) mempty
       BlockQuote bs -> blocks bs
       List _ items -> concat <$> traverse (\(ListItem _ bs) -> blocks bs) items
       Div _ bs -> blocks bs
+      Spoiler _ bs -> blocks bs
       Footnotes notes -> concat <$> traverse (\(Footnote _ _ bs) -> blocks bs) notes
       _ -> pure []
     blocks bs = concat <$> traverse block bs

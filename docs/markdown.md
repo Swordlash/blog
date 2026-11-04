@@ -20,7 +20,7 @@ A line of three dashes is a thematic break:
 
 Every heading gets an `id` made from its text, so that a link can point at it: this section is `#headings`, and a link to it is [Headings](#headings). The `id` is the text in lower case, with spaces made dashes and punctuation left out; letters of every alphabet stay as they are, so `## Zażółć gęślą` is `#zażółć-gęślą`. A second heading with the same text gets `-2` added, a third `-3`, and so on down the page. To choose the `id` yourself, put it in braces after the heading: `## Setup {#install}`. Pointing at a heading shows a `#` after it, a link to it: follow it, and the address bar has the heading's address, to copy and pass on.
 
-A page with three headings or more has a "Contents" panel beside it (above it on a narrow screen), which lists them and marks the section being read. To put the list in the page instead, write `[[toc]]` on a line of its own where it should go; the panel is then not shown.
+A page with three headings or more has a "Contents" panel beside it (above it on a narrow screen), which lists them and marks the section being read. To put the list in the page instead, write `[[toc]]` where it should go, as a paragraph of its own: a blank line before it and after it, and nothing else on its line; the panel is then not shown. Anywhere else, inside a sentence for instance, `[[toc]]` is a wiki link to a page named `toc`, which shows as a broken link in red, like any `[[page]]` whose path leads nowhere.
 
 ## Lists
 
@@ -151,6 +151,17 @@ These languages are highlighted, by the names a fence may give them (in any case
 | YAML | `yaml`, `yml` |
 
 `m` is MATLAB; Objective-C is `objc`. COBOL, Fish, Zig and Scratch are not highlighted: highlight.js, which the wiki highlights with, has no grammar for them.
+
+A long listing can be shown a few lines at a time: `rows=N` in braces after the fence's language (` ```haskell {rows=3} `, or ` ```{.haskell rows=3} `) makes the block that many lines high, and the rest of the code scrolls inside it. A value that is not a whole number above zero is ignored, and the block is as long as its code. The toolbar's code block button writes a fence without it.
+
+```haskell {rows=3}
+-- Only three of these lines show; scroll the block for the rest.
+fibs :: [Integer]
+fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+
+main :: IO ()
+main = print (take 20 fibs)
+```
 
 ## Math
 
@@ -313,6 +324,40 @@ A box of any other sort is a fenced div with a class, which the wiki's style she
 ::: summary
 Three colons, a class, the content, three colons.
 :::
+
+## Spoilers
+
+Text between two pairs of bars is an inline spoiler: the culprit is ||the butler||. It is blurred until the reader clicks it, or presses Enter or Space on it, and a second click hides it again. It may hold emphasis, code and math, as `||**bold** and $x$||`. A single bar, and a table's bars, stay what they were. The toolbar's **Inline spoiler** button (an eye struck through) puts the bars around the selected words.
+
+A block spoiler hides whole blocks until the reader opens it. It starts with a line of its own, `[[spoiler]]{name}(Description)`, and ends with another, `[[/spoiler]]{name}`:
+
+[[spoiler]]{answer}(The answer, and how to *find* it)
+Forty-two, by this program:
+
+```python
+print(6 * 7)
+```
+[[/spoiler]]{answer}
+
+The name, in braces, is one word of letters, digits, `-` and `_`, as a name in code is; the end marker repeats it. The description, in parentheses, is what the reader sees and clicks, and may hold emphasis, code and math. Spaces between the three parts are allowed, and nothing else on the line. Between the markers goes any Markdown, without a prefix on its lines: paragraphs, lists, code, tables, boxes, and other spoilers. An end marker ends the innermost open spoiler, and only when the names agree, so spoilers nest:
+
+[[spoiler]]{hint}(A hint first)
+Think of what six times seven is.
+
+[[spoiler]]{solution}(Then the solution)
+Forty-two.
+[[/spoiler]]{solution}
+[[/spoiler]]{hint}
+
+The toolbar's **Block spoiler** button puts the two markers around the selected lines, with `name` selected for you to type over; the end marker's `name` is then changed to match.
+
+A spoiler lies within one section, or wraps a whole one: either it holds no heading, or its first line is a heading, every other heading in it is deeper, and the next block after it is a heading of the same or a higher level, or nothing. The section's entry stays in the page's contents, and following it, or any link to the heading, opens the spoiler. Section spoilers nest the same way, a subsection's inside its section's.
+
+What is wrong shows in red where it is, in the page and in the editor's preview as you type: a start marker without its name in braces or its description in parentheses, an end marker whose name is not that of the innermost open spoiler, or that has more after it, and the marker of a spoiler that is never closed or that cuts a section, with the reason under it. A spoiler that is not closed, or cuts a section, has its blocks shown in red after its marker, as they are, so that nothing is lost while you fix it.
+
+A spoiler starts closed. Whether a reader left it open is kept in their browser, for each page and each name, and it opens again when they come back; a reader not signed in is one reader. Two spoilers with one name on one page open and close together. The state is kept in that browser only: on another device the spoilers start closed again. `[[spoiler]]` and `[[/spoiler]]` at the start of a line are always markers, so they are never a wiki link to a page of that name.
+
+Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, and an inline spoiler is its text. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
 
 ## Presentations
 

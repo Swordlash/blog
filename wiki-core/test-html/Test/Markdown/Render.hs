@@ -175,7 +175,7 @@ spec = describe "Markdown.Render" $ do
     let keyed = \key -> show key.occurrence :: Text
         opts =
           defaultOptions
-            { codeBlock = \key lang code -> HH.span [HP.title (keyed key)] [HH.text (fromMaybe "-" lang <> ":" <> code)]
+            { codeBlock = \key lang _ code -> HH.span [HP.title (keyed key)] [HH.text (fromMaybe "-" lang <> ":" <> code)]
             , mathInline = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("i:" <> tex)]
             , mathDisplay = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("d:" <> tex)]
             , mermaid = \key src -> HH.span [HP.title (keyed key)] [HH.text ("m:" <> src)]
@@ -360,6 +360,35 @@ spec = describe "Markdown.Render" $ do
       $ "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>x</p></div>"
     it "writes a fenced div with its class" $
       "::: summary\nShort.\n:::" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
+
+  describe "spoilers" $ do
+    it "writes an inline spoiler as a span the reader focuses and clicks, with its formatting" $
+      "a ||secret **word**|| b"
+        `shows'` "<p>a <span aria-label=\"Spoiler: click to reveal\" class=\"spoiler\" role=\"button\" tabindex=\"0\">secret <strong>word</strong></span> b</p>"
+    it "writes a block spoiler as a closed details, its summary the description, its name in data-spoiler" $
+      "[[spoiler]]{answer}(The *answer*)\nForty-two.\n[[/spoiler]]{answer}"
+        `shows'` "<details class=\"spoiler\" data-spoiler=\"answer\"><summary>The <em>answer</em></summary><p>Forty-two.</p></details>"
+    it "nests spoilers, and keeps a section spoiler's heading and its link inside" $ do
+      "[[spoiler]]{a}(A)\n[[spoiler]]{b}(B)\nx\n[[/spoiler]]{b}\n[[/spoiler]]{a}"
+        `shows'` "<details class=\"spoiler\" data-spoiler=\"a\"><summary>A</summary><details class=\"spoiler\" data-spoiler=\"b\"><summary>B</summary><p>x</p></details></details>"
+      "[[spoiler]]{s}(Solutions)\n## Solutions\n\nx\n[[/spoiler]]{s}"
+        `shows'` "<details class=\"spoiler\" data-spoiler=\"s\"><summary>Solutions</summary><h2 id=\"solutions\">Solutions<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#solutions\"></a></h2><p>x</p></details>"
+    it "writes a broken marker line in red, with the reason as its title" $
+      "[[/spoiler]]{x}"
+        `shows'` "<p class=\"spoiler-error\" title=\"no spoiler is open here\">[[/spoiler]]{x}<span class=\"spoiler-error-reason\">no spoiler is open here</span></p>"
+    it "writes an unclosed spoiler's marker in red, then its blocks as they are in the unclosed div" $
+      "[[spoiler]]{x}(D)\na\n\n```\ncode\n```"
+        `shows'` "<p class=\"spoiler-error\" title=\"Spoiler “x” is not closed: add [[/spoiler]]{x}\">[[spoiler]]{x}(D)<span class=\"spoiler-error-reason\">Spoiler “x” is not closed: add [[/spoiler]]{x}</span></p><div class=\"spoiler-unclosed\"><p>a</p><pre><code>code\n</code></pre></div>"
+    it "writes a spoiler that cuts a section as an unclosed one, with its own reason" $ do
+      html <- markdown "[[spoiler]]{x}(D)\ntext\n\n## Heading\n[[/spoiler]]{x}"
+      html `shouldSatisfy` T.isInfixOf "cuts a section: a spoiler lies within one section, or wraps a whole one"
+      html `shouldSatisfy` T.isInfixOf "<div class=\"spoiler-unclosed\"><p>text</p><h2 id=\"heading\">"
+
+  describe "listings that scroll" $
+    it "gives a fence with rows a class, its height in lines and its scrolling, and leaves wrong rows out" $ do
+      "```haskell {rows=3}\nx = 1\n```"
+        `shows'` "<pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">x = 1\n</code></pre>"
+      "```haskell {rows=0}\nx = 1\n```" `shows'` "<pre><code class=\"language-haskell\">x = 1\n</code></pre>"
 
   it "renders nothing for an empty page" $
     "" `shows'` ""
