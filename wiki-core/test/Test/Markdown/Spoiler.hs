@@ -128,6 +128,16 @@ spec = describe "Markdown spoilers and listings" $ do
           , SpoilerMarker 3 1 (Ends 1)
           ]
 
+    it "gives the export where each inline spoiler's bars are, and none for bars that are text" $
+      (\(_, _, ms) -> ms) <$> parseWithAllMarkers "a ||b|| c \\|\\|d\\|\\| `||e||`\n> ||f\n> g||\n\n[[spoiler]]{x}(A ||b||)\nc\n[[/spoiler]]{x}\n"
+        `shouldBe` Right
+          [ SpoilerMarker 1 3 (InlineBars 1 6)
+          , SpoilerMarker 2 3 (InlineBars 3 4)
+          , SpoilerMarker 5 1 (Starts "x" "A ||b||")
+          , SpoilerMarker 5 18 (InlineBars 5 21)
+          , SpoilerMarker 7 1 (Ends 5)
+          ]
+
   describe "spoilers and sections" $ do
     it "accepts a spoiler within a section, without a heading" $
       spoilers (blocksOf "## A\n\n[[spoiler]]{x}(D)\ntext\n[[/spoiler]]{x}\n\nmore\n") `shouldBe` [("x", Nothing)]

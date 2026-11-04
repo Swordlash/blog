@@ -241,7 +241,6 @@ pageBlocks :: Output -> Place -> PageRead -> Either PandocError [P.Block]
 pageBlocks output place page = do
   read' <- withBoxesRead place.boxes place.numbering page
   pure
-    . walk hiddenSpans
     . expandMacros place.macros
     . walk (resolveInlines place)
     . walk (concatMap (islands output))
@@ -348,6 +347,9 @@ data PageRead = PageRead
   , blocks :: Either ParseError [Block]
   , markers :: [BoxMarker]
   , spoilers :: Map Int (Int, SpoilerEdit)
+  , bars :: [((Int, Int), (Int, Int))]
+  -- ^ Where the bars of each inline spoiler are, the opening pair's line
+  -- and column and the closing pair's ('InlineBars').
   -- ^ What becomes of each of the page's spoiler marker lines, by its
   -- line, with the column its marker starts at ('spoilerEdits').
   }
@@ -360,6 +362,7 @@ readPage raw =
     , blocks = (\(bs, _, _) -> bs) <$> parsedPage
     , markers = either (const []) (\(_, ms, _) -> ms) parsedPage
     , spoilers = either (const mempty) (\(bs, _, ss) -> spoilerEdits bs ss) parsedPage
+    , bars = either (const []) (\(_, _, ss) -> [((s.spoilerLine, s.spoilerColumn), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
     }
   where
     source = normalLines raw
@@ -383,7 +386,7 @@ data SpoilerEdit
 -- ('SpoilerHead''s @problem@) is its blocks, after its marker and the
 -- reason as text; a broken marker line is its text and the reason.
 spoilerEdits :: [Block] -> [SpoilerMarker] -> Map Int (Int, SpoilerEdit)
-spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, edit m)) | m <- markers]
+spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, e)) | m <- markers, Just e <- [edit m]]
   where
     heads = Map.fromList [(h.line, h) | h <- concatMap headsOf doc]
     headsOf = \case
@@ -395,13 +398,15 @@ spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, edit 
       Footnotes notes -> concat [concatMap headsOf bs | Footnote _ _ bs <- notes]
       _ -> []
     edit m = case m.role of
-      Starts _ description -> case Map.lookup m.spoilerLine heads of
+      Starts _ description -> Just $ case Map.lookup m.spoilerLine heads of
         Just h | Just problem <- h.problem -> ShowLine (h.marker <> " — " <> spoilerProblemText h problem)
         _ -> OpenBox description
-      Ends start -> case Map.lookup start heads of
+      Ends start -> Just $ case Map.lookup start heads of
         Just h | isNothing h.problem -> CloseBox start
         _ -> DropLine
-      Faulty written why -> ShowLine (written <> " — " <> why)
+      Faulty written why -> Just (ShowLine (written <> " — " <> why))
+      -- An inline spoiler's bars are rewritten apart ('withBoxes').
+      InlineBars _ _ -> Nothing
 
 -- | A text with every line ended by @\\n@: CommonMark ends a line at
 -- @\\r\\n@, at @\\r@ and at @\\n@ alike, so the lines of the result are
@@ -419,7 +424,7 @@ withBoxesRead :: [BoxKind] -> Numbering -> PageRead -> Either PandocError [P.Blo
 withBoxesRead defined numbering page = go page.markers page.spoilers
   where
     go markers spoilers = do
-      let (marked, boxes, spoilerBoxes) = withBoxes page.source markers spoilers
+      let (marked, boxes, spoilerBoxes, bars) = withBoxes page.source markers spoilers page.bars
       P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} marked)
       let boxed = walk (spoilersOf spoilerBoxes) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) read')
           found = texts boxed
@@ -429,7 +434,9 @@ withBoxesRead defined numbering page = go page.markers page.spoilers
           -- pandoc did not read as a paragraph of its own.
           straySpoilers = Set.fromList [line | (placeholder, (line, _)) <- Map.toList spoilerBoxes, any (placeholder `T.isInfixOf`) found]
           unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` straySpoilers && (case e of CloseBox start -> start `Set.notMember` straySpoilers; _ -> True)) spoilers
-      if Set.null stray && Set.null straySpoilers then pure boxed else go (filter (`Set.notMember` stray) markers) unmarked
+      if Set.null stray && Set.null straySpoilers
+        then pure (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars)
+        else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
     texts :: [P.Block] -> [Text]
     texts bs =
@@ -478,9 +485,15 @@ type Boxes = Map Text (BoxMarker, Text)
 -- line (of the prefix's quotation marks) before and after it. The third
 -- result is each spoiler line's placeholder, with its line and what it
 -- becomes.
-withBoxes :: Text -> [BoxMarker] -> Map Int (Int, SpoilerEdit) -> (Text, Boxes, Map Text (Int, SpoilerEdit))
-withBoxes source markers spoilers = case family of
-  Nothing -> (source, mempty, mempty)
+--
+-- The bars of each inline spoiler the wiki's parser found are replaced
+-- too, each pair by a placeholder ('Bars', the fourth result), which
+-- 'hiddenSpans' pairs again once pandoc has read the page. So pandoc
+-- never decides what is a spoiler either: bars it would read as text
+-- once it has decoded them (@\\|@, @&#124;@) stay text.
+withBoxes :: Text -> [BoxMarker] -> Map Int (Int, SpoilerEdit) -> [((Int, Int), (Int, Int))] -> (Text, Boxes, Map Text (Int, SpoilerEdit), Maybe Bars)
+withBoxes source markers spoilers bars = case family of
+  Nothing -> (source, mempty, mempty, Nothing)
   Just prefix ->
     let placed =
           Map.fromList
@@ -490,25 +503,61 @@ withBoxes source markers spoilers = case family of
             , Just start <- [markerStart m text]
             ]
         spoilerPlaceholders = Map.fromList [(line, prefix <> "s" <> show n <> "z") | (n, line) <- zip [1 :: Int ..] (Map.keys spoilers)]
-        rewrite n text = case (Map.lookup n placed, Map.lookup n spoilers) of
-          (Just (placeholder, m, start, _), _) -> [T.take start text <> placeholder <> maybe "" (" " <>) m.boxTitle, quoteOnly (T.take start text)]
-          (Nothing, Just (column, e)) ->
-            let before = T.take (column - 1) text
-                -- The prefix as the lines after the marker's continue it.
-                indent = T.map (\c -> if c == '>' || c == '\t' then c else ' ') before
-                placeholder = fromMaybe "" (Map.lookup n spoilerPlaceholders)
-                around ls = [quoteOnly before] <> ls <> [quoteOnly before]
-             in case e of
-                  OpenBox description -> around [before <> "::: wikispoiler", quoteOnly before, indent <> placeholder <> " " <> description]
-                  CloseBox _ -> around [before <> ":::"]
-                  ShowLine _ -> around [before <> placeholder]
-                  DropLine -> [quoteOnly before]
-          (Nothing, Nothing) -> [text]
+        -- Each pair of bars, by its line, with its column and its
+        -- placeholder.
+        barPlaceholders =
+          Map.fromListWith
+            (<>)
+            ( concat
+                [ [(ol, [(oc, "|" <> prefix <> "ho" <> show n <> "z|")]), (cl, [(cc, "|" <> prefix <> "hc" <> show n <> "z|")])]
+                | (n, ((ol, oc), (cl, cc))) <- zip [1 :: Int ..] bars
+                ]
+            )
+        -- A line with its bars replaced, from its end, so that each
+        -- column is still the line's as written.
+        withPlaceholders n text = foldl' place text (sortOn (Down . fst) (mapMaybe (\(c, p) -> (\i -> (i, p)) <$> barsAt text c) (Map.findWithDefault [] n barPlaceholders)))
+        place text (i, placeholder) = T.take i text <> placeholder <> T.drop (i + 2) text
+        rewrite n written =
+          let text = withPlaceholders n written
+           in case (Map.lookup n placed, Map.lookup n spoilers) of
+                (Just (placeholder, m, start, _), _) -> [T.take start text <> placeholder <> maybe "" (const (" " <> titleIn (T.drop start text))) m.boxTitle, quoteOnly (T.take start text)]
+                (Nothing, Just (column, e)) ->
+                  let before = T.take (column - 1) text
+                      -- The prefix as the lines after the marker's continue it.
+                      indent = T.map (\c -> if c == '>' || c == '\t' then c else ' ') before
+                      placeholder = fromMaybe "" (Map.lookup n spoilerPlaceholders)
+                      around ls = [quoteOnly before] <> ls <> [quoteOnly before]
+                   in case e of
+                        OpenBox _ -> around [before <> "::: wikispoiler", quoteOnly before, indent <> placeholder <> " " <> descriptionIn (T.drop (column - 1) text)]
+                        CloseBox _ -> around [before <> ":::"]
+                        ShowLine _ -> around [before <> placeholder]
+                        DropLine -> [quoteOnly before]
+                (Nothing, Nothing) -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
         , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList spoilerPlaceholders, Just (_, e) <- [Map.lookup line spoilers]]
+        , Bars (prefix <> "h") <$ guard (not (null bars))
         )
   where
+    -- The index in a line of the bars at a column, if they are there. A
+    -- tab counts to the next multiple of four columns, as CommonMark
+    -- counts it.
+    barsAt text column = go 0 1 (T.unpack text)
+      where
+        go i c rest
+          | c == column = i <$ guard ("||" `T.isPrefixOf` T.drop i text)
+          | c > column = Nothing
+          | otherwise = case rest of
+              [] -> Nothing
+              ch : more -> go (i + 1) (if ch == '\t' then c + 4 - (c - 1) `mod` 4 else c + 1) more
+    -- A box's title, after its marker, as written.
+    titleIn = T.strip . T.drop 1 . T.dropWhile (/= ']')
+    -- A spoiler's description, in its start marker as written: from the
+    -- parenthesis after the name to the last one.
+    descriptionIn marker =
+      let afterName = T.drop 1 (T.dropWhile (/= '}') marker)
+          inside = T.drop 1 (T.dropWhile (/= '(') afterName)
+       in T.strip (T.dropWhileEnd (/= ')') inside & T.dropEnd 1)
     lines' = T.splitOn "\n" source
     digest = decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (SHA256.hash (encodeUtf8 source)))))
     family = find (not . (`T.isInfixOf` source)) [prefix | n <- [8, 16, 64], let prefix = "wikibox" <> T.take n digest]
@@ -540,61 +589,82 @@ spoilersOf placeholders = \case
     | Just (_, ShowLine shown) <- Map.lookup placeholder placeholders -> P.Para (B.toList (B.text shown))
   b -> b
 
--- | A run of inlines with each inline spoiler, @||text||@, as its text in
--- a span of the class @spoiler@. Pandoc's reader keeps the bars as text,
--- so they are found here as the wiki's parser finds them: two bars, no
--- more, that can open (the next character is not white space) or close
--- (the one before is not), each closer taking the nearest opener before
--- it, within one run of inlines. Bars that pair with none stay text, and
--- code and math are not text, so their bars stay.
-hiddenSpans :: [P.Inline] -> [P.Inline]
-hiddenSpans xs
-  | not (any hasBars xs) = xs
-  | otherwise = B.toList (build 0 (length pieces))
+-- | 'Bars' are the placeholders 'withBoxes' put in place of the bars of
+-- the page's inline spoilers: each starts with this text, then @o@ for an
+-- opening pair or @c@ for a closing one, the spoiler's number and @z@,
+-- between two single bars (so that pandoc reads emphasis next to it as it
+-- reads it next to the bars).
+newtype Bars = Bars Text
+
+-- | A run of inlines with each inline spoiler as its text in a span of the
+-- class @spoiler@. The wiki's parser found the spoilers' bars, and
+-- 'withBoxes' put placeholders in their place, so a bar escaped or
+-- written as a character reference, and bars in code, are what pandoc
+-- read them as. An opening placeholder is paired with its own closing one
+-- in the same run of inlines; one that pandoc put elsewhere (where it reads
+-- emphasis differently) is its bars again.
+hiddenSpans :: Bars -> [P.Inline] -> [P.Inline]
+hiddenSpans (Bars family) xs
+  | not (any hasPlaceholder xs) = xs
+  | otherwise = B.toList (build pieces)
   where
-    hasBars = \case
-      P.Str t -> "||" `T.isInfixOf` t
+    hasPlaceholder = \case
+      P.Str t -> family `T.isInfixOf` t
       _ -> False
-    -- The inlines, with each run of bars in the text apart.
-    pieces :: [Either Text P.Inline]
+    -- The inlines, with each placeholder apart: whether it opens, and
+    -- its spoiler's number.
+    pieces :: [Either (Bool, Int) P.Inline]
     pieces = concatMap split xs
     split = \case
-      P.Str t -> [if T.all (== '|') g then Left g else Right (P.Str g) | g <- T.groupBy (\a b -> (a == '|') == (b == '|')) t]
+      P.Str t -> [either Left (Right . P.Str) p | p <- placeholdersIn (Bars family) t]
       x -> [Right x]
-    indexed = zip [0 :: Int ..] pieces
-    -- The character before and after a piece, as far as it matters: white
-    -- space or not.
-    blankBefore i = case atMay pieces (i - 1) of
-      Nothing -> True
-      Just p -> blankEnd False p
-    blankAfter i = case atMay pieces (i + 1) of
-      Nothing -> True
-      Just p -> blankEnd True p
-    blankEnd atStart = \case
-      Left _ -> False
-      Right (P.Str t) -> maybe True (isSpace . (if atStart then T.head else T.last)) (mfilter (not . T.null) (Just t))
-      Right P.Space -> True
-      Right P.SoftBreak -> True
-      Right P.LineBreak -> True
-      Right _ -> False
-    -- Each opener's closer, by index.
-    pairs :: Map Int Int
-    pairs = fst (foldl' step (mempty, []) indexed)
-    step (found, open) (i, p) = case p of
-      Left "||"
-        | not (blankBefore i), o : rest <- open -> (Map.insert o i found, rest)
-        | not (blankAfter i) -> (found, i : open)
-      _ -> (found, open)
-    -- The pieces from one index up to another, with the pairs as spans.
-    build :: Int -> Int -> B.Inlines
-    build i end
-      | i >= end = mempty
-      | Just close <- Map.lookup i pairs, close < end = B.spanWith ("", ["spoiler"], []) (build (i + 1) close) <> build (close + 1) end
-      | otherwise = piece (atMay pieces i) <> build (i + 1) end
-    piece = \case
-      Just (Left bars) -> B.str bars
-      Just (Right x) -> B.singleton x
-      Nothing -> mempty
+    build = \case
+      [] -> mempty
+      Left (True, n) : rest
+        | (inside, _ : after) <- break (== Left (False, n)) rest -> B.spanWith ("", ["spoiler"], []) (build inside) <> build after
+      Left _ : rest -> B.str "||" <> build rest
+      Right x : rest -> B.singleton x <> build rest
+
+-- | A text cut at the placeholders of inline spoilers' bars ('Bars'): its
+-- text, and each placeholder as whether it opens and its spoiler's number.
+placeholdersIn :: Bars -> Text -> [Either (Bool, Int) Text]
+placeholdersIn (Bars family) t = case T.breakOn ("|" <> family) t of
+  (before, "") -> [Right before | not (T.null before)]
+  (before, rest) ->
+    let after = T.drop (T.length family + 1) rest
+        (digits, more) = T.span isDigit (T.drop 1 after)
+        kind = T.take 1 after
+     in case (kind, readMaybe (T.unpack digits), T.take 2 more) of
+          (k, Just n, "z|") | k `elem` ["o", "c"] -> [Right before | not (T.null before)] <> [Left (k == "o", n)] <> placeholdersIn (Bars family) (T.drop 2 more)
+          _ -> Right (before <> "|") : placeholdersIn (Bars family) (T.drop 1 rest)
+
+-- | Any placeholder of an inline spoiler's bars left in code, math or raw
+-- text (where pandoc read the source otherwise than the wiki) is its bars
+-- again. A heading's identifier, which pandoc made from its text with the
+-- placeholders in it, is made without them, as pandoc makes it without
+-- the bars, which it leaves out.
+restoreBars :: Bars -> [P.Block] -> [P.Block]
+restoreBars bars@(Bars family) = walk inBlock . walk inInline
+  where
+    unplace t = T.concat [either (const "||") identity p | p <- placeholdersIn bars t]
+    unplaceId ident = case T.breakOn family ident of
+      (before, "") -> before
+      (before, rest) ->
+        let after = T.drop (T.length family) rest
+            (digits, more) = T.span isDigit (T.drop 1 after)
+         in if T.take 1 after `elem` ["o", "c"] && not (T.null digits) && "z" `T.isPrefixOf` more
+              then before <> unplaceId (T.drop 1 more)
+              else before <> T.take (T.length family) rest <> unplaceId after
+    inInline = \case
+      P.Code attrs t -> P.Code attrs (unplace t)
+      P.Math kind t -> P.Math kind (unplace t)
+      P.RawInline f t -> P.RawInline f (unplace t)
+      x -> x
+    inBlock = \case
+      P.Header level (ident, cls, kvs) xs -> P.Header level (unplaceId ident, cls, kvs) xs
+      P.CodeBlock attrs t -> P.CodeBlock attrs (unplace t)
+      P.RawBlock f t -> P.RawBlock f (unplace t)
+      b -> b
 
 -- | The number of each numbered box of a page ('withBoxes'), by its
 -- placeholder, as the page's renderer numbers it ("Wiki.Core.Markdown.Box"):

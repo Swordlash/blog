@@ -353,7 +353,7 @@ parseWithAllMarkers source =
   ( \(Blocks bs (Markers ms ss)) ->
       ( finished (map snd (toList bs))
       , sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)
-      , sortOn (\s -> s.spoilerLine) (ordNub ss)
+      , sortOn (\s -> (s.spoilerLine, s.spoilerColumn)) (ordNub ss)
       )
   )
     <$> parsed source
@@ -408,6 +408,11 @@ data SpoilerRole
   | -- | A line the page shows in red ('SpoilerError'): the line as
     -- written, and what is wrong with it.
     Faulty Text Text
+  | -- | The two bars that open an inline spoiler, @||@, are here; the
+    -- line and the column of the two that close it. Only the bars the
+    -- parser read as a spoiler's are listed, so the export knows them
+    -- apart from an escaped bar, a character reference and code.
+    InlineBars Int Int
   deriving stock (Eq, Ord, Show)
 
 -- | Every box's marker in a page's source, in the order of the source;
@@ -741,17 +746,33 @@ sectionLevels = concatMap $ \case
 -- What commonmark builds
 
 -- | Inlines as the parser builds them: a sequence, so that appending is
--- cheap, which merges adjacent text as it goes.
-newtype Inlines = Inlines (Seq Inline)
+-- cheap, which merges adjacent text as it goes. With them, where the bars
+-- of the inline spoilers among them are in the source ('InlineBars'), for
+-- the export, and whether they are an inline spoiler just made, whose
+-- place the parser gives next ('CM.Rangeable').
+data Inlines = Inlines (Seq Inline) [SpoilerMarker] Bool
   deriving stock (Show)
 
 instance Semigroup Inlines where
-  Inlines xs <> Inlines ys = case (Seq.viewr xs, Seq.viewl ys) of
-    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys')
-    _ -> Inlines (xs <> ys)
+  Inlines xs bs _ <> Inlines ys cs _ = case (Seq.viewr xs, Seq.viewl ys) of
+    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys') (bs <> cs) False
+    _ -> Inlines (xs <> ys) (bs <> cs) False
 
 instance Monoid Inlines where
-  mempty = Inlines Seq.empty
+  mempty = Inlines Seq.empty [] False
+
+-- | One inline made of others, with the bars of the inline spoilers in
+-- them.
+wrapping :: ([Inline] -> Inline) -> Inlines -> Inlines
+wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) False
+
+-- | Where the bars of the inline spoilers among some inlines are.
+barsOf :: Inlines -> [SpoilerMarker]
+barsOf (Inlines _ bs _) = bs
+
+-- | Blocks made of some inlines, with the bars of their inline spoilers.
+withBars :: Inlines -> Blocks -> Blocks
+withBars xs (Blocks bs ms) = Blocks bs (ms <> Markers [] (barsOf xs))
 
 -- | Blocks as the parser builds them, each with the line of the source it
 -- starts on once the parser has said ('parseWithLines'), and with the
@@ -778,7 +799,7 @@ instance Monoid Blocks where
   mempty = Blocks Seq.empty mempty
 
 inline :: Inline -> Inlines
-inline = Inlines . Seq.singleton
+inline x = Inlines (Seq.singleton x) [] False
 
 block :: Block -> Blocks
 block b = Blocks (Seq.singleton (Nothing, b)) mempty
@@ -791,13 +812,21 @@ markersOf :: Blocks -> Markers
 markersOf (Blocks _ ms) = ms
 
 inlines :: Inlines -> [Inline]
-inlines (Inlines xs) = toList xs
+inlines (Inlines xs _ _) = toList xs
 
 blocks :: Blocks -> [Block]
 blocks (Blocks xs _) = map snd (toList xs)
 
+-- | The parser gives the place of each inline it makes, the formatted ones
+-- just after it makes them: an inline spoiler's place, from its first two
+-- bars to the end of its last two, says where its bars are.
 instance CM.Rangeable Inlines where
-  ranged _ = identity
+  ranged (CM.SourceRange ranges) = \case
+    Inlines xs bs True
+      | Just (start, _) <- head ranges
+      , Just (_, end) <- lastMay ranges ->
+          Inlines xs (bs <> [SpoilerMarker (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) False
+    Inlines xs bs _ -> Inlines xs bs False
 
 -- | The parser says where each block is once it has made it, innermost
 -- first: a block without a line yet starts where this range does. A block
@@ -809,7 +838,7 @@ instance CM.Rangeable Blocks where
     [] -> Blocks xs ms
 
 instance CM.HasAttributes Inlines where
-  addAttributes new (Inlines xs) = Inlines (add <$> xs)
+  addAttributes new (Inlines xs bs fresh) = Inlines (add <$> xs) bs fresh
     where
       add = \case
         Code attrs t -> Code (attrs <> new) t
@@ -837,10 +866,10 @@ instance CM.IsInline Inlines where
     | otherwise = inline (Str t)
   entity t = CM.str (fromMaybe t (CM.lookupEntity (T.drop 1 t)))
   escapedChar c = CM.str (T.singleton c)
-  emph = inline . Emph . inlines
-  strong = inline . Strong . inlines
-  link destination title = inline . Link [] destination title . inlines
-  image source title = inline . Image [] source title . inlines
+  emph = wrapping Emph
+  strong = wrapping Strong
+  link destination title = wrapping (Link [] destination title)
+  image source title = wrapping (Image [] source title)
   code = inline . Code []
 
   -- The core syntax makes raw inlines only of HTML; the extensions that
@@ -848,12 +877,12 @@ instance CM.IsInline Inlines where
   rawInline _ = inline . RawHtml
 
 instance CM.IsBlock Inlines Blocks where
-  paragraph = splitDisplayMath Para . inlines
-  plain = splitDisplayMath Plain . inlines
+  paragraph xs = withBars xs (splitDisplayMath Para (inlines xs))
+  plain xs = withBars xs (splitDisplayMath Plain (inlines xs))
   thematicBreak = block ThematicBreak
   blockQuote = around BlockQuote
   codeBlock info = block . codeBlockWith [] (head (T.words info))
-  heading level = block . Heading level [] . inlines
+  heading level xs = withBars xs (block (Heading level [] (inlines xs)))
   rawBlock _ = block . RawHtmlBlock
 
   -- A definition has done its job once the links that use it are parsed.
@@ -865,17 +894,17 @@ instance CME.HasMath Inlines where
   displayMath = inline . Math DisplayMath
 
 instance CME.HasStrikethrough Inlines where
-  strikethrough = inline . Strikeout . inlines
+  strikethrough = wrapping Strikeout
 
 instance CME.HasEmoji Inlines where
   emoji keyword = inline . Emoji keyword
 
 instance CME.HasWikilinks Inlines where
-  wikilink destination = inline . Link [("class", "wikilink")] destination "" . inlines
+  wikilink destination = wrapping (Link [("class", "wikilink")] destination "")
 
 instance CME.HasPipeTable Inlines Blocks where
   pipeTable aligns header rows =
-    block $ Table (map alignment aligns) (map inlines header) (map (map inlines) rows)
+    withBars (mconcat (header <> concat rows)) . block $ Table (map alignment aligns) (map inlines header) (map (map inlines) rows)
     where
       alignment = \case
         CME.LeftAlignedCol -> AlignLeft
@@ -961,9 +990,10 @@ alertBlockSpec =
               fromMaybe
                 (MarkerLine BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing, boxNumbered = True} [])
                 (fromDynamic (CM.blockData (rootLabel node)))
-        title <- if null titleToks then pure Nothing else Just . inlines <$> CM.runInlineParser titleToks
+        written <- if null titleToks then pure Nothing else Just <$> CM.runInlineParser titleToks
         inside <- mconcat <$> CM.renderChildren node
-        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered, id = Nothing} (blocks inside))) (Markers [marker] [] <> markersOf inside))
+        let title = inlines <$> written
+        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered, id = Nothing} (blocks inside))) (Markers [marker] (foldMap barsOf written) <> markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
 
@@ -974,7 +1004,11 @@ alertBlockSpec =
 -- text. A pipe table splits its rows into cells at the bars before any
 -- cell's text is read, so a bar in a table is the table's, as before.
 hiddenSpec :: CM.SyntaxSpec Identity Inlines Blocks
-hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True True Nothing (Just (inline . Hidden . inlines)) '|']}
+hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True True Nothing (Just hidden) '|']}
+  where
+    -- Marked as just made, so that its place, which the parser gives
+    -- next, is kept as its bars'.
+    hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs True
 
 -- | Block spoilers: the blocks between @[[spoiler]]{name}(Description)@
 -- and @[[/spoiler]]{name}@, each marker a line of its own (indented by at
@@ -1041,6 +1075,9 @@ readSpoilerMarker written
 data OpenSpoiler = OpenSpoiler
   { openName :: Text
   , openDescription :: Text
+  , openDescriptionToks :: [CM.Tok]
+  -- ^ The description's tokens, where the source has them, so that the
+  -- places of the inline spoilers in it are the source's.
   , openMarker :: Text
   , openLine :: Int
   , openColumn :: Int
@@ -1054,15 +1091,16 @@ spoilerBlockSpec =
     , CM.blockStart = do
         CM.nonindentSpaces
         pos <- getPosition
-        written <- T.stripEnd . CM.untokenize <$> many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
-        let line = Parsec.sourceLine pos
+        toks <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
+        let written = T.stripEnd (CM.untokenize toks)
+            line = Parsec.sourceLine pos
             column = Parsec.sourceColumn pos
             broken why = CM.addNodeToStack (Node (CM.defBlockData spoilerErrorSpec) {CM.blockData = toDyn (SpoilerMarker line column (Faulty written why)), CM.blockStartPos = [pos]} [])
         case readSpoilerMarker written of
           Nothing -> mzero
           Just (StartText name description) ->
             CM.addNodeToStack $
-              Node (CM.defBlockData spoilerBlockSpec) {CM.blockData = toDyn OpenSpoiler {openName = name, openDescription = description, openMarker = written, openLine = line, openColumn = column, ended = Nothing}, CM.blockStartPos = [pos]} []
+              Node (CM.defBlockData spoilerBlockSpec) {CM.blockData = toDyn OpenSpoiler {openName = name, openDescription = description, openDescriptionToks = descriptionToks toks, openMarker = written, openLine = line, openColumn = column, ended = Nothing}, CM.blockStartPos = [pos]} []
           -- An end marker that ended its spoiler was taken by the
           -- spoiler's continuation ('closesSpoiler'), so this one ends
           -- none.
@@ -1092,9 +1130,14 @@ spoilerBlockSpec =
         case spoilerOf node of
           Nothing -> pure inside
           Just o -> do
-            description <- inlines <$> CM.runInlineParser (CM.tokenize "spoiler" o.openDescription)
-            let h = SpoilerHead {name = o.openName, description, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended)}
-                found = Markers [] ([SpoilerMarker o.openLine o.openColumn (Starts o.openName o.openDescription)] <> [SpoilerMarker l c (Ends o.openLine) | Just (l, c) <- [o.ended]])
+            -- The description's own tokens, or, should they not be the
+            -- description as read, its text tokenized again.
+            let toks
+                  | T.strip (CM.untokenize o.openDescriptionToks) == o.openDescription = o.openDescriptionToks
+                  | otherwise = CM.tokenize "spoiler" o.openDescription
+            parsedDescription <- CM.runInlineParser toks
+            let h = SpoilerHead {name = o.openName, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended)}
+                found = Markers [] ([SpoilerMarker o.openLine o.openColumn (Starts o.openName o.openDescription)] <> [SpoilerMarker l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription)
             pure (Blocks (Seq.singleton (Nothing, Spoiler h (blocks inside))) (found <> markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
@@ -1123,6 +1166,19 @@ spoilerBlockSpec =
           verbatim n = let s = CM.blockSpec (rootLabel n) in CM.blockContainsLines s && not (CM.blockParagraph s)
       guard (not (any (\n -> isJust (spoilerOf n) || verbatim n) above))
       pure (Parsec.sourceLine at, Parsec.sourceColumn at)
+
+-- | The tokens of a start marker's description: after the name's closing
+-- brace and the opening parenthesis, up to the last closing parenthesis,
+-- without the spaces at either end.
+descriptionToks :: [CM.Tok] -> [CM.Tok]
+descriptionToks toks = case dropWhile spaces (drop 1 (dropWhile (not . CM.hasType (CM.Symbol '}')) toks)) of
+  open : rest
+    | CM.hasType (CM.Symbol '(') open ->
+        trim (reverse (drop 1 (dropWhile (not . CM.hasType (CM.Symbol ')')) (reverse rest))))
+  _ -> []
+  where
+    spaces = CM.hasType CM.Spaces
+    trim = reverse . dropWhile spaces . reverse . dropWhile spaces
 
 -- | A 'SpoilerError' line: made at once, and holding nothing, so the next
 -- line is read afresh.

@@ -309,6 +309,26 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       paragraphs shown `shouldSatisfy` elem "After hidden bold and a || b."
       show shown `shouldNotSatisfy` T.isInfixOf "wikibox"
       show shown `shouldNotSatisfy` T.isInfixOf "spoiler]]"
+    it "makes only the bars the wiki reads as an inline spoiler's a span: not escaped bars, character references or code" $ do
+      let spans = query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> [])
+          codes = query (\case P.Code _ t -> [t]; _ -> [])
+      escaped <- blocksOf ToOther place "\\|\\|literal\\|\\| and ||real||\n"
+      spans escaped `shouldBe` [[P.Str "real"]]
+      paragraphs escaped `shouldBe` ["||literal|| and real"]
+      referenced <- blocksOf ToOther place "&#124;&#124;x&#124;&#124; and &vert;&vert;y&vert;&vert;\n"
+      spans referenced `shouldBe` []
+      paragraphs referenced `shouldBe` ["||x|| and ||y||"]
+      coded <- blocksOf ToOther place "`||x||` and `a || b`, then ||*seen*|| and ||_too_||\n"
+      codes coded `shouldBe` ["||x||", "a || b"]
+      spans coded `shouldBe` [[P.Emph [P.Str "seen"]], [P.Emph [P.Str "too"]]]
+      show coded `shouldNotSatisfy` T.isInfixOf "wikibox"
+    it "keeps an inline spoiler in a box's title, a spoiler's description and a heading" $ do
+      let spans = query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> [])
+      titled' <- blocksOf ToOther place "> [!TIP] Who? ||The butler||\n> Yes.\n\n[[spoiler]]{x}(Ask ||him||)\nNo.\n[[/spoiler]]{x}\n\n## A ||hidden|| heading\n"
+      spans titled' `shouldBe` [[P.Str "The", P.Space, P.Str "butler"], [P.Str "him"], [P.Str "hidden"]]
+      titles titled' `shouldSatisfy` elem [P.Str "Ask", P.Space, P.Span ("", ["spoiler"], []) [P.Str "him"]]
+      [ident | P.Header _ (ident, _, _) _ <- titled'] `shouldBe` ["a-hidden-heading"]
+      show titled' `shouldNotSatisfy` T.isInfixOf "wikibox"
     it "nests spoilers, and finds them in a quotation and a list item" $ do
       nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
       boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]
