@@ -496,10 +496,10 @@ spec m = do
     -- Enter with no hit chosen picks the first.
     press "Enter"
     eventually $ length <$> findAll ui ".link-dialog" `shouldReturn` 0
-    markdown ui `shouldReturn` "# Hello, world\n\nSee [Diagrams](/docs/markdown-guide/diagrams)"
+    markdown ui `shouldReturn` "# Hello, world\n\nSee [Diagrams](/s/docs/p/markdown-guide/diagrams/)"
     -- The text has the focus again, after the link.
     typeText text "."
-    markdown ui `shouldReturn` "# Hello, world\n\nSee [Diagrams](/docs/markdown-guide/diagrams)."
+    markdown ui `shouldReturn` "# Hello, world\n\nSee [Diagrams](/s/docs/p/markdown-guide/diagrams/)."
     -- The address leads to the page.
     _ <- find ui ".editor-preview .page-body a[href$='#/s/docs/p/markdown-guide/diagrams/']"
     pure ()
@@ -528,7 +528,7 @@ spec m = do
     anchors `shouldSatisfy` notElem (Just "mathematics")
     find ui ".link-dialog-anchor[data-anchor='macros']" >>= click
     eventually $ length <$> findAll ui ".link-dialog" `shouldReturn` 0
-    markdown ui `shouldReturn` "# Hello, world\n\nthe [macros](/docs/markdown-guide/mathematics#macros)"
+    markdown ui `shouldReturn` "# Hello, world\n\nthe [macros](/s/docs/p/markdown-guide/mathematics/#macros)"
 
   it "writes nothing when the \"Link to a page\" dialog is closed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
