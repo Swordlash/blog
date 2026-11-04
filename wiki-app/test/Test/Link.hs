@@ -10,6 +10,7 @@ import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route
+import Wiki.App.View.LinkDialog (pageAddress)
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
@@ -68,6 +69,14 @@ spec = describe "resolvePageLink" $ do
     fromDocs ["tour"] "/docs/no-such-page" `shouldBe` Nothing
     fromDocs ["tour"] "/blog/hello-world" `shouldBe` Just (PageLink (Page (slugs ["blog"]) (slugs ["hello-world"])) "")
     fromDocs ["tour"] "/nowhere/at-all" `shouldBe` Nothing
+
+  it "leads to each of the demo's pages from the address \"Link to a page\" writes, from anywhere" $
+    for_ (Map.elems demo.pages) $ \p -> do
+      let spacePath = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) p.space)
+          pagePath = fromMaybe [] (pathOf (`Map.lookup` demo.pages) p.id)
+          address = pageAddress spacePath pagePath
+          expected = if null pagePath then Space spacePath else Page spacePath pagePath
+      (address, fromDocs ["tour"] (address <> "#intro")) `shouldBe` (address, Just (PageLink expected "#intro"))
 
   it "resolves every link between the demo's pages" $
     for_ (Map.elems demo.pages) $ \p -> do

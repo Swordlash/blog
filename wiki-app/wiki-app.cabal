@@ -120,11 +120,13 @@ library
       Wiki.App.View.Help
       Wiki.App.View.Export
       Wiki.App.View.Import
+      Wiki.App.View.LinkDialog
       Wiki.App.View.NewKindDialog
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
       Wiki.App.View.NotificationSettings
       Wiki.App.View.Page
+      Wiki.App.View.PagePicker
       Wiki.App.View.Permissions
       Wiki.App.View.Preview
       Wiki.App.View.LivePreview
@@ -132,6 +134,7 @@ library
       Wiki.App.View.ProviderIcons
       Wiki.App.View.Reset
       Wiki.App.View.Search
+      Wiki.App.View.SearchHit
       Wiki.App.View.SearchResults
       Wiki.App.View.Security
       Wiki.App.View.Server

@@ -95,7 +95,11 @@
 -- "New kind…", which opens a dialog with the administration's form for a
 -- kind of box ("Wiki.App.View.NewKindDialog"), so that the work here stays
 -- as it is; the kind saved there is written into the text and is in the
--- menu at once. The editor's keys are recognised in the
+-- menu at once. "Link to a page" (Ctrl+Shift+K) opens a dialog with the
+-- search box's picker ("Wiki.App.View.LinkDialog"), and the link to the
+-- page (or to one of its sections) chosen there is written around the
+-- selection by the command 'LinkTo', as a toolbar button writes. The
+-- editor's keys are recognised in the
 -- keydown's listener, which stops the browser's own action for them
 -- (Ctrl+K and Ctrl+E have defaults of their own) while the event is
 -- dispatched, whatever the component is busy with. Drag and drop events
@@ -283,6 +287,7 @@ import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
+import Wiki.App.View.LinkDialog qualified as LinkDialog
 import Wiki.App.View.LivePreview (liveKey)
 import Wiki.App.View.MacrosPanel qualified as MacrosPanel
 import Wiki.App.View.NewKindDialog qualified as NewKindDialog
@@ -358,6 +363,7 @@ type Slots =
     .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
     .+ ("macros" .== H.Slot (Const Void) MacrosPanel.Output ())
     .+ ("newKind" .== H.Slot (Const Void) NewKindDialog.Output ())
+    .+ ("linkDialog" .== H.Slot (Const Void) LinkDialog.Output ())
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -494,6 +500,9 @@ data State = State
   -- ^ Whether the math macros' panel is shown ("Wiki.App.View.MacrosPanel").
   , kindDialogOpen :: Bool
   -- ^ Whether the "New kind…" dialog is shown ("Wiki.App.View.NewKindDialog").
+  , linkDialogOpen :: Bool
+  -- ^ Whether the "Link to a page" dialog is shown ("Wiki.App.View.LinkDialog").
+  -- ^ The home page's options as ticked in the editor of its document,
   , assistantMounted :: Bool
   -- ^ Whether the panel has been shown yet: it is then mounted, and kept.
   , hostElement :: Maybe Element
@@ -548,6 +557,8 @@ data Action
   | FromMacros MacrosPanel.Output
   | NewKind
   | FromNewKind NewKindDialog.Output
+  | LinkPage
+  | FromLinkDialog LinkDialog.Output
   | PanelSubmitted
   | ShowPreview
   | WentTo Bool
@@ -675,6 +686,7 @@ component =
               , assistantOpen = False
               , macrosOpen = False
               , kindDialogOpen = False
+              , linkDialogOpen = False
               , assistantMounted = False
               , hostElement = Nothing
               , selection = Nothing
@@ -772,6 +784,9 @@ component =
             {% end %}
             {% if st.kindDialogOpen %}
               {{ HH.slot "newKind" () NewKindDialog.component NewKindDialog.Input {context = st.input.context} FromNewKind }}
+            {% end %}
+            {% if st.linkDialogOpen %}
+              {{ HH.slot "linkDialog" () LinkDialog.component LinkDialog.Input {context = st.input.context} FromLinkDialog }}
             {% end %}
           </div>
           <div
@@ -1065,7 +1080,7 @@ component =
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
-          <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
+          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ macrosButton bar }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
@@ -1084,6 +1099,12 @@ component =
     toolButton :: Tool -> H.ComponentHTML Action Slots m
     toolButton tool =
       [hh|<button type="button" class="tool" title={{ toolTitle tool }} aria-label={{ tool.label }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+
+    -- A link to a page of the wiki, chosen in a dialog
+    -- ("Wiki.App.View.LinkDialog").
+    linkPageButton :: H.ComponentHTML Action Slots m
+    linkPageButton =
+      [hh|<button type="button" class="tool" title="Link to a page (Ctrl+Shift+K)" aria-label="Link to a page" onClick={{ const LinkPage }}>{{ icon linkPageIcon }}</button>|]
 
     -- An image, or any other file: an attachment, through the file input.
     imageButton :: H.ComponentHTML Action Slots m
@@ -1360,6 +1381,7 @@ component =
         SaveKey -> save Stay
         IndentKey -> insert "  "
         CommandKey command -> run command
+        LinkPageKey -> handleAction LinkPage
         PreviewKey ->
           gets (\st -> st.mode) >>= \case
             Editing -> showPreview True
@@ -1407,6 +1429,17 @@ component =
       PanelSubmitted -> pass
       NewKind -> closeMenu >> modify (\st -> st {kindDialogOpen = True})
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})
+      LinkPage -> do
+        closeMenu
+        whenM (gets (\st -> st.mode == Editing)) $ modify (\st -> st {linkDialogOpen = True})
+      FromLinkDialog LinkDialog.Closed -> modify (\st -> st {linkDialogOpen = False})
+      -- The link goes around the selection, which the text kept while the
+      -- dialog had the focus, as a toolbar command writes; the focus goes
+      -- back to the text, after the link.
+      FromLinkDialog (LinkDialog.Chosen title address) -> do
+        modify (\st -> st {linkDialogOpen = False})
+        run (LinkTo title address)
+        gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . focusText)
       -- A kind was defined in the dialog: a box of it goes into the text,
       -- as if chosen from the menu, and the shell reads the session again,
       -- which has the new kind, for the menu and the preview.
@@ -2237,8 +2270,10 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon :: Text
+imageIcon, linkPageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
+-- A page with a corner folded, and a link's chain over it.
+linkPageIcon = "M3 1.5h6l3.5 3.5v3M3 1.5v13h4.5M9 1.5v3.5h3.5M10.2 13.6a1.6 1.6 0 0 0 2.3 0l1.3-1.3a1.6 1.6 0 0 0-2.3-2.3l-.5.5M12.4 11.4a1.6 1.6 0 0 0-2.3 0l-1.3 1.3a1.6 1.6 0 0 0 2.3 2.3l.5-.5"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
 noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"

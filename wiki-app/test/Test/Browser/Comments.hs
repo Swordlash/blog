@@ -71,6 +71,28 @@ spec m = do
     length <$> findAll anonymous ".comment-on-selection" `shouldReturn` 0
     length <$> findAll anonymous ".comment-form" `shouldReturn` 0
 
+  it "copies a link to the text selected, with the browser's text fragment, for anyone" $ runPage $ do
+    anonymous <- start m Nothing notes
+    _ <- find anonymous ".page-body"
+    select "computed once" "asks for it"
+    length <$> findAll anonymous ".comment-on-selection" `shouldReturn` 0
+    find anonymous ".copy-selection-link" >>= click
+    eventually $
+      find anonymous ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "#:~:text=computed%20once%20something%20asks%20for%20it")
+    find anonymous ".link-copied-label" >>= textContent >>= (`shouldSatisfy` (not . T.null))
+    length <$> findAll anonymous ".copy-selection-link" `shouldReturn` 0
+
+  it "copies a section's address from a heading's # and a box's, and stays on the page" $ runPage $ do
+    ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide", "mathematics"]))
+    find ui ".page-body a.heading-anchor[href='#macros']" >>= click
+    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "/#macros")
+    find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    unmount ui
+    guide <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    box <- find guide ".page-body .alert-exercise[id='box-exercise-1']"
+    findIn box ".alert-title a.heading-anchor[href='#box-exercise-1']" >>= click
+    eventually $ find guide ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "/#box-exercise-1")
+
   it "replies to a thread, and resolves it, which unmarks its quote, and reopens it" $ runPage $ do
     ui <- start m (Just "user-editor") hello
     find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")

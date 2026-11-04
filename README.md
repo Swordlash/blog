@@ -248,6 +248,19 @@ Links to the guide's subpage and to the tour, a wiki link with a label of its
 own, and a footnote: [Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#text).
 A link to a page that is not there is shown as broken.
 
+The editor writes these links for you. **Link to a page** (Ctrl+Shift+K), next
+to **Link**, opens the search box in a dialog: pick a page by its title or its
+text, and the link goes around the selected text, or with the page's title as
+its text, as `[Mathematics](/docs/markdown-guide/mathematics)`, the page's path
+from the wiki's root. With **Link a section** ticked, the dialog then lists the
+page's headings and boxes, and the link goes to the one chosen
+(`/docs/markdown-guide/mathematics#macros`). Every heading and every box
+has a `#` that shows when the pointer is on it: a click copies the address
+of that section, and a box's address has its kind and number, `#box-tip-2`.
+Text selected in a page gets **Copy link** beside **Comment**: its address
+ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
+Safari and Firefox open it scrolled to that text, highlighted.
+
 Tables, task lists, footnotes, `@` mentions, the HTML a page may hold and its
 colours are in [docs/markdown.md](docs/markdown.md), with everything above in
 full.

@@ -16,6 +16,7 @@ module Wiki.App.Browser
   ( ArticleLink (..)
   , articleLink
   , followArticleLink
+  , markFragment
   , setDocumentTitle
   , setFavicon
   , EntryState (..)
@@ -137,6 +138,12 @@ data ArticleLink
   | -- | A footnote, from a reference to it: the note's id (@fn-1@) and the
     -- reference's own (@fnref-1@), which the browser's Back returns to.
     ToNote Text Text
+  | -- | The @#@ a heading or a box's title ends with
+    -- ("Wiki.Core.Markdown.Render"), by the id it links to. The page view
+    -- copies the section's address to the clipboard instead of following
+    -- it ("Wiki.App.View.Page"); anywhere else, it is followed as a
+    -- 'ToFragment' is.
+    CopyAnchor Text
 
 -- | Which of the application's links a click landed on, given an element
 -- around them, if any. 'Nothing' for anything the browser follows itself
@@ -157,9 +164,11 @@ articleLink router event = do
   guard (not (T.null href))
   case (routeOfHref router href, T.stripPrefix "#" href) of
     (Just r, _) -> Just (ToRoute r)
-    (Nothing, Just fragment) -> case noteReference anchor of
-      Just reference -> Just (ToNote (decodeComponent fragment) reference)
-      Nothing -> Just (ToFragment (decodeComponent fragment))
+    (Nothing, Just fragment)
+      | isJust (Element.closestNow anchor "a.heading-anchor") -> Just (CopyAnchor (decodeComponent fragment))
+      | otherwise -> case noteReference anchor of
+          Just reference -> Just (ToNote (decodeComponent fragment) reference)
+          Nothing -> Just (ToFragment (decodeComponent fragment))
     (Nothing, Nothing) -> Nothing
   where
     -- A footnote's reference is the link's own id (@fnref-1@, or
@@ -194,6 +203,7 @@ followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
   ToFragment fragment -> liftIO (scrollTo fragment)
+  CopyAnchor fragment -> liftIO (scrollTo fragment)
   ToNote footnote reference -> liftIO (followNote footnote reference)
 
 -- Scroll to an element of the page by its id, as following a link to
@@ -211,11 +221,20 @@ scrollTo place = do
   found <- w.document.getElementById place
   for_ found $ \element -> do
     element.scrollIntoView
-    fragment <- w.location.hash
-    unless ("#/" `T.isPrefixOf` fragment) $ do
-      kept <- w.history.state
-      here <- (<>) <$> w.location.pathname <*> w.location.search
-      w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent place))
+    markFragment place
+
+-- | Put @#id@ in the address bar, as 'scrollTo' does, without scrolling:
+-- what a click on a heading's @#@ does besides copying the section's
+-- address, so that the address shown is the section's too. Natively
+-- nothing.
+markFragment :: (MonadIO m) => Text -> m ()
+markFragment place = when inBrowser . liftIO $ do
+  w <- Window.window
+  fragment <- w.location.hash
+  unless ("#/" `T.isPrefixOf` fragment) $ do
+    kept <- w.history.state
+    here <- (<>) <$> w.location.pathname <*> w.location.search
+    w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent place))
 
 -- Go from a footnote's reference to its note, as following a link to
 -- @#fn-1@ on an ordinary page does: a new entry in the session history, so
