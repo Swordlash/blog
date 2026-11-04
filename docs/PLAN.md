@@ -488,6 +488,50 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.55 Avatars, who is reading, who wrote, and the editor's title** (the owner,
+  2026-11-04; one pull request for the four). (a) *Avatars.* A user uploads a picture of
+  themselves, cropped to a circle. `User` and `Version.Author` gain `avatar :: Maybe
+  (BlobId, MimeType)`, never stored on a comment or a version but joined from the users
+  table as `Author.name` is (a migration adds the two columns). `PUT account/avatar` (the
+  image's bytes; `iconMediaTypes`, at most `maxIconSize`) and `DELETE account/avatar`,
+  audit `account.avatar`; the bytes are stored like a space icon's and served at
+  `users/<id>/avatar/<blob>` as an icon is (same headers and cache); the old blob goes
+  when replaced or removed, and with the account. The crop is made in the browser with a
+  cropper from npm, bundled as a lazy island chunk as the editor's CodeMirror is (its
+  licence in `licenses.txt`): a square comes out, shown round by CSS; the server checks
+  type and size, not shape. The avatar shows in the header next to the user's name, at
+  each comment next to its author, and in (b); a user without one gets an initials
+  circle, the same helper everywhere; the header updates through the session changes,
+  without a reload. A personal space with no icon of its own shows its owner's avatar as
+  its icon, derived where spaces are answered to the application (as `personalName` is)
+  and resolved by the icon URL, never written to the archive; an icon set in its settings
+  wins, and "none" there falls back to the avatar. Avatars do not travel in the archive
+  (a known gap to record). (b) *Who is reading.* A connection subscribed to a page on the
+  live channel is reading it: `Wiki.Server.Presence` gains readers next to editors, the
+  answer to a subscription carries them and a `Readers` message follows each change, as
+  `Editing` does: the signed-in users of the other connections, each once, the tab's own
+  user excluded, visitors not signed in not counted, capped by the server at 15 authors
+  plus the total. The page view shows next to the title a stack of overlapping avatar
+  circles, at most 5, then a grey translucent circle "+N" for the rest; hover and focus
+  show the list, at most 15 names and "and N more". The demo has no live channel and
+  shows nothing. (c) *Who wrote.* `Page` gains `createdBy` and `updatedBy :: Maybe
+  Author` (the first and the latest version's authors, filled by the backends on a full
+  page read, absent for a page without a version; `PageSummary` untouched), and the page
+  view shows under the title, in small print, "Created by X, last edited by Y on <date>"
+  (one name when both are the same), which replaces the footer's "Last changed"; the
+  blog's "Posted" line stays. (d) *The editor's title.* The title of a non-template page
+  is shown as text in the title's place, not as a field (a disabled input gets no click,
+  so it is not one); a click on it puts the caret on the text's first line after `# `,
+  scrolls it into view and focuses the text (a new island entry next to `focus`). A
+  template's title stays an editable field. Tests: server (upload, a wrong type or size
+  refused, the URL, the default icon, readers over the live channel next to
+  `Test.Server.Presence` and the comments channel tests, `createdBy` and `updatedBy`);
+  browser (the avatar in the header and at a comment through the demo, the readers'
+  stack from a given list, who wrote under the title, the title's click in the editor,
+  the readers over HTTP in `Test.Browser.Http` next to "who is editing"). The wiki-api
+  goldens change (`User` and `Author` carry the field). Docs: `docs/api.md`, the README,
+  the guide where it shows the header or comments, the four CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
