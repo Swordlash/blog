@@ -505,6 +505,35 @@ confirms it against reality and the plan is amended if it does not hold.
     remembered `texlive=yes` gives `--no-texlive`. Perl and its standard modules are
     checked at install time, not in `check-native.sh`.
 
+41. **Exports that say what went wrong** (the owner, 2026-11-04, built by WP5.56). The
+    server tries its TeX engine before offering PDFs: `probeTexEngine` finds `xelatex`
+    and typesets, under exactly the export's conditions (`restrictTeX`, `texLimits`,
+    `-halt-on-error -interaction nonstopmode`), a document that loads what pandoc's
+    template loads (`fontspec`, `unicode-math`, `lmodern`) and sets a formula, within
+    60 s (`ServeOptions.texProbeTimeout`), in a process group of its own that is killed
+    on timeout. The result (`EngineNotFound | EngineWorking path | EngineFailing path
+    output`, the output at most 2000 characters: how the engine ended, stderr's tail,
+    the log's errors) is kept in `Env` with its time; made once at start, before
+    listening (the `tex-engine` log event), and on `POST api/v1/admin/tex-engine/check`
+    (`GET api/v1/admin/tex-engine` answers the last result; administrators only;
+    `Wiki.Api.Admin.TexEngine {status, path, output, checkedAt}`; `MonadAdmin.texEngine`,
+    `checkTexEngine`). The PDFs are offered only while the engine works; a PDF export
+    while it fails answers 400 with one sentence pointing at the administration's
+    Server section, which shows the three outcomes, the engine's output folded past 12
+    lines, the usual causes (a missing format file, a service whose PATH or HOME differ
+    from the shell's, a TeX Live older than 2021 whose kpathsea refuses full-path reads
+    in paranoid mode, missing packages) and "Check again" with the time. The
+    application fetches exports (`MonadWiki.fetchExport :: ExportTarget -> ExportFormat
+    -> m (Either WikiError Document)`, the file name from `Content-Disposition`) and
+    saves them from a `blob:` URL (`Browser.download`), a PDF opened in a tab
+    (`Browser.openInTab`) or saved with a notice when the browser opens no tab; a
+    refusal shows the server's sentence in a notice of the export component (red,
+    dismissable, 15 s); while a document is made its entry says so and the entries
+    wait; the HTTP backend gives an export, and the engine check, two minutes, and the
+    server pauses Warp's idle timeout for both. A request is counted in the metrics
+    just before its response is handed to Warp, so the duration histogram measures the
+    time until the response starts.
+
 ## Repository layout
 
 ```
@@ -550,32 +579,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.56 Exports that say what went wrong** (the owner, 2026-11-04, after WP5.55;
-  one pull request). On the owner's server `xelatex` is on the PATH but has no format
-  file, so the server offers the PDFs (it only looks for the executable) and every PDF
-  export answers 400 with TeX's raw error; the export link being `<a download>`, the
-  browser saved that JSON as the document, and a Chromium block on HTTP downloads hid
-  even that. Two changes. (a) *The server probes the engine.* At start, and again when
-  the administration asks, the server typesets a one-line document with `xelatex` in a
-  temporary directory; the PDFs are offered only when that succeeds, and the Server
-  section of the administration shows the outcome: offered; not found (as today, with
-  the install hint); or found at this path but failing, with the engine's last lines of
-  output and the usual causes in a sentence (a missing format: `fmtutil-sys --byfmt
-  xelatex`; a service user without the TeX directories; missing packages), and a
-  "Check again" button. The export's 400 keeps the reason but says in one sentence what
-  it is and where the administration shows it. (b) *The application fetches exports.*
-  The Export menu no longer links `<a download>`: the application fetches the document
-  (same origin, the session cookie), and on success saves it from a `blob:` URL under
-  its file name (a Chromium browser does not block that on plain HTTP, checked by the
-  owner on 2026-11-04), a PDF opened in a tab from the same blob; on an error it shows
-  the server's reason in the page's status line instead of saving it. WP5.55's `inline`
-  for PDFs stays. Tests: server (the probe passing with a fake engine, failing with one
-  that exits non-zero, and absent; the session's exports following it; the 400's
-  wording), browser (a failed export shows the reason and saves nothing; a successful
-  one saves, through the demo's own exports or a stubbed fetch), the admin's section in
-  its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
-  and wiki-app's CHANGELOGs.
 
 - **WP5.59 The key is tested before it is kept** (the owner, 2026-11-04; one small pull
   request). In the assistant's settings the owner typed a key and clicked the test,
@@ -928,6 +931,15 @@ needs. Each was true when its package merged; check before relying on one.
   makes `install-tl` refuse ("not compatible"): rerun, or name a mirror. `--status`
   waits up to 60 s on a looping engine. The deploy test's CI comment still says
   "about two minutes" where it took seven.
+- WP5.56 (decision 41): a PDF opened from a `blob:` URL is saved by Chromium's viewer
+  under the blob's name; a failing engine is logged as a warning, not in the status
+  page's error list; a child process the engine starts during an export is not killed
+  with the export (the probe kills its whole group; pandoc's handle is out of reach);
+  every test server start runs the probe, so the server's SQLite suite takes about
+  240 s instead of 150; the probe runs synchronously at start (about 1 s with a working
+  TeX, up to 60 s with a hanging one), and a TeX repaired afterwards takes effect at
+  "Check again" or a restart; the export buttons do nothing until the program has
+  loaded, where the old links worked before it.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
