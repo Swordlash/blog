@@ -171,8 +171,10 @@ switchUser u = MemWiki $ do
 memUsers :: (MonadIO m) => MemWiki m [User]
 memUsers = (\st -> sortOn (\u -> u.login) [u | u <- Map.elems st.users, not (Set.member u.id st.disabled)]) <$> readState
 
+-- | The wiki as it is now, with each personal space named after its
+-- owner ('withPersonalNames'), as the server names them as it reads them.
 readState :: (MonadIO m) => MemWiki m MemState
-readState = MemWiki (ask >>= \env -> liftIO (readIORef env.wiki))
+readState = MemWiki (ask >>= \env -> liftIO (withPersonalNames <$> readIORef env.wiki))
 
 -- | A read: a pure function applied to the wiki as it is now.
 query :: (MonadIO m) => (MemState -> a) -> MemWiki m a
@@ -199,6 +201,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   createSpace parent = writeAt . createSpaceIn parent
   renameSpace sid = write . renameSpaceIn sid
   setSpacePublic sid = write . setSpacePublicIn sid
+  setSpaceSealed sid = write . setSpaceSealedIn sid
+  personalSpace = query personalSpaceIn
+  setPersonalSpace = writeAt . flip setPersonalSpaceIn
   setSpaceMathMacros sid = write . setSpaceMathMacrosIn sid
   setSpaceProfile sid = write . setSpaceProfileIn sid
   uploadSpaceIcon sid mediaType = write . uploadSpaceIconIn sid mediaType

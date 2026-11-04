@@ -236,7 +236,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withMathMacros, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
@@ -1083,6 +1083,9 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   createSpace parent = run Writes . createSpaceTx parent
   renameSpace sid = run Writes . renameSpaceTx sid
   setSpacePublic sid = run Writes . setSpacePublicTx sid
+  setSpaceSealed sid = run Writes . setSpaceSealedTx sid
+  personalSpace = run Reads personalSpaceTx
+  setPersonalSpace = run Writes . setPersonalSpaceTx
 
   -- Whoever may edit the whole space may set its macros (WP5.41 of
   -- docs/PLAN.md), from the editor as from the space's page.
@@ -1659,6 +1662,10 @@ createSpaceTx parent name = do
           , slug = freshSlug (isJust . findChild others parent) (fromMaybe (fallbackSlug "space") (slugify n))
           , parent
           , public = False
+          , sealed = False
+          , owner = Nothing
+          , active = True
+          , personalContainer = False
           , mathMacros = ""
           , createdAt = time
           , position = nextPosition (childrenOf others parent)
@@ -1673,8 +1680,13 @@ createSpaceTx parent name = do
   db (insertSpace space)
   for_ ctx.creator $ \u ->
     db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
-  -- Its home page, created as if the space's creator had created it, and
-  -- then set as the space's home page, which requires the page to exist.
+  withHomePage time space
+
+-- | Give a space just inserted its home page, created as if the space's
+-- creator had created it, and then set as the space's home page, which
+-- requires the page to exist.
+withHomePage :: UTCTime -> Space -> Tx Space
+withHomePage time space = do
   j <- newId
   let home =
         Page
@@ -1683,7 +1695,7 @@ createSpaceTx parent name = do
           , parent = Nothing
           , title = homeTitle
           , slug = fromMaybe (fallbackSlug "page") (slugify homeTitle)
-          , body = homeBody n
+          , body = homeBody space.name
           , attachments = []
           , createdAt = time
           , updatedAt = time
@@ -1819,8 +1831,28 @@ setSpacePublicTx sid public = do
   record "space.public" (spaceSubject s') [("public", yesNo public)]
   pure s'
 
+-- | Make a space private from its parent, or not ('Wiki.Core.Space.sealed').
+-- Whoever administers the space may, which its parent's administrators do
+-- by inheritance; but sealing it cuts that inheritance, so an
+-- administrator who would no longer administer the space afterwards is
+-- granted 'AdministerSpace' on it, as its creator is: otherwise they could
+-- not undo what they just did.
+setSpaceSealedTx :: SpaceId -> Bool -> Tx Space
+setSpaceSealedTx sid sealed = do
+  ctx <- ask
+  (_, c) <- findSpace sid
+  s' <- adjustSpace sid (\s -> pure s {sealed})
+  let sealedChain = initSafe c <> [s']
+  when (sealed && not (canAdministerSpace ctx.principal ctx.grants sealedChain)) $
+    for_ ctx.creator $ \u ->
+      db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = sid, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
+  record "space.sealed" (spaceSubject s') [("sealed", yesNo sealed)]
+  pure s'
+
 renameSpaceTx :: SpaceId -> Text -> Tx Space
 renameSpaceTx sid name = adjustSpace sid $ \s -> do
+  when (isPersonal s) $
+    invalid "A personal space is named after its owner, and cannot be renamed."
   n <- nonBlank "A space's name" name
   pure
     Space
@@ -1829,6 +1861,10 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , slug = s.slug
       , parent = s.parent
       , public = s.public
+      , sealed = s.sealed
+      , owner = s.owner
+      , active = s.active
+      , personalContainer = s.personalContainer
       , mathMacros = s.mathMacros
       , createdAt = s.createdAt
       , position = s.position
@@ -1857,6 +1893,8 @@ moveSpaceTx sid destination = do
   traverse_ requireView destinationChain
   require (mayMoveSpace ctx.principal ctx.grants c destinationChain)
   requireOrdinary sid
+  when (isPersonal s && destination /= s.parent) $
+    invalid "A personal space stays among the users' spaces: it cannot be moved."
   traverse_ (requireOrdinary) destination
   when (maybe False (within sid) destinationChain) $
     invalid "A space cannot be moved into itself or one of its subspaces."
@@ -1867,6 +1905,103 @@ moveSpaceTx sid destination = do
       s' = respace destination slug position s
   db (updateSpace s')
   pure s'
+
+--------------------------------------------------------------------------------
+-- Personal spaces
+
+-- | The asking user's personal space, turned on or off, or 'Nothing' if
+-- they have none. Someone not signed in, and the server's operator, who
+-- is not a user, have none and may have none: 'Forbidden'.
+personalSpaceTx :: Tx (Maybe Space)
+personalSpaceTx = do
+  u <- notified
+  asks (\x -> find (\s -> s.owner == Just u) (Map.elems x.spaces))
+
+-- | Turn the asking user's personal space on or off. The first time, it is
+-- made: in the container of personal spaces, which is made too if no user
+-- has had one yet, with the user's login as its slug, public, with a home
+-- page, and administered by its owner. Turning it off hides it from
+-- everyone and keeps its content; turning it on again shows it as it was.
+-- Turning off a personal space the user does not have is 'NotFound'. The
+-- result is the space.
+setPersonalSpaceTx :: Bool -> Tx Space
+setPersonalSpaceTx enabled = do
+  u <- notified
+  user <- asks (\x -> x.user) >>= maybe (failWith Forbidden) pure
+  ctx <- ask
+  let named s = withName (personalName user.displayName) s
+  case find (\s -> s.owner == Just u) (Map.elems ctx.spaces) of
+    Just s -> do
+      let s' = named s {active = enabled}
+      when (s.active /= enabled) $ do
+        db (updateSpace s')
+        record "space.personal" (spaceSubject s') [("active", yesNo enabled)]
+      pure s'
+    Nothing
+      | not enabled -> failWith NotFound
+      | otherwise -> do
+          time <- now
+          container <- maybe (makeContainer time) pure (find (\s -> s.personalContainer) (Map.elems ctx.spaces))
+          i <- newId
+          let others = Map.elems ctx.spaces
+              parent = Just container.id
+              space =
+                Space
+                  { id = SpaceId i
+                  , name = personalName user.displayName
+                  , slug = freshSlug (isJust . findChild others parent) (fromMaybe (fallbackSlug "user") (slugify user.login.text))
+                  , parent
+                  , public = True
+                  , sealed = False
+                  , owner = Just u
+                  , active = True
+                  , personalContainer = False
+                  , mathMacros = ""
+                  , createdAt = time
+                  , position = nextPosition (childrenOf others parent)
+                  , subspaceOrder = ByName
+                  , pageOrder = ByName
+                  , homePage = Nothing
+                  , icon = Nothing
+                  , description = ""
+                  , blog = False
+                  , boxNumbering = InPage
+                  }
+          db (insertSpace space)
+          db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
+          made <- withHomePage time space
+          record "space.personal" (spaceSubject made) [("active", yesNo True), ("path", spacePathText [container, made])]
+          pure made
+  where
+    -- The container of personal spaces: a top-level space with no grants
+    -- and no home page, which nobody may view itself.
+    makeContainer time = do
+      i <- newId
+      others <- asks (\x -> Map.elems x.spaces)
+      let container =
+            Space
+              { id = SpaceId i
+              , name = containerName
+              , slug = freshSlug (isJust . findChild others Nothing) containerSlug
+              , parent = Nothing
+              , public = False
+              , sealed = False
+              , owner = Nothing
+              , active = True
+              , personalContainer = True
+              , mathMacros = ""
+              , createdAt = time
+              , position = nextPosition (childrenOf others Nothing)
+              , subspaceOrder = ByName
+              , pageOrder = ByName
+              , homePage = Nothing
+              , icon = Nothing
+              , description = ""
+              , blog = False
+              , boxNumbering = InPage
+              }
+      db (insertSpace container)
+      pure container
 
 -- | Delete a space: its subspaces, their pages, the pages' versions,
 -- attachments and drafts, and the grants on all of them go with it, as the
@@ -1898,6 +2033,10 @@ respace parent slug position s =
     , slug
     , parent
     , public = s.public
+    , sealed = s.sealed
+    , owner = s.owner
+    , active = s.active
+    , personalContainer = s.personalContainer
     , mathMacros = s.mathMacros
     , createdAt = s.createdAt
     , position
@@ -2593,7 +2732,8 @@ removeSecondFactorTx u = do
 -- removes their own account here. 'deleteUserRows' deletes the account
 -- and what belongs to it. The page versions and comments the user wrote
 -- stay, kept under 'formerAuthor' with the login, so that they still name
--- the person; the login is then free for a new account.
+-- the person; the login is then free for a new account. Their personal
+-- space, if they have one, is deleted with the account.
 removeUserTx :: UserId -> Tx ()
 removeUserTx u = do
   requireAdministrator
@@ -2602,8 +2742,11 @@ removeUserTx u = do
   when (self == Just u) (failWith (Invalid "You cannot remove your own account."))
   account <- db (loadAccount u) >>= maybe (failWith NotFound) pure
   unless account.disabled (failWith (Conflict ("Disable " <> user.login.text <> "'s login before removing the account.")))
+  -- Their personal space belongs to them, and goes with the account (the
+  -- schema's foreign key cascades).
+  personal <- asks (\x -> find (\s -> s.owner == Just u) (Map.elems x.spaces))
   db (deleteUserRows u (formerAuthor user.login.text))
-  record "user.remove" (userSubject user) []
+  record "user.remove" (userSubject user) [("personal space", "deleted") | isJust personal]
 
 --------------------------------------------------------------------------------
 -- Comments

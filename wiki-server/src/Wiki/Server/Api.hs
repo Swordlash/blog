@@ -564,6 +564,8 @@ handlers env caller =
           , email = do
               u <- signedInUser
               emailStateOf u Nothing
+          , personalSpace = signedInUser >> wiki personalSpace
+          , setPersonalSpace = \body -> signedInUser >> wiki (setPersonalSpace body.enabled)
           , setEmail = \body -> do
               u <- signedInUser
               mailer <- liftIO (currentMailer env)
@@ -591,6 +593,7 @@ handlers env caller =
           , create = \new -> wiki (createSpace new.parent new.name)
           , rename = \s body -> wiki (renameSpace s body.name)
           , setPublic = \s body -> wiki (setSpacePublic s body.public)
+          , setSealed = \s body -> wiki (setSpaceSealed s body.sealed)
           , setMathMacros = \s body -> wiki (setSpaceMathMacros s body.mathMacros)
           , setProfile = \s body -> wiki (setSpaceProfile s body)
           , uploadIcon = \s u -> wiki (uploadSpaceIconFile s u.mediaType u.payload)

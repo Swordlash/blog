@@ -313,7 +313,15 @@ importSpace blobs a discussions choices progress m
               , name = m.archived.name
               , slug = m.archived.slug
               , parent
-              , public = m.archived.public
+              , -- A personal space of the archive comes in as an ordinary
+                -- space: its owner is a user of another wiki, which this
+                -- import does not bring. One its owner had turned off
+                -- comes in private.
+                public = m.archived.public && m.archived.active
+              , sealed = m.archived.sealed
+              , owner = Nothing
+              , active = True
+              , personalContainer = False
               , mathMacros = m.archived.mathMacros
               , createdAt = m.archived.createdAt
               , position = nextPosition (childrenOf spaces parent)

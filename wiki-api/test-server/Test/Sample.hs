@@ -5,6 +5,7 @@ module Test.Sample
   , later
   , slug
   , space
+  , personalSpace
   , page
   , attachment
   , draft
@@ -115,6 +116,10 @@ space =
     , slug = slug "docs"
     , parent = Nothing
     , public = True
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros = "\\R: \\mathbb{R}"
     , createdAt = time
     , position = 0
@@ -123,6 +128,31 @@ space =
     , homePage = Just (PageId "p1")
     , icon = Just (IconEmoji "📘")
     , description = "How to write here."
+    , blog = False
+    , boxNumbering = InPage
+    }
+
+-- | A user's personal space, in the container of personal spaces.
+personalSpace :: Space
+personalSpace =
+  Space
+    { id = SpaceId "s9"
+    , name = "Space of Ada"
+    , slug = slug "ada"
+    , parent = Just (SpaceId "s8")
+    , public = True
+    , sealed = False
+    , owner = Just (UserId "u1")
+    , active = True
+    , personalContainer = False
+    , mathMacros = ""
+    , createdAt = time
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByName
+    , homePage = Just (PageId "p9")
+    , icon = Nothing
+    , description = ""
     , blog = False
     , boxNumbering = InPage
     }

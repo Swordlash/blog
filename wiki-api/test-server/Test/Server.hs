@@ -142,6 +142,8 @@ stubs =
           , removeSecondFactor = \body -> if body.code == "287082" then pure SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True} else refuse Unauthenticated
           , email = pure Sample.emailState
           , setEmail = \body -> pure EmailState {email = Just (Email body.email), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+          , personalSpace = pure (Just Sample.personalSpace)
+          , setPersonalSpace = \body -> pure Sample.personalSpace {Space.active = body.enabled}
           }
     , spaces =
         SpacesApi
@@ -159,6 +161,7 @@ stubs =
           , create = \new -> pure Sample.space {Space.id = SpaceId "new", Space.parent = new.parent, Space.name = new.name}
           , rename = \s body -> pure Sample.space {Space.id = s, Space.name = body.name}
           , setPublic = \s body -> pure Sample.space {Space.id = s, Space.public = body.public}
+          , setSealed = \s body -> pure Sample.space {Space.id = s, Space.sealed = body.sealed}
           , setMathMacros = \s body -> pure Sample.space {Space.id = s, Space.mathMacros = body.mathMacros}
           , setOrder = \s body -> pure $ case body.children of
               ChildSpaces -> Sample.space {Space.id = s, Space.subspaceOrder = body.order}
@@ -440,6 +443,7 @@ spec = describe "a server of the API's type" $ do
     it "renames one, and changes its settings" $ do
       answers (sendJson methodPut (links.spaces.rename s) SpaceName {name = "Manuals"}) 200 Sample.space {Space.name = "Manuals"}
       answers (sendJson methodPut (links.spaces.setPublic s) SpacePublic {public = False}) 200 Sample.space {Space.public = False}
+      answers (sendJson methodPut (links.spaces.setSealed s) SpaceSealed {sealed = True}) 200 Sample.space {Space.sealed = True}
       answers (sendJson methodPut (links.spaces.setMathMacros s) SpaceMathMacros {mathMacros = ""}) 200 Sample.space {Space.mathMacros = ""}
       answers (sendJson methodPut (links.spaces.setOrder s) SpaceOrder {children = ChildSpaces, order = NewestFirst}) 200 Sample.space {Space.subspaceOrder = NewestFirst}
 
@@ -831,6 +835,10 @@ spec = describe "a server of the API's type" $ do
       links.secondFactor `shouldBe` "api/v1/session/second-factor"
       answers (sendJson methodPost links.secondFactor OneTimeCode {code = "287082"}) 200 Sample.sessionInfo
       answers (sendJson methodPost links.secondFactor OneTimeCode {code = "000000"}) 401 Unauthenticated
+
+    it "reads the user's personal space, and turns it on or off" $ do
+      answers (getAt links.account.personalSpace) 200 (Just Sample.personalSpace)
+      answers (sendJson methodPut links.account.setPersonalSpace PersonalSpaceSwitch {enabled = False}) 200 Sample.personalSpace {Space.active = False}
 
     it "reads and gives the user's e-mail address, and follows the link that verifies it" $ do
       links.account.email `shouldBe` "api/v1/account/email"

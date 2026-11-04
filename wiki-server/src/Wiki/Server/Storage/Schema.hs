@@ -353,6 +353,15 @@ data Spaces f = SpaceRow
   , blog :: Columnar f Bool
   , box_numbering :: Columnar f Text
   -- ^ How its boxes are numbered, by 'Wiki.Core.Markdown.Box.numberingName'.
+  , sealed :: Columnar f Bool
+  -- ^ Whether it is private from its parent (migration
+  -- @0007-sealed-and-personal-spaces@, as are the three below).
+  , owner :: Columnar f (Maybe Text)
+  -- ^ The user whose personal space it is.
+  , active :: Columnar f Bool
+  -- ^ Whether a personal space is shown.
+  , personal_container :: Columnar f Bool
+  -- ^ Whether it is the container of personal spaces.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

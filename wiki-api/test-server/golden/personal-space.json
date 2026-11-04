@@ -1,0 +1,21 @@
+{
+  "active": true,
+  "blog": false,
+  "boxNumbering": "in-page",
+  "createdAt": "2026-10-24T09:30:12.345678Z",
+  "description": "",
+  "homePage": "p9",
+  "icon": null,
+  "id": "s9",
+  "mathMacros": "",
+  "name": "Space of Ada",
+  "owner": "u1",
+  "pageOrder": "ByName",
+  "parent": "s8",
+  "personalContainer": false,
+  "position": 0,
+  "public": true,
+  "sealed": false,
+  "slug": "ada",
+  "subspaceOrder": "ByName"
+}

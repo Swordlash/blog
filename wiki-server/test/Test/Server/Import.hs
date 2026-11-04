@@ -81,6 +81,10 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , slug = slug s
     , parent = SpaceId <$> parent
     , public
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros
     , createdAt = time
     , position = 0

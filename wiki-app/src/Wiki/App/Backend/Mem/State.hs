@@ -57,6 +57,10 @@ module Wiki.App.Backend.Mem.State
   , createSpaceIn
   , renameSpaceIn
   , setSpacePublicIn
+  , setSpaceSealedIn
+  , personalSpaceIn
+  , setPersonalSpaceIn
+  , withPersonalNames
   , setSpaceMathMacrosIn
   , macroUsesInState
   , setSpaceProfileIn
@@ -222,7 +226,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withMathMacros, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
@@ -521,6 +525,10 @@ insertSpace parent name public now st0 =
           , slug
           , parent
           , public
+          , sealed = False
+          , owner = Nothing
+          , active = True
+          , personalContainer = False
           , mathMacros = ""
           , createdAt = now
           , position = nextPosition (childrenOf (Map.elems st.spaces) parent)
@@ -751,6 +759,10 @@ respace parent slug position s =
     , slug
     , parent
     , public = s.public
+    , sealed = s.sealed
+    , owner = s.owner
+    , active = s.active
+    , personalContainer = s.personalContainer
     , mathMacros = s.mathMacros
     , createdAt = s.createdAt
     , position
@@ -929,6 +941,8 @@ adjustSpace sid f st = do
 -- | Rename a space.
 renameSpaceIn :: SpaceId -> Text -> Write Space
 renameSpaceIn sid name = adjustSpace sid $ \s -> do
+  when (isPersonal s) $
+    Left (Invalid "A personal space is named after its owner, and cannot be renamed.")
   n <- nonBlank "A space's name" name
   pure
     Space
@@ -937,6 +951,10 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , slug = s.slug
       , parent = s.parent
       , public = s.public
+      , sealed = s.sealed
+      , owner = s.owner
+      , active = s.active
+      , personalContainer = s.personalContainer
       , mathMacros = s.mathMacros
       , createdAt = s.createdAt
       , position = s.position
@@ -952,6 +970,70 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
 -- | Make a space public or private.
 setSpacePublicIn :: SpaceId -> Bool -> Write Space
 setSpacePublicIn sid public = adjustSpace sid (\s -> pure s {public})
+
+-- | Make a space private from its parent, or not. Whoever seals it and
+-- would no longer administer it is granted 'AdministerSpace' on it, as on
+-- the server.
+setSpaceSealedIn :: SpaceId -> Bool -> Write Space
+setSpaceSealedIn sid sealed st = do
+  (_, c) <- findSpace st sid
+  (st1, s') <- adjustSpace sid (\s -> pure s {sealed}) st
+  let keeps = canAdministerSpace (currentPrincipal st) st.grants (initSafe c <> [s'])
+      st2 = case currentPrincipal st of
+        Just p | sealed && not keeps -> grantSpace sid (SubjectUser p.user) AdministerSpace st1
+        _ -> st1
+  pure (st2, s')
+
+--------------------------------------------------------------------------------
+-- Personal spaces
+
+-- | The spaces with the personal ones named after their owners as they are
+-- now ('personalName'), as the server names them when it reads them. The
+-- demo reads its spaces through this.
+withPersonalNames :: MemState -> MemState
+withPersonalNames st = st {spaces = Map.map afterOwner st.spaces}
+  where
+    afterOwner s = case s.owner >>= (`Map.lookup` st.users) of
+      Just u -> withName (personalName u.displayName) s
+      Nothing -> s
+
+-- | The current user's personal space, shown or not, if they have one.
+personalSpaceIn :: MemState -> Either WikiError (Maybe Space)
+personalSpaceIn st = do
+  u <- signedIn st
+  pure (find (\s -> s.owner == Just u) (Map.elems (withPersonalNames st).spaces))
+
+-- | Turn the current user's personal space on or off, making it, and the
+-- container of personal spaces, the first time.
+setPersonalSpaceIn :: UTCTime -> Bool -> Write Space
+setPersonalSpaceIn now enabled st = do
+  uid <- signedIn st
+  u <- findUser st uid
+  case find (\s -> s.owner == Just uid) (Map.elems st.spaces) of
+    Just s -> do
+      let s' = withName (personalName u.displayName) s {active = enabled}
+      pure (st {spaces = Map.insert s'.id s' st.spaces}, s')
+    Nothing
+      | not enabled -> Left NotFound
+      | otherwise -> do
+          let (st1, container) = case find (\s -> s.personalContainer) (Map.elems st.spaces) of
+                Just c -> (st, c)
+                Nothing ->
+                  let (stC, bare) = insertSpace Nothing containerName False now st
+                      -- The container's slug is "users" unless a top-level
+                      -- space has it.
+                      topLevel = Map.elems (Map.delete bare.id stC.spaces)
+                      c = (respace Nothing (freshSlug (isJust . findChild topLevel Nothing) containerSlug) bare.position bare) {personalContainer = True}
+                   in (stC {spaces = Map.insert c.id c stC.spaces}, c)
+              (st2, made) = insertSpace (Just container.id) (personalName u.displayName) True now st1
+              others = Map.elems (Map.delete made.id st2.spaces)
+              slug = freshSlug (isJust . findChild others (Just container.id)) (fromMaybe (fallbackSlug "user") (slugify u.login.text))
+              personal = (respace (Just container.id) slug made.position made) {owner = Just uid}
+              st3 = grantSpace personal.id (SubjectUser uid) AdministerSpace st2 {spaces = Map.insert personal.id personal st2.spaces}
+              -- Its home page, as 'createSpaceIn' makes one.
+              (st4, home) = insertPage personal.id Nothing homeTitle (homeBody personal.name) now st3
+              space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} personal
+          pure (recordVersion (Just uid) home st4 {spaces = Map.insert space.id space st4.spaces}, space)
 
 -- | Give a space new math macros: the text as it is, without blank lines
 -- at its ends, and nothing when it is blank. Whether KaTeX can parse it is
@@ -1004,6 +1086,8 @@ moveSpaceIn sid destination st = do
   traverse_ (requireView st) destinationChain
   require (mayMoveSpace (currentPrincipal st) st.grants c destinationChain)
   requireOrdinary st sid
+  when (isPersonal s && destination /= s.parent) $
+    Left (Invalid "A personal space stays among the users' spaces: it cannot be moved.")
   traverse_ (requireOrdinary st) destination
   when (maybe False (within sid) destinationChain) $
     Left (Invalid "A space cannot be moved into itself or one of its subspaces.")
@@ -1019,11 +1103,15 @@ deleteSpaceIn :: SpaceId -> Write ()
 deleteSpaceIn sid st = do
   (_, c) <- findSpace st sid
   requireAdminister st c
+  pure (removeSpace sid st, ())
+
+-- | A space removed, with everything under it, without checks.
+removeSpace :: SpaceId -> MemState -> MemState
+removeSpace sid st =
   let gone = Set.fromList [i | i <- Map.keys st.spaces, within sid (chainOf st i)]
       (dead, alive) = Map.partition (\p -> p.space `Set.member` gone) st.pages
       st1 = foldr dropIcon (dropAttachments (Map.elems dead) st) (Map.elems (Map.restrictKeys st.spaces gone))
-  pure
-    ( st1
+   in st1
         { spaces = Map.withoutKeys st.spaces gone
         , pages = alive
         , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
@@ -1038,8 +1126,6 @@ deleteSpaceIn sid st = do
               , P.access = st.grants.access
               }
         }
-    , ()
-    )
 
 -- | Who may do what on a space, for whoever administers it.
 spaceAccessIn :: SpaceId -> MemState -> Either WikiError SpaceAccess
@@ -1459,6 +1545,9 @@ removeUserIn uid st = do
   when (st.current == Just uid) (Left (Invalid "You cannot remove your own account."))
   unless (Set.member uid st.disabled) (Left (Conflict ("Disable " <> u.login.text <> "'s login before removing the account.")))
   let former = C.formerAuthor u.login.text
+      -- Their personal space belongs to them, and goes with the account,
+      -- as on the server.
+      st0 = maybe st (\p -> removeSpace p.id st) (find (\p -> p.owner == Just uid) (Map.elems st.spaces))
       keptComment c = if c.author.id == uid then c {C.author = absentAuthor former} else c
       keptNotice n
         | n.actor.id == uid =
@@ -1478,19 +1567,19 @@ removeUserIn uid st = do
       notUser :: Subject -> Bool
       notUser = (/= SubjectUser uid)
   pure
-    ( st
-        { users = Map.delete uid st.users
-        , membership = Map.map (Set.delete uid) st.membership
-        , grants = st.grants {P.global = filter (\g -> notUser g.subject) st.grants.global, P.spaces = filter (\g -> notUser g.subject) st.grants.spaces}
-        , drafts = Map.filterWithKey (\(_, author) _ -> author /= uid) st.drafts
-        , disabled = Set.delete uid st.disabled
-        , passwords = Set.delete uid st.passwords
-        , removed = Map.insert uid u.login.text st.removed
-        , notices = map (map keptNotice) (Map.delete uid st.notices)
-        , watches = Map.delete uid st.watches
-        , choices = Map.delete uid st.choices
-        , stars = Map.delete uid st.stars
-        , threads = Map.map (map (\t -> t {C.comments = map keptComment t.comments})) st.threads
+    ( st0
+        { users = Map.delete uid st0.users
+        , membership = Map.map (Set.delete uid) st0.membership
+        , grants = st0.grants {P.global = filter (\g -> notUser g.subject) st0.grants.global, P.spaces = filter (\g -> notUser g.subject) st0.grants.spaces}
+        , drafts = Map.filterWithKey (\(_, author) _ -> author /= uid) st0.drafts
+        , disabled = Set.delete uid st0.disabled
+        , passwords = Set.delete uid st0.passwords
+        , removed = Map.insert uid u.login.text st0.removed
+        , notices = map (map keptNotice) (Map.delete uid st0.notices)
+        , watches = Map.delete uid st0.watches
+        , choices = Map.delete uid st0.choices
+        , stars = Map.delete uid st0.stars
+        , threads = Map.map (map (\t -> t {C.comments = map keptComment t.comments})) st0.threads
         }
     , ()
     )

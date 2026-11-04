@@ -399,6 +399,9 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   createSpace parent name = write (endpoints.spaces.create NewSpace {parent, name})
   renameSpace sid name = write (endpoints.spaces.rename sid SpaceName {name})
   setSpacePublic sid public = write (endpoints.spaces.setPublic sid SpacePublic {public})
+  setSpaceSealed sid sealed = write (endpoints.spaces.setSealed sid SpaceSealed {sealed})
+  personalSpace = send endpoints.account.personalSpace
+  setPersonalSpace enabled = write (endpoints.account.setPersonalSpace PersonalSpaceSwitch {enabled})
   setSpaceMathMacros sid mathMacros = write (endpoints.spaces.setMathMacros sid SpaceMathMacros {mathMacros})
   setSpaceProfile sid profile = write (endpoints.spaces.setProfile sid profile)
 

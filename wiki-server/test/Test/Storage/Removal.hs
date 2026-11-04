@@ -130,6 +130,19 @@ spec backing = describe "removing an account" $ do
     again.user.id `shouldNotBe` u
     authors `shouldReturn` [Just "Ada Admin", Just former.name, Just former.name]
 
+  it "deletes their personal space with the account" $ withDemo backing $ \st -> do
+    editor <- userNamed st "editor"
+    adminId <- (\u -> u.id) <$> userNamed st "admin"
+    mine <- ok =<< runStoredWiki st (AsUser editor.id) (setPersonalSpace True)
+    void (ok =<< runStoredWiki st (AsUser editor.id) (createPage mine.id Nothing "Notes" "Mine."))
+    void (ok =<< setDisabled st editor.id True)
+    ok =<< runStoredWiki st (AsUser adminId) (removeUser editor.id)
+    runStoredWiki st (AsUser adminId) (getSpace (path "users/editor")) `shouldReturn` Left NotFound
+    reading st (countWhere wikiDb.spaces (\s -> s.id ==. val_ mine.id.text)) `shouldReturn` 0
+    reading st (countWhere wikiDb.pages (\p -> p.space_id ==. val_ mine.id.text)) `shouldReturn` 0
+    reading st (countWhere wikiDb.audit_log (\a -> a.action ==. val_ "user.remove" &&. a.subject_name ==. val_ "editor"))
+      `shouldReturn` 1
+
   it "is the console's users remove, which asks for the login to be disabled first" $
     withPlaceIn backing $ \at -> do
       let run command = runUsers (\_ -> pure (Left "not asked")) Users {place = placeOptionsOf at, command}
