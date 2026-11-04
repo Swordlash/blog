@@ -19,12 +19,14 @@ passed=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_contains() { grep -F -- "$2" "$1" >/dev/null || fail "$1 lacks: $2"; }
 pass() { passed=$((passed + 1)); printf 'ok %s - %s\n' "$passed" "$*"; }
+# The line number of the first line containing a string, for order checks.
+line_of() { grep -n -F -- "$2" "$1" | head -n 1 | cut -d: -f1; }
 
 fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/repo/toolchain"
   cp "$SOURCE" "$case_dir/repo/toolchain/bootstrap.sh"
-  cp "$SOURCE_DIR/check-native.sh" "$case_dir/repo/toolchain/"
+  cp "$SOURCE_DIR/check-native.sh" "$SOURCE_DIR/check-tex.sh" "$case_dir/repo/toolchain/"
   HOME=$case_dir/home
   EVENTS=$case_dir/events
   CACHE=$case_dir/cache/chromium_headless_shell-1234
@@ -81,6 +83,10 @@ EOF
   for cmd in ghc cabal wasm32-wasi-ghc node npm fourmolu dpkg-query curl apt-get sudo git; do
     ln -s tool "$case_dir/bin/$cmd"
   done
+  # An xelatex that typesets toolchain/check-tex.sh's probe at once, ahead
+  # of the host's own on PATH: toolchain/check-native.sh tries the one it
+  # finds, and the host's would take seconds, or fail, at every check.
+  fake_xelatex working
   FAKE_SETUP=$case_dir/fake-setup.sh
   export FAKE_SETUP
   cat >"$FAKE_SETUP" <<'EOF'
@@ -133,6 +139,19 @@ EOF
   printf '#!/bin/sh\nexit 0\n' >"$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
   chmod +x "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
   touch "$CACHE/INSTALLATION_COMPLETE"
+}
+
+# Write the fixture's xelatex: one that makes check-tex.sh's probe.pdf
+# (working), or one that stops as TeX Live 2020 does under kpathsea's
+# paranoid mode (failing).
+fake_xelatex() {
+  case $1 in
+    working)
+      printf '#!/bin/sh\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$case_dir/bin/xelatex" ;;
+    failing)
+      printf '#!/bin/sh\nprintf "! I can'"'"'t find file unicode-math-table.tex.\\n" >probe.log\nexit 1\n' >"$case_dir/bin/xelatex" ;;
+  esac
+  chmod +x "$case_dir/bin/xelatex"
 }
 
 sysroot() {
@@ -316,7 +335,7 @@ no_dpkg=$case_dir/no-dpkg
 mkdir "$no_dpkg"
 for cmd in /usr/bin/* /bin/*; do
   name=${cmd##*/}
-  case $name in dpkg-query | cc | make) continue ;; esac
+  case $name in dpkg-query | cc | make | xelatex) continue ;; esac
   if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
   [ -e "$no_dpkg/$name" ] || [ -L "$no_dpkg/$name" ] || ln -s "$cmd" "$no_dpkg/$name"
 done
@@ -442,6 +461,38 @@ TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$ca
 assert_contains "$out" 'missing  terminfo    cc cannot link a program with -ltinfo (the configuration wizard needs it) (Debian: libncurses-dev; RHEL: ncurses-devel)'
 assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
 pass 'toolchain/check-native.sh checks terminfo with --with-wizard only'
+
+# The xelatex of the PDF exports, through toolchain/check-tex.sh: a line
+# of its own after the commands, ok when the fake typesets the probe, no
+# with the reason's first line when it fails, no when PATH has none (the
+# links leave the host's out). It is never counted and never makes the
+# check fail, and the summary says what the PDF exports need, also after
+# a missing item.
+out=$case_dir/check-tex-working
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check with a working xelatex failed: $(cat "$out")"
+assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+if grep -F 'PDF exports need' "$out" >/dev/null; then fail 'the check with a working xelatex spoke of the PDF exports'; fi
+if [ "$(line_of "$out" 'pkg-config')" -gt "$(line_of "$out" 'xelatex')" ] || [ "$(line_of "$out" 'xelatex')" -gt "$(line_of "$out" 'GMP')" ]; then
+  fail 'the xelatex line is not after the commands'
+fi
+fake_xelatex failing
+out=$case_dir/check-tex-failing
+env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check with a failing xelatex failed: $(cat "$out")"
+assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex: It exited 1. (for the PDF exports; not counted)"
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails (sh toolchain/check-tex.sh says why), so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive)."
+rm "$case_dir/bin/xelatex"
+out=$case_dir/check-tex-none
+status=0
+TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --with-wizard >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check without -ltinfo and xelatex exited $status, not 1"
+assert_contains "$out" 'no       xelatex     not-found: no xelatex on PATH (for the PDF exports; not counted)'
+assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
+if grep -F 'Missing for the native build of wiki-server and the configuration wizard: terminfo, xelatex' "$out" >/dev/null; then fail 'xelatex was counted as missing'; fi
+assert_contains "$out" 'PDF exports need xelatex: none is on PATH, so the server would offer no PDFs'
+fake_xelatex working
+pass 'toolchain/check-native.sh says whether xelatex typesets the PDF exports, and never fails for it'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler or fourmolu on PATH, `node`

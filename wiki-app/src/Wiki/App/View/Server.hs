@@ -243,7 +243,9 @@ component =
     -- and above all whether PDF is among them: it needs a TeX engine that
     -- works on the server's machine. The server tries it when it starts
     -- and when "Check again" asks, and offers the PDFs only when it made
-    -- one; this says what it found, and when.
+    -- one; this says what it found, and when. A server started with
+    -- --no-pdf tries nothing: this says so and what sets the option, with
+    -- no "Check again", since a check would find the same.
     exportView :: State -> [ExportFormat] -> H.ComponentHTML Action Slots m
     exportView st formats =
       [hh|
@@ -273,6 +275,9 @@ component =
             TexNotFound ->
               [ [hh|<p class="server-export-tex server-export-no-tex">xelatex was not found, so nothing exports as PDF. Install it on the server's machine (<code>apt install texlive-xetex</code>), then check again.</p>|]
               , checkAgain (Just found.checkedAt)
+              ]
+            TexOff ->
+              [ [hh|<p class="server-export-tex server-export-off">PDF exports are off: the server runs with <code>--no-pdf</code>. The deploy sets it when it finds no xelatex that works and installs none; <code>sh toolchain/deploy-local.sh --server --texlive</code> installs TeX Live under the toolchain and turns them on.</p>|]
               ]
             TexFailing ->
               [ [hh|<p class="server-export-tex server-export-failing">xelatex was found at <code>{{ pathOf found }}</code> but fails, so nothing exports as PDF.</p>|]

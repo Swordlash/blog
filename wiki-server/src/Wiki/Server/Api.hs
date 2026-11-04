@@ -733,8 +733,10 @@ handlers env caller =
             texEngine = administrator >> liftIO (engineReport <$> currentEngine env.texEngine)
           , checkTexEngine = do
               administrator
-              -- A hanging engine is waited for up to the probe's limit, a
-              -- minute, past Warp's idle timeout.
+              -- A hanging engine is waited for up to the probe's limit,
+              -- 20 seconds, which Warp's idle timeout must not cut short.
+              -- A server whose PDFs are off (--no-pdf) tries nothing and
+              -- answers at once.
               liftIO caller.pauseIdle
               found <- liftIO (checkEngine env.texEngine)
               liftIO (logEngine env.logger found)

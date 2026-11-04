@@ -100,6 +100,7 @@ spec = describe "golden JSON" $ do
     golden "tex-engine-failing" Sample.texEngine
     golden "tex-engine-working" Sample.texEngine {status = TexWorking, output = Nothing}
     golden "tex-engine-not-found" Sample.texEngine {status = TexNotFound, path = Nothing, output = Nothing}
+    golden "tex-engine-off" Sample.texEngine {status = TexOff, path = Nothing, output = Nothing}
     golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}
     golden "backups" Sample.backups
     golden "backups-failed" Sample.backups {last = (\r -> r {file = Nothing, size = Nothing, failure = Just "The disk is full.", offSite = Nothing, trigger = Manual}) <$> Sample.backups.last, running = True}

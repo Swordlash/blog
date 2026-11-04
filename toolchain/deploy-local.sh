@@ -56,8 +56,13 @@
 #      the proxy that https_proxy names, as the toolchain's other downloads
 #      do; the installer needs perl. Without a terminal, or when the answer
 #      is no, nothing is installed and the server offers no PDFs (its
-#      administration's Server section says why). Nothing about TeX stops
-#      the deploy: PDFs are optional.
+#      administration's Server section says why). Whenever the step ends
+#      without an xelatex that works (the one found fails or there is none,
+#      and nothing was installed; the install or its check failed;
+#      --no-texlive or the answer no), the unit runs wiki-server with
+#      --no-pdf, so that it neither tries its TeX nor offers PDFs; a later
+#      run whose step ends with one that works drops the option. Nothing
+#      about TeX stops the deploy: PDFs are optional.
 #      With --backend-only the page is not built here: it is downloaded from
 #      the GitHub release where CI keeps it (see --backend-only below), and
 #      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
@@ -889,18 +894,23 @@ install_texlive() {
 }
 
 # The TeX step of a server's deploy. It decides texlive, texlive_dir and
-# texlive_mirror, which the state keeps, and tex_bin, the toolchain's
+# texlive_mirror, which the state keeps; tex_bin, the toolchain's
 # TeX Live bin directory the unit puts first on its PATH (empty when the
-# service uses the TeX it finds on its own, or none). It never stops the
+# service uses the TeX it finds on its own, or none); and pdf, yes when the
+# step ends with an xelatex that works and no otherwise. With pdf=no the
+# unit runs wiki-server with --no-pdf: the server then neither tries its
+# TeX at each start nor offers PDFs, and its administration's Server
+# section says that the option is set and what sets it. It never stops the
 # deploy: without a TeX that works, the server offers no PDFs.
 tex_step() {
   tex_bin=
+  pdf=no
   service_path=$(manager_path)
   # The toolchain's TeX Live, when one is installed and not declined.
   if [ "$texlive" != no ] && toolchain_bin=$(texlive_bin "$texlive_dir"); then
     if check_tex "$toolchain_bin:$UNIT_BASE_PATH"; then
       say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $toolchain_bin first on its PATH"
-      tex_bin=$toolchain_bin
+      tex_bin=$toolchain_bin pdf=yes
       return 0
     fi
     warn "PDF exports: the toolchain's TeX Live in $texlive_dir does not work:"
@@ -911,6 +921,7 @@ tex_step() {
   # The TeX the service finds on its own PATH.
   if check_tex "$service_path"; then
     say "PDF exports: ${tex_line#working } works, the TeX on this machine, found on the service's PATH ($service_path)"
+    pdf=yes
     return 0
   fi
   if [ "$tex_status" = 2 ]; then
@@ -924,7 +935,7 @@ tex_step() {
     say "this shell finds $shell_tex, but the service does not: a unit does not inherit the shell's PATH"
   fi
   mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
-  offer_off="the server offers no PDFs, and its administration's Server section says why"
+  offer_off="the server runs with --no-pdf and offers no PDFs, and its administration's Server section says why"
   case $texlive in
     no)
       say "PDF exports: $offer_off (--no-texlive; --texlive installs TeX Live under $texlive_root)"
@@ -971,14 +982,27 @@ tex_step() {
       say "deleted the older TeX Live in $old"
     fi
   done
-  texlive_dir=$texlive_new tex_bin=$new_bin
+  texlive_dir=$texlive_new tex_bin=$new_bin pdf=yes
   say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $tex_bin first on its PATH"
 }
 
-# The state of the PDF exports for --status: the check run with the PATH
-# the installed unit gives the service (its own PATH line when it has one,
-# else the systemd manager's).
+# The state of the PDF exports for --status. A unit whose wiki-server runs
+# with --no-pdf makes no PDFs whatever TeX there is: that is said, and
+# nothing is checked. Otherwise the check runs with the PATH the installed
+# unit gives the service (its own PATH line when it has one, else the
+# systemd manager's).
 tex_status_report() {
+  if grep '^ExecStart=.* --no-pdf' "$unit_file" >/dev/null 2>&1; then
+    say "PDF exports: off in the unit (--no-pdf): the deploy found no xelatex that works and installed none; the next deploy checks again, and --texlive installs TeX Live under the toolchain"
+  else
+    tex_engine_report
+  fi
+  case $prev_texlive in
+    yes) [ -z "$prev_texlive_dir" ] || say "the toolchain's TeX Live: $prev_texlive_dir" ;;
+    no) say "TeX Live under the toolchain was declined (--no-texlive); --texlive installs it" ;;
+  esac
+}
+tex_engine_report() {
   unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1)
   if [ -n "$unit_path" ]; then
     whose="the toolchain's TeX Live, first on the unit's PATH"
@@ -993,10 +1017,6 @@ tex_status_report() {
     say "PDF exports: off, ${tex_line#failing } fails ($whose):"
     tex_reason
   fi
-  case $prev_texlive in
-    yes) [ -z "$prev_texlive_dir" ] || say "the toolchain's TeX Live: $prev_texlive_dir" ;;
-    no) say "TeX Live under the toolchain was declined (--no-texlive); --texlive installs it" ;;
-  esac
 }
 
 if [ "$action" = status ]; then
@@ -1811,6 +1831,7 @@ texlive=${opt_texlive:-$prev_texlive}
 texlive_dir=$prev_texlive_dir
 texlive_mirror=${opt_texlive_mirror:-$prev_texlive_mirror}
 tex_bin=
+pdf=no
 [ "$mode" != server ] || tex_step
 if [ -n "$build" ] && [ -n "$backend_only" ]; then
   if [ "$mode" = server ]; then
@@ -2094,6 +2115,9 @@ if [ "$mode" = server ]; then
   else
     exec_start="$exec_start --sqlite $(unit_word "$dir/data/wiki.sqlite")"
   fi
+  # Without an xelatex that works at the end of the TeX step, the server
+  # makes no PDFs: it does not try its TeX at each start, and offers none.
+  [ "$pdf" = yes ] || exec_start="$exec_start --no-pdf"
   # The data is the owner's alone, and a stop lets the requests under way
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077

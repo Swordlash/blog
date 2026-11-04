@@ -994,6 +994,14 @@ without PostgreSQL (the cabal flag `postgres` off), which needs neither libpq no
 needed. That is the way on a machine whose libpq is too old for
 `postgresql-libpq`. terminfo is the wizard's alone (`toolchain/configure.sh`, above):
 the check counts it only with `--with-wizard`, which the deploy does not give.
+After the commands the check also says whether the `xelatex` on your shell's `PATH`
+typesets the PDF exports, through `toolchain/check-tex.sh` (20 seconds at most): `ok`
+and `working at <path>`, or `no` and `failing at <path>` with the first line of the
+reason, or `no` and `not-found`. That line is for information: it is not counted, never
+makes the check fail (a wiki without PDFs works), and the summary then says that PDF
+exports need `xelatex` and that the deploy offers TeX Live under the toolchain. The
+service's `PATH` may differ from your shell's, so the deploy checks again in its TeX step,
+below.
 
 | Library                 | Debian, Ubuntu   | RHEL, Fedora                                                                     |
 | ----------------------- | ---------------- | -------------------------------------------------------------------------------- |
@@ -1058,8 +1066,9 @@ an `xelatex` is not enough: TeX Live 2020 and older refuse, under those limits, 
 runs out, while a one-line document typesets fine. So with `--server` the deploy checks
 the TeX after the toolchain and before the build, with `toolchain/check-tex.sh`: it
 typesets a small document with `fontspec`, `unicode-math`, `lmodern` and a formula, as
-pandoc's template does, under the same limits and a timeout, and says working, failing
-(with the end of TeX's log) or not found.
+pandoc's template does, under the same limits and within 20 seconds (a working engine
+takes a second or two; `WIKI_TEX_TIMEOUT` sets another number of seconds), and says
+working, failing (with the end of TeX's log) or not found.
 
 The check runs in the environment the service will have, not the shell's. A systemd user
 unit gets the `PATH` of your systemd user manager (`systemctl --user show-environment`,
@@ -1093,6 +1102,13 @@ comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
   no PDFs unless a TeX of the machine's works, and its administration's Server section
   says why. Without a terminal and without either option nothing is asked or installed,
   and the deploy says how to ask for it.
+- Whenever the TeX step ends without an `xelatex` that works (the one the service finds
+  fails or there is none, and nothing was installed; the install or its check failed;
+  `--no-texlive`, or the answer no), the unit runs `wiki-server serve` with `--no-pdf`:
+  the server then neither tries its TeX at each start (20 seconds for one that hangs)
+  nor offers PDFs, and its administration's Server section says that the option is set
+  and what sets it. A later run whose TeX step ends with an `xelatex` that works (a TeX
+  installed on the machine meanwhile, or `--texlive`) takes the option out of the unit.
 - `--texlive-mirror URL` names another CTAN mirror (the default,
   `https://mirror.ctan.org`, redirects to one near you).
 - The answer, the installation and the mirror are kept in the state file (`texlive`,
@@ -1102,7 +1118,8 @@ comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
   deployment that has one leaves it on disk and takes its `PATH` out of the unit;
   `--texlive` uses it again.
 - Nothing about TeX stops the deploy: PDFs are optional. `--status` says whether the
-  engine works, at which path, and whether it is the toolchain's TeX Live.
+  engine works, at which path, and whether it is the toolchain's TeX Live; for a unit
+  with `--no-pdf` it says `PDF exports: off in the unit (--no-pdf)` instead.
 - `undeploy-local.sh` leaves the toolchain's TeX Live where it is, as it leaves the
   toolchain; `--purge` of a deployment under a prefix deletes it with the prefix.
 
@@ -1267,11 +1284,17 @@ to the demo, keeping `data/`.
   package is named in the export's error). The server tries it when it starts:
   it looks for `xelatex` on its `PATH` and typesets a one-line document with it
   that loads what pandoc's documents load (fontspec, unicode-math, Latin Modern)
-  and sets a formula, under the export's limits and for a minute at most, and
+  and sets a formula, under the export's limits and for 20 seconds at most, and
   offers the PDFs only when that makes a PDF (the log's `tex-engine` event
   says what it found). The administration's "Server" section shows the outcome,
   with what `xelatex` printed when it failed, and "Check again" tries it anew,
-  so a TeX installed or repaired later needs no restart. A `xelatex` that is
+  so a TeX installed or repaired later needs no restart. `wiki-server serve
+  --no-pdf` makes no PDFs at all: the server does not look for `xelatex`, offers
+  no PDF formats, refuses a PDF export ("PDF exports are off on this server (its
+  --no-pdf option)."), logs `tex-engine` with `status=off`, and the Server
+  section says that PDF exports are off by that option, with no "Check again".
+  The deploy sets it when it finds no `xelatex` that works and installs none
+  (below). A `xelatex` that is
   found but fails has usually lost its format file (`sudo fmtutil-sys --byfmt
   xelatex`, or `fmtutil-user --byfmt xelatex` as the server's user), or the
   server's service runs with a `PATH` or `HOME` other than your shell's, so that

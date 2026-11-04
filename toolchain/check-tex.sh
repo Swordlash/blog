@@ -18,10 +18,12 @@
 # openout_any=p (no reading or writing of hidden files or files outside the
 # working directory and TeX's own trees) and shell_escape=f (no \write18).
 # wiki-server sets the same three (texLimits in
-# wiki-server/src/Wiki/Server/Export.hs). It is killed after 60 seconds,
-# by coreutils' timeout where there is one, and by a watchdog of this
-# script's own where there is not. WIKI_TEX_TIMEOUT sets another number of
-# seconds, for the tests (toolchain/test-check-tex.sh).
+# wiki-server/src/Wiki/Server/Export.hs). It is killed after 20 seconds,
+# as the server's own probe is (probeTimeout there): a working engine
+# typesets this one-line document in a second or two. It is killed by
+# coreutils' timeout where there is one, and by a watchdog of this script's
+# own where there is not. WIKI_TEX_TIMEOUT sets another number of seconds,
+# for the tests (toolchain/test-check-tex.sh).
 #
 # It prints one line and exits:
 #
@@ -34,7 +36,8 @@
 #
 # toolchain/deploy-local.sh runs it in the environment its systemd unit will
 # have (env -i, with the unit's PATH), since the service does not see the
-# PATH of the shell the deploy runs in.
+# PATH of the shell the deploy runs in. toolchain/check-native.sh runs it
+# with the PATH of the shell it runs in, as its item xelatex.
 set -eu
 
 case ${1:-} in
@@ -62,7 +65,7 @@ case $engine in
   *) engine=$PWD/$engine ;;
 esac
 
-limit=${WIKI_TEX_TIMEOUT:-60}
+limit=${WIKI_TEX_TIMEOUT:-20}
 case $limit in
   '' | *[!0-9]* | 0) printf 'check-tex: WIKI_TEX_TIMEOUT must be a number of seconds, not %s\n' "$limit" >&2; exit 2 ;;
 esac

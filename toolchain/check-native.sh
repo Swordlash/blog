@@ -48,6 +48,19 @@
 #
 # SQLite is not an item: direct-sqlite builds its own copy of SQLite.
 #
+# One more line, after the commands, is for information only: xelatex,
+# which the server's PDF exports need and the build does not. It runs
+# toolchain/check-tex.sh, which typesets a one-line document with the
+# xelatex on PATH under the limits of the server's exports, for at most 20
+# seconds (WIKI_TEX_TIMEOUT sets another limit). The line says ok, working
+# and where it is when it works; no, failing, where it is and the first
+# line of the reason when it does not; or no, not-found when PATH has no
+# xelatex. The summary then says so too. It is not counted among the
+# items and never makes the check fail: a wiki without PDFs is a working
+# wiki. This is the PATH of the shell the check runs in; a systemd service
+# has its own, which toolchain/deploy-local.sh checks again in its TeX step,
+# and where it can install TeX Live under the toolchain.
+#
 # The build sees the environment this script runs in. LIBRARY_PATH,
 # C_INCLUDE_PATH, CPATH and PKG_CONFIG_PATH reach cabal untouched, so a
 # library installed into a directory of one's own is checked here as the
@@ -68,7 +81,9 @@ for option do
       usage
       printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
       printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, libsodium), one line each,\n'
-      printf 'and exits 1 when one is missing. It installs nothing. --without-postgres\n'
+      printf 'and exits 1 when one is missing. It installs nothing. It also says whether the\n'
+      printf 'xelatex on PATH typesets the PDF exports (toolchain/check-tex.sh), which is not\n'
+      printf 'needed for the build and never fails the check. --without-postgres\n'
       printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
       printf '%s\n' '--with-wizard also checks terminfo, which the configuration wizard'
       printf '(toolchain/configure.sh) links.\n'
@@ -115,6 +130,29 @@ command_item make make make
 command_item curl curl curl
 command_item git git git
 command_item pkg-config pkg-config pkgconf-pkg-config
+
+# xelatex, for the PDF exports only, through toolchain/check-tex.sh. Its
+# line is printed as the skipped lines are, so that it is not counted, and
+# it never joins the missing items. tex_note keeps what the summary says
+# about it, empty when it works.
+tex_note=
+tex_status=0
+tex_report=$(sh "$(dirname "$0")/check-tex.sh" 2>&1) || tex_status=$?
+tex_first=$(printf '%s\n' "$tex_report" | sed -n '1p')
+case $tex_status in
+  0)
+    printf '%-8s %-11s %s\n' ok xelatex "working at ${tex_first#working } (for the PDF exports; not counted)" ;;
+  1)
+    tex_reason=$(printf '%s\n' "$tex_report" | sed -n '2p')
+    printf '%-8s %-11s %s\n' no xelatex "failing at ${tex_first#failing }: ${tex_reason:-see sh toolchain/check-tex.sh} (for the PDF exports; not counted)"
+    tex_note="${tex_first#failing } fails (sh toolchain/check-tex.sh says why)" ;;
+  2)
+    printf '%-8s %-11s %s\n' no xelatex "not-found: no xelatex on PATH (for the PDF exports; not counted)"
+    tex_note="none is on PATH" ;;
+  *)
+    printf '%-8s %-11s %s\n' no xelatex "not checked: toolchain/check-tex.sh could not run: $tex_first (for the PDF exports; not counted)"
+    tex_note="it could not be checked" ;;
+esac
 
 # GMP's header, through the C compiler's preprocessor.
 if ! has cc; then
@@ -209,8 +247,15 @@ fi
 
 what='the native build of wiki-server' needs=needs
 [ -z "$wizard" ] || what="$what and the configuration wizard" needs=need
+# The note on xelatex, in both summaries: without it the wiki works and
+# offers no PDFs.
+tex_summary() {
+  [ -z "$tex_note" ] ||
+    printf 'PDF exports need xelatex: %s, so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive).\n' "$tex_note"
+}
 if [ -z "$missing" ]; then
   printf 'All %s items %s %s are there.\n' "$checked" "$what" "$needs"
+  tex_summary
   exit 0
 fi
 
@@ -241,4 +286,5 @@ printf 'The build sees the environment this runs in: LIBRARY_PATH, C_INCLUDE_PAT
 printf 'and PKG_CONFIG_PATH reach cabal untouched, for a library in a directory of its own.\n'
 printf 'A shared library there also needs LD_LIBRARY_PATH when wiki-server runs\n'
 printf '(toolchain/deploy-local.sh writes it into the systemd unit).\n'
+tex_summary
 exit 1

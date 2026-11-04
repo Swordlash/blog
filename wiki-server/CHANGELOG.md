@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+The server is told when the TeX is off (WP5.61). `wiki-server serve
+--no-pdf` (`ServeOptions`' `pdf`, on by default) makes no PDFs: the server
+does not look for `xelatex` at its start or when the administration
+checks, offers no PDF formats in the session, and refuses a PDF export
+with 400 "PDF exports are off on this server (its --no-pdf option)." Its
+engine is `Wiki.Server.Export`'s new `EngineOff`, which `GET
+admin/tex-engine` answers as the status `off` with the time of the start;
+`POST admin/tex-engine/check` answers the same `off` with 200 and tries
+nothing. The `tex-engine` event at start says `status=off`.
+`toolchain/deploy-local.sh` sets the option when its TeX step ends without
+an `xelatex` that works. `newEngine` takes whether the PDFs are on. A try
+of the engine now takes 20 seconds at most, not a minute (`probeTimeout`):
+a working engine typesets the probe in a second or two, and a hanging one
+held up the server's start for the whole limit. An export's own limit is
+still a minute.
+
 Exports that say what went wrong (WP5.56). The server tries its TeX
 engine instead of only looking for it (`Wiki.Server.Export`'s
 `probeTexEngine`): it finds `xelatex` on its `PATH` and typesets a one-line

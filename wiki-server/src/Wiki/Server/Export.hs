@@ -39,6 +39,12 @@
 -- ('requiringTeX'). Installing or repairing TeX therefore takes effect when
 -- the administration checks again, or at the next start.
 --
+-- A server started with @--no-pdf@ ("Wiki.Server.Options"' @pdf@) neither
+-- looks for the engine nor offers the PDFs ('EngineOff'). The deploy sets
+-- that option when it finds no @xelatex@ that works and installs none, so
+-- that the server does not offer PDFs nobody can make, or spend the
+-- probe's time at every start on an engine known to fail.
+--
 -- TeX is a programming language with access to files and a shell, and a
 -- PDF gives it what authors wrote: a TikZ picture is LaTeX by design, and
 -- texmath writes an unknown control sequence back out into a formula. So
@@ -161,9 +167,11 @@ texEngine = findExecutable "xelatex"
 
 -- | 'Probe' is what trying the TeX engine found: no @xelatex@ on the
 -- @PATH@; one that made a PDF; or one that did not, with what it wrote
--- ('probeOutputLimit' characters at most).
+-- ('probeOutputLimit' characters at most). 'EngineOff' is a server whose
+-- PDFs are off by its option (@--no-pdf@): it did not try the engine.
 data Probe
-  = EngineNotFound
+  = EngineOff
+  | EngineNotFound
   | EngineWorking FilePath
   | EngineFailing FilePath Text
   deriving stock (Eq, Show)
@@ -179,41 +187,53 @@ data Probed = Probed
 -- exports and the session's formats follow. It changes when the
 -- administration asks for another try ('checkEngine'). One try runs at a
 -- time: a second request waits for the first to end, then tries again.
+-- On a server whose PDFs are off it is 'EngineOff' from the start, and
+-- never changes.
 data Engine = Engine
   { probed :: TVar Probed
   , trying :: MVar ()
   , limit :: Int
   -- ^ How long a try may take, in microseconds: 'probeTimeout', except in
-  -- the tests, which do not wait a minute for an engine that never ends.
+  -- the tests, which do not wait that long for an engine that never ends.
+  , enabled :: Bool
+  -- ^ Whether the server makes PDFs at all: 'False' with @--no-pdf@.
   }
 
--- | Try the TeX engine, giving each try at most this long (in
--- microseconds), and keep what was found: what the server does as it
--- starts.
-newEngine :: Int -> IO Engine
-newEngine limit = do
-  tried <- probeTexEngineWithin limit
+-- | The server's TeX engine as it starts. With the PDFs on ('True'), the
+-- engine is tried, each try taking at most the limit given (in
+-- microseconds), and what was found is kept. With the PDFs off, nothing is
+-- tried: the engine is 'EngineOff', with the time of the start.
+newEngine :: Bool -> Int -> IO Engine
+newEngine enabled limit = do
+  tried <- if enabled then probeTexEngineWithin limit else Probed EngineOff <$> getCurrentTime
   probed <- newTVarIO tried
   trying <- newMVar ()
-  pure Engine {probed, trying, limit}
+  pure Engine {probed, trying, limit, enabled}
 
--- | Try the TeX engine again, keep what was found and return it.
+-- | Try the TeX engine again, keep what was found and return it. On a
+-- server whose PDFs are off, nothing is tried: the answer is the
+-- 'EngineOff' it started with.
 checkEngine :: Engine -> IO Probed
-checkEngine engine = withMVar engine.trying $ \_ -> do
-  found <- probeTexEngineWithin engine.limit
-  atomically (writeTVar engine.probed found)
-  pure found
+checkEngine engine
+  | not engine.enabled = currentEngine engine
+  | otherwise = withMVar engine.trying $ \_ -> do
+      found <- probeTexEngineWithin engine.limit
+      atomically (writeTVar engine.probed found)
+      pure found
 
 -- | What the last try of the TeX engine found.
 currentEngine :: Engine -> IO Probed
 currentEngine engine = readTVarIO engine.probed
 
--- | How long a try of the TeX engine may take, in microseconds: a minute,
--- which a working engine needs a fraction of. kpathsea may try to build a
--- missing format file first, which can take a while; an engine that takes
--- longer than this counts as failing.
+-- | How long a try of the TeX engine may take, in microseconds: 20
+-- seconds. A working engine typesets the probe's one-line document in a
+-- second or two; kpathsea may first build a missing format file, which
+-- takes a few seconds more. An engine that takes longer counts as failing.
+-- The server waits this long at its start for an engine that hangs, so
+-- the limit is short. An export's own limit ('exportTimeout') is longer,
+-- for real documents.
 probeTimeout :: Int
-probeTimeout = 60_000_000
+probeTimeout = 20_000_000
 
 -- | The most of the engine's output a failed try keeps, in characters: its
 -- end, where TeX says what stopped it.
@@ -234,7 +254,7 @@ probeTexEngine :: IO Probed
 probeTexEngine = probeTexEngineWithin probeTimeout
 
 -- | 'probeTexEngine' with another time limit, in microseconds: the tests'
--- engine that never ends is not waited for a minute.
+-- engine that never ends is not waited for 20 seconds.
 --
 -- When the engine fails, its reason is kept: what it wrote on its error
 -- output (kpathsea's refusals go there), then the errors its log names
@@ -317,6 +337,7 @@ probeDocument =
 -- line it wrote; the administration shows the rest.
 logEngine :: Logger -> Probed -> IO ()
 logEngine logger p = case p.probe of
+  EngineOff -> logWith logger Info [event, ("status", "off")]
   EngineNotFound -> logWith logger Info [event, ("status", "not-found")]
   EngineWorking engine -> logWith logger Info [event, ("status", "working"), ("path", toS engine)]
   EngineFailing engine said ->
@@ -328,6 +349,7 @@ logEngine logger p = case p.probe of
 -- ("Wiki.Api.Admin"'s 'TexEngine').
 engineReport :: Probed -> TexEngine
 engineReport p = case p.probe of
+  EngineOff -> TexEngine {status = TexOff, path = Nothing, output = Nothing, checkedAt = p.checkedAt}
   EngineNotFound -> TexEngine {status = TexNotFound, path = Nothing, output = Nothing, checkedAt = p.checkedAt}
   EngineWorking engine -> TexEngine {status = TexWorking, path = Just (toS engine), output = Nothing, checkedAt = p.checkedAt}
   EngineFailing engine said -> TexEngine {status = TexFailing, path = Just (toS engine), output = Just said, checkedAt = p.checkedAt}
@@ -445,6 +467,7 @@ requiringTeX :: Engine -> ExportFormat -> (Maybe FilePath -> IO (Either ApiError
 requiringTeX engine format go
   | needsTeX format =
       (\p -> p.probe) <$> currentEngine engine >>= \case
+        EngineOff -> pure (Left (ApiError.Invalid "PDF exports are off on this server (its --no-pdf option)."))
         EngineNotFound -> pure (Left (ApiError.Invalid (formatLabel format <> " needs xelatex, which this server's machine does not have.")))
         EngineFailing path _ -> pure (Left (ApiError.Invalid (formatLabel format <> " needs xelatex, which was found at " <> toS path <> " but does not work on this server; the administration's Server section shows why.")))
         EngineWorking path -> go (Just path)
