@@ -466,6 +466,18 @@ confirms it against reality and the plan is amended if it does not hold.
     the text is centred at the reading width or fills it, and the contents panel is
     pinned right. PDF exports are answered `inline` and opened in a tab, since Chromium
     browsers block downloads over plain HTTP.
+39. **Claude at another address** (the owner, 2026-11-04, built by WP5.57). The
+    assistant's settings take a base URL for Anthropic as for OpenAI (`baseUrlOf` for
+    every provider but the scripted one): the model list, "Test the key" and the chat go
+    there, the service is named by its host, and the hint and the "cannot reach"
+    warning point at the administration's list of the assistant's hosts (the CSP) and
+    at CORS. No choice of the key's header: the pinned `@anthropic-ai/sdk` 1.3.0 sends
+    every key as `Authorization: Bearer`, never `x-api-key` (its `apiKeyAuth` and
+    `bearerAuth` both; `toolchain/test-assistant.mjs` asserts it), so the owner's
+    gateway, which takes a bearer token, is reached by the base URL alone. A 401 is
+    explained: "<service> refused the key: it has probably expired or been revoked.
+    Paste a new one in the assistant's settings.", with a link to them, in the chat, in
+    "Test the key" and in the model list.
 
 ## Repository layout
 
@@ -538,31 +550,6 @@ In the order to do it, unless the owner says otherwise.
   one saves, through the demo's own exports or a stubbed fetch), the admin's section in
   its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
   and wiki-app's CHANGELOGs.
-
-- **WP5.57 Claude at another address, with a bearer token** (the owner, 2026-11-04,
-  after WP5.56; one pull request). The owner's organisation reaches Claude through a
-  gateway that speaks the Messages API at its own address (Claude Code's
-  `ANTHROPIC_BASE_URL`), gives each user a key of their own (its `apiKeyHelper`) and
-  takes it as `Authorization: Bearer`, not `x-api-key`; the owner checked from a browser
-  that the gateway answers CORS preflights, lists models and completes a message that
-  way, once its host is among the administration's assistant hosts (WP5.21's CSP). The
-  assistant's settings get, for Anthropic as for OpenAI today, a base URL ("Another
-  service that speaks Anthropic's API": `baseUrlOf` no longer OpenAI-only, the model
-  list fetched there, the service named by its host as `serviceName` does), and next to
-  the key a choice of how it is sent, "API key (`x-api-key`)" or "Bearer token
-  (`Authorization`)", the SDK's `apiKey` or `authToken`; the default stays the key at
-  `api.anthropic.com`, and the choice is kept with the settings (and the vault). The
-  field's help says the host must be among the administration's assistant hosts, and
-  the "cannot reach" warning names that list as a cause. A token that expires is pasted
-  again (nothing refreshes it), and the assistant says so: when a provider answers 401
-  (the SDK's authentication error), the message shown names the service and says the
-  key or token was refused and has probably expired or been revoked, with a link to the
-  assistant's settings to paste a new one; the same for the settings' "Check" and the
-  model list. Tests: wiki-core (settings round-trips with the new fields, `usable` and
-  `serviceName` for Anthropic elsewhere), browser (the settings' fields, the
-  assistant's request carrying `Authorization: Bearer` and the base URL when chosen,
-  and the 401 message, through the tests' own fetch). Docs: the README's assistant
-  section, the guide, wiki-core's and wiki-app's CHANGELOGs.
 
 ### Later, or waiting for the owner
 
@@ -855,6 +842,11 @@ needs. Each was true when its package merged; check before relying on one.
   the archive and an import leaves them alone; the demo's own pages say "Last edited
   by" alone, their first version having no author; the operator is neither a reader
   nor a visitor; the width switch is hidden below 1200 px.
+- The assistant at a gateway (WP5.57): nothing was tested against a real gateway or
+  `api.anthropic.com` (the header and the address are covered by the Node test with a
+  fake fetch); with a base URL and no key, "Test the connection" sends no auth header
+  and the 401 says to paste a key; the settings' "Fetching from …" lines name the
+  provider, not the host; a token that expires is pasted again, nothing refreshes it.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
