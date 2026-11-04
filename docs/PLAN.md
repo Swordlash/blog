@@ -598,8 +598,8 @@ In the order to do it, unless the owner says otherwise.
   backdrop; browser tests for its opening, the fit and the close. Docs: the
   guide's sentence on the settings, wiki-app's CHANGELOG.
 
-- **WP5.60 The assistant's addresses come from the server** (the owner, 2026-11-04,
-  after WP5.59; one pull request on WP5.59's branch). A user can type any base URL
+- **WP5.60 The assistant's addresses come from the server** (the owner, 2026-11-04;
+  in WP5.59's pull request, the owner's choice). A user can type any base URL
   in the assistant's settings, and every address but Anthropic's, OpenAI's and the
   administration's hosts is refused by the page's CSP, with an error that explains
   nothing to them. The administration's list of the assistant's hosts (WP5.21, origins
