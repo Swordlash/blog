@@ -510,11 +510,14 @@ In the order to do it, unless the owner says otherwise.
   live channel is reading it: `Wiki.Server.Presence` gains readers next to editors, the
   answer to a subscription carries them and a `Readers` message follows each change, as
   `Editing` does: the signed-in users of the other connections, each once, the tab's own
-  user excluded, visitors not signed in not counted, capped by the server at 15 authors
-  plus the total. The page view shows next to the title a stack of overlapping avatar
-  circles, at most 5, then a grey translucent circle "+N" for the rest; hover and focus
-  show the list, at most 15 names and "and N more". The demo has no live channel and
-  shows nothing. (c) *Who wrote.* `Page` gains `createdBy` and `updatedBy :: Maybe
+  user excluded, capped by the server at 15 authors plus the total, and the number of
+  connections without a user (visitors not signed in; the owner, 2026-11-04). The page
+  view shows next to the title a stack of overlapping avatar circles, at most 5, then a
+  grey translucent circle "+N" for the rest, then, at the bottom of the stack, a default
+  circle with the visitors' number; hover and focus show the list, at most 15 names,
+  "and N more" and the visitors' line; the hovered or focused circle rises to the top
+  of the stack as the pointer moves across it (CSS only). The demo has no live channel
+  and shows nothing. (c) *Who wrote.* `Page` gains `createdBy` and `updatedBy :: Maybe
   Author` (the first and the latest version's authors, filled by the backends on a full
   page read, absent for a page without a version; `PageSummary` untouched), and the page
   view shows under the title, in small print, "Created by X, last edited by Y on <date>"
