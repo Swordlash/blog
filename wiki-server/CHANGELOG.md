@@ -12,7 +12,9 @@ and `PUT account/personal-space` (audit `space.personal`, with `active`).
 A personal space is named after its owner as the spaces are read, and
 renaming or moving it is refused. Removing an account deletes its
 personal space, through the new column's foreign key. An import into a
-wiki that has content brings personal spaces in as ordinary spaces.
+wiki that has content brings personal spaces in as ordinary spaces; one
+its owner had turned off comes in sealed, and it and every space under it
+come in private, so that nothing it hid becomes readable.
 
 A wiki-server without PostgreSQL (WP5.52): the cabal flag `postgres`, on by
 default, can be turned off (`--constraint='wiki-server -postgres'`) for a

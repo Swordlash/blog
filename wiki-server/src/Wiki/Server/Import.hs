@@ -86,6 +86,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
+import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
@@ -307,6 +308,9 @@ importSpace blobs a discussions choices progress m
           i <- SpaceId <$> liftIO newId
           spaces <- Map.elems <$> loadSpaces
           let parent = m.archived.parent >>= (`Map.lookup` progress.spaceIds)
+              -- Whether the space is in a personal space of the archive
+              -- that its owner turned off, or is one.
+              hidden = any (\x -> not x.active) (spaceChain a.spaces m.archived.id)
           insertSpace
             Space
               { id = i
@@ -315,10 +319,12 @@ importSpace blobs a discussions choices progress m
               , parent
               , -- A personal space of the archive comes in as an ordinary
                 -- space: its owner is a user of another wiki, which this
-                -- import does not bring. One its owner had turned off
-                -- comes in private.
-                public = m.archived.public && m.archived.active
-              , sealed = m.archived.sealed
+                -- import does not bring. One its owner had turned off hid
+                -- everything under it, so it comes in sealed, and it and
+                -- every space under it come in private: none of them is
+                -- shown to more people than before the import.
+                public = m.archived.public && not hidden
+              , sealed = m.archived.sealed || not m.archived.active
               , owner = Nothing
               , active = True
               , personalContainer = False

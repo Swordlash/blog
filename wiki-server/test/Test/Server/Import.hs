@@ -50,6 +50,7 @@ spec :: Backing -> Spec
 spec backing = describe "export and import" $ do
   intoAnEmptyWiki backing
   merging backing
+  personalSpaces backing
   conflicts backing
   choices backing
   roundTrip backing
@@ -207,6 +208,34 @@ intoAnEmptyWiki backing = describe "into an empty wiki" $ do
     more.parent `shouldBe` Just tour.id
     s <- ok200 (getUrl r (admin r links.admin.status))
     ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 3, 4, 1)
+
+personalSpaces :: Backing -> Spec
+personalSpaces backing = describe "a personal space" $ do
+  it "comes in as an ordinary space, and one turned off keeps what it hid hidden" $ withRunning backing $ \r -> do
+    let container = (space "s1" Nothing "users") {personalContainer = True}
+        hiddenSpace = (spaceWith "s2" (Just "s1") "alice" True "" ByName ByName) {owner = Just (UserId "u1"), active = False}
+        notes = spaceWith "s3" (Just "s2") "notes" True "" ByName ByName
+        open = spaceWith "s4" Nothing "open" True "" ByName ByName
+        theirs = archive [container, hiddenSpace, notes, open] [page "p1" "s3" Nothing "n1" "Hidden.", page "p2" "s4" Nothing "o1" "Shown."]
+    apply r theirs importEverything `shouldReturn` summary {spacesCreated = 4, pagesCreated = 2}
+    -- Ordinary spaces now; the one that was turned off sealed, and it and
+    -- the space under it private.
+    imported <- traverse (spaceAt r) [["users"], ["users", "alice"], ["users", "alice", "notes"]]
+    [(x.personalContainer, x.owner, x.active, x.sealed, x.public) | x <- imported]
+      `shouldBe` [(False, Nothing, True, False, False), (False, Nothing, True, True, False), (False, Nothing, True, False, False)]
+    void (pageAt r ["users", "alice", "notes"] ["n1"])
+    -- Neither someone not signed in nor a user with no grant reads them,
+    -- while a public space of the same archive is read.
+    _ <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= \x -> jsonAs @Account 201 x
+    token <- signInAs r "bea" "bea's long password"
+    notesSpace <- spaceAt r ["users", "alice", "notes"]
+    let status headers address = (\x -> x.status) <$> getUrlWith r (r.public <> "/" <> address) headers
+        publicly headers path = status headers (links.spaces.atPath (map slug path))
+    for_ [[], [cookie token]] $ \headers -> do
+      publicly headers ["open"] `shouldReturn` 200
+      publicly headers ["users", "alice"] `shouldReturn` 404
+      publicly headers ["users", "alice", "notes"] `shouldReturn` 404
+      status headers (links.spaces.pageAt notesSpace.id [slug "n1"]) `shouldReturn` 404
 
 merging :: Backing -> Spec
 merging backing = describe "a space at the same path" $ do
