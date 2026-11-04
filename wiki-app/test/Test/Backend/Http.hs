@@ -36,6 +36,7 @@ import Wiki.Api.Vault (StoredVault (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
@@ -131,6 +132,12 @@ exports = describe "its exports" $ do
     _ <- runHttpWiki env (fetchExport (ExportSpace (SpaceId "s1")) Html)
     _ <- runHttpWiki env (getPage (SpaceId "s1") (slugs "export/pdf"))
     map timeLimit <$> readIORef asked `shouldReturn` [requestTimeout, exportTimeout, exportTimeout]
+
+  it "waits as long for a check of the TeX engine, which may hang until the server stops it" $ do
+    (env, asked) <- backend (const (status 403 "{\"error\":\"Forbidden\"}"))
+    _ <- runHttpWiki env checkTexEngine
+    _ <- runHttpWiki env texEngine
+    map (\r -> (requestUrl r, timeLimit r)) <$> readIORef asked `shouldReturn` [("api/v1/admin/tex-engine", requestTimeout), ("api/v1/admin/tex-engine/check", exportTimeout)]
 
 -- | What the browser's transport makes of what @fetch@ did, which natively
 -- is only that there is no network.

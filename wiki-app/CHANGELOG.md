@@ -26,7 +26,7 @@ corner of the window, until it is dismissed or for 15 seconds, and saves
 nothing; while a document is made its entry says so ("Making the PDF…") and
 the entries wait. The demo answers `fetchExport` with a refusal, and the
 server's storage too (its API makes the documents). The HTTP backend gives
-an export two minutes (`exportTimeout`). `MonadAdmin` gains `texEngine` and
+an export, and a check of the TeX engine, two minutes (`exportTimeout`). `MonadAdmin` gains `texEngine` and
 `checkTexEngine` (`Nothing` in the demo; refused to whoever does not
 administer the wiki, which the contract tests check); the HTTP backend reads
 the first from the prerendered page once, as the server's status, and the

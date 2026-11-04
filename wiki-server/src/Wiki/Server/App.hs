@@ -63,6 +63,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Network.HTTP.Types (Header, hCacheControl, hContentType, hLocation, hSetCookie, hVary, methodGet, methodHead, status302, status401, status404)
 import Network.Wai (Application, Request (..), mapResponseHeaders, responseLBS)
+import Network.Wai.Handler.Warp (pauseTimeout)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Notifications (feedPath)
@@ -151,24 +152,25 @@ listenerApp logger env site l request respond = do
 -- back if the request's cookie needs changing.
 findCaller :: Env -> Listener -> Request -> IO (Caller, [Header])
 findCaller env l request = case l.finding of
-  EveryoneAdministers -> pure (Caller {who = Administrator, address, signing = Nothing}, [])
+  EveryoneAdministers -> pure (Caller {who = Administrator, address, signing = Nothing, pauseIdle}, [])
   BySession cookies -> do
     settings <- readServerSettings env.storage
     let token = requestToken request
         signing = Signing {address, token, pending = requestPending request, cookies, site = siteFor settings.publicUrl request}
     case token of
-      Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing}, [])
+      Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing, pauseIdle}, [])
       Just t -> do
         now <- getCurrentTime
         resolveSession env.storage now signing.address t >>= \case
-          Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing {token = Nothing}}, [(hSetCookie, encodeUtf8 (clearCookie cookies))])
+          Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing {token = Nothing}, pauseIdle}, [(hSetCookie, encodeUtf8 (clearCookie cookies))])
           Just found ->
             pure
-              ( Caller {who = AsUser found.user, address, signing = Just signing}
+              ( Caller {who = AsUser found.user, address, signing = Just signing, pauseIdle}
               , [(hSetCookie, encodeUtf8 (sessionCookie cookies t)) | found.refreshed]
               )
   where
     address = addressOf request
+    pauseIdle = pauseTimeout request
 
 -- | The address a request came from, without its port: failed sign-in
 -- attempts are counted per address.

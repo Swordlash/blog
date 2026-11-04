@@ -18,6 +18,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, getCurrentTime)
 import Network.HTTP.Types (methodPost)
 import Protolude
 import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
@@ -52,6 +53,7 @@ import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, restrictTeX, texEngine, texLimits, writeDocument)
 import Wiki.Server.Export.Document
+import Wiki.Server.Options (ServeOptions (..))
 
 spec :: Backing -> Spec
 spec backing = describe "export with pandoc" $ do
@@ -703,6 +705,29 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
       -- The engine, and the process it started, are gone.
       pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
       length pids `shouldBe` 2
+      for_ pids $ \pid -> eventuallyGone (toS pid)
+
+  -- What the owner's TeX Live 2020 did: the engine never ends. Neither the
+  -- server's start nor the administration's check over HTTP waits for it
+  -- longer than the probe's limit, and the check answers the diagnosis.
+  it "give up an engine that never ends, at start and when checked over HTTP, and say why" $
+    withFakeTeX Hanging $ \engine -> do
+      started <- getCurrentTime
+      withRunningAs backing (\o -> o {texProbeTimeout = 1_000_000}) $ \r -> do
+        ready <- getCurrentTime
+        diffUTCTime ready started `shouldSatisfy` (< 30)
+        first' <- engineOn r
+        first'.status `shouldBe` TexFailing
+        checked <- checkOn r
+        (checked.status, checked.path) `shouldBe` (TexFailing, Just (toS engine))
+        checked.output `shouldSatisfy` maybe False (T.isPrefixOf "xelatex did not finish within 1 second, and was stopped.")
+        checked.output `shouldSatisfy` maybe False (T.isInfixOf "Not reading from /usr/share/texlive/texmf-dist/tex/latex/unicode-math/unicode-math-table.tex (openin_any = p)")
+        checked.checkedAt `shouldSatisfy` (> first'.checkedAt)
+        session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+        (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
+      -- Both tries' processes are gone.
+      pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
+      length pids `shouldBe` 4
       for_ pids $ \pid -> eventuallyGone (toS pid)
 
   it "keep the engine's reason, bounded, when it prints a long log and stops" $

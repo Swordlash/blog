@@ -141,7 +141,7 @@ withServerUsing given raw sendMail action = do
   -- first session already offers the PDFs or not (WP5.56 of docs/PLAN.md).
   -- A working engine takes a fraction of a second; a broken one is given
   -- up after a minute at most.
-  texEngine <- newEngine
+  texEngine <- newEngine options.texProbeTimeout
   feeds <- newFeedCache
   -- A data directory another server has open is a configuration this one
   -- cannot run with, reported like the others.

@@ -37,7 +37,7 @@ import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.Backups (newBackupService)
 import Wiki.Server.Events (newHub)
-import Wiki.Server.Export (newEngine, newExports)
+import Wiki.Server.Export (newEngine, newExports, probeTimeout)
 import Wiki.Server.Feed (newFeedCache)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Log (newErrorRing, silentLogger)
@@ -120,7 +120,7 @@ withApiEnv storage test = Ki.scoped $ \resetTasks -> do
   providerCache <- newProviderCache
   events <- newHub
   exports <- newExports
-  texEngine <- newEngine
+  texEngine <- newEngine probeTimeout
   -- Its thread is not run: these backups are made by nobody.
   backups <- newBackupService (silentLogger (const pass)) "rclone" storage
   resets <- newLimiter defaultLimits

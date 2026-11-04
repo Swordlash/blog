@@ -20,8 +20,11 @@ the next request. A PDF asked for while the engine fails is refused with one
 sentence that names the engine's path and the administration's Server
 section, instead of TeX's raw error. `exportPage`, `exportSpace` and
 `availableFormats` take the `Engine`, and `writeDocument` the engine's path.
-An export pauses Warp's idle timeout, as the wiki's export does, since a PDF
-may take up to its minute. The library depends on `temporary`.
+An export and a check of the TeX engine pause Warp's idle timeout, as the
+wiki's export does, since a PDF or a hanging engine may take up to its
+minute (`Caller` carries `pauseIdle` for that). How long a try of the engine
+may take is `ServeOptions`' `texProbeTimeout`, a minute, which no option
+sets; the tests shorten it. The library depends on `temporary`.
 
 Avatars, readers, who wrote a page and inline PDFs (WP5.55). Migration
 0008 adds `avatar_blob` and `avatar_media_type` to `users`, on SQLite and

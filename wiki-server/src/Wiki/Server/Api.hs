@@ -222,6 +222,11 @@ data Caller = Caller
   , signing :: Maybe Signing
   -- ^ What signing in and out need, on the listener where people sign in:
   -- the public one.
+  , pauseIdle :: IO ()
+  -- ^ Let the request's connection stay silent longer than Warp's idle
+  -- timeout of 30 seconds (Warp's @pauseTimeout@), for an answer that
+  -- takes longer to make: a check of the TeX engine, which may take a
+  -- minute. Nothing for a request that does not come through Warp.
   }
 
 -- | What signing in and out need to know of a request.
@@ -245,7 +250,7 @@ data Signing = Signing
 -- for on the server. The server sends that page's API requests to itself,
 -- so they have no address and no cookie.
 callerAs :: Who -> Caller
-callerAs who = Caller {who, address = "", signing = Nothing}
+callerAs who = Caller {who, address = "", signing = Nothing, pauseIdle = pass}
 
 -- | The API as a WAI application, answering as the given 'Caller'. Every
 -- refusal, including the routing's own, is an 'ApiError'.
@@ -727,6 +732,9 @@ handlers env caller =
             texEngine = administrator >> liftIO (engineReport <$> currentEngine env.texEngine)
           , checkTexEngine = do
               administrator
+              -- A hanging engine is waited for up to the probe's limit, a
+              -- minute, past Warp's idle timeout.
+              liftIO caller.pauseIdle
               found <- liftIO (checkEngine env.texEngine)
               liftIO (logEngine env.logger found)
               pure (engineReport found)

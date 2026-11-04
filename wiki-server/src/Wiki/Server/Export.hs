@@ -182,19 +182,25 @@ data Probed = Probed
 data Engine = Engine
   { probed :: TVar Probed
   , trying :: MVar ()
+  , limit :: Int
+  -- ^ How long a try may take, in microseconds: 'probeTimeout', except in
+  -- the tests, which do not wait a minute for an engine that never ends.
   }
 
--- | Try the TeX engine, and keep what was found: what the server does as
--- it starts.
-newEngine :: IO Engine
-newEngine = do
-  tried <- probeTexEngine
-  Engine <$> newTVarIO tried <*> newMVar ()
+-- | Try the TeX engine, giving each try at most this long (in
+-- microseconds), and keep what was found: what the server does as it
+-- starts.
+newEngine :: Int -> IO Engine
+newEngine limit = do
+  tried <- probeTexEngineWithin limit
+  probed <- newTVarIO tried
+  trying <- newMVar ()
+  pure Engine {probed, trying, limit}
 
 -- | Try the TeX engine again, keep what was found and return it.
 checkEngine :: Engine -> IO Probed
 checkEngine engine = withMVar engine.trying $ \_ -> do
-  found <- probeTexEngine
+  found <- probeTexEngineWithin engine.limit
   atomically (writeTVar engine.probed found)
   pure found
 
