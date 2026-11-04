@@ -22,7 +22,10 @@ section, instead of TeX's raw error. `exportPage`, `exportSpace` and
 `availableFormats` take the `Engine`, and `writeDocument` the engine's path.
 An export and a check of the TeX engine pause Warp's idle timeout, as the
 wiki's export does, since a PDF or a hanging engine may take up to its
-minute (`Caller` carries `pauseIdle` for that). How long a try of the engine
+minute (`Caller` carries `pauseIdle` for that). A request is now counted in
+`/metrics` as its response starts, before it is sent, and its duration there
+is the time until then; counted after the send, a client's next request could
+scrape before it was counted. How long a try of the engine
 may take is `ServeOptions`' `texProbeTimeout`, a minute, which no option
 sets; the tests shorten it. The library depends on `temporary`.
 

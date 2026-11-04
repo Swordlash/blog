@@ -143,8 +143,11 @@ quote v
 
 -- | Log every request a listener answers, as the given user: what was
 -- requested, by whom, the route pattern it matched, the response's status
--- and how long it took, which is also passed to the given observer (the
--- server's metrics). A handler that throws is logged with its exception
+-- and how long it took. The status, and the time until the response
+-- starts, are also passed to the given observer (the server's metrics)
+-- before the response is sent, so that a client that has received a
+-- response finds it counted in the next scrape; counting after the send
+-- raced with the client's next request. A handler that throws is logged with its exception
 -- and, if nothing was sent yet, answered with a 500 (servant's own answer
 -- to an exception would be the same, but without logging what went wrong).
 -- A response with a 5xx is logged as an error.
@@ -152,7 +155,11 @@ logRequests :: Logger -> Text -> Text -> Text -> (Int -> Double -> IO ()) -> Mid
 logRequests logger listener principal route observe app request respond = do
   started <- getMonotonicTime
   sent <- newIORef Nothing
-  let respond' response = writeIORef sent (Just (statusOf response)) >> respond response
+  let respond' response = do
+        writeIORef sent (Just (statusOf response))
+        answering <- getMonotonicTime
+        observe (statusOf response) (answering - started)
+        respond response
       context =
         [ ("listener", listener)
         , ("principal", principal)
@@ -164,7 +171,6 @@ logRequests logger listener principal route observe app request respond = do
       done status = do
         finished <- getMonotonicTime
         let timing = [("status", show status), ("ms", T.pack (printf "%.1f" ((finished - started) * 1000)))]
-        observe status (finished - started)
         if status >= 500
           then logWith logger Error (context <> timing <> [("error", "answered " <> show status)])
           else logWith logger Info (context <> timing)
@@ -179,10 +185,11 @@ logRequests logger listener principal route observe app request respond = do
           readIORef sent >>= \case
             Just _ -> throwIO e
             Nothing -> do
+              answering <- getMonotonicTime
+              observe 500 (answering - started)
               received <- respond (responseLBS status500 [(hContentType, "text/plain; charset=utf-8")] "Internal server error\n")
               finished <- getMonotonicTime
               -- Already logged as an error, with what was thrown.
-              observe 500 (finished - started)
               logWith logger Info (context <> [("status", "500"), ("ms", T.pack (printf "%.1f" ((finished - started) * 1000)))])
               pure received
 

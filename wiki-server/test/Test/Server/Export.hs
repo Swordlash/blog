@@ -21,7 +21,7 @@ import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Network.HTTP.Types (methodPost)
 import Protolude
-import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
+import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setOwnerWritable, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath (takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
@@ -838,7 +838,9 @@ fakeEngine engine fake = do
         , "echo 'the last line'"
         , "exit 1"
         ]
-  setPermissions engine (setOwnerExecutable True (setOwnerReadable True emptyPermissions))
+  -- Writable too, so that a test can rewrite it ("repair" the engine): a
+  -- suite that does not run as root may not write a file without it.
+  setPermissions engine (setOwnerWritable True (setOwnerExecutable True (setOwnerReadable True emptyPermissions)))
 
 -- | Wait, for at most five seconds, until the process with this id is gone
 -- (not even a zombie waiting to be reaped).
