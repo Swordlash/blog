@@ -41,7 +41,9 @@
 // script.lists[provider], [{id, label, created}, ...], or {error: {kind,
 // status, message}} to fail (kind "connection": no way to the provider);
 // without one, the scripted provider has the one model "scripted" and the
-// others none. script.check, an error, refuses "Test the key".
+// others none. script.check, an error, refuses "Test the key"; each check
+// is kept in script.checks ({provider, model, key, baseUrl}), for the tests
+// to read which key was checked.
 //
 // The key is handed to the island, which hands it to the SDK; nothing here
 // logs it or keeps it beyond the chat.
@@ -263,7 +265,12 @@ async function wiki_assistant_check(config) {
   const { provider, model, key, baseUrl } = JSON.parse(config);
   try {
     if (provider === "scripted" || wikiAssistantScriptedPage()) {
-      const refusal = globalThis.wikiAssistantScript?.check;
+      const script = globalThis.wikiAssistantScript;
+      if (script && typeof script === "object") {
+        if (!Array.isArray(script.checks)) script.checks = [];
+        script.checks.push({ provider, model, key, baseUrl: baseUrl ?? null });
+      }
+      const refusal = script?.check;
       if (refusal) throw wikiAssistantScriptError(refusal);
       return "";
     }

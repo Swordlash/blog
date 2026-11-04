@@ -18,10 +18,14 @@
 -- under the user's id ("Wiki.App.Assistant"), and the browser sends it
 -- only to its provider, never to the wiki's server. The page says so, and
 -- also that every request sends the wiki's Markdown reference, which the
--- providers cache where they can. "Test the key" makes the smallest
--- possible request (looking up the model, which is free) and shows the
--- provider's response. "Forget" deletes the key. Once saved, a key is
--- never shown again; the page only shows that one is set.
+-- providers cache where they can. A typed key is kept only once it works
+-- (WP5.59): "Test and keep the key" (or Enter in the key's field) makes
+-- the smallest possible request with the typed key (looking up the model,
+-- which is free), and keeps the key only when the provider accepts it. A
+-- refused key is not kept: the page shows why, and the key stays in the
+-- field to be corrected. "Test the key" checks a kept key the same way.
+-- "Forget" deletes the key. Once kept, a key is never shown again; the
+-- page only shows that one is set.
 --
 -- Over plain HTTP (anywhere except the local machine's address) the page
 -- warns that it is not secure. The key is still sent to the provider over
@@ -72,7 +76,7 @@ import Wiki.App.Editor.Browser (clearField)
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (..)
-  , ErrorKind (Unreachable)
+  , ErrorKind (NoSuchModel, Unreachable)
   , Model (..)
   , ModelChoices (..)
   , ModelName (..)
@@ -94,6 +98,7 @@ import Wiki.Core.Assistant
   , providerLabel
   , providers
   , readyFor
+  , readyWith
   , serviceName
   , serviceOf
   , settingsOf
@@ -112,8 +117,12 @@ import Wiki.Core.User (Password (..), User (id))
 
 newtype Input = Input {context :: Context}
 
--- | 'Check': the result of "Test the key".
-data Check = Checking | Works | Fails Text
+-- | 'Check': the result of "Test the key", "Test the connection (no
+-- key)" or "Test and keep the key". 'Kept' is a typed key that worked and
+-- is now kept. 'KeptWithoutModel' is a typed key with which the service
+-- has no model of the name checked (given), but lists its models: the key
+-- is kept, and the list offers the models the service has.
+data Check = Checking | Works | Kept | KeptWithoutModel ModelName | Fails Text
 
 -- | 'Listing': the state of fetching a provider's model list.
 data Listing = Listing | Fetched Int | NotFetched Text
@@ -169,7 +178,7 @@ data Action
   = Initialize
   | Receive Input
   | TypedKey Provider Text
-  | KeepKey Provider
+  | TestAndKeep Provider
   | Forget Provider
   | Choose Provider
   | ChooseModel Provider Text
@@ -384,21 +393,21 @@ component =
                 <button type="button" class="danger assistant-forget" disabled={{ st.busy }} onClick={{ const (Forget p) }}>Forget</button>
               </div>
             {% else %}
-              <form class="assistant-key-form" {{ HE.preventingDefault (HE.onSubmit (const (KeepKey p))) }}>
+              <form class="assistant-key-form" {{ HE.preventingDefault (HE.onSubmit (const (TestAndKeep p))) }}>
                 <label class="field">
                   <span>API key</span>
-                  <input type="password" class="assistant-key" autocomplete="off" spellcheck="false" value={{ Map.findWithDefault "" p st.typedKeys }} onValueInput={{ TypedKey p }}>
+                  <input type="password" class="assistant-key" autocomplete="off" spellcheck="false" value={{ typedKey }} disabled={{ checking }} onValueInput={{ TypedKey p }}>
                 </label>
-                <button type="submit" class="primary" disabled={{ st.busy || T.null (T.strip (Map.findWithDefault "" p st.typedKeys)) }}>Keep the key</button>
+                <button type="submit" class="primary assistant-test-keep" disabled={{ st.busy || checking || nothingTyped }}>{{ if checking then "Checking…" else "Test and keep the key" :: Text }}</button>
               </form>
               {% if isNothing (baseUrlOf p ps) %}
                 {% for url in maybeToList (keyPage p) %}
                   <p class="account-note">Make one at <a href={{ url }} target="_blank" rel="noopener noreferrer">{{ url }}</a>.</p>
                 {% end %}
               {% end %}
-              {% if usable p ps %}
+              {% if usable p ps && nothingTyped %}
                 <div class="actions">
-                  <button type="button" class="assistant-test" disabled={{ checking }} onClick={{ const (Test p) }}>Test the connection</button>
+                  <button type="button" class="assistant-test" disabled={{ checking }} onClick={{ const (Test p) }}>Test the connection (no key)</button>
                 </div>
               {% end %}
             {% end %}
@@ -480,6 +489,10 @@ component =
           Just (Fetched n) -> Just [hh|<p class="assistant-listing assistant-listed" role="status">{{ show n :: Text }} models fetched from {{ providerLabel p }}, {{ show (length choices.recommended + length choices.others) :: Text }} of them offered for a chat.</p>|]
           Just (NotFetched why) -> Just [hh|<p class="error assistant-listing assistant-not-listed" role="alert">The list of models could not be fetched. {{ why }}</p>|]
         typedModel = Map.findWithDefault "" p st.typedModels
+        -- With a key typed, the only test offered is the one with that key:
+        -- "Test the connection (no key)" is hidden.
+        typedKey = Map.findWithDefault "" p st.typedKeys
+        nothingTyped = T.null (T.strip typedKey)
         effortName e = if e == defaultEffort then e <> " (default)" else e
         checking = case Map.lookup p st.checks of
           Just Checking -> True
@@ -487,7 +500,11 @@ component =
         checkView = case Map.lookup p st.checks of
           Nothing -> Nothing
           Just Checking -> Just [hh|<p class="assistant-check" role="status">Asking {{ providerLabel p }}…</p>|]
-          Just Works -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
+          Just Works
+            | p /= Scripted && isNothing ps.key -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The connection works without a key, and {{ chosen.text }} is there.</p>|]
+            | otherwise -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
+          Just Kept -> Just [hh|<p class="assistant-check assistant-check-works assistant-check-kept" role="status">The key works and is kept.</p>|]
+          Just (KeptWithoutModel missing) -> Just [hh|<p class="warning assistant-check assistant-check-kept" role="status">The key works and is kept, but {{ serviceName p ps }} has no model {{ missing.text }}: choose one from the list.</p>|]
           Just (Fails why) -> Just [hh|<p class="error assistant-check assistant-check-fails" role="alert">{{ why }}</p>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -509,13 +526,33 @@ component =
           modify (\st -> st {settings = Nothing, typedKeys = mempty, typedModels = mempty, checks = mempty, listings = mempty, otherModels = mempty, problem = Nothing})
           load
       TypedKey p k -> modify (\st -> st {typedKeys = Map.insert p k st.typedKeys})
-      KeepKey p -> do
-        typed <- gets (\st -> Map.findWithDefault "" p st.typedKeys)
-        unless (T.null (T.strip typed)) $ do
-          change (withKey p (Just typed))
-          -- Once the browser stores the key, the page's state no longer holds it.
-          modify (\st -> st {typedKeys = Map.delete p st.typedKeys, checks = Map.delete p st.checks})
-          fetchModels p
+      -- The typed key is checked first, and kept only if the provider
+      -- accepts it, so that a wrong key is never kept. A refused key stays
+      -- in the field, with the reason beside it.
+      TestAndKeep p ->
+        gets (\st -> (st.user, st.settings, Map.findWithDefault "" p st.typedKeys)) >>= \case
+          (Just user, Just (Right s), typed) | Just r <- readyWith typed p s -> do
+            modify (\st -> st {checks = Map.insert p Checking st.checks})
+            result <- lift (checkKey r)
+            -- Another user signed in during the check: their settings are not
+            -- the ones the key was typed into.
+            let same = gets (\st -> st.user == Just user)
+                refuse e = do
+                  modify (\st -> st {checks = Map.insert p (Fails (errorText (serviceOf r) (Just r.key) e)) st.checks})
+                  change (withReached p (e.kind /= Unreachable))
+            whenM same $ case result of
+              Nothing -> keepTyped p typed Kept
+              -- The service has no model of that name. Such a service
+              -- (GitHub Models, for one) names its models otherwise, and
+              -- lists them only for a key. So the key is checked by
+              -- fetching the list with it: kept if the list comes, and
+              -- refused with the list's error if not. A service that
+              -- answers 404 to every request never gets a key kept.
+              Just e | e.kind == NoSuchModel -> do
+                listed <- lift (listModels r)
+                whenM same $ either refuse (const (keepTyped p typed (KeptWithoutModel r.model))) listed
+              Just e -> refuse e
+          _ -> pass
       Forget p -> do
         change (withKey p Nothing)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
@@ -571,6 +608,20 @@ component =
         gets (\st -> st.settings) >>= \case
           Just (Right s) | usable p (settingsOf p s) && isJust (baseUrlOf p (settingsOf p s)) -> fetchModels p
           _ -> pass
+
+    -- Keep a typed key that the provider accepted, show the check's result,
+    -- and fetch the model list with the key. Once the browser stores the
+    -- key, the page's state no longer holds it. When storing fails, the
+    -- key stays typed and the page shows why ('change').
+    keepTyped :: Provider -> Text -> Check -> H.HalogenM State Action Empty output m ()
+    keepTyped p typed outcome = do
+      change (withKey p (Just typed))
+      kept <- gets (\st -> either (const False) (\s -> isJust (settingsOf p s).key) (fromMaybe (Left "") st.settings))
+      if kept
+        then do
+          modify (\st -> st {typedKeys = Map.delete p st.typedKeys, checks = Map.insert p outcome st.checks})
+          fetchModels p
+        else modify (\st -> st {checks = Map.delete p st.checks})
 
     -- Fetch a provider's model list with its key, and store it. The fetch
     -- also tells whether the provider can be reached from here.

@@ -20,7 +20,10 @@
 -- says to paste a new one and links to the settings; and the settings
 -- page: keys kept per user, forgotten, and tested, the list of models
 -- fetched with a key, the default effort per provider, and Anthropic's
--- base URL, kept, with what a refused key and no connection say there; the two modes, Ask, whose request has the tools
+-- base URL, kept, with what a refused key and no connection say there;
+-- a typed key tested before it is kept, kept only when the provider
+-- accepts it, and the connection to another address tested without a
+-- key; the two modes, Ask, whose request has the tools
 -- turned off and whose model's edit is refused, and Agent, kept in the
 -- settings and chosen above the conversation with the model and the
 -- effort; and the text's selection kept in sight while the message box
@@ -64,6 +67,7 @@ $( browserJS
      , ("js_choose", "wiki_test_choose", Safe, [t|JSText -> JSText -> IO Bool|])
      , ("js_lists", "wiki_test_assistant_lists", Safe, [t|JSText -> IO Bool|])
      , ("js_check", "wiki_test_assistant_check", Safe, [t|JSText -> IO Bool|])
+     , ("js_checks", "wiki_test_assistant_checks", Safe, [t|IO JSText|])
      ]
  )
 
@@ -552,6 +556,91 @@ spec m = do
     unreachable `shouldSatisfy` T.isInfixOf "Cannot reach claude-gateway.example.com from this network"
     unreachable `shouldSatisfy` T.isInfixOf "The assistant's hosts"
 
+  it "tests the connection to another address without a key, until a key is typed, which is then the only one tested" $ runPage $ do
+    scriptWith [] (object [])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    -- Nothing typed: the connection is tested without a key, and says so.
+    test <- findIn anthropic ".assistant-test"
+    textContent test >>= (`shouldBe` "Test the connection (no key)")
+    click test
+    eventually $ findIn anthropic ".assistant-check-works" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The connection works without a key")
+    [checked] <- checks
+    fieldText ["key"] checked `shouldBe` Just ""
+    fieldText ["baseUrl"] checked `shouldBe` Just gateway
+    -- A key typed: the only test offered is the one with the key.
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-typed")
+    eventually $ length <$> findAllIn anthropic ".assistant-test" `shouldReturn` 0
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= (`shouldHaveText` "Test and keep the key")
+    -- Emptied again, the connection test is back.
+    findIn anthropic ".assistant-key" >>= clear
+    eventually $ findIn anthropic ".assistant-test" >>= (`shouldHaveText` "Test the connection (no key)")
+
+  it "tests a typed key before keeping it: a refused one is not kept and stays in the field, an accepted one is kept with its models, and Enter tests it" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    let refuse = unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int), "message" .= ("token expired: gw-wrong" :: Text)]))))))
+        accept = unsafeIOToPageM (js_check (toJSText "null"))
+        keyOf = (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor")
+    -- A key the gateway refuses: the reason by the field, nothing kept,
+    -- the key left in the field to be corrected.
+    refuse >>= (`shouldBe` True)
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-wrong")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    refused <- eventually $ findIn anthropic ".assistant-check-fails" >>= textContent
+    refused `shouldSatisfy` T.isInfixOf "claude-gateway.example.com refused the key: it has probably expired or been revoked."
+    refused `shouldSatisfy` T.isInfixOf "(401)"
+    -- The key checked is the one typed, and the provider's words do not show it.
+    refused `shouldNotSatisfy'` T.isInfixOf "gw-wrong"
+    (map (fieldText ["key"]) <$> checks) `shouldReturn` [Just "gw-wrong"]
+    keyOf `shouldReturn` Nothing
+    length <$> findAllIn anthropic ".assistant-key-kept" `shouldReturn` 0
+    findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-wrong")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    -- The corrected key, submitted with Enter: kept, the field emptied,
+    -- the models fetched with it.
+    accept >>= (`shouldBe` True)
+    field <- findIn anthropic ".assistant-key"
+    clear field
+    typeText field "gw-token"
+    press "Enter"
+    eventually $ findIn anthropic ".assistant-key-kept" >>= (`shouldHaveText` "A key is kept for Anthropic (Claude) in this browser.")
+    findIn anthropic ".assistant-check-kept" >>= (`shouldHaveText` "The key works and is kept.")
+    (map (fieldText ["key"]) <$> checks) `shouldReturn` [Just "gw-wrong", Just "gw-token"]
+    eventually $ keyOf `shouldReturn` Just (ApiKey "gw-token")
+    eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
+    -- Forgotten, the field is empty: what was typed is not kept in the page.
+    findIn anthropic ".assistant-forget" >>= click
+    eventually $ findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "")
+
+  it "checks a typed key by the service's list of models when the service has no model of the name checked" $ runPage $ do
+    let refused = object ["error" .= object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int), "message" .= ("bad token" :: Text)]]
+    scriptWith [] (object ["openai" .= refused])
+    keep m (UserId "user-editor") (withBaseUrl OpenAI "https://models.github.ai/inference" defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    openai <- find ui ".assistant-provider-settings[data-provider='openai']"
+    unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["kind" .= ("not_found" :: Text), "status" .= (404 :: Int)])))))) >>= (`shouldBe` True)
+    -- No such model, and the list refused to the key: the key is not kept.
+    findIn openai ".assistant-key" >>= (`typeText` "wrong-token")
+    findIn openai ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn openai ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "models.github.ai refused the key")
+    (\s -> (settingsOf OpenAI s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+    findIn openai ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "wrong-token")
+    -- No such model, but the list comes with the key: the key is kept, and
+    -- the service's own models are offered.
+    setLists (object ["openai" .= [object ["id" .= ("openai/gpt-5" :: Text), "created" .= (20 :: Int)]]])
+    field <- findIn openai ".assistant-key"
+    clear field
+    typeText field "github-token"
+    findIn openai ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn openai ".assistant-key-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "A key is kept")
+    findIn openai ".assistant-check-kept" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The key works and is kept, but models.github.ai has no model")
+    eventually $ (\s -> (settingsOf OpenAI s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "github-token"))
+    eventually $ findAllIn openai ".assistant-model-choice option" >>= traverse textContent >>= (`shouldContain` ["openai/gpt-5"])
+
 -- | The address of an organisation's gateway in front of Anthropic's API.
 gateway :: Text
 gateway = "https://claude-gateway.example.com"
@@ -636,10 +725,12 @@ scriptedModels =
       ]
   ]
 
--- | What the scripted provider was sent, and what its tools were answered.
-requests, answers :: PageM s [Value]
+-- | What the scripted provider was sent, what its tools were answered,
+-- and what the settings' tests checked with it.
+requests, answers, checks :: PageM s [Value]
 requests = unsafeIOToPageM (decoded <$> js_requests)
 answers = unsafeIOToPageM (decoded <$> js_answers)
+checks = unsafeIOToPageM (decoded <$> js_checks)
 
 decoded :: JSText -> [Value]
 decoded = fromMaybe [] . decodeStrict . encodeUtf8 . fromJSText

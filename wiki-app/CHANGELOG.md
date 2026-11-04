@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+The key is tested before it is kept (WP5.59). In the assistant's
+settings, the key form's button is now "Test and keep the key" (Enter in
+the field does the same): it asks the provider with the typed key, at
+the base URL if one is set, and keeps the key (in this browser, in the
+vault when syncing is on) and fetches the model list only when the
+provider accepts it. A refused key is not kept: the reason shows by the
+field, a 401 with the sentence that says the key has probably expired,
+and the key stays in the field to be corrected. While the check runs,
+the field and the button are disabled and the button says "Checking…".
+A service that has no model of the name checked (GitHub Models names
+OpenAI's models differently) is asked for its list of models with the
+key instead: the key is kept if the list comes, with a note to choose a
+model from it, and refused with the list's error if not.
+"Test the connection" is now "Test the connection (no key)", and shows
+only while nothing is typed in the key field; it says "The connection
+works without a key" when it does. The scripted provider keeps each check
+in `script.checks`, for the browser tests to read the key checked.
+
 Claude at another address (WP5.57). The assistant's settings show the
 "Base URL" field for Anthropic as for OpenAI, with a hint that names a
 gateway and where the administrator allows its address (Administration,

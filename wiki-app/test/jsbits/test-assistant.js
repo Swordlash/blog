@@ -16,6 +16,12 @@ function wiki_test_assistant_requests() {
   return JSON.stringify(globalThis.wikiAssistantScript?.requests ?? []);
 }
 
+// What "Test the key" and "Test and keep the key" asked the scripted
+// provider: [{provider, model, key, baseUrl}, ...].
+function wiki_test_assistant_checks() {
+  return JSON.stringify(globalThis.wikiAssistantScript?.checks ?? []);
+}
+
 function wiki_test_assistant_answers() {
   return JSON.stringify(globalThis.wikiAssistantScript?.answers ?? []);
 }
@@ -51,7 +57,7 @@ function wiki_test_assistant_lists(json) {
 }
 
 // The error "Test the key" answers with from now on (the script's check),
-// the rest of the script kept.
+// the rest of the script kept; null to accept the key again.
 function wiki_test_assistant_check(json) {
   const script = globalThis.wikiAssistantScript;
   if (typeof script !== "object" || script === null) return false;
