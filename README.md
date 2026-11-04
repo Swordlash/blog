@@ -693,8 +693,9 @@ sent anywhere, and a reload starts the demo over.
 
 The easiest way in is the wizard, `toolchain/configure.sh`: a terminal application
 that asks for the deploy's options in a few screens (what to deploy, where the page
-comes from, the database, how it is reached, the address, the rest), each with what
-it does, and hides what does not apply to the choices before it. It starts from the
+comes from, the database and the TeX of the PDF exports, how it is reached, the
+address, the rest), each with what it does, and hides what does not apply to the
+choices before it. It starts from the
 deployment's last run, read from its state file, so a redeploy is Enter through every
 screen. The last screen shows the command line, `sh toolchain/deploy-local.sh …`:
 Enter runs it, with the deploy's output in the terminal, and `q` quits and prints it
@@ -1036,6 +1037,70 @@ server can serve it. The choice of REF, the warning for a page of another commit
 `--no-build`, `--stop` and `--no-backend-only` work as for the server. Commits and
 tags that CI built before the demo's page was added have no `app-demo-` zip.
 
+### PDF exports: the TeX the service finds
+
+The server makes PDFs with `xelatex` (see [The wiki's server](#the-wikis-server)), under
+kpathsea's paranoid limits (`openin_any=p`, `openout_any=p`, `shell_escape=f`). Having
+an `xelatex` is not enough: TeX Live 2020 and older refuse, under those limits, the table
+`unicode-math` reads by its full path, and the engine loops until the export's minute
+runs out, while a one-line document typesets fine. So with `--server` the deploy checks
+the TeX after the toolchain and before the build, with `toolchain/check-tex.sh`: it
+typesets a small document with `fontspec`, `unicode-math`, `lmodern` and a formula, as
+pandoc's template does, under the same limits and a timeout, and says working, failing
+(with the end of TeX's log) or not found.
+
+The check runs in the environment the service will have, not the shell's. A systemd user
+unit gets the `PATH` of your systemd user manager (`systemctl --user show-environment`,
+usually `/usr/local/bin:/usr/bin:/bin` and little more) and nothing from your profile, so
+a TeX your shell finds in `~/texlive` or `/opt` is not one the service finds; the deploy
+says so when that is the case.
+
+When the check fails or finds nothing, the deploy offers to install TeX Live under the
+toolchain directory:
+
+```
+deploy-local: Install TeX Live under ~/.wiki-toolchain/texlive from https://mirror.ctan.org? About 250 MB and a few minutes [y/N]
+```
+
+Yes downloads TeX Live's installer (`install-tl-unx.tar.gz`) from the mirror's
+`systems/texlive/tlnet/`, installs the scheme basic without documentation or sources into
+`<toolchain>/.wiki-toolchain/texlive/<year>`, installs the packages the exports need with
+`tlmgr` (the list is `toolchain/texlive-packages.txt`: XeTeX, `fontspec`,
+`unicode-math`, Latin Modern, what pandoc's template and Beamer load, TikZ, `tikz-cd`,
+`pgfplots` and `mhchem`), checks it, and writes `Environment="PATH=<its bin>:/usr/local/bin:/usr/bin:/bin"`
+into the unit. The size is an estimate from TeX Live's package database: about 180 MB of files for
+those packages, plus the formats `fmtutil` builds and the database itself, about 250 MB
+in all, from a download of about 45 MB.
+The installer is a Perl program: it needs `perl` (on RHEL the whole `perl` package, not
+`perl-interpreter` alone), `curl` and `tar`, which the deploy checks first. The downloads
+go through `curl` and the installer's own downloader, which both use the proxy
+`https_proxy` names, as the toolchain's other downloads do. Its output is shown as it
+comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
+
+- `--texlive` answers yes without asking, and `--no-texlive` no: the server then offers
+  no PDFs unless a TeX of the machine's works, and its administration's Server section
+  says why. Without a terminal and without either option nothing is asked or installed,
+  and the deploy says how to ask for it.
+- `--texlive-mirror URL` names another CTAN mirror (the default,
+  `https://mirror.ctan.org`, redirects to one near you).
+- The answer, the installation and the mirror are kept in the state file (`texlive`,
+  `texlive_dir`, `texlive_mirror`). A later run checks the installation and installs
+  nothing while it works; when it fails, it is installed again. One installation is
+  kept: a newer year replaces the older one once it works. `--no-texlive` on a
+  deployment that has one leaves it on disk and takes its `PATH` out of the unit;
+  `--texlive` uses it again.
+- Nothing about TeX stops the deploy: PDFs are optional. `--status` says whether the
+  engine works, at which path, and whether it is the toolchain's TeX Live.
+- `undeploy-local.sh` leaves the toolchain's TeX Live where it is, as it leaves the
+  toolchain; `--purge` of a deployment under a prefix deletes it with the prefix.
+
+`sh toolchain/check-tex.sh [ENGINE]` runs the same check by hand. To check what the
+service sees:
+
+```sh
+env -i HOME="$HOME" PATH="$(systemctl --user show-environment | sed -n 's/^PATH=//p')" sh toolchain/check-tex.sh
+```
+
 ### What else it does
 
 - When Tailscale does not answer at all, it listens on 127.0.0.1 and says so.
@@ -1190,7 +1255,9 @@ to the demo, keeping `data/`.
   `\pu` chemistry, `texlive-plain-generic` for struck-out and underlined
   text, which pandoc sets with `soul`; a missing package is named in the
   export's error). The administration's "Server" section says whether it was
-  found.
+  found. The deploy checks the TeX the service finds, and offers to install TeX Live
+  under the toolchain when it does not work: see
+  [PDF exports: the TeX the service finds](#pdf-exports-the-tex-the-service-finds).
 - **Where the data lives.** The database (in the volume `wiki-demo_wiki-db`, or
   `data/wiki.sqlite` with `--sqlite`) and `data/`: the attachments under their
   content hash, and the backups. No deploy ever deletes either: a redeploy
@@ -1546,6 +1613,7 @@ first, or name one with `WIKI_SERVER`), and that one over HTTPS too:
 
 ```sh
 sh toolchain/test-deploy-local.sh
+sh toolchain/test-check-tex.sh     # the TeX check, against fake engines
 ```
 
 CI runs them in its `native` job, after the native tests (about two minutes).
