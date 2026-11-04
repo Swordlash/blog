@@ -576,6 +576,22 @@ In the order to do it, unless the owner says otherwise.
   round-trip, the wizard's option coverage and `test-configure.sh`. Docs: the README's
   deploy and exports sections, the wizard's help.
 
+- **WP5.59 The key is tested before it is kept** (the owner, 2026-11-04; one small pull
+  request). In the assistant's settings the owner typed a key and clicked the test,
+  which checked the connection without the typed key (`checkKey` takes what is kept,
+  and with a base URL the provider counts as usable without a key) and answered 401;
+  only after "Keep the key" did it work. Now the test takes the key from the field:
+  the key form's one primary button is "Test and keep the key", which checks the typed
+  key (with the base URL and the service as `readyFor` builds them, the typed key in
+  place of the kept one), and keeps it (IndexedDB, the vault, the model list fetched)
+  only when the check passes; a refusal shows the reason by the field (WP5.57's 401
+  sentence included) and keeps nothing. With a key kept, "Test the key" stays as it
+  is; with a base URL and no key typed, "Test the connection" tests without one and
+  says so. Tests: browser (a typed key that the service refuses is not kept and the
+  reason is shown; one it accepts is kept and the models fetched; the connection test
+  without a key), wiki-core if `readyFor` gains a way to take a typed key. Docs: the
+  guide's sentence on the settings, wiki-app's CHANGELOG.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
