@@ -624,6 +624,29 @@ In the order to do it, unless the owner says otherwise.
   request, the stale address). Docs: `docs/api.md`, the README's assistant section,
   the guide, the CHANGELOGs.
 
+- **WP5.61 The server is told when the TeX is off** (the owner, 2026-11-04, after
+  WP5.58; one pull request). On the owner's server the deploy's TeX step found no
+  working xelatex and could not install TeX Live (no perl), and said so, but the
+  server it started went on offering PDFs: nothing told it. Three changes. (a)
+  `toolchain/check-native.sh` gains the TeX engine as an item, through
+  `toolchain/check-tex.sh`, with a short timeout: a one-line probe document takes a
+  second, so the check's timeout and the server's probe timeout (`probeTimeout`, a
+  minute today) both become 20 s (a hanging engine then costs 20 s at the server's
+  start, not a minute); the item is informative (working at <path>, failing with
+  the reason, not found), never a missing item. (b) `wiki-server serve --no-pdf`:
+  the server neither looks for an engine nor offers the PDF formats; the
+  administration's Server section says that PDFs are off by the server's option
+  and what sets it (`TexEngine`'s status gains `off`; no "Check again" then). (c)
+  The deploy writes `--no-pdf` into the unit's `ExecStart` whenever its TeX step
+  ends without a working engine: the found one fails and nothing was installed,
+  the install failed, or the owner declined (`--no-texlive`); it drops the option
+  when the step ends with one; `--status` shows it. Tests: `test-check-native.sh`
+  or the deploy's tests for the item; server (the option: no probe, no formats,
+  the admin's `off`; the admin's JSON round trip); browser (the Server section's
+  fourth state); the deploy's regression cases (the unit with and without the
+  option, following the TeX step's outcome). Docs: the README's deploy and exports
+  sections, `docs/api.md`, wiki-server's, wiki-api's and wiki-app's CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
