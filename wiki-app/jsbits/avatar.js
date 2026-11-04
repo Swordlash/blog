@@ -5,7 +5,7 @@
 // web/src/avatar.js leaves on the element (`wikiAvatar`).
 
 // Put the cropper in `host` on `file`; the promise settles once it is
-// there (or the cropper could not be loaded). Without the page's islands.js
+// there with the picture loaded (or the cropper could not be loaded). Without the page's islands.js
 // there is no cropper.
 async function wiki_avatar_crop(host, file) {
   await globalThis.wikiIslands?.cropAvatar?.(host, file);
@@ -19,4 +19,10 @@ async function wiki_avatar_cropped(host) {
 // Take the cropper out of `host`, and let the picture go.
 function wiki_avatar_drop(host) {
   host.wikiAvatar?.destroy();
+}
+
+// Place the cropper's selection in `host`: (x, y) from its canvas's
+// corner, side by side pixels.
+function wiki_avatar_select(host, x, y, side) {
+  host.wikiAvatar?.select(x, y, side);
 }

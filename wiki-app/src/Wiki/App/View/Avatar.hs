@@ -51,6 +51,7 @@ import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Browser (closeDialog, showDialog)
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles)
 import Wiki.App.View.Common
+import Wiki.App.Web.Rect (boxOf, centredSquare)
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Space (iconMediaTypes)
 import Wiki.Core.User (Avatar, User (..))
@@ -60,6 +61,7 @@ $( browserJS
      [ ("js_crop", "wiki_avatar_crop", Safe, [t|Element -> File -> IO (Promise ())|])
      , ("js_cropped", "wiki_avatar_cropped", Safe, [t|Element -> IO (Promise ByteString)|])
      , ("js_drop", "wiki_avatar_drop", Safe, [t|Element -> IO ()|])
+     , ("js_select", "wiki_avatar_select", Safe, [t|Element -> Double -> Double -> Double -> IO ()|])
      ]
  )
 
@@ -189,7 +191,9 @@ component =
                       liftIO (wait =<< js_crop host file.file)
                       -- Closed while the cropper loaded: it is taken out again.
                       gets (\st -> st.cropping) >>= \case
-                        True -> modify (\st -> st {ready = True})
+                        True -> do
+                          H.liftEffect (liftIO (startInside host))
+                          modify (\st -> st {ready = True})
                         False -> H.liftEffect (liftIO (js_drop host))
                   )
       Use -> gets (\st -> st.host) >>= H.getRef >>= traverse_ uploadFrom
@@ -214,6 +218,22 @@ component =
             modify (\st -> st {busy = False, url = Nothing, input = Input {user = Just u}})
             H.raise (Changed Nothing)
       Finalize -> gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . js_drop)
+
+    -- The crop's selection starts as the largest square inside the picture,
+    -- centred, shown as a circle ('centredSquare'). Cropper.js places its
+    -- starting selection by the canvas, which with a picture fitted whole
+    -- ("contain") and not square reaches into the checked background, so
+    -- that the crop would keep some of it. The canvas and the picture are
+    -- Cropper.js's elements in the host, measured once the picture is
+    -- loaded; a picture that did not load has no size, and the selection
+    -- stays where it was.
+    startInside :: Element -> IO ()
+    startInside host = do
+      canvas <- host.querySelector "cropper-canvas"
+      picture <- host.querySelector "cropper-image"
+      for_ ((,) <$> canvas <*> picture) $ \(c, i) -> do
+        square <- centredSquare <$> boxOf c <*> boxOf i
+        for_ square (\(x, y, side) -> js_select host x y side)
 
     -- Upload the crop in the dialog's element as the avatar.
     uploadFrom :: Element -> H.HalogenM State Action Empty ViewOutput m ()

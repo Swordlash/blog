@@ -25,9 +25,10 @@ const element = (name, attributes) => {
 // Put the cropper in `host`, on the picture in `file` (a File or a Blob),
 // in place of whatever was there. The host then carries `wikiAvatar`, with
 // `result()`, the crop as PNG bytes (a Promise of a Uint8Array, or of null
-// when there is none), and `destroy()`, which lets the picture go. The
-// promise returned settles once the picture is loaded and the selection
-// placed on it.
+// when there is none), `select(x, y, side)`, which places the selection,
+// and `destroy()`, which lets the picture go. The promise returned settles
+// once the picture is loaded (or failed to load), for the application to
+// place the selection on it ("Wiki.App.View.Avatar").
 export const crop = async (host, file) => {
   host.wikiAvatar?.destroy();
   const url = URL.createObjectURL(file);
@@ -50,28 +51,21 @@ export const crop = async (host, file) => {
       const blob = await new Promise((resolve) => cropped.toBlob(resolve, "image/png"));
       return blob === null ? null : new Uint8Array(await blob.arrayBuffer());
     },
+    // Put the selection at (x, y) from the canvas's corner, side by side
+    // pixels: Cropper.js's own call.
+    select: (x, y, side) => {
+      selection.$change(x, y, side, side);
+    },
     destroy: () => {
       URL.revokeObjectURL(url);
       host.replaceChildren();
       delete host.wikiAvatar;
     },
   };
-  // The selection starts as the largest square inside the picture, centred,
-  // shown as a circle. Cropper.js places its initial selection by the
-  // canvas, which with a picture fitted whole ("contain") and not square
-  // reaches into the checked background, so that the crop would keep some
-  // of it. The square is a pixel smaller than the picture, because
-  // Cropper.js rounds the selection to whole pixels.
+  // Once the picture is loaded and fitted, or has failed to load: the
+  // application then measures it and places the selection ('select').
   try {
     await image.$ready();
-    const area = canvas.getBoundingClientRect();
-    const shown = image.getBoundingClientRect();
-    const left = Math.max(shown.left, area.left) - area.left;
-    const top = Math.max(shown.top, area.top) - area.top;
-    const width = Math.min(shown.right, area.right) - area.left - left;
-    const height = Math.min(shown.bottom, area.bottom) - area.top - top;
-    const side = Math.max(0, Math.floor(Math.min(width, height)) - 1);
-    if (side > 0) selection.$change(left + (width - side) / 2, top + (height - side) / 2, side, side);
   } catch {
     // A picture that does not load leaves the selection where it was; the
     // crop then has nothing to keep, which the application reports.

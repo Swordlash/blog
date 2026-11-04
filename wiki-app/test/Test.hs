@@ -24,6 +24,7 @@ import Test.Manifest qualified as Manifest
 import Test.Passwords qualified as Passwords
 import Test.Policy qualified as Policy
 import Test.Readme qualified as Readme
+import Test.Rect qualified as Rect
 import Test.Route qualified as Route
 import Test.Server qualified as Server
 import Test.Shell qualified as Shell
@@ -47,6 +48,7 @@ main = do
       Export.spec
       Favicon.spec
       Route.spec
+      Rect.spec
       Link.spec
       Live.spec
       Shell.spec
