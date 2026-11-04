@@ -234,6 +234,7 @@ import Wiki.Core.Permission
   , mayCreateSpace
   , mayMovePage
   , mayMoveSpace
+  , publicTo
   )
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
@@ -2000,9 +2001,12 @@ setAvatarFile mediaType file = do
 -- file. The avatar is looked up by its blob id, which is part of its URL,
 -- so a new picture gets a new URL. The server's route for avatars serves
 -- this. A blob that is not the user's avatar, or a user who does not
--- exist, is 'NotFound'.
+-- exist, is 'NotFound'; so is any avatar to someone a closed wiki does not
+-- let in ('publicTo', the rule a space's view applies), whom the server's
+-- listener answers 401 before it asks.
 avatarFile :: (MonadIO m) => UserId -> BlobId -> StoredWiki m (Either WikiError (MimeType, FilePath))
 avatarFile u blob = run Reads $ do
+  asks (\x -> publicTo x.grants.access x.principal) >>= (`unless` failWith NotFound)
   dir <- asks (\x -> x.blobs)
   db (loadUser u) >>= \case
     Just found | Just a <- found.avatar, a.blob == blob, Just file <- blobFile dir a.blob -> pure (a.mediaType, file)

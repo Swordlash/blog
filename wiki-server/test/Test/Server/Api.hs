@@ -16,16 +16,19 @@ import Network.HTTP.Types (hContentType, methodDelete, methodPost, methodPut)
 import Protolude
 import Servant.API (toUrlPiece)
 import Test.Database (Backing)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
-import Wiki.Api (AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Links (attachmentUrl, links, searchUrl, spaceIconUrl)
+import Wiki.Api.Links (attachmentUrl, avatarUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
+import Wiki.App.Backend qualified as B
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), MimeType (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
@@ -35,8 +38,8 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
-import Wiki.Server.Storage (administratorUser)
+import Wiki.Core.User (Avatar (..), Group (..), Login (..), Password (..), User (..))
+import Wiki.Server.Storage (Who (..), administratorUser, avatarFile, runStoredWiki, withStorageAside)
 
 spec :: Backing -> Spec
 spec backing = describe "the API over HTTP" $ do
@@ -53,6 +56,7 @@ spec backing = describe "the API over HTTP" $ do
   removingUsers backing
   permissions backing
   profiles backing
+  avatars backing
 
 -- | An address of the API on a listener: the public one's root, or the
 -- admin one's @\/admin\/@.
@@ -600,6 +604,56 @@ permissions backing = describe "permissions given over HTTP" $ do
     -- Granting to nobody is refused, after the permission.
     (.status) <$> send r methodPut (onPublic r (links.spaces.setGrant team.id)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectGroup (GroupId "no-such-group"), permission = View, granted = True})
       `shouldReturn` 400
+
+-- | A user's avatar over HTTP: uploaded by the user, as a space's icon is,
+-- and served at its address to whoever the wiki lets in. In a closed
+-- wiki, someone who has not signed in gets 401 for it, as for anything
+-- else of the wiki (Codex's first round on #147).
+avatars :: Backing -> Spec
+avatars backing = describe "a user's avatar over HTTP" $ do
+  let png = BSL.pack [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6]
+      setAccess r access = do
+        answered :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
+        answered.access `shouldBe` access
+
+  it "is uploaded by the user, and served to whom the wiki lets in: anyone in an open wiki, the signed-in in a closed one" $ withDemoRunning backing identity $ \r -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    (.status) <$> multipartWith r methodPut [] (onPublic r links.account.setAvatar) [] [("file", "me.png", "image/png", png)] `shouldReturn` 401
+    me :: User <- multipartWith r methodPut [editor] (onPublic r links.account.setAvatar) [] [("file", "me.png", "image/png", png)] >>= jsonAs 200
+    avatar <- maybe (assertFailure "no avatar") pure me.avatar
+    let address = onPublic r (avatarUrl me.id avatar)
+    -- An open wiki: anyone.
+    for_ [[], [editor]] $ \hs -> do
+      served <- getUrlWith r address hs
+      (served.status, served.body) `shouldBe` (200, png)
+      lookup hContentType served.headers `shouldBe` Just "image/png"
+    -- Another blob is not the user's avatar.
+    (.status) <$> getUrlWith r (onPublic r (links.users.avatar me.id (BlobId (T.replicate 64 "0")))) [editor] `shouldReturn` 404
+    -- A closed wiki: the signed-in only.
+    setAccess r Closed
+    (.status) <$> getUrlWith r address [] `shouldReturn` 401
+    (.status) <$> getUrlWith r address [editor] `shouldReturn` 200
+    setAccess r Open
+    (.status) <$> getUrlWith r address [] `shouldReturn` 200
+    -- An SVG is refused, and a removed avatar is served no more.
+    (.status) <$> multipartWith r methodPut [editor] (onPublic r links.account.setAvatar) [] [("file", "me.svg", "image/svg+xml", "<svg/>")] `shouldReturn` 400
+    gone :: User <- send r methodDelete (onPublic r links.account.removeAvatar) [editor] "" >>= jsonAs 200
+    gone.avatar `shouldBe` Nothing
+    (.status) <$> getUrlWith r address [] `shouldReturn` 404
+
+  it "is no avatar to the storage for someone a closed wiki does not let in" $ withDemoRunning backing identity $ \r -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    me :: User <- multipartWith r methodPut [editor] (onPublic r links.account.setAvatar) [] [("file", "me.png", "image/png", png)] >>= jsonAs 200
+    avatar <- maybe (assertFailure "no avatar") pure me.avatar
+    setAccess r Closed
+    withStorageAside r.place $ \st -> do
+      runStoredWiki st Anonymous (avatarFile me.id avatar.blob) >>= \case
+        Left B.NotFound -> pass
+        other -> expectationFailure ("expected NotFound, got " <> show (void other))
+      runStoredWiki st (AsUser me.id) (avatarFile me.id avatar.blob) >>= (`shouldSatisfy` isRight)
+      runStoredWiki st Administrator (avatarFile me.id avatar.blob) >>= (`shouldSatisfy` isRight)
 
 -- | A space's profile and icon over HTTP: set by whoever administers the
 -- space, its icon served to whoever may view it, and kept across a
