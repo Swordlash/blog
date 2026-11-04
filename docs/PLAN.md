@@ -479,6 +479,32 @@ confirms it against reality and the plan is amended if it does not hold.
     Paste a new one in the assistant's settings.", with a link to them, in the chat, in
     "Test the key" and in the model list.
 
+40. **The deploy installs a TeX that works** (the owner, 2026-11-04, built by WP5.58).
+    `toolchain/check-tex.sh [ENGINE]` typesets the document the server's probe
+    typesets (`fontspec`, `unicode-math`, `lmodern`, a formula; the same text in both
+    places, kept identical) under the export's limits within 60 s, and says `working`,
+    `failing` with the reason and the log's tail, or `not-found`. `deploy-local.sh
+    --server` runs it after the toolchain step with the PATH the service will have
+    (`systemctl --user show-environment`, else `/usr/local/bin:/usr/bin:/bin`), and
+    says so when the shell finds an xelatex the service does not. When the engine is
+    missing or failing it offers TeX Live under the toolchain,
+    `<toolchain>/.wiki-toolchain/texlive/<year>` (not `~/texlive`, where people keep
+    their own): `install-tl` from the mirror (`--texlive-mirror`, default
+    `https://mirror.ctan.org`, remembered), `scheme-basic` without docs and sources,
+    then `tlmgr install` of `toolchain/texlive-packages.txt` (scheme-basic has no XeTeX;
+    the list brings it, with what pandoc's template, Beamer, TikZ, `tikz-cd`,
+    `pgfplots` and `mhchem` need), then the check again with the new `bin` first;
+    about 250 MB, said before asking. `--texlive` and `--no-texlive` answer without
+    asking; on a terminal the question is asked and the answer kept (`texlive`,
+    `texlive_dir`, `texlive_mirror` in the state file); without a terminal nothing is
+    asked, installed or recorded. The unit gets `Environment="PATH=<bin>:/usr/local/bin:
+    /usr/bin:/bin"`; `--status` runs the check with the unit's PATH; the undeploy leaves
+    the TeX Live with the toolchain. Nothing about TeX stops a deploy. The wizard's
+    database screen offers the TeX on this machine, TeX Live under the toolchain (with
+    the mirror) or none, prefilled from the state; "the TeX on this machine" over a
+    remembered `texlive=yes` gives `--no-texlive`. Perl and its standard modules are
+    checked at install time, not in `check-native.sh`.
+
 ## Repository layout
 
 ```
@@ -550,31 +576,6 @@ In the order to do it, unless the owner says otherwise.
   one saves, through the demo's own exports or a stubbed fetch), the admin's section in
   its three states. Docs: `docs/api.md`, the README's exports section, wiki-server's
   and wiki-app's CHANGELOGs.
-
-- **WP5.58 The deploy installs a TeX that works** (the owner, 2026-11-04; one pull
-  request, beside WP5.56). The owner's server has TeX Live 2020, whose kpathsea refuses,
-  in the wiki's paranoid mode, the table `unicode-math` reads by its full path, so every
-  PDF export looped to its limit while a one-line `article` typeset fine (WP5.56's probe
-  will show it). The deploy takes care of it: `toolchain/check-tex.sh` typesets the
-  document WP5.56's probe typesets (`fontspec`, `unicode-math`, `lmodern`, a formula)
-  under the export's limits with a timeout, in the environment the service will have
-  (systemd's PATH, not the shell's), and says working, failing (with the log's tail) or
-  not found. `deploy-local.sh --server` runs it after the toolchain step and, when the
-  engine is missing or failing, offers to install TeX Live under the toolchain's
-  directory (`<toolchain>/texlive`): `install-tl` from a CTAN mirror (`--texlive-mirror
-  URL`, the default mirror otherwise, through the proxy the environment names),
-  `scheme-basic` without docs and sources, then `tlmgr install` of the packages the
-  exports need (one list, `toolchain/texlive-packages.txt`, with WP5.49's test packages),
-  the size and the time said before asking; `--texlive` and `--no-texlive` answer
-  without asking, the choice is kept in the state file and reused; a working
-  installation is checked again and the unit gets its `bin` first on `PATH`; declining
-  leaves the PDFs off, which the administration's Server section says. `--status` shows
-  the engine's state. The wizard gets the choice on the server screen, prefilled from
-  the state as everything is (the wizard reads the deployment's state file): the TeX on
-  this machine, TeX Live under the toolchain, or no PDFs. Tests: `test-bootstrap.sh`-style
-  cases with a fake `xelatex` that fails or hangs and a fake `install-tl`, the state's
-  round-trip, the wizard's option coverage and `test-configure.sh`. Docs: the README's
-  deploy and exports sections, the wizard's help.
 
 - **WP5.59 The key is tested before it is kept** (the owner, 2026-11-04; one small pull
   request). In the assistant's settings the owner typed a key and clicked the test,
@@ -917,6 +918,16 @@ needs. Each was true when its package merged; check before relying on one.
   and the 401 says to paste a key; the settings' "Fetching from …" lines name the
   provider, not the host; a token that expires is pasted again, nothing refreshes it.
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
+- WP5.58's TeX Live install (decision 40) was never run for real: the session's
+  sandbox refused the downloaded installer, so the size, the minutes and the package
+  list installing cleanly on the current TeX Live rest on its `texlive.tlpdb` and on
+  a `-recorder` mapping of what the PDF tests read; the "y" path is tested with a
+  fake installer only, and "y" at the terminal's question only with "n" through
+  `script(1)`. The first real `--texlive` deploy should be watched. `mirror.ctan.org`
+  may send the installer and the repository to different mirrors, and a lagging one
+  makes `install-tl` refuse ("not compatible"): rerun, or name a mirror. `--status`
+  waits up to 60 s on a looping engine. The deploy test's CI comment still says
+  "about two minutes" where it took seven.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
