@@ -547,7 +547,9 @@ try {
   const front = await fetch(url("/"));
   assert.equal(front.status, 200);
   const frontHtml = await front.text();
-  assert.match(frontHtml, /class="wiki-home".*class="page-view".*<h1[^>]*>Spaces<\/h1>/s, "the front page's ordinary page view is not rendered");
+  // The page view's class list also says how wide it lays the page out
+  // (page-width-compact, as a page the server renders always is).
+  assert.match(frontHtml, /class="wiki-home".*class="page-view(?: [^"]*)?".*<h1[^>]*>Spaces<\/h1>/s, "the front page's ordinary page view is not rendered");
   assert.match(frontHtml, /<section class="directory">/s, "the front page's directory of spaces is not rendered");
   assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
   assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
