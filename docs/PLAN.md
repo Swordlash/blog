@@ -646,6 +646,32 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.62 Spoilers, and code listings that scroll** (the owner, 2026-11-04, issue
+  #152; one pull request). Two additions to the Markdown. (a) *Spoilers.* A block
+  spoiler is a box of a new built-in kind, `> [!SPOILER]` (with a title as the other
+  kinds take one), rendered as a `<details class="alert alert-spoiler">` whose
+  `<summary>` is the label ("Spoiler", or the title) and whose content is hidden until
+  opened; never numbered. An inline spoiler, `||hidden||`, as the strikethrough and
+  the highlight are parsed (a two-character delimiter), is a `<span class="spoiler">`
+  blurred until the reader clicks it (focus reveals it; a second click hides it
+  again). The editor's box menu gains "Spoiler" and the text tools an inline spoiler
+  button; the preview and the page agree. Exports (PDF, Word, the feed) show the
+  content as a box titled "Spoiler" and the inline one as its text: a document
+  cannot hide. The plain-text views (search, anchors) keep the text. (b) *Scrolling
+  listings.* A fence may say how many rows are visible: ```` ```haskell {rows=20}
+  ```` (the attribute braces the fence already takes); the rendered `<pre>` gets a
+  maximum height of that many lines and scrolls inside (the `lh` unit on a style
+  attribute, which the CSP allows, or a `data-rows` the code island reads: the
+  package chooses and says why), `rows` without a value or not a positive number is
+  ignored. The toolbar's code block command is unchanged; the guide's Markdown
+  section shows both. Tests: wiki-core (the spoiler's parse and render, block and
+  inline, with and without a title; `rows` parsed, ignored when wrong; the plain
+  text; the export's forms), browser (a block spoiler closed and opened, an inline
+  one revealed by a click and hidden again, the toolbar writing both; a listing
+  with `rows` scrolling: its height is the rows' and `scrollHeight` exceeds it),
+  server (an export with a spoiler). Docs: the README's Markdown section, the guide,
+  wiki-core's and wiki-app's CHANGELOGs; `docs/PLAN.md`'s syntax notes if any.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
