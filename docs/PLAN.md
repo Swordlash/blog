@@ -589,7 +589,13 @@ In the order to do it, unless the owner says otherwise.
   is; with a base URL and no key typed, "Test the connection" tests without one and
   says so. Tests: browser (a typed key that the service refuses is not kept and the
   reason is shown; one it accepts is kept and the models fetched; the connection test
-  without a key), wiki-core if `readyFor` gains a way to take a typed key. Docs: the
+  without a key), wiki-core if `readyFor` gains a way to take a typed key. Also in this
+  package (the owner, 2026-11-04): the avatar's crop (WP5.55) opens as an inline box
+  inside the account panel's dropdown, off to the right and clipping the picture; it
+  becomes a `<dialog>` shown as a modal in the middle of the window, as the editor's
+  link dialog is, sized to the window with the picture fitted whole inside the
+  cropper, the round selection, "Use this" and "Cancel", closed by Escape and by the
+  backdrop; browser tests for its opening, the fit and the close. Docs: the
   guide's sentence on the settings, wiki-app's CHANGELOG.
 
 ### Later, or waiting for the owner
