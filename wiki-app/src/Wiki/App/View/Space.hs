@@ -69,7 +69,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
 import Wiki.Core.Page (PageSummary (id, title), templatePages, treePages)
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
+import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), isPersonal, subspacesOf)
 
 -- | The space view's input: the space, as the shell has loaded it, with
 -- its pages.
@@ -395,15 +395,17 @@ parentMacros ctx space = wikiMacrosOf ctx.session <> maybe mempty (spaceMacros c
 
 -- | Where the space may be moved: the top level, or under another space,
 -- where the rules allow it and the move would not put the space inside
--- itself; not where it already is.
+-- itself; not where it already is. A personal space stays where it is.
 destinations :: Context -> Space -> [Maybe Space]
 destinations ctx space =
   [ Nothing
   | isJust space.parent
+  , not (isPersonal space)
   , mayMoveSpace who grants chain Nothing
   ]
     <> [ Just d
-       | d <- ctx.spaces
+       | not (isPersonal space)
+       , d <- ctx.spaces
        , Just d.id /= space.parent
        , not (descendsFrom ctx.spaces space.id d.id)
        , mayMoveSpace who grants chain (Just (chainOf ctx d.id))

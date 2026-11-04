@@ -2,7 +2,10 @@
 
 -- | The permissions view: who may do what on a space (decision 9 of the
 -- plan). The space's view shows it, when opened, to someone who may
--- administer the space. It shows whether the space is public; the grants
+-- administer the space. It shows whether the space is public; for a
+-- subspace, whether it is private from the space above it
+-- ('Wiki.Core.Space.sealed'), in which case the grants it inherits are
+-- shown as not counting in it; the grants
 -- on it, which can be revoked; the grants it inherits from the spaces
 -- above it, with the space they are on, where they are changed; and a
 -- form that grants a user or a group a permission on it.
@@ -43,8 +46,8 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId (..), UserId (..))
-import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering)
-import Wiki.Core.Space (Space (id, name, public))
+import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering, sealedChain)
+import Wiki.Core.Space (Space (id, name, parent, public, sealed))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 
 -- | The permissions view's input: the space, as the space's view has it.
@@ -78,6 +81,7 @@ data Action
   | Retry
   | Followed (Follow Route)
   | TogglePublic
+  | ToggleSealed
   | ChooseWho Int
   | ChooseWhat Int
   | Grant
@@ -121,6 +125,22 @@ component =
             </button>
             <p class="permissions-intro">{{ publicText }}</p>
           </div>
+          {% if isJust space.parent %}
+            <div class="permissions-sealed">
+              <button
+                type="button"
+                role="switch"
+                class="switch sealed-switch"
+                aria-checked={{ ariaBool space.sealed }}
+                aria-label={{ space.name <> " is private from the space above it" }}
+                disabled={{ st.busy }}
+                onClick={{ const ToggleSealed }}
+              >
+                Make private
+              </button>
+              <p class="permissions-intro">{{ sealedText }}</p>
+            </div>
+          {% end %}
           {{ errorView <$> st.problem }}
           {{ body }}
         </section>
@@ -131,6 +151,10 @@ component =
         publicText
           | space.public = "Anyone may read this space and its subspaces, signed in or not. The grants below say who may do more."
           | otherwise = "Only the wiki's administrators, and those granted it below, may read this space."
+        sealedText :: Text
+        sealedText
+          | space.sealed = "Private: readers of the parent space do not see this space, only those granted here. The grants above do not count in it."
+          | otherwise = "Make private: readers of the parent space do not see this space, only those granted here."
         body = case st.loaded of
           Loading -> [hh|<p class="loading">Loading…</p>|]
           Failed e -> failureView e Retry
@@ -166,12 +190,14 @@ component =
     grantRow :: State -> SpaceAccess -> SpaceGrant -> H.ComponentHTML Action Empty m
     grantRow st access g =
       [hh|
-        <tr class="grant-row{% if inherited %} grant-inherited{% end %}" data-subject={{ subjectKey access g.subject }} data-permission={{ permissionKey g.permission }}>
+        <tr class="grant-row{% if inherited %} grant-inherited{% end %}{% if cut %} grant-cut{% end %}" data-subject={{ subjectKey access g.subject }} data-permission={{ permissionKey g.permission }}>
           <td class="grant-who">{{ subjectName access g.subject }}</td>
           <td class="grant-what">{{ permissionName g.permission }}</td>
           <td class="grant-where">{{ origin }}</td>
           <td class="grant-revoke-cell">
-            {% if inherited %}
+            {% if cut %}
+              <span class="admin-note grant-cut-note">Does not count here: this space is private from the spaces above it.</span>
+            {% elif inherited %}
               <span class="admin-note">Inherited: changed there.</span>
             {% elif locks %}
               <span class="admin-note grant-self">That is how you administer this space: another administrator can change it.</span>
@@ -193,6 +219,9 @@ component =
         ctx = st.input.context
         space = st.input.space
         inherited = g.space /= space.id
+        -- A grant above the last sealed space of the chain does not count
+        -- in this space ('sealedChain').
+        cut = g.space `notElem` map (\s -> s.id) (sealedChain (chainOf ctx space.id))
         locks = not (keepsAdministering (principalOf ctx) (grantsOf ctx) (chainOf ctx space.id) g)
         origin = case find (\s -> s.id == g.space) (chainOf ctx space.id) of
           Just s
@@ -244,6 +273,9 @@ component =
       TogglePublic -> do
         space <- gets (\st -> st.input.space)
         change (void <$> setSpacePublic space.id (not space.public))
+      ToggleSealed -> do
+        space <- gets (\st -> st.input.space)
+        change (void <$> setSpaceSealed space.id (not space.sealed))
       ChooseWho n -> modify (\st -> st {who = n})
       ChooseWhat n -> for_ (atMay permissions n) $ \p -> modify (\st -> st {what = p})
       Grant ->

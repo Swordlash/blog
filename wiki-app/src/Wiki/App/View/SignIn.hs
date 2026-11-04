@@ -38,7 +38,9 @@
 -- that requests a reset by mail with a login or an e-mail address; the
 -- answer is the same whether or not that matches anyone. The account panel
 -- ends with the account's security ("Wiki.App.View.Security": sessions,
--- the second factor, the e-mail address).
+-- the second factor, the e-mail address) and the switch of the user's
+-- personal space ("Wiki.App.View.PersonalSpace"), which tells the shell
+-- when the spaces are to be listed again ('SpacesChanged').
 --
 -- Signing in or out tells the shell the new session ('AccountChanged'),
 -- which reloads everything as that user. The shell can also open the form
@@ -92,13 +94,14 @@ import Wiki.Api.Security (resetLifetime)
 import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passkeyErrorText, passwordErrorText, signInErrorText)
 import Wiki.App.Assistant (MonadAssistant (..), PasskeyRefusal (..))
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend (Session (..), WikiError (..))
+import Wiki.App.Backend (MonadWiki, Session (..), WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.Security (MonadSecurity)
-import Wiki.App.View.Common (ariaBool, errorMessage)
+import Wiki.App.View.Common (ViewOutput, ariaBool, errorMessage)
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
+import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Permission (Grants (..))
@@ -117,8 +120,13 @@ data Input m = Input
 -- | Open the form, with the reason.
 data Query a = Prompt Text a
 
--- | Someone signed in or out: the new session.
-newtype Output = AccountChanged Session
+-- | What the sign-in control tells the shell.
+data Output
+  = -- | Someone signed in or out: the new session.
+    AccountChanged Session
+  | -- | The user turned their personal space on or off: the spaces are
+    -- to be listed again.
+    SpacesChanged
 
 -- | Which step of signing in the form is at.
 data Step
@@ -130,7 +138,7 @@ data Step
     AtReset
   deriving stock (Eq)
 
-type Slots = ("security" .== H.Slot (Const Void) Void ()) .+ ("notifications" .== H.Slot (Const Void) Void ())
+type Slots = ("security" .== H.Slot (Const Void) Void ()) .+ ("notifications" .== H.Slot (Const Void) Void ()) .+ ("personal" .== H.Slot (Const Void) ViewOutput ())
 
 data State m = State
   { input :: Input m
@@ -203,8 +211,9 @@ data Action
   | TypedRepeat Text
   | SavePassword
   | Followed (Follow Route)
+  | FromPersonal
 
-component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m, MonadAssistant m, MonadVault m) => H.Component Query (Input m) Output m
+component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadWiki m, MonadSecurity m, MonadNotifications m, MonadAssistant m, MonadVault m) => H.Component Query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -428,6 +437,11 @@ component =
           <h2>How you sign in</h2>
           {{ body }}
           {{ HH.slot_ "security" () SecurityView.component () }}
+          <section class="account-personal" aria-label="Personal space">
+            <h3>Personal space</h3>
+            <p class="account-note">A space of your own, under User subspaces, which you administer.</p>
+            {{ HH.slot "personal" () PersonalSpaceView.component PersonalSpaceView.Input {user = (\u -> u.id) <$> st.input.session.user} (const FromPersonal) }}
+          </section>
           <section class="account-notifications" aria-label="Notifications">
             <h3>Notifications</h3>
             {{ HH.slot_ "notifications" () NotificationSettingsView.component () }}
@@ -537,6 +551,7 @@ component =
       Followed f -> do
         modify (\st -> st {accountOpen = False})
         gets (\st -> st.input.router) >>= (`Router.follow` f)
+      FromPersonal -> H.raise SpacesChanged
       Toggle ->
         gets (\st -> st.open) >>= \case
           True -> close

@@ -6,6 +6,11 @@
 -- page with its space's name, in the order they were starred. A page's
 -- "Star" button ("Wiki.App.View.Star") adds a page to the list.
 --
+-- Above the stars is "Your space", a link to the user's personal space
+-- ('Wiki.Core.Space.owner'), while they have one turned on (WP5.54). It is
+-- no star: it is found among the spaces the shell has listed, which hold
+-- the personal space while it is on.
+--
 -- The list is fetched each time it opens, so that a page starred since is
 -- in it. The HTTP backend caches the list and puts the answer to each
 -- star in its cache, so opening the list usually asks the server nothing.
@@ -24,12 +29,14 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Stars (StarredPage (..))
-import Wiki.App.Backend (WikiError)
+import Wiki.App.Backend (Session (..), WikiError)
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Notification (PageLocation (..))
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (active, id, name, owner))
+import Wiki.Core.Space qualified as S
+import Wiki.Core.User (User (..))
 
 newtype Input = Input {context :: Context}
 
@@ -70,11 +77,30 @@ component =
           {% if st.open %}
             <section class="starred-panel" aria-label="Starred pages">
               <h2>Starred</h2>
+              {{ ownView st }}
               {{ listView st }}
             </section>
           {% end %}
         </div>
       |]
+
+    -- The user's personal space, when it is on: a fixed entry, not a
+    -- star, above the starred pages.
+    ownView :: State -> Maybe (H.ComponentHTML Action Empty m)
+    ownView st =
+      ownSpace ctx <&> \own ->
+        [hh|
+          <ul class="starred-list">
+            <li class="starred-item starred-own">
+              <a class="starred-link starred-own-link" {{ Router.linkProps ctx.router Followed (Space (spacePathOf ctx.spaces own.id)) }}>
+                <span class="starred-title">Your space</span>
+                <span class="starred-space">{{ own.name }}</span>
+              </a>
+            </li>
+          </ul>
+        |]
+      where
+        ctx = st.input.context
 
     listView :: State -> H.ComponentHTML Action Empty m
     listView st = case st.stars of
@@ -124,3 +150,9 @@ component =
     reload = do
       stars <- lift starred
       modify (\st -> st {stars = Just stars})
+
+-- | The signed-in user's personal space, if it is on and listed.
+ownSpace :: Context -> Maybe S.Space
+ownSpace ctx = do
+  u <- ctx.session.user
+  find (\s -> s.owner == Just u.id && s.active) ctx.spaces

@@ -173,6 +173,7 @@ import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.Page qualified as PageView
+import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Reset qualified as ResetView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
@@ -271,6 +272,7 @@ data ViewSlot
   | UsersSlot
   | GroupsSlot
   | StatusSlot
+  | PersonalSpaceSlot
   deriving stock (Eq, Ord)
 
 -- | 'PartSlot' is the index of a child under the label "part". The output
@@ -678,6 +680,9 @@ component =
               {% if isJust st.session.user %}
                 <li class="user-menu-account">
                   <button type="button" class="demo-account-toggle" onClick={{ const ToggleDemoAccount }}>Your account…</button>
+                </li>
+                <li class="user-menu-personal">
+                  {{ HH.slot "view" PersonalSpaceSlot PersonalSpaceView.component PersonalSpaceView.Input {user = (\u -> u.id) <$> st.session.user} FromView }}
                 </li>
                 <li class="user-menu-assistant">
                   <a class="assistant-settings-entry" {{ Router.linkProps st.router Followed AssistantSettings }}>Assistant</a>
@@ -1249,6 +1254,8 @@ component =
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
+      -- The user turned their personal space on or off.
+      FromAccount SignInView.SpacesChanged -> reload Nothing
       -- The session ended by itself (or changed elsewhere): reload
       -- everything as the current user, and if that is nobody, show the way
       -- to sign in again, saying why.
