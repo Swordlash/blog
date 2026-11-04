@@ -333,6 +333,13 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-bootstrap.sh
 
+    # The deploy's check of the TeX the PDF exports need, against fake
+    # engines (working, failing, hanging, none): ten seconds, and
+    # independent of the runner's own TeX.
+    - name: Test check-tex.sh
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-check-tex.sh
+
     # The two database groups use separate hosted VMs. Only PostgreSQL
     # needs a container; unit and SQLite never start or discover a cluster.
     - name: Start PostgreSQL for the tests

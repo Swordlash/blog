@@ -72,6 +72,23 @@ expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
   mode=static way=proxy port=8090 semaphore=on
 pass 'the build semaphore: --semaphore or --no-semaphore for a server that is built, nothing for the probe'
 
+# The TeX of the PDF exports: the TeX on this machine is the deploy's
+# default and takes no option, TeX Live under the toolchain is --texlive
+# (with --texlive-mirror when a mirror is given, and only then), none is
+# --no-texlive. A mirror without TeX Live is not given, and the demo,
+# which makes no PDFs, gets none of them.
+expect 'sh toolchain/deploy-local.sh --server --sqlite --texlive --texlive-mirror https://ctan.example/tex-archive --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite texlive=toolchain texlive_mirror=https://ctan.example/tex-archive way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --server --sqlite --texlive --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite texlive=toolchain way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --server --sqlite --no-texlive --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite texlive=none texlive_mirror=https://ctan.example way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite texlive=machine texlive_mirror=https://ctan.example way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
+  mode=static texlive=toolchain texlive_mirror=https://ctan.example way=proxy port=8090
+pass 'the PDF exports: nothing for this machine'"'"'s TeX, --texlive with its mirror, --no-texlive, nothing for the demo'
+
 # The demo, downloaded at a tag, over plain HTTP everywhere, under a prefix
 # with a space: no server option (the deploy refuses them for the demo),
 # and the prefix quoted.
@@ -123,6 +140,23 @@ expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/wiki --no-backen
   "prefix=$TMP/srv/wiki" backend_only= tls_ca=
 pass 'a dropped download and a dropped authority are forgotten with --no-backend-only and --tls-ca='
 
+# The TeX of the PDF exports from the state: TeX Live under the toolchain
+# (texlive=yes) is --texlive, with its remembered mirror; choosing this
+# machine's TeX over it gives --no-texlive, which forgets it; a remembered
+# no (texlive=no) is none, --no-texlive again.
+mkdir -p "$TMP/srv/tex/state"
+printf 'name=wiki-demo\ndir=%s/srv/tex\nport=8090\nmode=server\nadmin_port=8091\nway=proxy\ndb=sqlite\ntexlive=yes\ntexlive_dir=%s/srv/tex/toolchain/.wiki-toolchain/texlive/2026\ntexlive_mirror=https://ctan.example\n' "$TMP" "$TMP" >"$TMP/srv/tex/state/wiki-demo.state"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/tex --sqlite --texlive --texlive-mirror https://ctan.example --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/tex"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/tex --sqlite --no-texlive --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/tex" texlive=machine
+sed -i 's/^texlive=yes$/texlive=no/' "$TMP/srv/tex/state/wiki-demo.state"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/tex --sqlite --no-texlive --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/tex"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/tex --sqlite --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/tex" texlive=machine
+pass 'the PDF exports from the state: texlive=yes is --texlive with its mirror, and this machine'"'"'s TeX over it is --no-texlive'
+
 # The status and the stop of that deployment name it, and nothing else.
 expect "sh toolchain/deploy-local.sh --status --prefix $TMP/srv/wiki" action=status "prefix=$TMP/srv/wiki"
 expect "sh toolchain/deploy-local.sh --stop --name team" action=stop name=team
@@ -164,8 +198,10 @@ expect "sh toolchain/deploy-local.sh --server --prefix $TMP/mnt/deployments/wiki
 pass 'paths are resolved by realpath -m: links before .., also after a missing directory and its ..'
 
 # Answers the deploy would refuse are refused: a port under 1024, two
-# listeners on one port, a certificate without its key, an unknown key.
-for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue' 'semaphore=yes'; do
+# listeners on one port, a certificate without its key, an unknown key or
+# value, a CTAN mirror that is not an http:// or https:// URL.
+for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue' 'semaphore=yes' \
+  'texlive=yes' 'texlive=toolchain texlive_mirror=ftp://ctan.example' 'texlive=toolchain texlive_mirror=https://'; do
   # shellcheck disable=SC2086 # the answers are words.
   printf '%s\n' $answers >"$TMP/answers"
   if "$WIZARD" --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err"; then

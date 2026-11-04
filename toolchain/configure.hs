@@ -39,15 +39,15 @@ ghc-options: -threaded
 --
 -- The screens: what to do (deploy, --status or --stop) and which deployment
 -- (--name, --prefix); what to deploy (--server or --static); where the
--- page comes from (built here, or --backend-only); the database (server
--- only); how it is reached (the ways of HTTPS, or plain HTTP); the address
--- (port, bind address, admin port); the extras. The answers start from the
--- deployment's state file, found by prefix and name as the deploy finds it,
--- so that a rerun is Enter through every screen. The last screen shows the
--- command line: Enter runs it (the wizard replaces itself with
--- /bin/sh toolchain/deploy-local.sh, so the deploy's output reaches the
--- terminal and its exit status is the wizard's), and q quits and prints the
--- command line for copying.
+-- page comes from (built here, or --backend-only); the database and the
+-- TeX of the PDF exports (server only); how it is reached (the ways of
+-- HTTPS, or plain HTTP); the address (port, bind address, admin port); the
+-- extras. The answers start from the deployment's state file, found by
+-- prefix and name as the deploy finds it, so that a rerun is Enter through
+-- every screen. The last screen shows the command line: Enter runs it (the
+-- wizard replaces itself with /bin/sh toolchain/deploy-local.sh, so the
+-- deploy's output reaches the terminal and its exit status is the
+-- wizard's), and q quits and prints the command line for copying.
 --
 -- With --args-from FILE the wizard shows no screens: it reads answers from
 -- FILE, prints the command line it would run, and exits. The tests use it
@@ -60,6 +60,7 @@ ghc-options: -threaded
 -- >   action=deploy|status|stop     name=NAME             prefix=DIR
 -- >   mode=server|static            backend_only=|head|REF
 -- >   db=postgres|sqlite            db_port=N
+-- >   texlive=machine|toolchain|none  texlive_mirror=URL
 -- >   way=tailscale|cert|proxy|http tls_cert=FILE  tls_key=FILE  tls_ca=FILE
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
 -- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
@@ -67,7 +68,10 @@ ghc-options: -threaded
 --
 -- backend_only is empty for a page built here, head for the page of the
 -- checkout's commit, or a REF (main, a tag, a commit hash), as the state
--- file keeps it. Answers that the deploy would refuse are printed on
+-- file keeps it. texlive is the TeX of the PDF exports: the TeX on this
+-- machine (no option), TeX Live under the toolchain (--texlive, with
+-- --texlive-mirror when a mirror is given) or none (--no-texlive). Answers
+-- that the deploy would refuse are printed on
 -- standard error, and the wizard exits 1.
 --
 -- Every option of deploy-local.sh's header but --force (which does
@@ -158,6 +162,13 @@ data Page = BuiltHere | Downloaded
 data Database = Postgres | Sqlite
   deriving (Eq, Ord, Show)
 
+-- | The TeX that makes the server's PDF exports: the TeX on this machine,
+-- checked at the deploy (no option); TeX Live installed under the
+-- toolchain directory (--texlive); or none (--no-texlive). The state file
+-- keeps the choice as texlive=yes or texlive=no, and nothing for the first.
+data TexChoice = MachineTex | ToolchainTex | NoTex
+  deriving (Eq, Ord, Show)
+
 -- | Whether the server's build uses cabal's build semaphore: as
 -- toolchain/check-semaphore.sh finds (the deploy's default), always
 -- (--semaphore), or never (--no-semaphore). The deploy does not remember
@@ -186,6 +197,8 @@ data Answers = Answers
   , database :: Database
   , dbPort :: Text
   , fresh :: Bool
+  , tex :: TexChoice
+  , texMirror :: Text
   , way :: Way
   , tlsCert :: Text
   , tlsKey :: Text
@@ -200,6 +213,7 @@ data Answers = Answers
   , enableLinger :: Bool
   , rememberedDownload :: Bool
   , rememberedCa :: Bool
+  , rememberedTexLive :: Bool
   }
   deriving (Eq, Show)
 
@@ -217,6 +231,8 @@ defaultAnswers =
     , database = Postgres
     , dbPort = "5433"
     , fresh = False
+    , tex = MachineTex
+    , texMirror = ""
     , way = Tailscale
     , tlsCert = ""
     , tlsKey = ""
@@ -231,6 +247,7 @@ defaultAnswers =
     , enableLinger = False
     , rememberedDownload = False
     , rememberedCa = False
+    , rememberedTexLive = False
     }
 
 -- | The answers a deployment's state file gives: what the deploy would
@@ -244,6 +261,11 @@ fromState kv a =
     , pageRef = if backendOnly == "head" then "" else backendOnly
     , database = if value "db" == "sqlite" then Sqlite else Postgres
     , dbPort = orKeep (dbPort a) (value "db_port")
+    , tex = case value "texlive" of
+        "yes" -> ToolchainTex
+        "no" -> NoTex
+        _ -> MachineTex
+    , texMirror = value "texlive_mirror"
     , way = remembered
     , tlsCert = if remembered == Certificate then value "tls_cert" else ""
     , tlsKey = if remembered == Certificate then value "tls_key" else ""
@@ -256,6 +278,7 @@ fromState kv a =
     , toolchain = value "toolchain"
     , rememberedDownload = not (T.null backendOnly)
     , rememberedCa = remembered == Certificate && not (T.null (value "tls_ca"))
+    , rememberedTexLive = value "texlive" == "yes"
     }
   where
     -- As state_get: the last line of the key wins.
@@ -285,6 +308,8 @@ applyAnswer a (key, v) = case key of
     | otherwise -> Right a {page = Downloaded, pageRef = v}
   "db" -> pick (\x -> a {database = x}) [("postgres", Postgres), ("sqlite", Sqlite)]
   "db_port" -> Right a {dbPort = v}
+  "texlive" -> pick (\x -> a {tex = x}) [("machine", MachineTex), ("toolchain", ToolchainTex), ("none", NoTex)]
+  "texlive_mirror" -> Right a {texMirror = v}
   "way" ->
     pick
       (\x -> a {way = x})
@@ -344,6 +369,7 @@ deployArgs a = case action a of
       , which
       , pageArgs
       , if server then databaseArgs else []
+      , if server then texArgs else []
       , wayArgs
       , option "--port" (port a)
       , if way a `elem` [PlainHttp, Certificate] then option "--bind" (bind a) else []
@@ -370,6 +396,13 @@ deployArgs a = case action a of
           Sqlite -> ["--sqlite"]
       )
         ++ flag "--fresh" (fresh a)
+    -- The TeX on this machine is the deploy's default, so it takes no
+    -- option, unless the state remembers TeX Live under the toolchain,
+    -- which --no-texlive forgets.
+    texArgs = case tex a of
+      MachineTex -> flag "--no-texlive" (rememberedTexLive a)
+      ToolchainTex -> "--texlive" : option "--texlive-mirror" (texMirror a)
+      NoTex -> ["--no-texlive"]
     semaphoreArgs = case semaphore a of
       Probe -> []
       SemaphoreOn -> ["--semaphore"]
@@ -406,6 +439,12 @@ problems a =
               , dbPort a `elem` [port a, adminPort a]
               ]
             , ["A certificate needs its file." | way a == Certificate, T.null (tlsCert a)]
+            , [ "The CTAN mirror is an http:// or https:// URL, without spaces or quotes."
+              | server
+              , tex a == ToolchainTex
+              , not (T.null (texMirror a))
+              , not (validMirror (texMirror a))
+              ]
             , ["A certificate needs its key's file (the same file when one .pem holds both)." | way a == Certificate, T.null (tlsKey a)]
             ]
         _ -> []
@@ -417,6 +456,10 @@ problems a =
       | T.all isDigit v && not ("0" `T.isPrefixOf` v) && T.length v <= 5 && within (read (T.unpack v) :: Int) = []
       | otherwise = [what <> " is a number from 1024 to 65535."]
     within n = n >= 1024 && n <= 65535
+    -- As the deploy checks --texlive-mirror.
+    validMirror m =
+      any (\scheme -> scheme `T.isPrefixOf` m && T.length m > T.length scheme) ["http://", "https://"]
+        && not (T.any (\c -> c `elem` ("\"'\\`$" :: String) || c == ' ' || c == '\t' || c == '\n') m)
     validName n =
       not (T.null n)
         && not ("." `T.isPrefixOf` n)
@@ -556,6 +599,8 @@ data Name
   | DatabaseChoice Database
   | DbPortField
   | FreshField
+  | TexChoiceName TexChoice
+  | MirrorField
   | WayChoice Way
   | CertField
   | KeyField
@@ -582,7 +627,7 @@ screenTitle s = case s of
     )
   What -> ("What to deploy", "The wiki's server, or the demo that keeps its wiki in the browser.")
   PageSource -> ("Where the page comes from", "The page is the application the browser runs, compiled to WebAssembly.")
-  DatabaseScreen -> ("The database", "Where the wiki's server keeps the wiki.")
+  DatabaseScreen -> ("The database and PDFs", "Where the wiki's server keeps the wiki, and the TeX that makes its PDF exports.")
   Reach -> ("How it is reached", "HTTPS one of three ways, or plain HTTP. The ways exclude each other.")
   Address -> ("The address", "Where the server listens on this machine.")
   Extras -> ("The rest", "Options most deployments leave alone.")
@@ -680,6 +725,29 @@ fieldsFor s a = case s of
              freshL
              FreshField
              "--fresh  move an unusable database file aside"
+         ]
+      ++ [ choice
+             "PDF exports"
+             ( case tex a of
+                 MachineTex ->
+                   "The xelatex the service finds on its PATH (the systemd user manager's, not your shell's), checked at the deploy by typesetting a small document under the export's limits. When there is none, or it fails (TeX Live 2020 and older loop on unicode-math's table), the deploy asks whether to install TeX Live under the toolchain, unless an earlier deploy was told no (--no-texlive, or no at its question)."
+                 ToolchainTex ->
+                   "TeX Live installed under the toolchain directory (.wiki-toolchain/texlive) from a CTAN mirror, about 250 MB and a few minutes, when the TeX the service finds does not work; one installed there already is checked and used. Its installer needs perl, curl and tar. The unit puts its bin directory first on the service's PATH."
+                 NoTex ->
+                   "No TeX Live is installed. The server makes PDFs only with a TeX of this machine's that works; otherwise it offers no PDFs, and its administration's Server section says why."
+             )
+             texL
+             [ (MachineTex, TexChoiceName MachineTex, "the TeX on this machine, checked at the deploy")
+             , (ToolchainTex, TexChoiceName ToolchainTex, "--texlive  TeX Live under the toolchain, from a CTAN mirror")
+             , (NoTex, TexChoiceName NoTex, "--no-texlive  none")
+             ]
+         ]
+      ++ [ text
+             "--texlive-mirror"
+             "The CTAN mirror TeX Live is downloaded from, through the proxy https_proxy names, if any. Empty: https://mirror.ctan.org, which redirects to a mirror near you."
+             texMirrorL
+             MirrorField
+         | tex a == ToolchainTex
          ]
   Reach ->
     [ choice
@@ -810,11 +878,12 @@ framed title help w =
 actionL :: Lens' Answers Action
 actionL = lens action (\a v -> a {action = v})
 
-nameL, prefixL, pageRefL, dbPortL, tlsCertL, tlsKeyL, tlsCaL, portL, bindL, adminPortL, toolchainL :: Lens' Answers Text
+nameL, prefixL, pageRefL, dbPortL, texMirrorL, tlsCertL, tlsKeyL, tlsCaL, portL, bindL, adminPortL, toolchainL :: Lens' Answers Text
 nameL = lens name (\a v -> a {name = v})
 prefixL = lens prefix (\a v -> a {prefix = v})
 pageRefL = lens pageRef (\a v -> a {pageRef = v})
 dbPortL = lens dbPort (\a v -> a {dbPort = v})
+texMirrorL = lens texMirror (\a v -> a {texMirror = v})
 tlsCertL = lens tlsCert (\a v -> a {tlsCert = v})
 tlsKeyL = lens tlsKey (\a v -> a {tlsKey = v})
 tlsCaL = lens tlsCa (\a v -> a {tlsCa = v})
@@ -831,6 +900,9 @@ pageL = lens page (\a v -> a {page = v})
 
 databaseL :: Lens' Answers Database
 databaseL = lens database (\a v -> a {database = v})
+
+texL :: Lens' Answers TexChoice
+texL = lens tex (\a v -> a {tex = v})
 
 wayL :: Lens' Answers Way
 wayL = lens way (\a v -> a {way = v})
@@ -871,8 +943,8 @@ formFor s a = newForm (fieldsFor s a') a' where a' = normalise a
 
 -- | What decides which fields a screen shows, and the help of its
 -- choices: when an event changes it, the form is built again.
-shape :: Answers -> (Action, Mode, Page, Database, Way)
-shape a = (action a, mode a, page a, database a, way a)
+shape :: Answers -> (Action, Mode, Page, Database, TexChoice, Way)
+shape a = (action a, mode a, page a, database a, tex a, way a)
 
 answers :: Wizard -> Answers
 answers = formState . form
