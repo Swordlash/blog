@@ -139,9 +139,9 @@ withServerUsing given raw sendMail action = do
   exports <- newExports
   -- The TeX engine, tried once before anything is served, so that the
   -- first session already offers the PDFs or not (WP5.56 of docs/PLAN.md).
-  -- A working engine takes a fraction of a second; a broken one is given
-  -- up after a minute at most.
-  texEngine <- newEngine options.texProbeTimeout
+  -- A working engine takes a second or two; a broken one is given up
+  -- after 20 seconds at most. With --no-pdf it is not tried at all.
+  texEngine <- newEngine options.pdf options.texProbeTimeout
   feeds <- newFeedCache
   -- A data directory another server has open is a configuration this one
   -- cannot run with, reported like the others.

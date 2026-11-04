@@ -573,7 +573,9 @@ made a PDF. A PDF asked for otherwise is 400, with one sentence:
 `PDF needs xelatex, which this server's machine does not have.` where it
 was not found, and `PDF needs xelatex, which was found at <path> but does not
 work on this server; the administration's Server section shows why.` where it
-failed. So is a presentation of a page that is not a deck, or of a space,
+failed. A server started with `--no-pdf` does not try it and never lists the
+PDFs; a PDF asked for there is 400 with `PDF exports are off on this server
+(its --no-pdf option).` So is a presentation of a page that is not a deck, or of a space,
 and a document pandoc or TeX could not make, with their reason. Whoever may
 read the page (view the space) may export it. A PDF (`pdf`, `beamer-pdf`)
 is answered `inline` and every other format as an `attachment`
@@ -1203,7 +1205,7 @@ redirect URI.
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/admin/tex-engine` | | `TexEngine` `{"status", "path", "output", "checkedAt"}`: what the server found when it last tried `xelatex` | 403 | `texEngine` |
-| POST | `api/v1/admin/tex-engine/check` | | `TexEngine` as the server finds it now | 403 | `checkTexEngine` |
+| POST | `api/v1/admin/tex-engine/check` | | `TexEngine` as the server finds it now; with `--no-pdf`, the `off` it started with, without trying anything | 403 | `checkTexEngine` |
 
 The PDF exports ([Documents](#documents)) need `xelatex`, and finding it is
 not enough: on a machine where its format file is missing, or where the
@@ -1212,14 +1214,20 @@ every PDF fails. So the server tries it (WP5.56, `Wiki.Api.Admin.TexEngine`):
 when it starts, logged as the event `tex-engine` with its `status` and
 `path`, and again at each `check`. It looks for `xelatex` on its `PATH` and
 typesets a one-line document with it in a temporary directory, with the
-limits an export has, for a minute at most: one that loads what pandoc's
+limits an export has, for 20 seconds at most: one that loads what pandoc's
 LaTeX template loads for `xelatex` (fontspec, unicode-math, Latin Modern) and
 sets a formula, since that is where an old or odd installation fails (a TeX
 Live older than 2021 refuses unicode-math's table under the limits, then
 loops). An engine that runs out of time is killed with every process it
 started. `status` is `working` (it made a
-PDF), `failing` (it was found and did not) or `not-found`; `path` is where it
-was found (`null` when it was not); `output` is, for `failing` only, a
+PDF), `failing` (it was found and did not), `not-found`, or `off` (WP5.61):
+the server was started with `--no-pdf`, which the deploy sets when it finds
+no `xelatex` that works and installs none, and neither looks for the engine
+nor offers the PDFs. `off` has `path` and `output` `null`, `checkedAt` the
+time the server started, and is logged as `tex-engine` with `status=off`; a
+`check` then tries nothing and answers the same `off` with 200, not an
+error, since the server's state is what was asked for. `path` is where it
+was found (`null` when it was not, or not looked for); `output` is, for `failing` only, a
 first line that says how it ended, then what it wrote on its error output
 (kpathsea's refusals) and the errors its log names, or else the end of its
 log or of what it printed, 2000 characters at most; `checkedAt` is when it was tried. The session's `exports` offer the

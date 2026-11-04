@@ -18,7 +18,9 @@
 # made with --prefix is named the same way here: nothing in the home
 # directory remembers it. The toolchain the deploy built with stays, and
 # with it the TeX Live the deploy may have installed for the PDF exports
-# (<toolchain>/.wiki-toolchain/texlive): another deployment may use them,
+# (<toolchain>/.wiki-toolchain/texlive), and the Perl it may have built for
+# TeX Live's installer (<toolchain>/.wiki-toolchain/perl): another
+# deployment may use them,
 # and a later deploy reuses them. Only --purge of a deployment under a
 # prefix whose toolchain is <prefix>/toolchain deletes them, with the rest
 # of the prefix.

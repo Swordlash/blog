@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The server is told when the TeX is off (WP5.61). The administration's
+Server section shows a fourth state of the TeX engine, `off`: PDF exports
+are off because the server runs with `--no-pdf`, which the deploy sets when
+it finds no `xelatex` that works and installs none, and `sh
+toolchain/deploy-local.sh --server --texlive` turns them on by installing
+TeX Live under the toolchain. There is no "Check again" in that state.
+
 The assistant's addresses come from the server (WP5.60). The
 administration's Server section lists "The assistant's services", each a
 name, a base URL and the API it speaks, added, changed and removed as the

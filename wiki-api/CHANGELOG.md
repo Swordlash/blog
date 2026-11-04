@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The server is told when the TeX is off (WP5.61). `TexStatus` gains
+`TexOff`, JSON `off`: the status of a server started with `--no-pdf`,
+which neither tries its TeX engine nor offers the PDFs; its `TexEngine` has
+no `path` or `output`, and `checkedAt` is when the server started. A client
+that reads the status should expect the fourth value.
+
 Exports that say what went wrong (WP5.56). `AdminApi` gains
 `texEngine`, `GET admin/tex-engine`, and `checkTexEngine`, `POST
 admin/tex-engine/check`, both answering a `TexEngine` (`Wiki.Api.Admin`:

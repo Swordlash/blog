@@ -9,6 +9,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
+import Wiki.Api.Admin (TexStatus)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetToken (..), TotpEnrolment (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.Types (SessionInfo (..), SpaceName (..))
@@ -47,6 +48,7 @@ spec = describe "JSON" $ do
   roundTrips "ImportPlan" genImportPlan
   roundTrips "ImportChoices" genImportChoices
   roundTrips "ImportSummary" genImportSummary
+  roundTrips "TexStatus" (arbitraryBoundedEnum :: Gen TexStatus)
 
   it "writes a body of one field as an object, not as the bare value" $
     toJSON (SpaceName "Team") `shouldBe` object ["name" .= ("Team" :: Text)]

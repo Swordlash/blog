@@ -88,6 +88,13 @@ rules = describe "a configuration" $ do
       _ -> expectationFailure "--no-guide was not taken"
     options.guide `shouldBe` True
 
+  it "makes PDFs unless told --no-pdf" $ do
+    let parsed = execParserPure defaultPrefs (info serveOptions mempty)
+    case (parsed ["--data", "data"], parsed ["--data", "data", "--no-pdf"]) of
+      (Success with, Success without) -> (with.pdf, without.pdf) `shouldBe` (True, False)
+      _ -> expectationFailure "--no-pdf was not taken"
+    options.pdf `shouldBe` True
+
   it "has no options for mail, the public address or providers, which the administration sets, and says so" $ do
     let parsed = execParserPure defaultPrefs (info serveOptions mempty)
     for_ [["--smtp-host", "mail.example.org"], ["--public-url", "https://wiki.example.org/"], ["--oidc", "google=google,id"], ["--smtp-from", "w@example.org"]] $ \args ->

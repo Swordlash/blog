@@ -134,25 +134,31 @@ data LoggedError = LoggedError
 -- sees another TeX tree than the shell does, @xelatex@ is there and every
 -- PDF fails. So the server offers the PDFs only when the last try made a
 -- PDF.
+--
+-- A server started with @--no-pdf@ tries nothing and offers no PDFs: its
+-- status is @off@, with no path or output, and 'checkedAt' is when it
+-- started. A check answers the same, without trying the engine (WP5.61).
 data TexEngine = TexEngine
   { status :: TexStatus
   , path :: Maybe Text
-  -- ^ Where @xelatex@ was found; 'Nothing' when it was not.
+  -- ^ Where @xelatex@ was found; 'Nothing' when it was not, or not looked
+  -- for (@off@).
   , output :: Maybe Text
   -- ^ What the engine wrote when it failed, at most 2000 characters: a
   -- line that says how it ended (stopped with an exit code, or stopped by
-  -- the server after a minute), what it wrote on its error output, and the
+  -- the server after 20 seconds), what it wrote on its error output, and the
   -- errors its log names or the end of its log. 'Nothing' unless it failed.
   , checkedAt :: UTCTime
-  -- ^ When the server tried it.
+  -- ^ When the server tried it; for @off@, when the server started.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | 'TexStatus' is the outcome of the last try of the TeX engine: it made a
 -- PDF (@working@), it was found and did not (@failing@), or it was not
--- found (@not-found@).
-data TexStatus = TexWorking | TexFailing | TexNotFound
+-- found (@not-found@). @off@ is a server whose PDFs are off by its option
+-- (@--no-pdf@), which does not try the engine at all.
+data TexStatus = TexWorking | TexFailing | TexNotFound | TexOff
   deriving stock (Eq, Show, Enum, Bounded)
 
 instance ToJSON TexStatus where
@@ -160,13 +166,15 @@ instance ToJSON TexStatus where
     TexWorking -> "working"
     TexFailing -> "failing"
     TexNotFound -> "not-found"
+    TexOff -> "off"
 
 instance FromJSON TexStatus where
-  parseJSON = withText "working, failing or not-found" $ \case
+  parseJSON = withText "working, failing, not-found or off" $ \case
     "working" -> pure TexWorking
     "failing" -> pure TexFailing
     "not-found" -> pure TexNotFound
-    other -> fail ("not working, failing or not-found: " <> toS other)
+    "off" -> pure TexOff
+    other -> fail ("not working, failing, not-found or off: " <> toS other)
 
 -- | 'Directory': the response to @GET \/api\/v1\/admin\/directory@. It
 -- holds all of the wiki's users and groups as the administration shows

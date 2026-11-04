@@ -120,7 +120,7 @@ withApiEnv storage test = Ki.scoped $ \resetTasks -> do
   providerCache <- newProviderCache
   events <- newHub
   exports <- newExports
-  texEngine <- newEngine probeTimeout
+  texEngine <- newEngine True probeTimeout
   -- Its thread is not run: these backups are made by nobody.
   backups <- newBackupService (silentLogger (const pass)) "rclone" storage
   resets <- newLimiter defaultLimits

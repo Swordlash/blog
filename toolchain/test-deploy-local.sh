@@ -100,6 +100,18 @@ for cmd in /usr/bin/* /bin/*; do
   if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
   [ -e "$NO_TEX/$name" ] || [ -L "$NO_TEX/$name" ] || ln -s "$cmd" "$NO_TEX/$name"
 done
+# The commands of /usr/bin and /bin but Perl's (perl, perl5.*, perldoc and
+# the rest) and xelatex, as links: the shell's PATH of a machine without
+# Perl, on which the deploy builds one for TeX Live's installer. Those cases
+# run with PATH=$case_dir/bin:$NO_PERL.
+NO_PERL=$TMP/no-perl
+mkdir "$NO_PERL"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  case $name in perl* | xelatex) continue ;; esac
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$NO_PERL/$name" ] || [ -L "$NO_PERL/$name" ] || ln -s "$cmd" "$NO_PERL/$name"
+done
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -159,7 +171,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_TEXLIVE FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT
+    FAKE_TEXLIVE FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL FAKE_PERL_MAKE_FAIL WIKI_DEPLOY_PERL_SHA256
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -169,6 +181,13 @@ fixture() {
 exec "$NODE_REAL" "$@"
 EOF
   chmod +x "$HOME/.wiki-toolchain/node/bin/node"
+  # An xelatex on this shell's PATH, ahead of the host's own: one that
+  # typesets toolchain/check-tex.sh's probe at once, for the item xelatex
+  # of toolchain/check-native.sh, which checks the shell's PATH. The
+  # host's would take seconds, or fail, at every check. The deploy's TeX
+  # step checks the service's PATH (FAKE_SERVICE_PATH), without it.
+  printf '#!/bin/sh\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$case_dir/bin/xelatex"
+  chmod +x "$case_dir/bin/xelatex"
 
   # What the fake cabal builds for wiki-server: it logs how it was called,
   # backs a database up by copying it, and serves with Node, answering the
@@ -482,6 +501,12 @@ case $name in
         if [ -f "$release" ]; then code=200; else code=404; release=/dev/null; fi
         if [ -n "$output" ]; then cat "$release" >"$output"; else cat "$release"; fi
         [ -z "$format" ] || printf '%s' "$code"
+        exit 0 ;;
+      # CPAN: Perl's source is the tarball FAKE_PERL names (none when
+      # unset).
+      https://www.cpan.org/src/5.0/perl-*.tar.gz)
+        [ -n "${FAKE_PERL:-}" ] && [ -f "$FAKE_PERL" ] || { printf 'curl: (22) The requested URL returned error: 404\n' >&2; exit 22; }
+        cp "$FAKE_PERL" "$output"
         exit 0 ;;
       # A CTAN mirror: TeX Live's installer is the tarball FAKE_TEXLIVE
       # names (none when unset).
@@ -1674,7 +1699,9 @@ pass '--bind with another address than 127.0.0.1 implies --http; --https drops a
 fixture native-deps
 out=$case_dir/check
 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail 'the check failed with everything there'
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check did not report nine items ok'
+# Nine items, and the xelatex of the PDF exports, which is not counted.
+[ "$(grep -c '^ok ' "$out")" = 10 ] || fail 'the check did not report nine items and xelatex ok'
+assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
 assert_contains "$out" 'ok       zlib        pkg-config --exists zlib'
 assert_contains "$out" 'ok       libsodium   sodium.h and -lsodium, through cc'
 assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
@@ -1688,7 +1715,7 @@ assert_contains "$out" 'sudo apt-get install zlib1g-dev'
 assert_contains "$out" 'sudo dnf install zlib-devel'
 assert_contains "$out" 'LIBRARY_PATH, C_INCLUDE_PATH, CPATH'
 assert_contains "$out" 'LD_LIBRARY_PATH'
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without zlib did not report the other eight items ok'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without zlib did not report the other eight items and xelatex ok'
 pass 'toolchain/check-native.sh reports each item ok, and names a missing one with its packages and exits 1'
 
 # libpq is found through pg_config on PATH, which postgresql-libpq's build
@@ -1713,7 +1740,7 @@ assert_contains "$out" 'missing  libpq       no pg_config on PATH, though pkg-co
 assert_contains "$out" 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.'
 assert_contains "$out" "PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin"
 assert_contains "$out" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without pg_config did not report the other eight items ok'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without pg_config did not report the other eight items and xelatex ok'
 mkdir -p "$case_dir/pgsql-16/bin"
 ln -s "$case_dir/bin/tool" "$case_dir/pgsql-16/bin/pg_config"
 out=$case_dir/check-pg-config-elsewhere
@@ -1737,7 +1764,7 @@ sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres >"$out" 2>&1 ||
   fail 'the check --without-postgres failed with everything there'
 assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
 assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-postgres did not report eight items ok'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-postgres did not report eight items and xelatex ok'
 assert_lacks "$out" 'missing'
 status=0
 sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=$?
@@ -2707,6 +2734,7 @@ fake_texlive() {
   cat >"$tl/install-tl" <<'TL'
 #!/bin/sh
 printf 'install-tl %s\n' "$*" >>"$EVENTS"
+printf 'install-tl ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS"
 texdir=
 for arg do
   case $arg in --texdir=*) texdir=${arg#--texdir=} ;; esac
@@ -2720,6 +2748,7 @@ mkdir -p "$bin"
 cat >"$bin/tlmgr" <<'TLMGR'
 #!/bin/sh
 printf 'tlmgr %s\n' "$*" >>"$EVENTS"
+printf 'tlmgr ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS"
 [ -z "${FAKE_TLMGR_FAIL:-}" ] || { printf 'tlmgr: package repository unreachable\n' >&2; exit 1; }
 [ "${1:-}" = install ] || exit 0
 for package do
@@ -2737,11 +2766,50 @@ TL
   export FAKE_TEXLIVE
 }
 
+# A perl with the standard modules TeX Live's installer uses, ahead of the
+# host's on PATH, so that the cases that install TeX Live do not depend on
+# what the host's perl has: it answers the deploy's check of the modules.
+usable_perl() {
+  printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/perl"
+  chmod +x "$case_dir/bin/perl"
+}
+# Perl's source as the fake CPAN serves it (FAKE_PERL): perl-5.44.0/ with
+# a Configure that says how it was called and keeps the prefix, and a
+# Makefile whose build says so (and fails with FAKE_PERL_MAKE_FAIL) and
+# whose install writes <prefix>/bin/perl, a script that answers the
+# deploy's check of the modules. WIKI_DEPLOY_PERL_SHA256 is set to the
+# tarball's checksum, as the pinned one is the real tarball's.
+fake_perl_source() {
+  src=$case_dir/perl-source/perl-5.44.0
+  mkdir -p "$src"
+  cat >"$src/Configure" <<'CONFIGURE'
+#!/bin/sh
+printf 'perl Configure %s\n' "$*" >>"$EVENTS"
+for arg do
+  case $arg in -Dprefix=*) printf '%s\n' "${arg#-Dprefix=}" >prefix ;; esac
+done
+CONFIGURE
+  cat >"$src/install.sh" <<'INSTALL'
+#!/bin/sh
+prefix=$(cat prefix)
+mkdir -p "$prefix/bin" "$prefix/lib"
+printf '#!/bin/sh\nexit 0\n' >"$prefix/bin/perl"
+chmod +x "$prefix/bin/perl"
+INSTALL
+  # shellcheck disable=SC2016 # $$EVENTS is make's, for the recipe's shell.
+  printf 'all:\n\t@printf "perl make\\n" >>"$$EVENTS"\n\t@if [ -n "$$FAKE_PERL_MAKE_FAIL" ]; then echo "perl.c: error: the fake build fails"; exit 1; fi\ninstall:\n\t@printf "perl make install\\n" >>"$$EVENTS"\n\t@sh ./install.sh\n' >"$src/Makefile"
+  (cd "$case_dir/perl-source" && tar -czf ../perl-5.44.0.tar.gz perl-5.44.0)
+  FAKE_PERL=$case_dir/perl-5.44.0.tar.gz
+  WIKI_DEPLOY_PERL_SHA256=$(sha256sum "$FAKE_PERL" | cut -d' ' -f1)
+  export FAKE_PERL WIKI_DEPLOY_PERL_SHA256
+}
+
 # No TeX the service finds, and no terminal to ask on: the deploy says so,
 # names --texlive and --no-texlive, installs nothing and remembers no
-# answer; the unit sets no PATH. The xelatex this shell finds (the fake
-# one on the fixture's PATH) is named as the trap it is. --no-texlive is
-# remembered as no, and --status says the PDFs are off.
+# answer; the unit sets no PATH, and runs wiki-server with --no-pdf. The
+# xelatex this shell finds (the fake one on the fixture's PATH) is named
+# as the trap it is. --no-texlive is remembered as no, keeps --no-pdf, and
+# --status says the PDFs are off in the unit.
 fixture tex-none
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
@@ -2752,18 +2820,21 @@ assert_contains "$out" "PDF exports: no xelatex on the service's PATH ($NO_TEX)"
 assert_contains "$out" "this shell finds $case_dir/bin/xelatex, but the service does not"
 assert_contains "$out" "--texlive installs TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org"
 assert_lacks "$HOME/$unit" 'Environment="PATH='
+grep -x 'ExecStart=.* --no-pdf' "$HOME/$unit" >/dev/null || fail 'the unit does not run wiki-server with --no-pdf'
 [ -z "$(state texlive)" ] || fail "an unanswered question was remembered as $(state texlive)"
 [ "$(line_of "$out" 'PDF exports')" -lt "$(line_of "$out" 'building wiki-server at -O2')" ] || fail 'TeX was checked after the build'
 out=$case_dir/no
 deploy --no-texlive --no-build >"$out" 2>&1 || fail 'the deploy with --no-texlive failed'
 [ "$(state texlive)" = no ] || fail "--no-texlive was remembered as '$(state texlive)'"
-assert_contains "$out" 'the server offers no PDFs, and its administration'"'"'s Server section says why (--no-texlive'
+assert_contains "$out" 'the server runs with --no-pdf and offers no PDFs, and its administration'"'"'s Server section says why (--no-texlive'
+assert_contains "$HOME/$unit" ' --no-pdf'
 out=$case_dir/again
 deploy --no-build >"$out" 2>&1 || fail 'the redeploy after --no-texlive failed'
 [ "$(state texlive)" = no ] || fail 'the redeploy forgot --no-texlive'
 assert_contains "$out" '(--no-texlive;'
 deploy --status >"$out" 2>&1 || fail '--status failed'
-assert_contains "$out" "PDF exports: off, no xelatex on the service's PATH ($NO_TEX)"
+assert_contains "$out" 'PDF exports: off in the unit (--no-pdf): the deploy found no xelatex that works and installed none'
+assert_lacks "$out" "no xelatex on the service's PATH"
 assert_contains "$out" 'TeX Live under the toolchain was declined (--no-texlive)'
 if deploy --static --no-texlive >"$out" 2>&1; then fail '--no-texlive was taken for the demo'; fi
 assert_contains "$out" '--texlive, --no-texlive and --texlive-mirror are for the wiki'"'"'s server'
@@ -2771,11 +2842,12 @@ if deploy --texlive --no-texlive >"$out" 2>&1; then fail '--texlive and --no-tex
 if deploy --texlive-mirror ftp://ctan.example >"$out" 2>&1; then fail 'an ftp mirror was taken'; fi
 assert_contains "$out" 'an http:// or https:// URL'
 undeploy >/dev/null 2>&1
-pass 'without a TeX the service finds: said, PDFs off, nothing asked or installed; --no-texlive remembered'
+pass 'without a TeX the service finds: said, PDFs off by --no-pdf in the unit, nothing asked or installed; --no-texlive remembered'
 
 # A TeX of the machine's that works, on the service's PATH: used as it is,
-# with no PATH line in the unit. One that fails (as TeX Live 2020 does) is
-# reported with its reason, and the deploy goes on.
+# with no PATH line and no --no-pdf in the unit. One that fails (as TeX
+# Live 2020 does) is reported with its reason, the unit gets --no-pdf, and
+# the deploy goes on. Working again, the next deploy drops --no-pdf.
 fixture tex-machine
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
@@ -2785,6 +2857,7 @@ out=$case_dir/first
 deploy --server --sqlite --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with a working TeX failed'
 assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works, the TeX on this machine"
 assert_lacks "$HOME/$unit" 'Environment="PATH='
+assert_lacks "$HOME/$unit" '--no-pdf'
 deploy --status >"$out" 2>&1 || fail '--status failed'
 assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works (the TeX on this machine, on the service's PATH)"
 fake_xelatex "$case_dir/tex" failing
@@ -2793,10 +2866,18 @@ deploy --no-build --no-texlive >"$out" 2>&1 || fail 'the deploy with a failing T
 assert_contains "$out" "PDF exports: $case_dir/tex/xelatex does not make the probe's PDF under the export's limits"
 assert_contains "$out" 'Not reading from unicode-math-table.tex (openin_any = p).'
 assert_contains "$out" '(--no-texlive;'
+assert_contains "$HOME/$unit" ' --no-pdf'
 deploy --status >"$out" 2>&1 || fail '--status failed'
-assert_contains "$out" "PDF exports: off, $case_dir/tex/xelatex fails (the TeX on this machine"
+assert_contains "$out" 'PDF exports: off in the unit (--no-pdf)'
+fake_xelatex "$case_dir/tex" working
+out=$case_dir/working-again
+deploy --no-build >"$out" 2>&1 || fail 'the deploy with the TeX working again failed'
+assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works, the TeX on this machine"
+assert_lacks "$HOME/$unit" '--no-pdf'
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works (the TeX on this machine, on the service's PATH)"
 undeploy >/dev/null 2>&1
-pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, its reason said when it fails, and the deploy goes on'
+pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, its reason said and --no-pdf set when it fails, dropped when it works again, and the deploy goes on'
 
 # --texlive: the machine has no TeX the service finds, so TeX Live is
 # installed under the toolchain from the mirror given, through the fake
@@ -2804,13 +2885,15 @@ pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, 
 # sources into .wiki-toolchain/texlive/2026, then tlmgr with the list's
 # packages, then the check with the new bin first. The state keeps the
 # answer, the installation and the mirror; the unit puts its bin first on
-# its PATH; an older year is deleted. A second run checks it and installs
-# nothing; --no-texlive leaves it on disk and drops the PATH line; the
-# undeploy leaves it, and says so.
+# its PATH and does not have --no-pdf; an older year is deleted. A second
+# run checks it and installs nothing; --no-texlive leaves it on disk, drops
+# the PATH line and sets --no-pdf (the service finds no other TeX), which
+# --texlive drops again; the undeploy leaves it, and says so.
 fixture texlive
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 fake_texlive
+usable_perl
 texlive_root=$HOME/.wiki-toolchain/texlive
 mkdir -p "$texlive_root/2025/bin/x86_64-linux"
 out=$case_dir/first
@@ -2819,6 +2902,9 @@ deploy --server --sqlite --port "$p" --admin-port "$a" --texlive --texlive-mirro
 assert_contains "$EVENTS" 'curl https://ctan.example/systems/texlive/tlnet/install-tl-unx.tar.gz'
 assert_contains "$EVENTS" "install-tl --no-interaction --scheme=basic --texdir=$texlive_root/2026 --texuserdir=$texlive_root/user --no-doc-install --no-src-install --repository https://ctan.example/systems/texlive/tlnet"
 assert_contains "$EVENTS" 'tlmgr install xetex fontspec unicode-math lm lm-math '
+assert_contains "$EVENTS" "install-tl ran with perl=$case_dir/bin/perl"
+assert_lacks "$EVENTS" 'perl Configure'
+[ -z "$(state perl_dir)" ] || fail "the machine's perl was remembered as a built one: $(state perl_dir)"
 assert_contains "$EVENTS" ' pgf tikz-cd pgfplots mhchem'
 assert_lacks "$EVENTS" 'tlmgr install #'
 assert_contains "$out" 'Installing TeX Live 2026 into'
@@ -2831,6 +2917,7 @@ assert_contains "$texlive_root/install.log" 'tlmgr install'
 [ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail "the installation was remembered as '$(state texlive_dir)'"
 [ "$(state texlive_mirror)" = https://ctan.example/ ] || fail "the mirror was remembered as '$(state texlive_mirror)'"
 assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:/usr/local/bin:/usr/bin:/bin\""
+assert_lacks "$HOME/$unit" '--no-pdf'
 [ "$(line_of "$EVENTS" 'install-tl')" -lt "$(line_of "$EVENTS" 'cabal build')" ] || fail 'TeX Live was installed after the build'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with TeX Live does not answer'
 : >"$EVENTS"
@@ -2847,12 +2934,14 @@ out=$case_dir/declined
 deploy --no-build --no-texlive >"$out" 2>&1 || fail 'the redeploy with --no-texlive failed'
 assert_contains "$out" "--no-texlive: not using the toolchain's TeX Live in $texlive_root/2026, which stays there"
 assert_lacks "$HOME/$unit" 'Environment="PATH='
+assert_contains "$HOME/$unit" ' --no-pdf'
 [ -x "$texlive_root/2026/bin/x86_64-linux/xelatex" ] || fail '--no-texlive deleted the TeX Live'
 [ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail '--no-texlive forgot the installation'
 : >"$EVENTS"
 deploy --no-build --texlive >"$out" 2>&1 || fail 'the redeploy with --texlive again failed'
 assert_lacks "$EVENTS" 'install-tl'
 assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:"
+assert_lacks "$HOME/$unit" '--no-pdf'
 undeploy >"$out" 2>&1 || fail 'the undeploy failed'
 assert_contains "$out" "the TeX Live the deploy installed stays in $texlive_root/2026, with the toolchain"
 [ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail 'the undeploy forgot the installation'
@@ -2860,14 +2949,18 @@ assert_contains "$out" "the TeX Live the deploy installed stays in $texlive_root
 pass '--texlive installs TeX Live under the toolchain once, the unit puts its bin first on PATH, and a second run reuses it'
 
 # An install that fails (tlmgr cannot reach its repository, or the
-# installer leaves no bin directory with tlmgr) leaves the PDFs off and
-# records no installation, and the deploy goes on; the next run tries
-# again, as texlive=yes says. A Perl without its standard
-# modules (RHEL's perl-interpreter alone) is named before any download.
+# installer leaves no bin directory with tlmgr) leaves the PDFs off, with
+# --no-pdf in the unit, and records no installation, and the deploy goes
+# on; the next run tries again, as texlive=yes says. A Perl without its
+# standard modules (RHEL's perl-interpreter alone) is built from source
+# first; when that fails (here CPAN has no tarball), TeX Live's installer
+# does not run, and the PDFs stay off. The install that then succeeds
+# drops --no-pdf.
 fixture texlive-fails
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 fake_texlive
+usable_perl
 out=$case_dir/first
 FAKE_TLMGR_FAIL=1 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 ||
   fail 'the deploy whose TeX Live install failed stopped'
@@ -2878,6 +2971,7 @@ assert_contains "$out" 'TeX Live was not installed (see above)'
 [ "$(state texlive)" = yes ] || fail 'the answer was not remembered'
 [ -z "$(state texlive_dir)" ] || fail 'a failed installation was remembered'
 assert_lacks "$HOME/$unit" 'Environment="PATH='
+assert_contains "$HOME/$unit" ' --no-pdf'
 : >"$EVENTS"
 out=$case_dir/no-bin
 FAKE_INSTALL_TL_NO_BIN=1 deploy --no-build >"$out" 2>&1 || fail 'the deploy whose installer made no bin stopped'
@@ -2887,22 +2981,105 @@ assert_contains "$out" "TeX Live's installer left no bin/<platform>/tlmgr under 
 assert_contains "$out" 'TeX Live was not installed (see above)'
 [ -z "$(state texlive_dir)" ] || fail 'an installation without bin was remembered'
 assert_lacks "$HOME/$unit" 'Environment="PATH='
+assert_contains "$HOME/$unit" ' --no-pdf'
 : >"$EVENTS"
 printf '#!/bin/sh\nprintf "Can'"'"'t locate Digest/SHA.pm in @INC\\n" >&2\nexit 2\n' >"$case_dir/bin/perl"
 chmod +x "$case_dir/bin/perl"
 out=$case_dir/no-perl
 deploy --no-build >"$out" 2>&1 || fail 'the deploy without Perl'"'"'s modules stopped'
-assert_contains "$out" "TeX Live's installer needs Perl's standard modules (Digest::SHA and others), missing here"
-assert_contains "$out" 'the whole perl, not perl-interpreter alone'
+assert_contains "$EVENTS" 'curl https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz'
+assert_contains "$out" "downloading Perl's source failed"
+assert_contains "$out" 'Perl 5.44.0 was not built (see above), so TeX Live was not installed'
 assert_lacks "$EVENTS" 'install-tl-unx.tar.gz'
-rm "$case_dir/bin/perl"
+assert_contains "$HOME/$unit" ' --no-pdf'
+[ ! -e "$HOME/.wiki-toolchain/perl" ] || fail 'a failed Perl build left its directory'
+[ -z "$(state perl_dir)" ] || fail 'a failed Perl build was remembered'
+usable_perl
 : >"$EVENTS"
 deploy --no-build >"$out" 2>&1 || fail 'the deploy that installs TeX Live again failed'
 assert_contains "$EVENTS" 'install-tl --no-interaction'
 [ "$(state texlive_dir)" = "$HOME/.wiki-toolchain/texlive/2026" ] || fail 'the second install was not remembered'
 assert_contains "$HOME/$unit" 'Environment="PATH='
+assert_lacks "$HOME/$unit" '--no-pdf'
 undeploy >/dev/null 2>&1
-pass 'a failed TeX Live install (tlmgr fails, or no bin) leaves the PDFs off and is tried again; missing Perl modules are named'
+pass 'a failed TeX Live install (tlmgr fails, no bin, or no Perl and none could be built) leaves the PDFs off with --no-pdf and is tried again; the install that works drops --no-pdf'
+
+# No Perl on the shell's PATH: with --texlive the deploy builds Perl from
+# the fake CPAN's source under the toolchain (Configure with the prefix
+# and relocatable @INC, make, make install), records it, and runs the fake
+# install-tl and tlmgr with it first on their PATH; the unit's PATH holds
+# only TeX Live's bin. A second run that installs TeX Live again reuses the
+# Perl, building nothing. A build that fails, or a tarball whose checksum
+# differs, leaves no Perl, does not start TeX Live's installer, and leaves
+# the PDFs off with --no-pdf.
+fixture texlive-perl
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_texlive
+fake_perl_source
+# The fixture's make does nothing; the fake source's Makefile needs the
+# host's, which the links of NO_PERL hold.
+rm "$case_dir/bin/make"
+PATH=$case_dir/bin:$NO_PERL
+command -v make >/dev/null 2>&1 || fail 'the host has no make for the fake Perl source'
+perl_root=$HOME/.wiki-toolchain/perl
+texlive_root=$HOME/.wiki-toolchain/texlive
+command -v perl >/dev/null 2>&1 && fail "the case's PATH has a perl: $(command -v perl)"
+out=$case_dir/first
+deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 || fail 'the deploy that builds Perl failed'
+assert_contains "$EVENTS" 'curl https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz'
+assert_contains "$EVENTS" "perl Configure -des -Dprefix=$perl_root -Duserelocatableinc"
+assert_contains "$EVENTS" 'perl make install'
+[ "$(line_of "$EVENTS" 'perl make install')" -lt "$(line_of "$EVENTS" 'install-tl --no-interaction')" ] || fail 'TeX Live was installed before Perl'
+assert_contains "$EVENTS" "install-tl ran with perl=$perl_root/bin/perl"
+assert_contains "$EVENTS" "tlmgr ran with perl=$perl_root/bin/perl"
+assert_contains "$out" "built Perl 5.44.0 in $perl_root, for TeX Live's installer only"
+assert_contains "$texlive_root/install.log" 'Configure -des'
+[ -x "$perl_root/bin/perl" ] || fail 'the Perl was not installed'
+[ ! -e "$perl_root/src" ] || fail 'the Perl source was left behind'
+[ "$(state perl_dir)" = "$perl_root" ] || fail "the Perl was remembered as '$(state perl_dir)'"
+assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:/usr/local/bin:/usr/bin:/bin\""
+assert_lacks "$HOME/$unit" '.wiki-toolchain/perl'
+assert_lacks "$HOME/$unit" '--no-pdf'
+# Again, with the TeX Live gone: installed again with the same Perl.
+rm -rf "$texlive_root/2026"
+: >"$EVENTS"
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'the deploy that reuses the Perl failed'
+assert_lacks "$EVENTS" 'perl-5.44.0.tar.gz'
+assert_lacks "$EVENTS" 'perl Configure'
+assert_contains "$EVENTS" "install-tl ran with perl=$perl_root/bin/perl"
+assert_lacks "$HOME/$unit" '--no-pdf'
+# The undeploy leaves the Perl with the toolchain, and remembers it.
+undeploy >"$out" 2>&1 || fail 'the undeploy failed'
+assert_contains "$out" "the Perl the deploy built for TeX Live's installer stays in $perl_root, with the toolchain"
+[ -x "$perl_root/bin/perl" ] || fail 'the undeploy deleted the Perl'
+[ "$(state perl_dir)" = "$perl_root" ] || fail 'the undeploy forgot the Perl'
+# A build that fails: nothing installed, PDFs off.
+rm -rf "$texlive_root/2026" "$perl_root"
+: >"$EVENTS"
+out=$case_dir/build-fails
+FAKE_PERL_MAKE_FAIL=1 deploy --no-build >"$out" 2>&1 || fail 'the deploy whose Perl build failed stopped'
+assert_contains "$EVENTS" 'perl make'
+assert_lacks "$EVENTS" 'perl make install'
+assert_contains "$out" 'building Perl (make -j'
+assert_contains "$out" 'perl.c: error: the fake build fails'
+assert_contains "$out" 'Perl 5.44.0 was not built (see above), so TeX Live was not installed'
+assert_lacks "$EVENTS" 'install-tl'
+[ ! -e "$perl_root" ] || fail 'a failed Perl build left its directory'
+[ -z "$(state perl_dir)" ] || fail 'a failed Perl build was remembered'
+assert_contains "$HOME/$unit" ' --no-pdf'
+# A tarball that is not the one pinned: refused before it is unpacked.
+: >"$EVENTS"
+out=$case_dir/checksum
+WIKI_DEPLOY_PERL_SHA256=0000000000000000000000000000000000000000000000000000000000000000 deploy --no-build >"$out" 2>&1 ||
+  fail 'the deploy whose Perl tarball has another checksum stopped'
+assert_contains "$out" 'not 0000000000000000000000000000000000000000000000000000000000000000'
+assert_lacks "$EVENTS" 'perl Configure'
+assert_lacks "$EVENTS" 'install-tl'
+assert_contains "$HOME/$unit" ' --no-pdf'
+undeploy >/dev/null 2>&1
+pass 'without a Perl, --texlive builds one from source under the toolchain for TeX Live'"'"'s installer only, reuses it, and a failed build or another checksum leaves the PDFs off'
 
 # The question, on a terminal (script(1) gives the deploy one): no is
 # remembered as texlive=no, and nothing is installed.
@@ -2911,14 +3088,31 @@ if command -v script >/dev/null 2>&1; then
   p=$(free_port 127.0.0.1)
   a=$(other_port "$p")
   fake_texlive
+  usable_perl
   out=$case_dir/first
   printf 'n\n' | script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a" /dev/null >"$out" 2>&1 ||
     fail 'the deploy on a terminal failed'
-  assert_contains "$out" "Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org? About 250 MB and a few minutes [y/N]"
+  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes)? [y/N]"
   [ "$(state texlive)" = no ] || fail "no was remembered as '$(state texlive)'"
   assert_lacks "$EVENTS" 'install-tl'
+  assert_contains "$HOME/$unit" ' --no-pdf'
   undeploy >/dev/null 2>&1
-  pass 'the question on a terminal: no is remembered'
+  # Without a Perl, the one question names the Perl build too; no builds
+  # nothing.
+  rm "$case_dir/bin/perl"
+  rm -f "$HOME/.config/wiki-demo/wiki-demo.state"
+  fake_perl_source
+  : >"$EVENTS"
+  out=$case_dir/no-perl
+  printf 'n\n' | PATH=$case_dir/bin:$NO_PERL script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a" /dev/null >"$out" 2>&1 ||
+    fail 'the deploy on a terminal without Perl failed'
+  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes), building Perl 5.44.0 from its source under $HOME/.wiki-toolchain/perl first, since this machine has no Perl with its standard modules (a few minutes with cc)? [y/N]"
+  [ "$(grep -c 'Install TeX Live under' "$out")" = 1 ] || fail 'the deploy asked more than once'
+  assert_lacks "$EVENTS" 'perl-5.44.0.tar.gz'
+  assert_lacks "$EVENTS" 'install-tl'
+  assert_contains "$HOME/$unit" ' --no-pdf'
+  undeploy >/dev/null 2>&1
+  pass 'the question on a terminal: one, naming the Perl build when there is no Perl; no is remembered, and the unit gets --no-pdf'
 fi
 
 # The wizard, toolchain/configure.hs, knows the deploy's options: every

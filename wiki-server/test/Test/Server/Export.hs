@@ -7,9 +7,9 @@
 -- holds; who may export what; one export at a time each; the server's try
 -- of its TeX engine, with fake engines first on the @PATH@ (one that makes
 -- a PDF, one that stops for want of its format file, none at all), and what
--- the session, the administration and a PDF export say after each; and the
--- PDFs, where the machine has @xelatex@ (skipped, saying so, where it has
--- not).
+-- the session, the administration and a PDF export say after each; a
+-- server started with @--no-pdf@, which runs no engine; and the PDFs, where
+-- the machine has @xelatex@ (skipped, saying so, where it has not).
 module Test.Server.Export (spec, environmentSpec) where
 
 import Codec.Compression.Zlib qualified as Zlib
@@ -21,7 +21,7 @@ import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Network.HTTP.Types (methodPost)
 import Protolude
-import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setOwnerWritable, setPermissions)
+import System.Directory (doesFileExist, emptyPermissions, setOwnerExecutable, setOwnerReadable, setOwnerWritable, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath (takeDirectory)
 import System.IO.Temp (withSystemTempDirectory)
@@ -51,7 +51,7 @@ import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, restrictTeX, texEngine, texLimits, writeDocument)
+import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, probeTimeout, restrictTeX, texEngine, texLimits, writeDocument)
 import Wiki.Server.Export.Document
 import Wiki.Server.Options (ServeOptions (..))
 
@@ -729,6 +729,34 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
       pids <- T.words <$> readFile (takeDirectory engine <> "/pids")
       length pids `shouldBe` 4
       for_ pids $ \pid -> eventuallyGone (toS pid)
+
+  -- A server started with --no-pdf, as the deploy starts one that has no
+  -- xelatex that works: it does not run the engine, not at its start and
+  -- not when the administration checks, offers no PDFs, and refuses one
+  -- in a sentence that names the option. The fake engine writes its
+  -- process id down when it is run, and would hang if it were.
+  it "are off with --no-pdf: the engine is never run, nothing PDF is offered, and an export says why" $
+    withFakeTeX Hanging $ \engine -> do
+      started <- getCurrentTime
+      withDemoRunning backing (\o -> o {pdf = False}) $ \r -> do
+        ready <- getCurrentTime
+        diffUTCTime ready started `shouldSatisfy` (< 15)
+        session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+        (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
+        off <- engineOn r
+        (off.status, off.path, off.output) `shouldBe` (TexOff, Nothing, Nothing)
+        -- A check tries nothing, and answers the same, with the start's time.
+        checkOn r `shouldReturn` off
+        engineOn r `shouldReturn` off
+        (_, pages) <- docsIds r
+        getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf)
+          >>= jsonAs 400
+          >>= (`shouldBe` Invalid "PDF exports are off on this server (its --no-pdf option).")
+        getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Docx) >>= \reply -> reply.status `shouldBe` 200
+      doesFileExist (takeDirectory engine <> "/pids") `shouldReturn` False
+
+  it "give an engine 20 seconds to typeset the probe" $
+    probeTimeout `shouldBe` 20_000_000
 
   it "keep the engine's reason, bounded, when it prints a long log and stops" $
     withFakeTeX Long $ \_ -> do

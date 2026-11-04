@@ -23,7 +23,9 @@
 #     toolchain directory (texlive: yes, no, or empty before anyone
 #     answered), the installation the unit uses (texlive_dir, set once one
 #     has passed toolchain/check-tex.sh) and the CTAN mirror given for it
-#     (texlive_mirror, empty for the default);
+#     (texlive_mirror, empty for the default), and the Perl the deploy
+#     built from source for TeX Live's installer (perl_dir, empty when the
+#     machine's own perl did);
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted. Named with --prefix, the directory holds the state too
@@ -211,6 +213,7 @@ state_write() {
     printf 'texlive=%s\n' "${texlive:-}"
     printf 'texlive_dir=%s\n' "${texlive_dir:-}"
     printf 'texlive_mirror=%s\n' "${texlive_mirror:-}"
+    printf 'perl_dir=%s\n' "${perl_dir:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -521,6 +524,7 @@ undeploy() {
   texlive=$(state_get texlive)
   texlive_dir=$(state_get texlive_dir)
   texlive_mirror=$(state_get texlive_mirror)
+  perl_dir=$(state_get perl_dir)
   # A deployment that moved from PostgreSQL to --sqlite still has the
   # stopped container and its volume: --purge deletes them too.
   pg_down
@@ -569,9 +573,13 @@ undeploy() {
       say "the files are kept in $dir (--purge deletes them)"
     fi
   fi
-  # The toolchain's TeX Live is left as the toolchain is: under a prefix
+  # The toolchain's TeX Live, and the Perl built for its installer, are
+  # left as the toolchain is: under a prefix
   # --purge deleted it with the prefix, and otherwise it is still there.
   if [ -n "$texlive_dir" ] && [ -d "$texlive_dir" ]; then
     say "the TeX Live the deploy installed stays in $texlive_dir, with the toolchain"
+  fi
+  if [ -n "$perl_dir" ] && [ -d "$perl_dir" ]; then
+    say "the Perl the deploy built for TeX Live's installer stays in $perl_dir, with the toolchain"
   fi
 }

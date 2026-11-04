@@ -9,7 +9,8 @@
 -- opened in a tab from one (or saved, when the browser opens no tab), and a
 -- refusal shown with the server's reason, with nothing saved. And the
 -- administration's word on the TeX engine: working, failing with what it
--- printed, or not found, and checked again.
+-- printed, or not found, and checked again; or off by the server's option
+-- (@--no-pdf@), with no check.
 module Test.Browser.Export (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -212,6 +213,19 @@ spec m = do
     ui <- startServer m (Admin R.Server)
     find ui ".server-export .server-export-tex" >>= (`shouldHaveClass` "server-export-no-tex")
     find ui ".server-export .server-export-tex" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "apt install texlive-xetex")
+
+  -- A server started with --no-pdf, as the deploy starts one without a
+  -- working xelatex: the section says so and what turns them on, and
+  -- offers no check, which would find the same.
+  it "says in the administration that the server's PDFs are off by its option, with no check" $ runPage $ do
+    serverStarts
+    serveDemo
+    exporting [Docx, Html, Epub, Pptx, BeamerTex]
+    engineIs working {status = TexOff, path = Nothing}
+    ui <- startServer m (Admin R.Server)
+    find ui ".server-export .server-export-off" >>= (`shouldHaveText` "PDF exports are off: the server runs with --no-pdf. The deploy sets it when it finds no xelatex that works and installs none; sh toolchain/deploy-local.sh --server --texlive installs TeX Live under the toolchain and turns them on.")
+    length <$> findAll ui ".server-export-check-again" `shouldReturn` 0
+    length <$> findAll ui ".server-export-output" `shouldReturn` 0
 
   it "offers nothing in the demo, which has no pandoc" $ runPage $ do
     ui <- start m Nothing (Page docs (slugs ["markdown-guide", "presentations"]))
