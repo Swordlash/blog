@@ -18,7 +18,12 @@
 #     what undeploying turns off; and for a deployment that downloads its
 #     page from GitHub (--backend-only), the REF it names (backend_only:
 #     main, a tag, a hash, or head for the checkout's own commit) and the
-#     commit whose page it downloaded last (backend_only_commit);
+#     commit whose page it downloaded last (backend_only_commit); and for
+#     the PDF exports of a server, whether TeX Live is installed under the
+#     toolchain directory (texlive: yes, no, or empty before anyone
+#     answered), the installation the unit uses (texlive_dir, set once one
+#     has passed toolchain/check-tex.sh) and the CTAN mirror given for it
+#     (texlive_mirror, empty for the default);
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted. Named with --prefix, the directory holds the state too
@@ -203,6 +208,9 @@ state_write() {
     printf 'db_port=%s\n' "${db_port:-}"
     printf 'backend_only=%s\n' "${backend_only:-}"
     printf 'backend_only_commit=%s\n' "${backend_only_commit:-}"
+    printf 'texlive=%s\n' "${texlive:-}"
+    printf 'texlive_dir=%s\n' "${texlive_dir:-}"
+    printf 'texlive_mirror=%s\n' "${texlive_mirror:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -510,6 +518,9 @@ undeploy() {
   db_port=$(state_get db_port)
   backend_only=$(state_get backend_only)
   backend_only_commit=$(state_get backend_only_commit)
+  texlive=$(state_get texlive)
+  texlive_dir=$(state_get texlive_dir)
+  texlive_mirror=$(state_get texlive_mirror)
   # A deployment that moved from PostgreSQL to --sqlite still has the
   # stopped container and its volume: --purge deletes them too.
   pg_down
@@ -557,5 +568,10 @@ undeploy() {
     elif [ -n "$dir" ]; then
       say "the files are kept in $dir (--purge deletes them)"
     fi
+  fi
+  # The toolchain's TeX Live is left as the toolchain is: under a prefix
+  # --purge deleted it with the prefix, and otherwise it is still there.
+  if [ -n "$texlive_dir" ] && [ -d "$texlive_dir" ]; then
+    say "the TeX Live the deploy installed stays in $texlive_dir, with the toolchain"
   fi
 }

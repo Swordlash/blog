@@ -87,6 +87,19 @@ for cmd in /usr/bin/* /bin/*; do
   if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
   [ -e "$NO_DPKG/$name" ] || [ -L "$NO_DPKG/$name" ] || ln -s "$cmd" "$NO_DPKG/$name"
 done
+# The commands of /usr/bin and /bin but xelatex, as links: the PATH the
+# fake systemd manager gives the service (FAKE_SERVICE_PATH), so that the
+# deploy's check of the TeX the service finds (toolchain/check-tex.sh)
+# never reaches the host's own TeX. A case that wants one puts a fake
+# xelatex first.
+NO_TEX=$TMP/no-tex
+mkdir "$NO_TEX"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  [ "$name" != xelatex ] || continue
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$NO_TEX/$name" ] || [ -L "$NO_TEX/$name" ] || ln -s "$cmd" "$NO_TEX/$name"
+done
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -121,7 +134,8 @@ http_get() {
 fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/sbin" "$case_dir/repo/toolchain" "$case_dir/systemd"
-  for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh; do
+  for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh \
+    check-tex.sh texlive-packages.txt; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
   cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"
@@ -134,6 +148,8 @@ fixture() {
   WIKI_DEPLOY_WAIT=10
   WIKI_DEPLOY_HTTPS_WAIT=10
   FAKE_TS_SERVE=$case_dir/serve
+  FAKE_SERVICE_PATH=$NO_TEX
+  export FAKE_SERVICE_PATH
   export HOME EVENTS FAKE_SYSTEMD PATH WIKI_DEPLOY_SBIN WIKI_DEPLOY_UFW_CONF WIKI_DEPLOY_WAIT WIKI_DEPLOY_HTTPS_WAIT FAKE_TS_SERVE
   FAKE_DOCKER=$case_dir/docker
   export FAKE_DOCKER
@@ -142,7 +158,8 @@ fixture() {
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
-    FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
+    FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
+    FAKE_TEXLIVE FAKE_TLMGR_FAIL WIKI_TEX_TIMEOUT
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -449,7 +466,7 @@ case $name in
     output='' format='' failing='' cacert='' connect='' insecure=''
     while [ $# -gt 1 ]; do
       case $1 in
-        -o) output=$2; shift ;;
+        -o | --output) output=$2; shift ;;
         -w) format=$2; shift ;;
         --cacert) cacert=$2; shift ;;
         --connect-to) connect=$2; shift ;;
@@ -465,6 +482,12 @@ case $name in
         if [ -f "$release" ]; then code=200; else code=404; release=/dev/null; fi
         if [ -n "$output" ]; then cat "$release" >"$output"; else cat "$release"; fi
         [ -z "$format" ] || printf '%s' "$code"
+        exit 0 ;;
+      # A CTAN mirror: TeX Live's installer is the tarball FAKE_TEXLIVE
+      # names (none when unset).
+      */systems/texlive/tlnet/install-tl-unx.tar.gz)
+        [ -n "${FAKE_TEXLIVE:-}" ] && [ -f "$FAKE_TEXLIVE" ] || { printf 'curl: (22) The requested URL returned error: 404\n' >&2; exit 22; }
+        cp "$FAKE_TEXLIVE" "$output"
         exit 0 ;;
       https://github.com/Owner/blog/releases/download/*)
         asset=$FAKE_GITHUB/download/${url#https://github.com/Owner/blog/releases/download/}
@@ -580,7 +603,7 @@ case $name in
       printf '%s\n' "$!" >"$FAKE_SYSTEMD/$unit.pid"
     }
     case $1 in
-      show-environment) printf 'PATH=/usr/bin\n' ;;
+      show-environment) printf 'HOME=%s\nPATH=%s\n' "$HOME" "$FAKE_SERVICE_PATH" ;;
       daemon-reload) ;;
       enable) touch "$FAKE_SYSTEMD/$2.enabled" ;;
       disable)
@@ -2652,6 +2675,225 @@ assert_lacks "$EVENTS" 'tailscale serve'
 assert_contains "$out" "      reverse_proxy 127.0.0.1:$p"
 undeploy >/dev/null 2>&1
 pass 'the demo is served behind a reverse proxy as the server is'
+
+# The TeX of the PDF exports (WP5.58). A fake xelatex of one of three
+# kinds: working (writes probe.pdf), failing (as TeX Live 2020 fails under
+# kpathsea's paranoid mode) or a link to none. The deploy checks the TeX
+# with the PATH the systemd manager gives the service (FAKE_SERVICE_PATH,
+# a directory of links without the host's xelatex), not the shell's.
+fake_xelatex() {
+  mkdir -p "$1"
+  case $2 in
+    working)
+      printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$1/xelatex" ;;
+    failing)
+      printf '#!/bin/sh\nprintf "! I can'"'"'t find file unicode-math-table.tex.\\n" >probe.log\nprintf "xelatex: Not reading from unicode-math-table.tex (openin_any = p).\\n" >&2\nexit 1\n' >"$1/xelatex" ;;
+  esac
+  chmod +x "$1/xelatex"
+}
+# TeX Live's installer as the fake CTAN mirror serves it (FAKE_TEXLIVE):
+# install-tl-20260301/ with release-texlive.txt and an install-tl that
+# says how it was called and makes <texdir>/bin/x86_64-linux with a
+# working xelatex and a tlmgr that says how it was called (and fails with
+# FAKE_TLMGR_FAIL).
+fake_texlive() {
+  tl=$case_dir/texlive-mirror/install-tl-20260301
+  mkdir -p "$tl"
+  printf 'TeX Live (https://tug.org/texlive) version 2026\n\nThis file is public domain.\n' >"$tl/release-texlive.txt"
+  cat >"$tl/install-tl" <<'TL'
+#!/bin/sh
+printf 'install-tl %s\n' "$*" >>"$EVENTS"
+texdir=
+for arg do
+  case $arg in --texdir=*) texdir=${arg#--texdir=} ;; esac
+done
+[ -n "$texdir" ] || { printf 'install-tl: no --texdir\n' >&2; exit 1; }
+printf 'Installing TeX Live 2026 into %s (the fake installer)\n' "$texdir"
+bin=$texdir/bin/x86_64-linux
+mkdir -p "$bin"
+printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$bin/xelatex"
+printf '#!/bin/sh\nprintf "tlmgr %%s\\n" "$*" >>"$EVENTS"\n[ -z "${FAKE_TLMGR_FAIL:-}" ] || { printf "tlmgr: package repository unreachable\\n" >&2; exit 1; }\n' >"$bin/tlmgr"
+chmod +x "$bin/xelatex" "$bin/tlmgr"
+TL
+  chmod +x "$tl/install-tl"
+  (cd "$case_dir/texlive-mirror" && tar -czf ../install-tl-unx.tar.gz install-tl-20260301)
+  FAKE_TEXLIVE=$case_dir/install-tl-unx.tar.gz
+  export FAKE_TEXLIVE
+}
+
+# No TeX the service finds, and no terminal to ask on: the deploy says so,
+# names --texlive and --no-texlive, installs nothing and remembers no
+# answer; the unit sets no PATH. The xelatex this shell finds (the fake
+# one on the fixture's PATH) is named as the trap it is. --no-texlive is
+# remembered as no, and --status says the PDFs are off.
+fixture tex-none
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_xelatex "$case_dir/bin" working
+out=$case_dir/first
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy without TeX failed'
+assert_contains "$out" "PDF exports: no xelatex on the service's PATH ($NO_TEX)"
+assert_contains "$out" "this shell finds $case_dir/bin/xelatex, but the service does not"
+assert_contains "$out" "--texlive installs TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org"
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+[ -z "$(state texlive)" ] || fail "an unanswered question was remembered as $(state texlive)"
+[ "$(line_of "$out" 'PDF exports')" -lt "$(line_of "$out" 'building wiki-server at -O2')" ] || fail 'TeX was checked after the build'
+out=$case_dir/no
+deploy --no-texlive --no-build >"$out" 2>&1 || fail 'the deploy with --no-texlive failed'
+[ "$(state texlive)" = no ] || fail "--no-texlive was remembered as '$(state texlive)'"
+assert_contains "$out" 'the server offers no PDFs, and its administration'"'"'s Server section says why (--no-texlive'
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'the redeploy after --no-texlive failed'
+[ "$(state texlive)" = no ] || fail 'the redeploy forgot --no-texlive'
+assert_contains "$out" '(--no-texlive;'
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: off, no xelatex on the service's PATH ($NO_TEX)"
+assert_contains "$out" 'TeX Live under the toolchain was declined (--no-texlive)'
+if deploy --static --no-texlive >"$out" 2>&1; then fail '--no-texlive was taken for the demo'; fi
+assert_contains "$out" '--texlive, --no-texlive and --texlive-mirror are for the wiki'"'"'s server'
+if deploy --texlive --no-texlive >"$out" 2>&1; then fail '--texlive and --no-texlive were taken together'; fi
+if deploy --texlive-mirror ftp://ctan.example >"$out" 2>&1; then fail 'an ftp mirror was taken'; fi
+assert_contains "$out" 'an http:// or https:// URL'
+undeploy >/dev/null 2>&1
+pass 'without a TeX the service finds: said, PDFs off, nothing asked or installed; --no-texlive remembered'
+
+# A TeX of the machine's that works, on the service's PATH: used as it is,
+# with no PATH line in the unit. One that fails (as TeX Live 2020 does) is
+# reported with its reason, and the deploy goes on.
+fixture tex-machine
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_xelatex "$case_dir/tex" working
+FAKE_SERVICE_PATH=$case_dir/tex:$NO_TEX
+out=$case_dir/first
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with a working TeX failed'
+assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works, the TeX on this machine"
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works (the TeX on this machine, on the service's PATH)"
+fake_xelatex "$case_dir/tex" failing
+out=$case_dir/failing
+deploy --no-build --no-texlive >"$out" 2>&1 || fail 'the deploy with a failing TeX stopped'
+assert_contains "$out" "PDF exports: $case_dir/tex/xelatex does not make the probe's PDF under the export's limits"
+assert_contains "$out" 'Not reading from unicode-math-table.tex (openin_any = p).'
+assert_contains "$out" '(--no-texlive;'
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: off, $case_dir/tex/xelatex fails (the TeX on this machine"
+undeploy >/dev/null 2>&1
+pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, its reason said when it fails, and the deploy goes on'
+
+# --texlive: the machine has no TeX the service finds, so TeX Live is
+# installed under the toolchain from the mirror given, through the fake
+# installer: install-tl with the scheme basic and no documentation or
+# sources into .wiki-toolchain/texlive/2026, then tlmgr with the list's
+# packages, then the check with the new bin first. The state keeps the
+# answer, the installation and the mirror; the unit puts its bin first on
+# its PATH; an older year is deleted. A second run checks it and installs
+# nothing; --no-texlive leaves it on disk and drops the PATH line; the
+# undeploy leaves it, and says so.
+fixture texlive
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_texlive
+texlive_root=$HOME/.wiki-toolchain/texlive
+mkdir -p "$texlive_root/2025/bin/x86_64-linux"
+out=$case_dir/first
+deploy --server --sqlite --port "$p" --admin-port "$a" --texlive --texlive-mirror https://ctan.example/ >"$out" 2>&1 ||
+  fail 'the deploy with --texlive failed'
+assert_contains "$EVENTS" 'curl https://ctan.example/systems/texlive/tlnet/install-tl-unx.tar.gz'
+assert_contains "$EVENTS" "install-tl --no-interaction --scheme=basic --texdir=$texlive_root/2026 --texuserdir=$texlive_root/user --no-doc-install --no-src-install --repository https://ctan.example/systems/texlive/tlnet"
+assert_contains "$EVENTS" 'tlmgr install xetex fontspec unicode-math lm lm-math '
+assert_contains "$EVENTS" ' pgf tikz-cd pgfplots mhchem'
+assert_lacks "$EVENTS" 'tlmgr install #'
+assert_contains "$out" 'Installing TeX Live 2026 into'
+assert_contains "$out" "PDF exports: $texlive_root/2026/bin/x86_64-linux/xelatex works, the toolchain's TeX Live"
+assert_contains "$out" "deleted the older TeX Live in $texlive_root/2025"
+[ ! -e "$texlive_root/2025" ] || fail 'the older TeX Live was kept'
+[ ! -e "$texlive_root/installer.tmp" ] || fail 'the installer was left behind'
+assert_contains "$texlive_root/install.log" 'tlmgr install'
+[ "$(state texlive)" = yes ] || fail "--texlive was remembered as '$(state texlive)'"
+[ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail "the installation was remembered as '$(state texlive_dir)'"
+[ "$(state texlive_mirror)" = https://ctan.example/ ] || fail "the mirror was remembered as '$(state texlive_mirror)'"
+assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:/usr/local/bin:/usr/bin:/bin\""
+[ "$(line_of "$EVENTS" 'install-tl')" -lt "$(line_of "$EVENTS" 'cabal build')" ] || fail 'TeX Live was installed after the build'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with TeX Live does not answer'
+: >"$EVENTS"
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'the redeploy with TeX Live failed'
+assert_lacks "$EVENTS" 'install-tl'
+assert_lacks "$EVENTS" 'tlmgr'
+assert_contains "$out" "PDF exports: $texlive_root/2026/bin/x86_64-linux/xelatex works, the toolchain's TeX Live"
+assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:"
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: $texlive_root/2026/bin/x86_64-linux/xelatex works (the toolchain's TeX Live, first on the unit's PATH)"
+assert_contains "$out" "the toolchain's TeX Live: $texlive_root/2026"
+out=$case_dir/declined
+deploy --no-build --no-texlive >"$out" 2>&1 || fail 'the redeploy with --no-texlive failed'
+assert_contains "$out" "--no-texlive: not using the toolchain's TeX Live in $texlive_root/2026, which stays there"
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+[ -x "$texlive_root/2026/bin/x86_64-linux/xelatex" ] || fail '--no-texlive deleted the TeX Live'
+[ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail '--no-texlive forgot the installation'
+: >"$EVENTS"
+deploy --no-build --texlive >"$out" 2>&1 || fail 'the redeploy with --texlive again failed'
+assert_lacks "$EVENTS" 'install-tl'
+assert_contains "$HOME/$unit" "Environment=\"PATH=$texlive_root/2026/bin/x86_64-linux:"
+undeploy >"$out" 2>&1 || fail 'the undeploy failed'
+assert_contains "$out" "the TeX Live the deploy installed stays in $texlive_root/2026, with the toolchain"
+[ "$(state texlive_dir)" = "$texlive_root/2026" ] || fail 'the undeploy forgot the installation'
+[ "$(state texlive)" = yes ] || fail 'the undeploy forgot the answer'
+pass '--texlive installs TeX Live under the toolchain once, the unit puts its bin first on PATH, and a second run reuses it'
+
+# An install that fails (tlmgr cannot reach its repository) leaves the
+# PDFs off and records no installation, and the deploy goes on; the next
+# run tries again, as texlive=yes says. A Perl without its standard
+# modules (RHEL's perl-interpreter alone) is named before any download.
+fixture texlive-fails
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_texlive
+out=$case_dir/first
+FAKE_TLMGR_FAIL=1 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 ||
+  fail 'the deploy whose TeX Live install failed stopped'
+assert_contains "$EVENTS" 'curl https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz'
+assert_contains "$out" 'tlmgr install failed (exit 1)'
+assert_contains "$out" 'tlmgr: package repository unreachable'
+assert_contains "$out" 'TeX Live was not installed (see above)'
+[ "$(state texlive)" = yes ] || fail 'the answer was not remembered'
+[ -z "$(state texlive_dir)" ] || fail 'a failed installation was remembered'
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+: >"$EVENTS"
+printf '#!/bin/sh\nprintf "Can'"'"'t locate Digest/SHA.pm in @INC\\n" >&2\nexit 2\n' >"$case_dir/bin/perl"
+chmod +x "$case_dir/bin/perl"
+out=$case_dir/no-perl
+deploy --no-build >"$out" 2>&1 || fail 'the deploy without Perl'"'"'s modules stopped'
+assert_contains "$out" "TeX Live's installer needs Perl's standard modules (Digest::SHA and others), missing here"
+assert_contains "$out" 'the whole perl, not perl-interpreter alone'
+assert_lacks "$EVENTS" 'install-tl-unx.tar.gz'
+rm "$case_dir/bin/perl"
+: >"$EVENTS"
+deploy --no-build >"$out" 2>&1 || fail 'the deploy that installs TeX Live again failed'
+assert_contains "$EVENTS" 'install-tl --no-interaction'
+[ "$(state texlive_dir)" = "$HOME/.wiki-toolchain/texlive/2026" ] || fail 'the second install was not remembered'
+assert_contains "$HOME/$unit" 'Environment="PATH='
+undeploy >/dev/null 2>&1
+pass 'a failed TeX Live install leaves the PDFs off and is tried again; missing Perl modules are named'
+
+# The question, on a terminal (script(1) gives the deploy one): no is
+# remembered as texlive=no, and nothing is installed.
+if command -v script >/dev/null 2>&1; then
+  fixture tex-question
+  p=$(free_port 127.0.0.1)
+  a=$(other_port "$p")
+  fake_texlive
+  out=$case_dir/first
+  printf 'n\n' | script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a" /dev/null >"$out" 2>&1 ||
+    fail 'the deploy on a terminal failed'
+  assert_contains "$out" "Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org? About 250 MB and a few minutes [y/N]"
+  [ "$(state texlive)" = no ] || fail "no was remembered as '$(state texlive)'"
+  assert_lacks "$EVENTS" 'install-tl'
+  undeploy >/dev/null 2>&1
+  pass 'the question on a terminal: no is remembered'
+fi
 
 # The wizard, toolchain/configure.hs, knows the deploy's options: every
 # option the header of deploy-local.sh describes is a string literal of the

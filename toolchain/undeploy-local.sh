@@ -16,7 +16,12 @@
 # server's database, attachments and backups) unless --purge-data is given. It needs nothing of the build toolchain, and
 # running it when nothing is deployed says so and succeeds. A deployment
 # made with --prefix is named the same way here: nothing in the home
-# directory remembers it.
+# directory remembers it. The toolchain the deploy built with stays, and
+# with it the TeX Live the deploy may have installed for the PDF exports
+# (<toolchain>/.wiki-toolchain/texlive): another deployment may use them,
+# and a later deploy reuses them. Only --purge of a deployment under a
+# prefix whose toolchain is <prefix>/toolchain deletes them, with the rest
+# of the prefix.
 #
 #   --prefix DIR    the deployment's prefix (deploy-local.sh --prefix); --dir is its old name
 #   --name NAME     which deployment, when there are several (default wiki-demo)

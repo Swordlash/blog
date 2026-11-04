@@ -1,0 +1,57 @@
+# The TeX Live packages the wiki's PDF exports need, installed with
+# `tlmgr install` on top of scheme-basic (plain TeX and LaTeX) when
+# toolchain/deploy-local.sh installs TeX Live under the toolchain. One
+# package per line; # starts a comment. The list names what the exports
+# load, not what those packages need in turn: tlmgr installs a package's
+# dependencies with it (Beamer's translator, mhchem's chemgreek). A package
+# scheme-basic already has (hyperref, geometry, lm) is listed all the same,
+# and tlmgr passes over it, so that the list does not depend on what the
+# scheme happens to hold.
+#
+# The same needs, as Debian packages for CI, are in
+# toolchain/ci-native-pdf-packages.txt.
+
+# The engine, and the fonts and font loading of pandoc's XeTeX template:
+# fontspec and unicode-math, with Latin Modern for text (lm) and for
+# mathematics (lm-math, unicode-math's default font).
+xetex
+fontspec
+unicode-math
+lm
+lm-math
+
+# What pandoc's default LaTeX template loads, or loads when the document
+# uses it (tables, code, struck-out text, links, figures).
+amsfonts
+iftex
+xcolor
+geometry
+hyperref
+bookmark
+xurl
+url
+upquote
+microtype
+parskip
+setspace
+fancyvrb
+framed
+listings
+booktabs
+caption
+multirow
+etoolbox
+soul
+cancel
+csquotes
+
+# Slides: Beamer, its Madrid theme included.
+beamer
+
+# The wiki's own preamble: TikZ pictures (pgf), commutative diagrams
+# (tikz-cd, which tlmgr does not know needs pgf), plots, and chemistry in
+# formulas (\ce and \pu).
+pgf
+tikz-cd
+pgfplots
+mhchem

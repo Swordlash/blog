@@ -11,6 +11,7 @@
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
 #                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
 #                                [--no-build] [--semaphore | --no-semaphore]
+#                                [--texlive | --no-texlive] [--texlive-mirror URL]
 #                                [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
@@ -37,6 +38,26 @@
 #      cabal's build semaphore when toolchain/check-semaphore.sh finds that
 #      GHC can open one on this machine, and without it otherwise.
 #      Any failure stops here, before the running service is touched.
+#      With --server, between the toolchain and the build, the TeX that
+#      makes the wiki's PDF exports is checked: toolchain/check-tex.sh
+#      typesets a small document with xelatex under the limits the server
+#      sets for its exports, with a timeout, in the environment the service
+#      will have. A systemd user unit gets the PATH of the user's systemd
+#      manager (systemctl --user show-environment), not the PATH of the
+#      shell this runs in, so an xelatex the shell finds may not be the one
+#      the service finds, or there may be none. When the check fails or
+#      finds no xelatex, the deploy offers to install TeX Live under the
+#      toolchain directory (<toolchain>/.wiki-toolchain/texlive/<year>,
+#      about 250 MB): install-tl from a CTAN mirror, the scheme basic
+#      without documentation or sources, then the packages the exports need
+#      (toolchain/texlive-packages.txt) with tlmgr, and the check again.
+#      Then the unit puts that TeX Live's bin directory first on its PATH.
+#      The download goes through curl and TeX Live's installer, which use
+#      the proxy that https_proxy names, as the toolchain's other downloads
+#      do; the installer needs perl. Without a terminal, or when the answer
+#      is no, nothing is installed and the server offers no PDFs (its
+#      administration's Server section says why). Nothing about TeX stops
+#      the deploy: PDFs are optional.
 #      With --backend-only the page is not built here: it is downloaded from
 #      the GitHub release where CI keeps it (see --backend-only below), and
 #      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
@@ -249,6 +270,16 @@
 #                    open a semaphore made the way cabal makes one, and the build uses
 #                    the semaphore only when it can. Not remembered: a choice for
 #                    this run's build
+#   --texlive        --server: when the TeX the service finds does not work, install TeX
+#                    Live under the toolchain directory without asking; when one is
+#                    installed there already, check it and use it. Remembered for the next
+#                    run, as is the answer to the question
+#   --no-texlive     --server: do not install TeX Live, and do not use one the toolchain
+#                    directory holds (it is left there); the server makes PDFs only
+#                    with a TeX of this machine's that works. Remembered for the next run
+#   --texlive-mirror URL
+#                    --server: the CTAN mirror TeX Live is installed from (default
+#                    https://mirror.ctan.org, which redirects to one near you); remembered
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
 #                    starts at boot and survives logging out
@@ -294,6 +325,7 @@ name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 opt_backend_only='' refresh_page=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
+opt_texlive='' opt_texlive_mirror=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force='' opt_semaphore=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -342,6 +374,14 @@ while [ $# -gt 0 ]; do
     --no-build) build= ;;
     --semaphore) opt_semaphore=on ;;
     --no-semaphore) opt_semaphore=off ;;
+    --texlive)
+      [ "$opt_texlive" != no ] || die "--texlive and --no-texlive exclude each other: give one"
+      opt_texlive=yes ;;
+    --no-texlive)
+      [ "$opt_texlive" != yes ] || die "--texlive and --no-texlive exclude each other: give one"
+      opt_texlive=no ;;
+    --texlive-mirror) need_value $# "$1"; opt_texlive_mirror=$2; shift ;;
+    --texlive-mirror=*) opt_texlive_mirror=${1#*=} ;;
     --no-firewall) no_firewall=1 ;;
     --enable-linger) enable_linger=1 ;;
     --force) force=1 ;;
@@ -362,6 +402,12 @@ ways=
 case $ways in
   ' '*' '*)
     die "$(printf '%s' "${ways# }" | sed 's/ / and /g') are ways to serve that exclude each other: give one (--https through tailscale serve, --tls-cert FILE --tls-key FILE with a certificate of your own, --behind-proxy behind a reverse proxy, or --http for plain HTTP)" ;;
+esac
+case $opt_texlive_mirror in
+  '') ;;
+  *[[:space:]\"\'\\\`\$]*) die "--texlive-mirror $opt_texlive_mirror: an http:// or https:// URL without spaces or quotes" ;;
+  http://?* | https://?*) ;;
+  *) die "--texlive-mirror $opt_texlive_mirror: an http:// or https:// URL, such as https://mirror.ctan.org" ;;
 esac
 check_name "$name"
 resolve_prefix
@@ -411,6 +457,13 @@ prev_db_port=$(state_get db_port)
 # the REF it was given, and the commit whose page it downloaded last.
 prev_backend_only=$(state_get backend_only)
 prev_backend_only_commit=$(state_get backend_only_commit)
+# Whether the deployment installs TeX Live under the toolchain directory for
+# its PDF exports (yes, no, or empty when nobody has answered yet), the
+# installation it uses (texlive_dir, set once one has worked), and the CTAN
+# mirror given for it.
+prev_texlive=$(state_get texlive)
+prev_texlive_dir=$(state_get texlive_dir)
+prev_texlive_mirror=$(state_get texlive_mirror)
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -683,6 +736,257 @@ console_wrapper() {
   printf "exec '%s/bin/wiki-server' \"\$@\"\n" "$dir"
 }
 
+# --- PDF exports: the TeX the service finds ---------------------------------
+#
+# wiki-server makes PDFs with the xelatex on its PATH, under kpathsea's
+# paranoid limits. A TeX Live older than 2021 refuses, under those limits, a
+# file unicode-math reads by its full path, and loops until the export's
+# time runs out, so finding an xelatex is not enough: toolchain/check-tex.sh
+# typesets a document like an export's. It runs in the environment the
+# service will have, because a systemd user unit does not get the PATH of
+# the shell the deploy runs in. When the check fails, the deploy can install
+# TeX Live under the toolchain directory and put its bin directory first on
+# the unit's PATH.
+
+# The CTAN mirror TeX Live is installed from when --texlive-mirror names
+# none. It redirects to a mirror near the machine.
+TEXLIVE_DEFAULT_MIRROR=https://mirror.ctan.org
+# The directory of the toolchain's TeX Live: one installation per TeX Live
+# year (<year>/), the TEXMFHOME and caches it keeps for its user (user/),
+# and the install's log. It is under .wiki-toolchain, as the managed Node
+# is, so that it can never be a TeX Live of one's own in ~/texlive.
+texlive_root=$toolchain_base/.wiki-toolchain/texlive
+# The PATH of the unit that uses the toolchain's TeX Live, after its bin
+# directory: the directories of the system's own programs.
+UNIT_BASE_PATH=/usr/local/bin:/usr/bin:/bin
+
+# The PATH the user's systemd manager gives a unit that sets none, which is
+# the PATH the service sees. When systemctl says nothing, systemd's usual
+# default.
+manager_path() {
+  path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p' | tail -n 1)
+  printf '%s\n' "${path:-$UNIT_BASE_PATH}"
+}
+
+# The bin directory of a TeX Live installation (bin/<platform>, such as
+# bin/x86_64-linux) that holds xelatex; fails when there is none.
+texlive_bin() {
+  [ -n "$1" ] || return 1
+  for candidate in "$1"/bin/*/; do
+    if [ -x "${candidate}xelatex" ]; then
+      printf '%s\n' "${candidate%/}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Run toolchain/check-tex.sh as the service would run xelatex: with an empty
+# environment but HOME and the PATH given. Sets tex_status (0 working, 1
+# failing, 2 not found), tex_line (the first line of its report, "working
+# <path>", "failing <path>" or "not-found") and tex_report (the whole
+# report).
+check_tex() {
+  tex_status=0
+  tex_report=$(env -i HOME="$HOME" PATH="$1" ${WIKI_TEX_TIMEOUT:+"WIKI_TEX_TIMEOUT=$WIKI_TEX_TIMEOUT"} \
+    /bin/sh "$ROOT/toolchain/check-tex.sh" 2>&1) || tex_status=$?
+  tex_line=$(printf '%s\n' "$tex_report" | head -n 1)
+  return "$tex_status"
+}
+# The report's lines after the first (the reason a check failed), indented.
+tex_reason() { printf '%s\n' "$tex_report" | sed '1d;s/^/    /'; }
+
+# What TeX Live's installer needs from the machine that is missing, empty
+# when nothing is: curl, tar and gzip download and unpack it, and it is a
+# Perl program that uses modules of Perl's standard library, which RHEL
+# leaves out of perl-interpreter alone.
+texlive_missing() {
+  missing=
+  for cmd in curl tar gzip perl; do
+    command -v "$cmd" >/dev/null 2>&1 || missing="${missing:+$missing, }$cmd"
+  done
+  if [ -z "$missing" ] &&
+    ! perl -MDigest::MD5 -MDigest::SHA -MFile::Temp -MGetopt::Long -MPod::Usage -MData::Dumper -MTime::HiRes -e 1 >/dev/null 2>&1; then
+    missing="Perl's standard modules (Digest::SHA and others)"
+  fi
+  printf '%s\n' "$missing"
+}
+
+# One step of the install: the command's output is shown as it comes and
+# appended to the install's log, as the bootstrap's long steps are. A
+# failure shows the end of the log and fails.
+texlive_step() {
+  step=$1
+  shift
+  printf '+ %s\n' "$*" >>"$texlive_log"
+  # A pipeline's status is tee's, so the command's own status goes to a
+  # file, which stays empty when the command succeeds.
+  step_status=$(mktemp)
+  { "$@" 2>&1 || printf '%s' "$?" >"$step_status"; } | tee -a "$texlive_log"
+  step_failed=$(cat "$step_status")
+  rm -f "$step_status"
+  [ -n "$step_failed" ] || return 0
+  warn "$step failed (exit $step_failed); the end of $texlive_log:"
+  tail -n 20 "$texlive_log" >&2
+  return 1
+}
+
+# Install TeX Live under texlive_root from the mirror texlive_mirror names:
+# the installer from <mirror>/systems/texlive/tlnet/, the scheme basic
+# (plain TeX and LaTeX) without documentation and sources, then the
+# packages of toolchain/texlive-packages.txt with tlmgr. The installation
+# goes into <year>/, the year of the installer's TeX Live; an installation
+# of that year already there (one that failed its check) is replaced, and
+# those of other years are deleted once the new one works (texlive_step).
+# Sets texlive_new to the installation; fails, saying why, when a step
+# fails.
+install_texlive() {
+  mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
+  repository=${mirror%/}/systems/texlive/tlnet
+  mkdir -p "$texlive_root"
+  texlive_log=$texlive_root/install.log
+  printf '\n%s installing TeX Live from %s\n' "$(date '+%F %T')" "$repository" >>"$texlive_log"
+  installer_dir=$texlive_root/installer.tmp
+  rm -rf "$installer_dir"
+  mkdir -p "$installer_dir"
+  say "downloading TeX Live's installer from $repository (its output also goes to $texlive_log)"
+  texlive_step "downloading TeX Live's installer" curl --fail --location --retry 5 --silent --show-error \
+    --output "$installer_dir/install-tl-unx.tar.gz" "$repository/install-tl-unx.tar.gz" || return 1
+  texlive_step "unpacking TeX Live's installer" tar -xzf "$installer_dir/install-tl-unx.tar.gz" -C "$installer_dir" || return 1
+  installer=
+  for candidate in "$installer_dir"/install-tl-*/; do
+    [ ! -f "${candidate}install-tl" ] || installer=${candidate%/}
+  done
+  [ -n "$installer" ] || { warn "the download from $repository holds no install-tl"; return 1; }
+  # The year of the TeX Live the installer installs: release-texlive.txt
+  # says "TeX Live (https://tug.org/texlive) version 2026"; the directory,
+  # install-tl-20260301, has it too.
+  year=$(sed -n 's/.*version \([0-9][0-9][0-9][0-9]\).*/\1/p' "$installer/release-texlive.txt" 2>/dev/null | head -n 1)
+  [ -n "$year" ] || year=$(printf '%s\n' "${installer##*/install-tl-}" | sed -n 's/^\([0-9][0-9][0-9][0-9]\).*/\1/p')
+  [ -n "$year" ] || { warn "cannot tell the year of the TeX Live in $installer"; return 1; }
+  texlive_new=$texlive_root/$year
+  rm -rf "$texlive_new"
+  say "installing TeX Live $year into $texlive_new (the scheme basic, no documentation or sources)"
+  texlive_step "TeX Live's installer" "$installer/install-tl" --no-interaction --scheme=basic \
+    --texdir="$texlive_new" --texuserdir="$texlive_root/user" --no-doc-install --no-src-install \
+    --repository "$repository" || return 1
+  new_bin=$(texlive_bin "$texlive_new") || { warn "TeX Live's installer left no xelatex under $texlive_new/bin"; return 1; }
+  # The list's words, without its comments.
+  packages=$(sed 's/#.*//' "$ROOT/toolchain/texlive-packages.txt" | tr -s ' \t\n' ' ')
+  say "installing the packages the PDF exports need (toolchain/texlive-packages.txt) with tlmgr"
+  # shellcheck disable=SC2086 # the packages are words.
+  texlive_step "tlmgr install" "$new_bin/tlmgr" install $packages || return 1
+  rm -rf "$installer_dir"
+}
+
+# The TeX step of a server's deploy. It decides texlive, texlive_dir and
+# texlive_mirror, which the state keeps, and tex_bin, the toolchain's
+# TeX Live bin directory the unit puts first on its PATH (empty when the
+# service uses the TeX it finds on its own, or none). It never stops the
+# deploy: without a TeX that works, the server offers no PDFs.
+tex_step() {
+  tex_bin=
+  service_path=$(manager_path)
+  # The toolchain's TeX Live, when one is installed and not declined.
+  if [ "$texlive" != no ] && toolchain_bin=$(texlive_bin "$texlive_dir"); then
+    if check_tex "$toolchain_bin:$UNIT_BASE_PATH"; then
+      say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $toolchain_bin first on its PATH"
+      tex_bin=$toolchain_bin
+      return 0
+    fi
+    warn "PDF exports: the toolchain's TeX Live in $texlive_dir does not work:"
+    tex_reason >&2
+  elif [ "$texlive" = no ] && [ -n "$(texlive_bin "$texlive_dir" || true)" ]; then
+    say "--no-texlive: not using the toolchain's TeX Live in $texlive_dir, which stays there (--texlive uses it again)"
+  fi
+  # The TeX the service finds on its own PATH.
+  if check_tex "$service_path"; then
+    say "PDF exports: ${tex_line#working } works, the TeX on this machine, found on the service's PATH ($service_path)"
+    return 0
+  fi
+  if [ "$tex_status" = 2 ]; then
+    say "PDF exports: no xelatex on the service's PATH ($service_path): the systemd user manager's PATH, not this shell's"
+  else
+    warn "PDF exports: ${tex_line#failing } does not make the probe's PDF under the export's limits, on the service's PATH ($service_path):"
+    tex_reason >&2
+  fi
+  # The trap: a TeX this shell finds and the service does not.
+  if shell_tex=$(command -v xelatex 2>/dev/null) && [ "$tex_status" = 2 ]; then
+    say "this shell finds $shell_tex, but the service does not: a unit does not inherit the shell's PATH"
+  fi
+  mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
+  offer_off="the server offers no PDFs, and its administration's Server section says why"
+  case $texlive in
+    no)
+      say "PDF exports: $offer_off (--no-texlive; --texlive installs TeX Live under $texlive_root)"
+      return 0 ;;
+    yes) ;;
+    *)
+      if [ -t 0 ] && [ -t 1 ]; then
+        printf '%s: Install TeX Live under %s from %s? About 250 MB and a few minutes [y/N] ' "$PROG" "$texlive_root" "$mirror"
+        read -r answer || answer=
+        case $answer in
+          y | Y | yes | Yes | YES) texlive=yes ;;
+          *)
+            texlive=no
+            say "PDF exports: $offer_off (remembered; --texlive installs TeX Live under $texlive_root later)"
+            return 0 ;;
+        esac
+      else
+        say "PDF exports: $offer_off. --texlive installs TeX Live under $texlive_root from $mirror (about 250 MB and a few minutes); --no-texlive says no and stops this note"
+        return 0
+      fi ;;
+  esac
+  missing=$(texlive_missing)
+  if [ -n "$missing" ]; then
+    warn "TeX Live's installer needs $missing, missing here: install them (Debian and Ubuntu: sudo apt-get install perl curl tar gzip; RHEL and Fedora: sudo dnf install perl curl tar gzip, the whole perl, not perl-interpreter alone) and deploy again. Meanwhile $offer_off"
+    return 0
+  fi
+  if ! install_texlive; then
+    warn "TeX Live was not installed (see above), so $offer_off; the next deploy tries again (--no-texlive stops it)"
+    return 0
+  fi
+  if ! check_tex "$new_bin:$UNIT_BASE_PATH"; then
+    warn "the TeX Live just installed in $texlive_new does not make the probe's PDF:"
+    tex_reason >&2
+    warn "so $offer_off; the next deploy installs it again (--no-texlive stops it)"
+    return 0
+  fi
+  # One installation is kept: those of other years go.
+  for old in "$texlive_root"/[0-9][0-9][0-9][0-9]; do
+    if [ -d "$old" ] && [ "$old" != "$texlive_new" ]; then
+      rm -rf "$old"
+      say "deleted the older TeX Live in $old"
+    fi
+  done
+  texlive_dir=$texlive_new tex_bin=$new_bin
+  say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $tex_bin first on its PATH"
+}
+
+# The state of the PDF exports for --status: the check run with the PATH
+# the installed unit gives the service (its own PATH line when it has one,
+# else the systemd manager's).
+tex_status_report() {
+  unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1)
+  if [ -n "$unit_path" ]; then
+    whose="the toolchain's TeX Live, first on the unit's PATH"
+  else
+    unit_path=$(manager_path) whose="the TeX on this machine, on the service's PATH"
+  fi
+  if check_tex "$unit_path"; then
+    say "PDF exports: ${tex_line#working } works ($whose)"
+  elif [ "$tex_status" = 2 ]; then
+    say "PDF exports: off, no xelatex on the service's PATH ($unit_path)"
+  else
+    say "PDF exports: off, ${tex_line#failing } fails ($whose):"
+    tex_reason
+  fi
+  case $prev_texlive in
+    yes) [ -z "$prev_texlive_dir" ] || say "the toolchain's TeX Live: $prev_texlive_dir" ;;
+    no) say "TeX Live under the toolchain was declined (--no-texlive); --texlive installs it" ;;
+  esac
+}
+
 if [ "$action" = status ]; then
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
     say "nothing is deployed under the name $name${prefix:+ under $prefix}${prefix:-: a deployment under a prefix is found with --prefix DIR}"
@@ -714,6 +1018,7 @@ if [ "$action" = status ]; then
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
     say "users: $prev_dir/bin/wiki users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
     say "its public address, mail server and sign-in providers: the administration's Server section, http://127.0.0.1:$prev_admin_port/admin/admin/"
+    tex_status_report
     if [ -n "$prev_smtp_host$prev_public_url$prev_oidc" ] || [ -f "$env_file" ]; then
       say "it was deployed with --smtp-host, --public-url or --oidc, which are gone: the next deploy drops them${prev_smtp_host:+ (mail through $prev_smtp_host)}${prev_oidc:+ (providers: $prev_oidc)}; set them in the Server section"
     fi
@@ -796,6 +1101,7 @@ if [ "$mode" = server ]; then
 else
   [ -z "$opt_admin_port" ] || die "--admin-port is for the wiki's server: add --server"
   [ -z "$opt_db$opt_db_port$fresh" ] || die "--postgres, --sqlite, --db-port and --fresh are for the wiki's server: add --server"
+  [ -z "$opt_texlive$opt_texlive_mirror" ] || die "--texlive, --no-texlive and --texlive-mirror are for the wiki's server, which makes the PDFs: add --server"
 fi
 
 # The wiki's database: PostgreSQL in Docker unless --sqlite said otherwise,
@@ -1486,6 +1792,14 @@ if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
 fi
 bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env)
 eval "$bootstrap_env"
+# The TeX of the PDF exports, checked after the toolchain and before the
+# build, so that an install of TeX Live, when one is wanted, happens before
+# the long wait. The demo keeps what a server before it chose.
+texlive=${opt_texlive:-$prev_texlive}
+texlive_dir=$prev_texlive_dir
+texlive_mirror=${opt_texlive_mirror:-$prev_texlive_mirror}
+tex_bin=
+[ "$mode" != server ] || tex_step
 if [ -n "$build" ] && [ -n "$backend_only" ]; then
   if [ "$mode" = server ]; then
     say "building wiki-server at -O2 (cabal-native-opt.project)"
@@ -1784,6 +2098,14 @@ TimeoutStopSec=30"
     service_extra="$service_extra
 Environment=\"LD_LIBRARY_PATH=$(printf '%s' "$LD_LIBRARY_PATH" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g')\""
     say "the unit runs wiki-server with LD_LIBRARY_PATH=$LD_LIBRARY_PATH, as this shell has it: a systemd unit does not inherit the shell's environment"
+  fi
+  # The toolchain's TeX Live, when the TeX step chose it, first on the
+  # unit's PATH, where the server looks for xelatex; the rest is the
+  # system's own directories. The path was checked for the characters a
+  # unit cannot hold with the toolchain's.
+  if [ -n "$tex_bin" ]; then
+    service_extra="$service_extra
+Environment=\"PATH=$(printf '%s' "$tex_bin:$UNIT_BASE_PATH" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g')\""
   fi
 else
   description="Wiki demo ($name) from $dir on $bind:$port"
