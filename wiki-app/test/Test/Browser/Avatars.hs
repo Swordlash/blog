@@ -5,7 +5,8 @@
 -- first letter of their name; one chooses a picture in the account panel
 -- (a click on the avatar's circle),
 -- crops it in the dialog (Cropper.js, through the page's islands), a modal
--- centred in the window with the whole picture in the cropper, and uses
+-- centred in the window with the whole picture in the cropper and the
+-- starting circle inside the picture, and uses
 -- it, and the header shows it at once; "Cancel" and Escape close the
 -- dialog without uploading anything. A comment's author is shown with
 -- their avatar, a personal space without an icon of its own with its
@@ -131,6 +132,12 @@ spec m = do
       image `shouldSatisfy` within canvas
       abs ((image.right - image.left) - (canvas.right - canvas.left)) `shouldSatisfy` (< 1.5)
       abs (2 * (image.bottom - image.top) - (canvas.bottom - canvas.top)) `shouldSatisfy` (< 3)
+      -- The starting selection, the circle, is the largest square inside
+      -- the picture, centred: none of it on the checked background.
+      Just (selection, _) <- rect ".account-avatar .avatar-crop cropper-selection"
+      selection `shouldSatisfy` within image
+      (selection.bottom - selection.top) `shouldSatisfy` (> (image.bottom - image.top) - 3)
+      abs ((selection.left + selection.right) - (image.left + image.right)) `shouldSatisfy` (< 2)
     find ui ".account-avatar .avatar-cancel" >>= click
     eventually $ length <$> findAll ui ".account-avatar .avatar-crop-dialog[open]" `shouldReturn` 0
     unmount ui
