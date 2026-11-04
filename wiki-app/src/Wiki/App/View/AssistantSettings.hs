@@ -33,19 +33,25 @@
 -- TLS, but anyone who can modify this page in transit could read what is
 -- typed into it.
 --
--- Each provider's settings accept another base URL for its API ("Base
--- URL"), for any service that implements the API. For OpenAI's that is
--- GitHub Models, OpenRouter, or a server on this machine (Ollama, LM
--- Studio), which needs no key. For Anthropic's it is a gateway, such as an
--- organisation's own in front of Anthropic (WP5.57). The SDK sends the key
--- as @Authorization: Bearer@, which such a gateway takes. A base URL over
--- plain HTTP to another machine gets the same warning: the key would cross
--- the network unencrypted. A base URL that the page's
--- Content Security Policy does not allow (WP5.21 of docs/PLAN.md) is
--- refused before anything is sent: "Test the key" says so, with the
--- addresses the page allows and who can add one ("Wiki.App.Assistant"). A
--- provider that could not be reached on the last attempt (because a
--- network blocks it) is marked as unreachable.
+-- Each provider's settings choose the service its requests go to
+-- ("Service", WP5.60): the provider's own, or one of the services that
+-- speak its API which the wiki's administrator lists (Administration,
+-- Server, The assistant's services), as the session carries them. For
+-- OpenAI's API that may be GitHub Models, OpenRouter, or a server of
+-- Ollama or LM Studio, which needs no key. For Anthropic's it is a
+-- gateway, such as an organisation's own in front of Anthropic (WP5.57).
+-- The SDK sends the key as @Authorization: Bearer@, which such a gateway
+-- takes. Choosing a service sets the base URL the settings keep
+-- ('withBaseUrl'), so nothing else changes. There is no field to type an
+-- address in: the page's Content Security Policy (WP5.21 of
+-- docs/PLAN.md) lets the browser reach only the administrator's services,
+-- and a typed address would be refused with an error that explains
+-- nothing. A base URL kept from before, which no service offers any
+-- more, is shown as such until another service is chosen. A service over
+-- plain HTTP to another machine gets the same warning as the page: the key
+-- would cross the network unencrypted. A provider that could not be
+-- reached on the last attempt (because a network blocks it) is marked as
+-- unreachable.
 --
 -- Everything is read in the initializer, in the browser. A page rendered
 -- ahead of the program (by the prerender or the server), which has no
@@ -68,6 +74,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..))
 import Wiki.Api.Vault (PasskeyInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, readKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
@@ -184,7 +191,7 @@ data Action
   | TypedModel Provider Text
   | Test Provider
   | Refresh Provider
-  | TypedBaseUrl Provider Text
+  | ChooseService Provider Text
   | ChooseEffort Provider Text
   | TurnOn
   | TypedSyncPassword Text
@@ -375,11 +382,22 @@ component =
             {% if ps.unreachable %}
               <p class="warning assistant-unreachable" role="alert">{{ cannotReach }}</p>
             {% end %}
-            <label class="field assistant-base-url-field">
-              <span>Base URL</span>
-              <input type="url" class="assistant-base-url" spellcheck="false" placeholder={{ basePlaceholder }} value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy || checking }} onValueChange={{ TypedBaseUrl p }}>
+            <label class="field assistant-service-field">
+              <span>Service</span>
+              <select class="assistant-service" disabled={{ st.busy || checking }} onValueChange={{ ChooseService p }}>
+                <option value="" selected={{ isNothing ps.baseUrl }}>{{ ownService }}</option>
+                {% for service in offered %}
+                  <option value={{ service.baseUrl.text }} selected={{ ps.baseUrl == Just service.baseUrl }}>{{ service.name }} ({{ service.baseUrl.text }})</option>
+                {% end %}
+                {% for url in maybeToList stale %}
+                  <option value={{ url.text }} selected>{{ url.text }} (no longer offered by this wiki)</option>
+                {% end %}
+              </select>
             </label>
-            <p class="account-note assistant-base-url-hint">{{ baseHint }}</p>
+            {% if isJust stale %}
+              <p class="warning assistant-service-stale" role="alert">This address is no longer among the services this wiki offers, and the browser may be refused it: choose another service.</p>
+            {% end %}
+            <p class="account-note assistant-service-hint">{{ serviceHint }}</p>
             {% for url in maybeToList ps.baseUrl %}
               {% if insecureUrl url.text %}
                 <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>
@@ -466,15 +484,17 @@ component =
             <> serviceName p ps
             <> " from this network: the last request found no way to it. A network that blocks it, a firewall or a proxy, is the likely cause."
             <> if isJust (baseUrlOf p ps)
-              then " Or the address is not among those this wiki allows (its administrator adds them in the server settings: Administration, Server, The assistant's hosts), or the service does not answer requests from a browser page (CORS)."
+              then " Or the service does not answer requests from a browser page (CORS), or its address is no longer one this wiki offers (its administrator lists them in the server settings: Administration, Server, The assistant's services)."
               else ""
-        basePlaceholder = if p == OpenAI then "https://api.openai.com/v1" else "https://api.anthropic.com" :: Text
-        baseHint :: Text
-        baseHint
-          | p == OpenAI =
-              "Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key. The browser reaches only the addresses this wiki allows: OpenAI's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
-          | otherwise =
-              "Empty for Anthropic's own; or another service that speaks its API, such as your organisation's gateway. The browser reaches only the addresses this wiki allows: Anthropic's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
+        -- The session's services that speak this provider's API, and the
+        -- base URL kept if none of them is at it.
+        offered = [service | service <- st.input.context.session.assistantServices, apiProvider service.api == p]
+        stale = mfilter (\url -> url `notElem` map (\service -> service.baseUrl) offered) ps.baseUrl
+        ownService = (if p == OpenAI then "OpenAI's own" else "Anthropic's own") :: Text
+        serviceHint :: Text
+        serviceHint
+          | null offered = providerLabel p <> "'s own service is the only one this wiki offers. Its administrator can add others that speak its API, such as your organisation's gateway or a server of Ollama (Administration, Server, The assistant's services)."
+          | otherwise = providerLabel p <> "'s own service, or another that speaks its API, as this wiki's administrator lists them (Administration, Server, The assistant's services). Some take a key of their own (GitHub Models a GitHub token), and a server of Ollama or LM Studio takes none."
         listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
         other = Set.member p st.otherModels || not listed
         option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
@@ -629,7 +649,7 @@ component =
                   Left why -> st {sync = st.sync {working = Nothing, trouble = Just why}}
             )
       ChooseEffort p e -> change (withEffort p e)
-      TypedBaseUrl p url -> do
+      ChooseService p url -> do
         change (withBaseUrl p url)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
         -- Fetch the other service's own list, if it can be reached.
@@ -757,6 +777,12 @@ component =
             Right k -> st {busy = False, settings = Just (Right k.settings), sync = syncOf result st.sync}
             Left why -> st {busy = False, problem = Just why}
         _ -> pass
+
+-- | The provider whose API a service speaks.
+apiProvider :: AssistantApi -> Provider
+apiProvider = \case
+  AnthropicApi -> Anthropic
+  OpenAiApi -> OpenAI
 
 userOf :: Input -> Maybe UserId
 userOf input = (\u -> u.id) <$> input.context.session.user

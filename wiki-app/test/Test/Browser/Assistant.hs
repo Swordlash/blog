@@ -44,23 +44,27 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, replace)
+import Test.Browser.Http (answerWith, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (slugs, startWith)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
-import Web.DOM.Element qualified as Element
-import Web.Event.Event (EventType (..))
-import Web.Event.Event qualified as Event
-import Web.HTML.HTMLInputElement qualified as HTMLInputElement
-import Web.HTML.Window qualified as Window
+import Web.Storage.IndexedDB (MonadIndexedDB)
+import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..))
+import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, readKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
+import Wiki.App.Backend (Session (..), session)
+import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
+import Wiki.App.Backend.Mem.State qualified as M
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode, withModel)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
+import Wiki.Core.User (Standing (..))
 
 $( browserJS
      ["jsbits/test-assistant.js"]
@@ -77,7 +81,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   it "sends a selection, streams the answer, and makes its edit a change that Accept keeps and Ctrl+Z undoes" $ runPage $ do
     script [[text "I will ", text "make it the very first.", replace "the first post" "the very first post", text " Done."]]
@@ -525,26 +529,20 @@ spec m = do
     choose "medium"
     eventually $ (\s -> (settingsOf Anthropic s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
 
-  it "keeps a base URL for Anthropic, fetches the gateway's models there, and says what a refused key and no connection mean" $ runPage $ do
+  it "chooses a gateway the server offers for Anthropic, fetches its models there, and says what a refused key and no connection mean" $ runPage $ do
     scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
     keep m (UserId "user-editor") (withKey Anthropic (Just "gw-token") defaultSettings)
-    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    ui <- settingsOver m [corporateGateway, ollama]
     anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
-    field <- findIn anthropic ".assistant-base-url"
-    getAttribute field "placeholder" >>= (`shouldBe` Just "https://api.anthropic.com")
-    hint <- findIn anthropic ".assistant-base-url-hint" >>= textContent
-    hint `shouldSatisfy` T.isInfixOf "Empty for Anthropic's own; or another service that speaks its API, such as your organisation's gateway."
-    hint `shouldSatisfy` T.isInfixOf "(Administration, Server, The assistant's hosts)"
-    -- OpenAI's field is there too, with its own hint.
-    openai <- find ui ".assistant-provider-settings[data-provider='openai']"
-    findIn openai ".assistant-base-url" >>= (`getAttribute` "placeholder") >>= (`shouldBe` Just "https://api.openai.com/v1")
-    typeText field gateway
-    press "Tab"
+    hint <- findIn anthropic ".assistant-service-hint" >>= textContent
+    hint `shouldSatisfy` T.isInfixOf "(Administration, Server, The assistant's services)"
+    findIn anthropic ".assistant-service" >>= (`getProperty` "value") >>= (`shouldBe` "")
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-provider-settings[data-provider='anthropic'] .assistant-service") (toJSText gateway))
     eventually $ (\s -> (settingsOf Anthropic s).baseUrl) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (Url gateway))
     (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "gw-token"))
     -- The other service's own list, fetched at once with the key.
     eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
-    findIn anthropic ".assistant-base-url" >>= (`getProperty` "value") >>= (`shouldBe` gateway)
+    findIn anthropic ".assistant-service" >>= (`getProperty` "value") >>= (`shouldBe` gateway)
     length <$> findAllIn anthropic ".assistant-insecure-base-url" `shouldReturn` 0
     -- A refused key, in the model list and in "Test the key", says what
     -- it probably means.
@@ -555,12 +553,66 @@ spec m = do
     unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int)])))))) >>= (`shouldBe` True)
     findIn anthropic ".assistant-test" >>= click
     eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf expired)
-    -- No connection at all names the wiki's allowed addresses as a cause.
+    -- No connection at all names CORS and the administrator's list as causes.
     setLists (object ["anthropic" .= object ["error" .= object ["kind" .= ("connection" :: Text), "message" .= ("Failed to fetch" :: Text)]]])
     findIn anthropic ".assistant-refresh" >>= click
     unreachable <- eventually $ findIn anthropic ".assistant-unreachable" >>= textContent
     unreachable `shouldSatisfy` T.isInfixOf "Cannot reach claude-gateway.example.com from this network"
-    unreachable `shouldSatisfy` T.isInfixOf "The assistant's hosts"
+    unreachable `shouldSatisfy` T.isInfixOf "The assistant's services"
+    unmount ui
+    serverStops
+
+  it "offers the session's services under the provider whose API they speak, and the request goes to the one chosen" $ runPage $ do
+    scriptWith [] (object [])
+    keep m (UserId "user-editor") (withKey OpenAI (Just "sk-proj") (withKey Anthropic (Just "gw-token") defaultSettings))
+    ui <- settingsOver m [corporateGateway, ollama]
+    let offered provider = findAll ui (".assistant-provider-settings[data-provider='" <> provider <> "'] .assistant-service option") >>= traverse textContent
+    offered "anthropic" `shouldReturn` ["Anthropic's own", "Corporate gateway (" <> gateway <> ")"]
+    offered "openai" `shouldReturn` ["OpenAI's own", "Ollama (http://localhost:11434/v1)"]
+    -- The scripted provider has no service to choose.
+    length <$> findAll ui ".assistant-provider-settings[data-provider='scripted'] .assistant-service" `shouldReturn` 0
+    -- Chosen, the gateway is where "Test the key" goes; the provider's own
+    -- again, the provider.
+    let anthropic = ".assistant-provider-settings[data-provider='anthropic'] "
+        test = do
+          eventually $ find ui (anthropic <> ".assistant-test") >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+          before <- length <$> checks
+          find ui (anthropic <> ".assistant-test") >>= click
+          eventually $ length <$> checks `shouldReturn` (before + 1)
+          fmap (fieldText ["baseUrl"]) . lastMay <$> checks
+    _ <- unsafeIOToPageM (js_choose (toJSText (anthropic <> ".assistant-service")) (toJSText gateway))
+    eventually $ (\s -> (settingsOf Anthropic s).baseUrl) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (Url gateway))
+    test `shouldReturn` Just (Just gateway)
+    _ <- unsafeIOToPageM (js_choose (toJSText (anthropic <> ".assistant-service")) (toJSText ""))
+    eventually $ (\s -> (settingsOf Anthropic s).baseUrl) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+    test `shouldReturn` Just Nothing
+    unmount ui
+    serverStops
+
+  it "shows a kept address that no service offers as such, and replaces it with the service chosen" $ runPage $ do
+    scriptWith [] (object [])
+    let retired = "https://old-gateway.example.com"
+    keep m (UserId "user-editor") (withKey Anthropic (Just "gw-token") (withBaseUrl Anthropic retired defaultSettings))
+    ui <- settingsOver m [corporateGateway]
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    findIn anthropic ".assistant-service" >>= (`getProperty` "value") >>= (`shouldBe` retired)
+    findIn anthropic ".assistant-service option:checked" >>= (`shouldHaveText` (retired <> " (no longer offered by this wiki)"))
+    findIn anthropic ".assistant-service-stale" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "no longer among the services this wiki offers")
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-provider-settings[data-provider='anthropic'] .assistant-service") (toJSText gateway))
+    eventually $ (\s -> (settingsOf Anthropic s).baseUrl) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (Url gateway))
+    eventually $ length <$> findAllIn anthropic ".assistant-service-stale" `shouldReturn` 0
+    findAllIn anthropic ".assistant-service option" >>= traverse textContent >>= (`shouldBe` ["Anthropic's own", "Corporate gateway (" <> gateway <> ")"])
+    unmount ui
+    serverStops
+
+  it "offers only the provider's own service in the demo, which has no server" $ runPage $ do
+    scriptWith [] (object [])
+    keep m (UserId "user-editor") defaultSettings
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    -- Once the settings are read.
+    eventually $ findAll ui ".assistant-provider-settings[data-provider='anthropic'] .assistant-service option" >>= traverse textContent >>= (`shouldBe` ["Anthropic's own"])
+    findAll ui ".assistant-provider-settings[data-provider='openai'] .assistant-service option" >>= traverse textContent >>= (`shouldBe` ["OpenAI's own"])
+    find ui ".assistant-provider-settings[data-provider='anthropic'] .assistant-service-hint" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "the only one this wiki offers")
 
   it "tests the connection to another address without a key, until a key is typed, which is then the only one tested" $ runPage $ do
     scriptWith [] (object [])
@@ -628,20 +680,20 @@ spec m = do
     keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
     (ui, _) <- startWith m (Just "user-editor") AssistantSettings
     anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
-    let elsewhere = "https://other-gateway.example.com"
-        settingsNow = settingsOf Anthropic <$> settingsFor m (UserId "user-editor")
+    let settingsNow = settingsOf Anthropic <$> settingsFor m (UserId "user-editor")
     -- A gateway that takes its time to answer.
     unsafeIOToPageM (js_check_wait 1500) >>= (`shouldBe` True)
     findIn anthropic ".assistant-key" >>= (`typeText` "gw-token")
     findIn anthropic ".assistant-key-form button[type='submit']" >>= click
     eventually $ findIn anthropic ".assistant-key-form button[type='submit']" >>= (`shouldHaveText` "Checking…")
-    for_ [".assistant-base-url", ".assistant-key", ".assistant-model", ".assistant-default-effort"] $ \selector ->
+    for_ [".assistant-service", ".assistant-key", ".assistant-model", ".assistant-default-effort"] $ \selector ->
       findIn anthropic selector >>= (`getAttribute` "disabled") >>= (`shouldBe` Just "")
     -- The address changes all the same before the answer comes, as a
-    -- change from another device would: the field's change, sent by the
-    -- test, since the field takes no input from the user.
-    changeInput ".assistant-provider-settings[data-provider='anthropic'] .assistant-base-url" elsewhere `shouldReturn` True
-    eventually $ (\ps -> ps.baseUrl) <$> settingsNow >>= (`shouldBe` Just (Url elsewhere))
+    -- change from another device would: the choice's change, sent by the
+    -- test, since the choice takes no input from the user. The demo
+    -- offers the provider's own service only, which is the other address.
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-provider-settings[data-provider='anthropic'] .assistant-service") (toJSText ""))
+    eventually $ (\ps -> ps.baseUrl) <$> settingsNow >>= (`shouldBe` Nothing)
     -- The old address's answer keeps nothing, and says why; the key stays
     -- in the field, to be tested at the new address.
     eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The base URL changed while the key was tested, so the key was not kept")
@@ -725,6 +777,31 @@ spec m = do
     (map (fieldText ["model"]) <$> checks) `shouldReturn` [Just "claude-opus-5-5"]
     (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "gw-token"))
 
+-- | The assistant's settings, as the demo's editor, over a server (the
+-- test's own, in fetch's place) whose session offers these services of
+-- the assistant. The test stops the server with 'serverStops'.
+settingsOver
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+  => [AssistantService]
+  -> PageM s (Mounted s Shell.Query Void m)
+settingsOver m services = do
+  serverStarts
+  serveDemo
+  me <- unsafeIOToPageM $ do
+    wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId "user-editor")})
+    runMemWiki wiki session
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = services}
+  ui <- startServer m AssistantSettings
+  _ <- eventually $ find ui ".assistant-provider-settings[data-provider='anthropic'] .assistant-service"
+  pure ui
+
+-- | The administration's services of the test's server: a gateway that
+-- speaks Anthropic's API, and a server of Ollama that speaks OpenAI's.
+corporateGateway, ollama :: AssistantService
+corporateGateway = AssistantService {name = "Corporate gateway", baseUrl = Url gateway, api = AnthropicApi}
+ollama = AssistantService {name = "Ollama", baseUrl = Url "http://localhost:11434/v1", api = OpenAiApi}
+
 -- | The address of an organisation's gateway in front of Anthropic's API.
 gateway :: Text
 gateway = "https://claude-gateway.example.com"
@@ -780,19 +857,6 @@ keep m user settings = void (unsafeIOToPageM (runTest (changeKeys user (const se
 
 settingsFor :: forall m -> (MonadBrowserTest m, MonadAssistant m) => UserId -> PageM s Settings
 settingsFor m user = unsafeIOToPageM (either (const defaultSettings) (\k -> k.settings) <$> runTest (readKeys user :: m (Either Text Keys)))
-
--- | Set an input's value and send its change event, as the browser does
--- when the user has changed it; also for an input the user cannot change
--- (a disabled one). Whether the selector found an input.
-changeInput :: Text -> Text -> PageM s Bool
-changeInput selector value = unsafeIOToPageM $ do
-  w <- Window.window
-  found <- (>>= HTMLInputElement.fromElement) <$> w.document.querySelector selector
-  for_ found $ \input -> do
-    input.value_set value
-    changed <- Event.newEvent (EventType "change") True
-    void ((Element.toEventTarget (HTMLInputElement.toElement input)).dispatchEvent changed)
-  pure (isJust found)
 
 -- | Install the scripted provider's script: the steps of each turn.
 script :: [[Value]] -> PageM s ()

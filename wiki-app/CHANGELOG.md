@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+The assistant's addresses come from the server (WP5.60). The
+administration's Server section lists "The assistant's services", each a
+name, a base URL and the API it speaks, added, changed and removed as the
+sign-in providers are; the server refuses a bad address or a name used
+twice, and the form shows why. In the assistant's settings the "Base URL"
+field is gone: each provider's "Service" offers the provider's own and the
+session's services that speak its API ("name (base URL)"), and choosing
+one sets the base URL the settings keep, so the vault, the requests and the
+model list work as before. A kept address that no service offers any more
+is shown as no longer offered, with a note, until another is chosen. The
+demo has no server and offers the provider's own only. `Session` gains
+`assistantServices`.
+
 The key is tested before it is kept (WP5.59). In the assistant's
 settings, the key form's button is now "Test and keep the key" (Enter in
 the field does the same). With the typed key, at the base URL if one is
