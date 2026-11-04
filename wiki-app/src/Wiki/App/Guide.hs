@@ -417,7 +417,7 @@ markdownGuide =
   , "paragraph of its own: a blank line before it and after it, and nothing"
   , "else on its line. Anywhere else, inside a sentence for instance, it is"
   , "read as a wiki link to a page named `toc`, which shows as a broken link"
-  , "in red, like any `[[page]]` whose path leads nowhere:"
+  , "in red, like any wiki link whose path leads nowhere:"
   , ""
   , "```markdown"
   , "An introduction."
