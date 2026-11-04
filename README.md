@@ -462,8 +462,9 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   Markdown's font, and **«** at the bottom left folds the sidebar away; the
   browser keeps both.
 - **A writing assistant** in the editor, with your own API key for Anthropic's
-  Claude or OpenAI, or any service that speaks OpenAI's API (GitHub Models,
-  OpenRouter, Ollama on your own machine): a chat beside the Markdown, whose
+  Claude or OpenAI, or any service that speaks either's API (an organisation's
+  gateway in front of Anthropic, GitHub Models, OpenRouter, Ollama on your own
+  machine; [below](#the-assistant-at-another-address)): a chat beside the Markdown, whose
   model edits the page through tools, each edit shown as a change you accept or
   reject (**Agent** mode), or only answers and changes nothing (**Ask** mode),
   with the models the provider lists for your key. The mode, the model and the
@@ -581,6 +582,35 @@ wiki's own origin. They need a browser with the PRF extension, which the
 browsers the wiki runs in have: Chrome and Edge 140 or later, Firefox 133 or
 later, Safari 18.2 or later. A passkey here does
 not sign you in; it only unlocks the assistant's keys.
+
+### The assistant at another address
+
+Each provider's settings take a **Base URL**, for another service that speaks
+the provider's API. For Anthropic's that is typically an organisation's
+gateway in front of Anthropic (what Claude Code takes as
+`ANTHROPIC_BASE_URL`), which gives each user a key or token of their own (the
+one Claude Code's `apiKeyHelper` prints); for OpenAI's, GitHub Models,
+OpenRouter, or Ollama or LM Studio on your own machine, which needs no key.
+The model list is then the service's own, fetched there, and the assistant
+names the service by its host.
+
+- **The key goes as a bearer token.** Both providers' SDKs send the key as
+  `Authorization: Bearer <key>`, which is what such a gateway takes, so
+  there is nothing to choose. The browser also sends Anthropic's
+  `anthropic-dangerous-direct-browser-access: true`, and the service has to
+  answer the browser's CORS preflight with `authorization` among the
+  allowed headers.
+- **The address must be allowed.** Every page's Content Security Policy
+  lets the browser reach Anthropic's and OpenAI's APIs only, so an
+  administrator adds the service's address under "The assistant's hosts"
+  in the administration's "Server" section (or `--assistant-hosts`). Until
+  then the settings say the address is not allowed, before anything is
+  sent; a service that cannot be reached at all is said to be unreachable,
+  with the allowed addresses named as a likely cause.
+- **An expired key is pasted again.** Nothing renews a key or a token. When
+  the service refuses one (a 401), the chat and the settings say that it
+  has probably expired or been revoked, and the chat links to the settings
+  to paste a new one.
 
 ## How it is built
 
@@ -1296,7 +1326,7 @@ to the demo, keeping `data/`.
   turns off the camera, the microphone and the location. So a script slipped
   into a page, past the allowlist of its HTML, has nowhere to send an
   assistant's key. A user whose assistant talks to another service (Ollama,
-  LM Studio, OpenRouter, a proxy) needs its address among the assistant's
+  LM Studio, OpenRouter, a gateway in front of Anthropic) needs its address among the assistant's
   hosts: the "Server" section's "The assistant's hosts", or
   `--assistant-hosts https://openrouter.ai,http://localhost:11434`. The
   assistant's settings say so when an address is not allowed.

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Claude at another address (WP5.57). The assistant's settings show the
+"Base URL" field for Anthropic as for OpenAI, with a hint that names a
+gateway and where the administrator allows its address (Administration,
+Server, The assistant's hosts), and the model list and "Test the key" go
+there. The key goes as `Authorization: Bearer`, as the SDKs already send
+it, which is what such a gateway takes. The "cannot reach" warning for
+another address names the allowed addresses and CORS as causes. A key
+the provider refuses (a 401) shows, in the chat, a bubble that says the
+key has probably expired or been revoked, with a link to the settings
+and the provider's own words in smaller text under it; "Test the key"
+and the model list say the same.
+
 Avatars, readers, who wrote a page, the editor's title and the page's
 width (WP5.55). `MonadWiki` gains `setAvatar`, `removeAvatar` and
 `avatarUrl`, which the demo and the HTTP backend implement and the

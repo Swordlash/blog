@@ -49,3 +49,12 @@ function wiki_test_assistant_lists(json) {
   script.lists = JSON.parse(json);
   return true;
 }
+
+// The error "Test the key" answers with from now on (the script's check),
+// the rest of the script kept.
+function wiki_test_assistant_check(json) {
+  const script = globalThis.wikiAssistantScript;
+  if (typeof script !== "object" || script === null) return false;
+  script.check = JSON.parse(json);
+  return true;
+}

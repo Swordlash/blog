@@ -28,11 +28,14 @@
 -- TLS, but anyone who can modify this page in transit could read what is
 -- typed into it.
 --
--- OpenAI's settings accept another base URL for its API ("Base URL"), for
--- any service that implements the API: GitHub Models, OpenRouter, or a
--- server on this machine (Ollama, LM Studio), which needs no key. A base
--- URL over plain HTTP to another machine gets the same warning: the key
--- would cross the network unencrypted. A base URL that the page's
+-- Each provider's settings accept another base URL for its API ("Base
+-- URL"), for any service that implements the API. For OpenAI's that is
+-- GitHub Models, OpenRouter, or a server on this machine (Ollama, LM
+-- Studio), which needs no key. For Anthropic's it is a gateway, such as an
+-- organisation's own in front of Anthropic (WP5.57). The SDK sends the key
+-- as @Authorization: Bearer@, which such a gateway takes. A base URL over
+-- plain HTTP to another machine gets the same warning: the key would cross
+-- the network unencrypted. A base URL that the page's
 -- Content Security Policy does not allow (WP5.21 of docs/PLAN.md) is
 -- refused before anything is sent: "Test the key" says so, with the
 -- addresses the page allows and who can add one ("Wiki.App.Assistant"). A
@@ -92,6 +95,7 @@ import Wiki.Core.Assistant
   , providers
   , readyFor
   , serviceName
+  , serviceOf
   , settingsOf
   , usable
   , withBaseUrl
@@ -361,18 +365,16 @@ component =
             </div>
           {% else %}
             {% if ps.unreachable %}
-              <p class="warning assistant-unreachable" role="alert">Cannot reach {{ serviceName p ps }} from this network: the last request found no way to it. A network that blocks it, a firewall or a proxy, is the likely cause.</p>
+              <p class="warning assistant-unreachable" role="alert">{{ cannotReach }}</p>
             {% end %}
-            {% if p == OpenAI %}
-              <label class="field assistant-base-url-field">
-                <span>Base URL</span>
-                <input type="url" class="assistant-base-url" spellcheck="false" placeholder="https://api.openai.com/v1" value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
-              </label>
-              <p class="account-note assistant-base-url-hint">Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key. The browser reaches only the addresses this wiki allows: OpenAI's, and those its administrator adds in the server settings.</p>
-              {% for url in maybeToList ps.baseUrl %}
-                {% if insecureUrl url.text %}
-                  <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>
-                {% end %}
+            <label class="field assistant-base-url-field">
+              <span>Base URL</span>
+              <input type="url" class="assistant-base-url" spellcheck="false" placeholder={{ basePlaceholder }} value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
+            </label>
+            <p class="account-note assistant-base-url-hint">{{ baseHint }}</p>
+            {% for url in maybeToList ps.baseUrl %}
+              {% if insecureUrl url.text %}
+                <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>
               {% end %}
             {% end %}
             {% if isJust ps.key %}
@@ -446,6 +448,25 @@ component =
         ps = settingsOf p s
         choices = modelChoices p ps
         chosen = chosenModel p ps
+        -- At another service's address there are two more causes. The
+        -- page's Content Security Policy may not allow the address
+        -- (WP5.21), and the service may not answer a browser page's
+        -- requests (CORS). The browser reports both as no connection.
+        cannotReach :: Text
+        cannotReach =
+          "Cannot reach "
+            <> serviceName p ps
+            <> " from this network: the last request found no way to it. A network that blocks it, a firewall or a proxy, is the likely cause."
+            <> if isJust (baseUrlOf p ps)
+              then " Or the address is not among those this wiki allows (its administrator adds them in the server settings: Administration, Server, The assistant's hosts), or the service does not answer requests from a browser page (CORS)."
+              else ""
+        basePlaceholder = if p == OpenAI then "https://api.openai.com/v1" else "https://api.anthropic.com" :: Text
+        baseHint :: Text
+        baseHint
+          | p == OpenAI =
+              "Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key. The browser reaches only the addresses this wiki allows: OpenAI's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
+          | otherwise =
+              "Empty for Anthropic's own; or another service that speaks its API, such as your organisation's gateway. The browser reaches only the addresses this wiki allows: Anthropic's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
         listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
         other = Set.member p st.otherModels || not listed
         option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
@@ -519,7 +540,7 @@ component =
           Just (Right s) | Right r <- readyFor p s -> do
             modify (\st -> st {checks = Map.insert p Checking st.checks})
             result <- lift (checkKey r)
-            modify (\st -> st {checks = Map.insert p (maybe Works (Fails . errorText (Just r.key)) result) st.checks})
+            modify (\st -> st {checks = Map.insert p (maybe Works (Fails . errorText (serviceOf r) (Just r.key)) result) st.checks})
             -- Record whether the provider responded at all; and once the
             -- key is known to work, fetch its model list too.
             for_ result (\e -> change (withReached p (e.kind /= Unreachable)))
@@ -563,7 +584,7 @@ component =
           case result of
             Left e -> do
               change (withReached p (e.kind /= Unreachable))
-              modify (\st -> st {listings = Map.insert p (NotFetched (errorText (Just r.key) e)) st.listings})
+              modify (\st -> st {listings = Map.insert p (NotFetched (errorText (serviceOf r) (Just r.key) e)) st.listings})
             Right listed -> do
               change (withModels p listed now)
               modify (\st -> st {listings = Map.insert p (Fetched (length listed)) st.listings})

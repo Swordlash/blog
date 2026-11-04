@@ -39,8 +39,9 @@
 // its provider only, by the SDK, over HTTPS; nothing here logs (the SDKs'
 // own logging is turned off) or keeps it. `options` are the SDK client's
 // own: the page passes the address of another service than the provider's
-// own, if it is asked at one ({baseURL}: any that speaks OpenAI's API),
-// and the tests a fetch of their own.
+// own, if it is asked at one ({baseURL}: any that speaks the provider's
+// API, such as an organisation's gateway in front of Anthropic's), and the
+// tests a fetch of their own.
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -55,10 +56,13 @@ const maxRounds = 24;
 const refusesPart = (error, pattern) =>
   (error instanceof Anthropic.BadRequestError || error instanceof OpenAI.BadRequestError) && pattern.test(messageOf(error));
 
-// An empty key is a server's that takes none (OpenAI's API on this
-// machine: Ollama, LM Studio): the SDK will not make a client without a
-// key, so it gets one that is never sent, its Authorization header taken
-// away, as the SDK allows.
+// Both SDKs send the key as `Authorization: Bearer <key>` (Anthropic's
+// since its 1.x releases, for an apiKey and an authToken alike). That is
+// also the header a gateway in front of Anthropic's API takes, so a key
+// needs no choice of header. An empty key is a server's that takes none
+// (OpenAI's API on this machine: Ollama, LM Studio): the SDK will not make
+// a client without a key, so it gets one that is never sent, its
+// Authorization header taken away, as the SDK allows.
 const clientOptions = (key, options) => ({
   apiKey: key === "" ? "none" : key,
   ...(key === "" ? { defaultHeaders: { Authorization: null } } : {}),

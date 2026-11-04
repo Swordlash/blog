@@ -4,7 +4,7 @@
 //
 // - a chat is opened with its provider, model, key, the address of
 //   another service than the provider's own if it is asked at one
-//   (baseUrl: OpenAI's API elsewhere), and request (the request without
+//   (baseUrl: the provider's API elsewhere), and request (the request without
 //   its conversation, as Wiki.Core.Assistant.Prompt assembles it) and one
 //   Haskell callback, and is known by a number;
 // - each message is sent with the request as it is now (a model or an effort

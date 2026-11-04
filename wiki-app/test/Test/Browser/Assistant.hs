@@ -16,9 +16,11 @@
 -- it; the models offered, the provider's own list grouped; a bubble per
 -- provider with a key, or one without any; a provider that cannot be
 -- reached, said so and tried again; OpenAI's API at another address
--- without a key; and the settings page: keys kept per user, forgotten,
--- and tested, the list of models fetched with a key, and the default
--- effort per provider; the two modes, Ask, whose request has the tools
+-- without a key; Anthropic's API at a gateway, whose refusal of the key
+-- says to paste a new one and links to the settings; and the settings
+-- page: keys kept per user, forgotten, and tested, the list of models
+-- fetched with a key, the default effort per provider, and Anthropic's
+-- base URL, kept, with what a refused key and no connection say there; the two modes, Ask, whose request has the tools
 -- turned off and whose model's edit is refused, and Agent, kept in the
 -- settings and chosen above the conversation with the model and the
 -- effort; and the text's selection kept in sight while the message box
@@ -50,6 +52,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Url (Url (..))
 
 $( browserJS
      ["jsbits/test-assistant.js"]
@@ -60,6 +63,7 @@ $( browserJS
      , ("js_select", "wiki_test_editor_select", Safe, [t|Int -> Int -> IO Bool|])
      , ("js_choose", "wiki_test_choose", Safe, [t|JSText -> JSText -> IO Bool|])
      , ("js_lists", "wiki_test_assistant_lists", Safe, [t|JSText -> IO Bool|])
+     , ("js_check", "wiki_test_assistant_check", Safe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -343,15 +347,41 @@ spec m = do
     fieldText ["key"] toClaude `shouldBe` Just "sk-ant-test"
 
   it "shows a provider's error as it gave it, without anything like a key" $ runPage $ do
-    script [[failing "authentication" 401 "invalid x-api-key: sk-ant-api03-abcdefgh1234"]]
+    script [[failing "permission" 403 "not for this key: sk-ant-api03-abcdefgh1234"]]
     ui <- openAssistant m
     send ui "Hello?"
     shown <- eventually $ find ui ".assistant-error" >>= textContent
-    shown `shouldSatisfy` T.isInfixOf "The provider did not accept the key."
-    shown `shouldSatisfy` T.isInfixOf "(401)"
+    shown `shouldSatisfy` T.isInfixOf "The key may not do this."
+    shown `shouldSatisfy` T.isInfixOf "(403)"
     shown `shouldNotSatisfy'` T.isInfixOf "abcdefgh1234"
     _ <- find ui ".assistant-send"
     pass
+
+  it "asks Anthropic's API at a gateway with its key, and a refused key says to paste a new one, with a link to the settings" $ runPage $ do
+    script [[failing "authentication" 401 "token expired: sk-ant-api03-abcdefgh1234"]]
+    keep m (UserId "user-editor") (withKey Anthropic (Just "gw-token") (withBaseUrl Anthropic gateway defaultSettings))
+    (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    _ <- editorText ui
+    eventually (find ui ".editor-provider[data-provider='anthropic']") >>= click
+    eventually $ find ui ".assistant-using" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "claude-gateway.example.com")
+    send ui "Hello?"
+    eventually $ length <$> requests `shouldReturn` 1
+    [request] <- requests
+    fieldText ["provider"] request `shouldBe` Just "anthropic"
+    fieldText ["baseUrl"] request `shouldBe` Just gateway
+    fieldText ["key"] request `shouldBe` Just "gw-token"
+    refused <- eventually $ find ui ".assistant-key-refused"
+    textContent refused >>= (`shouldSatisfy` T.isInfixOf "claude-gateway.example.com refused the key: it has probably expired or been revoked. Paste a new one in the assistant's settings.")
+    -- The provider's own words follow, smaller, without the key.
+    detail <- findIn refused ".assistant-error-detail" >>= textContent
+    detail `shouldSatisfy` T.isInfixOf "token expired"
+    detail `shouldSatisfy` T.isInfixOf "(401)"
+    detail `shouldNotSatisfy'` T.isInfixOf "abcdefgh1234"
+    -- The link opens the settings, where the new key goes.
+    settingsLink <- findIn refused "a.assistant-settings-open"
+    textContent settingsLink >>= (`shouldSatisfy` T.isInfixOf "Open the assistant's settings")
+    click settingsLink
+    eventually $ find ui ".assistant-settings h1" >>= (`shouldHaveText` "Writing assistant")
 
   it "offers the provider's own models, grouped, the first recommended the default, and asks the one chosen" $ runPage $ do
     scriptWith [[text "Hello."]] (object ["scripted" .= scriptedModels])
@@ -484,6 +514,47 @@ spec m = do
     -- The default chosen again is kept as none chosen.
     choose "medium"
     eventually $ (\s -> (settingsOf Anthropic s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+
+  it "keeps a base URL for Anthropic, fetches the gateway's models there, and says what a refused key and no connection mean" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    keep m (UserId "user-editor") (withKey Anthropic (Just "gw-token") defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    field <- findIn anthropic ".assistant-base-url"
+    getAttribute field "placeholder" >>= (`shouldBe` Just "https://api.anthropic.com")
+    hint <- findIn anthropic ".assistant-base-url-hint" >>= textContent
+    hint `shouldSatisfy` T.isInfixOf "Empty for Anthropic's own; or another service that speaks its API, such as your organisation's gateway."
+    hint `shouldSatisfy` T.isInfixOf "(Administration, Server, The assistant's hosts)"
+    -- OpenAI's field is there too, with its own hint.
+    openai <- find ui ".assistant-provider-settings[data-provider='openai']"
+    findIn openai ".assistant-base-url" >>= (`getAttribute` "placeholder") >>= (`shouldBe` Just "https://api.openai.com/v1")
+    typeText field gateway
+    press "Tab"
+    eventually $ (\s -> (settingsOf Anthropic s).baseUrl) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (Url gateway))
+    (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "gw-token"))
+    -- The other service's own list, fetched at once with the key.
+    eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
+    findIn anthropic ".assistant-base-url" >>= (`getProperty` "value") >>= (`shouldBe` gateway)
+    length <$> findAllIn anthropic ".assistant-insecure-base-url" `shouldReturn` 0
+    -- A refused key, in the model list and in "Test the key", says what
+    -- it probably means.
+    let expired = "claude-gateway.example.com refused the key: it has probably expired or been revoked. Paste a new one in the assistant's settings."
+    setLists (object ["anthropic" .= object ["error" .= object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int), "message" .= ("token expired" :: Text)]]])
+    findIn anthropic ".assistant-refresh" >>= click
+    eventually $ findIn anthropic ".assistant-not-listed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf expired)
+    unsafeIOToPageM (js_check (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int)])))))) >>= (`shouldBe` True)
+    findIn anthropic ".assistant-test" >>= click
+    eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf expired)
+    -- No connection at all names the wiki's allowed addresses as a cause.
+    setLists (object ["anthropic" .= object ["error" .= object ["kind" .= ("connection" :: Text), "message" .= ("Failed to fetch" :: Text)]]])
+    findIn anthropic ".assistant-refresh" >>= click
+    unreachable <- eventually $ findIn anthropic ".assistant-unreachable" >>= textContent
+    unreachable `shouldSatisfy` T.isInfixOf "Cannot reach claude-gateway.example.com from this network"
+    unreachable `shouldSatisfy` T.isInfixOf "The assistant's hosts"
+
+-- | The address of an organisation's gateway in front of Anthropic's API.
+gateway :: Text
+gateway = "https://claude-gateway.example.com"
 
 -- | The editor on the demo's first post, as its author, with the scripted
 -- provider chosen and the panel open; and the page's Markdown.

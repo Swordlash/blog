@@ -6807,6 +6807,17 @@ a.mention {
   justify-content: flex-end;
 }
 
+/* A refused key: the sentence and the link to the settings, then the
+   provider's own message, smaller. */
+.assistant-key-refused p {
+  margin: 0;
+}
+
+.assistant-error-detail {
+  margin-top: 0.3rem;
+  font-size: 0.85em;
+}
+
 .assistant-notice {
   margin: 0;
   font-size: 0.8rem;

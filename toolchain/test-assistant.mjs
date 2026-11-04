@@ -8,8 +8,10 @@
 // start of each tool call handed on as they stream, the request sent again
 // without what a model or an organisation refuses (adaptive thinking, the
 // effort, a reasoning summary), a stop, the SDKs' typed errors read as the
-// application's kinds, and the providers' lists of models,
-// every page of them, in the one shape the application reads. The browser tests use the scripted
+// application's kinds, the providers' lists of models,
+// every page of them, in the one shape the application reads, and either
+// provider's API at another address (a server on this machine, a
+// gateway), with the key as a bearer token or without one. The browser tests use the scripted
 // provider instead (wiki-app/jsbits/assistant.js); a real provider cannot
 // be reached from here.
 //
@@ -527,6 +529,44 @@ await test("OpenAI's API elsewhere: the base URL reaches the client, and an empt
   await listModels("openai", "ghp_token", { fetch: g.fetch, maxRetries: 0, baseURL: "https://models.github.ai/inference" });
   assert.equal(g.requests[0].url, "https://models.github.ai/inference/models");
   assert.equal(g.requests[0].headers.get("authorization"), "Bearer ghp_token");
+});
+
+await test("Anthropic's API elsewhere: a gateway's base URL reaches the client, and the key goes as a bearer token", async () => {
+  // An organisation's gateway in front of Anthropic's API (what Claude
+  // Code takes as ANTHROPIC_BASE_URL) takes the key as Authorization:
+  // Bearer, not as x-api-key. The SDK sends it that way.
+  const gateway = "https://claude-gateway.example.com";
+  const a = fakeFetch([
+    json(200, { data: [{ type: "model", id: "claude-opus-5-5", display_name: "Claude Opus 5.5", created_at: "2026-09-01T00:00:00Z" }], has_more: false, first_id: "claude-opus-5-5", last_id: "claude-opus-5-5" }),
+    anthropicMessage(["Hi."], [], "end_turn"),
+  ]);
+  const options = { fetch: a.fetch, maxRetries: 0, baseURL: gateway };
+  assert.deepEqual(await listModels("anthropic", "gw-token", options), [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", created: Date.UTC(2026, 8, 1) / 1000 }]);
+  const chat = startChat("anthropic", "gw-token", anthropicRequest, options);
+  const said = [];
+  await chat.send("Hello", { text: (t) => said.push(t), tool: async () => ({ text: "", ok: false }) }, new AbortController().signal);
+  assert.equal(said.join(""), "Hi.");
+  assert.match(a.requests[0].url, /^https:\/\/claude-gateway\.example\.com\/v1\/models\?limit=1000$/);
+  assert.equal(a.requests[1].url, `${gateway}/v1/messages`);
+  for (const request of a.requests) {
+    assert.equal(request.headers.get("authorization"), "Bearer gw-token");
+    assert.equal(request.headers.has("x-api-key"), false);
+    assert.equal(request.headers.get("anthropic-dangerous-direct-browser-access"), "true");
+  }
+  // A key the gateway refuses (an expired token) is the application's
+  // "authentication" kind, which says to paste a new one.
+  const refused = fakeFetch([json(401, { type: "error", error: { type: "authentication_error", message: "token expired" } })]);
+  const error = await checkKey("anthropic", "gw-token", "claude-opus-5-5", { fetch: refused.fetch, maxRetries: 0, baseURL: gateway }).then(
+    () => null,
+    (e) => e,
+  );
+  assert.deepEqual(describeError(error), { kind: "authentication", status: 401, message: "token expired" });
+  assert.equal(refused.requests[0].url, `${gateway}/v1/models/claude-opus-5-5`);
+  // Without a key, nothing that looks like one is sent.
+  const bare = fakeFetch([json(200, { data: [], has_more: false, first_id: null, last_id: null })]);
+  assert.deepEqual(await listModels("anthropic", "", { fetch: bare.fetch, maxRetries: 0, baseURL: gateway }), []);
+  assert.equal(bare.requests[0].headers.has("authorization"), false);
+  assert.equal(bare.requests[0].headers.has("x-api-key"), false);
 });
 
 if (failures > 0) {

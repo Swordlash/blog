@@ -1076,7 +1076,9 @@ component =
         blocked = ps.unreachable
         cannotReach = "Cannot reach " <> serviceName p ps <> " from this network"
         -- A service other than OpenAI's own is named by its address, and
-        -- does not get OpenAI's logo.
+        -- does not get OpenAI's logo: it may serve any model. A gateway in
+        -- front of Anthropic's API serves Claude, so its button stays
+        -- Claude's; the panel names the gateway's host.
         (label, face) = case p of
           Anthropic -> ("Chat with Claude", logo claudePath (Just claudeColour))
           OpenAI
