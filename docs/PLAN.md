@@ -657,7 +657,13 @@ In the order to do it, unless the owner says otherwise.
   the blocks it is), which the editor's preview shows as one types. A closed spoiler is
   a `<details class="spoiler">` whose summary is the name, closed by default; open or
   closed is remembered per user, page and name in the browser's storage (a server-side
-  store may come later). An inline spoiler, `||hidden||`, as the strikethrough and
+  store may come later). A spoiler never cuts a section (the owner, 2026-11-04): either
+  its content has no heading (it lies within one section), or it is a section spoiler,
+  its first block a heading of level N, every heading inside deeper than N, and what
+  follows its end a heading of level N or less or nothing (it wraps the whole section,
+  subsections included); anything else is an error rendered as the unclosed case is.
+  A section spoiler keeps the section's entry in the table of contents, and a click
+  on that entry or a URL fragment naming the heading opens it. An inline spoiler, `||hidden||`, as the strikethrough and
   the highlight are parsed (a two-character delimiter), is a `<span class="spoiler">`
   blurred until the reader clicks it (focus reveals it; a second click hides it
   again). The toolbar's block tools gain a spoiler button writing the pair around the
