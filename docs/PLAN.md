@@ -576,6 +576,30 @@ confirms it against reality and the plan is amended if it does not hold.
     shown as no longer offered and replaced by the next choice; the demo offers the
     provider's own only. No free field anywhere.
 
+44. **The server is told when the TeX is off, and Perl is built for the installer**
+    (the owner, 2026-11-04, built by WP5.61). `wiki-server serve --no-pdf`: the server
+    runs no probe, offers no PDF format, answers a PDF export with 400 "PDF exports
+    are off on this server (its --no-pdf option)", and the administration's engine
+    status is `off` (`TexStatus`'s fourth value; the check endpoint answers it
+    without probing); the Server section shows the state with what turns the PDFs on
+    and no "Check again". The probe's timeout is 20 s, in the server (`probeTimeout`)
+    and in `toolchain/check-tex.sh` (`WIKI_TEX_TIMEOUT` overrides); the export's own
+    minute stays. `toolchain/check-native.sh` lists xelatex as an informative item
+    through `check-tex.sh` (working, failing with the reason, not found), never
+    counted, never a failure. The deploy's TeX step ends with `pdf=yes` only where it
+    ends with a working engine, and the unit's `ExecStart` carries `--no-pdf` exactly
+    otherwise (the found engine failing or absent and nothing installed, the install
+    or its check failing, `--no-texlive` or the question declined); a later run that
+    ends with a working engine drops it; `--status` reads the unit and says so. When
+    the install needs Perl and the machine has none, or one without its standard
+    modules, the deploy builds Perl (one pinned version from CPAN's source tarball,
+    its published SHA-256 checked; `Configure -des -Duserelocatableinc`, `make`, `make
+    install`, no `make test`) under `<toolchain>/.wiki-toolchain/perl`, for
+    `install-tl` and `tlmgr` only, never on the unit's PATH, records `perl_dir` and
+    reuses it; the terminal's question is one, naming the TeX Live download and, when
+    needed, the Perl build; `--texlive` answers yes to both; the undeploy keeps that
+    Perl with the toolchain. The CTAN binaries are accepted (the owner, 2026-11-04).
+
 ## Repository layout
 
 ```
@@ -621,36 +645,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.61 The server is told when the TeX is off** (the owner, 2026-11-04, after
-  WP5.58; one pull request). On the owner's server the deploy's TeX step found no
-  working xelatex and could not install TeX Live (no perl), and said so, but the
-  server it started went on offering PDFs: nothing told it. Three changes. (a)
-  `toolchain/check-native.sh` gains the TeX engine as an item, through
-  `toolchain/check-tex.sh`, with a short timeout: a one-line probe document takes a
-  second, so the check's timeout and the server's probe timeout (`probeTimeout`, a
-  minute today) both become 20 s (a hanging engine then costs 20 s at the server's
-  start, not a minute); the item is informative (working at <path>, failing with
-  the reason, not found), never a missing item. (b) `wiki-server serve --no-pdf`:
-  the server neither looks for an engine nor offers the PDF formats; the
-  administration's Server section says that PDFs are off by the server's option
-  and what sets it (`TexEngine`'s status gains `off`; no "Check again" then). (c)
-  The deploy writes `--no-pdf` into the unit's `ExecStart` whenever its TeX step
-  ends without a working engine: the found one fails and nothing was installed,
-  the install failed, or the owner declined (`--no-texlive`); it drops the option
-  when the step ends with one; `--status` shows it. Tests: `test-check-native.sh`
-  or the deploy's tests for the item; server (the option: no probe, no formats,
-  the admin's `off`; the admin's JSON round trip); browser (the Server section's
-  fourth state); the deploy's regression cases (the unit with and without the
-  option, following the TeX step's outcome). (d) (the owner, 2026-11-04, later that
-  day) Perl: when the install needs it and the machine has none, or one without its
-  standard modules, the deploy builds Perl from its source tarball (CPAN, one pinned
-  version with its checksum) under `<toolchain>/.wiki-toolchain/perl`, for
-  `install-tl` and `tlmgr` only, never on the unit's PATH, and reuses it later; the
-  terminal's question becomes one, naming both what is downloaded (TeX Live from the
-  mirror) and, when needed, that Perl is built first; `--texlive` answers yes to
-  both. Tests with a fake source tarball. Docs: the README's deploy and exports
-  sections, `docs/api.md`, wiki-server's, wiki-api's and wiki-app's CHANGELOGs.
 
 ### Later, or waiting for the owner
 
@@ -983,6 +977,14 @@ needs. Each was true when its package merged; check before relying on one.
   long. `getBoundingClientRect` belongs in haskell-halogen's `Element` (decision 30);
   until it is there, `Wiki.App.Web.Rect` reads it through a newtype of its own: a
   follow-up for haskell-halogen, after which the newtype goes.
+- WP5.61 (decision 44): CI tests the Perl build with a fake source tarball only (the
+  real build was done by hand once, under four minutes); the build's whole `make`
+  output goes to the terminal as well as the log; the xelatex item runs in every
+  check-native call (a second or two with a working engine, up to 20 s with one that
+  hangs) and, before the deploy's TeX step, shows the shell's PATH, which can differ
+  from the service's; a server with `--no-pdf` keeps the PDFs off until the next
+  deploy, even if a working TeX appears meanwhile; `check-tex.sh`'s default 20 s has
+  no test of its own.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
