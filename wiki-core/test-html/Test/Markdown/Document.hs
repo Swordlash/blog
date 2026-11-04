@@ -54,7 +54,7 @@ spec = describe "docs/markdown.md" $ do
       , "<th style=\"text-align: center\">Syntax</th>"
       , "<input checked disabled type=\"checkbox\"> write the page"
       , "<section class=\"footnotes\"><ol><li id=\"fn-1\">"
-      , "<div class=\"alert alert-warning\">"
+      , "<div class=\"alert alert-warning\" id=\"box-warning-1\">"
       , "<div class=\"summary\">"
       , "<kbd>Ctrl</kbd>+<kbd>S</kbd>"
       , "<abbr title=\"HyperText Markup Language\">HTML</abbr>"

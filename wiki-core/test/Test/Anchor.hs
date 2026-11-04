@@ -109,6 +109,76 @@ spec = describe "Anchor" $ do
       checkAnchor (Anchor "q" (T.replicate 40 "a" <> "b") ("c" <> T.replicate 40 "d"))
         `shouldBe` Right (Anchor "q" (T.replicate 31 "a" <> "b") ("c" <> T.replicate 31 "d"))
 
+  describe "textFragment" $ do
+    it "is the quote alone when the page has it once" $
+      textFragment (oneBlock "The quick brown fox jumps.") (quoting "brown fox" "The quick brown fox jumps.") `shouldBe` ":~:text=brown%20fox"
+    it "widens a quote to the words it starts and ends in" $
+      textFragment (oneBlock "The quick brown fox jumps.") (quoting "ick brown fo" "The quick brown fox jumps.") `shouldBe` ":~:text=quick%20brown%20fox"
+    it "adds the words before and after a quote the page has more than once" $ do
+      let text = "One cat sat here. Then a cat sat there, by the door."
+          again = anchorAt text (Range 25 32)
+      textFragment (oneBlock text) again `shouldBe` ":~:text=here.%20Then%20a-,cat%20sat,-there%2C%20by%20the"
+    it "counts a quote again in any case, as the browser does" $ do
+      let text = "Note this. note that."
+      textFragment (oneBlock text) (quoting "note" text) `shouldBe` ":~:text=Note%20this.-,note,-that."
+    it "writes a long quote as its first and last words" $ do
+      let text = "one two three four five six seven eight nine ten"
+      textFragment (oneBlock text) (quoting "two three four five six seven eight nine ten" text) `shouldBe` ":~:text=two%20three%20four,eight%20nine%20ten"
+    it "writes an orphaned quote as the anchor has it" $
+      textFragment (oneBlock "Gone.") (Anchor "the old words" "" "") `shouldBe` ":~:text=the%20old%20words"
+
+    it "takes a block's edge as a word's edge, at the start and the end of a paragraph" $ do
+      let doc = blocksOf "# Title\n\nHello world.\n\nNext one."
+      textFragment doc (quoting "Hello" doc.text) `shouldBe` ":~:text=Hello"
+      textFragment doc (quoting "world." doc.text) `shouldBe` ":~:text=world."
+      textFragment doc (quoting "Next" doc.text) `shouldBe` ":~:text=Next"
+    it "writes a quote across two paragraphs as the first words of one and the last of the other" $ do
+      let doc = blocksOf "# T\n\nOne two three.\n\nFour five six."
+      textFragment doc (quoting "two three.Four five" doc.text) `shouldBe` ":~:text=two%20three.,Four%20five"
+    it "takes the prefix and the suffix from the quote's own block" $ do
+      let doc = blocksOf "# Cat\n\nA cat sat.\n\nThe cat sat."
+      textFragment doc (quoting "cat sat" doc.text) `shouldBe` ":~:text=A-,cat%20sat,-."
+
+    it "takes an island as a break the words around it do not cross" $ do
+      -- "The formula $x$ is useful.", the formula an island.
+      let doc = renderedBlocks ([HH.p_ [HH.text "The formula ", Core.widget (), HH.text " is useful."]] :: [HH.HTML () ()])
+      doc.text `shouldBe` "The formula  is useful."
+      textFragment doc (quoting "The formula  is useful." doc.text) `shouldBe` ":~:text=The%20formula,is%20useful."
+      textFragment doc (quoting "formula " doc.text) `shouldBe` ":~:text=formula"
+      textFragment doc (quoting " is use" doc.text) `shouldBe` ":~:text=is%20useful"
+    it "widens a word only up to an island beside it" $ do
+      let doc = renderedBlocks ([HH.p_ [HH.text "Area πr", Core.widget (), HH.text "ab today"]] :: [HH.HTML () ()])
+      textFragment doc (quoting "π" doc.text) `shouldBe` ":~:text=%CF%80r"
+      textFragment doc (quoting "b" doc.text) `shouldBe` ":~:text=ab"
+
+    it "takes an image as a break, as an island" $ do
+      let doc = blocksOf "See ![a dot](dot.png) here, and go."
+      textFragment doc (quoting "See  here" doc.text) `shouldBe` ":~:text=See,here"
+    it "takes a line break in a paragraph as a space, not a break" $ do
+      let doc = blocksOf "# T\n\nOne two\nthree four."
+      textFragment doc (quoting "two\nthree" doc.text) `shouldBe` ":~:text=two%20three"
+    it "reads a footnote's number, inline code and a mention as the text they show" $ do
+      let doc = blocksOf "A word[^n] in `code` by @ada.\n\n[^n]: The note."
+      textFragment doc (quoting "word1 in code by @ada" doc.text) `shouldBe` ":~:text=word1%20in%20code%20by%20%40ada"
+    it "takes a task's checkbox as a break" $ do
+      let doc = blocksOf "- [x] done it"
+      doc.text `shouldBe` " done it"
+      textFragment doc (quoting "done" doc.text) `shouldBe` ":~:text=done"
+
+  describe "renderedBlocks" $ do
+    it "is the rendered text, with where each block starts and ends" $ do
+      let doc = blocksOf "# Title\n\nA *b*.\n\n- one\n- two"
+      doc.text `shouldBe` "TitleA b.onetwo"
+      doc.breaks `shouldBe` [0, 5, 9, 12, 15]
+
+  describe "encodeFragmentPart" $ do
+    it "encodes as encodeURIComponent does, and the dash too" $
+      encodeFragmentPart "a-b, c & d's (e)!*~._" `shouldBe` "a%2Db%2C%20c%20%26%20d's%20(e)!*~._"
+    it "encodes each byte of a character outside ASCII" $
+      encodeFragmentPart "zażółć ✓" `shouldBe` "za%C5%BC%C3%B3%C5%82%C4%87%20%E2%9C%93"
+    it "encodes the fragment's own signs and the percent sign" $
+      encodeFragmentPart "#:~:text=%" `shouldBe` "%23%3A~%3Atext%3D%25"
+
   describe "renderedText" $ do
     it "is the text of the rendered page, joined with nothing between blocks" $ do
       let doc = either (panic . show) identity (renderMarkdown defaultOptions "# Title\n\nA *b* [c](d).\n\n- one\n- two")
@@ -117,6 +187,14 @@ spec = describe "Anchor" $ do
     it "leaves out what a child component (an island) draws" $ do
       let doc = [HH.p_ [HH.text "before "], Core.widget (), HH.p_ [HH.text "after"]] :: [HH.HTML () ()]
       renderedText doc `shouldBe` "before after"
+
+-- | A text that is one block, as a text fragment reads it.
+oneBlock :: Text -> BlockText
+oneBlock text = BlockText {text, breaks = []}
+
+-- | A page's text, with its blocks, as rendered.
+blocksOf :: Text -> BlockText
+blocksOf = renderedBlocks . either (panic . show) identity . renderMarkdown defaultOptions
 
 -- | A text of words and a range of it that has something to read in it.
 textAndRange :: Gen (Text, Range)

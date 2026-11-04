@@ -238,7 +238,8 @@ The editor writes these for you when a file is dropped or pasted into it.
 ### Links between pages
 
 A link to another page is its path, from this page or (with a leading `/`)
-from the wiki's root, and a wiki link is shorter still:
+from the wiki's root, or the page's own address in the wiki
+(`/s/docs/p/markdown-guide/diagrams/`), and a wiki link is shorter still:
 
 ```markdown
 Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~, `inline code` and links, to the web (<https://commonmark.org>) or to other pages by their path from this one: [diagrams](markdown-guide/diagrams), or the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]
@@ -247,6 +248,20 @@ Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~, `inline code` an
 Links to the guide's subpage and to the tour, a wiki link with a label of its
 own, and a footnote: [Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#text).
 A link to a page that is not there is shown as broken.
+
+The editor writes these links for you. **Link to a page** (Ctrl+Shift+K), next
+to **Link**, opens the search box in a dialog: pick a page by its title or its
+text, and the link goes around the selected text, or with the page's title as
+its text, as `[Mathematics](/s/docs/p/markdown-guide/mathematics/)`, the
+page's own address without the server's part, which names that page even where
+a subspace has its name. With **Link a section** ticked, the dialog then lists
+the page's headings and boxes, and the link goes to the one chosen
+(`/s/docs/p/markdown-guide/mathematics/#macros`). Every heading and every box
+has a `#` that shows when the pointer is on it: a click copies the address
+of that section, and a box's address has its kind and number, `#box-tip-2`.
+Text selected in a page gets **Copy link** beside **Comment**: its address
+ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
+Safari and Firefox open it scrolled to that text, highlighted.
 
 Tables, task lists, footnotes, `@` mentions, the HTML a page may hold and its
 colours are in [docs/markdown.md](docs/markdown.md), with everything above in
@@ -600,7 +615,10 @@ conflicts. **Save** stays in the editor; **Save and close** returns to the root.
 The home page also has source, history and restore, contents, presentation and
 server document exports. Comments are disabled on the home page alone.
 
-**Spaces** and **Recently visited** have independent switches below the page.
+**Spaces** and **Recently visited** below the page are switched on and off in
+the home page's editor, under **Home page** above the text, with the wiki's
+icon: the switches are saved with the page by **Save**, and **Cancel** drops
+them (the icon is saved as soon as it is set).
 The sidebar keeps the spaces the reader may open even when the directory is hidden.
 Recently visited belongs to each browser. Wiki links in the home page start at
 the wiki root, for example `[[/docs]]`; attachments belong to its real page and

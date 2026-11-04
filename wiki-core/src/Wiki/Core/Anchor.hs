@@ -61,10 +61,18 @@ module Wiki.Core.Anchor
     -- * Marking them
   , Marking (..)
   , highlight
+
+    -- * Linking to them
+  , BlockText (..)
+  , renderedBlocks
+  , textFragment
+  , encodeFragmentPart
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.ByteString qualified as BS
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Core (HTML (..))
@@ -177,6 +185,183 @@ commonPrefixLength x y = maybe 0 (\(common, _, _) -> T.length common) (T.commonP
 
 commonSuffixLength :: Text -> Text -> Int
 commonSuffixLength x y = commonPrefixLength (T.reverse x) (T.reverse y)
+
+-- | 'BlockText' is a page's rendered text ('renderedText') with where its
+-- blocks begin and end: the offsets in the text, in characters, at which a
+-- paragraph, a heading, a list item, a table's cell or any other block
+-- starts or ends ('renderedBlocks'), and where an island is (a formula, a
+-- diagram, a picture, code: a child component, whose text is not the
+-- page's). 'renderedText' joins the blocks with nothing between them, as
+-- the browser's selection reads them, and leaves the islands out, so the
+-- words on either side of a block's edge or of an island look like one
+-- text there. A text fragment ('textFragment') has to see those breaks:
+-- the browser looks for its words block by block, and an island's own
+-- text, which the browser does see, stands between the words around it.
+data BlockText = BlockText
+  { text :: Text
+  , breaks :: [Int]
+  -- ^ The offsets of the block boundaries, in order, each once.
+  }
+  deriving stock (Eq, Show)
+
+-- | A rendered document's 'BlockText': its 'renderedText', and where its
+-- block elements begin and end in it, and its islands and its images,
+-- videos and other elements that are not text are. An island
+-- inline (a formula in a sentence) is a break inside its block; one that
+-- is a block is a block with nothing in it. Either way the words before
+-- it and after it are not one text.
+renderedBlocks :: [HH.HTML w i] -> BlockText
+renderedBlocks doc = BlockText {text = T.concat pieces, breaks = ordNub (go 0 (concatMap (\(HTML v) -> walk v) doc))}
+  where
+    pieces = [t | Left t <- concatMap (\(HTML v) -> walk v) doc]
+    walk :: VDom a w -> [Either Text ()]
+    walk = \case
+      Text t -> [Left t]
+      Elem _ (ElemName name) _ children
+        | name `elem` blockElements -> [Right ()] <> concatMap walk children <> [Right ()]
+        | name `elem` replacedElements -> [Right ()]
+        | otherwise -> concatMap walk children
+      Keyed _ (ElemName name) _ children
+        | name `elem` blockElements -> [Right ()] <> concatMap (walk . snd) children <> [Right ()]
+        | otherwise -> concatMap (walk . snd) children
+      Widget _ -> [Right ()]
+      Grafted g -> walk (runGraft g)
+    go at = \case
+      [] -> []
+      Left t : rest -> go (at + T.length t) rest
+      Right () : rest -> at : go at rest
+
+-- | What 'textFragment' puts in the page's text at each of its breaks: a
+-- character no rendered text has, which is neither a word's nor
+-- whitespace.
+breakChar :: Char
+breakChar = '\0'
+
+-- | Elements the browser shows as something other than text, inside a
+-- line: an image, a video, a checkbox. The words on either side of one
+-- are not one text, as on either side of an island.
+replacedElements :: [Text]
+replacedElements = ["audio", "canvas", "embed", "iframe", "img", "input", "object", "svg", "video"]
+
+-- | The elements a browser lays out as blocks, between which a text
+-- fragment's words are not looked for together.
+blockElements :: [Text]
+blockElements =
+  [ "address"
+  , "article"
+  , "aside"
+  , "blockquote"
+  , "dd"
+  , "details"
+  , "div"
+  , "dl"
+  , "dt"
+  , "figcaption"
+  , "figure"
+  , "footer"
+  , "h1"
+  , "h2"
+  , "h3"
+  , "h4"
+  , "h5"
+  , "h6"
+  , "header"
+  , "hr"
+  , "li"
+  , "nav"
+  , "ol"
+  , "p"
+  , "pre"
+  , "section"
+  , "summary"
+  , "table"
+  , "tbody"
+  , "td"
+  , "tfoot"
+  , "th"
+  , "thead"
+  , "tr"
+  , "ul"
+  ]
+
+-- | The text fragment of a quote, @:~:text=…@, which goes after the @#@
+-- of a page's address: the browsers (Chromium, Safari, Firefox) scroll a
+-- page opened at such an address to the quote and highlight it, by
+-- themselves. "Copy link" on a selection writes one (the owner, issue
+-- #120); nothing of the wiki's reads it back.
+--
+-- The quote is found in the page's text ('locate'), and read again with
+-- its blocks apart: the browser looks for the words of a fragment within
+-- one block, and as whole words, a block's edge being a word's edge. So
+-- the quote is widened to the words it starts and ends in, within their
+-- blocks. A quote within one block of at most 'fragmentWords' words is
+-- written whole (@text=quote@); a longer one, or one across blocks, as its
+-- first few words (in its first block) and its last few (in its last
+-- block), @text=start,end@, which the browser reads as everything between
+-- them. When the quote's first words occur more than once in the page (in
+-- any case: the browser ignores it), the words before and after it in its
+-- blocks are added as its prefix and suffix
+-- (@text=prefix-,quote,-suffix@). Each part is percent-encoded
+-- ('encodeFragmentPart').
+textFragment :: BlockText -> Anchor -> Text
+textFragment page a = ":~:text=" <> T.intercalate "," (prefixPart <> map encodeFragmentPart body <> suffixPart)
+  where
+    -- The page's text with 'breakChar' at each break (a block's edge, an
+    -- island), and the quote's place in it, widened to whole words. A line
+    -- break in a paragraph is a "\n" of the text itself: whitespace, as
+    -- the browser reads it, not a break.
+    cuts = filter (\b -> b > 0 && b < T.length page.text) page.breaks
+    separated = T.intercalate (T.singleton breakChar) (pieces page.text (0 : cuts))
+    pieces t = \case
+      [] -> []
+      [o] -> [T.drop o t]
+      o : rest@(n : _) -> T.take (n - o) (T.drop o t) : pieces t rest
+    -- A boundary at or before a quote's first character is before it; one
+    -- at its end is after it.
+    startIn s = s + length (filter (<= s) cuts)
+    endIn e = e + length (filter (< e) cuts)
+    (before, quote, after) = case locate page.text a of
+      Found r ->
+        let s0 = startIn r.start
+            e0 = endIn r.end
+            s = if maybe False (wordChar . fst) (T.uncons a.exact) then s0 - T.length (T.takeWhileEnd wordChar (T.take s0 separated)) else s0
+            e = if maybe False (wordChar . snd) (T.unsnoc a.exact) then e0 + T.length (T.takeWhile wordChar (T.drop e0 separated)) else e0
+         in (T.take s separated, T.take (e - s) (T.drop s separated), T.drop e separated)
+      Orphaned -> (a.prefix, a.exact, a.suffix)
+    wordChar c = isAlphaNum c || c == '_'
+    blocks = filter (not . null) (map T.words (T.splitOn (T.singleton breakChar) quote))
+    quoteWords = concat blocks
+    body = case blocks of
+      [single] | length single <= fragmentWords -> [T.unwords single]
+      _ -> [T.unwords (take 3 (fromMaybe [] (head blocks))), T.unwords (lastN 3 (fromMaybe [] (lastMay blocks)))]
+    lastN n xs = drop (length xs - n) xs
+    firstTerm = T.toCaseFold (fromMaybe "" (head body))
+    repeated = sum [T.count firstTerm (T.toCaseFold (T.unwords (T.words b))) | b <- T.splitOn (T.singleton breakChar) separated, not (T.null firstTerm)] > 1
+    -- The last words before the quote in its first block, and the first
+    -- after it in its last, at most three of each: whole words, since the
+    -- quote was widened to them.
+    prefixPart = [encodeFragmentPart (T.unwords ws) <> "-" | repeated, not (null quoteWords), let ws = lastN 3 (T.words (T.takeWhileEnd (/= breakChar) before)), not (null ws)]
+    suffixPart = ["-" <> encodeFragmentPart (T.unwords ws) | repeated, not (null quoteWords), let ws = take 3 (T.words (T.takeWhile (/= breakChar) after)), not (null ws)]
+
+-- | How many words a text fragment's quote may have before only its first
+-- and last three are written.
+fragmentWords :: Int
+fragmentWords = 8
+
+-- | A part of a text fragment as an address writes it: percent-encoded as
+-- JavaScript's @encodeURIComponent@ encodes (every byte of the UTF-8 but
+-- letters, digits and @-_.!~*'()@), and @-@ too, which the fragment's
+-- syntax gives a meaning of its own (the end of a prefix, the start of a
+-- suffix). @,@ and @&@, which it also uses, are encoded already.
+encodeFragmentPart :: Text -> Text
+encodeFragmentPart = T.concat . map byte . BS.unpack . encodeUtf8
+  where
+    byte b
+      | isAsciiUpper c || isAsciiLower c || isDigit c || c `elem` ("_.!~*'()" :: [Char]) = T.singleton c
+      | otherwise = "%" <> T.pack [hex (b `div` 16), hex (b `mod` 16)]
+      where
+        c = chr (fromIntegral b)
+    hex n = "0123456789ABCDEF" `T.index` fromIntegral n
 
 -- | A rendered document's text (see "The text" above): its text nodes, in
 -- order, joined; nothing of a child component (an island).

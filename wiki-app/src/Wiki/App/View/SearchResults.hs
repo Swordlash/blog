@@ -21,7 +21,7 @@ import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.App.View.Search (hitContents, spaceNamesOf)
+import Wiki.App.View.SearchHit (hitContents, spaceNamesOf)
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))

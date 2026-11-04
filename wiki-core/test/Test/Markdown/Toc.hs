@@ -83,6 +83,39 @@ spec = describe "Markdown.Toc" $ do
     it "are the same for the same source, wherever it is parsed" $
       parsed "# A\n\n# A" `shouldBe` parsed "# A\n\n# A"
 
+  describe "box ids" $ do
+    let boxIds = concatMap boxIdsOf . parsed
+        boxIdsOf = \case
+          Alert _ box bs -> box.id : concatMap boxIdsOf bs
+          BlockQuote bs -> concatMap boxIdsOf bs
+          List _ items -> concat [concatMap boxIdsOf bs | ListItem _ bs <- items]
+          _ -> []
+    it "number each kind apart, in the order the page shows them" $
+      boxIds "> [!TIP]\n> a\n\n> [!NOTE]\n> b\n\n> [!TIP] Titled\n> c\n\n- > [!exercise]\n  > d"
+        `shouldBe` [Just "box-tip-1", Just "box-note-1", Just "box-tip-2", Just "box-exercise-1"]
+    it "count a box before the boxes inside it" $
+      boxIds "> [!TIP]\n> > [!TIP]\n> > a\n\n> [!TIP]\n> b" `shouldBe` [Just "box-tip-1", Just "box-tip-2", Just "box-tip-3"]
+    it "take a starred box's title, and give a starred box without one none" $
+      boxIds "> [!TIP*] Before you start\n> a\n\n> [!TIP*]\n> b\n\n> [!TIP*] ?!\n> c\n\n> [!TIP]\n> d"
+        `shouldBe` [Just "box-tip-before-you-start", Nothing, Nothing, Just "box-tip-1"]
+    it "stay clear of the headings' ids, and the headings of theirs" $ do
+      let doc = parsed "# Box tip 1\n\n> [!TIP]\n> a\n\n## Box tip 2 {#box-tip-2}\n\n> [!TIP]\n> b\n\n# Box tip 1"
+      boxIds "# Box tip 1\n\n> [!TIP]\n> a\n\n## Box tip 2 {#box-tip-2}\n\n> [!TIP]\n> b" `shouldBe` [Just "box-tip-1-2", Just "box-tip-2-2"]
+      [i | Heading _ attrs _ <- doc, Just i <- [attribute "id" attrs]] `shouldBe` ["box-tip-1", "box-tip-2", "box-tip-1-3"]
+
+  describe "anchors" $ do
+    it "lists the headings and the boxes, at every depth, in document order" $
+      anchors (parsed "# Page\n\n> [!TIP]\n> ## Inside\n\n## Next\n\n> [!NOTE] First\n> x\n\n- > [!EXERCISE*] Warm-up\n  > y\n\n> [!TIP*]\n> z")
+        `shouldBe` [ Anchor {id = "page", label = "Page", level = Just 1}
+                   , Anchor {id = "box-tip-1", label = "Tip 1", level = Nothing}
+                   , Anchor {id = "inside", label = "Inside", level = Just 2}
+                   , Anchor {id = "next", label = "Next", level = Just 2}
+                   , Anchor {id = "box-note-1", label = "Note 1: First", level = Nothing}
+                   , Anchor {id = "box-exercise-warm-up", label = "Warm-up", level = Nothing}
+                   ]
+    it "lists the ids the rendered page has" $
+      map (\a -> a.id) (anchors (parsed "# A\n\n# A {#b}\n\n# B")) `shouldBe` ["a", "b", "b-2"]
+
   describe "[[toc]]" $ do
     it "on a line of its own is the table of contents" $
       parsed "# A\n\n[[toc]]\n\nText." `shouldBe` [Heading 1 [("id", "a")] [Str "A"], TableOfContents, Para [Str "Text."]]

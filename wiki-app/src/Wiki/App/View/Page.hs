@@ -80,6 +80,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.Router.Duplex (encodeComponent)
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
@@ -90,7 +91,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
-import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal, revealFragment)
+import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedThread, copyText, followArticleLink, markFragment, readSelection, reveal, revealFragment)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
@@ -101,7 +102,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Watch qualified as WatchView
-import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
+import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
@@ -186,6 +187,22 @@ data State = State
   -- selection is read, and the button to comment goes there.
   , people :: Body.People
   -- ^ The people the page and its comments mention.
+  , copied :: Maybe Copied
+  -- ^ The address of a section or of selected text being copied, shown in
+  -- a notice until 'copiedWait' removes it.
+  , copiedWait :: Maybe H.ForkId
+  , copiedText :: H.RefLabel
+  -- ^ The notice's address, which the copy selects where the browser has
+  -- no asynchronous clipboard.
+  }
+
+-- | An address put on the clipboard: by a click on a heading's or a box's
+-- @#@, or by "Copy link" on selected text (WP5.53 of docs/PLAN.md).
+data Copied = Copied
+  { address :: Text
+  , outcome :: Maybe Bool
+  -- ^ Whether the clipboard took it, once known. When it did not, the
+  -- address stays selected in the notice, to be copied by hand.
   }
 
 data Action
@@ -211,6 +228,7 @@ data Action
   | SetAsHome
   | SetTemplate Bool
   | ShowChanged
+  | CopySelection BlockText
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -227,6 +245,7 @@ component =
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
           text <- H.newRefLabel "page-text"
+          copiedText <- H.newRefLabel "page-copied-address"
           pure
             State
               { input
@@ -244,6 +263,9 @@ component =
               , changed = False
               , text
               , people
+              , copied = Nothing
+              , copiedWait = Nothing
+              , copiedText
               }
       , render
       , eval =
@@ -265,6 +287,12 @@ component =
           <div class="page-view">
             {{ parts }}
             <footer class="page-meta">Last changed {{ day page.updatedAt }}</footer>
+            <div class="link-copied" role="status">
+              {% for c in maybeToList st.copied %}
+                <span class="link-copied-label">{{ copiedLabel c }}</span>
+                <span class="link-copied-address" ref={{ st.copiedText }}>{{ c.address }}</span>
+              {% end %}
+            </div>
           </div>
         |]
         where
@@ -431,18 +459,16 @@ component =
     textAndPanel st place rendered text page contents =
       [hh|
         <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
-          <div class="page-text" {{ [HE.onMouseUp (const Selecting) | commentsEnabled] }} {{ [HE.onKeyUp (const Selecting) | commentsEnabled] }} {{ quoteClicks }}>
+          <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
             {{ Body.articleOf FollowLink place page.body marked }}
           </div>
           {% for s in maybeToList st.selected %}
-            <button
-              type="button"
-              class="comment-on-selection"
-              style={{ position s }}
-              onClick={{ const CommentOnSelection }}
-            >
-              Comment
-            </button>
+            <div class="selection-actions" style={{ position s }}>
+              {% if mayCommentHere st %}
+                <button type="button" class="comment-on-selection" onClick={{ const CommentOnSelection }}>Comment</button>
+              {% end %}
+              <button type="button" class="copy-selection-link" title="Copy a link to this text: the browser scrolls to it and highlights it" onClick={{ const (CopySelection (either (const (BlockText "" [])) renderedBlocks rendered)) }}>Copy link</button>
+            </div>
           {% end %}
           {% if side %}
             <div class="page-side">
@@ -584,9 +610,27 @@ component =
           load
         when gainedFeed watch
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
+      -- A click on a heading's or a box's #: the section's address goes
+      -- to the clipboard and into the address bar, and the page stays
+      -- where it is. Its listener has kept the browser from following it.
+      FollowLink (CopyAnchor fragment) -> do
+        H.liftEffect (markFragment fragment)
+        here <- gets pageAddress >>= absoluteUrl
+        copyAddress (here <> "#" <> encodeComponent fragment)
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect (followArticleLink router target)
+      -- The address of the page with the browser's own text fragment for
+      -- the selection ("Wiki.Core.Anchor"'s 'textFragment'), found in the
+      -- page's text as rendered.
+      CopySelection blocks ->
+        gets (\st -> st.selected)
+          >>= traverse_
+            ( \s -> do
+                modify (\st -> st {selected = Nothing})
+                here <- gets pageAddress >>= absoluteUrl
+                copyAddress (here <> "#" <> textFragment blocks s.anchor)
+            )
       Open mode -> modify (\st -> st {mode, problem = Nothing})
       Typed t -> modify $ \st -> case st.mode of
         Renaming _ -> st {mode = Renaming t}
@@ -661,13 +705,11 @@ component =
                 }
             resolvePeople
           _ -> pass
+      -- Anyone may copy a link to what they select; who may comment is
+      -- asked when the buttons are shown.
       Selecting -> do
         st <- get
-        allowed <- gets mayCommentHere
-        found <-
-          if allowed
-            then H.getRef st.text >>= maybe (pure Nothing) (H.liftEffect . readSelection)
-            else pure Nothing
+        found <- H.getRef st.text >>= maybe (pure Nothing) (H.liftEffect . readSelection)
         when (found /= st.selected) $ modify (\s -> s {selected = found})
       CommentOnSelection -> do
         gets (\st -> st.selected)
@@ -758,6 +800,24 @@ component =
       st <- get
       for_ st.input.feed $ \f -> H.liftEffect (liftIO (traverse_ f.unwatch st.watching))
       modify (\s -> s {watching = Nothing})
+
+    -- Put an address on the clipboard and say so in the notice: for
+    -- 'copiedTime', or, when the clipboard did not take it, for longer,
+    -- with the address left selected to be copied by hand. The notice is
+    -- rendered with the address before the copy, since the copy without
+    -- an asynchronous clipboard selects it there. The copy waits for the
+    -- browser, so it runs off the loop ('liftIO').
+    copyAddress :: Text -> H.HalogenM State Action Slots ViewOutput m ()
+    copyAddress address = do
+      gets (\st -> st.copiedWait) >>= traverse_ H.kill
+      modify (\st -> st {copied = Just Copied {address, outcome = Nothing}, copiedWait = Nothing})
+      element <- gets (\st -> st.copiedText) >>= H.getRef
+      took <- maybe (pure False) (\e -> liftIO (copyText e address)) element
+      modify (\st -> st {copied = (\c -> c {outcome = Just took}) <$> st.copied})
+      waiting <- H.fork $ do
+        liftIO (threadDelay (if took then copiedTime else 4 * copiedTime))
+        modify (\st -> st {copied = Nothing, copiedWait = Nothing})
+      modify (\st -> st {copiedWait = Just waiting})
 
     withPage :: (Page -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage k =
@@ -850,6 +910,27 @@ busy st = isJust st.selected || isJust st.quoting || not viewing
       _ -> False
 
 -- | Whether the reader may comment on the page shown.
+-- | The address of the page shown, as the router writes it: the home
+-- page's for the home document, and a link to the rest of the wiki's pages
+-- otherwise.
+pageAddress :: State -> Text
+pageAddress st =
+  Router.href
+    st.input.context.router
+    (documentRoute st.input.context st.input.space.id (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path))
+
+-- | How long the notice of a copied address stays: long enough to be read
+-- in passing.
+copiedTime :: Int
+copiedTime = 2_000_000
+
+-- | What the notice of a copied address says before the address.
+copiedLabel :: Copied -> Text
+copiedLabel c = case c.outcome of
+  Nothing -> "Copying the link…"
+  Just True -> "Link copied:"
+  Just False -> "The link could not be copied. It is selected, to copy by hand:"
+
 mayCommentHere :: State -> Bool
 mayCommentHere st = not (homeSpace st.input.context st.input.space.id) && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
 

@@ -416,6 +416,9 @@ data EditorKey
     IndentKey
   | -- | A toolbar command's shortcut in the text.
     CommandKey Command
+  | -- | Ctrl+Shift+K (Cmd+Shift+K) in the text: "Link to a page", which
+    -- opens a dialog rather than running a command.
+    LinkPageKey
   deriving stock (Eq, Show)
 
 -- | Which of the editor's keys a keydown is, if any. Pure, so that a
@@ -425,7 +428,7 @@ data EditorKey
 -- Escape are the form's, wherever the focus is in it; the rest are the
 -- text's (the textarea's, or CodeMirror's content), not the assistant's
 -- message box, which is a textarea of the form too, where Tab and the
--- shortcuts are its own. Shift+7 and Shift+8 are read by the key's place
+-- shortcuts are its own. Shift+7, Shift+8 and Shift+K are read by the key's place
 -- (its code), since the character they type differs between layouts, as
 -- is P with Alt, which types a character of its own on a Mac. A key the
 -- list of a mention's completion acts on (Tab, Enter, Escape) never
@@ -439,6 +442,7 @@ editorKey event
   | not inText = Nothing
   | plain && key == "Tab" = Just IndentKey
   | command && not pressed.altKey && not pressed.shiftKey = CommandKey <$> lookup key [("b", Bold), ("i", Italic), ("k", Link), ("e", InlineCode)]
+  | command && not pressed.altKey && pressed.shiftKey && pressed.code == "KeyK" = Just LinkPageKey
   | command && not pressed.altKey && pressed.shiftKey = CommandKey <$> lookup pressed.code [("Digit7", NumberedList), ("Digit8", BulletList)]
   | otherwise = Nothing
   where

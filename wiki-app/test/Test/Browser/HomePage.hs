@@ -75,10 +75,39 @@ spec m = do
     saved <- unsafeIOToPageM (readIORef wiki)
     saved.server.homePage.title `shouldBe` "Knowledge renamed"
     length <$> findAll ui ".comments-toggle, .comments-panel, .page-comments" `shouldReturn` 0
-    find ui ".home-spaces" >>= click
-    find ui ".home-recent" >>= click
-    eventually $ length <$> findAll ui ".space-cards, .directory .recent-spaces" `shouldReturn` 0
     void (find ui ".wiki-sidebar a[href$='#/s/docs/']")
+
+  it "sets the home page's sections in its editor, saved with Save and dropped by Cancel" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") Home
+    _ <- find ui ".space-cards"
+    -- The options are the editor's, not the home page's.
+    length <$> findAll ui ".home-spaces, .home-recent, .home-icon" `shouldReturn` 0
+    -- Cancel drops them.
+    find ui ".edit-home" >>= click
+    _ <- editorText ui
+    find ui ".editor-home legend" >>= (`shouldHaveText` "Home page")
+    _ <- find ui ".editor-home .home-icon"
+    find ui ".editor-home .home-spaces" >>= click
+    find ui ".editor-cancel" >>= click
+    _ <- find ui ".space-cards"
+    saved <- unsafeIOToPageM (readIORef wiki)
+    saved.server.homePage.showSpaces `shouldBe` True
+    -- Save keeps them, after the text.
+    find ui ".edit-home" >>= click
+    _ <- editorText ui
+    find ui ".editor-home .home-spaces" >>= \box -> getProperty box "checked" `shouldReturn` "true"
+    find ui ".editor-home .home-spaces" >>= click
+    find ui ".editor-home .home-recent" >>= click
+    setMarkdown ui "# Spaces\n\nWelcome."
+    find ui ".editor-save-close" >>= click
+    find ui ".page-body p" >>= (`shouldHaveText` "Welcome.")
+    eventually $ length <$> findAll ui ".space-cards, .directory .recent-spaces" `shouldReturn` 0
+    after <- unsafeIOToPageM (readIORef wiki)
+    (after.server.homePage.showSpaces, after.server.homePage.showRecent) `shouldBe` (False, False)
+    -- The editor shows them as saved.
+    find ui ".edit-home" >>= click
+    _ <- editorText ui
+    find ui ".editor-home .home-spaces" >>= \box -> getProperty box "checked" `shouldReturn` "false"
 
   it "keeps uploaded attachments and source across IndexedDB reload" $ runPage $ do
     let db = memDatabase "wiki-test-full-home-attachment"
@@ -144,7 +173,11 @@ spec m = do
     _ <- find closed ".wiki-closed"
     unmount closed
     public <- startChanged m (privateHome False) (Just "user-admin") Home
-    find public ".home-anonymous" >>= click
+    find public ".edit-home" >>= click
+    _ <- editorText public
+    find public ".editor-home .home-anonymous" >>= click
+    find public ".editor-save-close" >>= click
+    _ <- find public ".page-view"
     find public ".user-switcher-toggle" >>= click
     find public ".user-menu button[data-login='']" >>= click
     find public ".page-view h1" >>= (`shouldHaveText` "Spaces")

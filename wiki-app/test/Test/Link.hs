@@ -10,11 +10,14 @@ import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route
+import Wiki.App.View.LinkDialog (pageAddress)
+import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (id, slug))
+import Wiki.Core.Space qualified as S
 
 demo :: MemState
 demo = demoState demoNow
@@ -29,10 +32,11 @@ spaces = Map.elems demo.spaces
 fromDocs :: [Text] -> Text -> Maybe PageLink
 fromDocs page = resolvePageLink spaces (slugs ["docs"]) (pagesOf "docs") (slugs page)
 
+mkSlug' :: Text -> Slug
+mkSlug' = either (panic . show) identity . mkSlug
+
 pagesOf :: Text -> [Page]
 pagesOf s = [p | p <- Map.elems demo.pages, Just p.space == ((\sp -> sp.id) <$> find (\sp -> sp.slug == mkSlug' s) spaces)]
-  where
-    mkSlug' = either (panic . show) identity . mkSlug
 
 docsPage :: [Text] -> Maybe PageLink
 docsPage path = Just (PageLink (Page (slugs ["docs"]) (slugs path)) "")
@@ -68,6 +72,29 @@ spec = describe "resolvePageLink" $ do
     fromDocs ["tour"] "/docs/no-such-page" `shouldBe` Nothing
     fromDocs ["tour"] "/blog/hello-world" `shouldBe` Just (PageLink (Page (slugs ["blog"]) (slugs ["hello-world"])) "")
     fromDocs ["tour"] "/nowhere/at-all" `shouldBe` Nothing
+
+  it "leads to each of the demo's pages from the address \"Link to a page\" writes, from anywhere" $
+    for_ (Map.elems demo.pages) $ \p -> do
+      let spacePath = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) p.space)
+          pagePath = fromMaybe [] (pathOf (`Map.lookup` demo.pages) p.id)
+          address = pageAddress spacePath pagePath
+          expected = if null pagePath then Space spacePath else Page spacePath pagePath
+      (address, fromDocs ["tour"] (address <> "#intro")) `shouldBe` (address, Just (PageLink expected "#intro"))
+
+  it "writes a page's own address for \"Link to a page\", without the router's prefix or mode" $
+    pageAddress (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]) `shouldBe` "/s/docs/p/markdown-guide/diagrams/"
+
+  it "reads a page's own address as that page, and a path as the longest space path, when a subspace has the page's slug" $ do
+    let docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
+        -- A subspace of Docs with the slug of one of Docs' pages.
+        sub = docs {S.id = SpaceId "space-guide", S.name = "Guide", S.slug = mkSlug' "markdown-guide", S.parent = Just docs.id}
+        resolve = resolvePageLink (sub : spaces) (slugs ["docs"]) (pagesOf "docs") (slugs ["tour"])
+    resolve (pageAddress (slugs ["docs"]) (slugs ["markdown-guide"]) <> "#links") `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
+    resolve "/docs/markdown-guide" `shouldBe` Just (PageLink (Space (slugs ["docs", "markdown-guide"])) "")
+    -- A page of this space it does not have is a broken link.
+    resolve (pageAddress (slugs ["docs"]) (slugs ["no-such-page"])) `shouldBe` Nothing
+    -- Nor does a space nobody can see have pages.
+    resolve (pageAddress (slugs ["nowhere"]) (slugs ["at-all"])) `shouldBe` Nothing
 
   it "resolves every link between the demo's pages" $
     for_ (Map.elems demo.pages) $ \p -> do

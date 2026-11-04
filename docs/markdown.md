@@ -1,6 +1,6 @@
 # Writing pages
 
-Pages are written in Markdown: [CommonMark](https://commonmark.org) with GitHub's extensions, math, Mermaid diagrams, TikZ pictures, attachments and links between pages. The editor shows the Markdown as it will look while you type it (bold and italics, larger headings, code on its own background and highlighted by language, with the Markdown's own marks kept but dimmed); its "Show preview" shows a page as readers will see it, and its toolbar writes the Markdown for you: select some text and choose a button, or choose one with nothing selected and type over what it puts in. Each button's title names its shortcut (Ctrl+B bold, Ctrl+I italic, Ctrl+K link, Ctrl+E code, Ctrl+Shift+8 and Ctrl+Shift+7 lists, Ctrl+Alt+P the preview; Cmd for Ctrl on a Mac). This page is written in everything it describes, so its source shows how.
+Pages are written in Markdown: [CommonMark](https://commonmark.org) with GitHub's extensions, math, Mermaid diagrams, TikZ pictures, attachments and links between pages. The editor shows the Markdown as it will look while you type it (bold and italics, larger headings, code on its own background and highlighted by language, with the Markdown's own marks kept but dimmed); its "Show preview" shows a page as readers will see it, and its toolbar writes the Markdown for you: select some text and choose a button, or choose one with nothing selected and type over what it puts in. Each button's title names its shortcut (Ctrl+B bold, Ctrl+I italic, Ctrl+K link, Ctrl+Shift+K link to a page of the wiki, Ctrl+E code, Ctrl+Shift+8 and Ctrl+Shift+7 lists, Ctrl+Alt+P the preview; Cmd for Ctrl on a Mac). This page is written in everything it describes, so its source shows how.
 
 ## Text
 
@@ -39,7 +39,7 @@ Task lists show a checkbox:
 
 ## Links
 
-A link to a page of the wiki is a path, relative to the current page or, starting with `/`, to the wiki: [the guide](guide), [setup](../setup), [a team's page](/engineering/onboarding). A wiki link is shorter: [[onboarding]] links to the page `onboarding`, and [[onboarding|our onboarding]] does too, with another label.
+A link to a page of the wiki is a path, relative to the current page or, starting with `/`, to the wiki: [the guide](guide), [setup](../setup), [a team's page](/engineering/onboarding). A page's own address in the wiki, `/s/engineering/p/onboarding/` (what the address bar shows after the wiki's own part), links to that page too, even where a subspace has the page's name; the editor's "Link to a page" (Ctrl+Shift+K) writes links this way, after you pick the page, and one of its sections if you like. A wiki link is shorter: [[onboarding]] links to the page `onboarding`, and [[onboarding|our onboarding]] does too, with another label.
 
 A link to the web is a URL: <https://example.com>, or [with a label](https://example.com "and a title"). A bare URL such as https://example.com is a link too. Links that leave the wiki get `rel="noopener"`. A `javascript:` link is shown as its text.
 

@@ -87,6 +87,7 @@ import Data.List (findIndex, lookup, span, zip3)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
+import Wiki.Core.Markdown.Link (labelText)
 import Wiki.Core.Math (onlyDefinitions)
 
 -- | 'Selection': what is selected, from 'start' to 'end', in characters
@@ -119,6 +120,11 @@ data Command
   | -- | A TikZ picture: the body of a @tikzpicture@.
     Tikz
   | Link
+  | -- | A link to a known address, chosen rather than typed: the text a
+    -- link with nothing selected gets (a page's title), and the address
+    -- (@\/docs\/guide#intro@). "Link to a page" writes it
+    -- ("Wiki.App.View.LinkDialog").
+    LinkTo Text Text
   | -- | An image by its URL. (An attachment is uploaded instead, and the
     -- editor inserts its reference.)
     Image
@@ -220,6 +226,7 @@ apply command text selection = case command of
   Mermaid -> fenced (Fence "```mermaid" "```" "graph LR\n  A --> B" True) text sel
   Tikz -> fenced (Fence "```tikz" "```" "\\draw[->] (0,0) -- (2,1) node[right] {$x$};" True) text sel
   Link -> link "" "link text" text sel
+  LinkTo title address -> linkTo title address text sel
   Image -> link "!" "description" text sel
   Table -> template tableTemplate (Just (2, T.length "Column 1")) text sel
   HorizontalRule -> template "---" Nothing text sel
@@ -693,6 +700,26 @@ link bang placeholder text (Selection s e)
                 Just target | (addr, closing) <- T.break (\c -> c == ')' || c == '\n') target, T.isPrefixOf ")" closing -> Just (2 + T.length addr + 1)
                 _ -> Nothing
       | otherwise = Nothing
+
+-- | A link to an address chosen in a dialog, around the selection as
+-- 'link' puts one: the selected text becomes the link's text, and with
+-- nothing selected the title given is, written to show as itself
+-- ('labelText': a bracket, a dollar or an asterisk in a title is text, not
+-- syntax). The cursor goes after
+-- the link, since there is nothing left to type in it. A selection that
+-- is already a link's text gets a link of its own all the same: the
+-- writer chose a page for it.
+linkTo :: Text -> Text -> Text -> Selection -> (Text, Selection)
+linkTo title address text (Selection s e) =
+  let shown = if s == e then labelText title else T.take (e - s) (T.drop s text)
+      new = "[" <> shown <> "](" <> destination <> ")"
+   in (replace [Replacement s (e - s) new] text, cursor (s + T.length new))
+  where
+    -- An address with a space or a parenthesis in it is written between
+    -- angle brackets, which CommonMark reads as one address.
+    destination
+      | T.any (\c -> isSpace c || c `elem` ("()" :: [Char])) address = "<" <> address <> ">"
+      | otherwise = address
 
 -- Colours
 

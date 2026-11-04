@@ -45,11 +45,15 @@ spec m = describe "the favicon" $ do
 
   it "is the wiki's icon away from the spaces, once an administrator sets it" $ runPage $ do
     ui <- start m (Just "user-admin") Home
-    form <- find ui ".home-icon"
+    -- The icon is among the home page's options, in its editor.
+    find ui ".edit-home" >>= click
+    form <- find ui ".editor-home .home-icon"
     findIn form ".home-icon-kind-emoji input" >>= click
     find ui ".home-icon-emoji" >>= (`typeText` "🏠")
     find ui ".home-icon-save" >>= click
     eventually (find ui ".home-icon .settings-saved" >>= (`shouldHaveText` "Saved"))
+    -- Saved at once: leaving the editor without saving keeps it.
+    find ui ".editor-cancel" >>= click
     eventually (favicon >>= (`shouldSatisfy` \f -> "data:image/svg+xml," `T.isPrefixOf` f && "🏠" `T.isInfixOf` f))
     -- A space's own pages keep the space's.
     find ui ".space-card[data-space] .space-card-link" >>= click

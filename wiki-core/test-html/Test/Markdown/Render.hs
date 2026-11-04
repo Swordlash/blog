@@ -41,8 +41,8 @@ spec = describe "Markdown.Render" $ do
   describe "line breaks (issue #120: a line broken on purpose is meant)" $ do
     it "breaks a quotation's lines, and a box's" $ do
       "> a\n> b" `shows'` "<blockquote><p>a<br>\nb</p></blockquote>"
-      "> [!NOTE]\n> a\n> b" `shows'` "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>a<br>\nb</p></div>"
-      "> [!TIP] A title\n> a\n> b" `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">A title</p><p>a<br>\nb</p></div>"
+      "> [!NOTE]\n> a\n> b" `shows'` "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>a<br>\nb</p></div>"
+      "> [!TIP] A title\n> a\n> b" `shows'` "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\">A title<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>a<br>\nb</p></div>"
     it "breaks a list item's lines, and leaves the items apart" $ do
       "- a\n  b\n- c" `shows'` "<ul><li>a<br>\nb</li><li>c</li></ul>"
       "1. a\nb" `shows'` "<ol><li>a<br>\nb</li></ol>"
@@ -300,38 +300,38 @@ spec = describe "Markdown.Render" $ do
 
   describe "boxes" $ do
     it "writes an alert with its title" $
-      "> [!WARNING]\n> Hot." `shows'` "<div class=\"alert alert-warning\"><p class=\"alert-title\">Warning</p><p>Hot.</p></div>"
+      "> [!WARNING]\n> Hot." `shows'` "<div class=\"alert alert-warning\" id=\"box-warning-1\"><p class=\"alert-title\">Warning<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-warning-1\"></a></p><p>Hot.</p></div>"
     it "writes a box of a kind nobody defined with its name as its title, and no style" $
-      "> [!FUN-FACT]\n> Owls." `shows'` "<div class=\"alert alert-fun-fact\"><p class=\"alert-title\">Fun fact</p><p>Owls.</p></div>"
+      "> [!FUN-FACT]\n> Owls." `shows'` "<div class=\"alert alert-fun-fact\" id=\"box-fun-fact-1\"><p class=\"alert-title\">Fun fact<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-fun-fact-1\"></a></p><p>Owls.</p></div>"
     it "writes the title given after the marker, for the five kinds too" $ do
-      "> [!EXERCISE] Exercise 3\n> Prove it." `shows'` "<div class=\"alert alert-exercise\"><p class=\"alert-title\">Exercise 3</p><p>Prove it.</p></div>"
-      "> [!TIP] Before you start\n> Read." `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">Before you start</p><p>Read.</p></div>"
+      "> [!EXERCISE] Exercise 3\n> Prove it." `shows'` "<div class=\"alert alert-exercise\" id=\"box-exercise-1\"><p class=\"alert-title\">Exercise 3<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-exercise-1\"></a></p><p>Prove it.</p></div>"
+      "> [!TIP] Before you start\n> Read." `shows'` "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\">Before you start<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>Read.</p></div>"
     it "writes a defined kind's label, colour and icon" $ do
       let defined = defaultOptions {boxes = [BoxKind {name = "exercise", label = "Try it", colour = Teal, icon = Pencil}, BoxKind {name = "aside", label = "Aside", colour = Grey, icon = NoIcon}]}
       showsWith defined "> [!EXERCISE]\n> Prove it." $
-        "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
-          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it</p><p>Prove it.</p></div>"
+        "<div class=\"alert alert-exercise\" id=\"box-exercise-1\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
+          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Try it<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-exercise-1\"></a></p><p>Prove it.</p></div>"
       showsWith defined "> [!EXERCISE] Exercise 3\n> Prove it." $
-        "<div class=\"alert alert-exercise\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
-          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Exercise 3</p><p>Prove it.</p></div>"
+        "<div class=\"alert alert-exercise\" id=\"box-exercise-1\" style=\"--box-colour: var(--c-teal); --box-icon: var(--box-icon-pencil)\">"
+          <> "<p class=\"alert-title\"><span aria-hidden=\"true\" class=\"alert-icon\"></span>Exercise 3<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-exercise-1\"></a></p><p>Prove it.</p></div>"
       showsWith defined "> [!ASIDE]\n> By the way." $
-        "<div class=\"alert alert-aside\" style=\"--box-colour: var(--muted)\"><p class=\"alert-title\">Aside</p><p>By the way.</p></div>"
+        "<div class=\"alert alert-aside\" id=\"box-aside-1\" style=\"--box-colour: var(--muted)\"><p class=\"alert-title\">Aside<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-aside-1\"></a></p><p>By the way.</p></div>"
     it "writes a custom colour as its hex code"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "aside", label = "Aside", colour = CustomColour "#1a7f37", icon = NoIcon}]} "> [!ASIDE]\n> x"
-      $ "<div class=\"alert alert-aside\" style=\"--box-colour: #1a7f37\"><p class=\"alert-title\">Aside</p><p>x</p></div>"
+      $ "<div class=\"alert alert-aside\" id=\"box-aside-1\" style=\"--box-colour: #1a7f37\"><p class=\"alert-title\">Aside<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-aside-1\"></a></p><p>x</p></div>"
     it "numbers each kind of box apart, within the page, and none written with a star" $ do
       let withNumbers form = defaultOptions {numbering = Numbering {form, number = Just 2}}
           source = "> [!TIP]\n> a\n\n> [!TIP*]\n> b\n\n> [!NOTE] First\n> c\n\n> [!TIP]\n> d"
       showsWith (withNumbers InPage) source $
-        "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip 1</p><p>a</p></div>"
+        "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\">Tip 1<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>a</p></div>"
           <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>b</p></div>"
-          <> "<div class=\"alert alert-note\"><p class=\"alert-title\">Note 1: First</p><p>c</p></div>"
-          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip 2</p><p>d</p></div>"
+          <> "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note 1: First<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>c</p></div>"
+          <> "<div class=\"alert alert-tip\" id=\"box-tip-2\"><p class=\"alert-title\">Tip 2<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-2\"></a></p><p>d</p></div>"
       showsWith (withNumbers NoNumbers) source $
-        "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>a</p></div>"
+        "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\">Tip<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>a</p></div>"
           <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>b</p></div>"
-          <> "<div class=\"alert alert-note\"><p class=\"alert-title\">First</p><p>c</p></div>"
-          <> "<div class=\"alert alert-tip\"><p class=\"alert-title\">Tip</p><p>d</p></div>"
+          <> "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">First<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>c</p></div>"
+          <> "<div class=\"alert alert-tip\" id=\"box-tip-2\"><p class=\"alert-title\">Tip<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-2\"></a></p><p>d</p></div>"
     it "numbers boxes after the page's number, and the section's, a section starting at each ## heading" $ do
       let titles opts md = map (T.takeWhile (/= '<')) . drop 1 . T.splitOn "<p class=\"alert-title\">" <$> markdownWith opts md
           withNumbers form page = defaultOptions {numbering = Numbering {form, number = page}, headingAnchors = False}
@@ -342,13 +342,13 @@ spec = describe "Markdown.Render" $ do
       titles (withNumbers WithSection Nothing) source `shouldReturn` ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5", "Tip 6"]
     it "writes a title's math as math, and its display math on the title's line" $
       "> [!TIP] Use $x$ and $$y$$\n> a"
-        `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\">Use <span class=\"math inline\">x</span> and <span class=\"math inline\">\\displaystyle y</span></p><p>a</p></div>"
+        `shows'` "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\">Use <span class=\"math inline\">x</span> and <span class=\"math inline\">\\displaystyle y</span><a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>a</p></div>"
     it "writes display math inside emphasis in a title on the title's line too" $
       "> [!TIP] *$$y$$*\n> a"
-        `shows'` "<div class=\"alert alert-tip\"><p class=\"alert-title\"><em><span class=\"math inline\">\\displaystyle y</span></em></p><p>a</p></div>"
+        `shows'` "<div class=\"alert alert-tip\" id=\"box-tip-1\"><p class=\"alert-title\"><em><span class=\"math inline\">\\displaystyle y</span></em><a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-tip-1\"></a></p><p>a</p></div>"
     it "keeps the five kinds' own look whatever is defined"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
-      $ "<div class=\"alert alert-note\"><p class=\"alert-title\">Note</p><p>x</p></div>"
+      $ "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>x</p></div>"
     it "writes a fenced div with its class" $
       "::: summary\nShort.\n:::" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
 

@@ -1087,6 +1087,13 @@ select {
 
 /* ---- Search --------------------------------------------------------------- */
 
+/* The page picker (Wiki.App.View.PagePicker) in the header's box adds an
+   element of its own around the bar and the list, which the box's layout
+   does not see. */
+.wiki-search > .page-picker {
+  display: contents;
+}
+
 .search-bar {
   display: flex;
   align-items: center;
@@ -2441,6 +2448,37 @@ body:has(.slides-view) {
    corner of the window. The element is always there, empty and so with no
    size when there is nothing to say, so that a screen reader has its live
    region before the word arrives in it. */
+/* The notice of a section's or a selection's address copied by the page
+   view (WP5.53): in a corner, as the editor's "Saved", with the address
+   in small print. */
+.link-copied {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  color: var(--background);
+  background: var(--tip);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+}
+
+.link-copied:empty {
+  padding: 0;
+  box-shadow: none;
+}
+
+.link-copied-label {
+  font-weight: 600;
+}
+
+.link-copied-address {
+  display: block;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 .editor-saved-notice {
   position: fixed;
   right: 1rem;
@@ -3777,8 +3815,10 @@ body:has(.slides-view) {
 
 /* The editor's "New kind…" dialog (Wiki.App.View.NewKindDialog): the
    administration's form for a kind of box, over the page being written,
-   drawn as the user dialog is. */
-.new-kind-dialog {
+   drawn as the user dialog is. Its "Link to a page" dialog
+   (Wiki.App.View.LinkDialog) is drawn the same way. */
+.new-kind-dialog,
+.link-dialog {
   width: min(34rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
   padding: 0;
@@ -3789,18 +3829,21 @@ body:has(.slides-view) {
   box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
 }
 
-.new-kind-dialog::backdrop {
+.new-kind-dialog::backdrop,
+.link-dialog::backdrop {
   background: var(--dialog-backdrop);
 }
 
-.new-kind-dialog-body {
+.new-kind-dialog-body,
+.link-dialog-body {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
   padding: 0 1.25rem 1.25rem;
 }
 
-.new-kind-dialog-header {
+.new-kind-dialog-header,
+.link-dialog-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -3810,13 +3853,15 @@ body:has(.slides-view) {
   border-bottom: 1px solid var(--border);
 }
 
-.new-kind-dialog-header h2 {
+.new-kind-dialog-header h2,
+.link-dialog-header h2 {
   margin: 0;
   font-size: 1.2rem;
   line-height: 1.3;
 }
 
-.new-kind-dialog-close {
+.new-kind-dialog-close,
+.link-dialog-close {
   flex-shrink: 0;
   width: 2rem;
   height: 2rem;
@@ -3828,9 +3873,79 @@ body:has(.slides-view) {
   background: transparent;
 }
 
-.new-kind-dialog-close:hover {
+.new-kind-dialog-close:hover,
+.link-dialog-close:hover {
   color: var(--text);
   background: var(--surface);
+}
+
+/* In the "Link to a page" dialog the search box's hits are a list under
+   the input, in the dialog's flow, not a menu hanging over the page. */
+.link-dialog .search-bar {
+  max-width: none;
+}
+
+.link-dialog .search-results {
+  position: static;
+  max-width: none;
+  max-height: 40vh;
+  margin-top: 0.4rem;
+  box-shadow: none;
+}
+
+.link-dialog-section-toggle {
+  font-size: 0.9rem;
+}
+
+.link-dialog-sections {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.link-dialog-page {
+  margin: 0;
+}
+
+.link-dialog-anchors {
+  align-self: stretch;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.link-dialog-anchor {
+  width: 100%;
+  padding: 0.3rem 0.6rem;
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--accent);
+  background: transparent;
+}
+
+.link-dialog-anchor:hover,
+.link-dialog-anchor:focus-visible {
+  background: var(--surface);
+}
+
+/* A heading's section is indented by its level, as the contents list
+   it; a box is listed at the level of the heading before it. */
+.link-dialog-anchor-level-3 {
+  padding-left: 1rem;
+}
+
+.link-dialog-anchor-level-4,
+.link-dialog-anchor-level-5,
+.link-dialog-anchor-level-6 {
+  padding-left: 2rem;
+}
+
+.link-dialog-anchor-box .link-dialog-anchor {
+  color: var(--text);
 }
 
 /* A dialog stands above the page: as white as the page in the light
@@ -4863,9 +4978,17 @@ mark.comment-mark-focused {
   background: var(--comment-mark-focused);
 }
 
-.comment-on-selection {
+/* The buttons over a selection in a page: "Comment" for someone who may,
+   and "Copy link" for anyone (WP5.53). */
+.selection-actions {
   position: absolute;
   z-index: 5;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.comment-on-selection,
+.copy-selection-link {
   padding: 0.2rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -5047,7 +5170,8 @@ mark.comment-mark-focused {
 @media print {
   .comments-panel,
   .page-comments,
-  .comment-on-selection,
+  .selection-actions,
+  .link-copied,
   .comments-toggle {
     display: none;
   }
@@ -5635,6 +5759,7 @@ a.mention {
 }
 
 .page-body :is(h1, h2, h3, h4, h5, h6):hover > .heading-anchor,
+.page-body .alert-title:hover > .heading-anchor,
 .heading-anchor:focus-visible {
   opacity: 1;
 }
@@ -6623,14 +6748,30 @@ a.mention {
   color: var(--text-muted);
 }
 
-/* The wiki's icon (WP5.45), on a line of its own under the switches: the
-   space settings' icon field, which the favicon follows. */
-.home-sections .home-icon {
-  flex-basis: 100%;
+/* The home page's options, above the text in the editor of its document
+   (WP5.53): the switches, then the wiki's icon (WP5.45), the space
+   settings' icon field, which the favicon follows. */
+.editor-home {
+  margin: 0.75rem 0;
+  padding: 0.5rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.editor-home legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+
+.editor-home .home-sections {
+  margin-block: 0.5rem 1rem;
+}
+
+.editor-home .home-icon {
   max-width: 34rem;
 }
 
-.home-sections .home-icon p {
+.editor-home .home-icon p {
   color: var(--muted);
 }
 

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+Boxes have ids, and pages can be linked to by section (WP5.53). `BoxHead`
+gains `id`: a numbered box gets `box-<kind>-<n>`, its number among the
+numbered boxes of its kind in the page (the number "within the page" shows,
+whatever the space's numbering), a box without a number but with a title
+`box-<kind>-<slug of the title>`, and a box with neither none; the ids are
+made unique together with the headings' (`withHeadingIds`). The renderer
+puts the id on the box's `div` and ends the box's title with the same empty
+`heading-anchor` link a heading ends with. `Wiki.Core.Markdown.Toc` gains
+`anchors`, every heading and box with an id at any depth, with a label, for
+a list of the sections a link can point at. `Wiki.Core.Markdown.Edit` gains
+the command `LinkTo title address`, a link to a chosen address around the
+selection (the title as its text when nothing is selected), with the cursor
+after it. The title is written with `labelText`, new in
+`Wiki.Core.Markdown.Link` and shared with `attachmentReference`: syntax
+escaped, and brackets as `&#91;` and `&#93;`, since `\[` starts display
+math. `Wiki.Core.Anchor` gains `textFragment`, a quote's text fragment
+(`:~:text=…`, widened to whole words, with the words around it when the
+page has it more than once), and `encodeFragmentPart`, its percent-encoding.
+`textFragment` reads the page's text with its breaks (`BlockText`, from
+`renderedBlocks`): the edges of its blocks, since the browser looks for a
+fragment's words within one block, and its islands (formulas, diagrams,
+pictures, code blocks) and images, videos and checkboxes, which stand
+between the words around them. A break is a word's edge, and a quote
+across one is written as its first and last words (`text=start,end`). A
+line break inside a paragraph is whitespace, as the browser reads it.
+
 The built-in math macros may be the server's own copy (WP5.41):
 `Wiki.Core.Math` gains `wikiMacros`, which marks that block (a TeX comment,
 `wikiMacrosMarker`) so that the islands read it in place of the shipped
