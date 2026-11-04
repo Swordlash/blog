@@ -732,7 +732,7 @@ fieldsFor s a = case s of
                  MachineTex ->
                    "The xelatex the service finds on its PATH (the systemd user manager's, not your shell's), checked at the deploy by typesetting a small document under the export's limits. When there is none, or it fails (TeX Live 2020 and older loop on unicode-math's table), the deploy asks whether to install TeX Live under the toolchain, unless an earlier deploy was told no (--no-texlive, or no at its question)."
                  ToolchainTex ->
-                   "TeX Live installed under the toolchain directory (.wiki-toolchain/texlive) from a CTAN mirror, about 250 MB and a few minutes, when the TeX the service finds does not work; one installed there already is checked and used. Its installer needs perl, curl and tar. The unit puts its bin directory first on the service's PATH."
+                   "TeX Live installed under the toolchain directory (.wiki-toolchain/texlive) from a CTAN mirror, about 250 MB and a few minutes, when the TeX the service finds does not work; one installed there already is checked and used. Its installer needs curl and tar, and Perl with its standard modules: where the machine has none, the deploy builds Perl from its source under the toolchain (.wiki-toolchain/perl, a few minutes with cc), for the installer only. The unit puts TeX Live's bin directory first on the service's PATH."
                  NoTex ->
                    "No TeX Live is installed. The server makes PDFs only with a TeX of this machine's that works; otherwise it offers no PDFs, and its administration's Server section says why."
              )

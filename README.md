@@ -1080,7 +1080,14 @@ When the check fails or finds nothing, the deploy offers to install TeX Live und
 toolchain directory:
 
 ```
-deploy-local: Install TeX Live under ~/.wiki-toolchain/texlive from https://mirror.ctan.org? About 250 MB and a few minutes [y/N]
+deploy-local: PDF exports need a TeX that works and none was found. Install TeX Live under ~/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes)? [y/N]
+```
+
+On a machine without a Perl that has its standard modules, the same question also names
+the Perl it builds first (below), so that one answer covers both:
+
+```
+deploy-local: PDF exports need a TeX that works and none was found. Install TeX Live under ~/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes), building Perl 5.44.0 from its source under ~/.wiki-toolchain/perl first, since this machine has no Perl with its standard modules (a few minutes with cc)? [y/N]
 ```
 
 Yes downloads TeX Live's installer (`install-tl-unx.tar.gz`) from the mirror's
@@ -1092,11 +1099,24 @@ Yes downloads TeX Live's installer (`install-tl-unx.tar.gz`) from the mirror's
 into the unit. The size is an estimate from TeX Live's package database: about 180 MB of files for
 those packages, plus the formats `fmtutil` builds and the database itself, about 250 MB
 in all, from a download of about 45 MB.
-The installer is a Perl program: it needs `perl` (on RHEL the whole `perl` package, not
-`perl-interpreter` alone), `curl` and `tar`, which the deploy checks first. The downloads
-go through `curl` and the installer's own downloader, which both use the proxy
-`https_proxy` names, as the toolchain's other downloads do. Its output is shown as it
-comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
+The installer needs `curl`, `tar` and `gzip`, which the deploy checks first, and it and
+`tlmgr` are Perl programs that use modules of Perl's standard library. When the machine
+has no `perl` with those modules (none at all, or RHEL's `perl-interpreter` without the
+whole `perl` package), the deploy builds Perl first: it downloads the source of one
+version, pinned in the script with its SHA-256 (Perl 5.44.0 from
+`https://www.cpan.org/src/5.0/`), checks the checksum, and builds it under
+`<toolchain>/.wiki-toolchain/perl` with `sh Configure -des
+-Dprefix=<toolchain>/.wiki-toolchain/perl -Duserelocatableinc`, `make` with as many jobs
+as the machine has processors, and `make install` (not `make test`, which takes longer
+than the build), a few minutes with `cc` and `make`, which the native build needs
+anyway. That Perl serves the TeX install only: it is first on the `PATH` of `install-tl`
+and `tlmgr`, never on the unit's, since neither the server nor `xelatex` runs Perl. The
+state file keeps it (`perl_dir`), and a later install reuses it while it runs with those
+modules. A build that fails, or a download whose checksum differs, stops the TeX install
+before it starts; the deploy says what failed and goes on with the PDFs off. The
+downloads go through `curl` and the installer's own downloader, which both use the proxy
+`https_proxy` names, as the toolchain's other downloads do. Their output, and the Perl
+build's, is shown as it comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
 
 - `--texlive` answers yes without asking, and `--no-texlive` no: the server then offers
   no PDFs unless a TeX of the machine's works, and its administration's Server section
@@ -1120,8 +1140,8 @@ comes and kept in `<toolchain>/.wiki-toolchain/texlive/install.log`.
 - Nothing about TeX stops the deploy: PDFs are optional. `--status` says whether the
   engine works, at which path, and whether it is the toolchain's TeX Live; for a unit
   with `--no-pdf` it says `PDF exports: off in the unit (--no-pdf)` instead.
-- `undeploy-local.sh` leaves the toolchain's TeX Live where it is, as it leaves the
-  toolchain; `--purge` of a deployment under a prefix deletes it with the prefix.
+- `undeploy-local.sh` leaves the toolchain's TeX Live, and the Perl built for it, where
+  they are, as it leaves the toolchain; `--purge` of a deployment under a prefix deletes them with the prefix.
 
 `sh toolchain/check-tex.sh [ENGINE]` runs the same check by hand. To check what the
 service sees:
