@@ -269,6 +269,7 @@ component =
                   <p class="server-export-causes">
                     The usual causes: its format file is missing (make it with <code>fmtutil-sys --byfmt xelatex</code> as root, or <code>fmtutil-user --byfmt xelatex</code> as the server's user);
                     the server's service runs with a <code>PATH</code> or <code>HOME</code> other than your shell's, so that xelatex finds another TeX tree or none (set them in the service, with <code>systemctl edit</code>, or <code>systemctl --user edit</code> for a user's service);
+                    a TeX Live older than 2021, whose kpathsea refuses, in the wiki's paranoid mode, files that TeX reads by their full path (unicode-math's table: "Not reading from …"), after which xelatex runs until it is stopped: install a newer TeX Live (a user install under the service's home is enough) and put its <code>bin</code> first on the service's <code>PATH</code>;
                     or a LaTeX package the documents load is not installed.
                   </p>
                 |]

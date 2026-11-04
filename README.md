@@ -1255,8 +1255,10 @@ to the demo, keeping `data/`.
   `texlive-science` for `\ce` and `\pu` chemistry, `texlive-plain-generic` for
   struck-out and underlined text, which pandoc sets with `soul`; a missing
   package is named in the export's error). The server tries it when it starts:
-  it looks for `xelatex` on its `PATH` and typesets a one-line document with it,
-  and offers the PDFs only when that makes a PDF (the log's `tex-engine` event
+  it looks for `xelatex` on its `PATH` and typesets a one-line document with it
+  that loads what pandoc's documents load (fontspec, unicode-math, Latin Modern)
+  and sets a formula, under the export's limits and for a minute at most, and
+  offers the PDFs only when that makes a PDF (the log's `tex-engine` event
   says what it found). The administration's "Server" section shows the outcome,
   with what `xelatex` printed when it failed, and "Check again" tries it anew,
   so a TeX installed or repaired later needs no restart. A `xelatex` that is
@@ -1264,8 +1266,14 @@ to the demo, keeping `data/`.
   xelatex`, or `fmtutil-user --byfmt xelatex` as the server's user), or the
   server's service runs with a `PATH` or `HOME` other than your shell's, so that
   it finds another TeX tree or none (set them in the service with `systemctl
-  edit`, or `systemctl --user edit` for a user's service). The deploy checks the TeX the service finds, and offers to install TeX Live
-  under the toolchain when it does not work: see
+  edit`, or `systemctl --user edit` for a user's service). A TeX Live older
+  than 2021 fails too: its kpathsea refuses, in the paranoid mode the wiki
+  runs TeX in (`openin_any=p`, which keeps a page's formulas from reading the
+  server's files), the files TeX reads by their full path, unicode-math's
+  table among them ("Not reading from …"), and xelatex then runs until it is
+  stopped. Install a newer TeX Live (a user install under the service's home is
+  enough) and put its `bin` first on the service's `PATH`. The deploy checks the TeX the service finds, and offers to install TeX
+  Live under the toolchain when it does not work: see
   [PDF exports: the TeX the service finds](#pdf-exports-the-tex-the-service-finds).
 - **Where the data lives.** The database (in the volume `wiki-demo_wiki-db`, or
   `data/wiki.sqlite` with `--sqlite`) and `data/`: the attachments under their

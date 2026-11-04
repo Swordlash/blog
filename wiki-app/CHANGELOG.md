@@ -33,7 +33,8 @@ the first from the prerendered page once, as the server's status, and the
 preload carries it as `texEngine`. The administration's Server section shows
 what the server found: xelatex working at its path, not found with the
 install hint, or failing with what it printed (folded under a `<details>`
-past 12 lines) and the usual causes, with "Check again" and the time of the
+past 12 lines) and the usual causes (a TeX Live older than 2021 among
+them), with "Check again" and the time of the
 check; a check tells the shell, which reads the session's formats again.
 
 Avatars, readers, who wrote a page, the editor's title and the page's

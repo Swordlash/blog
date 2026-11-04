@@ -77,6 +77,7 @@ module Wiki.Server.Export
   , Probe (..)
   , Probed (..)
   , probeTexEngine
+  , probeTexEngineWithin
   , probeTimeout
   , engineReport
   , logEngine
@@ -101,7 +102,8 @@ import System.Directory (doesFileExist, findExecutable)
 import System.Environment (getEnvironment, setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
+import System.Posix.Signals (sigKILL, signalProcessGroup)
+import System.Process (CreateProcess (..), StdStream (..), getPid, proc, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
 import Text.Pandoc (PandocError, PandocIO, Verbosity (..), WriterOptions (..), compileDefaultTemplate, def, renderError, runIO, setMediaBag, setVerbosity, writeBeamer, writeDocx, writeEPUB3, writeHtml5String, writeLaTeX, writePowerpoint)
 import Text.Pandoc.Builder qualified as B
@@ -213,52 +215,95 @@ probeOutputLimit :: Int
 probeOutputLimit = 2000
 
 -- | Try the TeX engine: find @xelatex@ on the @PATH@ ('texEngine'), and
--- typeset a one-line LaTeX document with it in a temporary directory, as
--- pandoc runs it for an export (@-halt-on-error@, no interaction, the
--- output in that directory, with @TEXMFOUTPUT@ there too) and under the
--- same limits ('restrictTeX'). It works if it ends well and leaves the
--- PDF behind. Otherwise its reason is kept: the errors its log names
--- ('texError'), or, when it wrote no log (a missing format file stops it
--- before it opens one), the end of what it printed.
+-- typeset a one-line document with it in a temporary directory, as pandoc
+-- runs it for an export (@-halt-on-error@, no interaction, the output in
+-- that directory, with @TEXMFOUTPUT@ there too) and under the same limits
+-- ('restrictTeX'), for at most 'probeTimeout'. The document loads what
+-- pandoc's LaTeX template loads for @xelatex@ (fontspec, unicode-math, Latin
+-- Modern) and sets a formula, because that is where an old or odd TeX
+-- installation fails: a TeX Live older than 2021 refuses, under the
+-- limits, the table unicode-math reads by its full path, and then loops.
+-- It works if it ends well and leaves the PDF behind.
 probeTexEngine :: IO Probed
-probeTexEngine = do
+probeTexEngine = probeTexEngineWithin probeTimeout
+
+-- | 'probeTexEngine' with another time limit, in microseconds: the tests'
+-- engine that never ends is not waited for a minute.
+--
+-- When the engine fails, its reason is kept: what it wrote on its error
+-- output (kpathsea's refusals go there), then the errors its log names
+-- ('texError'), or the end of its log, or, when it wrote no log (a missing
+-- format file stops it before it opens one), the end of what it printed.
+-- An engine that takes too long is killed with every process it started:
+-- it runs in a process group of its own, which is killed as a whole.
+probeTexEngineWithin :: Int -> IO Probed
+probeTexEngineWithin limit = do
   probe <-
     texEngine >>= \case
       Nothing -> pure EngineNotFound
       Just engine -> withSystemTempDirectory "wiki-tex-probe" $ \dir -> do
-        writeFile (dir </> "probe.tex") "\\documentclass{article}\\begin{document}x\\end{document}\n"
+        writeFile (dir </> "probe.tex") probeDocument
         restrictTeX
         environment <- getEnvironment
         let run =
               (proc engine ["-halt-on-error", "-interaction", "nonstopmode", "-output-directory", dir, "probe.tex"])
                 { cwd = Just dir
                 , env = Just (("TEXMFOUTPUT", dir) : filter ((/= "TEXMFOUTPUT") . fst) environment)
+                , std_in = NoStream
+                , create_group = True
                 }
-        ran <- timeout probeTimeout (try @IOException (readCreateProcessWithExitCode run ""))
+        ran <- try @IOException $
+          withFile (dir </> "probe.stdout") WriteMode $ \out ->
+            withFile (dir </> "probe.stderr") WriteMode $ \err ->
+              withCreateProcess run {std_out = UseHandle out, std_err = UseHandle err} $ \_ _ _ process ->
+                (timeout limit (waitForProcess process) `onException` stopGroup process) >>= \case
+                  Just code -> pure (Just code)
+                  Nothing -> stopGroup process $> Nothing
+        made <- readIfThere (dir </> "probe.pdf")
         case ran of
-          Nothing -> pure (EngineFailing engine ("xelatex did not finish within " <> show (probeTimeout `div` 1_000_000) <> " seconds."))
-          Just (Left e) -> pure (EngineFailing engine (bounded (toS (displayException e))))
-          Just (Right (code, out, err)) -> do
-            made <- doesFileExist (dir </> "probe.pdf")
-            pdf <- if made then BS.readFile (dir </> "probe.pdf") else pure ""
-            if code == ExitSuccess && "%PDF" `BS.isPrefixOf` pdf
-              then pure (EngineWorking engine)
-              else do
-                logged <- do
-                  present <- doesFileExist (dir </> "probe.log")
-                  if present then decodeUtf8With lenientDecode <$> BS.readFile (dir </> "probe.log") else pure ""
-                let errors = if any ("!" `T.isPrefixOf`) (T.lines logged) then texError logged else ""
-                    printed = T.strip (toS out <> "\n" <> toS err)
-                    said
-                      | not (T.null (T.strip errors)) = errors
-                      | not (T.null printed) = printed
-                      | otherwise = case code of
-                          ExitSuccess -> "xelatex ended without making a PDF."
-                          ExitFailure n -> "xelatex stopped with exit code " <> show n <> " and printed nothing."
-                pure (EngineFailing engine (bounded said))
+          Right (Just ExitSuccess) | "%PDF" `BS.isPrefixOf` made -> pure (EngineWorking engine)
+          Left e -> pure (EngineFailing engine (bounded ("xelatex could not be run: " <> toS (displayException e)) ""))
+          Right outcome -> do
+            printed <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.stdout")
+            complained <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.stderr")
+            logged <- decodeUtf8With lenientDecode <$> readIfThere (dir </> "probe.log")
+            let headline = case outcome of
+                  Nothing -> "xelatex did not finish within " <> seconds limit <> ", and was stopped."
+                  Just ExitSuccess -> "xelatex ended without making a PDF."
+                  Just (ExitFailure n) -> "xelatex stopped with exit code " <> show n <> "."
+                fromLog
+                  | any ("!" `T.isPrefixOf`) (T.lines logged) = texError logged
+                  | not (T.null (T.strip logged)) = T.unlines (lastLines 20 logged)
+                  | otherwise = T.unlines (lastLines 20 printed)
+            pure (EngineFailing engine (bounded headline (T.intercalate "\n" (filter (not . T.null) (map T.strip [T.unlines (lastLines 10 complained), fromLog])))))
   Probed probe <$> getCurrentTime
   where
-    bounded t = T.strip (T.takeEnd probeOutputLimit (T.strip t))
+    -- The headline, and as much of the end of the rest as the limit leaves.
+    bounded headline rest =
+      let room = max 0 (probeOutputLimit - T.length headline - 1)
+       in T.strip (headline <> "\n" <> T.takeEnd room (T.strip rest))
+    lastLines n = reverse . take n . reverse . filter (not . T.null . T.strip) . T.lines
+    readIfThere file = doesFileExist file >>= \there -> if there then BS.readFile file else pure ""
+    seconds micro = case micro `div` 1_000_000 of
+      1 -> "1 second"
+      n -> show n <> " seconds"
+    stopGroup process = do
+      getPid process >>= traverse_ (\pid -> void (try @IOException (signalProcessGroup sigKILL pid)))
+      void (waitForProcess process)
+
+-- | The document 'probeTexEngine' typesets: what pandoc's LaTeX template
+-- loads for @xelatex@, and a formula, on one line of text.
+probeDocument :: Text
+probeDocument =
+  T.unlines
+    [ "\\documentclass{article}"
+    , "\\usepackage{fontspec}"
+    , "\\usepackage{unicode-math}"
+    , "\\usepackage{lmodern}"
+    , "\\begin{document}"
+    , "x $x^2$"
+    , "\\end{document}"
+    ]
 
 -- | Log a try of the TeX engine, as the event @tex-engine@ with its status
 -- and the engine's path: when the server starts, and when the

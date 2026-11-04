@@ -139,9 +139,10 @@ data TexEngine = TexEngine
   , path :: Maybe Text
   -- ^ Where @xelatex@ was found; 'Nothing' when it was not.
   , output :: Maybe Text
-  -- ^ What the engine wrote when it failed: the end of its output, or
-  -- the errors in its log, at most 2000 characters. 'Nothing' unless it
-  -- failed.
+  -- ^ What the engine wrote when it failed, at most 2000 characters: a
+  -- line that says how it ended (stopped with an exit code, or stopped by
+  -- the server after a minute), what it wrote on its error output, and the
+  -- errors its log names or the end of its log. 'Nothing' unless it failed.
   , checkedAt :: UTCTime
   -- ^ When the server tried it.
   }

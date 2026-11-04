@@ -5,8 +5,11 @@
 Exports that say what went wrong (WP5.56). The server tries its TeX
 engine instead of only looking for it (`Wiki.Server.Export`'s
 `probeTexEngine`): it finds `xelatex` on its `PATH` and typesets a one-line
-document with it in a temporary directory, under the export's limits and
-for a minute at most. It does that when it starts, logged as the event
+document with it in a temporary directory, loading fontspec, unicode-math
+and Latin Modern and setting a formula as pandoc's documents do, under the
+export's limits and for a minute at most; an engine that runs out of time
+is killed with its whole process group, and what it wrote on its error
+output and in its log is kept. It does that when it starts, logged as the event
 `tex-engine` (`status=working|failing|not-found`, the path, and for a
 failing engine a warning with its last line), and again on `POST
 admin/tex-engine/check`; `GET admin/tex-engine` answers the last result,

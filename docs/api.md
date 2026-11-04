@@ -1202,11 +1202,17 @@ every PDF fails. So the server tries it (WP5.56, `Wiki.Api.Admin.TexEngine`):
 when it starts, logged as the event `tex-engine` with its `status` and
 `path`, and again at each `check`. It looks for `xelatex` on its `PATH` and
 typesets a one-line document with it in a temporary directory, with the
-limits an export has, for a minute at most. `status` is `working` (it made a
+limits an export has, for a minute at most: one that loads what pandoc's
+LaTeX template loads for `xelatex` (fontspec, unicode-math, Latin Modern) and
+sets a formula, since that is where an old or odd installation fails (a TeX
+Live older than 2021 refuses unicode-math's table under the limits, then
+loops). An engine that runs out of time is killed with every process it
+started. `status` is `working` (it made a
 PDF), `failing` (it was found and did not) or `not-found`; `path` is where it
-was found (`null` when it was not); `output` is, for `failing` only, the
-errors its log names or else the end of what it printed, 2000 characters at
-most; `checkedAt` is when it was tried. The session's `exports` offer the
+was found (`null` when it was not); `output` is, for `failing` only, a
+first line that says how it ended, then what it wrote on its error output
+(kpathsea's refusals) and the errors its log names, or else the end of its
+log or of what it printed, 2000 characters at most; `checkedAt` is when it was tried. The session's `exports` offer the
 PDFs while the status is `working`, so installing or repairing TeX takes
 effect at the next `check`, or the next start. The demo's backend has no
 server: its `texEngine` is `Nothing`, and it offers no export at all.
