@@ -46,7 +46,8 @@ spec m = describe "spoilers and listings in a page" $ do
     computedStyle ".page-body span.spoiler" "user-select" `shouldReturn` "none"
     click spoiler
     eventually $ getAttribute spoiler "class" `shouldReturn` Just "spoiler shown"
-    computedStyle ".page-body span.spoiler" "filter" `shouldReturn` "none"
+    -- The blur fades out, and the computed style follows the transition.
+    eventually $ computedStyle ".page-body span.spoiler" "filter" `shouldReturn` "none"
     click spoiler
     eventually $ getAttribute spoiler "class" `shouldReturn` Just "spoiler"
     -- The clicks gave it the focus, as a button has it.
