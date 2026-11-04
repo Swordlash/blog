@@ -1,9 +1,10 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The optional Spaces and Recently visited sections under the home page.
--- Administrators change each section independently, and the wiki's icon
--- ("Wiki.App.View.HomeIcon"). The shell renders the ordinary page view
--- above these navigation sections.
+-- The shell renders the ordinary page view above these navigation
+-- sections. Administrators choose which are shown, and set the wiki's
+-- icon, in the editor of the home page's document ("Wiki.App.View.Editor",
+-- WP5.53 of docs/PLAN.md).
 module Wiki.App.View.Directory
   ( Input (..)
   , component
@@ -11,7 +12,7 @@ module Wiki.App.View.Directory
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.==))
+import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -21,21 +22,13 @@ import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Wiki.Api.ServerSettings (HomePage (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (grants, homePage), WikiError, shutOut)
-import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (homePage), WikiError, shutOut)
 import Wiki.App.Recent (readRecent)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.App.View.HomeIcon qualified as HomeIcon
-import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Path (childrenOf)
-import Wiki.Core.Permission
-  ( GlobalPermission (Administer)
-  , Grants (access)
-  , hasGlobalPermission
-  , mayCreateSpace
-  )
+import Wiki.Core.Permission (mayCreateSpace)
 import Wiki.Core.Space (Space (description, id, name, public, slug), subspacesOf)
 
 -- | The directory's input: the shell's context, and a route a newcomer is
@@ -52,11 +45,11 @@ data State = State
   , problem :: Maybe WikiError
   }
 
-type Slots = ("homeIcon" .== H.Slot (Const Void) ViewOutput ())
+type Slots = Empty
 
-data Action = Initialize | Receive Input | Followed (Follow Route) | Spaces Bool | Recent Bool | Anonymous Bool | FromHomeIcon ViewOutput
+data Action = Initialize | Receive Input | Followed (Follow Route)
 
-component :: forall query m. (MonadLoad m, MonadAdmin m, MonadBrowserDOM m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadBrowserDOM m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.component
     ( \input -> do
@@ -70,17 +63,6 @@ component =
     render st =
       [hh|
         <section class="directory">
-          {% if hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer %}
-            <div class="home-sections">
-              <label><input class="home-spaces" type="checkbox" checked={{ home.showSpaces }} onChecked={{ Spaces }}/> Show Spaces</label>
-              <label><input class="home-recent" type="checkbox" checked={{ home.showRecent }} onChecked={{ Recent }}/> Show Recently visited</label>
-              {% if ctx.session.grants.access == Closed %}
-                <label><input class="home-anonymous" type="checkbox" checked={{ home.showAnonymous }} onChecked={{ Anonymous }}/> Show to signed-out visitors</label>
-                <p>Shares this home page, its attachments, source and history. Other wiki pages still require sign-in.</p>
-              {% end %}
-              {{ HH.slot "homeIcon" () HomeIcon.component HomeIcon.Input {context = ctx} FromHomeIcon }}
-            </div>
-          {% end %}
           {% for e in maybeToList st.problem %}{{ errorView e }}{% end %}
           {% if home.showSpaces %}
             <div class="actions">{{ newSpace ctx }}</div>
@@ -188,18 +170,6 @@ component =
         modify (\st -> st {input})
         when (old.context.revision /= input.context.revision) load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
-      Spaces value -> change (\h -> h {showSpaces = value})
-      Recent value -> change (\h -> h {showRecent = value})
-      Anonymous value -> change (\h -> h {showAnonymous = value})
-      FromHomeIcon out -> H.raise out
-
-    change f = do
-      home <- gets (\st -> st.input.context.session.homePage)
-      lift (setHomePage (f home)) >>= \case
-        Left e -> modify (\st -> st {problem = Just e})
-        Right saved -> do
-          modify (\st -> st {input = st.input {context = st.input.context {session = st.input.context.session {homePage = saved}}}})
-          H.raise (Changed Nothing)
 
     load = do
       input <- gets (\st -> st.input)

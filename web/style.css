@@ -6748,14 +6748,30 @@ a.mention {
   color: var(--text-muted);
 }
 
-/* The wiki's icon (WP5.45), on a line of its own under the switches: the
-   space settings' icon field, which the favicon follows. */
-.home-sections .home-icon {
-  flex-basis: 100%;
+/* The home page's options, above the text in the editor of its document
+   (WP5.53): the switches, then the wiki's icon (WP5.45), the space
+   settings' icon field, which the favicon follows. */
+.editor-home {
+  margin: 0.75rem 0;
+  padding: 0.5rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.editor-home legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+
+.editor-home .home-sections {
+  margin-block: 0.5rem 1rem;
+}
+
+.editor-home .home-icon {
   max-width: 34rem;
 }
 
-.home-sections .home-icon p {
+.editor-home .home-icon p {
   color: var(--muted);
 }
 

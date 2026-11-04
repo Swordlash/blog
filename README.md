@@ -613,7 +613,10 @@ conflicts. **Save** stays in the editor; **Save and close** returns to the root.
 The home page also has source, history and restore, contents, presentation and
 server document exports. Comments are disabled on the home page alone.
 
-**Spaces** and **Recently visited** have independent switches below the page.
+**Spaces** and **Recently visited** below the page are switched on and off in
+the home page's editor, under **Home page** above the text, with the wiki's
+icon: the switches are saved with the page by **Save**, and **Cancel** drops
+them (the icon is saved as soon as it is set).
 The sidebar keeps the spaces the reader may open even when the directory is hidden.
 Recently visited belongs to each browser. Wiki links in the home page start at
 the wiki root, for example `[[/docs]]`; attachments belong to its real page and

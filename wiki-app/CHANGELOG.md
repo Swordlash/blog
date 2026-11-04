@@ -22,6 +22,14 @@ gains `CopyAnchor`, and `Wiki.App.Browser` gains `markFragment`). Text
 selected in a page gets "Copy link" beside "Comment", for every reader,
 whose address ends in the browser's text fragment (`#:~:text=…`).
 
+The home page's options moved into the editor of its document: an
+administrator sets "Show Spaces", "Show Recently visited", "Show to
+signed-out visitors" and the wiki's icon under "Home page" above the
+text. The switches are saved with the page by Save (after the page, and
+only when they changed), and Cancel drops them; the icon is still saved as
+soon as it is set. The directory under the home page no longer shows them.
+`Editor.Input` gains `home`.
+
 The account panel's notifications have a block "Your notifications as a
 feed" (WP5.31): over `wiki-server`, "Make an address" makes the secret
 address of an Atom feed of one's notifications, shown whole with "Copy",

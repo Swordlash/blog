@@ -137,6 +137,15 @@
 -- element that is replaced takes its ref with it, after the new one has
 -- set it.
 --
+-- The editor of the home page's document ('home' in its 'Input') shows an
+-- administrator the home page's options above the text (WP5.53 of
+-- docs/PLAN.md): the sections under the page and, in a closed wiki,
+-- whether signed-out visitors see it. Save saves them after the page
+-- ('setHomePage'), when they changed; Cancel drops them. They are not
+-- part of the work: they make no draft, and leaving with them changed is
+-- not asked about. The wiki's icon is there too, in a form of its own
+-- that saves it at once ("Wiki.App.View.HomeIcon").
+--
 -- Leaving with unsaved changes is guarded twice. The shell asks this
 -- component ('IsDirty') before it follows a route away, and the browser
 -- warns before a reload or a close while the work differs from what was
@@ -235,11 +244,12 @@ import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
+import Wiki.Api.ServerSettings (HomePage (showAnonymous, showRecent, showSpaces))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
-import Wiki.App.Backend.Admin (MonadAdmin)
+import Wiki.App.Backend.Admin (MonadAdmin (setHomePage))
 import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
 import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
@@ -287,12 +297,14 @@ import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
+import Wiki.App.View.HomeIcon qualified as HomeIcon
 import Wiki.App.View.LinkDialog qualified as LinkDialog
 import Wiki.App.View.LivePreview (liveKey)
 import Wiki.App.View.MacrosPanel qualified as MacrosPanel
 import Wiki.App.View.NewKindDialog qualified as NewKindDialog
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
+import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Assistant
   ( AssistantError (kind)
   , Provider (..)
@@ -336,7 +348,7 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
-import Wiki.Core.Permission (GlobalPermission (Administer), hasGlobalPermission)
+import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), hasGlobalPermission)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.User (User (id))
@@ -351,6 +363,10 @@ data Input = Input
   , path :: [Slug]
   , feed :: Maybe Feed
   -- ^ The tab's live channel, on a backend that has one.
+  , home :: Bool
+  -- ^ Whether the page is the home page's document (the route
+  -- 'Wiki.App.Route.EditHome'): an administrator then also sets the home
+  -- page's options here.
   }
 
 -- | Whether the work has unsaved changes: the shell asks this before it
@@ -364,6 +380,7 @@ type Slots =
     .+ ("macros" .== H.Slot (Const Void) MacrosPanel.Output ())
     .+ ("newKind" .== H.Slot (Const Void) NewKindDialog.Output ())
     .+ ("linkDialog" .== H.Slot (Const Void) LinkDialog.Output ())
+    .+ ("homeIcon" .== H.Slot (Const Void) ViewOutput ())
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -502,7 +519,9 @@ data State = State
   -- ^ Whether the "New kind…" dialog is shown ("Wiki.App.View.NewKindDialog").
   , linkDialogOpen :: Bool
   -- ^ Whether the "Link to a page" dialog is shown ("Wiki.App.View.LinkDialog").
+  , homeChoice :: HomeChoice
   -- ^ The home page's options as ticked in the editor of its document,
+  -- saved with the page.
   , assistantMounted :: Bool
   -- ^ Whether the panel has been shown yet: it is then mounted, and kept.
   , hostElement :: Maybe Element
@@ -559,6 +578,8 @@ data Action
   | FromNewKind NewKindDialog.Output
   | LinkPage
   | FromLinkDialog LinkDialog.Output
+  | ChoseHome HomeChoice
+  | FromHomeIcon ViewOutput
   | PanelSubmitted
   | ShowPreview
   | WentTo Bool
@@ -687,6 +708,7 @@ component =
               , macrosOpen = False
               , kindDialogOpen = False
               , linkDialogOpen = False
+              , homeChoice = homeChoiceOf input.context.session.homePage
               , assistantMounted = False
               , hostElement = Nothing
               , selection = Nothing
@@ -778,6 +800,9 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
+          <div class="editor-home-holder" {{ HE.stoppingPropagation (HE.handler (EventType "submit") (const PanelSubmitted)) }}>
+            {% if editsHomeOptions st.input %}{{ homeOptions st }}{% end %}
+          </div>
           <div class="editor-panels" {{ HE.stoppingPropagation (HE.handler (EventType "submit") (const PanelSubmitted)) }}>
             {% if st.macrosOpen %}
               {{ HH.slot "macros" () MacrosPanel.component MacrosPanel.Input {context = st.input.context, space = st.input.space, page = fromMaybe "" (pageMacros work.body)} FromMacros }}
@@ -805,6 +830,34 @@ component =
           <div class="editor-saved-notice" role="status">{% if isJust st.notice %}Saved{% end %}</div>
         </form>
       |]
+
+    -- The home page's options, in the editor of its document, for an
+    -- administrator (WP5.53 of docs/PLAN.md): its sections, and in a
+    -- closed wiki whether signed-out visitors see it, saved with the
+    -- page by Save and dropped by Cancel. The wiki's icon has its own
+    -- form ("Wiki.App.View.HomeIcon"), which saves the icon at once (an
+    -- image is uploaded as soon as it is chosen). Its form is held in an
+    -- element that keeps its submit from reaching the page's form.
+    homeOptions :: State -> H.ComponentHTML Action Slots m
+    homeOptions st =
+      [hh|
+        <fieldset class="editor-home">
+          <legend>Home page</legend>
+          <div class="home-sections">
+            <label><input class="home-spaces" type="checkbox" checked={{ c.withSpaces }} onChecked={{ \v -> ChoseHome c {withSpaces = v} }}> Show Spaces</label>
+            <label><input class="home-recent" type="checkbox" checked={{ c.withRecent }} onChecked={{ \v -> ChoseHome c {withRecent = v} }}> Show Recently visited</label>
+            {% if ctx.session.grants.access == Closed %}
+              <label><input class="home-anonymous" type="checkbox" checked={{ c.forVisitors }} onChecked={{ \v -> ChoseHome c {forVisitors = v} }}> Show to signed-out visitors</label>
+              <p class="field-hint">Shares this home page, its attachments, source and history. Other wiki pages still require sign-in.</p>
+            {% end %}
+            <p class="field-hint">Saved with the page.</p>
+          </div>
+          {{ HH.slot "homeIcon" () HomeIcon.component HomeIcon.Input {context = ctx} FromHomeIcon }}
+        </fieldset>
+      |]
+      where
+        ctx = st.input.context
+        c = st.homeChoice
 
     -- Cancel navigates to the page. With unsaved work, or a saved draft, it
     -- first asks what becomes of the draft ('cancelQuestion').
@@ -1433,6 +1486,9 @@ component =
         closeMenu
         whenM (gets (\st -> st.mode == Editing)) $ modify (\st -> st {linkDialogOpen = True})
       FromLinkDialog LinkDialog.Closed -> modify (\st -> st {linkDialogOpen = False})
+      ChoseHome homeChoice -> modify (\st -> st {homeChoice})
+      -- The icon was saved: the shell reads the wiki again.
+      FromHomeIcon out -> H.raise out
       -- The link goes around the selection, which the text kept while the
       -- dialog had the focus, as a toolbar command writes; the focus goes
       -- back to the text, after the link.
@@ -1952,7 +2008,11 @@ component =
               -- What is saved is the text including the assistant's
               -- changes, so they are accepted.
               whenM (gets (\s -> s.pendingChanges > 0)) $ decide Accept Nothing
+              -- The home page's options, after its text, when they changed.
+              -- If they cannot be saved, the editor stays, and says why.
+              optionsSaved <- saveHomeChoice
               case after of
+                _ | not optionsSaved -> H.raise (Changed Nothing)
                 Close -> H.raise (Changed (Just (leaving st.input)))
                 Stay -> do
                   showSaved
@@ -1961,6 +2021,19 @@ component =
                   -- breadcrumbs show.
                   H.raise (Changed Nothing)
         _ -> pass
+
+    -- Save the home page's options as ticked, if this editor shows them
+    -- and they differ from the wiki's, and say whether nothing failed.
+    saveHomeChoice :: H.HalogenM State Action Slots ViewOutput m Bool
+    saveHomeChoice = do
+      st <- get
+      let current = st.input.context.session.homePage
+      if not (editsHomeOptions st.input) || homeChoiceOf current == st.homeChoice
+        then pure True
+        else
+          setHomePage current {showSpaces = st.homeChoice.withSpaces, showRecent = st.homeChoice.withRecent, showAnonymous = st.homeChoice.forVisitors} >>= \case
+            Left e -> False <$ modify (\s -> s {problem = Just e})
+            Right _ -> pure True
 
     -- Handle a save refused because of someone else's save: fetch their
     -- version and show it beside the author's text, which is saved as a
@@ -2182,6 +2255,20 @@ placeOf input work =
     , -- The preview looks up the people the work mentions itself.
       Body.people = mempty
     }
+
+-- | 'HomeChoice' is the home page's options as the editor of its
+-- document shows them: whether it shows the spaces, the spaces visited
+-- last, and, in a closed wiki, whether signed-out visitors see it.
+data HomeChoice = HomeChoice {withSpaces :: Bool, withRecent :: Bool, forVisitors :: Bool}
+  deriving stock (Eq)
+
+homeChoiceOf :: HomePage -> HomeChoice
+homeChoiceOf h = HomeChoice {withSpaces = h.showSpaces, withRecent = h.showRecent, forVisitors = h.showAnonymous}
+
+-- | Whether the editor shows the home page's options: on the home page's
+-- document, to an administrator, who alone may change them.
+editsHomeOptions :: Input -> Bool
+editsHomeOptions input = input.home && hasGlobalPermission (principalOf input.context) (grantsOf input.context) Administer
 
 -- | What the line beside the buttons says about the draft.
 draftStatus :: DraftNews -> Text

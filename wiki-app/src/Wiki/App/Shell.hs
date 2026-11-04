@@ -1011,7 +1011,7 @@ component =
         InSpace _ space pages ->
           let homePath = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
            in case st.route of
-                EditHome -> HH.slot "editor" (space.id, homePath) Editor.component Editor.Input {context = context st, space, pages, path = homePath, feed = st.feed} FromView
+                EditHome -> HH.slot "editor" (space.id, homePath) Editor.component Editor.Input {context = context st, space, pages, path = homePath, feed = st.feed, home = True} FromView
                 HomeSource -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path = homePath} FromView
                 HomeHistory version against -> HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = homePath, version, against} FromView
                 HomeSlides slide step -> HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path = homePath, slide, step} FromView
@@ -1031,7 +1031,7 @@ component =
                   HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide, step} FromView
                 -- One editor per page edited: another page's editor is a
                 -- separate component, with its own draft.
-                EditPage _ path -> HH.slot "editor" (space.id, path) Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
+                EditPage _ path -> HH.slot "editor" (space.id, path) Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed, home = False} FromView
                 NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
                 _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
