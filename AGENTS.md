@@ -41,7 +41,10 @@ is followed by another round, however small the fixes, until a round finds nothi
 (the owner, 2026-11-03: a round is never skipped because the fixes were small). Every
 pull request, every time. Three rounds at most (the owner, 2026-11-02, down from
 four): the fixes after the third are made and described in the pull request, not
-reviewed again.
+reviewed again, except when the third round's finding is of the same kind as an
+earlier round's (the same mechanism, another case of it): then one more round is run
+after the fix, so that the family of findings is closed by a review (the owner,
+2026-11-04).
 
 The owner merges. The session does not merge a pull request unless the owner asks it
 to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
