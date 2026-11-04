@@ -16,10 +16,11 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
-import Test.Browser.Http (answerWith, holdAt, release, serveDemo, serverStarts, startServer)
+import Protolude hiding (find, wait)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, startServer)
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -47,10 +48,15 @@ $( browserJS
      ["jsbits/test-download.js"]
      [ ("js_downloads_start", "wiki_test_downloads_start", Safe, [t|Bool -> IO ()|])
      , ("js_downloads_stop", "wiki_test_downloads_stop", Safe, [t|IO ()|])
-     , ("js_downloads", "wiki_test_downloads", Safe, [t|IO JSText|])
+     , ("js_downloadsPromise", "wiki_test_downloads", Safe, [t|IO (Promise JSText)|])
      , ("js_answer_document", "wiki_test_answer_document", Safe, [t|JSText -> JSText -> Int -> JSText -> JSText -> JSText -> IO ()|])
      ]
  )
+
+-- | What the page saved and opened, which the page reads as text from each
+-- blob, so it comes as a promise.
+js_downloads :: IO JSText
+js_downloads = if inBrowser then wait =<< js_downloadsPromise else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -181,9 +187,13 @@ spec m = do
     -- A few lines are shown as they are, not folded away.
     length <$> findAll ui ".server-export-details" `shouldReturn` 0
     find ui ".server-export .server-export-causes" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "fmtutil-sys --byfmt xelatex")
+    -- Checked again, the server finds it working, and says so from then on.
+    engineIs working
     find ui ".server-export-check-again" >>= click
     eventually $ find ui ".server-export .server-export-working" >>= (`shouldHaveText` "xelatex was found at /usr/bin/xelatex: PDFs are made with it.")
     length <$> findAll ui ".server-export-output" `shouldReturn` 0
+    checks <- filter (\a -> a.method == "POST" && a.url == endpointUrl (\e -> e.admin.checkTexEngine)) <$> asked
+    length checks `shouldBe` 1
 
   it "folds a long output away in the administration" $ runPage $ do
     serverStarts
@@ -295,4 +305,4 @@ instance FromJSON Handed where
 
 -- | What the page saved and opened so far.
 given :: PageM s Handed
-given = unsafeIOToPageM js_downloads >>= either (\e -> panic ("the downloads: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
+given = unsafeIOToPageM (evaluate =<< js_downloads) >>= either (\e -> panic ("the downloads: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText

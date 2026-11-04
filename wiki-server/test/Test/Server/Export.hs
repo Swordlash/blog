@@ -651,14 +651,19 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
       getUrl r (r.public <> "/" <> links.admin.texEngine) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
       send r methodPost (r.public <> "/" <> links.admin.checkTexEngine) [] "" >>= jsonAs 403 >>= (`shouldBe` Forbidden)
 
-  it "are refused, saying why, where it has not" $ withoutTeX $ withDemoRunning backing identity $ \r -> do
+  -- The server starts with its own PATH (one on PostgreSQL runs its tools
+  -- as it starts), and finds no xelatex when the administration checks
+  -- again with the PATH hidden.
+  it "are refused, saying why, where it has not" $ withDemoRunning backing identity $ \r -> do
     (_, pages) <- docsIds r
-    texEngine `shouldReturn` Nothing
-    session <- ok200 (getUrl r (r.public <> "/" <> links.session))
-    (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
-    found <- engineOn r
-    (found.status, found.path, found.output) `shouldBe` (TexNotFound, Nothing, Nothing)
-    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
+    withoutTeX $ do
+      texEngine `shouldReturn` Nothing
+      found <- checkOn r
+      (found.status, found.path, found.output) `shouldBe` (TexNotFound, Nothing, Nothing)
+      engineOn r `shouldReturn` found
+      session <- ok200 (getUrl r (r.public <> "/" <> links.session))
+      (session :: SessionInfo).exports `shouldBe` [Docx, Html, Epub, Pptx, BeamerTex]
+      getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
 
   it "follow the administration's check: a repaired engine offers them, with the time of the check" $
     withFakeTeX Broken $ \engine -> withRunning backing $ \r -> do
