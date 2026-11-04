@@ -135,7 +135,7 @@ import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (title))
-import Wiki.Core.Slug (Slug)
+import Wiki.Core.Slug (Slug, freshName)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 
@@ -640,11 +640,17 @@ placeholdersIn (Bars family) t = case T.breakOn ("|" <> family) t of
 
 -- | Any placeholder of an inline spoiler's bars left in code, math or raw
 -- text (where pandoc read the source otherwise than the wiki) is its bars
--- again. A heading's identifier, which pandoc made from its text with the
--- placeholders in it, is made without them, as pandoc makes it without
--- the bars, which it leaves out.
+-- again.
+--
+-- A heading's identifier, which pandoc made from its text with the
+-- placeholders in it, is made again without them ('reidentified'). Pandoc
+-- made the identifiers unique with the placeholders in them, so two
+-- headings @## ||Answer||@ are told apart only by their placeholders; once
+-- these are gone, each such heading takes the first identifier that no
+-- heading of the document has, as the wiki gives its headings theirs
+-- ('freshName': @answer@, then @answer-2@).
 restoreBars :: Bars -> [P.Block] -> [P.Block]
-restoreBars bars@(Bars family) = walk inBlock . walk inInline
+restoreBars bars@(Bars family) = reidentified unplaceId . walk inBlock . walk inInline
   where
     unplace t = T.concat [either (const "||") identity p | p <- placeholdersIn bars t]
     unplaceId ident = case T.breakOn family ident of
@@ -661,10 +667,27 @@ restoreBars bars@(Bars family) = walk inBlock . walk inInline
       P.RawInline f t -> P.RawInline f (unplace t)
       x -> x
     inBlock = \case
-      P.Header level (ident, cls, kvs) xs -> P.Header level (unplaceId ident, cls, kvs) xs
       P.CodeBlock attrs t -> P.CodeBlock attrs (unplace t)
       P.RawBlock f t -> P.RawBlock f (unplace t)
       b -> b
+
+-- | Headings whose identifier this changes, given new identifiers, in the
+-- order of the document: each the changed one if no other heading has
+-- it, or else the first of @-2@, @-3@, … after it that none has
+-- ('freshName'). The identifiers taken are those of every heading the
+-- change leaves as it is, and those given so far.
+reidentified :: (Text -> Text) -> [P.Block] -> [P.Block]
+reidentified change blocks = evalState (walkM renamed blocks) kept
+  where
+    kept = Set.fromList (query (\case P.Header _ (ident, _, _) _ | change ident == ident -> [ident]; _ -> []) blocks)
+    renamed :: P.Block -> State (Set Text) P.Block
+    renamed = \case
+      P.Header level (ident, cls, kvs) xs
+        | change ident /= ident -> do
+            fresh <- gets (\taken -> freshName (`Set.member` taken) (change ident))
+            modify (Set.insert fresh)
+            pure (P.Header level (fresh, cls, kvs) xs)
+      b -> pure b
 
 -- | The number of each numbered box of a page ('withBoxes'), by its
 -- placeholder, as the page's renderer numbers it ("Wiki.Core.Markdown.Box"):

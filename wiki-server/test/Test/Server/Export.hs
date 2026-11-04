@@ -43,7 +43,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
-import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Ast (Block (Heading), parseMarkdown)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -329,6 +329,18 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       titles titled' `shouldSatisfy` elem [P.Str "Ask", P.Space, P.Span ("", ["spoiler"], []) [P.Str "him"]]
       [ident | P.Header _ (ident, _, _) _ <- titled'] `shouldBe` ["a-hidden-heading"]
       show titled' `shouldNotSatisfy` T.isInfixOf "wikibox"
+    it "gives headings with an inline spoiler identifiers of their own, as the wiki gives them" $ do
+      let ids bs = [ident | P.Header _ (ident, _, _) _ <- bs]
+          targets = query (\case P.Link _ _ (url, _) -> [url]; _ -> [])
+      twice <- blocksOf ToOther place "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo, and [the second](#answer-2).\n"
+      ids twice `shouldBe` ["answer", "answer-2"]
+      targets twice `shouldBe` ["#answer-2"]
+      plainFirst <- blocksOf ToOther place "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n"
+      ids plainFirst `shouldBe` ["answer", "answer-2"]
+      -- The wiki gives the same identifiers to the page's headings.
+      let wikiIds source = [ident | Right doc <- [parseMarkdown source], Heading _ attrs _ <- doc, Just ident <- [lookup "id" attrs]]
+      wikiIds "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo.\n" `shouldBe` ["answer", "answer-2"]
+      wikiIds "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n" `shouldBe` ["answer", "answer-2"]
     it "nests spoilers, and finds them in a quotation and a list item" $ do
       nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
       boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]
