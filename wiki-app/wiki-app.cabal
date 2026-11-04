@@ -128,6 +128,7 @@ library
       Wiki.App.View.Page
       Wiki.App.View.PagePicker
       Wiki.App.View.Permissions
+      Wiki.App.View.PersonalSpace
       Wiki.App.View.Preview
       Wiki.App.View.LivePreview
       Wiki.App.View.MacrosPanel
@@ -378,6 +379,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Order
       Test.Browser.Permissions
       Test.Browser.Persist
+      Test.Browser.Personal
       Test.Browser.Policy
       Test.Browser.Providers
       Test.Browser.Search

@@ -9,7 +9,9 @@
 -- ("Wiki.App.View.Permissions", which has the public switch).
 --
 -- The profile is one form, saved with one button: the name, if it changed
--- ('renameSpace'), then the rest ('setSpaceProfile'). The icon is the
+-- ('renameSpace'), then the rest ('setSpaceProfile'). A personal space's
+-- name is its owner's ('Wiki.Core.Space.personalName'), so its field is
+-- shown disabled, with a note. The icon is the
 -- default (the name's first letter on a colour picked for the space), a
 -- colour chosen from the palette, an emoji, or an image. An image is
 -- uploaded as soon as it is chosen ('uploadSpaceIcon'), and the profile
@@ -48,6 +50,7 @@ import Wiki.Core.Space
   , iconColourName
   , iconColours
   , iconMediaTypes
+  , isPersonal
   , maxDescriptionLength
   , withProfile
   )
@@ -120,8 +123,11 @@ component =
           <form class="settings-form space-profile-form" {{ HE.preventingDefault (HE.onSubmit (const Save)) }}>
             <label class="field">
               <span>Name</span>
-              <input type="text" class="space-name-field" value={{ f.typedName }} onValueInput={{ TypedName }} required>
+              <input type="text" class="space-name-field" value={{ f.typedName }} onValueInput={{ TypedName }} disabled={{ personal }} required>
             </label>
+            {% if personal %}
+              <p class="field-hint personal-name-note">A personal space is named after its owner, and its name follows theirs.</p>
+            {% end %}
             <label class="field">
               <span>Description</span>
               {{ HH.textarea [HP.class_ "space-description-field", HP.value f.typedDescription, HP.rows 3, attr "maxlength" (show maxDescriptionLength), HE.onValueInput TypedDescription] }}
@@ -197,6 +203,7 @@ component =
         f = st.fields
         ctx = st.input.context
         hasImage = isImage st.input.space.icon
+        personal = isPersonal st.input.space
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
@@ -244,7 +251,7 @@ component =
           Right icon -> do
             modify (\s -> s {busy = True, problem = Nothing, saved = False})
             result <- runExceptT $ do
-              when (T.strip f.typedName /= space.name) $ void (ExceptT (renameSpace space.id f.typedName))
+              when (T.strip f.typedName /= space.name && not (isPersonal space)) $ void (ExceptT (renameSpace space.id f.typedName))
               ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home, blog = f.blog, boxNumbering = f.boxNumbering})
             case result of
               Left e -> modify (\s -> s {busy = False, problem = Just e})

@@ -366,6 +366,44 @@ class (Monad m) => MonadWiki m where
   default setSpacePublic :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Bool -> m (Either WikiError Space)
   setSpacePublic s = lift . setSpacePublic s
 
+  -- | Make a space private from its parent ('Wiki.Core.Space.sealed'), or
+  -- not: sealed, it inherits no grant and no public flag from the spaces
+  -- above it, so that only those granted on it (or a global
+  -- administrator) see it. Like 'setSpacePublic', it needs
+  -- 'Wiki.Core.Permission.AdministerSpace' on the space, which its
+  -- parent's administrators have by inheritance. Sealing the space would
+  -- take that from them, so whoever seals a space and would no longer
+  -- administer it is granted 'Wiki.Core.Permission.AdministerSpace' on
+  -- it.
+  setSpaceSealed :: SpaceId -> Bool -> m (Either WikiError Space)
+  default setSpaceSealed :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Bool -> m (Either WikiError Space)
+  setSpaceSealed s = lift . setSpaceSealed s
+
+  -- * Personal spaces
+
+  -- | The current user's personal space ('Wiki.Core.Space.owner'), shown
+  -- or not ('Wiki.Core.Space.active'), or 'Nothing' if they have none.
+  -- Someone not signed in, and the server's operator, have none and may
+  -- have none: 'Forbidden'.
+  personalSpace :: m (Either WikiError (Maybe Space))
+  default personalSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => m (Either WikiError (Maybe Space))
+  personalSpace = lift personalSpace
+
+  -- | Turn the current user's personal space on ('True') or off. The first
+  -- time it is turned on, it is made: a public space named after them
+  -- ('Wiki.Core.Space.personalName'), with their login as its slug, a home
+  -- page, and 'Wiki.Core.Permission.AdministerSpace' for them, in the
+  -- container of personal spaces ("User subspaces"), which is made too
+  -- when no user has had a personal space yet. Turned off, the space is
+  -- hidden from everyone, its content kept; turned on again, it is shown
+  -- as it was. Turning off a personal space the user does not have is
+  -- 'NotFound'. A personal space is otherwise an ordinary space, but it
+  -- cannot be renamed or moved ('Invalid'); deleting it, which its owner
+  -- may, lets them make a new one. The result is the space.
+  setPersonalSpace :: Bool -> m (Either WikiError Space)
+  default setPersonalSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => Bool -> m (Either WikiError Space)
+  setPersonalSpace = lift . setPersonalSpace
+
   -- | Give a space its math macros ('Wiki.Core.Space.mathMacros'), which
   -- its subspaces inherit; the empty text for none. Blank lines at either
   -- end are dropped. The text is stored as it is. The browser checks

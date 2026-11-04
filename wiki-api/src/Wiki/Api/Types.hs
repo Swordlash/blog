@@ -20,6 +20,8 @@ module Wiki.Api.Types
   , NewSpace (..)
   , SpaceName (..)
   , SpacePublic (..)
+  , SpaceSealed (..)
+  , PersonalSpaceSwitch (..)
   , SpaceMathMacros (..)
   , SpaceOrder (..)
   , SpaceMove (..)
@@ -120,6 +122,18 @@ newtype SpaceName = SpaceName {name :: Text}
 
 -- | 'SpacePublic': whether everyone may read a space, @setSpacePublic@.
 newtype SpacePublic = SpacePublic {public :: Bool}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SpaceSealed': whether a space is private from its parent,
+-- @setSpaceSealed@ ('Wiki.Core.Space.sealed').
+newtype SpaceSealed = SpaceSealed {sealed :: Bool}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'PersonalSpaceSwitch': whether the signed-in user wants their personal
+-- space shown, @setPersonalSpace@.
+newtype PersonalSpaceSwitch = PersonalSpaceSwitch {enabled :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

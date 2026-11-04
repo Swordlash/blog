@@ -26,6 +26,7 @@ import Test.Browser.Offline qualified as Offline
 import Test.Browser.Order qualified as Order
 import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
+import Test.Browser.Personal qualified as Personal
 import Test.Browser.Policy qualified as Policy
 import Test.Browser.Providers qualified as Providers
 import Test.Browser.Search qualified as Search
@@ -71,6 +72,7 @@ spec = do
   describe "Wiki.App.Shell" (Shell.spec BrowserDOM)
   describe "The shared home page" (HomePage.spec BrowserDOM)
   describe "One space at a time" (Spaces.spec BrowserDOM)
+  describe "Personal spaces and private subspaces" (Personal.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Wiki.App.Browser" Entries.spec

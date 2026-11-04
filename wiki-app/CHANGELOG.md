@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Private subspaces and personal spaces (WP5.54). `MonadWiki` gains
+`setSpaceSealed`, `personalSpace` and `setPersonalSpace`, which the demo
+and the HTTP backend implement and the contract tests check. A subspace's
+permissions have a "Make private" switch under Public and Private, and
+show the grants from above struck through while it is on. The server's
+account panel and the demo's menu of users have "Enable personal space"
+and "Disable personal space" (`Wiki.App.View.PersonalSpace`), the Starred
+panel starts with "Your space" while the user's personal space is on, and
+a personal space's settings show its name read-only. `SignIn.Output` is a
+`data` type now, with `SpacesChanged` beside `AccountChanged`. The demo
+names a personal space after its owner as it reads its state
+(`withPersonalNames`), and removing a user removes their personal space.
+
 Links to pages and sections (WP5.53, issue #120). The editor's toolbar has
 "Link to a page" beside "Link" (Ctrl+Shift+K), which opens a dialog with the
 search box's input, space selector and hits: picking a page writes a link to

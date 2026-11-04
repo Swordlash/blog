@@ -98,6 +98,14 @@ eachWrite backing = describe "has one entry for each write of the administration
     summary revoked `shouldBe` ("space.revoke", "space", "Docs", [("permission", "edit"), ("to", "user reader")])
     public <- recordsOne st (as st "admin" (setSpacePublic docs.id False))
     summary public `shouldBe` ("space.public", "space", "Docs", [("public", "no")])
+    sealed <- recordsOne st (as st "admin" (setSpaceSealed docs.id True))
+    summary sealed `shouldBe` ("space.sealed", "space", "Docs", [("sealed", "yes")])
+
+  it "a personal space turned on, made the first time, and turned off" $ withDemo backing $ \st -> do
+    made <- recordsOne st (as st "editor" (setPersonalSpace True))
+    summary made `shouldBe` ("space.personal", "space", "Space of Edgar Editor", [("active", "yes"), ("path", "users/editor")])
+    off <- recordsOne st (as st "editor" (setPersonalSpace False))
+    summary off `shouldBe` ("space.personal", "space", "Space of Edgar Editor", [("active", "no")])
 
   it "a space's profile changed in its settings, and an icon uploaded; a save that changes nothing, none" $ withDemo backing $ \st -> do
     docs <- spaceNamed st "Docs"

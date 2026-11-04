@@ -273,6 +273,8 @@ data SpacesApi form mode = SpacesApi
   -- ^ @renameSpace@.
   , setPublic :: mode :- Capture "space" SpaceId :> "public" :> ReqBody '[JSON] SpacePublic :> Put '[JSON] Space
   -- ^ @setSpacePublic@.
+  , setSealed :: mode :- Capture "space" SpaceId :> "sealed" :> ReqBody '[JSON] SpaceSealed :> Put '[JSON] Space
+  -- ^ @setSpaceSealed@: make the space private from its parent, or not.
   , setMathMacros :: mode :- Capture "space" SpaceId :> "math-macros" :> ReqBody '[JSON] SpaceMathMacros :> Put '[JSON] Space
   -- ^ @setSpaceMathMacros@.
   , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
@@ -623,6 +625,12 @@ data AccountApi mode = AccountApi
   , email :: mode :- "email" :> Get '[JSON] EmailState
   -- ^ The user's e-mail address, whether it is verified, and whether the
   -- server sends mail.
+  , personalSpace :: mode :- "personal-space" :> Get '[JSON] (Maybe Space)
+  -- ^ @personalSpace@: the user's personal space, shown or not (its
+  -- @active@), or @null@ if they have none.
+  , setPersonalSpace :: mode :- "personal-space" :> ReqBody '[JSON] PersonalSpaceSwitch :> Put '[JSON] Space
+  -- ^ @setPersonalSpace@: turn the user's personal space on, making it the
+  -- first time, or off. The response is the space.
   , setEmail :: mode :- "email" :> ReqBody '[JSON] EmailChange :> Put '[JSON] EmailState
   -- ^ Set the user's e-mail address, or remove it. A new address is not
   -- verified until the user follows the link sent to it. Changing or

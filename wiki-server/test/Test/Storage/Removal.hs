@@ -25,7 +25,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), WrappedKey (..), vaultFormat)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
-import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
@@ -37,7 +37,7 @@ import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.SecondFactor (enrol)
 import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, runStoredWiki, userByLogin, withStorage)
 import Wiki.Server.Storage.Rows (permissionsGeneration)
-import Wiki.Server.Storage.Schema (AuditLog (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (AuditLog (..), Pages (..), Spaces (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (registerPasskey, storeVault)
 import Wiki.Server.WebAuthn (NewCredential (..))
 
@@ -129,6 +129,19 @@ spec backing = describe "removing an account" $ do
     again <- ok =<< createAccount st "editor" "Another editor" (Just (Password "another password"))
     again.user.id `shouldNotBe` u
     authors `shouldReturn` [Just "Ada Admin", Just former.name, Just former.name]
+
+  it "deletes their personal space with the account" $ withDemo backing $ \st -> do
+    editor <- userNamed st "editor"
+    adminId <- (\u -> u.id) <$> userNamed st "admin"
+    mine <- ok =<< runStoredWiki st (AsUser editor.id) (setPersonalSpace True)
+    void (ok =<< runStoredWiki st (AsUser editor.id) (createPage mine.id Nothing "Notes" "Mine."))
+    void (ok =<< setDisabled st editor.id True)
+    ok =<< runStoredWiki st (AsUser adminId) (removeUser editor.id)
+    runStoredWiki st (AsUser adminId) (getSpace (path "users/editor")) `shouldReturn` Left NotFound
+    reading st (countWhere wikiDb.spaces (\s -> s.id ==. val_ mine.id.text)) `shouldReturn` 0
+    reading st (countWhere wikiDb.pages (\p -> p.space_id ==. val_ mine.id.text)) `shouldReturn` 0
+    reading st (countWhere wikiDb.audit_log (\a -> a.action ==. val_ "user.remove" &&. a.subject_name ==. val_ "editor"))
+      `shouldReturn` 1
 
   it "is the console's users remove, which asks for the login to be disabled first" $
     withPlaceIn backing $ \at -> do

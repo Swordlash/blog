@@ -4223,7 +4223,8 @@ button.danger-outline:hover {
   margin: 0 0 0.5rem;
 }
 
-.permissions-public {
+.permissions-public,
+.permissions-sealed {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -4257,6 +4258,17 @@ button.danger-outline:hover {
 
 .grant-inherited {
   color: var(--muted);
+}
+
+/* A grant above a space that is private from its parent: listed, but it
+   does not count there (WP5.54). */
+.grant-cut td {
+  opacity: 0.6;
+}
+
+.grant-cut .grant-who,
+.grant-cut .grant-what {
+  text-decoration: line-through;
 }
 
 .grant-self {
@@ -4876,7 +4888,8 @@ div.server-secret > span:first-child {
   z-index: 21;
 }
 
-.user-menu-account {
+.user-menu-account,
+.user-menu-personal {
   margin-top: 0.3rem;
   padding-top: 0.3rem;
   border-top: 1px solid var(--border);
@@ -5485,6 +5498,11 @@ mark.comment-mark-focused {
 
 .starred-item + .starred-item {
   border-top: 1px solid var(--border);
+}
+
+/* The user's personal space, always first, apart from the stars. */
+.starred-own {
+  border-bottom: 1px solid var(--border);
 }
 
 .starred-link {

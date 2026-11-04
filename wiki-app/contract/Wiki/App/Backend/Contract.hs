@@ -75,6 +75,8 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   posting
   movingSpaces
   deletingSpaces
+  sealedSpaces
+  personalSpaces
   ordering
   creatingPages
   savingPages
@@ -610,6 +612,158 @@ deletingSpaces = describe "deleteSpace" $ do
     mine <- run editor (createSpace Nothing "Mine") >>= ok
     run editor (deleteSpace mine.id) >>= ok
     void (spaceAt run admin "blog")
+
+--------------------------------------------------------------------------------
+-- Private subspaces
+
+sealedSpaces :: (MonadWiki m) => SpecWith (Fixture m)
+sealedSpaces = describe "setSpaceSealed" $ do
+  it "hides a subspace from its parent's readers, and keeps its own grants" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    projects <- spaceAt run admin "team/projects"
+    editorId <- userId run editor
+    run admin (setSpaceGrant team.id (SubjectUser editorId) View True) >>= ok
+    void (pageAt run editor "team/projects" "the-wiki")
+    sealed <- run admin (setSpaceSealed projects.id True) >>= ok
+    sealed.sealed `shouldBe` True
+    getPageAt run editor "team/projects" "the-wiki" `shouldReturn` Left NotFound
+    run editor (getSpace (path "team/projects")) `shouldReturn` Left NotFound
+    spaceNames run editor `shouldReturn` ["Blog", "Docs", "Team"]
+    void (pageAt run editor "team" "team-handbook")
+    -- The reader's grant is on the sealed space itself; the team above it
+    -- is still listed for its name only.
+    void (pageAt run reader "team/projects" "the-wiki")
+    spaceNames run reader `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
+    void (pageAt run admin "team/projects" "the-wiki")
+    void (run admin (setSpaceSealed projects.id False) >>= ok)
+    void (pageAt run editor "team/projects" "the-wiki")
+
+  it "keeps a public parent's readers out, and its own public flag" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    unpublished <- run admin (createSpace (Just blog.id) "Drafts") >>= ok
+    void (run admin (setSpacePublic unpublished.id True) >>= ok)
+    void (spaceAt run Anonymous "blog/drafts")
+    void (run admin (setSpacePublic unpublished.id False) >>= ok)
+    -- Private, it is still public through the blog until it is sealed.
+    void (spaceAt run Anonymous "blog/drafts")
+    void (run admin (setSpaceSealed unpublished.id True) >>= ok)
+    run Anonymous (getSpace (path "blog/drafts")) `shouldReturn` Left NotFound
+    run reader (getSpace (path "blog/drafts")) `shouldReturn` Left NotFound
+    void (run admin (setSpacePublic unpublished.id True) >>= ok)
+    void (spaceAt run Anonymous "blog/drafts")
+
+  it "takes AdministerSpace, and leaves whoever sealed it administering it" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    projects <- spaceAt run admin "team/projects"
+    blog <- spaceAt run admin "blog"
+    editorId <- userId run editor
+    run reader (setSpaceSealed projects.id True) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (setSpaceSealed blog.id True) >>= (`shouldFailWith` Forbidden)
+    run editor (setSpaceSealed blog.id True) >>= (`shouldFailWith` Forbidden)
+    run editor (setSpaceSealed projects.id True) >>= (`shouldFailWith` NotFound)
+    -- The editor administers the team, and so the projects under it, by
+    -- inheritance; sealing the projects grants them its administration.
+    run admin (setSpaceGrant team.id (SubjectUser editorId) AdministerSpace True) >>= ok
+    void (run editor (setSpaceSealed projects.id True) >>= ok)
+    access <- run editor (spaceAccess projects.id) >>= ok
+    [(g.space, g.permission) | g <- access.grants, g.subject == SubjectUser editorId] `shouldBe` [(projects.id, AdministerSpace), (team.id, AdministerSpace)]
+    void (run editor (setSpaceSealed projects.id False) >>= ok)
+
+--------------------------------------------------------------------------------
+-- Personal spaces
+
+personalSpaces :: (MonadWiki m) => SpecWith (Fixture m)
+personalSpaces = describe "personal spaces" $ do
+  it "are made on the first enable, in a container that is made with the first" $ \(Fixture run) -> do
+    editorId <- userId run editor
+    run editor personalSpace `shouldReturn` Right Nothing
+    mine <- run editor (setPersonalSpace True) >>= ok
+    (mine.name, slugOf mine, mine.public, mine.owner, mine.active) `shouldBe` ("Space of Edgar Editor", "editor", True, Just editorId, True)
+    run editor personalSpace `shouldReturn` Right (Just mine)
+    container <- spaceAt run admin "users/editor" >>= \s -> maybe (assertFailure "no container") pure s.parent
+    spaces <- run admin listSpaces
+    map (\s -> (s.name, s.personalContainer)) (filter (\s -> s.id == container) spaces) `shouldBe` [("User subspaces", True)]
+    -- Readable as a public space is, with a home page, and administered
+    -- by its owner.
+    found <- spaceAt run Anonymous "users/editor"
+    found.name `shouldBe` "Space of Edgar Editor"
+    void (pageAt run Anonymous "users/editor" "home")
+    void (run editor (spaceAccess mine.id) >>= ok)
+    run reader (spaceAccess mine.id) >>= (`shouldFailWith` Forbidden)
+    -- The container itself is viewed by nobody.
+    for_ [Anonymous, editor, admin] $ \who ->
+      run who (getSpace (path "users")) `shouldReturn` Left NotFound
+    -- A second user's goes into the same container.
+    theirs <- run reader (setPersonalSpace True) >>= ok
+    theirs.parent `shouldBe` Just container
+    (theirs.name, slugOf theirs) `shouldBe` ("Space of Rita Reader", "reader")
+
+  it "are listed under the container only while one is active" $ \(Fixture run) -> do
+    spaceNames run Anonymous `shouldReturn` ["Blog", "Docs"]
+    mine <- run editor (setPersonalSpace True) >>= ok
+    spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "User subspaces", "Space of Edgar Editor"]
+    counts <- run Anonymous pageCounts
+    Map.lookup mine.id counts `shouldBe` Just 1
+    hidden <- run editor (setPersonalSpace False) >>= ok
+    (hidden.id, hidden.active) `shouldBe` (mine.id, False)
+    for_ [Anonymous, editor, admin] $ \who -> do
+      names <- spaceNames run who
+      filter (`elem` ["User subspaces", "Space of Edgar Editor"]) names `shouldBe` []
+      run who (getSpace (path "users/editor")) `shouldReturn` Left NotFound
+      counts' <- run who pageCounts
+      Map.member mine.id counts' `shouldBe` False
+    run editor (renameSpace mine.id "Mine") >>= (`shouldFailWith` NotFound)
+    run editor personalSpace `shouldReturn` Right (Just hidden)
+    -- Enabled again, it is as it was.
+    shown <- run editor (setPersonalSpace True) >>= ok
+    (shown.id, shown.active) `shouldBe` (mine.id, True)
+    void (pageAt run Anonymous "users/editor" "home")
+
+  it "are refused to someone not signed in" $ \(Fixture run) -> do
+    run Anonymous personalSpace `shouldReturn` Left Forbidden
+    run Anonymous (setPersonalSpace True) >>= (`shouldFailWith` Forbidden)
+    run editor (setPersonalSpace False) >>= (`shouldFailWith` NotFound)
+
+  it "are named after their owner, and cannot be renamed or moved" $ \(Fixture run) -> do
+    mine <- run editor (setPersonalSpace True) >>= ok
+    team <- spaceAt run admin "team"
+    blog <- spaceAt run admin "blog"
+    container <- maybe (assertFailure "no container") pure mine.parent
+    run editor (renameSpace mine.id "Mine") >>= shouldBeInvalid
+    run admin (renameSpace mine.id "Mine") >>= shouldBeInvalid
+    run admin (moveSpace mine.id Nothing) >>= shouldBeInvalid
+    run admin (moveSpace mine.id (Just blog.id)) >>= shouldBeInvalid
+    -- Nothing goes into the container, and it is not changed by hand.
+    run admin (moveSpace team.id (Just container)) >>= (`shouldFailWith` NotFound)
+    run admin (createSpace (Just container) "Another") >>= (`shouldFailWith` NotFound)
+    run admin (renameSpace container "Users") >>= (`shouldFailWith` NotFound)
+    run admin (deleteSpace container) >>= (`shouldFailWith` NotFound)
+    void (spaceAt run Anonymous "users/editor")
+
+  it "are otherwise ordinary spaces" $ \(Fixture run) -> do
+    mine <- run editor (setPersonalSpace True) >>= ok
+    sub <- run editor (createSpace (Just mine.id) "Notes") >>= ok
+    void (run editor (createPage sub.id Nothing "Ideas" "Some.") >>= ok)
+    void (pageAt run Anonymous "users/editor/notes" "ideas")
+    void (run editor (setSpaceSealed sub.id True) >>= ok)
+    getPageAt run Anonymous "users/editor/notes" "ideas" `shouldReturn` Left NotFound
+    void (run editor (setSpacePublic mine.id False) >>= ok)
+    run Anonymous (getSpace (path "users/editor")) `shouldReturn` Left NotFound
+    void (spaceAt run editor "users/editor")
+    -- Moving a space of the wiki into it is a move like another.
+    made <- run editor (createSpace Nothing "Loose") >>= ok
+    moved <- run editor (moveSpace made.id (Just mine.id)) >>= ok
+    moved.parent `shouldBe` Just mine.id
+
+  it "are deleted as any space is, and enabled afresh" $ \(Fixture run) -> do
+    mine <- run editor (setPersonalSpace True) >>= ok
+    run editor (deleteSpace mine.id) >>= ok
+    run editor personalSpace `shouldReturn` Right Nothing
+    spaceNames run Anonymous `shouldReturn` ["Blog", "Docs"]
+    fresh <- run editor (setPersonalSpace True) >>= ok
+    fresh.id `shouldNotBe` mine.id
+    slugOf fresh `shouldBe` "editor"
+    void (pageAt run Anonymous "users/editor" "home")
 
 --------------------------------------------------------------------------------
 -- Order
@@ -1580,6 +1734,7 @@ neverThrown = describe "errors" $ do
           , void <$> createSpace (Just s) "X"
           , void <$> renameSpace s "X"
           , void <$> setSpacePublic s True
+          , void <$> setSpaceSealed s True
           , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
           , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing, blog = False, boxNumbering = InPage}
           , void <$> uploadSpaceIcon s "image/png" png

@@ -23,6 +23,10 @@ space i parent mathMacros =
     , slug = either (panic . show) identity (mkSlug i)
     , parent = SpaceId <$> parent
     , public = False
+    , sealed = False
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
     , mathMacros
     , createdAt = UTCTime (fromGregorian 2026 1 1) 0
     , position = 0

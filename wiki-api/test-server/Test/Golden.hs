@@ -37,7 +37,7 @@ import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (summaryOf)
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), SpaceProfile (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space, SpaceProfile (..))
 import Wiki.Core.User (Password (..))
 import Wiki.Core.Version (VersionInfo (..))
 
@@ -65,6 +65,8 @@ spec = describe "golden JSON" $ do
     golden "activity" Sample.activity
     golden "session" Sample.sessionInfo
     golden "space" Sample.space
+    golden "personal-space" (Just Sample.personalSpace)
+    golden "no-personal-space" (Nothing :: Maybe Space)
     golden "page-counts" (Map.fromList [(SpaceId "s1", 5 :: Int), (SpaceId "s2", 0)])
     golden "post-details" (Map.fromList [(PageId "p1", Sample.postDetails), (PageId "p2", PostDetails {author = Nothing, comments = 0, excerpt = ""})])
     golden "page" Sample.page
@@ -132,6 +134,8 @@ spec = describe "golden JSON" $ do
     golden "new-space" NewSpace {parent = Just (SpaceId "s1"), name = "Guides"}
     golden "space-name" SpaceName {name = "Guides"}
     golden "space-public" SpacePublic {public = True}
+    golden "space-sealed" SpaceSealed {sealed = True}
+    golden "personal-space-switch" PersonalSpaceSwitch {enabled = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
     golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = False, boxNumbering = InPage}
     golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True, boxNumbering = WithSection}

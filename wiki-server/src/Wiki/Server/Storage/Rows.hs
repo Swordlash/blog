@@ -234,7 +234,7 @@ import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), personalName, withName)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
@@ -453,6 +453,10 @@ spaceOf r =
     , name = r.name
     , slug = slugOf r.slug
     , public = r.public
+    , sealed = r.sealed
+    , owner = UserId <$> r.owner
+    , active = r.active
+    , personalContainer = r.personal_container
     , mathMacros = r.math_macros
     , createdAt = r.created_at
     , position = fromIntegral r.position
@@ -487,13 +491,31 @@ spaceRow s =
     , description = s.description
     , blog = s.blog
     , box_numbering = numberingName s.boxNumbering
+    , sealed = s.sealed
+    , owner = (\o -> o.text) <$> s.owner
+    , active = s.active
+    , personal_container = s.personalContainer
     }
 
 -- | Every space, by id. A wiki has tens of them, and every permission is
 -- a question about a space's chain of ancestors, so each operation reads
 -- them all.
+--
+-- A personal space is named after its owner as the users table has them
+-- now ('Wiki.Core.Space.personalName'): the name stored with it is the
+-- one it was made with, which is kept only for a reader of the database.
 loadSpaces :: (Backend be) => Db be (Map SpaceId Space)
-loadSpaces = Map.fromList . map (\r -> (SpaceId r.id, spaceOf r)) <$> runSelectReturningList (select (all_ wikiDb.spaces))
+loadSpaces = do
+  spaces <- map spaceOf <$> runSelectReturningList (select (all_ wikiDb.spaces))
+  let owners = [o.text | s <- spaces, Just o <- [s.owner]]
+  names <-
+    if null owners
+      then pure mempty
+      else Map.fromList <$> runSelectReturningList (select ((\u -> (u.id, u.display_name)) <$> filter_ (\u -> u.id `in_` map val_ owners) (all_ wikiDb.users)))
+  let named s = case s.owner >>= \o -> Map.lookup o.text names of
+        Just displayName -> withName (personalName displayName) s
+        Nothing -> s
+  pure (Map.fromList [(s.id, named s) | s <- spaces])
 
 -- | Every global grant, in the order they were given.
 loadGlobalGrants :: (Backend be) => Db be [GlobalGrant]
@@ -1367,6 +1389,10 @@ updateSpace s =
                 , x.description <-. val_ r.description
                 , x.blog <-. val_ r.blog
                 , x.box_numbering <-. val_ r.box_numbering
+                , x.sealed <-. val_ r.sealed
+                , x.owner <-. val_ r.owner
+                , x.active <-. val_ r.active
+                , x.personal_container <-. val_ r.personal_container
                 ]
           )
           (\x -> x.id ==. val_ r.id)

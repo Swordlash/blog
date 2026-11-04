@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Private subspaces and personal spaces (WP5.54). `Space` gains four
+fields: `sealed`, whether the space is private from its parent; `owner`,
+the user whose personal space it is; `active`, false for a personal space
+its owner turned off; and `personalContainer`, which marks "User
+subspaces", the top-level space that holds the personal spaces.
+`spacePermissions` gives nothing in a chain that holds an inactive space,
+nor in the container itself, to anyone, global administrators included;
+otherwise it reads only the part of the chain from the last sealed space
+down (`sealedChain`, exported), so that neither a grant nor a public flag
+above it counts there. Code that builds a `Space` with a record
+construction must give the new fields (`sealed = False`, `owner =
+Nothing`, `active = True`, `personalContainer = False` for an ordinary
+space). New helpers: `isPersonal`, `personalName` ("Space of " and the
+owner's display name), `containerName`, `containerSlug` and `withName`.
+The export writes the fields only when they differ from those defaults, so
+its format version stays 2. `readArchive` refuses an archive whose personal
+spaces the storage could not hold: an owner who is not among its users,
+two spaces of one owner, two containers, a personal space outside the
+container or a container below another space, and a space turned off that
+is not a personal space.
+
 Boxes have ids, and pages can be linked to by section (WP5.53). `BoxHead`
 gains `id`: a numbered box gets `box-<kind>-<n>`, its number among the
 numbered boxes of its kind in the page (the number "within the page" shows,

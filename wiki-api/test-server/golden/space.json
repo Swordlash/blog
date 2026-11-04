@@ -1,4 +1,5 @@
 {
+  "active": true,
   "blog": false,
   "boxNumbering": "in-page",
   "createdAt": "2026-10-24T09:30:12.345678Z",
@@ -10,10 +11,13 @@
   "id": "s1",
   "mathMacros": "\\R: \\mathbb{R}",
   "name": "Docs",
+  "owner": null,
   "pageOrder": "ByHand",
   "parent": null,
+  "personalContainer": false,
   "position": 0,
   "public": true,
+  "sealed": false,
   "slug": "docs",
   "subspaceOrder": "ByName"
 }

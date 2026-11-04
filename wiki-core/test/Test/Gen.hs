@@ -126,7 +126,11 @@ genSpace = do
   description <- oneof [pure "", genText]
   blog <- arbitrary
   boxNumbering <- elements numberings
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  sealed <- arbitrary
+  owner <- oneof [pure Nothing, Just <$> genUserId]
+  active <- arbitrary
+  personalContainer <- arbitrary
+  pure Space {id, name, slug, parent, public, sealed, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 genIcon :: Gen Icon
 genIcon =
@@ -212,7 +216,8 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
+    sealed <- frequency [(1, pure True), (4, pure False)]
+    pure Space {id, name = "", slug, parent, public, sealed, owner = Nothing, active = True, personalContainer = False, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

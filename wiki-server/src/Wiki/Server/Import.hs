@@ -70,6 +70,7 @@ where
 
 import Control.Monad.UUID (generateV4)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
@@ -86,6 +87,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
+import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
@@ -239,6 +241,8 @@ data Progress = Progress
   , spaceIds :: Map SpaceId SpaceId
   -- ^ Each imported space of the archive, and the server's space it now
   -- is.
+  , created :: Set SpaceId
+  -- ^ The server's spaces this import created, rather than merged into.
   , pageIds :: Map PageId PageId
   -- ^ Each imported or kept page of the archive, and the server's page it
   -- now is.
@@ -287,7 +291,7 @@ mergeArchive :: (Backend be) => FilePath -> Archive -> ImportChoices -> Db be (I
 mergeArchive blobs a choices = do
   matches <- matchIn a
   people <- loadUsers
-  let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
+  let start = Progress {summary = nothingYet, spaceIds = mempty, created = mempty, pageIds = mempty, commentsBrought = 0}
       discussions = threadsAmong (administratorUser : people) a
   done <- foldlM (importSpace blobs a discussions choices) start matches
   importHomeDocument blobs a
@@ -307,13 +311,36 @@ importSpace blobs a discussions choices progress m
           i <- SpaceId <$> liftIO newId
           spaces <- Map.elems <$> loadSpaces
           let parent = m.archived.parent >>= (`Map.lookup` progress.spaceIds)
+              -- Whether a space of the archive is in a personal space
+              -- that its owner turned off, or is one.
+              hiddenInArchive sid = any (\x -> not x.active) (spaceChain a.spaces sid)
+              hidden = hiddenInArchive m.archived.id
+              -- Whether the archive's parent of the space came in as a
+              -- space this import created hidden, which is sealed itself or
+              -- under one that is.
+              underCreatedHidden = case m.archived.parent of
+                Just above -> hiddenInArchive above && maybe False (`Set.member` progress.created) (Map.lookup above progress.spaceIds)
+                Nothing -> False
           insertSpace
             Space
               { id = i
               , name = m.archived.name
               , slug = m.archived.slug
               , parent
-              , public = m.archived.public
+              , -- A personal space of the archive comes in as an ordinary
+                -- space: its owner is a user of another wiki, which this
+                -- import does not bring. One its owner had turned off hid
+                -- everything under it, so it and every space under it come
+                -- in private, and the top of each run of such spaces that
+                -- this import creates comes in sealed: its parent may be a
+                -- space the server already had, whose public flag and
+                -- grants would otherwise reach it. None of them is shown
+                -- to more people than before the import.
+                public = m.archived.public && not hidden
+              , sealed = m.archived.sealed || (hidden && not underCreatedHidden)
+              , owner = Nothing
+              , active = True
+              , personalContainer = False
               , mathMacros = m.archived.mathMacros
               , createdAt = m.archived.createdAt
               , position = nextPosition (childrenOf spaces parent)
@@ -332,7 +359,10 @@ importSpace blobs a discussions choices progress m
           pure i
       let placed =
             count
-              progress {spaceIds = Map.insert m.archived.id target progress.spaceIds}
+              progress
+                { spaceIds = Map.insert m.archived.id target progress.spaceIds
+                , created = if isJust m.server then progress.created else Set.insert target progress.created
+                }
               (\s -> if isJust m.server then s {spacesMerged = s.spacesMerged + 1} else s {spacesCreated = s.spacesCreated + 1})
       done <- foldlM (importPage blobs a discussions choices m.path target) placed m.pages
       fillProfile blobs a m target done

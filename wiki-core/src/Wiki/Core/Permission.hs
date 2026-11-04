@@ -10,8 +10,9 @@
 -- someone may do in a space is what they are granted on it or on any of
 -- its ancestors. A public space grants 'View' to everyone, signed in or
 -- not, and since that is a grant like any other, its subspaces are public
--- too. There are no page-level permissions: a page is as visible and as
--- editable as its space.
+-- too. A sealed space is the exception: it inherits nothing, so that its
+-- parent's readers do not see it ('sealedChain'). There are no page-level
+-- permissions: a page is as visible and as editable as its space.
 --
 -- The wiki decides whom a public space is public to ("Wiki.Core.Access"),
 -- and the rules receive that with the grants ('Grants'): in an open wiki
@@ -46,6 +47,7 @@ module Wiki.Core.Permission
   , hasGlobalPermission
   , hasSpacePermission
   , spacePermissions
+  , sealedChain
   , canCreateSpaces
   , canView
   , canEdit
@@ -217,15 +219,30 @@ hasGlobalPermission (Just p) grants wanted =
 -- 'Edit' there means the set also has 'View'. The empty chain means no
 -- space, where only 'Administer' gives anything. A public space in the
 -- chain gives 'View' to whoever it is public to ('publicTo').
+--
+-- A sealed space ('Wiki.Core.Space.sealed') cuts the chain: the grants and
+-- public flags of the spaces above the last sealed space in it do not
+-- count, so that a subtree can be private from its parent's readers. Only
+-- a global 'Administer' reaches past the cut.
+--
+-- Two kinds of space give nobody anything, global administrators
+-- included: a space in an inactive personal space ('Wiki.Core.Space.active'),
+-- which its owner has hidden, and the container of personal spaces itself
+-- ('Wiki.Core.Space.personalContainer'), which only holds them. The
+-- personal spaces in the container are not affected by the second rule:
+-- the container has neither grants nor a public flag to give them.
 spacePermissions :: Maybe Principal -> Grants -> [Space] -> Set SpacePermission
 spacePermissions who grants chain
+  | any (\s -> not s.active) chain = Set.empty
+  | maybe False (\s -> s.personalContainer) (lastMay chain) = Set.empty
   | hasGlobalPermission who grants Administer = Set.fromList [minBound .. maxBound]
   | otherwise = Set.fromList (concatMap implied granted)
   where
     implied held = filter (spaceImplies held) [minBound .. maxBound]
     granted = publicView <> fromGrants
-    publicView = [View | any (\s -> s.public) chain, publicTo grants.access who]
-    inChain = Set.fromList (map (\s -> s.id) chain)
+    reach = sealedChain chain
+    publicView = [View | any (\s -> s.public) reach, publicTo grants.access who]
+    inChain = Set.fromList (map (\s -> s.id) reach)
     fromGrants = case who of
       Nothing -> []
       Just p ->
@@ -234,6 +251,13 @@ spacePermissions who grants chain
         , g.space `Set.member` inChain
         , isFor p g.subject
         ]
+
+-- | The part of a chain whose grants count in its last space: from the last
+-- sealed space in it down, or the whole chain if no space in it is sealed.
+sealedChain :: [Space] -> [Space]
+sealedChain chain = case break (\s -> s.sealed) (reverse chain) of
+  (below, sealedSpace : _) -> sealedSpace : reverse below
+  (_, []) -> chain
 
 -- | Whether someone may do this in the last space of the chain.
 hasSpacePermission :: Maybe Principal -> Grants -> [Space] -> SpacePermission -> Bool

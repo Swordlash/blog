@@ -490,7 +490,13 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   in-app guide.
 - **Blogs**: a space shown as a blog lists its pages as posts, newest first,
   with an Atom and an RSS feed over `wiki-server`.
-- **Users, groups and permissions** to view, edit or administer a space; over
+- **Users, groups and permissions** to view, edit or administer a space. A
+  subspace inherits the grants and the public flag of the spaces above it,
+  unless it is made private from its parent ("Make private" in its
+  permissions), when only its own grants count. Each user may turn on a
+  **personal space** from the account menu: "Space of" and their name,
+  public, administered by them, listed under "User subspaces"; turned off,
+  it is hidden from everyone and kept. Over
   `wiki-server`, accounts with passwords, a second factor, passkeys
   ([below](#passkeys)), sign-in with Google, GitHub, Apple or any OpenID
   Connect provider, and invitations.
