@@ -38,6 +38,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.HomePage (importHomeDocument)
@@ -76,6 +77,25 @@ homeDocument backing = describe "the real home document" $ do
       runStoredWiki st Administrator listSpaces `shouldReturn` []
       versions <- runStoredWiki st Administrator (listVersions page.id latestVersions) >>= ok
       length versions `shouldBe` 1
+
+  it "keeps the assistant's services across a reopen, and reads the hosts of an older wiki as services (WP5.60)" $ withPlaceIn backing $ \place -> do
+    let gateway = SS.AssistantService {name = "Corporate gateway", baseUrl = Url "https://claude-gateway.example.com", api = SS.AnthropicApi}
+    withStorage defaultConfig place $ \st -> do
+      settings <- readServerSettings st
+      writing st (Rows.storeServerSettings settings {SS.assistantServices = [gateway]})
+    withStorage defaultConfig place $ \st -> do
+      settings <- readServerSettings st
+      settings.assistantServices `shouldBe` [gateway]
+      -- An older wiki's hosts, one per line, and no services.
+      writing st $ do
+        Rows.storeServerSettings settings {SS.assistantServices = []}
+        Rows.storeSetting "assistant-hosts" "http://localhost:11434\nhttps://openrouter.ai\n"
+    withStorage defaultConfig place $ \st -> do
+      settings <- readServerSettings st
+      settings.assistantServices
+        `shouldBe` [ SS.AssistantService {name = "localhost:11434", baseUrl = Url "http://localhost:11434", api = SS.OpenAiApi}
+                   , SS.AssistantService {name = "openrouter.ai", baseUrl = Url "https://openrouter.ai", api = SS.OpenAiApi}
+                   ]
 
   it "preserves root attachments and saved versions in a whole-wiki archive" $ withDemo backing $ \st -> do
     (_, initial) <- asAdmin st getHomeDocument >>= ok

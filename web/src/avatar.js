@@ -25,12 +25,19 @@ const element = (name, attributes) => {
 // Put the cropper in `host`, on the picture in `file` (a File or a Blob),
 // in place of whatever was there. The host then carries `wikiAvatar`, with
 // `result()`, the crop as PNG bytes (a Promise of a Uint8Array, or of null
-// when there is none), and `destroy()`, which lets the picture go.
-export const crop = (host, file) => {
+// when there is none), `select(x, y, side)`, which places the selection,
+// and `destroy()`, which lets the picture go. The promise returned settles
+// once the picture is loaded (or failed to load), for the application to
+// place the selection on it ("Wiki.App.View.Avatar").
+export const crop = async (host, file) => {
   host.wikiAvatar?.destroy();
   const url = URL.createObjectURL(file);
-  const canvas = element("cropper-canvas", { background: "" });
-  const image = element("cropper-image", { src: url, alt: "The picture to crop", "initial-center-size": "cover", translatable: "", scalable: "" });
+  // The canvas is a square the page's CSS sizes; its checked background
+  // shows where the picture is not. The picture starts fitted whole inside
+  // it ("contain"), centred, so that nothing of it is cut off before the
+  // user chooses; the wheel zooms it by scale-step a notch.
+  const canvas = element("cropper-canvas", { background: "", "scale-step": "0.1" });
+  const image = element("cropper-image", { src: url, alt: "The picture to crop", "initial-center-size": "contain", translatable: "", scalable: "" });
   const selection = element("cropper-selection", { "aspect-ratio": "1", "initial-coverage": "0.8", movable: "", resizable: "", outlined: "" });
   selection.append(
     element("cropper-handle", { action: "move", "theme-color": "rgba(255, 255, 255, 0.35)" }),
@@ -44,10 +51,23 @@ export const crop = (host, file) => {
       const blob = await new Promise((resolve) => cropped.toBlob(resolve, "image/png"));
       return blob === null ? null : new Uint8Array(await blob.arrayBuffer());
     },
+    // Put the selection at (x, y) from the canvas's corner, side by side
+    // pixels: Cropper.js's own call.
+    select: (x, y, side) => {
+      selection.$change(x, y, side, side);
+    },
     destroy: () => {
       URL.revokeObjectURL(url);
       host.replaceChildren();
       delete host.wikiAvatar;
     },
   };
+  // Once the picture is loaded and fitted, or has failed to load: the
+  // application then measures it and places the selection ('select').
+  try {
+    await image.$ready();
+  } catch {
+    // A picture that does not load leaves the selection where it was; the
+    // crop then has nothing to keep, which the application reports.
+  }
 };

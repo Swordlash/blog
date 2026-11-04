@@ -4742,6 +4742,7 @@ table.invitations td {
 .server-mail-form,
 .server-url-form,
 .server-provider-form,
+.server-service-form,
 .server-mail-test {
   display: flex;
   flex-direction: column;
@@ -4753,6 +4754,7 @@ table.invitations td {
 .server-mail-form .field,
 .server-url-form .field,
 .server-provider-form .field,
+.server-service-form .field,
 .server-mail-test .field {
   flex: none;
 }
@@ -4834,13 +4836,15 @@ div.server-secret > span:first-child {
   color: var(--muted);
 }
 
-.server-provider-list {
+.server-provider-list,
+.server-service-list {
   margin: 0.4rem 0;
   padding: 0;
   list-style: none;
 }
 
-.server-provider {
+.server-provider,
+.server-service {
   padding: 0.6rem 0.8rem;
   margin-bottom: 0.6rem;
   border: 1px solid var(--border);
@@ -4850,6 +4854,28 @@ div.server-secret > span:first-child {
 .server-provider-kind {
   margin-left: 0.5rem;
   color: var(--muted);
+}
+
+/* The assistant's services (WP5.60): a name, a base URL and the API. */
+.server-service-url {
+  margin-left: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.server-service-api {
+  margin-left: 0.5rem;
+  color: var(--muted);
+}
+
+.server-service-api-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .server-provider-redirect {
@@ -7068,14 +7094,14 @@ a.mention {
   margin-top: 0.4rem;
 }
 
-.assistant-base-url-field {
+.assistant-service-field {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   margin: 0.5rem 0 0;
 }
 
-.assistant-base-url {
+.assistant-service {
   width: 24rem;
   max-width: 100%;
   font: inherit;
@@ -7291,22 +7317,55 @@ a.mention {
   }
 }
 
+/* The avatar's crop dialog (Wiki.App.View.Avatar): a modal <dialog>, in
+   the browser's top layer and centred in the window, drawn as the editor's
+   dialogs are. The cropper's canvas is a square of up to 28rem, smaller
+   where the window is: the dialog's padding, title, help and buttons fit
+   around it. */
 .avatar-crop-dialog {
-  flex-basis: 100%;
-  padding: 0.75rem;
+  --avatar-crop-size: min(calc(100vw - 4.5rem), calc(100vh - 14rem), 28rem);
+  width: auto;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 2rem);
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--dialog);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.3);
 }
 
-.avatar-crop-dialog[hidden] {
-  display: none;
+.avatar-crop-dialog::backdrop {
+  background: var(--dialog-backdrop);
 }
 
-/* Cropper.js's canvas, which fills the element it is put in. */
+.avatar-crop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.avatar-crop-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.avatar-crop-help {
+  max-width: var(--avatar-crop-size);
+  margin: 0;
+}
+
+.avatar-crop-body .actions {
+  margin: 0;
+}
+
+/* Cropper.js's canvas fills this square; the picture is fitted whole
+   inside it (web/src/avatar.js). */
 .avatar-crop {
-  height: 18rem;
-  margin: 0.5rem 0;
+  width: var(--avatar-crop-size);
+  height: var(--avatar-crop-size);
 }
 
 .avatar-crop cropper-canvas {

@@ -37,6 +37,12 @@ module Wiki.Api.ServerSettings
   , ProviderSettings
   , ProviderChange
   , noServerSettings
+  , AssistantService (..)
+  , AssistantApi (..)
+  , apiName
+  , readApi
+  , serviceOrigin
+  , legacyService
   , HomePage (..)
   , defaultHomePage
   , checkHomePage
@@ -106,13 +112,14 @@ data ServerSettingsOf s = ServerSettings
   -- pass on.
   , providers :: [ProviderSettingsOf s]
   -- ^ The providers users may sign in with, in the order of their buttons.
-  , assistantHosts :: [Text]
-  -- ^ The addresses besides Anthropic's and OpenAI's APIs that the
-  -- writing assistant may reach from the browser (WP5.21 of docs/PLAN.md):
-  -- the origins of the base URLs its users set, such as a server of
-  -- Ollama or LM Studio, or a proxy. The page's Content Security Policy
-  -- allows them ("Wiki.Api.ContentPolicy"), and refuses every other
-  -- address. Each is an origin, as 'parseAssistantHost' writes it.
+  , assistantServices :: [AssistantService]
+  -- ^ The services besides Anthropic's and OpenAI's own that the writing
+  -- assistant may use (WP5.60 of docs/PLAN.md): an organisation's
+  -- gateway, a server of Ollama or LM Studio, a proxy. Every session
+  -- carries them, and the assistant's settings offer them, so that
+  -- nobody types an address the page refuses. The page's Content Security
+  -- Policy allows each one's origin ('serviceOrigin',
+  -- "Wiki.Api.ContentPolicy"), and refuses every other address.
   , homePage :: HomePage
   -- ^ The shared front page. This value contains no server secrets.
   , boxes :: [BoxKind]
@@ -139,8 +146,12 @@ type ServerSettingsChange = ServerSettingsOf (Maybe Text)
 instance (ToJSON s) => ToJSON (ServerSettingsOf s)
 
 -- | Read by hand rather than derived, so that settings without
--- @assistantHosts@, @boxes@ or @mathMacros@, from before the fields existed (in a
+-- @assistantServices@, @boxes@ or @mathMacros@, from before the fields existed (in a
 -- demo's stored state, or from an older client), read as having none.
+-- Settings from before WP5.60 carry @assistantHosts@, a list of origins,
+-- instead of @assistantServices@: each reads as a service at that origin
+-- speaking OpenAI's API (the hosts' hint named Ollama, LM Studio and
+-- proxies, which all speak it), named by its host ('legacyService').
 instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
   parseJSON = withObject "ServerSettings" $ \o ->
     ServerSettings
@@ -148,10 +159,62 @@ instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
       .:? "publicUrl"
       <*> o .:? "mail"
       <*> o .: "providers"
-      <*> o .:? "assistantHosts" .!= []
+      <*> ( o .:? "assistantServices" >>= \case
+              Just services -> pure services
+              Nothing -> mapMaybe legacyService <$> (o .:? "assistantHosts" .!= [])
+          )
       <*> o .:? "homePage" .!= defaultHomePage
       <*> o .:? "boxes" .!= []
       <*> o .:? "mathMacros"
+
+-- | 'AssistantService': a service the writing assistant may use besides
+-- Anthropic's and OpenAI's own, as the administration lists it. Its name
+-- is what the assistant's settings show, its base URL is where the
+-- requests go (as a provider's SDK takes it: @https:\/\/openrouter.ai\/api\/v1@),
+-- and its API is the provider whose API it speaks, under which the
+-- settings offer it.
+data AssistantService = AssistantService
+  { name :: Text
+  , baseUrl :: Url
+  , api :: AssistantApi
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+-- | 'AssistantApi': the API a service speaks, Anthropic's or OpenAI's.
+data AssistantApi = AnthropicApi | OpenAiApi
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | Its name in the API: @anthropic@ or @openai@.
+apiName :: AssistantApi -> Text
+apiName = \case
+  AnthropicApi -> "anthropic"
+  OpenAiApi -> "openai"
+
+readApi :: Text -> Maybe AssistantApi
+readApi t = find (\a -> apiName a == t) [minBound .. maxBound]
+
+instance ToJSON AssistantApi where
+  toJSON = toJSON . apiName
+
+instance FromJSON AssistantApi where
+  parseJSON = withText "anthropic or openai" $ \t -> maybe (fail ("not anthropic or openai: " <> toS t)) pure (readApi t)
+
+-- | The origin of a service's base URL (@https:\/\/host:port@), which the
+-- page's Content Security Policy allows; 'Nothing' for a base URL that
+-- has none, which 'checkServerSettings' never keeps.
+serviceOrigin :: AssistantService -> Maybe Text
+serviceOrigin s = rightToMaybe (parseAssistantHost s.baseUrl.text)
+
+-- | A host of the settings before WP5.60 (an origin) as a service: named
+-- by its host and port, at that origin, speaking OpenAI's API. A host
+-- with a @*@ in it allowed many addresses and is no one service: it is
+-- left out.
+legacyService :: Text -> Maybe AssistantService
+legacyService typed = do
+  origin <- rightToMaybe (parseAssistantHost typed)
+  guard (not ("*" `T.isInfixOf` origin))
+  pure AssistantService {name = T.drop 3 (snd (T.breakOn "://" origin)), baseUrl = Url origin, api = OpenAiApi}
 
 -- | 'MailSettingsOf': a mail server, reached over SMTP.
 data MailSettingsOf s = MailSettings
@@ -204,7 +267,7 @@ instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 -- server, no provider. A wiki created before these settings existed keeps
 -- working as before.
 noServerSettings :: ServerSettingsOf s
-noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantServices = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
 --------------------------------------------------------------------------------
 -- Secrets
@@ -238,7 +301,7 @@ applyChange keep old new =
     { publicUrl = new.publicUrl
     , mail = (\m -> withPassword (resolve (old.mail >>= \o -> o.password) m.password) m) <$> new.mail
     , providers = [withSecret (resolve (previous p.name) p.secret) p | p <- new.providers]
-    , assistantHosts = new.assistantHosts
+    , assistantServices = new.assistantServices
     , homePage = new.homePage
     , boxes = new.boxes
     , mathMacros = new.mathMacros
@@ -371,11 +434,11 @@ checkServerSettings isSet s = do
     Left "The mail needs the wiki's public address: the links it carries start with it."
   when (isNothing publicUrl && not (null providers)) $
     Left "The providers need the wiki's public address: they send people back below it."
-  assistantHosts <- ordNub <$> traverse parseAssistantHost (filter (not . T.null . T.strip) s.assistantHosts)
+  assistantServices <- checkAssistantServices s.assistantServices
   boxes <- checkBoxKinds s.boxes
   mathMacros <- traverse checkMathMacros s.mathMacros
   homePage <- checkHomePage s.homePage
-  pure ServerSettings {publicUrl, mail, providers, assistantHosts, boxes, homePage, mathMacros}
+  pure ServerSettings {publicUrl, mail, providers, assistantServices, boxes, homePage, mathMacros}
   where
     checkMail m = do
       let host = T.strip m.host
@@ -393,6 +456,29 @@ checkServerSettings isSet s = do
        in ["There are two providers named " <> n <> "." | n <- ordNub names, length (filter (== n) names) > 1]
     missingSecrets ps = ["The provider " <> p.name <> " needs its client secret." | p <- ps, not (isSet p.secret)]
     blankless = mfilter (not . T.null) . fmap T.strip
+
+-- | The assistant's services as they are stored, or the first reason they
+-- are invalid: each name trimmed, not empty and used once (in any case);
+-- each base URL trimmed, an @http:@ or @https:@ address with a host (as
+-- 'parseAssistantHost' reads it, but with no @*@, since requests go
+-- there), without a fragment, kept as typed but for slashes at its end.
+checkAssistantServices :: [AssistantService] -> Either Text [AssistantService]
+checkAssistantServices services = do
+  checked <- traverse checkService services
+  let names = map (\s -> T.toLower s.name) checked
+  case [s.name | s <- checked, length (filter (== T.toLower s.name) names) > 1] of
+    n : _ -> Left ("There are two services of the assistant named " <> n <> ".")
+    [] -> pure checked
+  where
+    checkService s = do
+      let name = T.strip s.name
+          url = T.dropWhileEnd (== '/') (T.strip s.baseUrl.text)
+      when (T.null name) $ Left ("A service of the assistant needs its name: " <> url)
+      _ <- first (\why -> "The service " <> name <> "'s base URL: " <> why) (parseAssistantHost url)
+      when ("*" `T.isInfixOf` url) $ Left ("The service " <> name <> "'s base URL cannot have a *: " <> url)
+      when ("#" `T.isInfixOf` url) $ Left ("The service " <> name <> "'s base URL cannot have a fragment (#): " <> url)
+      when (T.any (\c -> isSpace c || isControl c || c `elem` ("\"<>\\" :: [Char])) url) $ Left ("The service " <> name <> "'s base URL has a character an address cannot: " <> url)
+      pure AssistantService {name, baseUrl = Url url, api = s.api}
 
 -- | The wiki's address as the server uses it: @http@ or @https@, with a
 -- host, and a slash at the end; or why it is invalid.

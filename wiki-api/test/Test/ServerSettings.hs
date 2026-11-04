@@ -26,11 +26,19 @@ kept =
     { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = mailWith (Just "wiki") (Just "pw")
     , providers = [providerWithSecret "google" (Just "g"), providerWithSecret "other" (Just "o")]
-    , assistantHosts = ["http://localhost:11434"]
+    , assistantServices = [ollama]
     , boxes = []
     , homePage = defaultHomePage
     , mathMacros = Nothing
     }
+
+-- | A server of Ollama on this machine, which speaks OpenAI's API.
+ollama :: AssistantService
+ollama = AssistantService {name = "Ollama", baseUrl = Url "http://localhost:11434/v1", api = OpenAiApi}
+
+-- | A service of the assistant, as typed.
+service :: Text -> Text -> AssistantApi -> AssistantService
+service name url api = AssistantService {name, baseUrl = Url url, api}
 
 -- | A kind of box, blue with no icon, labelled as given.
 box :: Text -> Text -> BoxKind
@@ -50,13 +58,13 @@ spec = describe "the server's settings" $ do
       checkHomePage defaultHomePage {title = " Welcome ", body = "  source\r\n"} `shouldBe` Right defaultHomePage {title = "Welcome", body = "  source\r\n"}
   describe "a change" $ do
     it "keeps each secret it leaves out, by the provider's name" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith (Just "wiki") Nothing, providers = [providerWithSecret "other" Nothing, providerWithSecret "google" Nothing], assistantServices = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just (Just "pw")
       map (\p -> (p.name, p.secret)) changed.providers `shouldBe` [("other", Just "o"), ("google", Just "g")]
 
     it "replaces a secret given, and clears an empty one" $ do
-      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+      let change = ServerSettings {publicUrl = kept.publicUrl, mail = mailWith Nothing (Just ""), providers = [providerWithSecret "google" (Just "new")], assistantServices = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
           changed = applyChange identity kept change
       (\m -> m.password) <$> changed.mail `shouldBe` Just Nothing
       map (\p -> p.secret) changed.providers `shouldBe` [Just "new"]
@@ -70,20 +78,46 @@ spec = describe "the server's settings" $ do
     it "is read with a secret left out as keeping it" $ do
       let json = "{\"publicUrl\":null,\"mail\":{\"host\":\"h\",\"port\":25,\"security\":\"plain\",\"user\":null,\"from\":\"f@example.org\"},\"providers\":[{\"name\":\"g\",\"kind\":\"google\",\"clientId\":\"c\",\"issuer\":null}]}"
       (decode json :: Maybe ServerSettingsChange)
-        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantHosts = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+        `shouldBe` Just ServerSettings {publicUrl = Nothing, mail = Just MailSettings {host = "h", port = 25, security = Plain, user = Nothing, password = Nothing, from = "f@example.org"}, providers = [ProviderSettings {name = "g", kind = Google, clientId = "c", issuer = Nothing, secret = Nothing}], assistantServices = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
-    it "takes the assistant's hosts as the change gives them" $
-      (applyChange identity kept (noServerSettings {assistantHosts = ["https://openrouter.ai"]} :: ServerSettingsChange)).assistantHosts `shouldBe` ["https://openrouter.ai"]
+    it "takes the assistant's services as the change gives them" $
+      (applyChange identity kept (noServerSettings {assistantServices = [service "OpenRouter" "https://openrouter.ai/api/v1" OpenAiApi]} :: ServerSettingsChange)).assistantServices
+        `shouldBe` [service "OpenRouter" "https://openrouter.ai/api/v1" OpenAiApi]
+
+  describe "the assistant's services (WP5.60)" $ do
+    it "round-trip through their JSON, the API as anthropic or openai" $ do
+      let gateway = service "Corporate gateway" "https://claude-gateway.example.com" AnthropicApi
+          settings = (noServerSettings :: ServerSettingsChange) {assistantServices = [gateway, ollama]}
+      decode (encode settings) `shouldBe` Just settings
+      decode "{\"name\":\"G\",\"baseUrl\":\"https://g.example\",\"api\":\"anthropic\"}" `shouldBe` Just (service "G" "https://g.example" AnthropicApi)
+      decode "{\"name\":\"O\",\"baseUrl\":\"http://localhost:11434/v1\",\"api\":\"openai\"}" `shouldBe` Just (service "O" "http://localhost:11434/v1" OpenAiApi)
+      (decode "{\"name\":\"X\",\"baseUrl\":\"https://x.example\",\"api\":\"gemini\"}" :: Maybe AssistantService) `shouldBe` Nothing
+    it "read the hosts of settings from before them as services speaking OpenAI's API, named by their host" $ do
+      let old = "{\"providers\":[],\"assistantHosts\":[\"http://localhost:11434\",\"https://openrouter.ai\",\"https://*.example.com\"]}"
+      ((\s -> s.assistantServices) <$> (decode old :: Maybe ServerSettingsChange))
+        `shouldBe` Just [service "localhost:11434" "http://localhost:11434" OpenAiApi, service "openrouter.ai" "https://openrouter.ai" OpenAiApi]
+      ((\s -> s.assistantServices) <$> (decode "{\"providers\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just []
+      -- Both present: the services win.
+      ((\s -> s.assistantServices) <$> (decode "{\"providers\":[],\"assistantHosts\":[\"https://a.example\"],\"assistantServices\":[]}" :: Maybe ServerSettingsChange)) `shouldBe` Just []
+    it "give the policy the origin of their base URL" $ do
+      serviceOrigin (service "OpenRouter" "https://OpenRouter.ai/api/v1" OpenAiApi) `shouldBe` Just "https://openrouter.ai"
+      serviceOrigin ollama `shouldBe` Just "http://localhost:11434"
 
   describe "the checks" $ do
     let checked = checkServerSettings isJust
     it "take settings that can be, normalised" $
       ((\s -> s.publicUrl) <$> checked kept {publicUrl = Just (Url " https://wiki.example.org/team ")}) `shouldBe` Right (Just (Url "https://wiki.example.org/team/"))
     it "take nothing set" $ checked (noServerSettings :: Kept) `shouldBe` Right noServerSettings
-    it "take the assistant's hosts as origins, each once, and refuse what is not one" $ do
-      ((\s -> s.assistantHosts) <$> checked kept {assistantHosts = ["https://OpenRouter.ai/api/v1", " ", "https://openrouter.ai", "http://localhost:11434"]})
-        `shouldBe` Right ["https://openrouter.ai", "http://localhost:11434"]
-      checked kept {assistantHosts = ["https://a.example; script-src *"]} `shouldSatisfy` isLeft
+    it "take the assistant's services trimmed, the base URL without its last slash, and refuse a bad name or address" $ do
+      ((\s -> s.assistantServices) <$> checked kept {assistantServices = [service " OpenRouter " " https://OpenRouter.ai/api/v1/ " OpenAiApi, ollama]})
+        `shouldBe` Right [service "OpenRouter" "https://OpenRouter.ai/api/v1" OpenAiApi, ollama]
+      let refusedService services why = either (why `T.isInfixOf`) (const False) (checked kept {assistantServices = services}) `shouldBe` True
+      refusedService [service " " "https://a.example" OpenAiApi] "needs its name"
+      refusedService [service "A" "https://a.example; script-src *" OpenAiApi] "base URL"
+      refusedService [service "A" "ftp://a.example" OpenAiApi] "base URL"
+      refusedService [service "A" "https://a.example/v1#top" OpenAiApi] "fragment"
+      refusedService [service "A" "https://*.example.com" OpenAiApi] "cannot have a *"
+      refusedService [service "Gateway" "https://a.example" OpenAiApi, service "gateway" "https://b.example" AnthropicApi] "two services of the assistant named"
     it "take kinds of box, named in lower case, an empty label made from the name" $
       ((\s -> s.boxes) <$> checked kept {boxes = [box " Exercise " "  ", box "fun-fact" " A fun fact "]})
         `shouldBe` Right [box "exercise" "Exercise", box "fun-fact" "A fun fact"]

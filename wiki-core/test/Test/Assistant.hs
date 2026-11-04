@@ -251,6 +251,30 @@ modelsSpec = describe "the models offered" $ do
     -- The scripted provider sends nothing anywhere.
     baseUrlOf Scripted ps `shouldBe` Nothing
 
+  it "build a request with a typed key in place of the kept one" $ do
+    let url = Url "https://claude-gateway.example.com"
+        gateway = withModel Anthropic "claude-sonnet-5-5" (withBaseUrl Anthropic "https://claude-gateway.example.com" defaultSettings)
+    -- The typed key, trimmed as 'withKey' keeps it; the rest as 'readyFor' builds it.
+    readyWith " gw-typed\n" Anthropic gateway `shouldBe` Just (Ready Anthropic (ModelName "claude-sonnet-5-5") (ApiKey "gw-typed") "medium" (Just url))
+    (\r -> r.key) <$> readyWith " gw-typed\n" Anthropic gateway `shouldBe` (settingsOf Anthropic (withKey Anthropic (Just " gw-typed\n") gateway)).key
+    -- In place of a kept key, which it does not change.
+    let kept = withKey Anthropic (Just "sk-kept") defaultSettings
+    (\r -> r.key) <$> readyWith "sk-typed" Anthropic kept `shouldBe` Just (ApiKey "sk-typed")
+    (settingsOf Anthropic kept).key `shouldBe` Just (ApiKey "sk-kept")
+    -- A provider with no key and no base URL can be asked with a typed one.
+    readyFor OpenAI defaultSettings `shouldSatisfy` isLeft
+    (\r -> (r.provider, r.key, r.baseUrl)) <$> readyWith "sk-proj" OpenAI defaultSettings `shouldBe` Just (OpenAI, ApiKey "sk-proj", Nothing)
+    -- The model list fetched before the key, at another address, still
+    -- chooses the model: the key is not kept yet, so nothing is discarded.
+    let served = [Listed (ModelName "llama4:8b") Nothing (Just 20)]
+        onMachine = withModels OpenAI served today (withBaseUrl OpenAI "http://localhost:11434/v1" defaultSettings)
+    (\r -> r.model) <$> readyWith "local-key" OpenAI onMachine `shouldBe` Just (ModelName "llama4:8b")
+    -- Nothing typed, or only spaces: no request.
+    readyWith "" Anthropic gateway `shouldBe` Nothing
+    readyWith " \n " Anthropic gateway `shouldBe` Nothing
+    -- The scripted provider is never asked at another address.
+    (\r -> r.baseUrl) <$> readyWith "x" Scripted gateway `shouldBe` Just Nothing
+
   it "say which addresses are plain HTTP to another machine" $ do
     map insecureUrl ["https://models.github.ai/inference", "http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://[::1]:8080", "HTTP://LocalHost/v1"]
       `shouldBe` [False, False, False, False, False]

@@ -596,7 +596,7 @@ serverWith user password secret =
     { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
     , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing, secret}]
-    , assistantHosts = []
+    , assistantServices = []
     , boxes = []
     , homePage = defaultHomePage
     , mathMacros = Nothing
@@ -604,11 +604,11 @@ serverWith user password secret =
 
 -- | Settings as they are, with no kinds of box.
 withoutBoxes :: ServerSettingsOf s -> ServerSettingsOf s
-withoutBoxes ServerSettings {publicUrl, mail, providers, assistantHosts} = ServerSettings {publicUrl, mail, providers, assistantHosts, boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+withoutBoxes ServerSettings {publicUrl, mail, providers, assistantServices} = ServerSettings {publicUrl, mail, providers, assistantServices, boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
 
 -- | Settings with nothing set but these kinds of box.
 boxesOnly :: [BoxKind] -> ServerSettingsChange
-boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = [], boxes, homePage = defaultHomePage, mathMacros = Nothing}
+boxesOnly boxes = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantServices = [], boxes, homePage = defaultHomePage, mathMacros = Nothing}
 
 serverSide :: (MonadAdmin m, MonadWiki m, MonadComments m) => SpecWith (Fixture m)
 serverSide = describe "serverSettings and setServerSettings" $ do

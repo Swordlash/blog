@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+The assistant's addresses come from the server (WP5.60). The
+administration's Server section lists "The assistant's services", each a
+name, a base URL and the API it speaks, added, changed and removed as the
+sign-in providers are; the server refuses a bad address or a name used
+twice, and the form shows why. In the assistant's settings the "Base URL"
+field is gone: each provider's "Service" offers the provider's own and the
+session's services that speak its API ("name (base URL)"), and choosing
+one sets the base URL the settings keep, so the vault, the requests and the
+model list work as before. A kept address that no service offers any more
+is shown as no longer offered, with a note, until another is chosen. The
+demo has no server and offers the provider's own only. `Session` gains
+`assistantServices`.
+
+The key is tested before it is kept (WP5.59). In the assistant's
+settings, the key form's button is now "Test and keep the key" (Enter in
+the field does the same). With the typed key, at the base URL if one is
+set, it first fetches the provider's model list and shows it. A refused
+key (a 401) stops there, with the sentence that says the key has
+probably expired; any other failure of the list goes on, since a gateway
+may have no list. Then it tries the key with the model chosen, or with
+the list's first model if the list does not have it, and only when that
+passes keeps the key (in this browser, in the vault when syncing is on)
+and that model. On a failure nothing is kept: the reason shows by the
+field, the key stays in the field, and the list stays shown, to choose
+another model and press the button again. While it runs, the key field,
+the button, the base URL, the model and the effort are disabled and the
+button says "Checking…"; an answer for a base URL no longer set keeps
+nothing. "Test the connection" is now "Test the connection (no key)",
+and shows only while nothing is typed in the key field; it says "The
+connection works without a key" when it does. The scripted provider
+keeps each check in `script.checks`, for the browser tests to read the
+key and the model checked, and can answer after `script.checkWait`
+milliseconds.
+
+The avatar's crop dialog (WP5.59, the owner's addendum) is a modal
+`<dialog>`, shown as the editor's "Link to a page" dialog is: centred in
+the window above the account panel, with a title, a line of help, the
+picture fitted whole into a square cropper of up to 28rem, and "Cancel",
+Escape or a click on the backdrop closing it without an upload. The starting circle is the largest that fits in the picture, centred,
+so that none of it lies on the background around a picture that is not
+square.
+
 Claude at another address (WP5.57). The assistant's settings show the
 "Base URL" field for Anthropic as for OpenAI, with a hint that names a
 gateway and where the administrator allows its address (Administration,

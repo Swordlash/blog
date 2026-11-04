@@ -191,7 +191,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
-import Wiki.Api.ServerSettings (HomePage, defaultHomePage)
+import Wiki.Api.ServerSettings (AssistantService, HomePage, defaultHomePage)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Blog (PostDetails)
@@ -277,6 +277,11 @@ data Session = Session
   -- (WP5.41 of docs/PLAN.md), which every formula is set with; 'Nothing'
   -- for the ones the wiki ships with (@web/src/katex-macros.tex@). Part
   -- of the session for the same reason as 'boxes'.
+  , assistantServices :: [AssistantService]
+  -- ^ The services besides Anthropic's and OpenAI's own that the writing
+  -- assistant may use, as a server's administration lists them (WP5.60
+  -- of docs/PLAN.md): the assistant's settings offer them. The demo has
+  -- no server, and offers none.
   }
   deriving stock (Eq, Show)
 
@@ -289,7 +294,7 @@ anonymous = anonymousIn Open
 -- wiki is open to ("Wiki.Core.Access"), so that the application knows
 -- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.
@@ -304,7 +309,7 @@ sessionPrincipal s = (\u -> Principal {user = u.id, groups = s.groups}) <$> s.us
 -- | The session with the signed-in user's record as it now is, after a
 -- change of their own (their avatar), which changes nothing else of it.
 withOwnUser :: User -> Session -> Session
-withOwnUser u s = Session {user = Just u, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports, homePage = s.homePage, boxes = s.boxes, mathMacros = s.mathMacros}
+withOwnUser u s = Session {user = Just u, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports, homePage = s.homePage, boxes = s.boxes, mathMacros = s.mathMacros, assistantServices = s.assistantServices}
 
 -- | Whether two sessions are of the same requester with the same rights:
 -- the same user (or nobody), groups, grants and standing. The user's own

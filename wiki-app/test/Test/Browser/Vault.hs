@@ -631,14 +631,14 @@ settingsHere m = unsafeIOToPageM (either (const defaultSettings) (\k -> k.settin
 
 -- | Nobody signed in, in an open wiki.
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
 
 -- | One of the demo's users, signed in.
 signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
 
 -- | A field of JSON, by its path of keys (an array's items by number).
 field :: [Text] -> Value -> Maybe Value

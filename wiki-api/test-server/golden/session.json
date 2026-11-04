@@ -1,4 +1,11 @@
 {
+  "assistantServices": [
+    {
+      "api": "anthropic",
+      "baseUrl": "https://claude-gateway.example.com",
+      "name": "Corporate gateway"
+    }
+  ],
   "boxes": [
     {
       "colour": "teal",

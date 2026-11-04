@@ -587,14 +587,25 @@ not sign you in; it only unlocks the assistant's keys.
 
 ### The assistant at another address
 
-Each provider's settings take a **Base URL**, for another service that speaks
-the provider's API. For Anthropic's that is typically an organisation's
-gateway in front of Anthropic (what Claude Code takes as
-`ANTHROPIC_BASE_URL`), which gives each user a key or token of their own (the
-one Claude Code's `apiKeyHelper` prints); for OpenAI's, GitHub Models,
-OpenRouter, or Ollama or LM Studio on your own machine, which needs no key.
-The model list is then the service's own, fetched there, and the assistant
-names the service by its host.
+Each provider's settings choose a **Service**: the provider's own, or one of
+the services that speak its API which the wiki's administrator lists in the
+administration's "Server" section, "The assistant's services" (WP5.60). For
+Anthropic's API that is typically an organisation's gateway in front of
+Anthropic (what Claude Code takes as `ANTHROPIC_BASE_URL`), which gives each
+user a key or token of their own (the one Claude Code's `apiKeyHelper`
+prints); for OpenAI's, GitHub Models, OpenRouter, or Ollama or LM Studio,
+which needs no key. The model list is then the service's own, fetched
+there, and the assistant names the service by its host.
+
+To add one, an administrator opens Administration, Server, "The assistant's
+services", chooses "Add a service", and gives its name (what users see), its
+base URL as the provider's SDK takes it (`https://gateway.example.org/v1`,
+`http://localhost:11434/v1`) and the API it speaks. Every session carries
+the list, so the next page a user opens offers it. Nobody types an address
+in the assistant's settings: one the administrator has not listed would be
+refused by the page anyway. An address a user kept from before, which no
+service offers any more, is shown as no longer offered until another is
+chosen.
 
 - **The key goes as a bearer token.** Both providers' SDKs send the key as
   `Authorization: Bearer <key>`, which is what such a gateway takes, so
@@ -602,13 +613,12 @@ names the service by its host.
   `anthropic-dangerous-direct-browser-access: true`, and the service has to
   answer the browser's CORS preflight with `authorization` among the
   allowed headers.
-- **The address must be allowed.** Every page's Content Security Policy
-  lets the browser reach Anthropic's and OpenAI's APIs only, so an
-  administrator adds the service's address under "The assistant's hosts"
-  in the administration's "Server" section (or `--assistant-hosts`). Until
-  then the settings say the address is not allowed, before anything is
-  sent; a service that cannot be reached at all is said to be unreachable,
-  with the allowed addresses named as a likely cause.
+- **The address is allowed with the service.** Every page's Content
+  Security Policy lets the browser reach Anthropic's and OpenAI's APIs and
+  the origins of the administrator's services, and no other address. The
+  server's `--assistant-hosts` allows more origins, for the policy only:
+  they are not offered to users. A service that cannot be reached at all is
+  said to be unreachable, with CORS named as a likely cause.
 - **An expired key is pasted again.** Nothing renews a key or a token. When
   the service refuses one (a 401), the chat and the settings say that it
   has probably expired or been revoked, and the chat links to the settings
@@ -1409,11 +1419,12 @@ to the demo, keeping `data/`.
   The demo carries it in its pages; the server sends it as a header too, and
   turns off the camera, the microphone and the location. So a script slipped
   into a page, past the allowlist of its HTML, has nowhere to send an
-  assistant's key. A user whose assistant talks to another service (Ollama,
-  LM Studio, OpenRouter, a gateway in front of Anthropic) needs its address among the assistant's
-  hosts: the "Server" section's "The assistant's hosts", or
-  `--assistant-hosts https://openrouter.ai,http://localhost:11434`. The
-  assistant's settings say so when an address is not allowed.
+  assistant's key. Another service the assistant may talk to (Ollama, LM
+  Studio, OpenRouter, a gateway in front of Anthropic) is listed in the
+  "Server" section's "The assistant's services", with its name, base URL and
+  API: the policy allows its origin, and the assistant's settings offer it.
+  `--assistant-hosts https://openrouter.ai,http://localhost:11434` allows
+  more origins without offering them.
 - **Open or closed.** The administration's "Permissions" section, "Who may come
   in", says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"

@@ -1,6 +1,10 @@
 {
-  "assistantHosts": [
-    "http://localhost:11434"
+  "assistantServices": [
+    {
+      "api": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "name": "Ollama"
+    }
   ],
   "boxes": [
     {

@@ -18,29 +18,40 @@
 -- under the user's id ("Wiki.App.Assistant"), and the browser sends it
 -- only to its provider, never to the wiki's server. The page says so, and
 -- also that every request sends the wiki's Markdown reference, which the
--- providers cache where they can. "Test the key" makes the smallest
--- possible request (looking up the model, which is free) and shows the
--- provider's response. "Forget" deletes the key. Once saved, a key is
--- never shown again; the page only shows that one is set.
+-- providers cache where they can. A typed key is kept only once it works
+-- (WP5.59): "Test and keep the key" (or Enter in the key's field) fetches
+-- the model list with the typed key, then makes the smallest possible
+-- request with it (looking up the model, which is free), and keeps the
+-- key and the model only when the provider accepts both. A refused key is
+-- not kept: the page shows why, and the key stays in the field to be
+-- corrected. "Test the key" checks a kept key with that small request.
+-- "Forget" deletes the key. Once kept, a key is never shown again; the
+-- page only shows that one is set.
 --
 -- Over plain HTTP (anywhere except the local machine's address) the page
 -- warns that it is not secure. The key is still sent to the provider over
 -- TLS, but anyone who can modify this page in transit could read what is
 -- typed into it.
 --
--- Each provider's settings accept another base URL for its API ("Base
--- URL"), for any service that implements the API. For OpenAI's that is
--- GitHub Models, OpenRouter, or a server on this machine (Ollama, LM
--- Studio), which needs no key. For Anthropic's it is a gateway, such as an
--- organisation's own in front of Anthropic (WP5.57). The SDK sends the key
--- as @Authorization: Bearer@, which such a gateway takes. A base URL over
--- plain HTTP to another machine gets the same warning: the key would cross
--- the network unencrypted. A base URL that the page's
--- Content Security Policy does not allow (WP5.21 of docs/PLAN.md) is
--- refused before anything is sent: "Test the key" says so, with the
--- addresses the page allows and who can add one ("Wiki.App.Assistant"). A
--- provider that could not be reached on the last attempt (because a
--- network blocks it) is marked as unreachable.
+-- Each provider's settings choose the service its requests go to
+-- ("Service", WP5.60): the provider's own, or one of the services that
+-- speak its API which the wiki's administrator lists (Administration,
+-- Server, The assistant's services), as the session carries them. For
+-- OpenAI's API that may be GitHub Models, OpenRouter, or a server of
+-- Ollama or LM Studio, which needs no key. For Anthropic's it is a
+-- gateway, such as an organisation's own in front of Anthropic (WP5.57).
+-- The SDK sends the key as @Authorization: Bearer@, which such a gateway
+-- takes. Choosing a service sets the base URL the settings keep
+-- ('withBaseUrl'), so nothing else changes. There is no field to type an
+-- address in: the page's Content Security Policy (WP5.21 of
+-- docs/PLAN.md) lets the browser reach only the administrator's services,
+-- and a typed address would be refused with an error that explains
+-- nothing. A base URL kept from before, which no service offers any
+-- more, is shown as such until another service is chosen. A service over
+-- plain HTTP to another machine gets the same warning as the page: the key
+-- would cross the network unencrypted. A provider that could not be
+-- reached on the last attempt (because a network blocks it) is marked as
+-- unreachable.
 --
 -- Everything is read in the initializer, in the browser. A page rendered
 -- ahead of the program (by the prerender or the server), which has no
@@ -63,6 +74,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..))
 import Wiki.Api.Vault (PasskeyInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, readKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
@@ -72,7 +84,7 @@ import Wiki.App.Editor.Browser (clearField)
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
   ( AssistantError (..)
-  , ErrorKind (Unreachable)
+  , ErrorKind (BadKey, Unreachable)
   , Model (..)
   , ModelChoices (..)
   , ModelName (..)
@@ -94,6 +106,7 @@ import Wiki.Core.Assistant
   , providerLabel
   , providers
   , readyFor
+  , readyWith
   , serviceName
   , serviceOf
   , settingsOf
@@ -112,8 +125,10 @@ import Wiki.Core.User (Password (..), User (id))
 
 newtype Input = Input {context :: Context}
 
--- | 'Check': the result of "Test the key".
-data Check = Checking | Works | Fails Text
+-- | 'Check': the result of "Test the key", "Test the connection (no
+-- key)" or "Test and keep the key". 'Kept' is a typed key that worked and
+-- is now kept.
+data Check = Checking | Works | Kept | Fails Text
 
 -- | 'Listing': the state of fetching a provider's model list.
 data Listing = Listing | Fetched Int | NotFetched Text
@@ -169,14 +184,14 @@ data Action
   = Initialize
   | Receive Input
   | TypedKey Provider Text
-  | KeepKey Provider
+  | TestAndKeep Provider
   | Forget Provider
   | Choose Provider
   | ChooseModel Provider Text
   | TypedModel Provider Text
   | Test Provider
   | Refresh Provider
-  | TypedBaseUrl Provider Text
+  | ChooseService Provider Text
   | ChooseEffort Provider Text
   | TurnOn
   | TypedSyncPassword Text
@@ -367,11 +382,22 @@ component =
             {% if ps.unreachable %}
               <p class="warning assistant-unreachable" role="alert">{{ cannotReach }}</p>
             {% end %}
-            <label class="field assistant-base-url-field">
-              <span>Base URL</span>
-              <input type="url" class="assistant-base-url" spellcheck="false" placeholder={{ basePlaceholder }} value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
+            <label class="field assistant-service-field">
+              <span>Service</span>
+              <select class="assistant-service" disabled={{ st.busy || checking }} onValueChange={{ ChooseService p }}>
+                <option value="" selected={{ isNothing ps.baseUrl }}>{{ ownService }}</option>
+                {% for service in offered %}
+                  <option value={{ service.baseUrl.text }} selected={{ ps.baseUrl == Just service.baseUrl }}>{{ service.name }} ({{ service.baseUrl.text }})</option>
+                {% end %}
+                {% for url in maybeToList stale %}
+                  <option value={{ url.text }} selected>{{ url.text }} (no longer offered by this wiki)</option>
+                {% end %}
+              </select>
             </label>
-            <p class="account-note assistant-base-url-hint">{{ baseHint }}</p>
+            {% if isJust stale %}
+              <p class="warning assistant-service-stale" role="alert">This address is no longer among the services this wiki offers, and the browser may be refused it: choose another service.</p>
+            {% end %}
+            <p class="account-note assistant-service-hint">{{ serviceHint }}</p>
             {% for url in maybeToList ps.baseUrl %}
               {% if insecureUrl url.text %}
                 <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>
@@ -384,26 +410,26 @@ component =
                 <button type="button" class="danger assistant-forget" disabled={{ st.busy }} onClick={{ const (Forget p) }}>Forget</button>
               </div>
             {% else %}
-              <form class="assistant-key-form" {{ HE.preventingDefault (HE.onSubmit (const (KeepKey p))) }}>
+              <form class="assistant-key-form" {{ HE.preventingDefault (HE.onSubmit (const (TestAndKeep p))) }}>
                 <label class="field">
                   <span>API key</span>
-                  <input type="password" class="assistant-key" autocomplete="off" spellcheck="false" value={{ Map.findWithDefault "" p st.typedKeys }} onValueInput={{ TypedKey p }}>
+                  <input type="password" class="assistant-key" autocomplete="off" spellcheck="false" value={{ typedKey }} disabled={{ checking }} onValueInput={{ TypedKey p }}>
                 </label>
-                <button type="submit" class="primary" disabled={{ st.busy || T.null (T.strip (Map.findWithDefault "" p st.typedKeys)) }}>Keep the key</button>
+                <button type="submit" class="primary assistant-test-keep" disabled={{ st.busy || checking || nothingTyped }}>{{ if checking then "Checking…" else "Test and keep the key" :: Text }}</button>
               </form>
               {% if isNothing (baseUrlOf p ps) %}
                 {% for url in maybeToList (keyPage p) %}
                   <p class="account-note">Make one at <a href={{ url }} target="_blank" rel="noopener noreferrer">{{ url }}</a>.</p>
                 {% end %}
               {% end %}
-              {% if usable p ps %}
+              {% if usable p ps && nothingTyped %}
                 <div class="actions">
-                  <button type="button" class="assistant-test" disabled={{ checking }} onClick={{ const (Test p) }}>Test the connection</button>
+                  <button type="button" class="assistant-test" disabled={{ checking }} onClick={{ const (Test p) }}>Test the connection (no key)</button>
                 </div>
               {% end %}
             {% end %}
           {% end %}
-          <fieldset class="assistant-model" disabled={{ st.busy }}>
+          <fieldset class="assistant-model" disabled={{ st.busy || checking }}>
             <legend>Model</legend>
             <div class="assistant-model-row">
               <select class="assistant-model-choice" aria-label={{ "The model of " <> providerLabel p }} onValueChange={{ ChooseModel p }}>
@@ -434,7 +460,7 @@ component =
           </fieldset>
           <label class="field assistant-effort-field">
             <span>Effort</span>
-            <select class="assistant-default-effort" disabled={{ st.busy }} onValueChange={{ ChooseEffort p }}>
+            <select class="assistant-default-effort" disabled={{ st.busy || checking }} onValueChange={{ ChooseEffort p }}>
               {% for e in efforts p %}
                 <option value={{ e }} selected={{ effortOf ps == e }}>{{ effortName e }}</option>
               {% end %}
@@ -458,15 +484,17 @@ component =
             <> serviceName p ps
             <> " from this network: the last request found no way to it. A network that blocks it, a firewall or a proxy, is the likely cause."
             <> if isJust (baseUrlOf p ps)
-              then " Or the address is not among those this wiki allows (its administrator adds them in the server settings: Administration, Server, The assistant's hosts), or the service does not answer requests from a browser page (CORS)."
+              then " Or the service does not answer requests from a browser page (CORS), or its address is no longer one this wiki offers (its administrator lists them in the server settings: Administration, Server, The assistant's services)."
               else ""
-        basePlaceholder = if p == OpenAI then "https://api.openai.com/v1" else "https://api.anthropic.com" :: Text
-        baseHint :: Text
-        baseHint
-          | p == OpenAI =
-              "Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key. The browser reaches only the addresses this wiki allows: OpenAI's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
-          | otherwise =
-              "Empty for Anthropic's own; or another service that speaks its API, such as your organisation's gateway. The browser reaches only the addresses this wiki allows: Anthropic's, and those its administrator adds in the server settings (Administration, Server, The assistant's hosts)."
+        -- The session's services that speak this provider's API, and the
+        -- base URL kept if none of them is at it.
+        offered = [service | service <- st.input.context.session.assistantServices, apiProvider service.api == p]
+        stale = mfilter (\url -> url `notElem` map (\service -> service.baseUrl) offered) ps.baseUrl
+        ownService = (if p == OpenAI then "OpenAI's own" else "Anthropic's own") :: Text
+        serviceHint :: Text
+        serviceHint
+          | null offered = providerLabel p <> "'s own service is the only one this wiki offers. Its administrator can add others that speak its API, such as your organisation's gateway or a server of Ollama (Administration, Server, The assistant's services)."
+          | otherwise = providerLabel p <> "'s own service, or another that speaks its API, as this wiki's administrator lists them (Administration, Server, The assistant's services). Some take a key of their own (GitHub Models a GitHub token), and a server of Ollama or LM Studio takes none."
         listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
         other = Set.member p st.otherModels || not listed
         option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
@@ -480,6 +508,10 @@ component =
           Just (Fetched n) -> Just [hh|<p class="assistant-listing assistant-listed" role="status">{{ show n :: Text }} models fetched from {{ providerLabel p }}, {{ show (length choices.recommended + length choices.others) :: Text }} of them offered for a chat.</p>|]
           Just (NotFetched why) -> Just [hh|<p class="error assistant-listing assistant-not-listed" role="alert">The list of models could not be fetched. {{ why }}</p>|]
         typedModel = Map.findWithDefault "" p st.typedModels
+        -- With a key typed, the only test offered is the one with that key:
+        -- "Test the connection (no key)" is hidden.
+        typedKey = Map.findWithDefault "" p st.typedKeys
+        nothingTyped = T.null (T.strip typedKey)
         effortName e = if e == defaultEffort then e <> " (default)" else e
         checking = case Map.lookup p st.checks of
           Just Checking -> True
@@ -487,7 +519,10 @@ component =
         checkView = case Map.lookup p st.checks of
           Nothing -> Nothing
           Just Checking -> Just [hh|<p class="assistant-check" role="status">Asking {{ providerLabel p }}…</p>|]
-          Just Works -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
+          Just Works
+            | p /= Scripted && isNothing ps.key -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The connection works without a key, and {{ chosen.text }} is there.</p>|]
+            | otherwise -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
+          Just Kept -> Just [hh|<p class="assistant-check assistant-check-works assistant-check-kept" role="status">The key works and is kept.</p>|]
           Just (Fails why) -> Just [hh|<p class="error assistant-check assistant-check-fails" role="alert">{{ why }}</p>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -509,13 +544,63 @@ component =
           modify (\st -> st {settings = Nothing, typedKeys = mempty, typedModels = mempty, checks = mempty, listings = mempty, otherModels = mempty, problem = Nothing})
           load
       TypedKey p k -> modify (\st -> st {typedKeys = Map.insert p k st.typedKeys})
-      KeepKey p -> do
-        typed <- gets (\st -> Map.findWithDefault "" p st.typedKeys)
-        unless (T.null (T.strip typed)) $ do
-          change (withKey p (Just typed))
-          -- Once the browser stores the key, the page's state no longer holds it.
-          modify (\st -> st {typedKeys = Map.delete p st.typedKeys, checks = Map.delete p st.checks})
-          fetchModels p
+      -- "Test and keep the key" (the owner, 2026-11-04). The typed key is
+      -- tried before it is kept, so that a wrong key is never kept, in two
+      -- steps. First the model list is fetched with it: a refused key (a
+      -- 401) stops there. Any other failure of the list goes on with the
+      -- model chosen, since a gateway may have no list. Then the message
+      -- test ('checkKey') runs with the model chosen if the list has it,
+      -- else with the list's first model. Only when it passes are the key
+      -- and that model kept. On a failure nothing is kept: the reason
+      -- shows by the field, the key stays in it, and the list stays shown,
+      -- so that another model can be chosen and the button pressed again.
+      TestAndKeep p ->
+        gets (\st -> (st.user, st.settings, Map.findWithDefault "" p st.typedKeys)) >>= \case
+          (Just user, Just (Right s), typed) | Just asked <- readyWith typed p s -> do
+            modify (\st -> st {checks = Map.insert p Checking st.checks, listings = Map.insert p Listing st.listings})
+            -- The provider's other inputs are disabled while the key is
+            -- tried, but the settings may still change meanwhile (another
+            -- device's change, taken in by 'change'). An answer counts only
+            -- for the same user and the same address: another user's
+            -- settings are not the ones the key was typed into, and an
+            -- answer from the old address says nothing of the new one. An
+            -- answer from an address no longer set keeps nothing.
+            let same = do
+                  (user', address) <- gets (\st -> (st.user, fmap (baseUrlOf p . settingsOf p) <$> st.settings))
+                  if user' /= Just user
+                    then pure False
+                    else
+                      if address == Just (Right asked.baseUrl)
+                        then pure True
+                        else do
+                          modify (\st -> st {checks = Map.insert p (Fails moved) st.checks})
+                          pure False
+                moved = "The base URL changed while the key was tested, so the key was not kept: test it again."
+                refuse e = do
+                  modify (\st -> st {checks = Map.insert p (Fails (errorText (serviceOf asked) (Just asked.key) e)) st.checks})
+                  change (withReached p (e.kind /= Unreachable))
+            now <- liftIO getCurrentTime
+            listed <- lift (listModels asked)
+            whenM same $ case listed of
+              Left e | e.kind == BadKey -> do
+                modify (\st -> st {listings = Map.delete p st.listings})
+                refuse e
+              Left e -> do
+                modify (\st -> st {listings = Map.insert p (NotFetched (errorText (serviceOf asked) (Just asked.key) e)) st.listings})
+                tryModel p user typed asked same refuse identity asked.model
+              Right models -> do
+                -- Shown at once, so that another model can be chosen if
+                -- the message test fails with this one.
+                change (withModels p models now)
+                modify (\st -> st {listings = Map.insert p (Fetched (length models)) st.listings})
+                listedSettings <- gets (\st -> either (const Nothing) Just =<< st.settings)
+                let ps = maybe (settingsOf p s) (settingsOf p) listedSettings
+                    choices = modelChoices p ps
+                    offered = map (\m -> m.id) (choices.recommended <> choices.others)
+                    chosen = chosenModel p ps
+                    model = if chosen `elem` offered then chosen else fromMaybe chosen (head offered)
+                tryModel p user typed asked same refuse (withModels p models now) model
+          _ -> pass
       Forget p -> do
         change (withKey p Nothing)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
@@ -564,13 +649,44 @@ component =
                   Left why -> st {sync = st.sync {working = Nothing, trouble = Just why}}
             )
       ChooseEffort p e -> change (withEffort p e)
-      TypedBaseUrl p url -> do
+      ChooseService p url -> do
         change (withBaseUrl p url)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
         -- Fetch the other service's own list, if it can be reached.
         gets (\st -> st.settings) >>= \case
           Just (Right s) | usable p (settingsOf p s) && isJust (baseUrlOf p (settingsOf p s)) -> fetchModels p
           _ -> pass
+
+    -- The message test of "Test and keep the key", with a typed key and a
+    -- model; then, if it passes, the key and the model kept. Keeping the
+    -- key discards the model list stored before it ('withKey'), so the
+    -- list fetched with the key is stored again with it ('relisted').
+    -- Once the browser stores the key, the page's state no longer holds
+    -- it. When storing fails, the key stays typed and the page shows why
+    -- ('change').
+    tryModel
+      :: Provider
+      -> UserId
+      -> Text
+      -> Ready
+      -> H.HalogenM State Action Empty output m Bool
+      -> (AssistantError -> H.HalogenM State Action Empty output m ())
+      -> (Settings -> Settings)
+      -> ModelName
+      -> H.HalogenM State Action Empty output m ()
+    tryModel p user typed asked same refuse relisted model = do
+      let r = Ready {provider = asked.provider, model, key = asked.key, effort = asked.effort, baseUrl = asked.baseUrl}
+      result <- lift (checkKey r)
+      whenM same $ case result of
+        Just e -> refuse e
+        Nothing -> do
+          let keepModel ns = if chosenModel p (settingsOf p ns) == model then ns else withModel p model.text ns
+          change (keepModel . relisted . withKey p (Just typed))
+          kept <- gets (\st -> st.user == Just user && either (const False) (\ns -> isJust (settingsOf p ns).key) (fromMaybe (Left "") st.settings))
+          modify $ \st ->
+            if kept
+              then st {typedKeys = Map.delete p st.typedKeys, checks = Map.insert p Kept st.checks}
+              else st {checks = Map.delete p st.checks}
 
     -- Fetch a provider's model list with its key, and store it. The fetch
     -- also tells whether the provider can be reached from here.
@@ -661,6 +777,12 @@ component =
             Right k -> st {busy = False, settings = Just (Right k.settings), sync = syncOf result st.sync}
             Left why -> st {busy = False, problem = Just why}
         _ -> pass
+
+-- | The provider whose API a service speaks.
+apiProvider :: AssistantApi -> Provider
+apiProvider = \case
+  AnthropicApi -> Anthropic
+  OpenAiApi -> OpenAI
 
 userOf :: Input -> Maybe UserId
 userOf input = (\u -> u.id) <$> input.context.session.user

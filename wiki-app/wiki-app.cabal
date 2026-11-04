@@ -155,6 +155,7 @@ library
       Wiki.App.View.Users
       Wiki.App.View.VerifyEmail
       Wiki.App.View.Watch
+      Wiki.App.Web.Rect
 
   -- The version "Export the wiki" writes into an archive's manifest.
   other-modules:    Paths_wiki_app
@@ -315,6 +316,7 @@ test-suite wiki-app-test
         Test.Passwords
         Test.Policy
         Test.Readme
+        Test.Rect
         Test.Route
         Test.Scripted
         Test.Server

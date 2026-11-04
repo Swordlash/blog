@@ -88,8 +88,9 @@ data Editing
   | EditingMail MailForm
   | -- | A provider, by the name it had ('Nothing' for a new one).
     EditingProvider (Maybe Text) ProviderForm
-  | -- | The assistant's hosts, as typed: one per line.
-    EditingHosts Text
+  | -- | A service of the assistant, by its place in the list ('Nothing'
+    -- for a new one).
+    EditingService (Maybe Int) ServiceForm
 
 -- | The mail server's form, as typed.
 data MailForm = MailForm
@@ -116,6 +117,13 @@ data ProviderForm = ProviderForm
   , secretSet :: Bool
   , replacingSecret :: Bool
   , formCheck :: Maybe Checked
+  }
+
+-- | A service of the assistant's form, as typed.
+data ServiceForm = ServiceForm
+  { typedServiceName :: Text
+  , typedBaseUrl :: Text
+  , chosenApi :: AssistantApi
   }
 
 -- | The result of checking a provider.
@@ -173,9 +181,13 @@ data Action
   | Cancel
   | TypedTestTo Text
   | SendTest
-  | EditHosts
-  | TypedHosts Text
-  | SaveHosts
+  | AddService
+  | EditService Int
+  | RemoveService Int
+  | TypedServiceName Text
+  | TypedBaseUrl Text
+  | ChoseApi Text
+  | SaveService
   | CheckEngine
 
 component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
@@ -222,7 +234,7 @@ component =
           {{ urlView st settings }}
           {{ mailView st settings }}
           {{ providersView st settings }}
-          {{ hostsView st settings }}
+          {{ servicesView st settings }}
           {{ exportView st st.input.context.session.exports }}
         </div>
       |]
@@ -298,54 +310,91 @@ component =
             </div>
           |]
 
-    -- The addresses the writing assistant may reach besides Anthropic's
-    -- and OpenAI's APIs: the page's Content Security Policy refuses every
-    -- other one ("Wiki.Api.ContentPolicy").
-    hostsView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
-    hostsView st settings =
+    -- The services the writing assistant may use besides Anthropic's and
+    -- OpenAI's own (WP5.60 of docs/PLAN.md). Every session carries them,
+    -- the assistant's settings offer them, and the page's Content Security
+    -- Policy lets the browser reach their addresses and no other
+    -- ("Wiki.Api.ContentPolicy"). They are edited as the sign-in providers
+    -- are: a form per service.
+    servicesView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
+    servicesView st settings =
       [hh|
-        <div class="server-part server-assistant-hosts">
-          <h3>The assistant's hosts</h3>
+        <div class="server-part server-assistant-services">
+          <h3>The assistant's services</h3>
           <p class="admin-intro">
-            The writing assistant runs in each reader's browser, and this wiki's pages let it reach Anthropic's and OpenAI's APIs only.
-            A user who sets another base URL in the assistant's settings (a server of Ollama or LM Studio, a proxy, OpenRouter) needs its address here.
-            The browser refuses every other address, so that a script slipped into a page cannot send a key elsewhere.
+            Besides Anthropic's and OpenAI's own services, which every wiki offers.
+            A service that speaks one of their APIs at another address: your organisation's gateway, a server of Ollama or LM Studio, a proxy.
+            The page's security policy lets the browser reach these addresses and no other.
           </p>
-          {{ inside }}
+          {% if null settings.assistantServices %}
+            <p class="empty server-services-none">None: the assistant offers Anthropic's and OpenAI's own services only.</p>
+          {% else %}
+            <ul class="server-service-list">
+              {% for (i, service) in zip [0 ..] settings.assistantServices %}
+                <li class="server-service" data-name={{ service.name }}>
+                  {% if editedService st == Just i %}
+                    {{ serviceForm st <$> serviceFormOf st }}
+                  {% else %}
+                    {{ serviceRow st i service }}
+                  {% end %}
+                </li>
+              {% end %}
+            </ul>
+          {% end %}
+          {{ adding }}
         </div>
       |]
       where
-        inside = case st.editing of
-          EditingHosts typed ->
-            [hh|
-              <form class="server-hosts-form" aria-label="The assistant's hosts" {{ HE.preventingDefault (HE.onSubmit (const SaveHosts)) }}>
-                <label class="field">
-                  <span>One address per line, such as https://openrouter.ai or http://localhost:11434</span>
-                  <textarea name="hosts" rows="4" spellcheck="false" value={{ typed }} onValueInput={{ TypedHosts }}></textarea>
-                </label>
-                <div class="actions">
-                  <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
-                  <button type="button" class="server-cancel" onClick={{ const Cancel }}>Cancel</button>
-                </div>
-              </form>
-            |]
+        adding = case st.editing of
+          EditingService Nothing form -> [hh|<div class="server-service-new">{{ serviceForm st form }}</div>|]
           _ ->
             [hh|
-              <div class="server-hosts-shown">
-                {% if null settings.assistantHosts %}
-                  <p class="server-hosts-none">None: the assistant reaches Anthropic and OpenAI only.</p>
-                {% else %}
-                  <ul class="server-hosts">
-                    {% for host in settings.assistantHosts %}
-                      <li>{{ host }}</li>
-                    {% end %}
-                  </ul>
-                {% end %}
-                <div class="actions">
-                  <button type="button" class="server-hosts-edit" disabled={{ editingSomething st }} onClick={{ const EditHosts }}>Change</button>
-                </div>
+              <div class="actions">
+                <button type="button" class="server-service-add" disabled={{ editingSomething st }} onClick={{ const AddService }}>Add a service</button>
               </div>
             |]
+
+    serviceRow :: State -> Int -> AssistantService -> H.ComponentHTML Action Slots m
+    serviceRow st i service =
+      [hh|
+        <div class="server-service-row">
+          <strong class="server-service-name">{{ service.name }}</strong>
+          <span class="server-service-url">{{ service.baseUrl.text }}</span>
+          <span class="server-service-api">{{ apiText service.api }}</span>
+          <div class="actions">
+            <button type="button" class="server-service-edit" disabled={{ editingSomething st }} onClick={{ const (EditService i) }}>Change</button>
+            <button type="button" class="server-service-remove" disabled={{ editingSomething st || st.busy }} onClick={{ const (RemoveService i) }}>Remove</button>
+          </div>
+        </div>
+      |]
+
+    serviceForm :: State -> ServiceForm -> H.ComponentHTML Action Slots m
+    serviceForm st form =
+      [hh|
+        <form class="server-service-form" aria-label="A service of the assistant" {{ HE.preventingDefault (HE.onSubmit (const SaveService)) }}>
+          <label class="field">
+            <span>Name, as the assistant's settings show it</span>
+            <input type="text" name="service-name" autocomplete="off" required placeholder="Our gateway" value={{ form.typedServiceName }} onValueInput={{ TypedServiceName }}>
+          </label>
+          <label class="field">
+            <span>Base URL, as the provider's SDK takes it</span>
+            <input type="url" name="service-url" autocomplete="off" spellcheck="false" required placeholder="https://gateway.example.org/v1" value={{ form.typedBaseUrl }} onValueInput={{ TypedBaseUrl }}>
+          </label>
+          <fieldset class="server-service-api-choice">
+            <legend>The API it speaks</legend>
+            {% for a in [minBound .. maxBound :: AssistantApi] %}
+              <label class="choice">
+                <input type="radio" name="service-api" value={{ apiName a }} checked={{ a == form.chosenApi }} onChange={{ const (ChoseApi (apiName a)) }}>
+                <span>{{ apiText a }}</span>
+              </label>
+            {% end %}
+          </fieldset>
+          <div class="actions">
+            <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
+            <button type="button" class="server-cancel" onClick={{ const Cancel }}>Cancel</button>
+          </div>
+        </form>
+      |]
 
     -- The public address.
     urlView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
@@ -686,11 +735,24 @@ component =
         modify (\st -> st {checks = Map.insert name Checking st.checks})
         result <- lift (checkProvider name Nothing)
         modify (\st -> st {checks = Map.insert name (CheckedAs result) st.checks})
-      EditHosts -> withSettings $ \s -> modify (\st -> st {editing = EditingHosts (T.unlines s.assistantHosts), refusal = Nothing})
-      TypedHosts t -> modify (\st -> st {editing = EditingHosts t})
-      SaveHosts ->
+      AddService -> modify (\st -> st {editing = EditingService Nothing ServiceForm {typedServiceName = "", typedBaseUrl = "", chosenApi = OpenAiApi}, refusal = Nothing})
+      EditService i -> withSettings $ \s ->
+        for_ (atMay s.assistantServices i) $ \service ->
+          modify (\st -> st {editing = EditingService (Just i) ServiceForm {typedServiceName = service.name, typedBaseUrl = service.baseUrl.text, chosenApi = service.api}, refusal = Nothing})
+      RemoveService i -> save (\s -> (unchanged s) {assistantServices = [service | (j, service) <- zip [0 ..] s.assistantServices, j /= i]})
+      TypedServiceName t -> onService (\f -> f {typedServiceName = t})
+      TypedBaseUrl t -> onService (\f -> f {typedBaseUrl = t})
+      ChoseApi t -> onService (\f -> f {chosenApi = fromMaybe f.chosenApi (readApi t)})
+      -- The server trims the name and the address, and refuses a bad
+      -- address or a name used twice, which the form then shows.
+      SaveService ->
         gets (\st -> st.editing) >>= \case
-          EditingHosts typed -> save (\s -> (unchanged s) {assistantHosts = filter (not . T.null) (map T.strip (T.lines typed))})
+          EditingService was form -> do
+            let service = AssistantService {name = form.typedServiceName, baseUrl = Url form.typedBaseUrl, api = form.chosenApi}
+                replaced s = case was of
+                  Just i -> [if j == i then service else old | (j, old) <- zip [0 ..] s.assistantServices]
+                  Nothing -> s.assistantServices <> [service]
+            save (\s -> (unchanged s) {assistantServices = replaced s})
           _ -> pass
       -- The server tries its TeX engine again. The session's formats
       -- follow what it found, so the shell is told, as after a save.
@@ -715,6 +777,11 @@ component =
     onMail :: (MailForm -> MailForm) -> H.HalogenM State Action Slots ViewOutput m ()
     onMail f = modify $ \st -> case st.editing of
       EditingMail form -> st {editing = EditingMail (f form)}
+      _ -> st
+
+    onService :: (ServiceForm -> ServiceForm) -> H.HalogenM State Action Slots ViewOutput m ()
+    onService f = modify $ \st -> case st.editing of
+      EditingService was form -> st {editing = EditingService was (f form)}
       _ -> st
 
     onProvider :: (ProviderForm -> ProviderForm) -> H.HalogenM State Action Slots ViewOutput m ()
@@ -768,6 +835,23 @@ editedName :: State -> Maybe Text
 editedName st = case st.editing of
   EditingProvider (Just name) _ -> Just name
   _ -> Nothing
+
+-- | The place of the service of the assistant being changed, if one is.
+editedService :: State -> Maybe Int
+editedService st = case st.editing of
+  EditingService (Just i) _ -> Just i
+  _ -> Nothing
+
+serviceFormOf :: State -> Maybe ServiceForm
+serviceFormOf st = case st.editing of
+  EditingService (Just _) form -> Just form
+  _ -> Nothing
+
+-- | The API a service speaks, as the administration shows it.
+apiText :: AssistantApi -> Text
+apiText = \case
+  AnthropicApi -> "Anthropic's API"
+  OpenAiApi -> "OpenAI's API"
 
 providerFormOf :: State -> Maybe ProviderForm
 providerFormOf st = case st.editing of

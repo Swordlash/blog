@@ -16,6 +16,7 @@ import Test.Server.Fixture
 import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
 import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.Api.ServerSettings qualified as Settings
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Static (withBaseHref, withPolicyMeta)
@@ -163,14 +164,14 @@ policy backing = describe "a page's Content Security Policy" $ do
       reply.status `shouldBe` 200
       header "Content-Security-Policy" reply `shouldBe` Nothing
 
-  it "is the same in the header and the page's meta element, the assistant's hosts in both" $
+  it "is the same in the header and the page's meta element, the assistant's hosts and services in both" $
     withRunningAs backing (\o -> o {Options.assistantHosts = ["http://localhost:11434"]}) $ \r -> do
       plain <- getUrl r (r.public <> "/policed/")
       header "Content-Security-Policy" plain `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434"]))
       bodyText plain `shouldSatisfy` T.isInfixOf ("<meta http-equiv=\"Content-Security-Policy\" content=\"" <> pagePolicy ["http://localhost:11434"] <> "\">")
-      -- The administration's hosts are added to the command line's, from
-      -- the next page on.
-      _ <- setServer r noServerSettings {Settings.assistantHosts = ["https://openrouter.ai"]}
+      -- The origins of the administration's services are added to the
+      -- command line's, from the next page on.
+      _ <- setServer r noServerSettings {Settings.assistantServices = [Settings.AssistantService {name = "OpenRouter", baseUrl = Url "https://openrouter.ai/api/v1", api = Settings.OpenAiApi}]}
       changed <- getUrlWith r (r.public <> "/policed/") [("If-None-Match", fromMaybe "" (header "ETag" plain))]
       changed.status `shouldBe` 200
       header "Content-Security-Policy" changed `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434", "https://openrouter.ai"]))

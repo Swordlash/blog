@@ -13,7 +13,13 @@
 --
 -- A picture chosen opens a dialog with a cropper (Cropper.js, through the
 -- page's islands: @web/src/avatar.js@, loaded the first time), in which
--- the user picks a square of the picture, shown round. "Use this" uploads
+-- the user picks a square of the picture, shown round. The dialog is a
+-- @\<dialog>@ shown as a modal ('showDialog'), as the editor's "Link to a
+-- page" dialog is ("Wiki.App.View.LinkDialog"): the browser draws it in
+-- its top layer, centred in the window, whatever the account panel around
+-- the component does, and the rest of the page is inert. "Cancel", Escape
+-- and a click that starts on the backdrop close it, the cropper taken out
+-- and nothing uploaded. "Use this" uploads
 -- that square, a PNG of 256 by 256 pixels, as the avatar ('setAvatar');
 -- the server checks the image's type and size, not its shape. After an
 -- upload or a removal the shell is told that the wiki changed ('Changed'),
@@ -30,6 +36,7 @@ import Data.ByteString qualified as BS
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.JSBits (Safety (..), browserJS)
 import Halogen.JSBits.Promise (Promise, wait)
@@ -38,11 +45,13 @@ import Protolude hiding (State, wait)
 -- With their constructors: the FFI passes the value inside each newtype,
 -- which it can only see through a constructor in scope.
 import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event)
+import Web.Event.Event (Event, EventType (..))
 import Web.File.File (File (..))
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
+import Wiki.App.Browser (closeDialog, showDialog)
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles)
 import Wiki.App.View.Common
+import Wiki.App.Web.Rect (boxOf, centredSquare)
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Space (iconMediaTypes)
 import Wiki.Core.User (Avatar, User (..))
@@ -52,6 +61,7 @@ $( browserJS
      [ ("js_crop", "wiki_avatar_crop", Safe, [t|Element -> File -> IO (Promise ())|])
      , ("js_cropped", "wiki_avatar_cropped", Safe, [t|Element -> IO (Promise ByteString)|])
      , ("js_drop", "wiki_avatar_drop", Safe, [t|Element -> IO ()|])
+     , ("js_select", "wiki_avatar_select", Safe, [t|Element -> Double -> Double -> Double -> IO ()|])
      ]
  )
 
@@ -73,6 +83,12 @@ data State = State
   , host :: H.RefLabel
   -- ^ The dialog's element the cropper is put in, which no render looks
   -- inside.
+  , dialog :: H.RefLabel
+  -- ^ The @\<dialog>@ itself, shown and closed through the browser.
+  , pressedOnBackdrop :: Bool
+  -- ^ Whether the pointer went down on the backdrop: only a click that
+  -- starts there closes the dialog, not a drag of the cropper let go
+  -- outside it.
   }
 
 data Action
@@ -81,6 +97,10 @@ data Action
   | Chosen Event
   | Use
   | Cancel
+  | ClickedDialog
+  | Pressed Bool
+  | Inside
+  | ClosedByBrowser
   | Remove
   | Finalize
 
@@ -90,7 +110,8 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           host <- H.newRefLabel "avatar-crop"
-          pure State {input, url = Nothing, cropping = False, ready = False, busy = False, problem = Nothing, host}
+          dialog <- H.newRefLabel "avatar-crop-dialog"
+          pure State {input, url = Nothing, cropping = False, ready = False, busy = False, problem = Nothing, host, dialog, pressedOnBackdrop = False}
       , render
       , eval =
           H.mkEval
@@ -116,17 +137,30 @@ component =
           {% if hasAvatar %}
             <button type="button" class="link-button avatar-remove" disabled={{ st.busy }} onClick={{ const Remove }}>Remove</button>
           {% end %}
-          {% for e in maybeToList st.problem %}
+          {% for e in maybeToList (if st.cropping then Nothing else st.problem) %}
             <p class="error avatar-error" role="alert">{{ errorMessage e }}</p>
           {% end %}
-          <div class="avatar-crop-dialog" role="dialog" aria-label="Crop your picture" hidden={{ not st.cropping }}>
-            <p class="account-note">Move and resize the circle over the part of the picture to keep.</p>
-            <div class="avatar-crop" {{ HP.ref st.host }}></div>
-            <div class="actions">
-              <button type="button" class="primary avatar-use" disabled={{ not st.ready || st.busy }} onClick={{ const Use }}>Use this</button>
-              <button type="button" class="avatar-cancel" onClick={{ const Cancel }}>Cancel</button>
+          <dialog
+            class="avatar-crop-dialog"
+            aria-modal="true"
+            aria-label="Crop your picture"
+            onClick={{ const ClickedDialog }}
+            {{ HP.ref st.dialog }}
+            {{ [HE.handler (EventType "close") (const ClosedByBrowser), HE.onPointerDown (const (Pressed True))] }}
+          >
+            <div class="avatar-crop-body" {{ [HE.stoppingPropagation (HE.onClick (const Inside)), HE.stoppingPropagation (HE.onPointerDown (const (Pressed False)))] }}>
+              <h2 class="avatar-crop-title">Crop your picture</h2>
+              <p class="account-note avatar-crop-help">Drag the circle to move it and its corners to resize it, and scroll to zoom the picture. The part in the circle is kept.</p>
+              <div class="avatar-crop" {{ HP.ref st.host }}></div>
+              {% for e in maybeToList (if st.cropping then st.problem else Nothing) %}
+                <p class="error avatar-error" role="alert">{{ errorMessage e }}</p>
+              {% end %}
+              <div class="actions">
+                <button type="button" class="primary avatar-use" disabled={{ not st.ready || st.busy }} onClick={{ const Use }}>Use this</button>
+                <button type="button" class="avatar-cancel" onClick={{ const Cancel }}>Cancel</button>
+              </div>
             </div>
-          </div>
+          </dialog>
         </div>
       |]
       where
@@ -147,6 +181,7 @@ component =
             then modify (\st -> st {problem = Just (Invalid "An avatar has to be a PNG, JPEG, GIF, WebP or AVIF image.")})
             else do
               modify (\st -> st {cropping = True, ready = False, problem = Nothing})
+              gets (\st -> st.dialog) >>= H.getRef >>= traverse_ (H.liftEffect . showDialog)
               gets (\st -> st.host)
                 >>= H.getRef
                 >>= traverse_
@@ -154,12 +189,27 @@ component =
                       -- The cropper's module may have to be fetched first: the
                       -- wait is off the loop.
                       liftIO (wait =<< js_crop host file.file)
-                      modify (\st -> st {ready = True})
+                      -- Closed while the cropper loaded: it is taken out again.
+                      gets (\st -> st.cropping) >>= \case
+                        True -> do
+                          H.liftEffect (liftIO (startInside host))
+                          modify (\st -> st {ready = True})
+                        False -> H.liftEffect (liftIO (js_drop host))
                   )
       Use -> gets (\st -> st.host) >>= H.getRef >>= traverse_ uploadFrom
-      Cancel -> do
+      -- Closing the dialog fires its close event, which drops the cropper.
+      Cancel -> gets (\st -> st.dialog) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
+      Inside -> pass
+      Pressed onBackdrop -> modify (\st -> st {pressedOnBackdrop = onBackdrop})
+      ClickedDialog -> do
+        onBackdrop <- gets (\st -> st.pressedOnBackdrop)
+        modify (\st -> st {pressedOnBackdrop = False})
+        when onBackdrop (handleAction Cancel)
+      -- The dialog has closed: by "Cancel", Escape, the backdrop, or after
+      -- "Use this". The cropper is taken out, and the picture let go.
+      ClosedByBrowser -> do
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . js_drop)
-        modify (\st -> st {cropping = False, ready = False, problem = Nothing})
+        modify (\st -> st {cropping = False, ready = False, problem = if st.cropping then Nothing else st.problem})
       Remove -> do
         modify (\st -> st {busy = True, problem = Nothing})
         lift removeAvatar >>= \case
@@ -168,6 +218,22 @@ component =
             modify (\st -> st {busy = False, url = Nothing, input = Input {user = Just u}})
             H.raise (Changed Nothing)
       Finalize -> gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . js_drop)
+
+    -- The crop's selection starts as the largest square inside the picture,
+    -- centred, shown as a circle ('centredSquare'). Cropper.js places its
+    -- starting selection by the canvas, which with a picture fitted whole
+    -- ("contain") and not square reaches into the checked background, so
+    -- that the crop would keep some of it. The canvas and the picture are
+    -- Cropper.js's elements in the host, measured once the picture is
+    -- loaded; a picture that did not load has no size, and the selection
+    -- stays where it was.
+    startInside :: Element -> IO ()
+    startInside host = do
+      canvas <- host.querySelector "cropper-canvas"
+      picture <- host.querySelector "cropper-image"
+      for_ ((,) <$> canvas <*> picture) $ \(c, i) -> do
+        square <- centredSquare <$> boxOf c <*> boxOf i
+        for_ square (\(x, y, side) -> js_select host x y side)
 
     -- Upload the crop in the dialog's element as the avatar.
     uploadFrom :: Element -> H.HalogenM State Action Empty ViewOutput m ()
@@ -180,8 +246,8 @@ component =
           lift (setAvatar "image/png" bytes) >>= \case
             Left e -> modify (\st -> st {busy = False, problem = Just e})
             Right u -> do
-              H.liftEffect (liftIO (js_drop host))
-              modify (\st -> st {busy = False, cropping = False, ready = False, input = Input {user = Just u}})
+              modify (\st -> st {busy = False, input = Input {user = Just u}})
+              gets (\st -> st.dialog) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
               showAvatar
               H.raise (Changed Nothing)
 
