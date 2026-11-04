@@ -520,8 +520,11 @@ spec m = do
     click hit
     -- The page's sections, its title line not among them.
     find ui ".link-dialog-page" >>= (`shouldHaveText` "Sections of Mathematics")
-    anchors <- traverse (`getAttribute` "data-anchor") =<< findAll ui ".link-dialog-anchor"
-    anchors `shouldSatisfy` elem (Just "macros")
+    -- Listed once the page has been read.
+    anchors <- eventually $ do
+      listed <- traverse (`getAttribute` "data-anchor") =<< findAll ui ".link-dialog-anchor"
+      listed `shouldSatisfy` elem (Just "macros")
+      pure listed
     anchors `shouldSatisfy` notElem (Just "mathematics")
     find ui ".link-dialog-anchor[data-anchor='macros']" >>= click
     eventually $ length <$> findAll ui ".link-dialog" `shouldReturn` 0
