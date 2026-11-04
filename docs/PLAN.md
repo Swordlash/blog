@@ -650,12 +650,13 @@ In the order to do it, unless the owner says otherwise.
   #152; one pull request). Two additions to the Markdown. (a) *Spoilers.* A block
   spoiler is a named pair of markers, so that any blocks go inside without a prefix on
   every line and spoilers nest (the owner, 2026-11-04, over a box kind): a line
-  `::: spoiler name Description` opens one (the name one word, as an identifier in
-  code, keying the remembered state; the description the rest of the line, inline
-  Markdown allowed, what the summary shows; both required), `::: end name` closes
-  the innermost open spoiler of that name; an end marker of another name, or a start
-  marker missing its name or its description, is an error line in red that opens or
-  closes nothing; an unclosed spoiler renders in red
+  `[[spoiler]]{name}(Description)` opens one (the name one word, as an identifier in
+  code, keying the remembered state; the description in the parentheses, inline
+  Markdown allowed, what the summary shows; both required; the spelling the owner's,
+  after bbcode, recognised as a block on a line of its own, so the wiki links
+  `[[page]]` are untouched), `[[/spoiler]]{name}` closes the innermost open spoiler
+  of that name; an end marker of another name, or a start marker missing its name or
+  its description, is an error line in red that opens or closes nothing; an unclosed spoiler renders in red
   from its marker down (the marker as an error line saying what to add, its content as
   the blocks it is), which the editor's preview shows as one types. A closed spoiler is
   a `<details class="spoiler">` whose summary is the description, closed by default; open or
