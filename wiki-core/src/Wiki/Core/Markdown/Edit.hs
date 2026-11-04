@@ -87,6 +87,7 @@ import Data.List (findIndex, lookup, span, zip3)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
+import Wiki.Core.Markdown.Link (labelText)
 import Wiki.Core.Math (onlyDefinitions)
 
 -- | 'Selection': what is selected, from 'start' to 'end', in characters
@@ -702,20 +703,18 @@ link bang placeholder text (Selection s e)
 
 -- | A link to an address chosen in a dialog, around the selection as
 -- 'link' puts one: the selected text becomes the link's text, and with
--- nothing selected the title given is (with the characters that would
--- end the link's text or start emphasis escaped). The cursor goes after
+-- nothing selected the title given is, written to show as itself
+-- ('labelText': a bracket, a dollar or an asterisk in a title is text, not
+-- syntax). The cursor goes after
 -- the link, since there is nothing left to type in it. A selection that
 -- is already a link's text gets a link of its own all the same: the
 -- writer chose a page for it.
 linkTo :: Text -> Text -> Text -> Selection -> (Text, Selection)
 linkTo title address text (Selection s e) =
-  let shown = if s == e then T.concatMap escape title else T.take (e - s) (T.drop s text)
+  let shown = if s == e then labelText title else T.take (e - s) (T.drop s text)
       new = "[" <> shown <> "](" <> destination <> ")"
    in (replace [Replacement s (e - s) new] text, cursor (s + T.length new))
   where
-    escape c
-      | c `elem` ("\\[]*_`<>" :: [Char]) = T.pack ['\\', c]
-      | otherwise = T.singleton c
     -- An address with a space or a parenthesis in it is written between
     -- angle brackets, which CommonMark reads as one address.
     destination

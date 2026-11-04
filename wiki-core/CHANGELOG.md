@@ -14,7 +14,10 @@ puts the id on the box's `div` and ends the box's title with the same empty
 a list of the sections a link can point at. `Wiki.Core.Markdown.Edit` gains
 the command `LinkTo title address`, a link to a chosen address around the
 selection (the title as its text when nothing is selected), with the cursor
-after it. `Wiki.Core.Anchor` gains `textFragment`, a quote's text fragment
+after it. The title is written with `labelText`, new in
+`Wiki.Core.Markdown.Link` and shared with `attachmentReference`: syntax
+escaped, and brackets as `&#91;` and `&#93;`, since `\[` starts display
+math. `Wiki.Core.Anchor` gains `textFragment`, a quote's text fragment
 (`:~:text=…`, widened to whole words, with the words around it when the
 page has it more than once), and `encodeFragmentPart`, its percent-encoding.
 `textFragment` reads the page's text with its breaks (`BlockText`, from

@@ -27,6 +27,7 @@ module Wiki.Core.Markdown.Link
 
     -- * Writing a reference
   , attachmentReference
+  , labelText
 
     -- * What an embed shows as
   , MediaKind (..)
@@ -106,10 +107,7 @@ classifyDestination dest
 -- characters a destination would otherwise misread (@%@, @&@, @\\@, @\<@,
 -- @\>@) percent-encoded. In the label, Markdown syntax characters (@*@,
 -- @_@, @$@, @:@ and similar) are escaped, so the label shows the name as
--- it is. Brackets are written as character references (@&#91;@, @&#93;@)
--- rather than escaped, because @\\[@ … @\\]@ is display math
--- ("Wiki.Core.Markdown.TexMath"), and a link's label cannot contain an
--- unmatched bracket.
+-- it is ('labelText').
 attachmentReference
   :: Text
   -- ^ The attachment's name.
@@ -117,7 +115,7 @@ attachmentReference
   -- ^ Its media type; empty if unknown.
   -> Text
 attachmentReference name mediaType =
-  (if embedded then "!" else "") <> "[" <> T.concatMap escapeLabel name <> "](" <> destination <> ")"
+  (if embedded then "!" else "") <> "[" <> labelText name <> "](" <> destination <> ")"
   where
     kind = if T.null (T.strip mediaType) then mediaKindOfPath name else mediaKindOfType mediaType
     embedded = kind /= OtherMedia
@@ -128,7 +126,20 @@ attachmentReference name mediaType =
     encode c
       | c `elem` ['%', '&', '\\', '<', '>'] = "%" <> T.justifyRight 2 '0' (T.toUpper (toS (showHex (ord c) "")))
       | otherwise = T.singleton c
-    escapeLabel c
+
+-- | A text written as a link's label that shows as the text itself: the
+-- characters Markdown would read as syntax (@*@, @_@, @$@, @:@ and
+-- similar) escaped with a backslash. Brackets are written as character
+-- references (@&#91;@, @&#93;@) rather than escaped, because @\\[@ …
+-- @\\]@ is display math ("Wiki.Core.Markdown.TexMath"), read before the
+-- escapes are, and a link's label cannot contain an unmatched bracket.
+-- An attachment's name in its reference ('attachmentReference') and a
+-- page's title in the editor's link to it
+-- ("Wiki.Core.Markdown.Edit"'s @LinkTo@) are written this way.
+labelText :: Text -> Text
+labelText = T.concatMap escape
+  where
+    escape c
       | c == '[' = "&#91;"
       | c == ']' = "&#93;"
       | c `elem` ("\\*_`$<>&~:!|{}#^" :: [Char]) = "\\" <> T.singleton c
