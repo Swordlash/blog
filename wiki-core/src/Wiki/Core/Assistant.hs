@@ -69,6 +69,7 @@ module Wiki.Core.Assistant
   , Ready (..)
   , ready
   , readyFor
+  , readyWith
 
     -- * Errors
   , ErrorKind (..)
@@ -557,6 +558,18 @@ readyFor :: Provider -> Settings -> Either Text Ready
 readyFor p s
   | usable p ps = Right Ready {provider = p, model = chosenModel p ps, key = fromMaybe (ApiKey "") ps.key, effort = effortOf ps, baseUrl = baseUrlOf p ps}
   | otherwise = Left ("There is no API key for " <> providerLabel p <> " yet: add one in the assistant's settings.")
+  where
+    ps = settingsOf p s
+
+-- | A provider's request with a key typed in the settings in place of the
+-- kept one, or 'Nothing' when nothing but spaces was typed. The settings'
+-- "Test and keep the key" checks the typed key with it before keeping the
+-- key, so the key is trimmed as 'withKey' trims it: the key checked is the
+-- key kept. The model, the effort and the base URL are those 'readyFor'
+-- takes, and the model list fetched so far still chooses the model.
+readyWith :: Text -> Provider -> Settings -> Maybe Ready
+readyWith typed p s =
+  (\k -> Ready {provider = p, model = chosenModel p ps, key = ApiKey k, effort = effortOf ps, baseUrl = baseUrlOf p ps}) <$> trimmed (Just typed)
   where
     ps = settingsOf p s
 

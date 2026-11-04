@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`readyWith` (WP5.59) builds a provider's request with a typed key in
+place of the kept one, trimmed as `withKey` keeps it, the model, effort
+and base URL as `readyFor` takes them, or `Nothing` when only spaces
+were typed. The assistant's settings check a typed key with it before
+keeping the key.
+
 Claude at another address (WP5.57). `baseUrlOf` now gives the base URL
 of any provider but the scripted one, so Anthropic's settings take one
 too, for a gateway that speaks Anthropic's API. `usable`, `readyFor`,
