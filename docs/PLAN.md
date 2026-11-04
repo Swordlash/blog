@@ -644,7 +644,14 @@ In the order to do it, unless the owner says otherwise.
   or the deploy's tests for the item; server (the option: no probe, no formats,
   the admin's `off`; the admin's JSON round trip); browser (the Server section's
   fourth state); the deploy's regression cases (the unit with and without the
-  option, following the TeX step's outcome). Docs: the README's deploy and exports
+  option, following the TeX step's outcome). (d) (the owner, 2026-11-04, later that
+  day) Perl: when the install needs it and the machine has none, or one without its
+  standard modules, the deploy builds Perl from its source tarball (CPAN, one pinned
+  version with its checksum) under `<toolchain>/.wiki-toolchain/perl`, for
+  `install-tl` and `tlmgr` only, never on the unit's PATH, and reuses it later; the
+  terminal's question becomes one, naming both what is downloaded (TeX Live from the
+  mirror) and, when needed, that Perl is built first; `--texlive` answers yes to
+  both. Tests with a fake source tarball. Docs: the README's deploy and exports
   sections, `docs/api.md`, wiki-server's, wiki-api's and wiki-app's CHANGELOGs.
 
 ### Later, or waiting for the owner
