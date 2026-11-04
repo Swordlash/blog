@@ -534,6 +534,48 @@ confirms it against reality and the plan is amended if it does not hold.
     just before its response is handed to Warp, so the duration histogram measures the
     time until the response starts.
 
+42. **The key is tested before it is kept, and the crop is a modal** (the owner,
+    2026-11-04, built by WP5.59). `readyWith :: Text -> Provider -> Settings -> Maybe
+    Ready` builds the request `readyFor` builds with a typed key in place of the kept
+    one. The key form's one primary button, "Test and keep the key" (Enter submits
+    it), first fetches the model list with the typed key and shows it: a 401 refuses
+    the key with decision 39's sentence and keeps nothing; any other failure of the
+    list goes on with the chosen model (a gateway without a list); then it tests a
+    message with the chosen model if the list has it, else the list's first; passing
+    keeps the key and that model (storage, vault, the field emptied) and says so;
+    failing keeps nothing and leaves the list shown, so another model can be chosen
+    and the button pressed again (the owner's choice over a 404-for-model path). While
+    checking, the field, the service, the model, the effort and the button are
+    disabled; a result arriving after another user signed in or after the base URL
+    changed is dropped. "Test the connection (no key)" shows only while the field is
+    empty. The avatar's crop is a `<dialog>` shown as a modal, as the editor's link
+    dialog, centred in the window, the canvas a square of `min(100vw - 4.5rem, 100vh
+    - 14rem, 28rem)` with the picture fitted whole; once the picture is ready the
+    component measures the canvas and the picture (`Wiki.App.Web.Rect`: `boxOf`, an
+    element's box read through a newtype with `jsFields`, since haskell-halogen's
+    `Element` has no `getBoundingClientRect`; `centredSquare`) and places the
+    starting selection as the largest centred square inside the picture, through
+    the adapter's `select`; the adapter (`web/src/avatar.js`) keeps Cropper.js's own
+    calls only (Codex's finding, twice, under decision 30).
+
+43. **The assistant's addresses come from the server** (the owner, 2026-11-04, built
+    by WP5.60 in WP5.59's pull request). `ServerSettings.assistantHosts` (origins for
+    the CSP) is replaced by `assistantServices :: [AssistantService {name, baseUrl,
+    api}]`, `api` Anthropic's or OpenAI's (JSON `"anthropic"`/`"openai"`): names
+    trimmed, non-empty, unique regardless of case; an http(s) base URL with a host,
+    no fragment, no `*`, kept as typed but for trailing slashes. Old settings and
+    `assistant-hosts` rows read as services speaking OpenAI's API named by host and
+    port (a wildcard host dropped). Every session carries the list
+    (`SessionInfo.assistantServices`, the server-rendered one included); the CSP's
+    `connect-src` takes each service's origin plus `--assistant-hosts`, which stay
+    allowed but are not offered. The Server section edits the services as the
+    sign-in providers are edited (name, base URL, API). The assistant's settings
+    offer, per provider, a "Service" choice: the provider's own and the session's
+    services speaking its API; choosing one sets `baseUrl` as before, so `readyFor`,
+    the vault and the model list are untouched; a kept address no service offers is
+    shown as no longer offered and replaced by the next choice; the demo offers the
+    provider's own only. No free field anywhere.
+
 ## Repository layout
 
 ```
@@ -579,50 +621,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.59 The key is tested before it is kept** (the owner, 2026-11-04; one small pull
-  request). In the assistant's settings the owner typed a key and clicked the test,
-  which checked the connection without the typed key (`checkKey` takes what is kept,
-  and with a base URL the provider counts as usable without a key) and answered 401;
-  only after "Keep the key" did it work. Now the test takes the key from the field:
-  the key form's one primary button is "Test and keep the key", which checks the typed
-  key (with the base URL and the service as `readyFor` builds them, the typed key in
-  place of the kept one), and keeps it (IndexedDB, the vault, the model list fetched)
-  only when the check passes; a refusal shows the reason by the field (WP5.57's 401
-  sentence included) and keeps nothing. With a key kept, "Test the key" stays as it
-  is; with a base URL and no key typed, "Test the connection" tests without one and
-  says so. Tests: browser (a typed key that the service refuses is not kept and the
-  reason is shown; one it accepts is kept and the models fetched; the connection test
-  without a key), wiki-core if `readyFor` gains a way to take a typed key. Also in this
-  package (the owner, 2026-11-04): the avatar's crop (WP5.55) opens as an inline box
-  inside the account panel's dropdown, off to the right and clipping the picture; it
-  becomes a `<dialog>` shown as a modal in the middle of the window, as the editor's
-  link dialog is, sized to the window with the picture fitted whole inside the
-  cropper, the round selection, "Use this" and "Cancel", closed by Escape and by the
-  backdrop; browser tests for its opening, the fit and the close. Docs: the
-  guide's sentence on the settings, wiki-app's CHANGELOG.
-
-- **WP5.60 The assistant's addresses come from the server** (the owner, 2026-11-04;
-  in WP5.59's pull request, the owner's choice). A user can type any base URL
-  in the assistant's settings, and every address but Anthropic's, OpenAI's and the
-  administration's hosts is refused by the page's CSP, with an error that explains
-  nothing to them. The administration's list of the assistant's hosts (WP5.21, origins
-  for the CSP only) becomes a list of the assistant's services: each with a name, a
-  base URL and the API it speaks (Anthropic's or OpenAI's), edited in the Server
-  section as the sign-in providers are; the CSP takes each one's origin (and the
-  `--assistant-hosts` of the command line as today), and every session carries the
-  list (`SessionInfo.assistantServices`). Old settings with `assistantHosts` read as
-  services speaking OpenAI's API, named by their host. In the assistant's settings the
-  base URL field becomes a choice per provider: the provider's own service, then the
-  server's services that speak its API; choosing one sets the base URL the kept
-  settings already carry (`baseUrl`), so `readyFor`, the vault and the model list
-  stay as they are. No free field: the demo, which has no server, offers the
-  provider's own only. A kept base URL that no service offers any more is shown as
-  such and replaced by the next choice. Tests: wiki-api (the settings' JSON, old and
-  new, the CSP's origins), server (the session's list, the administration's edit),
-  browser (the choice offered from the session, the chosen address reaching the
-  request, the stale address). Docs: `docs/api.md`, the README's assistant section,
-  the guide, the CHANGELOGs.
 
 - **WP5.61 The server is told when the TeX is off** (the owner, 2026-11-04, after
   WP5.58; one pull request). On the owner's server the deploy's TeX step found no
@@ -977,6 +975,14 @@ needs. Each was true when its package merged; check before relying on one.
   transactions of the server that begin in that window (a "last seen" write, a
   notification) are counted too, so under load it sees more. Count the permission
   checks themselves, or the readers' transactions only, when it next fails.
+- WP5.59 and WP5.60 (decisions 42 and 43): the crop dialog's backdrop click closes
+  it as the link dialog's does but is not browser-tested (Playwright's click lands on
+  the dialog's body); Escape during an upload in flight closes the dialog while the
+  upload completes; the plain-HTTP warning in the assistant's settings now concerns a
+  service only the administrator can change; the `--assistant-hosts` help text is
+  long. `getBoundingClientRect` belongs in haskell-halogen's `Element` (decision 30);
+  until it is there, `Wiki.App.Web.Rect` reads it through a newtype of its own: a
+  follow-up for haskell-halogen, after which the newtype goes.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
