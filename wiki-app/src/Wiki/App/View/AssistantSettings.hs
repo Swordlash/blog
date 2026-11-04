@@ -378,7 +378,7 @@ component =
             {% end %}
             <label class="field assistant-base-url-field">
               <span>Base URL</span>
-              <input type="url" class="assistant-base-url" spellcheck="false" placeholder={{ basePlaceholder }} value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
+              <input type="url" class="assistant-base-url" spellcheck="false" placeholder={{ basePlaceholder }} value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy || checking }} onValueChange={{ TypedBaseUrl p }}>
             </label>
             <p class="account-note assistant-base-url-hint">{{ baseHint }}</p>
             {% for url in maybeToList ps.baseUrl %}
@@ -412,7 +412,7 @@ component =
               {% end %}
             {% end %}
           {% end %}
-          <fieldset class="assistant-model" disabled={{ st.busy }}>
+          <fieldset class="assistant-model" disabled={{ st.busy || checking }}>
             <legend>Model</legend>
             <div class="assistant-model-row">
               <select class="assistant-model-choice" aria-label={{ "The model of " <> providerLabel p }} onValueChange={{ ChooseModel p }}>
@@ -443,7 +443,7 @@ component =
           </fieldset>
           <label class="field assistant-effort-field">
             <span>Effort</span>
-            <select class="assistant-default-effort" disabled={{ st.busy }} onValueChange={{ ChooseEffort p }}>
+            <select class="assistant-default-effort" disabled={{ st.busy || checking }} onValueChange={{ ChooseEffort p }}>
               {% for e in efforts p %}
                 <option value={{ e }} selected={{ effortOf ps == e }}>{{ effortName e }}</option>
               {% end %}
@@ -534,9 +534,24 @@ component =
           (Just user, Just (Right s), typed) | Just r <- readyWith typed p s -> do
             modify (\st -> st {checks = Map.insert p Checking st.checks})
             result <- lift (checkKey r)
-            -- Another user signed in during the check: their settings are not
-            -- the ones the key was typed into.
-            let same = gets (\st -> st.user == Just user)
+            -- The provider's other inputs are disabled while the check
+            -- runs, but the settings may still change meanwhile (another
+            -- device's change, taken in by 'change'). An answer counts only
+            -- for the same user and the same address: another user's
+            -- settings are not the ones the key was typed into, and an
+            -- answer from the old address says nothing of the new one. An
+            -- answer from an address no longer set keeps nothing.
+            let same = do
+                  (user', address) <- gets (\st -> (st.user, fmap (baseUrlOf p . settingsOf p) <$> st.settings))
+                  if user' /= Just user
+                    then pure False
+                    else
+                      if address == Just (Right r.baseUrl)
+                        then pure True
+                        else do
+                          modify (\st -> st {checks = Map.insert p (Fails moved) st.checks})
+                          pure False
+                moved = "The base URL changed while the key was tested, so the key was not kept: test it again."
                 refuse e = do
                   modify (\st -> st {checks = Map.insert p (Fails (errorText (serviceOf r) (Just r.key) e)) st.checks})
                   change (withReached p (e.kind /= Unreachable))

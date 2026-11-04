@@ -43,7 +43,8 @@
 // without one, the scripted provider has the one model "scripted" and the
 // others none. script.check, an error, refuses "Test the key"; each check
 // is kept in script.checks ({provider, model, key, baseUrl}), for the tests
-// to read which key was checked.
+// to read which key was checked, and answered after script.checkWait
+// milliseconds if that is set.
 //
 // The key is handed to the island, which hands it to the SDK; nothing here
 // logs it or keeps it beyond the chat.
@@ -270,6 +271,8 @@ async function wiki_assistant_check(config) {
         if (!Array.isArray(script.checks)) script.checks = [];
         script.checks.push({ provider, model, key, baseUrl: baseUrl ?? null });
       }
+      // A test's slow provider: the answer after so many milliseconds.
+      if (typeof script?.checkWait === "number") await new Promise((done) => setTimeout(done, script.checkWait));
       const refusal = script?.check;
       if (refusal) throw wikiAssistantScriptError(refusal);
       return "";

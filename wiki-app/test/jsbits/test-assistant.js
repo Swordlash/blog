@@ -64,3 +64,12 @@ function wiki_test_assistant_check(json) {
   script.check = JSON.parse(json);
   return true;
 }
+
+// How long "Test the key" takes to answer from now on, in milliseconds
+// (the script's checkWait), the rest of the script kept.
+function wiki_test_assistant_check_wait(ms) {
+  const script = globalThis.wikiAssistantScript;
+  if (typeof script !== "object" || script === null) return false;
+  script.checkWait = ms;
+  return true;
+}

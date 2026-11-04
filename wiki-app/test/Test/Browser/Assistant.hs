@@ -47,6 +47,11 @@ import Protolude hiding (find, replace)
 import Test.Browser.Mount (slugs, startWith)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
+import Web.DOM.Element qualified as Element
+import Web.Event.Event (EventType (..))
+import Web.Event.Event qualified as Event
+import Web.HTML.HTMLInputElement qualified as HTMLInputElement
+import Web.HTML.Window qualified as Window
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, readKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
@@ -68,6 +73,7 @@ $( browserJS
      , ("js_lists", "wiki_test_assistant_lists", Safe, [t|JSText -> IO Bool|])
      , ("js_check", "wiki_test_assistant_check", Safe, [t|JSText -> IO Bool|])
      , ("js_checks", "wiki_test_assistant_checks", Safe, [t|IO JSText|])
+     , ("js_check_wait", "wiki_test_assistant_check_wait", Safe, [t|Int -> IO Bool|])
      ]
  )
 
@@ -599,7 +605,8 @@ spec m = do
     keyOf `shouldReturn` Nothing
     length <$> findAllIn anthropic ".assistant-key-kept" `shouldReturn` 0
     findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-wrong")
-    findIn anthropic ".assistant-key-form button[type='submit']" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    -- Once the settings have stored that the gateway answered.
+    eventually $ findIn anthropic ".assistant-key-form button[type='submit']" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
     -- The corrected key, submitted with Enter: kept, the field emptied,
     -- the models fetched with it.
     accept >>= (`shouldBe` True)
@@ -615,6 +622,33 @@ spec m = do
     -- Forgotten, the field is empty: what was typed is not kept in the page.
     findIn anthropic ".assistant-forget" >>= click
     eventually $ findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "")
+
+  it "disables the provider's inputs while a typed key is tested, and keeps nothing when the address changes before the answer" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    keep m (UserId "user-editor") (withBaseUrl Anthropic gateway defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    let elsewhere = "https://other-gateway.example.com"
+        settingsNow = settingsOf Anthropic <$> settingsFor m (UserId "user-editor")
+    -- A gateway that takes its time to answer.
+    unsafeIOToPageM (js_check_wait 1500) >>= (`shouldBe` True)
+    findIn anthropic ".assistant-key" >>= (`typeText` "gw-token")
+    findIn anthropic ".assistant-key-form button[type='submit']" >>= click
+    eventually $ findIn anthropic ".assistant-key-form button[type='submit']" >>= (`shouldHaveText` "Checking…")
+    for_ [".assistant-base-url", ".assistant-key", ".assistant-model", ".assistant-default-effort"] $ \selector ->
+      findIn anthropic selector >>= (`getAttribute` "disabled") >>= (`shouldBe` Just "")
+    -- The address changes all the same before the answer comes, as a
+    -- change from another device would: the field's change, sent by the
+    -- test, since the field takes no input from the user.
+    changeInput ".assistant-provider-settings[data-provider='anthropic'] .assistant-base-url" elsewhere `shouldReturn` True
+    eventually $ (\ps -> ps.baseUrl) <$> settingsNow >>= (`shouldBe` Just (Url elsewhere))
+    -- The old address's answer keeps nothing, and says why; the key stays
+    -- in the field, to be tested at the new address.
+    eventually $ findIn anthropic ".assistant-check-fails" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The base URL changed while the key was tested, so the key was not kept")
+    (\ps -> ps.key) <$> settingsNow >>= (`shouldBe` Nothing)
+    length <$> findAllIn anthropic ".assistant-key-kept" `shouldReturn` 0
+    findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "gw-token")
+    (map (fieldText ["baseUrl"]) <$> checks) `shouldReturn` [Just gateway]
 
   it "checks a typed key by the service's list of models when the service has no model of the name checked" $ runPage $ do
     let refused = object ["error" .= object ["kind" .= ("authentication" :: Text), "status" .= (401 :: Int), "message" .= ("bad token" :: Text)]]
@@ -696,6 +730,19 @@ keep m user settings = void (unsafeIOToPageM (runTest (changeKeys user (const se
 
 settingsFor :: forall m -> (MonadBrowserTest m, MonadAssistant m) => UserId -> PageM s Settings
 settingsFor m user = unsafeIOToPageM (either (const defaultSettings) (\k -> k.settings) <$> runTest (readKeys user :: m (Either Text Keys)))
+
+-- | Set an input's value and send its change event, as the browser does
+-- when the user has changed it; also for an input the user cannot change
+-- (a disabled one). Whether the selector found an input.
+changeInput :: Text -> Text -> PageM s Bool
+changeInput selector value = unsafeIOToPageM $ do
+  w <- Window.window
+  found <- (>>= HTMLInputElement.fromElement) <$> w.document.querySelector selector
+  for_ found $ \input -> do
+    input.value_set value
+    changed <- Event.newEvent (EventType "change") True
+    void ((Element.toEventTarget (HTMLInputElement.toElement input)).dispatchEvent changed)
+  pure (isJust found)
 
 -- | Install the scripted provider's script: the steps of each turn.
 script :: [[Value]] -> PageM s ()
