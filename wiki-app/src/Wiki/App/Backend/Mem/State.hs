@@ -61,6 +61,7 @@ module Wiki.App.Backend.Mem.State
   , personalSpaceIn
   , setPersonalSpaceIn
   , withPersonalNames
+  , withOwnerNames
   , setAvatarIn
   , removeAvatarIn
   , withWriters
@@ -1009,6 +1010,16 @@ withPersonalNames st = st {spaces = Map.map afterOwner st.spaces}
   where
     afterOwner s = case s.owner >>= (`Map.lookup` st.users) of
       Just u -> withOwnerAvatar u.avatar (withName (personalName u.displayName) s)
+      Nothing -> s
+
+-- | 'withPersonalNames' without the owners' avatars: the spaces with the
+-- icons they have of their own, as an export writes them, since an
+-- archive carries no avatar.
+withOwnerNames :: MemState -> MemState
+withOwnerNames st = st {spaces = Map.map afterOwner st.spaces}
+  where
+    afterOwner s = case s.owner >>= (`Map.lookup` st.users) of
+      Just u -> withName (personalName u.displayName) s
       Nothing -> s
 
 -- | Give the current user an avatar: the picture's bytes, stored as a

@@ -176,6 +176,12 @@ memUsers = (\st -> sortOn (\u -> u.login) [u | u <- Map.elems st.users, not (Set
 readState :: (MonadIO m) => MemWiki m MemState
 readState = MemWiki (ask >>= \env -> liftIO (withPersonalNames <$> readIORef env.wiki))
 
+-- | The wiki as it is stored, with each personal space named after its
+-- owner but with the icon it has of its own, not its owner's avatar
+-- ('withOwnerNames'): what an export writes.
+readStored :: (MonadIO m) => MemWiki m MemState
+readStored = MemWiki (ask >>= \env -> liftIO (withOwnerNames <$> readIORef env.wiki))
+
 -- | A read: a pure function applied to the wiki as it is now.
 query :: (MonadIO m) => (MemState -> a) -> MemWiki m a
 query f = f <$> readState
@@ -585,7 +591,7 @@ memArchive :: (MonadIO m) => Text -> MemWiki m Archive
 memArchive app = do
   needVersions (\st -> maybe [] (\d -> unreadHistory d.page st) st.server.homePage.document)
   now <- liftIO getCurrentTime
-  st <- readState
+  st <- readStored
   unread <- for (Set.toList st.unreadBlobs) (\b -> fmap (b,) <$> readBlob b)
   pure (toArchive now app st {blobs = st.blobs <> Map.fromList (catMaybes unread)})
 
@@ -594,7 +600,7 @@ memArchive app = do
 -- changed. It is what a wiki loaded again is compared with in the tests.
 readWholly :: (MonadIO m) => MemWiki m MemState
 readWholly = do
-  st <- readState
+  st <- readStored
   blobs <- for (Set.toList st.unreadBlobs) (\b -> (b,) <$> readBlob b)
   history <- MemWiki $ do
     env <- ask
