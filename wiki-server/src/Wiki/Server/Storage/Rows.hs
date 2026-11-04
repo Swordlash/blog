@@ -29,6 +29,8 @@ module Wiki.Server.Storage.Rows
 
     -- * Reads
   , loadSpaces
+  , loadSpacesWithAvatars
+  , avatarOf
   , loadGrants
   , loadGlobalGrants
   , loadUser
@@ -49,6 +51,7 @@ module Wiki.Server.Storage.Rows
   , loadAttachmentIn
   , loadDraft
   , VersionRow (..)
+  , pageWriters
   , loadVersionsPage
   , loadFirstVersion
   , loadFirstVersions
@@ -110,6 +113,7 @@ module Wiki.Server.Storage.Rows
 
     -- * Writes
   , insertUsers
+  , updateAvatar
   , insertGroup
   , insertMember
   , insertMembers
@@ -237,7 +241,7 @@ import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), personalName, withName)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Schema (wikiDb)
@@ -505,17 +509,31 @@ spaceRow s =
 -- now ('Wiki.Core.Space.personalName'): the name stored with it is the
 -- one it was made with, which is kept only for a reader of the database.
 loadSpaces :: (Backend be) => Db be (Map SpaceId Space)
-loadSpaces = do
+loadSpaces = fst <$> loadSpacesWithAvatars
+
+-- | 'loadSpaces', with the avatars of the owners of personal spaces who
+-- have one, by user: what a personal space with no icon of its own is
+-- shown with ('Wiki.Core.Space.withOwnerAvatar'). The spaces keep the icons
+-- they have stored: the storage shows them with the avatars only where it
+-- answers with them, so that no write and no export takes the avatar for
+-- the space's own icon.
+loadSpacesWithAvatars :: (Backend be) => Db be (Map SpaceId Space, Map UserId Avatar)
+loadSpacesWithAvatars = do
   spaces <- map spaceOf <$> runSelectReturningList (select (all_ wikiDb.spaces))
   let owners = [o.text | s <- spaces, Just o <- [s.owner]]
-  names <-
+  found <-
     if null owners
-      then pure mempty
-      else Map.fromList <$> runSelectReturningList (select ((\u -> (u.id, u.display_name)) <$> filter_ (\u -> u.id `in_` map val_ owners) (all_ wikiDb.users)))
-  let named s = case s.owner >>= \o -> Map.lookup o.text names of
+      then pure []
+      else runSelectReturningList (select ((\u -> (u.id, u.display_name, u.avatar_blob, u.avatar_media_type)) <$> filter_ (\u -> u.id `in_` map val_ owners) (all_ wikiDb.users)))
+  let names = Map.fromList [(i, n) | (i, n, _, _) <- found]
+      named s = case s.owner >>= \o -> Map.lookup o.text names of
         Just displayName -> withName (personalName displayName) s
         Nothing -> s
-  pure (Map.fromList [(s.id, named s) | s <- spaces])
+  pure (Map.fromList [(s.id, named s) | s <- spaces], Map.fromList [(UserId i, a) | (i, _, b, m) <- found, Just a <- [avatarOf b m]])
+
+-- | An avatar from its two columns, which are both set or both NULL.
+avatarOf :: Maybe Text -> Maybe Text -> Maybe Avatar
+avatarOf b m = Avatar <$> (BlobId <$> b) <*> (MimeType <$> m)
 
 -- | Every global grant, in the order they were given.
 loadGlobalGrants :: (Backend be) => Db be [GlobalGrant]
@@ -547,7 +565,7 @@ loadGrants = do
   pure Grants {global, spaces, access = Open}
 
 userOf :: S.Users Identity -> User
-userOf r = User {id = UserId r.id, login = Login r.login, displayName = r.display_name}
+userOf r = User {id = UserId r.id, login = Login r.login, displayName = r.display_name, avatar = avatarOf r.avatar_blob r.avatar_media_type}
 
 -- | The users a condition picks, as the application sees them.
 usersWhere :: (Backend be) => (forall s. S.Users (QExpr be s) -> QExpr be s Bool) -> Db be [User]
@@ -670,6 +688,10 @@ pageOf r attachments =
     , updatedAt = r.updated_at
     , position = fromIntegral r.position
     , template = r.template
+    , -- Read from the history where a page is answered with them
+      -- ("Wiki.Server.Storage"'s 'pageWriters').
+      createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 -- | An attachment's row, with the page it is on.
@@ -762,6 +784,8 @@ data VersionRow = VersionRow
   , body :: Text
   , author :: Maybe UserId
   , authorName :: Maybe Text
+  , authorAvatar :: Maybe Avatar
+  -- ^ The author's name and avatar as the users table has them now.
   }
 
 -- | A page of a page's history: at most this many of its versions saved
@@ -775,11 +799,11 @@ loadVersionsPage page before most = do
   let earlier :: forall s. S.PageVersions (QExpr be s) -> QExpr be s Bool
       earlier v = v.page_id ==. val_ page.text &&. maybe (val_ True) (\t -> v.updated_at <. val_ (micro t)) before
   counted <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ earlier (all_ wikiDb.page_versions))))
-  rows <- runSelectReturningList . select . limit_ (fromIntegral most) . orderBy_ (\(t, _, _, _) -> desc_ t) $ do
+  rows <- runSelectReturningList . select . limit_ (fromIntegral most) . orderBy_ (\((t, _, _), _) -> desc_ t) $ do
     v <- filter_ earlier (all_ wikiDb.page_versions)
     u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
-    pure (v.updated_at, v.title, v.author, u.display_name)
-  pure (maybe 0 fromIntegral counted, [VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName} | (updatedAt, title, author, authorName) <- rows])
+    pure ((v.updated_at, v.title, v.author), (u.display_name, u.avatar_blob, u.avatar_media_type))
+  pure (maybe 0 fromIntegral counted, [VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName, authorAvatar = avatarOf (join b) (join m)} | ((updatedAt, title, author), (authorName, b, m)) <- rows])
 
 -- | The first versions of the pages a condition picks, without their
 -- bodies, by page: the version saved when each page was created, so the
@@ -793,8 +817,8 @@ firstVersionsWhere cond = do
     p <- filter_ cond (all_ wikiDb.pages)
     v <- join_ wikiDb.page_versions (\v -> v.page_id ==. p.id &&. v.updated_at ==. p.created_at)
     u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
-    pure (v.page_id, v.updated_at, v.title, v.author, u.display_name)
-  pure [(PageId pid, VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName}) | (pid, updatedAt, title, author, authorName) <- rows]
+    pure ((v.page_id, v.updated_at, v.title, v.author), (u.display_name, u.avatar_blob, u.avatar_media_type))
+  pure [(PageId pid, VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName, authorAvatar = avatarOf (join b) (join m)}) | ((pid, updatedAt, title, author), (authorName, b, m)) <- rows]
 
 -- | The first version of a page ('firstVersionsWhere').
 loadFirstVersion :: (Backend be) => PageId -> Db be (Maybe VersionRow)
@@ -830,8 +854,15 @@ loadVersion page at = do
   row <- runSelectReturningOne . select $ do
     v <- filter_ (\v -> v.page_id ==. val_ page.text &&. v.updated_at ==. val_ (micro at)) (all_ wikiDb.page_versions)
     u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
-    pure (v, u.display_name)
-  pure ((\(v, name) -> VersionRow {updatedAt = v.updated_at, title = v.title, body = v.body, author = UserId <$> v.author, authorName = name}) <$> row)
+    pure (v, (u.display_name, u.avatar_blob, u.avatar_media_type))
+  pure ((\(v, (name, b, m)) -> VersionRow {updatedAt = v.updated_at, title = v.title, body = v.body, author = UserId <$> v.author, authorName = name, authorAvatar = avatarOf (join b) (join m)}) <$> row)
+
+-- | The rows of the versions who wrote a page is read from
+-- ('Wiki.Core.Page.createdBy', 'Wiki.Core.Page.updatedBy'): its first
+-- version, as 'loadFirstVersion' finds it (none for a page an import
+-- made), and the version saved at the time given, the page's latest.
+pageWriters :: (Backend be) => PageId -> UTCTime -> Db be (Maybe VersionRow, Maybe VersionRow)
+pageWriters pid latest = (,) <$> loadFirstVersion pid <*> loadVersion pid latest
 
 -- | The number of pages in each space that has any, not counting
 -- templates, through the index @pages_space_template@.
@@ -903,13 +934,29 @@ loadIcons = catMaybes <$> runSelectReturningList (select ((\s -> s.icon) <$> fil
 blobAttached :: (Backend be) => BlobId -> Db be Bool
 blobAttached b = isJust <$> runSelectReturningOne (select (limit_ 1 ((\a -> a.id) <$> filter_ (\a -> a.blob `holds` val_ b.text) (all_ wikiDb.attachments))))
 
--- | The blobs the attachments and the spaces' icons name: the files of
--- the blob store a database refers to ("Wiki.Server.Storage.Blobs").
+-- | The blobs the attachments, the spaces' icons and the users' avatars
+-- name: the files of the blob store a database refers to
+-- ("Wiki.Server.Storage.Blobs").
 referencedBlobs :: (Backend be) => Db be (Set BlobId)
 referencedBlobs = do
   attached <- map fst <$> blobSizes
   icons <- loadIcons
-  pure (Set.fromList (attached <> [b | t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 t)]]))
+  avatars <- loadAvatarBlobs
+  pure (Set.fromList (attached <> [b | t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 t)]] <> avatars))
+
+-- | The blobs of the users' avatars. A database of a schema before the
+-- avatars (a backup made by an older server, which 'referencedBlobs' reads
+-- too) has none, and no column to read them from.
+loadAvatarBlobs :: (Backend be) => Db be [BlobId]
+loadAvatarBlobs = do
+  tables <- tableNames
+  version <-
+    if "wiki_schema" `elem` tables
+      then maybe (0 :: Int) fromIntegral . join <$> runSelectReturningOne (select (aggregate_ (\v -> max_ v.version) (all_ S.schemaDb.wiki_schema)))
+      else pure 0
+  if version < 8
+    then pure []
+    else map BlobId . catMaybes <$> runSelectReturningList (select ((\u -> u.avatar_blob) <$> filter_ (\u -> Beam.isJust_ u.avatar_blob) (all_ wikiDb.users)))
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -970,6 +1017,8 @@ insertAccount u login displayName phc =
               , notification_mail = Nothing
               , watch_own = True
               , feed_token = Nothing
+              , avatar_blob = Nothing
+              , avatar_media_type = Nothing
               }
           ]
       maybe (Left login) Right <$> loadAccount u
@@ -1277,9 +1326,21 @@ insertUsers us =
             , notification_mail = Nothing
             , watch_own = True
             , feed_token = Nothing
+            , -- Avatars do not travel in an archive.
+              avatar_blob = Nothing
+            , avatar_media_type = Nothing
             }
         | u <- chunk
         ]
+
+-- | Give a user an avatar, or none.
+updateAvatar :: (Backend be) => UserId -> Maybe Avatar -> Db be ()
+updateAvatar u avatar =
+  runUpdate $
+    update
+      wikiDb.users
+      (\r -> (r.avatar_blob <-. val_ ((\a -> a.blob.text) <$> avatar)) <> (r.avatar_media_type <-. val_ ((\a -> a.mediaType.text) <$> avatar)))
+      (\r -> r.id ==. val_ u.text)
 
 -- | Add a group.
 insertGroup :: (Backend be) => Group -> Db be ()

@@ -27,7 +27,7 @@ import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Walk (query)
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Export (ExportFormat (..), formatMediaType)
+import Wiki.Api.Export (ExportFormat (..), formatMediaType, opensInline)
 import Wiki.Api.Links (attachmentUrl, links)
 import Wiki.Api.Types (NewPage (..), SessionInfo (exports))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
@@ -436,7 +436,9 @@ exported reply format = do
   when (reply.status /= 200) $
     expectationFailure ("export returned " <> show reply.status <> ": " <> show reply.body)
   (reply.status, header "Content-Type" reply) `shouldBe` (200, Just (encodeUtf8 (formatMediaType format)))
-  header "Content-Disposition" reply `shouldSatisfy` maybe False ("attachment; filename=\"" `BS.isPrefixOf`)
+  -- A PDF opens in the browser's tab, under its file name; every other
+  -- format downloads.
+  header "Content-Disposition" reply `shouldSatisfy` maybe False ((if opensInline format then "inline; filename=\"" else "attachment; filename=\"") `BS.isPrefixOf`)
   BSL.length reply.body `shouldSatisfy` (> 0)
   pure (BSL.toStrict reply.body)
 

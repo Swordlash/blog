@@ -427,6 +427,8 @@ importPage blobs a discussions choices spacePath target progress pm
               , updatedAt = pm.archived.updatedAt
               , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = pm.archived.template
+              , createdBy = Nothing
+              , updatedBy = Nothing
               }
       insertPage page
       insertVersion page Nothing

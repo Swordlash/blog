@@ -469,6 +469,8 @@ byHash a =
         , updatedAt = p.updatedAt
         , position = p.position
         , template = p.template
+        , createdBy = Nothing
+        , updatedBy = Nothing
         }
     rehash x = case x.source of
       SourceBlob b | Just bytes <- Map.lookup b a.blobs -> x {source = SourceBlob (blobOf bytes)}

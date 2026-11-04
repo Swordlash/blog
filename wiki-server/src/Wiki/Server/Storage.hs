@@ -142,6 +142,8 @@ module Wiki.Server.Storage
   , feedPosts
   , blobPath
   , spaceIconFile
+  , avatarFile
+  , setAvatarFile
   , mayReadPage
   , locatedFor
   , editorOf
@@ -236,10 +238,10 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), authorOf, maxVersionsPageSize, namedAuthor, versionInfo)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
@@ -333,6 +335,9 @@ data Config = Config
   -- ^ The URL a browser fetches a space's icon image from, for a space
   -- whose icon is an image: the server's route for it, which serves
   -- 'spaceIconFile'.
+  , avatarAddress :: UserId -> Avatar -> Text
+  -- ^ The URL a browser fetches a user's avatar from: the server's route
+  -- for it, which serves 'avatarFile'.
   , publish :: PageId -> PageEvent -> IO ()
   -- ^ The callback that reports what happens to a page to the server's
   -- live channel ("Wiki.Server.Events"): every change to the page's
@@ -352,6 +357,7 @@ defaultConfig =
   Config
     { attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text
     , iconAddress = \s -> "/api/v1/spaces/" <> s.id.text <> "/icon"
+    , avatarAddress = \u a -> "/api/v1/users/" <> u.text <> "/avatar/" <> a.blob.text
     , publish = \_ _ -> pass
     , notify = \_ -> pass
     }
@@ -637,7 +643,7 @@ administratorId = UserId "~administrator"
 -- | The administrator as the application sees them: signed in, holding the
 -- global 'Administer'.
 administratorUser :: User
-administratorUser = User {id = administratorId, login = Login "administrator", displayName = "Administrator"}
+administratorUser = User {id = administratorId, login = Login "administrator", displayName = "Administrator", avatar = Nothing}
 
 -- | The user with a login.
 userByLogin :: Storage -> Text -> IO (Maybe User)
@@ -652,6 +658,10 @@ data Ctx = Ctx
   { conn :: Conn
   , blobs :: FilePath
   , spaces :: Map SpaceId Space
+  -- ^ The spaces as they are stored: a personal space's icon is its own,
+  -- not its owner's avatar, which 'shown' adds where a space is answered.
+  , avatars :: Map UserId Avatar
+  -- ^ The avatars of the owners of personal spaces who have one.
   , grants :: Grants
   -- ^ The wiki's grants, plus, for the administrator, a global
   -- 'Administer' grant.
@@ -750,25 +760,25 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
 context :: Storage -> Bool -> Conn -> Who -> Text -> IO Ctx
 context st writes c who address
   | writes = do
-      spaces <- viaConn c loadSpaces
+      (spaces, avatars) <- viaConn c loadSpacesWithAvatars
       rows <- viaConn c loadGrants
-      contextWith st c who address spaces rows (activeUser c)
+      contextWith st c who address (spaces, avatars) rows (activeUser c)
   | otherwise = do
       kept <- keptPermissions st c
-      contextWith st c who address kept.spaces kept.grants (keptUser st c kept)
+      contextWith st c who address (kept.spaces, kept.avatars) kept.grants (keptUser st c kept)
 
 -- | 'context', with the spaces and the grants it holds given (every one,
 -- or only those some rules need: 'readWithin'), and the function that
 -- finds a user who may act, with their groups.
-contextWith :: Storage -> Conn -> Who -> Text -> Map SpaceId Space -> Grants -> (UserId -> IO (Maybe (User, Set GroupId))) -> IO Ctx
-contextWith st c who address spaces rows activeAs = do
+contextWith :: Storage -> Conn -> Who -> Text -> (Map SpaceId Space, Map UserId Avatar) -> Grants -> (UserId -> IO (Maybe (User, Set GroupId))) -> IO Ctx
+contextWith st c who address (spaces, avatars) rows activeAs = do
   -- The settings come from memory. The database is read only when memory
   -- has none, which does not happen once 'openWith' has filled it.
   wiki <- readIORef st.settings >>= maybe (viaConn c loadSettings) pure
   server <- readIORef st.serverKept >>= maybe (viaConn c loadServerSettings) pure
   told <- newIORef []
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.place.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address, told}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.place.dataDir, spaces, avatars, grants, principal, user, author, creator, wiki, server, address, told}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -814,6 +824,9 @@ data Permissions = Permissions
   -- ^ 'Nothing' for a permission context read without a generation, which
   -- is never kept.
   , spaces :: Map SpaceId Space
+  , avatars :: Map UserId Avatar
+  -- ^ The avatars of the owners of personal spaces, which those with no
+  -- icon of their own are shown with.
   , grants :: Grants
   -- ^ The grants as the database has them, without whom the wiki is open
   -- to, which comes from the settings ('contextWith').
@@ -855,9 +868,9 @@ keptPermissions st c =
           pure read'
   where
     fresh generation = do
-      spaces <- viaConn c loadSpaces
+      (spaces, avatars) <- viaConn c loadSpacesWithAvatars
       grants <- viaConn c loadGrants
-      pure Permissions {generation, spaces, grants, users = mempty}
+      pure Permissions {generation, spaces, avatars, grants, users = mempty}
 
 -- | A user who may act, with their groups, in a read transaction of the
 -- generation of the permission context given: from memory if a read of
@@ -868,7 +881,7 @@ keptUser st c kept u = case Map.lookup u kept.users of
   Nothing -> do
     found <- activeUser c u
     let remember held
-          | isJust kept.generation && held.generation == kept.generation && Map.size held.users < maxKeptUsers = Permissions {generation = held.generation, spaces = held.spaces, grants = held.grants, users = Map.insert u found held.users}
+          | isJust kept.generation && held.generation == kept.generation && Map.size held.users < maxKeptUsers = Permissions {generation = held.generation, spaces = held.spaces, avatars = held.avatars, grants = held.grants, users = Map.insert u found held.users}
           | otherwise = held
     atomicModifyIORef' st.permissions (\held -> (remember <$> held, ()))
     pure found
@@ -892,7 +905,7 @@ readWithin st who locate body = case st.engine of
         -- The permission context is read only when the attachment
         -- exists, so a request for a missing one costs no read of it.
         kept <- keptPermissions st conn
-        ctx <- contextWith st conn who "" kept.spaces kept.grants (keptUser st conn kept)
+        ctx <- contextWith st conn who "" (kept.spaces, kept.avatars) kept.grants (keptUser st conn kept)
         let Tx tx = body sid found
         runExceptT (runReaderT tx ctx)
 
@@ -923,6 +936,21 @@ findSpace :: SpaceId -> Tx (Space, [Space])
 findSpace sid = do
   ctx <- ask
   maybe (failWith NotFound) (\s -> pure (s, chainOf ctx sid)) (Map.lookup sid ctx.spaces)
+
+-- | A space as the application is shown it: a personal space with no icon
+-- of its own shows its owner's avatar ('withOwnerAvatar'). Applied to the
+-- spaces the class answers with, and nowhere else, so that what is
+-- written back and exported is the icon the space has stored.
+shown :: Space -> Tx Space
+shown s = asks (\x -> withOwnerAvatar ((s.owner >>= (`Map.lookup` x.avatars)) <|> (x.user >>= \u -> guard (s.owner == Just u.id) >> u.avatar)) s)
+
+-- | A page as the class answers with it: with who wrote it
+-- ('Page.createdBy', 'Page.updatedBy'), its first and latest versions'
+-- authors, named as a history names them.
+withWriters :: Page -> Tx Page
+withWriters p = do
+  (first', latest) <- db (pageWriters p.id p.updatedAt)
+  pure p {createdBy = first' >>= \r -> (versionOf p.id r).author, updatedBy = latest >>= \r -> (versionOf p.id r).author}
 
 -- | A page by id, as a node.
 findNode :: PageId -> Tx PageNode
@@ -1077,15 +1105,18 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
     (space, c) <- findSpace d.space
     requireView c
     page <- findPage d.page
-    pure (space, page)
-  listSpaces = answer [] listSpacesTx
-  getSpace = run Reads . getSpaceTx
-  createSpace parent = run Writes . createSpaceTx parent
-  renameSpace sid = run Writes . renameSpaceTx sid
-  setSpacePublic sid = run Writes . setSpacePublicTx sid
-  setSpaceSealed sid = run Writes . setSpaceSealedTx sid
-  personalSpace = run Reads personalSpaceTx
-  setPersonalSpace = run Writes . setPersonalSpaceTx
+    (,) <$> shown space <*> withWriters page
+  listSpaces = answer [] (listSpacesTx >>= traverse shown)
+  getSpace = run Reads . (shown <=< getSpaceTx)
+  createSpace parent = run Writes . (shown <=< createSpaceTx parent)
+  renameSpace sid = run Writes . (shown <=< renameSpaceTx sid)
+  setSpacePublic sid = run Writes . (shown <=< setSpacePublicTx sid)
+  setSpaceSealed sid = run Writes . (shown <=< setSpaceSealedTx sid)
+  personalSpace = run Reads (personalSpaceTx >>= traverse shown)
+  setPersonalSpace = run Writes . (shown <=< setPersonalSpaceTx)
+  setAvatar mediaType bytes = run Writes (setAvatarTx mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
+  removeAvatar = run Writes removeAvatarTx
+  avatarUrl u a = StoredWiki (asks (\env -> env.storage.config.avatarAddress u a))
 
   -- Whoever may edit the whole space may set its macros (WP5.41 of
   -- docs/PLAN.md), from the editor as from the space's page.
@@ -1094,28 +1125,28 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
     requireEdit c
     let s' = withMathMacros (trimLines macros) s
     db (updateSpace s')
-    pure s'
+    shown s'
 
-  setSpaceProfile sid = run Writes . setSpaceProfileTx sid
-  uploadSpaceIcon sid mediaType bytes = run Writes (uploadSpaceIconTx sid mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
+  setSpaceProfile sid = run Writes . (shown <=< setSpaceProfileTx sid)
+  uploadSpaceIcon sid mediaType bytes = run Writes (uploadSpaceIconTx sid mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes) >>= shown)
   spaceIconUrl s = case s.icon of
     Just (IconImage _ _) -> StoredWiki (asks (\env -> env.storage.config.iconAddress s))
     _ -> pure ""
   pageCounts = answer mempty pageCountsTx
   spaceAccess = run Reads . spaceAccessTx
   setSpaceGrant sid subject permission = run Writes . setSpaceGrantTx sid subject permission
-  moveSpace sid = run Writes . moveSpaceTx sid
+  moveSpace sid = run Writes . (shown <=< moveSpaceTx sid)
   deleteSpace = run Writes . deleteSpaceTx
-  setSpaceOrder sid kind = run Writes . setSpaceOrderTx sid kind
-  shiftSpace sid = run Writes . shiftSpaceTx sid
-  shiftPage pid = run Writes . shiftPageTx pid
+  setSpaceOrder sid kind = run Writes . (shown <=< setSpaceOrderTx sid kind)
+  shiftSpace sid = run Writes . (shown <=< shiftSpaceTx sid)
+  shiftPage pid = run Writes . (withWriters <=< shiftPageTx pid)
   listPages = run Reads . listPagesTx
   postDetails = run Reads . postDetailsTx
-  getPage sid = run Reads . getPageTx sid
-  createPage sid parent title = run Writes . createPageTx sid parent title
-  savePage pid base title = saving . savePageTx pid base title
-  movePage pid sid = run Writes . movePageTx pid sid
-  setPageTemplate pid = run Writes . setPageTemplateTx pid
+  getPage sid = run Reads . (withWriters <=< getPageTx sid)
+  createPage sid parent title = run Writes . (withWriters <=< createPageTx sid parent title)
+  savePage pid base title = saving . (withWriters <=< savePageTx pid base title)
+  movePage pid sid = run Writes . (withWriters <=< movePageTx pid sid)
+  setPageTemplate pid = run Writes . (withWriters <=< setPageTemplateTx pid)
   deletePage = run Writes . deletePageTx
   uploadAttachment pid name mediaType bytes = run Writes (uploadAttachmentTx pid name mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   deleteAttachment = run Writes . deleteAttachmentTx
@@ -1130,7 +1161,7 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   discardDraft = run Writes . discardDraftTx
   listVersions pid = run Reads . listVersionsTx pid
   getVersion pid = run Reads . getVersionTx pid
-  restoreVersion pid at = saving . restoreVersionTx pid at
+  restoreVersion pid at = saving . (withWriters <=< restoreVersionTx pid at)
 
 -- | The administration operations, as the class's Haddock describes them
 -- ("Wiki.App.Backend.Admin"). Each operation is one transaction that
@@ -1309,7 +1340,7 @@ editorOf st who pid =
       ( do
           p <- findNode pid
           requireEdit =<< chainOfPage p
-          asks (\x -> x.user) >>= maybe (failWith Forbidden) (\u -> pure Author {id = u.id, name = u.displayName})
+          asks (\x -> x.user) >>= maybe (failWith Forbidden) (pure . authorOf)
       )
 
 -- | A page's threads, if the 'Who' may read them ('Left' if they may not,
@@ -1323,12 +1354,17 @@ editorOf st who pid =
 -- before any write commits, and only the writer can promise that: a write
 -- runs its callbacks ('publish') on the writer too, so a write that
 -- commits after the read reports its change after the subscription.
-threadsThen :: Storage -> Who -> PageId -> ([Thread] -> IO ()) -> IO (Either WikiError [Thread])
+--
+-- With the threads comes who is reading, as the live channel names them
+-- ('authorOf'): the signed-in user asking, or 'Nothing' for anyone else.
+threadsThen :: Storage -> Who -> PageId -> (([Thread], Maybe Author) -> IO ()) -> IO (Either WikiError ([Thread], Maybe Author))
 threadsThen st who pid = transactThen st who ReadsOnWriter $ do
   p <- findNode pid
   requireView =<< chainOfPage p
   home <- asks (\x -> Home.isHomePage x.server.homePage pid)
-  if home then pure [] else listThreadsTx pid
+  threads <- if home then pure [] else listThreadsTx pid
+  readingAs <- asks (\x -> x.user) <&> \u -> authorOf <$> mfilter (\v -> v.id /= administratorId) u
+  pure (threads, readingAs)
 
 -- | The comment operations, as the class's Haddock describes them
 -- ("Wiki.App.Backend.Comments"). Each operation is one transaction, and
@@ -1443,13 +1479,16 @@ blobPath st = blobFile (attachmentsDir st.place.dataDir)
 -- | A space's icon image, if the 'Who' may view the space: its media type
 -- and its file. The image is looked up by its blob id, which is part of
 -- its URL, so a replaced image gets a new URL. The server's route for
--- space icons serves this. A blob that is not the space's image is
--- 'NotFound'.
+-- space icons serves this. A blob that is not the space's image (its own,
+-- or its owner's avatar it is shown with) is 'NotFound'.
 spaceIconFile :: (MonadIO m) => SpaceId -> BlobId -> StoredWiki m (Either WikiError (MimeType, FilePath))
 spaceIconFile sid blob = run Reads $ do
-  (s, c) <- findSpace sid
+  (stored, c) <- findSpace sid
   requireView c
   dir <- asks (\x -> x.blobs)
+  -- A personal space with no icon of its own shows its owner's avatar,
+  -- at the space's icon's address like any other image.
+  s <- shown stored
   case s.icon of
     Just (IconImage b mediaType) | b == blob, Just file <- blobFile dir b -> pure (mediaType, file)
     _ -> failWith NotFound
@@ -1701,6 +1740,8 @@ withHomePage time space = do
           , updatedAt = time
           , position = 0
           , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
           }
       withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} space
   author <- asks (\x -> x.author)
@@ -1713,7 +1754,10 @@ setSpaceProfileTx sid given = do
   (s, c) <- findSpace sid
   home <- requireIconAdminister sid c
   -- The wiki home's space takes only an icon: the rest is its own.
-  let p = if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given
+  -- The owner's avatar, which the settings show as the icon of a personal
+  -- space with none of its own, is not taken for one ('ownProfile').
+  avatar <- asks (\x -> s.owner >>= (`Map.lookup` x.avatars))
+  let p = ownProfile avatar (if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given)
   nodes <- db (pageNodes sid)
   checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
   let s' = withProfile checked s
@@ -1908,6 +1952,61 @@ moveSpaceTx sid destination = do
 
 --------------------------------------------------------------------------------
 -- Personal spaces
+
+--------------------------------------------------------------------------------
+-- Avatars
+
+-- | Give the asking user an avatar: an image of this media type and size,
+-- which the last argument stores in the blob directory given to it, after
+-- the checks ('checkAvatarUpload'). The avatar it replaces is left for the
+-- deletion of unreferenced files, as a space's replaced icon is
+-- ("Wiki.Server.Storage.Blobs"). Someone not signed in, and the operator,
+-- have no account: 'Forbidden'. The result is the user with the avatar.
+setAvatarTx :: Text -> Integer -> (FilePath -> IO BlobId) -> Tx User
+setAvatarTx mediaType size store = do
+  user <- ownAccount
+  mt <- either invalid pure (checkAvatarUpload mediaType (fromIntegral size))
+  dir <- asks (\x -> x.blobs)
+  blob <- liftIO (store dir)
+  let avatar = Avatar {blob, mediaType = mt}
+  db (updateAvatar user.id (Just avatar))
+  record "account.avatar" (userSubject user) [("avatar", "set")]
+  pure User {id = user.id, login = user.login, displayName = user.displayName, avatar = Just avatar}
+
+-- | Take the asking user's avatar away, refused as 'setAvatarTx' is. The
+-- result is the user without it.
+removeAvatarTx :: Tx User
+removeAvatarTx = do
+  user <- ownAccount
+  when (isJust user.avatar) $ do
+    db (updateAvatar user.id Nothing)
+    record "account.avatar" (userSubject user) [("avatar", "removed")]
+  pure User {id = user.id, login = user.login, displayName = user.displayName, avatar = Nothing}
+
+-- | The asking user, who has an account: not someone who has not signed
+-- in, nor the server's operator ('Forbidden').
+ownAccount :: Tx User
+ownAccount = do
+  _ <- notified
+  asks (\x -> x.user) >>= maybe (failWith Forbidden) pure
+
+-- | 'setAvatar' with the image in a file, as 'uploadAttachmentFile'.
+setAvatarFile :: (MonadIO m) => Text -> FilePath -> StoredWiki m (Either WikiError User)
+setAvatarFile mediaType file = do
+  size <- liftIO (getFileSize file)
+  run Writes (setAvatarTx mediaType size (\dir -> fst <$> storeBlobFile dir file))
+
+-- | A user's avatar, for whoever may read the wiki: its media type and its
+-- file. The avatar is looked up by its blob id, which is part of its URL,
+-- so a new picture gets a new URL. The server's route for avatars serves
+-- this. A blob that is not the user's avatar, or a user who does not
+-- exist, is 'NotFound'.
+avatarFile :: (MonadIO m) => UserId -> BlobId -> StoredWiki m (Either WikiError (MimeType, FilePath))
+avatarFile u blob = run Reads $ do
+  dir <- asks (\x -> x.blobs)
+  db (loadUser u) >>= \case
+    Just found | Just a <- found.avatar, a.blob == blob, Just file <- blobFile dir a.blob -> pure (a.mediaType, file)
+    _ -> failWith NotFound
 
 -- | The asking user's personal space, turned on or off, or 'Nothing' if
 -- they have none. Someone not signed in, and the server's operator, who
@@ -2150,6 +2249,8 @@ createPageTx sid parent title body = do
           , updatedAt = time
           , position = nextPosition (childrenOf nodes parent)
           , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
           }
   author <- asks (\x -> x.author)
   db (insertPage page >> insertVersion page author)
@@ -2317,8 +2418,8 @@ versionOf page r =
   Version {page, updatedAt = r.updatedAt, title = r.title, body = r.body, author = named <$> r.author}
   where
     named u
-      | u == administratorId = Author {id = u, name = administratorUser.displayName}
-      | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n}) r.authorName
+      | u == administratorId = namedAuthor u administratorUser.displayName
+      | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n, avatar = r.authorAvatar}) r.authorName
 
 -- | A page of a page's history, each version with its number: the first
 -- of them is numbered with how many versions there are up to it, and the
@@ -2752,13 +2853,13 @@ removeUserTx u = do
 -- Comments
 
 -- | Who wrote a comment, as a reader sees them: the administrator, a user
--- by the display name the users table has for them, or, for an author who
+-- by the display name and avatar the users table has for them, or, for an author who
 -- is not a user here (one an import brought), as 'absentAuthor' names
 -- them.
-commentAuthor :: UserId -> Maybe Text -> Author
-commentAuthor u name
-  | u == administratorId = Author {id = u, name = administratorUser.displayName}
-  | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n}) name
+commentAuthor :: UserId -> Maybe Text -> Maybe Avatar -> Author
+commentAuthor u name avatar
+  | u == administratorId = namedAuthor u administratorUser.displayName
+  | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n, avatar}) name
 
 -- | Check that the current user may read a page, and return its space's
 -- chain and its threads. Every comment operation starts with this, so its
@@ -2915,7 +3016,7 @@ tellTx pid sid title thread excerpt occasion logins = do
             , mentioned = Set.fromList (mapMaybe (`Map.lookup` byLogin) (Set.toList logins))
             }
         location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathOf (`Map.lookup` nodes) pid)}
-        actorAuthor = maybe Author {id = actor, name = actor.text} (\u -> Author {id = u.id, name = u.displayName}) ctx.user
+        actorAuthor = maybe (namedAuthor actor actor.text) authorOf ctx.user
     time <- now
     for_ (recipients grants watchers happened) $ \(u, kind) -> do
       i <- NotificationId <$> newId
@@ -3102,7 +3203,7 @@ mentionableTx logins =
   asks (\x -> x.user) >>= \case
     Just _ | not (null logins) -> do
       users <- db (loadActiveUsersByLogin logins)
-      pure (Map.fromList [(u.login.text, Author {id = u.id, name = u.displayName}) | u <- users])
+      pure (Map.fromList [(u.login.text, authorOf u) | u <- users])
     _ -> pure mempty
 
 -- | The users whose login or display name starts with some letters, and

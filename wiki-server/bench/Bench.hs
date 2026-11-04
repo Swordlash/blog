@@ -232,7 +232,7 @@ seed st = do
   writing st $ do
     for_ (chunksOf 500 [0 .. users - 1]) $ \chunk ->
       runInsert . insert wikiDb.users $
-        insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing} | i <- chunk]
+        insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing, avatar_blob = Nothing, avatar_media_type = Nothing} | i <- chunk]
     for_ [0 .. pages - 1] $ \i -> do
       let p = pageOf space.id now i
       insertPage p
@@ -300,6 +300,8 @@ pageOf space now i =
     , updatedAt = addUTCTime (fromIntegral i) now
     , position = i
     , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
     }
 
 -- | How long an action takes, in seconds, with what it gave.
@@ -364,7 +366,7 @@ commentWithTabs st hub commenter target = do
         WS.sendTextData c (encode (Subscribe (pageId target)))
         let untilSubscribed =
               WS.receiveData c >>= \m -> case decode m of
-                Just (Subscribed _ _ _) -> pass
+                Just (Subscribed {}) -> pass
                 _ -> untilSubscribed
             untilEvent =
               WS.receiveData c >>= \m -> case decode m of
