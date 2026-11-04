@@ -416,6 +416,31 @@ confirms it against reality and the plan is amended if it does not hold.
     `start,end`; nothing of ours reads it. The home page's Show Spaces, Show Recently
     visited, Show to signed-out visitors and the icon are edited with the home page
     (`EditHome`) and saved with it, no longer in its view.
+37. **Private subspaces, and personal spaces** (the owner, 2026-11-04, built by WP5.54).
+    A space has `sealed`: `spacePermissions` reads only the chain from the last sealed
+    space down (`sealedChain`), so no ancestor's grant or `public` flag reaches a sealed
+    space, its own grants and its own `public` still work, its subspaces inherit from it,
+    and a global administrator still sees everything. The settings' Permissions component
+    has the "Make private" switch (`PUT spaces/<id>/sealed`, audit `space.sealed`); it
+    grants the sealer `AdministerSpace` when they held it by inheritance alone, so that
+    one click cannot lock them out. Personal spaces: `Space` has `owner`, `active` and
+    `personalContainer`. "Enable personal space" in the account menu (`PUT
+    account/personal-space {enabled}`, audit `space.personal`) makes, the first time
+    anywhere, the container "User subspaces" (slug `users` or the next free one; known by
+    its flag, not its slug; viewable by nobody, administrators included, and refusing a
+    subspace made by hand, a move into it, rename and delete), and under it the user's
+    space: slug the login slugified, public, the owner holding `AdministerSpace`, named
+    "Space of <display name>" wherever spaces are read and never stored; rename and move
+    are refused, everything else is an ordinary space's. Disable sets `active = False`
+    and keeps the data: an inactive space in a chain gives nobody anything,
+    administrators included. The Starred panel shows an active personal space first, as
+    "Your space". Removing an account deletes its personal space. An archive carries the
+    four fields when they differ from the defaults, and `readArchive` checks they fit
+    together (an owner among the archive's users, one personal space per owner, one
+    container, personal spaces under it only); a merge import brings personal spaces in
+    as ordinary spaces, a turned-off one with its whole subtree private and the top of
+    each run of hidden spaces the import creates sealed, so nothing it hid becomes
+    readable.
 
 ## Repository layout
 
@@ -462,53 +487,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.54 Private subspaces, and personal spaces** (the owner, 2026-11-04; one pull
-  request for both). (a) *Make private.* Today a subspace inherits every ancestor's
-  grants and a public ancestor's `View` (decision 9), so a subtree cannot be hidden
-  from its parent's readers. A space gains `sealed :: Bool`: when set, the chain
-  `spacePermissions` reads stops there, so only the space's own grants and its
-  descendants' count, and no ancestor's grant or `public` flag reaches it; its own
-  `public` still works; a global administrator still sees everything. The settings'
-  Permissions component gets a switch next to Public/Private, "Make private: readers of
-  the parent space do not see this space, only those granted here" (`setSealed`, needs
-  `AdministerSpace` on the space, which the parent's administrators hold by
-  inheritance; audit `space.sealed`). Nothing else changes: the server's lists, search,
-  the feed, stars and the sidebar already go through `canView` on the chain, and
-  `listSpacesTx` keeps a sealed space's ancestors as unviewable entries as it does now.
-  (b) *Personal spaces.* A user turns one on from the account menu ("Enable personal
-  space" in `SignIn.accountPanel` and the demo's `userSwitcher`; `PUT
-  account/personal-space {enabled}`, a new `AccountApi` endpoint; the demo backend the
-  same): the server makes, on the first enable anywhere, a top-level container space
-  "User subspaces" (slug `users`, `public = False`, no grants: never viewable itself,
-  shown as an unviewable root whose viewable subspaces are listed, as the sidebar and
-  the front page's cards do for such roots today; hidden entirely while it has no
-  active personal space; `requireOrdinary` keeps it from being renamed, moved, deleted
-  or given subspaces by hand), and under it the user's space with `owner = Just user`
-  (new field), slug the user's login, `public = True` (readable as the wiki's public
-  spaces are: by everyone in an open wiki, by signed-in users in a closed one), the
-  owner holding `AdministerSpace`, a home page as `createSpaceTx` makes one. Its name
-  is not stored but derived wherever a space's name is shown: "Space of <display
-  name>" (the settings' Name field is read-only for it, `rename` refuses). "Disable
-  personal space" sets `active = False` (new field): the space is then listed to nobody
-  and `canView` denies it (data kept; the menu offers "Enable" again, which sets
-  `active` back); deletion goes through the space's own settings like any space's
-  (after which "Enable" makes a fresh one). Otherwise a personal space is an ordinary
-  space: icon, description, blog, numbering, grants, Public/Private, sealed (a),
-  subspaces, pages, export; it cannot be moved out of the container and nothing can be
-  moved into the container. While active, it is always first in the header's Starred
-  panel as "Your space" (a fixed entry, not a star; the stars model stays pages only).
-  Both fields travel in `Space`'s JSON, the SQLite and PostgreSQL schemas (a migration
-  each) and the export. Tests: `Test/Permission.hs` for sealed (a reader of the parent
-  loses the subspace, its own grants and `public` still work, an administrator still
-  sees it, a sealed space's own subspaces inherit from it); the backend contract for
-  personal spaces (enable makes the container and the space, the derived name, disable
-  hides it from lists and `canView`, re-enable, delete then enable, the container's
-  restrictions, `rename` refused); hspec-halogen for the menu item, the sidebar card,
-  the Starred panel's entry, the settings page of a personal space, and the sealed
-  switch hiding a subspace from the parent's reader. Docs: the README's spaces and
-  permissions sections, the guide if it describes permissions, the CHANGELOGs of
-  wiki-core, wiki-api, wiki-app and wiki-server.
 
 ### Later, or waiting for the owner
 
@@ -787,6 +765,13 @@ needs. Each was true when its package merged; check before relying on one.
   Ctrl+Shift+K is Firefox's web console shortcut (the default is prevented, Firefox's
   behaviour unchecked). The wiki's icon still saves as soon as it is set; the home
   page's three switches do not count as unsaved work.
+- Personal spaces (WP5.54): the container stays, hidden, after the last personal space
+  is deleted; sealing a personal space is allowed but changes nothing (the container
+  grants nothing); over HTTP a `Space` body must carry all four new fields (the derived
+  `FromJSON` has no defaults; client and server ship together); a turned-off personal
+  space imported by a merge becomes an ordinary private, sealed space that only
+  administrators read until someone grants it (the archive's users and grants do not
+  come along).
 - `PUT admin/settings` bodies must carry every field (`FromJSON` is derived).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
