@@ -294,8 +294,11 @@
 #   --app-page FILE  take the page's zip from FILE instead of GitHub, for a machine that
 #                    cannot reach github.com: a zip CI built, as --backend-only downloads
 #                    it (app-server-<hash>.zip, or app-demo-<hash>.zip with --static),
-#                    which must hold app.wasm. It is checked and kept in the page cache
-#                    as a downloaded zip is, and the deploy goes on as with
+#                    which must hold app.wasm. It is checked, and kept in the page cache
+#                    under a name of its own (app-<kind>-file-<SHA-256>.zip, its path in
+#                    the .meta file beside it): a run that finds the file gone takes
+#                    that copy, saying so, and a changed file replaces it. The deploy
+#                    goes on as with
 #                    --backend-only (with --server only wiki-server is built). The
 #                    deploy says which page it is: the page of <hash>, from the zip's
 #                    name when it follows CI's naming, or else a page from FILE; the
@@ -2019,6 +2022,68 @@ prune_pages() {
   done
 }
 
+# The SHA-256 of a file, in hex.
+file_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+  fi
+}
+
+# The cache entries of the page from a file (--app-page) named by
+# page_meta (file=<its path>), one a line: the zips whose .meta file says
+# that path.
+app_page_entries() {
+  for meta in "$page_cache/app-$page_kind-file-"*.zip.meta; do
+    if [ -f "$meta" ] && [ -f "${meta%.meta}" ] && [ "$(cat "$meta")" = "$page_meta" ]; then
+      printf '%s\n' "${meta%.meta}"
+    fi
+  done
+}
+
+# The page from a file (--app-page) and the page cache. The cache keeps
+# the file's zip under a name of its own, app-<kind>-file-<SHA-256>.zip,
+# with the file's path in its .meta file (file=<path>), apart from the zips
+# downloaded from GitHub: a file named as CI names its zips is still not
+# one CI's release served. While the file can be read, the file is the
+# page: its zip enters the cache when the cache does not have it (the
+# entries of an earlier version of the same file are deleted then), and is
+# touched when it does. When the file is gone, or cannot be read, on a
+# later run (the state remembers --app-page), the newest entry for its
+# path (there is one) is the page, as a downloaded page's cached zip is. A
+# zip of the same bytes given under another path takes the entry over.
+# Sets cached and
+# from_cache, and keep_file when the zip unpacked from the file is to be
+# kept in the cache.
+app_page_cache() {
+  page_meta="file=$app_page"
+  keep_file=
+  if [ -r "$app_page" ]; then
+    say "the page: $app_page_words"
+    cp "$app_page" "$work/page.zip" || die "--app-page $app_page: cannot read it (see above); give the file again, or another"
+    unpack_page "$work/page.zip" || die "$unpack_error"
+    cached=$page_cache/app-$page_kind-file-$(file_sha256 "$work/page.zip").zip
+    if [ -f "$cached" ] && [ "$(cat "$cached.meta" 2>/dev/null || true)" = "$page_meta" ]; then
+      touch "$cached"
+    else
+      keep_file=1
+    fi
+    return 0
+  fi
+  # One entry a path: a new version of the file replaces the old one's.
+  cached=$(app_page_entries | head -n 1)
+  [ -n "$cached" ] ||
+    die "--app-page $app_page is gone, or cannot be read, and the page cache $page_cache keeps no copy of it: give the file again (--app-page FILE), or take the page from GitHub (--backend-only)"
+  unpack_page "$cached" ||
+    die "--app-page $app_page is gone, or cannot be read, and its copy in the page cache, $cached, is not a page ($unpack_error): give the file again (--app-page FILE)"
+  touch "$cached"
+  from_cache=1
+  say "--app-page $app_page is gone, or cannot be read: the page is the copy the page cache kept of it when it was last deployed, $cached"
+}
+
 # Write the .meta file beside a cached zip: page_meta, the asset's id, time
 # and size on GitHub, through a temporary name.
 write_page_meta() {
@@ -2048,9 +2113,12 @@ download_page() {
   rm -rf "$work"
   mkdir -p "$work"
   from_cache=
-  # A page from a file (--app-page) is taken from the file, and from the
-  # cache only once the file cannot be read any more.
-  if [ -z "$refresh_page" ] && [ -f "$cached" ] && { [ -z "$app_page" ] || [ ! -r "$app_page" ]; }; then
+  # A page from a file (--app-page) has a cache entry of its own; see
+  # app_page_cache.
+  if [ -n "$app_page" ]; then
+    mkdir -p "$page_cache" 2>/dev/null || true
+    app_page_cache
+  elif [ -z "$refresh_page" ] && [ -f "$cached" ]; then
     if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
       from_cache=1
     else
@@ -2060,7 +2128,7 @@ download_page() {
       esac
     fi
   fi
-  if [ -n "$from_cache" ]; then
+  if [ -n "$from_cache" ] && [ -z "$app_page" ]; then
     if unpack_page "$cached"; then
       touch "$cached"
       [ -f "$cached.meta" ] || write_page_meta
@@ -2071,18 +2139,20 @@ download_page() {
       from_cache=
     fi
   fi
-  if [ -z "$from_cache" ] && [ -n "$app_page" ]; then
-    say "the page: $app_page_words"
-    cp "$app_page" "$work/page.zip" || die "--app-page $app_page: cannot read it (see above); give the file again, or another"
-    unpack_page "$work/page.zip" || die "$unpack_error"
-  elif [ -z "$from_cache" ]; then
+  if [ -z "$from_cache" ] && [ -z "$app_page" ]; then
     say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
     curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
     unpack_page "$work/page.zip" || die "$unpack_error"
   fi
-  if [ -z "$from_cache" ]; then
+  if [ -z "$from_cache" ] && { [ -z "$app_page" ] || [ -n "$keep_file" ]; }; then
     if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
       mv -f "$page_cache/.$page_asset.part" "$cached"; then
+      # The entries of an earlier version of the same file go.
+      if [ -n "$app_page" ]; then
+        app_page_entries | while IFS= read -r entry; do
+          [ "$entry" = "$cached" ] || rm -f "$entry" "$entry.meta"
+        done
+      fi
       write_page_meta
       prune_pages
     else

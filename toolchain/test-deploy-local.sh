@@ -3441,7 +3441,12 @@ assert_contains "$out" "the page with the bundles built here and the page CI bui
 for file in app.wasm ghc_wasm_jsffi.js index.html islands.js islands/mermaid.js sw.js; do
   cmp "$pre/app/$file" "$ci/$file" || fail "the deployed $file is not the page's"
 done
-[ -f "$pre/toolchain/.wiki-toolchain/pages/app-server-$head1.zip" ] || fail 'the page from the file was not kept in the cache'
+# The file's zip is kept under a name of its own, its path beside it.
+pages=$pre/toolchain/.wiki-toolchain/pages
+entry=$pages/app-server-file-$(sha256sum "$files/app-server-$head1.zip" | cut -d' ' -f1).zip
+cmp "$entry" "$files/app-server-$head1.zip" || fail "the page from the file was not kept in the cache as $entry: $(ls "$pages")"
+[ "$(cat "$entry.meta")" = "file=$files/app-server-$head1.zip" ] || fail "the cache entry does not name the file: $(cat "$entry.meta")"
+[ ! -e "$pages/app-server-$head1.zip" ] || fail 'the page from the file was kept as one downloaded from GitHub'
 assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --sqlite"
 [ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the page from the file is not served'
 { [ "$(pstate app_page)" = "$files/app-server-$head1.zip" ] && [ -z "$(pstate backend_only)" ] &&
@@ -3481,6 +3486,42 @@ assert_lacks "$EVENTS" 'npm'
   fail "--no-bundle-locally or --npm-registry= was not forgotten: $(cat "$pre/state/wiki-demo.state")"
 cmp "$pre/app/islands.js" "$ci/islands.js" || fail 'CI'"'"'s bundles were not taken again'
 pass 'a zip of another name is a page from its file; --no-bundle-locally and --npm-registry= forget them'
+
+# The file gone: the state still names it, and the rerun deploys the copy
+# the cache kept, saying so. A changed file replaces that copy, and the
+# copy of the change is the one a later run without the file takes. With
+# neither the file nor a copy, the deploy stops and the last page stays.
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the entry of the same bytes was not taken over by page.zip: $(cat "$entry.meta")"
+rm "$files/page.zip"
+: >"$EVENTS"
+out=$case_dir/file-gone
+locked >"$out" 2>&1 || fail "the rerun without the file failed: $(cat "$out")"
+assert_contains "$out" "--app-page $files/page.zip is gone, or cannot be read: the page is the copy the page cache kept of it when it was last deployed, $entry"
+assert_lacks "$EVENTS" 'curl https://'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the cached page is not served'
+cp -R "$ci" "$case_dir/changed-page"
+printf 'changed\n' >"$case_dir/changed-page/changed.txt"
+page_zip "$files/page.zip" "$case_dir/changed-page"
+changed=$pages/app-server-file-$(sha256sum "$files/page.zip" | cut -d' ' -f1).zip
+out=$case_dir/file-changed
+locked >"$out" 2>&1 || fail "the rerun with a changed file failed: $(cat "$out")"
+assert_contains "$out" "the page: a page from $files/page.zip"
+[ -f "$pre/app/changed.txt" ] || fail 'the changed file was not deployed'
+cmp "$changed" "$files/page.zip" || fail 'the changed file did not enter the cache'
+[ "$(cat "$changed.meta")" = "file=$files/page.zip" ] || fail "the new entry does not name the file: $(cat "$changed.meta")"
+{ [ ! -e "$entry" ] && [ ! -e "$entry.meta" ]; } || fail 'the copy of the earlier version stayed in the cache'
+rm "$files/page.zip"
+out=$case_dir/file-gone-again
+locked >"$out" 2>&1 || fail "the rerun without the changed file failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $changed"
+[ -f "$pre/app/changed.txt" ] || fail 'the copy of the change was not the one deployed'
+rm "$changed" "$changed.meta"
+out=$case_dir/file-no-copy
+if locked >"$out" 2>&1; then fail 'a deploy with neither the file nor a copy went on'; fi
+assert_contains "$out" "--app-page $files/page.zip is gone, or cannot be read, and the page cache $pages keeps no copy of it"
+[ -f "$pre/app/changed.txt" ] || fail 'the deployed page was changed by a deploy that stopped'
+cp "$files/app-server-$head1.zip" "$files/page.zip"
+pass 'a page from a file has a cache entry of its own: a rerun without the file deploys it, saying so, and a changed file replaces it'
 
 # What the deploy refuses, before anything is built or installed.
 mkdir -p "$case_dir/no-wasm"
