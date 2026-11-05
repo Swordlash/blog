@@ -122,14 +122,13 @@ import Protolude
 import Text.Pandoc (PandocError, ReaderOptions (..), def, readHtml, readMarkdown, runPure)
 import Text.Pandoc.Builder qualified as B
 import Text.Pandoc.Definition qualified as P
-import Text.Pandoc.Extensions (Extension (..), Extensions, extensionsFromList)
-import Text.Pandoc.Shared (inlineListToIdentifier)
+import Text.Pandoc.Extensions (Extension (..), Extensions, disableExtension, extensionsFromList)
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinitions)
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
-import Wiki.Core.Markdown.Ast (Block (..), BoxMarker (..), Footnote (..), ListItem (..), ParseError, SpoilerHead (..), SpoilerMarker (..), SpoilerRole (..), parseWithAllMarkers, spoilerProblemText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxMarker (..), Footnote (..), ListItem (..), ParseError, SpoilerHead (..), SpoilerMarker (..), SpoilerRole (..), WrittenIds (..), parseWithAllMarkers, spoilerProblemText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
@@ -348,11 +347,14 @@ data PageRead = PageRead
   , blocks :: Either ParseError [Block]
   , markers :: [BoxMarker]
   , spoilers :: Map Int (Int, SpoilerEdit)
+  -- ^ What becomes of each of the page's spoiler marker lines, by its
+  -- line, with the column its marker starts at ('spoilerEdits').
+  , written :: WrittenIds
+  -- ^ The identifiers written in the page's source, and which of its
+  -- headings have one written ('reidentified').
   , bars :: [((Int, Int), (Int, Int))]
   -- ^ Where the bars of each inline spoiler are, the opening pair's line
   -- and column and the closing pair's ('InlineBars').
-  -- ^ What becomes of each of the page's spoiler marker lines, by its
-  -- line, with the column its marker starts at ('spoilerEdits').
   }
 
 -- | A page's Markdown, read ('PageRead').
@@ -360,10 +362,11 @@ readPage :: Text -> PageRead
 readPage raw =
   PageRead
     { source
-    , blocks = (\(bs, _, _) -> bs) <$> parsedPage
-    , markers = either (const []) (\(_, ms, _) -> ms) parsedPage
-    , spoilers = either (const mempty) (\(bs, _, ss) -> spoilerEdits bs ss) parsedPage
-    , bars = either (const []) (\(_, _, ss) -> [((s.spoilerLine, s.spoilerColumn), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
+    , blocks = (\(bs, _, _, _) -> bs) <$> parsedPage
+    , markers = either (const []) (\(_, ms, _, _) -> ms) parsedPage
+    , spoilers = either (const mempty) (\(bs, _, ss, _) -> spoilerEdits bs ss) parsedPage
+    , written = either (const (WrittenIds [] [])) (\(_, _, _, w) -> w) parsedPage
+    , bars = either (const []) (\(_, _, ss, _) -> [((s.spoilerLine, s.spoilerColumn), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
     }
   where
     source = normalLines raw
@@ -426,7 +429,9 @@ withBoxesRead defined numbering page = go page.markers page.spoilers
   where
     go markers spoilers = do
       let (marked, boxes, spoilerBoxes, bars) = withBoxes page.source markers spoilers page.bars
-      P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} marked)
+      -- Without pandoc's automatic identifiers, so that a heading's
+      -- identifier is one written in the source ('reidentified').
+      P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = disableExtension Ext_auto_identifiers wikiExtensions} marked)
       let boxed = walk (spoilersOf spoilerBoxes) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) read')
           found = texts boxed
           stray = Set.fromList (concatMap (\t -> [m | (placeholder, (m, _)) <- Map.toList boxes, placeholder `T.isInfixOf` t]) found)
@@ -436,7 +441,7 @@ withBoxesRead defined numbering page = go page.markers page.spoilers
           straySpoilers = Set.fromList [line | (placeholder, (line, _)) <- Map.toList spoilerBoxes, any (placeholder `T.isInfixOf`) found]
           unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` straySpoilers && (case e of CloseBox start -> start `Set.notMember` straySpoilers; _ -> True)) spoilers
       if Set.null stray && Set.null straySpoilers
-        then pure (reidentified (maybe identity withoutPlaceholders bars) (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
+        then pure (reidentified page.written (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
         else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
     texts :: [P.Block] -> [Text]
@@ -656,55 +661,51 @@ restoreBars bars = walk inBlock . walk inInline
       P.RawBlock f t -> P.RawBlock f (unplace t)
       b -> b
 
--- | An identifier pandoc made from a heading's text with the placeholders
--- of inline spoilers' bars in it ('Bars'), without them: what pandoc would
--- have made without the bars, which it leaves out of an identifier.
-withoutPlaceholders :: Bars -> Text -> Text
-withoutPlaceholders (Bars family) ident = case T.breakOn family ident of
-  (before, "") -> before
-  (before, rest) ->
-    let after = T.drop (T.length family) rest
-        (digits, more) = T.span isDigit (T.drop 1 after)
-     in if T.take 1 after `elem` ["o", "c"] && not (T.null digits) && "z" `T.isPrefixOf` more
-          then before <> withoutPlaceholders (Bars family) (T.drop 1 more)
-          else before <> T.take (T.length family) rest <> withoutPlaceholders (Bars family) after
-
--- | The document with the identifier of every heading that has none of its
--- own made as the wiki makes it ("Wiki.Core.Markdown.Ast"'s
+-- | The document with the identifier of every heading that has none
+-- written in the source made as the wiki makes it ("Wiki.Core.Markdown.Ast"'s
 -- withHeadingIds), so that a link written on the page to a section lands
 -- on it in the document too, and the writer's table of contents links to
 -- the same identifiers. Pandoc makes them otherwise: a second @Answer@ is
--- @answer-1@ for it and @answer-2@ for the wiki, and a heading with an
--- inline spoiler had the spoiler's placeholders in its identifier while
--- pandoc made the identifiers unique.
+-- @answer-1@ for it and @answer-2@ for the wiki.
 --
--- The identifiers given in the source (@## Title {#custom}@) are kept,
--- and taken before the others, with those of fenced divs and code blocks,
--- as the wiki takes them. Pandoc's reader does not mark which identifiers
--- it made, so one is taken as made by pandoc when it is the one pandoc
--- makes from the heading's text, with or without the number pandoc adds
--- to tell two apart (after the placeholders are taken out of it, as the
--- function given does), and as given in the source otherwise. Then, in
--- the order of the document, each heading pandoc gave its identifier gets
--- the slug of its text, or the first of @-2@, @-3@, … after it that is
--- free ('freshName').
-reidentified :: (Text -> Text) -> [P.Block] -> [P.Block]
-reidentified unplace blocks = evalState (walkM renamed blocks) written
+-- An identifier written in the source (@## Title {#custom}@) is kept,
+-- whatever it looks like. The written identifiers of headings, fenced divs
+-- and code blocks are taken before any other, as the wiki takes them
+-- ('WrittenIds'). Then, in the order of the document, every other heading
+-- gets the slug of its text, or the first of @-2@, @-3@, … after it that
+-- is free ('freshName').
+--
+-- Which headings have an identifier written is the wiki parser's answer
+-- ('WrittenIds''s @headings@), matched to pandoc's headings by position
+-- when both read the same number of headings and pandoc's identifier
+-- agrees with each identifier the wiki read as written. The orders can
+-- differ: pandoc keeps a footnote's blocks where the footnote is
+-- referenced, and the wiki puts the footnotes at the end of the page, so
+-- a heading inside a footnote has another position in each. Then pandoc's
+-- own reading decides: the document is read without pandoc's automatic
+-- identifiers ('withBoxesRead'), so a heading has an identifier exactly
+-- when one is written for it.
+reidentified :: WrittenIds -> [P.Block] -> [P.Block]
+reidentified written blocks = evalState (walkM renamed blocks) (taken, keptOnes)
   where
-    automatic ident xs =
-      let made = unplace ident
-          base = inlineListToIdentifier wikiExtensions xs
-       in made == base || maybe False (\n -> not (T.null n) && T.all isDigit n) (T.stripPrefix (base <> "-") made)
-    written =
-      Set.fromList $
-        query (\case P.Header _ (ident, _, _) xs | not (T.null ident), not (automatic ident xs) -> [ident]; _ -> []) blocks
-          <> query (\case P.Div (ident, _, _) _ | not (T.null ident) -> [ident]; P.CodeBlock (ident, _, _) _ | not (T.null ident) -> [ident]; _ -> []) blocks
-    renamed :: P.Block -> State (Set Text) P.Block
+    -- Pandoc's headings' identifiers, in the order 'renamed' visits them.
+    pandocIds = reverse (execState (walkM (\b -> b <$ (case b of P.Header _ (ident, _, _) _ -> modify (ident :); _ -> pass)) blocks) [])
+    aligned = length pandocIds == length written.headings && and (zipWith (\w ident -> maybe True (== ident) w) written.headings pandocIds)
+    -- For each of pandoc's headings, in order, whether its identifier is
+    -- one written in the source.
+    keptOnes
+      | aligned = map isJust written.headings
+      | otherwise = map (not . T.null) pandocIds
+    taken = Set.fromList (written.taken <> [ident | (True, ident) <- zip keptOnes pandocIds])
+    renamed :: P.Block -> State (Set Text, [Bool]) P.Block
     renamed = \case
-      P.Header level (ident, cls, kvs) xs
-        | automatic ident xs -> do
-            fresh <- gets (\taken -> freshName (`Set.member` taken) (headingSlug (headingText xs)))
-            modify (Set.insert fresh)
+      P.Header level (ident, cls, kvs) xs -> do
+        (taken', kept) <- get
+        case kept of
+          True : rest -> P.Header level (ident, cls, kvs) xs <$ put (taken', rest)
+          _ -> do
+            let fresh = freshName (`Set.member` taken') (headingSlug (headingText xs))
+            put (Set.insert fresh taken', drop 1 kept)
             pure (P.Header level (fresh, cls, kvs) xs)
       b -> pure b
 

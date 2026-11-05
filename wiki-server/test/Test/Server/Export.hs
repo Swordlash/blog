@@ -43,7 +43,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
-import Wiki.Core.Markdown.Ast (Block (Heading), parseMarkdown)
+import Wiki.Core.Markdown.Ast (Block (Footnotes, Heading), Footnote (..), parseMarkdown, parseWithAllMarkers)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -349,6 +349,20 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       -- taken by it.
       _ <- same "## Title {#custom}\n\nOne.\n\n## Title\n\nTwo.\n" ["custom", "title"]
       _ <- same "## Start\n\n## Intro {#start}\n" ["start-2", "start"]
+      -- Whatever a written identifier looks like, it is written.
+      _ <- same "## Answer {#answer-2}\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer-2", "answer"]
+      _ <- same "## Answer {#answer}\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer", "answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## Answer {#answer}\n\nTwo.\n" ["answer-2", "answer"]
+      -- A heading in a footnote comes first in pandoc's document, where
+      -- the footnote is referenced, and last on the page, where the
+      -- footnotes are: its written identifier is still kept.
+      let footnoted = "Ref[^n].\n\n## Answer {#answer-2}\n\n## Answer\n\n[^n]: Note.\n\n    ## Inside {#answer}\n"
+          allIds = query (\case P.Header _ (ident, _, _) _ -> [ident]; _ -> [])
+          wikiAllIds = [ident | Right (doc, _, _, _) <- [parseWithAllMarkers footnoted], Heading _ attrs _ <- doc <> [b | Footnotes notes <- doc, Footnote _ _ bs <- notes, b <- bs], Just ident <- [lookup "id" attrs]]
+      noted <- blocksOf ToOther place footnoted
+      [ident | P.Header _ (ident, _, _) _ <- noted] `shouldBe` ["answer-2", "answer-3"]
+      allIds noted `shouldBe` ["answer", "answer-2", "answer-3"]
+      wikiAllIds `shouldBe` ["answer-2", "answer-3", "answer"]
       pass
     it "nests spoilers, and finds them in a quotation and a list item" $ do
       nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"

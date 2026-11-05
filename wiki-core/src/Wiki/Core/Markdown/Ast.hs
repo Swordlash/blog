@@ -77,6 +77,7 @@ module Wiki.Core.Markdown.Ast
   , boxMarkers
   , SpoilerMarker (..)
   , SpoilerRole (..)
+  , WrittenIds (..)
   , parseWithMarkers
   , parseWithAllMarkers
   , parseWithLines
@@ -342,21 +343,73 @@ parseMarkdown = fmap fst . parseWithMarkers
 -- | Parse a page's Markdown, with the markers of its boxes in the order of
 -- the source ('boxMarkers'): one parse, for a caller that needs both.
 parseWithMarkers :: Text -> Either ParseError ([Block], [BoxMarker])
-parseWithMarkers = fmap (\(bs, ms, _) -> (bs, ms)) . parseWithAllMarkers
+parseWithMarkers = fmap (\(bs, ms, _, _) -> (bs, ms)) . parseWithAllMarkers
 
 -- | Parse a page's Markdown, with the markers of its boxes and the marker
--- lines of its spoilers, each in the order of the source. The export
--- rewrites the source at these lines before pandoc reads it
+-- lines of its spoilers, each in the order of the source, and the
+-- identifiers written in it ('WrittenIds'). The export rewrites the
+-- source at these lines before pandoc reads it, and gives the document's
+-- headings the identifiers the wiki gives them
 -- ("Wiki.Server.Export.Document").
-parseWithAllMarkers :: Text -> Either ParseError ([Block], [BoxMarker], [SpoilerMarker])
+parseWithAllMarkers :: Text -> Either ParseError ([Block], [BoxMarker], [SpoilerMarker], WrittenIds)
 parseWithAllMarkers source =
   ( \(Blocks bs (Markers ms ss)) ->
-      ( finished (map snd (toList bs))
-      , sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)
-      , sortOn (\s -> (s.spoilerLine, s.spoilerColumn)) (ordNub ss)
-      )
+      let read' = map snd (toList bs)
+       in ( finished read'
+          , sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)
+          , sortOn (\s -> (s.spoilerLine, s.spoilerColumn)) (ordNub ss)
+          , WrittenIds {headings = writtenHeadings read', taken = concatMap writtenIds read'}
+          )
   )
     <$> parsed source
+
+-- | 'WrittenIds' are the identifiers written in braces in a page's source
+-- (@## Title {#custom}@). The wiki keeps a written identifier as it is,
+-- and gives no other heading the same one ('withHeadingIds'). The export
+-- needs both lists to give its headings the wiki's identifiers: pandoc's
+-- reader does not say which identifiers were written.
+data WrittenIds = WrittenIds
+  { headings :: [Maybe Text]
+  -- ^ One entry for every heading of the page, in the order
+  -- 'withHeadingIds' visits them: the identifier written for the
+  -- heading, or 'Nothing'. The headings in footnotes come last, because
+  -- the wiki puts the footnotes at the end of the page.
+  , taken :: [Text]
+  -- ^ Every identifier written in the page: those of headings, fenced
+  -- divs and code blocks.
+  }
+  deriving stock (Eq, Show)
+
+-- | The identifiers written in braces in a block and in the blocks inside
+-- it: those of headings, fenced divs and code blocks.
+writtenIds :: Block -> [Text]
+writtenIds = \case
+  Heading _ attrs _ -> ownId attrs
+  Div attrs bs -> ownId attrs <> concatMap writtenIds bs
+  CodeBlock attrs _ _ -> ownId attrs
+  BlockQuote bs -> concatMap writtenIds bs
+  List _ items -> concat [concatMap writtenIds bs | ListItem _ bs <- items]
+  Alert _ _ bs -> concatMap writtenIds bs
+  Spoiler _ bs -> concatMap writtenIds bs
+  Footnotes notes -> concat [concatMap writtenIds bs | Footnote _ _ bs <- notes]
+  _ -> []
+
+-- | Every heading of some blocks, in the order 'withHeadingIds' visits
+-- them, with the identifier written for it, if any.
+writtenHeadings :: [Block] -> [Maybe Text]
+writtenHeadings = concatMap $ \case
+  Heading _ attrs _ -> [head (ownId attrs)]
+  BlockQuote bs -> writtenHeadings bs
+  List _ items -> concat [writtenHeadings bs | ListItem _ bs <- items]
+  Div _ bs -> writtenHeadings bs
+  Alert _ _ bs -> writtenHeadings bs
+  Spoiler _ bs -> writtenHeadings bs
+  Footnotes notes -> concat [writtenHeadings bs | Footnote _ _ bs <- notes]
+  _ -> []
+
+-- | The identifier written in some attributes, if there is one.
+ownId :: Attributes -> [Text]
+ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
 
 -- | Parse a page's Markdown, each block of the page (not those inside
 -- another) with the line of the source it starts on, from 1: what the
@@ -581,18 +634,7 @@ mentions = foldMap block'
 withHeadingIds :: [Block] -> [Block]
 withHeadingIds doc = evalState (traverse assign doc) (written, mempty)
   where
-    written = Set.fromList (concatMap explicit doc)
-    explicit = \case
-      Heading _ attrs _ -> ownId attrs
-      Div attrs bs -> ownId attrs <> concatMap explicit bs
-      CodeBlock attrs _ _ -> ownId attrs
-      BlockQuote bs -> concatMap explicit bs
-      List _ items -> concat [concatMap explicit bs | ListItem _ bs <- items]
-      Alert _ _ bs -> concatMap explicit bs
-      Spoiler _ bs -> concatMap explicit bs
-      Footnotes notes -> concat [concatMap explicit bs | Footnote _ _ bs <- notes]
-      _ -> []
-    ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
+    written = Set.fromList (concatMap writtenIds doc)
     -- The ids taken so far, and how many numbered boxes of each kind
     -- (by its name) came before.
     assign :: Block -> State (Set Text, Map Text Int) Block

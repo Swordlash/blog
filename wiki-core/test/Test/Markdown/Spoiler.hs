@@ -121,7 +121,7 @@ spec = describe "Markdown spoilers and listings" $ do
     it "keeps a spoiler's description and blocks in the plain text" $
       bodyText "[[spoiler]]{x}(The answer)\nForty-two.\n[[/spoiler]]{x}\n" `shouldBe` "The answer Forty-two."
     it "gives the export each marker line, with what it is" $
-      (\(_, _, ms) -> ms) <$> parseWithAllMarkers "[[spoiler]]{x}(D)\n> [[/spoiler]]{y}\n[[/spoiler]]{x}\n"
+      (\(_, _, ms, _) -> ms) <$> parseWithAllMarkers "[[spoiler]]{x}(D)\n> [[/spoiler]]{y}\n[[/spoiler]]{x}\n"
         `shouldBe` Right
           [ SpoilerMarker 1 1 (Starts "x" "D")
           , SpoilerMarker 2 3 (Faulty "[[/spoiler]]{y}" "no open spoiler of this name")
@@ -129,7 +129,7 @@ spec = describe "Markdown spoilers and listings" $ do
           ]
 
     it "gives the export where each inline spoiler's bars are, and none for bars that are text" $
-      (\(_, _, ms) -> ms) <$> parseWithAllMarkers "a ||b|| c \\|\\|d\\|\\| `||e||`\n> ||f\n> g||\n\n[[spoiler]]{x}(A ||b||)\nc\n[[/spoiler]]{x}\n"
+      (\(_, _, ms, _) -> ms) <$> parseWithAllMarkers "a ||b|| c \\|\\|d\\|\\| `||e||`\n> ||f\n> g||\n\n[[spoiler]]{x}(A ||b||)\nc\n[[/spoiler]]{x}\n"
         `shouldBe` Right
           [ SpoilerMarker 1 3 (InlineBars 1 6)
           , SpoilerMarker 2 3 (InlineBars 3 4)
