@@ -74,20 +74,28 @@ unitSpec = describe "the changelog's entries" $ do
       refused ("---\r\npr: 3\r\ntitle: T\r\n---\r\n\r\n" <> bugs) "Unix"
 
   describe "the directory" $ do
-    it "names a file by a slug" $ do
-      map entryFileName ["changelog/heading-spoilers.md", "copy-code.md", "a1-b2.md"] `shouldBe` [True, True, True]
-      map entryFileName ["README.md", "x_y.md", "-a.md", "a--b.md", "a-.md", ".md", "a.txt", "Ab.md"] `shouldBe` replicate 8 False
+    it "names a file by its number and a slug" $ do
+      map entryFileName ["changelog/00160-heading-spoilers.md", "00158-copy-code.md", "00000-a1-b2.md", "123456-x.md"] `shouldBe` replicate 4 True
+      map entryFileName ["README.md", "heading-spoilers.md", "0160-x.md", "00160.md", "00160-.md", "00160-x_y.md", "00160--a.md", "00160-a--b.md", "00160-Ab.md", "00160-a.txt", "abcde-x.md"]
+        `shouldBe` replicate 11 False
 
     it "refuses a malformed entry, naming its file and the problem" $
-      readEntries [("changelog/good.md", entry "1" "Good" [bugs]), ("changelog/bad.md", entry "2" "Bad" ["## Bug fixes\n"])]
-        `shouldBe` Left "changelog/bad.md: line 6: the section ## Bug fixes is empty"
+      readEntries [("changelog/00001-good.md", entry "1" "Good" [bugs]), ("changelog/00002-bad.md", entry "2" "Bad" ["## Bug fixes\n"])]
+        `shouldBe` Left "changelog/00002-bad.md: line 6: the section ## Bug fixes is empty"
+
+    it "refuses a file named with another number than its pr" $ do
+      readEntries [("changelog/00159-spoilers.md", entry "160" "S" [bugs])]
+        `shouldBe` Left "changelog/00159-spoilers.md: named with 00159 but its pr is 160: name it 00160-spoilers.md"
+      readEntries [("changelog/00000-spoilers.md", entry "160" "S" [bugs])]
+        `shouldSatisfy` either (T.isInfixOf "name it 00160-spoilers.md") (const False)
+      length <$> readEntries [("changelog/123456-big.md", entry "123456" "Big" [bugs])] `shouldBe` Right 1
 
     it "refuses a file that is not an entry, and two entries with one number" $ do
       readEntries [("changelog/notes.txt", "x")] `shouldSatisfy` either (T.isPrefixOf "changelog/notes.txt: not an entry's name") (const False)
-      readEntries [("changelog/a.md", entry "7" "A" [bugs]), ("changelog/b.md", entry "7" "B" [bugs])]
-        `shouldBe` Left "pr 7 is in more than one entry: changelog/a.md, changelog/b.md"
+      readEntries [("changelog/00007-a.md", entry "7" "A" [bugs]), ("changelog/00007-b.md", entry "7" "B" [bugs])]
+        `shouldBe` Left "pr 7 is in more than one entry: changelog/00007-a.md, changelog/00007-b.md"
       -- Not numbered yet is not a number: any entry may have it.
-      length <$> readEntries [("changelog/a.md", entry "0" "A" [bugs]), ("changelog/b.md", entry "0" "B" [bugs])] `shouldBe` Right 2
+      length <$> readEntries [("changelog/00000-a.md", entry "0" "A" [bugs]), ("changelog/00000-b.md", entry "0" "B" [bugs])] `shouldBe` Right 2
 
     it "shows the newest twelve by number, the newest first, and none not numbered yet" $ do
       let numbered n = Entry {pr = n, title = show n, sections = [(BugFixes, "x")]}

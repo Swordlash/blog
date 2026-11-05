@@ -11,8 +11,8 @@
 # With --pr, the pull request numbered N, whose changes are those from the
 # merge base of REF and the head (HEAD by default) to the head:
 #
-#   * it adds exactly one entry, changelog/<slug>.md, well formed, whose pr
-#     is N (pr: 0, "not numbered yet", is a forgotten number here);
+#   * it adds exactly one entry, changelog/<number>-<slug>.md, well formed,
+#     whose pr is N (pr: 0, "not numbered yet", is a forgotten number here);
 #   * every entry it changes is well formed too (a typo fixed in an old one
 #     is fine); a file it deletes is not checked;
 #   * no other entry, at the head, has the number N;
@@ -39,8 +39,11 @@
 #   ## Bug fixes            once each, in this order, none empty; New
 #   ## Other changes        features holds at least one fenced code block)
 #
-# The file name is a slug (lower-case letters and digits in words joined by
-# single hyphens) and .md. The front matter is exactly those four lines: pr
+# The file name is the entry's pr with zeros in front to five digits
+# (00000 while it is not numbered yet), a hyphen, a slug (lower-case letters
+# and digits in words joined by single hyphens) and .md, such as
+# 00160-heading-spoilers.md: the files then list in the order the pull
+# requests were opened. The front matter is exactly those four lines: pr
 # a number without a leading zero, the title not empty and at most 80 bytes.
 # No other heading of level one or two outside a fenced code block. A fence
 # is three or more backticks or tildes after any indentation, closed by a
@@ -144,15 +147,26 @@ entry_form() {
   '
 }
 
-# Whether a path under changelog/ is an entry's: changelog/<slug>.md.
+# Whether a path under changelog/ is an entry's: changelog/<number>-<slug>.md.
 entry_path() {
-  printf '%s\n' "$1" | grep -E '^changelog/[a-z0-9]+(-[a-z0-9]+)*\.md$' >/dev/null
+  printf '%s\n' "$1" | grep -E '^changelog/[0-9]{5,}-[a-z0-9]+(-[a-z0-9]+)*\.md$' >/dev/null
+}
+
+# What is wrong with an entry's name, given its pr, or nothing: the number
+# it is named with must be its pr with zeros in front to five digits.
+name_problem() {
+  name=${1##*/}
+  named=${name%%-*}
+  want=$(printf '%05d' "$2")
+  [ "$named" = "$want" ] || printf 'named with %s but its pr is %s: name it %s-%s' "$named" "$2" "$want" "${name#*-}"
 }
 
 # What an entry looks like, for a message that says what to add.
 shape() {
   cat <<EOF
-An entry is a file changelog/<slug>.md (lower-case words joined by hyphens), such as:
+An entry is a file changelog/<number>-<slug>.md: the number is its pr with
+zeros in front to five digits (00000 before the pull request is opened), the
+slug lower-case words joined by hyphens, such as changelog/00160-heading-spoilers.md:
 
   ---
   pr: ${1:-N}
@@ -211,10 +225,16 @@ if [ -n "$files_mode" ]; then
       printf '%s: no such file\n' "$file"
       status=1
     elif ! entry_path "changelog/${file##*/}"; then
-      printf '%s: not an entry'"'"'s name: changelog/<slug>.md, lower-case letters and digits in words joined by hyphens\n' "$file"
+      printf '%s: not an entry'"'"'s name: changelog/<number>-<slug>.md, the number five digits or more, the slug lower-case letters and digits in words joined by hyphens\n' "$file"
       status=1
     elif result=$(entry_form <"$file"); then
-      printf '%s: %s\n' "$file" "$result"
+      wrong=$(name_problem "$file" "${result#ok }")
+      if [ -n "$wrong" ]; then
+        printf '%s: %s\n' "$file" "$wrong"
+        status=1
+      else
+        printf '%s: %s\n' "$file" "$result"
+      fi
     else
       printf '%s: %s\n' "$file" "$result"
       status=1
@@ -260,11 +280,16 @@ for change in $changes; do
     *) problem "$path: changed in a way the check does not take ($status)"; continue ;;
   esac
   if ! entry_path "$path"; then
-    problem "$path: not an entry; only entries named changelog/<slug>.md (lower-case letters and digits in words joined by hyphens) belong under changelog/"
+    problem "$path: not an entry; only entries named changelog/<number>-<slug>.md (the number five digits or more, the slug lower-case letters and digits in words joined by hyphens) belong under changelog/"
     continue
   fi
   if result=$(git show "$head:$path" | entry_form); then
     number=${result#ok }
+    wrong=$(name_problem "$path" "$number")
+    if [ -n "$wrong" ]; then
+      problem "$path: $wrong"
+      number=''
+    fi
   else
     problem "$path: $result"
     number=''
