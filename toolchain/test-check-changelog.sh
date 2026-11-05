@@ -134,6 +134,17 @@ commit 'an entry, an old one gone'
 expect_ok 160
 pass 'an entry deleted is not checked'
 
+# Old entries renamed beside the pull request's own (as when the entries
+# took their numbers into their names): a rename is not a new entry.
+branch renamed
+entry 160 'Heading spoilers' >"$REPO/changelog/00160-heading-spoilers.md"
+git -C "$REPO" mv changelog/00150-deploy-texlive.md changelog/00150-deploy-texlive-works.md
+git -C "$REPO" mv changelog/00151-key-test.md changelog/00151-the-key-test.md
+commit 'an entry, two renamed'
+expect_ok 160
+assert_contains 'ok: changelog/00160-heading-spoilers.md, the entry of #160'
+pass 'old entries renamed: checked, and not counted as new ones'
+
 # The pull request's number in another entry too.
 branch twice
 entry 160 'Heading spoilers' >"$REPO/changelog/00160-heading-spoilers.md"

@@ -271,6 +271,16 @@ tab=$(printf '\t')
 old_ifs=$IFS
 IFS='
 '
+# The numbers of the entries the pull request deletes: an entry added with
+# one of them is that entry renamed (as when the entries took their numbers
+# into their names), checked as a changed entry, not counted as the pull
+# request's own.
+deleted=' '
+for change in $changes; do
+  [ "${change%%"$tab"*}" = D ] || continue
+  number=$(git show "$from:${change#*"$tab"}" | sed -n 's/^pr:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' | head -n 1)
+  [ -z "$number" ] || [ "$number" = 0 ] || deleted="$deleted$number "
+done
 for change in $changes; do
   status=${change%%"$tab"*}
   path=${change#*"$tab"}
@@ -293,6 +303,9 @@ for change in $changes; do
   else
     problem "$path: $result"
     number=''
+  fi
+  if [ "$status" = A ] && [ -n "$number" ]; then
+    case $deleted in *" $number "*) status=M ;; esac
   fi
   if [ "$status" = A ]; then
     added="$added $path"
