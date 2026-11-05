@@ -1,0 +1,52 @@
+# Delete a cabal store from GitHub's cache (decision 54 of docs/PLAN.md), by
+# hand, from the Actions tab: when a store has grown too large with old
+# versions of libraries or of compilers, or when it is suspected of holding
+# something broken. Every copy of it goes, on every branch; the next run of
+# build.yml's native job (for "native") or wasm job (for "wasm") builds it
+# again from nothing and saves it.
+name: Delete a cabal store
+
+on:
+  workflow_dispatch:
+    inputs:
+      store:
+        description: "Which store: native (the native job's, with GHC's floor), wasm (the wasm job's, which server-page.yml also reads) or both"
+        type: choice
+        options:
+          - native
+          - wasm
+          - both
+        required: true
+
+permissions:
+  actions: write
+
+env:
+  CABAL_VERSION: '3.16.1.0'
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Delete every copy of the store
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        STORE: ${{ inputs.store }}
+      run: |
+        case $STORE in
+          both) kinds="native wasm" ;;
+          *) kinds=$STORE ;;
+        esac
+        for kind in $kinds; do
+          prefix="Linux-$kind-store-cabal-$CABAL_VERSION-"
+          ids=$(gh cache list --key "$prefix" --limit 1000 --json id,key --jq '.[] | "\(.id) \(.key)"')
+          if [ -z "$ids" ]; then
+            echo "No copy of $prefix* is cached."
+            continue
+          fi
+          printf '%s\n' "$ids" | while read -r id key; do
+            echo "Deleting $key"
+            gh cache delete "$id"
+          done
+        done

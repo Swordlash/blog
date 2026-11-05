@@ -140,6 +140,11 @@ env:
   # pull request rather than the merge commit GitHub tests.
   WIKI_BUILD_VERSION: ${{ github.event.pull_request.head.sha || github.sha }}
   GHC_VERSION: '9.14.1'
+  # The oldest GHC the native build supports (GHC_MIN_VERSION in
+  # toolchain/pins.env; decision 53 of docs/PLAN.md), at its newest release:
+  # the native job installs its dependencies into the store, and the
+  # native-floor job builds the wiki with it.
+  GHC_FLOOR_VERSION: '9.10.3'
   CABAL_VERSION: '3.16.1.0'
   # Keep WASM_GHC_VERSION in step with with-compiler in cabal-wasm.project.
   WASM_GHC_VERSION: '9.14.1.20260731'
@@ -312,31 +317,33 @@ jobs:
     - name: Update Cabal package index
       run: cabal update
 
-    # As haskell-halogen's workflow does, and for its reasons: the store is
-    # additive and partitioned by compiler, so it is carried forward from run
-    # to run rather than rebuilt when the dependencies change. A new
-    # dependency is one more directory in it. So the store is restored
-    # whatever the project files say: the newest copy of this ref (or of
-    # main) whose key names the same compilers, runner kind and version tag.
-    # Bump the tag (v1) by hand to start from an empty store. The key ends in
-    # the run's id because a key cannot be overwritten; after each save the
-    # older copies of the ref are deleted (see the save). The second restore
-    # key also takes the copies saved before the tag existed, whose keys
-    # carried a hash of the project files instead: remove it at the next bump,
-    # or it would take the old tag's copies.
+    # The native store (decision 54 of docs/PLAN.md): one cache entry per
+    # cabal version, whatever the compilers. The store keeps each compiler's
+    # packages in a directory of its own (store/ghc-9.14.1-..., store/ghc-
+    # 9.10.3-...), so the pinned GHC's and the floor's live in the same
+    # entry, and cabal decides what to build on top of it. It is carried
+    # forward from run to run whatever the project files say: the newest
+    # copy of this ref (or of main) for the same cabal and runner kind. Only
+    # the unit job saves it, with the floor's dependencies built in too, so
+    # the three groups and native-floor never undo each other's copies. Bump
+    # the tag (v1) by hand, or run the workflow "Delete a cabal store", to
+    # start from an empty store. The key ends in the run's id because a key
+    # cannot be overwritten; after each save the older copies of the ref are
+    # deleted (see the save). The last restore key takes the copies saved
+    # under the key that named GHC's version, once: remove it at the next
+    # bump.
     - name: Restore cached dependencies
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v5
       id: cache
       env:
-        key: ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
-        tag: ${{ runner.environment }}-v1
+        key: ${{ runner.os }}-native-store-cabal-${{ steps.setup.outputs.cabal-version }}-${{ runner.environment }}-v1
       with:
         path: ${{ steps.setup.outputs.cabal-store }}
-        key: ${{ env.key }}-${{ env.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ env.key }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ env.key }}-${{ env.tag }}-
           ${{ env.key }}-
+          ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}-
 
     # The store holds dependencies; this snapshot also keeps the wiki's own
     # object and interface files. It is restored whatever the sources say:
@@ -368,6 +375,25 @@ jobs:
       if: matrix.group == 'unit'
       run: cd maker && cabal build all --enable-tests --only-dependencies
 
+    # The oldest supported GHC's dependencies, the wiki's and the maker's,
+    # into the same store before it is saved, so that the native-floor job
+    # finds them there. The compiler itself is cached by its version; ghcup
+    # installs it beside the pinned one without making it the default.
+    - name: Cache GHC ${{ env.GHC_FLOOR_VERSION }}
+      if: matrix.group == 'unit' && runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      with:
+        path: /usr/local/.ghcup/ghc/${{ env.GHC_FLOOR_VERSION }}
+        key: ${{ runner.os }}-ghcup-ghc-${{ env.GHC_FLOOR_VERSION }}
+
+    - name: Install GHC ${{ env.GHC_FLOOR_VERSION }}'s dependencies
+      if: matrix.group == 'unit'
+      run: |
+        ghcup whereis ghc "$GHC_FLOOR_VERSION" >/dev/null 2>&1 || ghcup install ghc "$GHC_FLOOR_VERSION"
+        floor=$(ghcup whereis ghc "$GHC_FLOOR_VERSION")
+        cabal build all --only-dependencies -w "$floor" --builddir=dist-newstyle/native-floor
+        (cd maker && cabal build all --enable-tests --only-dependencies -w "$floor" --builddir=dist-newstyle/floor)
+
     # Before the build, so a run that fails on our own code still banks the
     # dependencies it compiled; after them, so a store whose dependencies
     # failed to build never replaces a good one. Then the ref's older copies
@@ -384,7 +410,7 @@ jobs:
       if: matrix.group == 'unit'
       env:
         GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}-
+        PREFIX: ${{ runner.os }}-native-store-cabal-${{ steps.setup.outputs.cabal-version }}-${{ runner.environment }}-v1-
         SAVED: ${{ steps.cache.outputs.cache-primary-key }}
       run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
@@ -501,6 +527,59 @@ jobs:
     - name: Report incremental build size
       if: matrix.group == 'unit'
       run: du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The oldest GHC the native build supports (decision 53), and on the
+  # weekly run and by hand the one between it and the pinned one: the
+  # wiki's packages and the maker built, with -Werror as cabal.project sets,
+  # tests not run (the native job runs them with the pinned GHC). Its own
+  # build directory, not cached. The store is the native job's, restored
+  # and never saved here: the unit job installs the floor's dependencies.
+  # The versions are written out in the matrix, which cannot read env:
+  # GHC_FLOOR_VERSION above, and 9.12's newest release.
+  native-floor:
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    name: native (GHC ${{ matrix.ghc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["9.10.3", "9.12.4"]' || '["9.10.3"]') }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Pin the cabal directory
+      run: echo "CABAL_DIR=$HOME/.cabal" >> "$GITHUB_ENV"
+
+    - uses: haskell-actions/setup@v2
+      id: setup
+      with:
+        ghc-version: ${{ matrix.ghc }}
+        cabal-version: ${{ env.CABAL_VERSION }}
+        cabal-update: false
+
+    - name: Install the system packages the build links with
+      run: sh toolchain/ci-native-deps.sh base
+
+    - name: Update Cabal package index
+      run: cabal update
+
+    - name: Restore cached dependencies
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.setup.outputs.cabal-store }}
+        key: ${{ runner.os }}-native-store-cabal-${{ steps.setup.outputs.cabal-version }}-${{ runner.environment }}-v1-${{ github.run_id }}
+        restore-keys: ${{ runner.os }}-native-store-cabal-${{ steps.setup.outputs.cabal-version }}-${{ runner.environment }}-v1-
+
+    - name: Build the wiki
+      run: |
+        sh toolchain/changelog-stamp.sh
+        cabal build all --builddir=dist-newstyle/native-floor
+
+    - name: Build the maker
+      run: cd maker && cabal build all --enable-tests --builddir=dist-newstyle/floor
 
   wasm:
     needs: plan
@@ -654,22 +733,24 @@ jobs:
     - name: Update Cabal package index
       run: cabal update
 
-    # One store for both compilers (cabal partitions it by compiler), restored
-    # and saved, and its older copies pruned, as in the native job; the
-    # second restore key is transitional there too.
+    # The wasm store (decision 54): one cache entry per cabal version for
+    # both compilers this job uses (cabal partitions the store by compiler),
+    # saved by this job only, and its older copies pruned, as in the native
+    # job. server-page.yml restores it and saves nothing. The last restore
+    # key takes the copies saved under the key that named the compilers'
+    # versions, once: remove it at the next bump of the tag.
     - name: Restore cached dependencies
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v5
       id: cache
       env:
-        key: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}
-        tag: ${{ runner.environment }}-v1
+        key: ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1
       with:
         path: ${{ env.CABAL_DIR }}/store
-        key: ${{ env.key }}-${{ env.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ env.key }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ env.key }}-${{ env.tag }}-
           ${{ env.key }}-
+          ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-
 
     # Separate from native's snapshot: the wasm job also builds native
     # prerender, browser-test and smoke-test programs. Only Cabal's build
@@ -730,7 +811,7 @@ jobs:
       if: runner.environment == 'github-hosted'
       env:
         GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-
+        PREFIX: ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1-
         SAVED: ${{ steps.cache.outputs.cache-primary-key }}
       run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
