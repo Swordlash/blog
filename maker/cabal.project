@@ -1,0 +1,10 @@
+-- The maker's own project, apart from the wiki's cabal.project, so that
+-- building or running it resolves and fetches nothing of the wiki:
+--   cabal --project-dir=maker build exe:maker
+-- toolchain/maker.sh does that and runs the result.
+packages: .
+
+-- As the wiki's own packages: no warning reaches a commit. Kept out of
+-- maker.cabal so that a newer GHC's new warning never stops a build there.
+package maker
+  ghc-options: -Werror
