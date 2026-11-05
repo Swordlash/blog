@@ -599,6 +599,47 @@ confirms it against reality and the plan is amended if it does not hold.
     reuses it; the terminal's question is one, naming the TeX Live download and, when
     needed, the Perl build; `--texlive` answers yes to both; the undeploy keeps that
     Perl with the toolchain. The CTAN binaries are accepted (the owner, 2026-11-04).
+45. **Spoilers and scrolling listings (WP5.62, issue #152).** A block spoiler is a
+    named pair of marker lines, `[[spoiler]]{name}(Description)` and
+    `[[/spoiler]]{name}` (the owner, 2026-11-04: markers over a box kind, so that any
+    blocks go inside and spoilers nest; the spelling after bbcode; the name one word,
+    as an identifier in code; the description inline Markdown; both required). They
+    are a container block spec on the parser's node stack, so they never reach the
+    inline parser and the wiki links are untouched; a marker is one only on a line of
+    its own, mid-line it is a wiki link. An end marker closes only the innermost open
+    spoiler and only when the names agree, and is not read inside code or HTML blocks.
+    A broken line (no braces, a bad name, no description, text after `)`, an end
+    marker with no name or the wrong one, no spoiler open) is an error line in red
+    with its reason, and an unclosed spoiler holds everything below it, in red. A
+    spoiler never cuts a section (the owner, 2026-11-04): either its content has no
+    heading, or it is a section spoiler (its first block a heading of level N, every
+    heading inside deeper, ending before a heading of level N or less or at the
+    document's end); anything else is an error. A good spoiler is `<details
+    class="spoiler" data-spoiler="name">` with the description as its summary, closed
+    by default; the contents, anchors, plain text, search, footnotes, mentions,
+    formulas, pauses and slide steps all look inside. Open or closed is remembered
+    per user, page and name in the browser's localStorage (a server-side store may
+    come later), restored when a spoiler first appears, and shared with the editor's
+    preview; a click on a contents entry, an in-page `#heading` link, `hashchange`
+    and load open the spoilers around the target heading, and the current-section
+    marker watches headings inside open spoilers. An inline spoiler, `||text||`, is a
+    formatting spec like strikethrough, a `span.spoiler` blurred until clicked or
+    Enter or Space when focused, hidden again by a second click; blog excerpts show
+    it as "…". The toolbar has an inline button in the text tools and a block button
+    in the block tools (the marker pair around the selection, the placeholder name
+    selected). Exports show a block spoiler as a box titled by its description and a
+    red line as its text; inline spoilers are marked at the source positions the
+    wiki's parser recorded, so escaped bars, character references and bars in code
+    export as pandoc reads them. Exported headings get the identifiers the wiki gives
+    them: pandoc reads with automatic identifiers off, the identifiers written in the
+    source (which the wiki's parser reports) are kept and reserved, and every other
+    heading gets the wiki's slug with its `-2`, `-3` suffixes in document order, so a
+    page's `#answer-2` link lands on the same heading in the document (plain
+    duplicates used to get pandoc's `-1`). A fence's `{rows=N}` (a positive whole
+    number of at most six digits) gives the `<pre>` the class `code-scroll` and
+    `style="max-height: Nlh; overflow: auto"`, so it scrolls in the server-rendered
+    page before any script runs; `overflow` is in the inline style as well as the
+    class so a feed or an unstyled page still contains the listing.
 
 ## Repository layout
 
@@ -645,49 +686,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.62 Spoilers, and code listings that scroll** (the owner, 2026-11-04, issue
-  #152; one pull request). Two additions to the Markdown. (a) *Spoilers.* A block
-  spoiler is a named pair of markers, so that any blocks go inside without a prefix on
-  every line and spoilers nest (the owner, 2026-11-04, over a box kind): a line
-  `[[spoiler]]{name}(Description)` opens one (the name one word, as an identifier in
-  code, keying the remembered state; the description in the parentheses, inline
-  Markdown allowed, what the summary shows; both required; the spelling the owner's,
-  after bbcode, recognised as a block on a line of its own, so the wiki links
-  `[[page]]` are untouched), `[[/spoiler]]{name}` closes the innermost open spoiler
-  of that name; an end marker of another name, or a start marker missing its name or
-  its description, is an error line in red that opens or closes nothing; an unclosed spoiler renders in red
-  from its marker down (the marker as an error line saying what to add, its content as
-  the blocks it is), which the editor's preview shows as one types. A closed spoiler is
-  a `<details class="spoiler">` whose summary is the description, closed by default; open or
-  closed is remembered per user, page and name in the browser's storage (a server-side
-  store may come later). A spoiler never cuts a section (the owner, 2026-11-04): either
-  its content has no heading (it lies within one section), or it is a section spoiler,
-  its first block a heading of level N, every heading inside deeper than N, and what
-  follows its end a heading of level N or less or nothing (it wraps the whole section,
-  subsections included); anything else is an error rendered as the unclosed case is.
-  A section spoiler keeps the section's entry in the table of contents, and a click
-  on that entry or a URL fragment naming the heading opens it. An inline spoiler, `||hidden||`, as the strikethrough and
-  the highlight are parsed (a two-character delimiter), is a `<span class="spoiler">`
-  blurred until the reader clicks it (focus reveals it; a second click hides it
-  again). The toolbar's block tools gain a spoiler button writing the pair around the
-  selected lines, and the text tools an inline spoiler button; the preview and the page
-  agree. Exports (PDF, Word, the feed) show the
-  content as a box titled "Spoiler" and the inline one as its text: a document
-  cannot hide. The plain-text views (search, anchors) keep the text. (b) *Scrolling
-  listings.* A fence may say how many rows are visible: ```` ```haskell {rows=20}
-  ```` (the attribute braces the fence already takes); the rendered `<pre>` gets a
-  maximum height of that many lines and scrolls inside (the `lh` unit on a style
-  attribute, which the CSP allows, or a `data-rows` the code island reads: the
-  package chooses and says why), `rows` without a value or not a positive number is
-  ignored. The toolbar's code block command is unchanged; the guide's Markdown
-  section shows both. Tests: wiki-core (the spoiler's parse and render, block and
-  inline, nested, with code inside, the error lines, the unclosed one; `rows` parsed, ignored when wrong; the plain
-  text; the export's forms), browser (a block spoiler closed, opened and remembered, an inline
-  one revealed by a click and hidden again, the toolbar writing both; a listing
-  with `rows` scrolling: its height is the rows' and `scrollHeight` exceeds it),
-  server (an export with a spoiler). Docs: the README's Markdown section, the guide,
-  wiki-core's and wiki-app's CHANGELOGs; `docs/PLAN.md`'s syntax notes if any.
 
 ### Later, or waiting for the owner
 
@@ -1043,6 +1041,22 @@ needs. Each was true when its package merged; check before relying on one.
   from the service's; a server with `--no-pdf` keeps the PDFs off until the next
   deploy, even if a working TeX appears meanwhile; `check-tex.sh`'s default 20 s has
   no test of its own.
+- WP5.62 (decision 45): a spoiler's open state is per browser, not per account; the
+  `hashchange` and load paths that open a spoiler around a URL fragment are
+  implemented but not in the browser suite (the test hash router cannot navigate to
+  a fragment); the inline spoiler's `role="button"` with a fixed `aria-label` hides
+  the revealed text from assistive technology; comment notification excerpts use
+  the plain text, so they reveal inline spoilers; CodeMirror does not dim `||` or
+  the marker lines; a heading inside a spoiler on a deck is not taken as the slide's
+  title; the block button cannot keep the end marker's name in step with the
+  start's; in exports a heading inside a footnote gets its automatic identifier in
+  pandoc's order (at the reference) rather than the wiki's (end of page), where the
+  two parsers disagree on what is a heading the export follows pandoc, and box
+  identifiers (`box-tip-1`) are not reserved since exported boxes carry none; the
+  guide's contents test ("lists a long page's headings…") failed 2 of 7 local runs
+  once, apparently a timing race older than WP5.62 (Mermaid and TikZ finish about
+  2 s after load and push the page down), which the guide's longer Spoilers section
+  makes easier to hit; CI has not hit it.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
