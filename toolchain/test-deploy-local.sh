@@ -382,6 +382,7 @@ case $name in
       build)
         [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
         printf 'cabal build PKG_CONFIG_PATH=%s LIBRARY_PATH=%s C_INCLUDE_PATH=%s\n' "${PKG_CONFIG_PATH:-}" "${LIBRARY_PATH:-}" "${C_INCLUDE_PATH:-}" >>"$EVENTS"
+        printf 'cabal build WIKI_BUILD_VERSION=%s\n' "${WIKI_BUILD_VERSION:-}" >>"$EVENTS"
         if [ -n "${FAKE_CABAL_NO_LIBRARY:-}" ]; then
           printf "Error: The pkg-config package 'libsodium' is required but it could not be found.\n" >&2
           exit 1
@@ -2945,6 +2946,39 @@ if deploy --texlive-mirror ftp://ctan.example >"$out" 2>&1; then fail 'an ftp mi
 assert_contains "$out" 'an http:// or https:// URL'
 undeploy >/dev/null 2>&1
 pass 'without a TeX the service finds: said, PDFs off by --no-pdf in the unit, nothing asked or installed; --no-texlive remembered'
+
+# The page "What's new?": --no-whats-new reaches the unit as wiki-server's
+# --no-whats-new, is remembered, and --status says so; --whats-new drops
+# it; neither is for the demo, and the two exclude each other. The build
+# is given the version the page shows: WIKI_BUILD_VERSION when the
+# environment sets it, else git describe of the checkout, which the
+# fixture's copy is not, so "unknown".
+fixture whats-new
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_xelatex "$case_dir/bin" working
+out=$case_dir/first
+deploy --server --sqlite --no-whats-new --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with --no-whats-new failed'
+grep -x 'ExecStart=.* --no-whats-new' "$HOME/$unit" >/dev/null || fail 'the unit does not run wiki-server with --no-whats-new'
+[ "$(state whats_new)" = no ] || fail "--no-whats-new was remembered as '$(state whats_new)'"
+assert_contains "$EVENTS" 'cabal build WIKI_BUILD_VERSION=unknown'
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" 'the page "What'"'"'s new?": off in the unit (--no-whats-new); --whats-new shows it again'
+: >"$EVENTS"
+WIKI_BUILD_VERSION=v1.2.3-4-gabcdef0 deploy >"$out" 2>&1 || fail 'the redeploy failed'
+assert_contains "$HOME/$unit" ' --no-whats-new'
+assert_contains "$EVENTS" 'cabal build WIKI_BUILD_VERSION=v1.2.3-4-gabcdef0'
+deploy --whats-new --no-build >"$out" 2>&1 || fail 'the deploy with --whats-new failed'
+assert_lacks "$HOME/$unit" '--no-whats-new'
+[ -z "$(state whats_new)" ] || fail "--whats-new was remembered as '$(state whats_new)'"
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_lacks "$out" 'What'"'"'s new?'
+if deploy --whats-new --no-whats-new >"$out" 2>&1; then fail '--whats-new and --no-whats-new were taken together'; fi
+assert_contains "$out" '--whats-new and --no-whats-new exclude each other'
+if deploy --static --no-whats-new >"$out" 2>&1; then fail '--no-whats-new was taken for the demo'; fi
+assert_contains "$out" '--whats-new and --no-whats-new are for the wiki'"'"'s server'
+undeploy >/dev/null 2>&1
+pass 'the page "What'"'"'s new?": --no-whats-new in the unit, remembered and said by --status, dropped by --whats-new; the build given its version'
 
 # --texlive-installer and --perl-source, where the TeX step takes the
 # installer and Perl's source from, are refused for the demo, as the other

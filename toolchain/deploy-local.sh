@@ -16,6 +16,7 @@
 #                                [--no-build] [--semaphore | --no-semaphore]
 #                                [--texlive | --no-texlive] [--texlive-mirror URL]
 #                                [--texlive-installer URL|DIR] [--perl-source URL|DIR]
+#                                [--whats-new | --no-whats-new]
 #                                [--no-firewall] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
@@ -386,6 +387,11 @@
 #                    URL; or a directory of this machine with Perl 5.44.0's source
 #                    (a checkout, or CPAN's tarball unpacked), copied under the
 #                    toolchain and built there. For this run only
+#   --no-whats-new   --server: run wiki-server with --no-whats-new, so that the wiki
+#                    shows no page "What's new?" (the changelog entries the server was
+#                    built with) and no link to it; remembered for the next run
+#   --whats-new      --server: show the page again, after a run with --no-whats-new
+#                    (the first run's default)
 #   --no-firewall    leave the firewall alone
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
 #                    starts at boot and survives logging out
@@ -434,6 +440,7 @@ opt_app_page='' opt_app_page_given='' opt_bundle_locally='' opt_system_tools=''
 opt_npm_registry='' opt_npm_registry_given='' opt_hackage_mirror='' opt_hackage_mirror_given=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 opt_texlive='' opt_texlive_mirror='' opt_texlive_installer='' opt_perl_source=''
+opt_whats_new=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force='' opt_semaphore=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -498,6 +505,12 @@ while [ $# -gt 0 ]; do
     --no-texlive)
       [ "$opt_texlive" != yes ] || die "--texlive and --no-texlive exclude each other: give one"
       opt_texlive=no ;;
+    --whats-new)
+      [ "$opt_whats_new" != no ] || die "--whats-new and --no-whats-new exclude each other: give one"
+      opt_whats_new=yes ;;
+    --no-whats-new)
+      [ "$opt_whats_new" != yes ] || die "--whats-new and --no-whats-new exclude each other: give one"
+      opt_whats_new=no ;;
     --texlive-mirror) need_value $# "$1"; opt_texlive_mirror=$2; shift ;;
     --texlive-mirror=*) opt_texlive_mirror=${1#*=} ;;
     --texlive-installer) need_value $# "$1"; opt_texlive_installer=$2; shift ;;
@@ -673,6 +686,9 @@ prev_texlive_mirror=$(state_get texlive_mirror)
 # The Perl the deploy built for TeX Live's installer (perl_dir, empty when
 # the machine's own perl did), reused while it works.
 prev_perl_dir=$(state_get perl_dir)
+# Whether the server shows the page "What's new?": no after --no-whats-new,
+# and empty (the default, on) otherwise.
+prev_whats_new=$(state_get whats_new)
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -1454,6 +1470,9 @@ if [ "$action" = status ]; then
     say "users: $prev_dir/bin/wiki users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
     say "its public address, mail server and sign-in providers: the administration's Server section, http://127.0.0.1:$prev_admin_port/admin/admin/"
     tex_status_report
+    if grep '^ExecStart=.* --no-whats-new' "$unit_file" >/dev/null 2>&1; then
+      say "the page \"What's new?\": off in the unit (--no-whats-new); --whats-new shows it again"
+    fi
     if [ -n "$prev_smtp_host$prev_public_url$prev_oidc" ] || [ -f "$env_file" ]; then
       say "it was deployed with --smtp-host, --public-url or --oidc, which are gone: the next deploy drops them${prev_smtp_host:+ (mail through $prev_smtp_host)}${prev_oidc:+ (providers: $prev_oidc)}; set them in the Server section"
     fi
@@ -1538,7 +1557,12 @@ else
   [ -z "$opt_db$opt_db_port$fresh" ] || die "--postgres, --sqlite, --db-port and --fresh are for the wiki's server: add --server"
   [ -z "$opt_texlive$opt_texlive_mirror" ] || die "--texlive, --no-texlive and --texlive-mirror are for the wiki's server, which makes the PDFs: add --server"
   [ -z "$opt_texlive_installer$opt_perl_source" ] || die "--texlive-installer and --perl-source are for the wiki's server, which makes the PDFs: add --server"
+  [ -z "$opt_whats_new" ] || die "--whats-new and --no-whats-new are for the wiki's server, which shows the page: add --server"
 fi
+# Whether the server shows the page "What's new?". The demo keeps what a
+# server before it chose.
+whats_new=${opt_whats_new:-$prev_whats_new}
+[ "$whats_new" = no ] || whats_new=''
 
 # The wiki's database: PostgreSQL in Docker unless --sqlite said otherwise,
 # now or on an earlier run. The demo keeps what a server before it chose,
@@ -2304,7 +2328,23 @@ bundle_locally_step() {
 server_cabal() {
   cabal_command=$1
   shift
-  (cd "$ROOT" && cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
+  (cd "$ROOT" && env WIKI_BUILD_VERSION="$(build_version)" cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
+}
+
+# The version wiki-server's page "What's new?" shows: WIKI_BUILD_VERSION
+# when the environment sets it, else what git describe says of the
+# checkout (a tag, the commits since it and the commit, "-dirty" with
+# changes not committed), else "unknown". wiki-server runs the same git
+# describe itself when it is compiled; naming it here makes the deployed
+# version the checkout's whatever directory cabal compiles in. cabal does
+# not rebuild wiki-server for a new version alone: a deploy whose checkout
+# changed nothing of the server's keeps the version it was built with.
+build_version() {
+  if [ -n "${WIKI_BUILD_VERSION:-}" ]; then
+    printf '%s' "$WIKI_BUILD_VERSION"
+  else
+    git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || printf 'unknown'
+  fi
 }
 
 # Whether wiki-server's build uses cabal's build semaphore: cabal's flag for
@@ -2820,6 +2860,8 @@ if [ "$mode" = server ]; then
   # Without an xelatex that works at the end of the TeX step, the server
   # makes no PDFs: it does not try its TeX at each start, and offers none.
   [ "$pdf" = yes ] || exec_start="$exec_start --no-pdf"
+  # The page "What's new?", off by the owner's choice (--no-whats-new).
+  [ "$whats_new" != no ] || exec_start="$exec_start --no-whats-new"
   # The data is the owner's alone, and a stop lets the requests under way
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077

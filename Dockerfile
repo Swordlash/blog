@@ -89,6 +89,12 @@ RUN --mount=type=cache,id=wiki-dist-newstyle,target=/src/dist-newstyle,sharing=l
            --with-compiler="$(command -v wasm32-wasi-ghc)" --with-hc-pkg="$(command -v wasm32-wasi-ghc-pkg)" \
            --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)" $LIBRARIES wiki-app:exe:wiki-app )
 COPY . .
+# The version wiki-server's page "What's new?" shows: .git is not in the
+# build's context, so git describe has nothing to read; give the image's
+# version with --build-arg WIKI_BUILD_VERSION=$(git describe --tags --always
+# --dirty). Without it the page says "unknown".
+ARG WIKI_BUILD_VERSION=
+ENV WIKI_BUILD_VERSION=$WIKI_BUILD_VERSION
 # The build directories live in a cache mount rather than in a layer, so that
 # a change to the sources recompiles only the modules it touches. What the
 # image needs is copied out of them into /out: the binary, stripped of its

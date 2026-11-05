@@ -224,6 +224,7 @@ state_write() {
     printf 'texlive_dir=%s\n' "${texlive_dir:-}"
     printf 'texlive_mirror=%s\n' "${texlive_mirror:-}"
     printf 'perl_dir=%s\n' "${perl_dir:-}"
+    printf 'whats_new=%s\n' "${whats_new:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
