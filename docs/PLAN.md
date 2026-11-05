@@ -708,9 +708,9 @@ confirms it against reality and the plan is amended if it does not hold.
     install it; another version than the pinned one is used with a warning.
     Refused with a page built here, which needs the wasm toolchain. The floor is
     9.12, not the 9.10 first hoped for: a CI experiment with 9.10.3 fails in the
-    solver on th's bound, and 9.12.2 needs two local type signatures in
-    `Wiki.Server.Storage` (a pull request of their own once the experiment
-    passes). `--npm-registry URL`: `NPM_CONFIG_REGISTRY` for every npm and npx
+    solver on th's bound, and 9.12.2 builds everything once four local helpers
+    that 9.14 typed by itself carry their types (two in `Wiki.Server.Storage`,
+    two in `Test.Storage.Scale`; #163). `--npm-registry URL`: `NPM_CONFIG_REGISTRY` for every npm and npx
     call; `npm ci` rewrites the lockfile's `registry.npmjs.org` addresses to it.
     `--hackage-mirror URL`: written into `$CABAL_DIR/config` before `cabal update`
     (forced when the address changes), `secure: True` kept, so the bootstrap
