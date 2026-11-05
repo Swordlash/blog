@@ -169,6 +169,25 @@ Haskell, coloured by its syntax:
 The names a fence may give each of some seventy languages are listed in
 [docs/markdown.md](docs/markdown.md#code).
 
+A long listing can show a few lines at a time: `rows=N` in braces after the
+language makes the block N lines high:
+
+````markdown
+```haskell {rows=3}
+-- Scroll this block for the rest.
+fibs :: [Integer]
+fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+
+main :: IO ()
+main = print (take 20 fibs)
+```
+````
+
+Three lines of it show, and the rest scrolls inside the block:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#code).
+` ```{.haskell rows=3} ` says the same, and a value that is not a whole number
+above zero is ignored.
+
 ### Alerts
 
 GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
@@ -192,11 +211,58 @@ after the section's too (`Tip 2.1.3`), as the space's settings say; a star,
 marker for you. See the Markdown guide's
 [Notes and boxes](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#notes-and-boxes).
 
+### Spoilers
+
+Two bars on each side, `||the butler||`, hide a few words: they are blurred
+until the reader clicks them (or presses Enter or Space on them), and a second
+click hides them again. A block spoiler hides whole blocks, between two marker
+lines of their own, and spoilers nest:
+
+````markdown
+[[spoiler]]{hint}(A hint, if you are *stuck*)
+Think of what six times seven is.
+
+[[spoiler]]{answer}(The answer)
+Forty-two, as this program prints:
+
+```python
+print(6 * 7)
+```
+[[/spoiler]]{answer}
+[[/spoiler]]{hint}
+````
+
+Two spoilers, one inside the other, each closed until it is clicked:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#spoilers).
+The name in braces is one word of letters, digits, `-` and `_`; the
+description in parentheses, which may hold Markdown, is what the reader clicks
+to open it. Any blocks go between the markers, with no prefix on their lines:
+code, lists, tables, boxes and other spoilers, since an end marker ends the
+innermost open spoiler, and only when the names agree. A spoiler lies within one
+section, or wraps a whole one: its heading first, up to the next heading of the
+same or a higher level; the section stays in the page's contents, and following
+its entry, or a link to its heading, opens it.
+
+Mistakes show in red where they are, on the page and in the editor's preview as
+they are typed: a start marker without its name or description, an end marker
+that names no open spoiler, a spoiler never closed or one that cuts a section
+(its blocks in red below its marker, with the reason). The reader's browser
+remembers which spoilers they left open, per reader, page and name, and opens
+them again; another browser or device starts with them closed. The markers are
+lines of their own, so `[[spoiler]]` at the start of a line is never a wiki
+link (there is no page of that name to link to). The toolbar's **Inline
+spoiler** and **Block spoiler** buttons write both kinds. Exported, a document
+shows everything: a block spoiler is a box titled with its description, an
+inline one its text.
+
 ### A table of contents
 
 Every heading gets an `id` to link to. A page with three headings or more has a
-"Contents" panel beside it; `[[toc]]` on a line of its own puts the list in the
-page instead:
+"Contents" panel beside it; `[[toc]]` puts the list in the page instead, but
+only as a paragraph of its own, a blank line before and after it and nothing
+else on its line. Anywhere else it is read as a wiki link to a page named `toc`,
+which shows as a broken link in red, like any `[[page]]` whose path leads
+nowhere:
 
 ```markdown
 # Team handbook

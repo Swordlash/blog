@@ -78,6 +78,10 @@ spec = describe "Markdown.Toc" $ do
       ids "# Box\n\n::: {#box}\nInside.\n:::" `shouldBe` ["box-2"]
     it "are given to headings inside other blocks too, in document order" $
       ids "# A\n\n> # A\n\n- # A" `shouldBe` ["a", "a-2", "a-3"]
+    it "are given to the export as written, with the headings that have one, footnotes last" $
+      (\(_, _, _, w) -> w)
+        <$> parseWithAllMarkers "Ref[^n].\n\n## A {#x}\n\n## B\n\n::: {#d}\nIn.\n:::\n\n```haskell {#c}\nx\n```\n\n## Answer {#answer-2}\n\n[^n]: Note.\n\n    ## Inside {#in}\n"
+        `shouldBe` Right WrittenIds {headings = [Just "x", Nothing, Just "answer-2", Just "in"], taken = ["x", "d", "c", "answer-2", "in"]}
     it "are made from the text without its markup" $
       ids "# The *big* `run` [now](x)" `shouldBe` ["the-big-run-now"]
     it "are the same for the same source, wherever it is parsed" $

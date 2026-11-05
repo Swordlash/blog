@@ -53,3 +53,14 @@ function wiki_test_one_column(selector) {
   }
   return "";
 }
+
+// How a code block that scrolls is drawn (Test.Browser.Spoilers): the height
+// of its content box, its line height, and its scrollHeight and clientHeight,
+// as "content line scroll client", or "" when the selector finds nothing.
+function wiki_test_listing(selector) {
+  const element = document.querySelector(selector);
+  if (!element) return "";
+  const style = getComputedStyle(element);
+  const content = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  return [content, parseFloat(style.lineHeight), element.scrollHeight, element.clientHeight].join(" ");
+}

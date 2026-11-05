@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Spoilers, and code listings that scroll (WP5.62, issue #152). A page
+shows `||text||` blurred until it is clicked, and a block spoiler,
+`[[spoiler]]{name}(Description)` to `[[/spoiler]]{name}`, closed until its
+description is clicked; a wrong spoiler, and a broken marker line, show in
+red in the page and in the editor's preview. The islands' script gives
+spoilers their behaviour, and keeps which block spoilers a reader left open
+in the browser's local storage, by the reader, the page (the article's
+`data-spoilers`) and the spoiler's name; a link to a heading inside a
+closed spoiler opens it. The toolbar gains **Inline spoiler** and **Block
+spoiler**. A code block whose fence says `rows=N` is N lines high and
+scrolls inside: the highlighted code island, `Islands.CodeBlock`, takes the
+rows as its second argument. The guide's Markdown page shows both, says
+where `[[toc]]` works, and the server's tour says who created and edited a
+page and when, and what the Export menu does.
+
 The server is told when the TeX is off (WP5.61). The administration's
 Server section shows a fourth state of the TeX engine, `off`: PDF exports
 are off because the server runs with `--no-pdf`, which the deploy sets when

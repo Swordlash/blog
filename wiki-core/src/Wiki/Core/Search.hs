@@ -71,7 +71,7 @@ import Data.Text qualified as T
 import Data.Text.Unsafe qualified as U
 import Protolude
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), ListItem (..), parseMarkdown, plainText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), ListItem (..), SpoilerHead (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Html (htmlText, parseHtml)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, foldLetter)
@@ -257,6 +257,8 @@ bodyText source =
       Table _ header rows -> T.intercalate "\n" (map (T.unwords . map plainText) (header : rows))
       Div _ bs -> blocks bs
       Alert _ box bs -> foldMap ((<> "\n") . plainText) box.title <> blocks bs
+      Spoiler h bs -> plainText h.description <> "\n" <> blocks bs
+      SpoilerError written _ -> written
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
       -- The list it stands for is the headings' text, already included.

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+Spoilers, and code listings that scroll (WP5.62, issue #152). The parser
+reads `||text||` as an inline spoiler, the new `Inline` constructor
+`Hidden`, read as the strikethrough is. A block spoiler sits between two
+marker lines, `[[spoiler]]{name}(Description)` and `[[/spoiler]]{name}`:
+the new `Block` constructor `Spoiler` holds a `SpoilerHead` (its name, its
+description as inlines, its marker line and line number, and a
+`SpoilerProblem`, `NotClosed` or `CutsSection`, when something is wrong)
+and its blocks. Spoilers nest; a marker line that is not whole, or an end
+marker that ends no open spoiler, is a `SpoilerError` block with the line
+and the reason. A spoiler that holds a heading must wrap a whole section,
+or it is `CutsSection`. `parseWithAllMarkers` also gives the spoilers'
+marker lines (`SpoilerMarker`), for the export. The renderer writes an
+inline spoiler as `<span class="spoiler" role="button" tabindex="0">`, a
+block spoiler as `<details class="spoiler" data-spoiler="name">` with the
+description as its summary, and a wrong one as a `spoiler-error` line
+followed by its blocks in a `spoiler-unclosed` div. The table of contents
+and the anchors look inside spoilers; plain text, search and footnotes'
+titles keep their text, while a blog excerpt shows an inline spoiler as
+"…". `Options.codeBlock` takes a code block's rows as its third argument:
+a fence's `rows=N` (`codeRows`) gives its `<pre>` the class `code-scroll`
+and `max-height: Nlh; overflow: auto` (`scrollingCode`). The editor's
+commands gain `Spoiler`, which wraps the selection in `||`, and
+`SpoilerBlock`, which puts the two marker lines around the lines selected.
+
 `readyWith` (WP5.59) builds a provider's request with a typed key in
 place of the kept one, trimmed as `withKey` keeps it, the model, effort
 and base URL as `readyFor` takes them, or `Nothing` when only spaces

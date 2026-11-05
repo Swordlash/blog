@@ -7,8 +7,8 @@
 --
 -- Commands come in four kinds.
 --
--- * Inline ones ('Bold', 'Italic', 'Strikethrough', 'InlineCode',
---   'InlineMath', and 'Html' with a phrasing tag) wrap the selection in
+-- * Inline ones ('Bold', 'Italic', 'Strikethrough', 'Spoiler',
+--   'InlineCode', 'InlineMath', and 'Html' with a phrasing tag) wrap the selection in
 --   their markers. With nothing selected they insert a placeholder between
 --   the markers and select it, so that typing replaces it. On a selection
 --   that is already wrapped, with the markers inside the selection
@@ -30,6 +30,10 @@
 --
 -- * Templates ('Table', 'HorizontalRule') go after the line the selection
 --   ends on.
+--
+-- * 'SpoilerBlock' puts a block spoiler's two marker lines around the
+--   lines the selection touches, or an empty spoiler after the cursor's
+--   line, and selects the name in the start marker, to be typed.
 --
 -- * 'PageMacros' sets the page's block of macros ('pageMacros'): a
 --   @math@ fence of nothing but definitions under the title line, which a
@@ -105,6 +109,8 @@ data Command
   = Bold
   | Italic
   | Strikethrough
+  | -- | An inline spoiler, @||hidden||@.
+    Spoiler
   | InlineCode
   | InlineMath
   | -- | No heading, then levels one, two, three, and none again.
@@ -130,6 +136,9 @@ data Command
     Image
   | -- | A table of three columns.
     Table
+  | -- | A block spoiler, @[[spoiler]]{name}(Description)@ to
+    -- @[[/spoiler]]{name}@.
+    SpoilerBlock
   | HorizontalRule
   | Html HtmlTag
   | -- | The text in a colour, or, for 'Nothing', in none (the page's own).
@@ -212,6 +221,7 @@ apply command text selection = case command of
   Bold -> inline (wrapIn "**") "bold text"
   Italic -> inline (wrapIn "_") "italic text"
   Strikethrough -> inline (wrapIn "~~") "struck text"
+  Spoiler -> inline (wrapIn "||") "hidden text"
   InlineCode -> inline codeSpan "code"
   InlineMath -> inline (wrapIn "$") "x^2"
   Html Details -> details text sel
@@ -230,6 +240,7 @@ apply command text selection = case command of
   Image -> link "!" "description" text sel
   Table -> template tableTemplate (Just (2, T.length "Column 1")) text sel
   HorizontalRule -> template "---" Nothing text sel
+  SpoilerBlock -> spoilerBlock text sel
   TextColour c -> colour textWrapper (textColourClass <$> c) text sel
   Highlight c -> colour highlightWrapper (highlightClass <$> c) text sel
   Box kind -> box kind text sel
@@ -663,6 +674,31 @@ details text sel@(Selection s e)
   where
     summary = htmlPlaceholder Details
     sectionTemplate = "<details>\n<summary>" <> summary <> "</summary>\nWhat opens on a click.\n</details>"
+
+-- | A block spoiler around the lines the selection touches: its start
+-- marker, @[[spoiler]]{name}(Description)@, on a line above them, and
+-- its end marker, @[[/spoiler]]{name}@, on a line below. The name in the
+-- start marker is selected, to be typed over; the end marker must then
+-- be given the same name. With nothing selected, a spoiler with an empty
+-- line in it goes after the cursor's line.
+spoilerBlock :: Text -> Selection -> (Text, Selection)
+spoilerBlock text sel@(Selection s e)
+  | s == e = template (opening <> "\n\n" <> closing) (Just (T.length "[[spoiler]]{", T.length name)) text sel
+  | otherwise = case touched text sel of
+      [] -> (text, sel)
+      ls@(firstLine : _) ->
+        let lastLine = fromMaybe firstLine (lastMay ls)
+            lo = firstLine.at
+            hi = lastLine.at + T.length lastLine.line
+            content = T.take (hi - lo) (T.drop lo text)
+            (pre, post) = blockSeparators (T.take lo text) (T.drop hi text)
+            begin = lo + T.length pre + T.length "[[spoiler]]{"
+            new = pre <> opening <> "\n" <> content <> "\n" <> closing <> post
+         in (replace [Replacement lo (hi - lo) new] text, Selection begin (begin + T.length name))
+  where
+    name = "name"
+    opening = "[[spoiler]]{" <> name <> "}(Description)"
+    closing = "[[/spoiler]]{" <> name <> "}"
 
 -- Links
 

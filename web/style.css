@@ -1360,6 +1360,21 @@ select {
   background: transparent;
 }
 
+/* A code block whose fence says rows=N (Wiki.Core.Markdown.Render's
+   scrollingCode) has max-height: Nlh and overflow: auto in its style
+   attribute. The lh unit is the block's own line height, so the block is
+   set at the code's size, and a line of code is exactly 1lh high; and the
+   height is that of its content, so the padding comes on top of the N
+   lines. */
+.page-body pre.code-scroll {
+  box-sizing: content-box;
+  font-size: 0.85rem;
+}
+
+.page-body pre.code-scroll code {
+  font-size: 1em;
+}
+
 .page-body .task-list {
   padding-left: 1.2rem;
   list-style: none;
@@ -1496,6 +1511,68 @@ select {
 
 .page-body details[open] > summary {
   margin-bottom: 0.5rem;
+}
+
+/* Spoilers (WP5.62 of docs/PLAN.md). An inline spoiler is blurred, and its
+   text cannot be selected, until a click or a key gives it the class
+   "shown" (web/src/islands.js). */
+.page-body span.spoiler {
+  border-radius: 3px;
+  background: var(--surface);
+  filter: blur(0.3em);
+  user-select: none;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.page-body span.spoiler.shown {
+  filter: none;
+  user-select: auto;
+  cursor: auto;
+}
+
+.page-body span.spoiler:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-body span.spoiler {
+    transition: none;
+  }
+}
+
+/* A block spoiler: a box with a muted bar down its left side, as the other
+   boxes have a coloured one, opened by a click on its summary. */
+.page-body details.spoiler {
+  border: 0;
+  border-left: 4px solid var(--muted);
+  border-radius: 0 6px 6px 0;
+}
+
+.page-body details.spoiler > summary {
+  color: var(--muted);
+}
+
+/* A spoiler's marker line that is wrong, with the reason under it, and the
+   blocks of a spoiler that is not closed or cuts a section: in red, so the
+   author sees the mistake in the preview as it is typed. Boxes and code
+   inside keep their shapes. */
+.page-body .spoiler-error {
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.page-body .spoiler-error-reason {
+  display: block;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.page-body .spoiler-unclosed {
+  padding-left: 0.75rem;
+  border-left: 2px dashed var(--danger);
+  color: var(--danger);
 }
 
 .page-body .wikilink {

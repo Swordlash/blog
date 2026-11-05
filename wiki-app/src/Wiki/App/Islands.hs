@@ -38,10 +38,13 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
+import Halogen.HTML qualified as HH
+import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..))
+import Wiki.Core.Markdown.Render (scrollingCode)
 import Wiki.Core.Markdown.Tikz (tikzDocument)
 import Wiki.Core.Math (Macros (..))
 
@@ -56,8 +59,9 @@ data Island
     Mermaid Text
   | -- | A TikZ picture's source, as a @tikz@ fence.
     Tikz Text
-  | -- | Code, in a language if the fence names one.
-    CodeBlock (Maybe Text) Text
+  | -- | Code, in a language if the fence names one, showing this many
+    -- lines before it scrolls if the fence says ('Wiki.Core.Markdown.Ast.codeRows').
+    CodeBlock (Maybe Text) (Maybe Int) Text
   | -- | A moment in time, written as the reader's browser writes one.
     LocalTime UTCTime
   deriving stock (Eq, Show)
@@ -90,7 +94,9 @@ component =
       MathDisplay _ _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
       Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
       Tikz _ -> [hh|<div ref={{ ref }} class="wiki-tikz"></div>|]
-      CodeBlock _ _ -> [hh|<pre ref={{ ref }} class="wiki-code"></pre>|]
+      -- The height and the scrolling are on the element itself, so a
+      -- prerendered page has them before the program runs.
+      CodeBlock _ rows _ -> HH.pre (HP.ref ref : scrollingCode rows ["wiki-code"]) []
       LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -120,7 +126,7 @@ component =
       -- one's; islands.js keeps the newer.
       Mermaid source -> H.liftEffect (renderMermaid source element)
       Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
-      CodeBlock language code -> H.liftEffect (highlightCode language code element)
+      CodeBlock language _ code -> H.liftEffect (highlightCode language code element)
       LocalTime at -> H.liftEffect (renderTime at element)
 
     iso :: UTCTime -> Text

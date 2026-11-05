@@ -35,7 +35,7 @@ spec m = do
         _ <- find ui "span.wiki-math-inline .katex"
         changeTo ui (Mermaid "graph LR\n  a --> b")
         _ <- waitForDiagram ui
-        changeTo ui (CodeBlock (Just "haskell") "main = pure ()")
+        changeTo ui (CodeBlock (Just "haskell") Nothing "main = pure ()")
         _ <- find ui "pre.wiki-code code.hljs"
         fetched "tikz" `shouldReturn` 0
 
@@ -133,36 +133,36 @@ spec m = do
 
   describe "CodeBlock" $ do
     it "is highlighted by highlight.js" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "haskell") "main :: IO ()\nmain = pure ()")
+      ui <- mount m harness (CodeBlock (Just "haskell") Nothing "main :: IO ()\nmain = pure ()")
       code <- find ui "pre.wiki-code > code.hljs.language-haskell"
       _ <- findIn code "span.hljs-type"
       code `shouldHaveText` "main :: IO ()\nmain = pure ()"
 
     it "is highlighted again when its code changes" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "haskell") "main :: IO ()")
+      ui <- mount m harness (CodeBlock (Just "haskell") Nothing "main :: IO ()")
       _ <- find ui "pre.wiki-code code.language-haskell"
-      changeTo ui (CodeBlock (Just "javascript") "const x = 1;")
+      changeTo ui (CodeBlock (Just "javascript") Nothing "const x = 1;")
       code <- find ui "pre.wiki-code code.language-javascript"
       _ <- findIn code "span.hljs-keyword"
       code `shouldHaveText` "const x = 1;"
       count ui "pre.wiki-code code" `shouldReturn` 1
 
     it "highlights the languages added to highlight.js's common set" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "fortran") "program hello\n  print *, 'Hello'\nend program hello")
+      ui <- mount m harness (CodeBlock (Just "fortran") Nothing "program hello\n  print *, 'Hello'\nend program hello")
       _ <- find ui "pre.wiki-code > code.hljs.language-fortran span.hljs-keyword"
-      changeTo ui (CodeBlock (Just "matlab") "function y = f(x)\n  y = x;\nend")
+      changeTo ui (CodeBlock (Just "matlab") Nothing "function y = f(x)\n  y = x;\nend")
       _ <- find ui "pre.wiki-code > code.hljs.language-matlab span.hljs-keyword"
       pure ()
 
     it "knows a language by the names fences give it" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "c++") "int main() { return 0; }")
+      ui <- mount m harness (CodeBlock (Just "c++") Nothing "int main() { return 0; }")
       _ <- find ui "pre.wiki-code > code.hljs.language-c\\+\\+ span.hljs-type"
-      changeTo ui (CodeBlock (Just "asm") "mov eax, 1")
+      changeTo ui (CodeBlock (Just "asm") Nothing "mov eax, 1")
       _ <- find ui "pre.wiki-code > code.hljs.language-asm span.hljs-keyword"
       pure ()
 
     it "shows code in a language it does not know as plain text" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "no-such-language") "a <b> c")
+      ui <- mount m harness (CodeBlock (Just "no-such-language") Nothing "a <b> c")
       code <- find ui "pre.wiki-code > code.hljs"
       code `shouldHaveText` "a <b> c"
       countIn code "span" `shouldReturn` 0
@@ -171,7 +171,7 @@ spec m = do
   describe "an island whose kind changes" $
     it "is drawn as the new kind" $
       runPage $ do
-        ui <- mount m harness (CodeBlock Nothing "x^2")
+        ui <- mount m harness (CodeBlock Nothing Nothing "x^2")
         _ <- find ui "pre.wiki-code code"
         changeTo ui (MathInline mempty "x^2")
         _ <- find ui "span.wiki-math-inline .katex"

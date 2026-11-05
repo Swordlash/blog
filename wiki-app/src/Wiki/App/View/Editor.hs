@@ -2339,6 +2339,8 @@ textTools =
   [ Tool Bold "Bold" (Just "Ctrl+B") "M4.5 2.5h4a2.75 2.75 0 0 1 0 5.5h-4zM4.5 8h4.75a2.75 2.75 0 0 1 0 5.5H4.5z"
   , Tool Italic "Italic" (Just "Ctrl+I") "M7 2.5h5M4 13.5h5M10 2.5l-4 11"
   , Tool Strikethrough "Strikethrough" Nothing "M2 8h12M11.5 4.5c-.5-1.3-1.8-2-3.5-2-2 0-3.5 1-3.5 2.5 0 1.2 1 2 2.5 2.5M5 11c.4 1.5 1.7 2.5 3.3 2.5 2 0 3.3-1 3.3-2.5"
+  , -- An eye struck through: text hidden until it is clicked.
+    Tool Spoiler "Inline spoiler" Nothing "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3zM2 2l12 12"
   , Tool Heading "Heading (again for a smaller one, then none)" Nothing "M3 2.5v11M10 2.5v11M3 8h7M12.5 7.5l1.5-1v7"
   ]
 listTools =
@@ -2358,6 +2360,8 @@ blockTools =
   , Tool Mermaid "Mermaid diagram" Nothing "M1.5 2.5h5v4h-5zM9.5 9.5h5v4h-5zM4 6.5v5h5.5"
   , Tool Tikz "TikZ picture" Nothing "M2.5 1.5v12h12M4.5 11c2-1 3-7 6-7 1.5 0 2.5 1 3.5 2"
   , Tool HorizontalRule "Horizontal rule" Nothing "M1.5 8h13M4 4.5h8M4 11.5h8"
+  , -- A box with a disclosure triangle, as a closed spoiler shows.
+    Tool SpoilerBlock "Block spoiler" Nothing "M1.5 2.5h13v11h-13zM4 5l2.5 1.5L4 8zM8.5 6.5h4M4 10.5h8.5"
   ]
 
 tableTool :: Tool

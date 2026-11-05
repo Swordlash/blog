@@ -28,9 +28,24 @@ function wiki_keep_contents() {
       return false;
     }
   };
-  // The headings the lists link to: those at the top of the page's text.
+  // The headings the lists link to, in the order of the page: those at the
+  // top of the page's text, and those of the sections a spoiler wraps
+  // (details.spoiler, at any depth), as the lists have them. A closed
+  // spoiler's headings are not shown, so they are left out until it opens.
   const headingsShown = () =>
-    [...document.querySelectorAll(".page-text .page-body > :is(h1, h2, h3, h4, h5, h6)[id]")];
+    [
+      ...document.querySelectorAll(
+        ".page-text .page-body > :is(h1, h2, h3, h4, h5, h6)[id], .page-text .page-body details.spoiler[open] > :is(h1, h2, h3, h4, h5, h6)[id]",
+      ),
+    ].filter((heading) => {
+      // Spoilers all the way up to the page's text, each of them open.
+      let parent = heading.parentElement;
+      while (parent !== null && !parent.classList.contains("page-body")) {
+        if (!parent.matches("details.spoiler[open]")) return false;
+        parent = parent.parentElement;
+      }
+      return parent !== null;
+    });
   const line = () => window.innerHeight / 4;
   let headings = [];
   let panels = [];
@@ -76,11 +91,16 @@ function wiki_keep_contents() {
     panels = shown;
   };
   // A panel folded or unfolded by the reader is remembered so; toggle does
-  // not bubble, so it is heard on its way down.
+  // not bubble, so it is heard on its way down. A spoiler opened or closed
+  // shows or hides the headings in it.
   document.addEventListener(
     "toggle",
     (event) => {
       const panel = event.target;
+      if (panel instanceof HTMLDetailsElement && panel.matches("details.spoiler")) {
+        rewatch();
+        return;
+      }
       if (!(panel instanceof HTMLDetailsElement) || !panel.classList.contains("page-contents")) return;
       try {
         localStorage.setItem(folded, panel.open ? "0" : "1");
@@ -105,5 +125,11 @@ function wiki_reveal_fragment() {
     id = decodeURIComponent(id);
   } catch {}
   const element = document.getElementById(id);
-  if (element !== null) element.scrollIntoView();
+  if (element === null) return;
+  // A heading in a closed spoiler is hidden; its spoilers are opened
+  // first, as the islands' script opens them for a link (web/src/islands.js).
+  for (let spoiler = element.closest("details.spoiler"); spoiler; spoiler = spoiler.parentElement?.closest("details.spoiler") ?? null) {
+    spoiler.open = true;
+  }
+  element.scrollIntoView();
 }

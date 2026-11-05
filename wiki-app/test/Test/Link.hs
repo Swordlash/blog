@@ -108,8 +108,9 @@ spec = describe "resolvePageLink" $ do
 
 -- | The targets of the Markdown links and images in a body, and of its wiki
 -- links, but for @[[toc]]@, which is where the page's table of contents
--- goes rather than a link.
+-- goes rather than a link, and a block spoiler's markers, @[[spoiler]]@
+-- and @[[/spoiler]]@.
 linkTargets :: Text -> [Text]
 linkTargets body =
   map (T.takeWhile (/= ')')) (drop 1 (T.splitOn "](" body))
-    <> filter (\t -> T.toLower t /= "toc") (map (T.takeWhile (`notElem` ['|', ']'])) (drop 1 (T.splitOn "[[" body)))
+    <> filter (\t -> T.toLower t `notElem` ["toc", "spoiler", "/spoiler"]) (map (T.takeWhile (`notElem` ['|', ']'])) (drop 1 (T.splitOn "[[" body)))

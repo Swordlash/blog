@@ -17,6 +17,9 @@
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //
+// It also gives the pages' spoilers their behaviour (see "Spoilers" below),
+// with listeners on the document rather than through an object.
+//
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
 // rejects shows the library's error in the element instead, which is what an
@@ -310,6 +313,188 @@ const cropAvatar = (host, file) =>
 // The built-in macros the wiki ships with, as written: what the editor's
 // settings start the server's own copy from.
 const builtinMacros = () => String(builtinTex);
+
+// Spoilers (wiki-core's Wiki.Core.Markdown.Render). The application puts no
+// listener inside a page's rendered Markdown, so the spoilers' behaviour is
+// here, on the document: it works the same in a page, in the editor's
+// preview and in a prerendered page before the program runs.
+//
+// An inline spoiler, <span class="spoiler">, is blurred by the stylesheet
+// until it has the class "shown". A click, or Enter or Space while it has
+// the focus, toggles the class. A click on a hidden spoiler only reveals it:
+// a link inside is followed only once its text can be read. The listeners
+// are on the capture phase, so they run before the page's own.
+const inlineSpoiler = (target) => (target instanceof Element ? target.closest(".page-body span.spoiler") : null);
+
+document.addEventListener(
+  "click",
+  (event) => {
+    const spoiler = inlineSpoiler(event.target);
+    if (spoiler === null) return;
+    if (!spoiler.classList.contains("shown")) {
+      event.preventDefault();
+      event.stopPropagation();
+      spoiler.classList.add("shown");
+    } else if (event.target.closest("a[href]") === null) {
+      spoiler.classList.remove("shown");
+    }
+  },
+  true,
+);
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (!(event.target instanceof Element) || !event.target.matches(".page-body span.spoiler")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.classList.toggle("shown");
+  },
+  true,
+);
+
+// A block spoiler, <details class="spoiler" data-spoiler="name">, is closed
+// when it is rendered. Whether a reader left it open is kept in this
+// browser's local storage, under the key the page's article gives in its
+// data-spoilers (the reader, the space and the page:
+// Wiki.App.View.Body.spoilerScope) and the spoiler's name. It is written on
+// each toggle, and applied to every spoiler that appears in the page, or
+// whose name or page changes, so a page rendered again (the preview, as it
+// is typed in) keeps it. Two spoilers of one name on one page share it.
+// A spoiler outside such an article (a slide) is not remembered.
+const spoilerKey = (details) => {
+  const scope = details.closest("[data-spoilers]")?.dataset.spoilers;
+  const name = details.dataset.spoiler;
+  return scope !== undefined && name ? `wiki-spoiler:${scope}:${name}` : null;
+};
+
+const rememberedOpen = (key) => {
+  try {
+    return localStorage.getItem(key) === "open";
+  } catch {
+    return false;
+  }
+};
+
+// The element the address's fragment names, if any. Under a router that
+// keeps the route in the fragment (#/s/..., the browser tests'), none.
+const fragmentTarget = (hash) => {
+  if (!hash || hash.length < 2 || hash.startsWith("#/")) return null;
+  try {
+    return document.getElementById(decodeURIComponent(hash.slice(1)));
+  } catch {
+    return null;
+  }
+};
+
+// Open every closed spoiler around an element, so that it can be seen and
+// scrolled to. Whether it was hidden.
+const openAround = (element) => {
+  let opened = false;
+  for (let spoiler = element?.closest("details.spoiler") ?? null; spoiler; spoiler = spoiler.parentElement?.closest("details.spoiler") ?? null) {
+    if (!spoiler.open) {
+      spoiler.open = true;
+      opened = true;
+    }
+  }
+  return opened;
+};
+
+// The key each spoiler was last opened or closed by, so that a spoiler is
+// restored once for its name and page, when it appears or its key
+// changes: the reader's own click is never undone by a render that moves
+// the spoiler about before the click's toggle has been remembered.
+const restoredKeys = new WeakMap();
+
+const restoreSpoiler = (details) => {
+  const key = spoilerKey(details);
+  if (key !== null && restoredKeys.get(details) !== key) {
+    restoredKeys.set(details, key);
+    details.open = rememberedOpen(key);
+  }
+  // A spoiler that holds the place the address names is opened for it.
+  const target = fragmentTarget(location.hash);
+  if (target !== null && details.contains(target) && openAround(target)) target.scrollIntoView();
+};
+
+const restoreWithin = (node) => {
+  if (!(node instanceof Element)) return;
+  if (node.matches("details.spoiler")) restoreSpoiler(node);
+  for (const details of node.querySelectorAll("details.spoiler")) restoreSpoiler(details);
+};
+
+document.addEventListener(
+  "toggle",
+  (event) => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.matches("details.spoiler")) return;
+    const key = spoilerKey(details);
+    if (key === null) return;
+    try {
+      if (details.open) localStorage.setItem(key, "open");
+      else localStorage.removeItem(key);
+    } catch {}
+    const scope = details.closest("[data-spoilers]");
+    for (const other of scope.querySelectorAll("details.spoiler")) {
+      if (other !== details && other.dataset.spoiler === details.dataset.spoiler && other.open !== details.open) other.open = details.open;
+    }
+  },
+  true,
+);
+
+// A click on a spoiler's summary is remembered at once, before the toggle
+// it causes is dispatched: a render that puts a new element in the
+// spoiler's place meanwhile opens the new one as the reader left it.
+document.addEventListener(
+  "click",
+  (event) => {
+    const summary = event.target instanceof Element ? event.target.closest("details.spoiler > summary") : null;
+    if (summary === null || event.target.closest("a[href]") !== null) return;
+    const details = summary.parentElement;
+    const key = spoilerKey(details);
+    if (key === null) return;
+    try {
+      if (details.open) localStorage.removeItem(key);
+      else localStorage.setItem(key, "open");
+    } catch {}
+    restoredKeys.set(details, key);
+  },
+  true,
+);
+
+new MutationObserver((records) => {
+  for (const record of records) {
+    if (record.type === "attributes") restoreWithin(record.target);
+    else record.addedNodes.forEach(restoreWithin);
+  }
+}).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-spoiler", "data-spoilers"] });
+
+// A section a spoiler wraps is listed in the page's table of contents, and
+// a link may name its heading: following such a link, from the contents or
+// from the text, or arriving at its address, opens the spoilers around the
+// heading first, so that there is something to scroll to. The click's
+// listener is on the capture phase, so the spoilers are open before the
+// application scrolls.
+document.addEventListener(
+  "click",
+  (event) => {
+    const link = event.target instanceof Element ? event.target.closest("a[href*='#']") : null;
+    if (link === null) return;
+    const href = link.getAttribute("href");
+    openAround(fragmentTarget(href.slice(href.lastIndexOf("#"))));
+  },
+  true,
+);
+
+window.addEventListener("hashchange", () => {
+  const target = fragmentTarget(location.hash);
+  if (openAround(target)) target.scrollIntoView();
+});
+
+// A prerendered page's spoilers are in the page before this script runs.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => restoreWithin(document.body));
+else restoreWithin(document.body);
 
 globalThis.wikiIslands = Object.freeze({
   renderMath,

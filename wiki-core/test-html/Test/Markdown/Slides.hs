@@ -26,7 +26,7 @@ spec = describe "Slides.renderDeck" $ do
 
   it "gives the islands of every slide keys unique in the deck" $ do
     let keyed k = HH.i_ [HH.text (T.strip k.source <> show k.occurrence)]
-        opts = defaultOptions {codeBlock = \k _ _ -> keyed k, mathInline = \k _ _ -> keyed k}
+        opts = defaultOptions {codeBlock = \k _ _ _ -> keyed k, mathInline = \k _ _ -> keyed k}
         slides = rendered opts "$x$\n\n```\ncode\n```\n\n---\n\n$x$ and $x$\n\n::: notes\n```\ncode\n```\n:::"
     for slides (\s -> (,) <$> renderHtml s.body <*> renderHtml s.notes)
       `shouldReturn` [ ("<p><i>x0</i></p><i>code0</i>", "")

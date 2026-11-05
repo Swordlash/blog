@@ -43,7 +43,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
-import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Ast (Block (Footnotes, Heading), Footnote (..), parseMarkdown, parseWithAllMarkers)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -293,6 +293,91 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     boxClasses spelled `shouldBe` [["note", "alert"]]
     query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) spelled `shouldBe` [[P.Str "Mine"]]
     [() | P.BlockQuote _ <- spelled] `shouldBe` [()]
+
+  describe "spoilers" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+        titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        paragraphs = query (\case P.Para xs -> [stringify xs]; _ -> [])
+        stringify = T.concat . query (\case P.Str t -> [t]; P.Space -> [" "]; P.SoftBreak -> [" "]; P.LineBreak -> [" "]; _ -> [])
+    it "makes a block spoiler a box titled with its description, its content shown, and an inline spoiler its text" $ do
+      shown <- blocksOf ToOther place "[[spoiler]]{answer}(The *answer*)\nForty-two.\n\n- a\n[[/spoiler]]{answer}\n\nAfter ||hidden **bold**|| and a || b.\n"
+      boxClasses shown `shouldBe` [["alert-spoiler"]]
+      titles shown `shouldBe` [[P.Str "The", P.Space, P.Emph [P.Str "answer"]]]
+      paragraphs shown `shouldSatisfy` elem "Forty-two."
+      length (query (\case P.BulletList _ -> [()]; _ -> []) shown) `shouldBe` 1
+      query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> []) shown `shouldBe` [[P.Str "hidden", P.Space, P.Strong [P.Str "bold"]]]
+      paragraphs shown `shouldSatisfy` elem "After hidden bold and a || b."
+      show shown `shouldNotSatisfy` T.isInfixOf "wikibox"
+      show shown `shouldNotSatisfy` T.isInfixOf "spoiler]]"
+    it "makes only the bars the wiki reads as an inline spoiler's a span: not escaped bars, character references or code" $ do
+      let spans = query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> [])
+          codes = query (\case P.Code _ t -> [t]; _ -> [])
+      escaped <- blocksOf ToOther place "\\|\\|literal\\|\\| and ||real||\n"
+      spans escaped `shouldBe` [[P.Str "real"]]
+      paragraphs escaped `shouldBe` ["||literal|| and real"]
+      referenced <- blocksOf ToOther place "&#124;&#124;x&#124;&#124; and &vert;&vert;y&vert;&vert;\n"
+      spans referenced `shouldBe` []
+      paragraphs referenced `shouldBe` ["||x|| and ||y||"]
+      coded <- blocksOf ToOther place "`||x||` and `a || b`, then ||*seen*|| and ||_too_||\n"
+      codes coded `shouldBe` ["||x||", "a || b"]
+      spans coded `shouldBe` [[P.Emph [P.Str "seen"]], [P.Emph [P.Str "too"]]]
+      show coded `shouldNotSatisfy` T.isInfixOf "wikibox"
+    it "keeps an inline spoiler in a box's title, a spoiler's description and a heading" $ do
+      let spans = query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> [])
+      titled' <- blocksOf ToOther place "> [!TIP] Who? ||The butler||\n> Yes.\n\n[[spoiler]]{x}(Ask ||him||)\nNo.\n[[/spoiler]]{x}\n\n## A ||hidden|| heading\n"
+      spans titled' `shouldBe` [[P.Str "The", P.Space, P.Str "butler"], [P.Str "him"], [P.Str "hidden"]]
+      titles titled' `shouldSatisfy` elem [P.Str "Ask", P.Space, P.Span ("", ["spoiler"], []) [P.Str "him"]]
+      [ident | P.Header _ (ident, _, _) _ <- titled'] `shouldBe` ["a-hidden-heading"]
+      show titled' `shouldNotSatisfy` T.isInfixOf "wikibox"
+    it "gives the headings the identifiers the wiki gives them, with an inline spoiler or not, and keeps the ones written" $ do
+      let ids bs = [ident | P.Header _ (ident, _, _) _ <- bs]
+          targets = query (\case P.Link _ _ (url, _) -> [url]; _ -> [])
+          wikiIds source = [ident | Right doc <- [parseMarkdown source], Heading _ attrs _ <- doc, Just ident <- [lookup "id" attrs]]
+          -- The document's identifiers, and the wiki's for the same page.
+          same source expected = do
+            written <- blocksOf ToOther place source
+            (source, ids written, wikiIds source) `shouldBe` (source, expected, expected)
+            pure written
+      twice <- same "## ||Answer||\n\nOne.\n\n## ||Answer||\n\nTwo, and [the second](#answer-2).\n" ["answer", "answer-2"]
+      targets twice `shouldBe` ["#answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## ||Answer||\n\nTwo.\n" ["answer", "answer-2"]
+      spoilerFirst <- same "## ||Answer||\n\nOne.\n\n## Answer\n\nTwo, and [the second](#answer-2).\n" ["answer", "answer-2"]
+      [ident | P.Header _ (ident, _, _) xs <- spoilerFirst, P.Str "Answer" `elem` xs] `shouldBe` ["answer-2"]
+      targets spoilerFirst `shouldBe` ["#answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer", "answer-2"]
+      -- An identifier written is kept, and the heading's text is not
+      -- taken by it.
+      _ <- same "## Title {#custom}\n\nOne.\n\n## Title\n\nTwo.\n" ["custom", "title"]
+      _ <- same "## Start\n\n## Intro {#start}\n" ["start-2", "start"]
+      -- Whatever a written identifier looks like, it is written.
+      _ <- same "## Answer {#answer-2}\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer-2", "answer"]
+      _ <- same "## Answer {#answer}\n\nOne.\n\n## Answer\n\nTwo.\n" ["answer", "answer-2"]
+      _ <- same "## Answer\n\nOne.\n\n## Answer {#answer}\n\nTwo.\n" ["answer-2", "answer"]
+      -- A heading in a footnote comes first in pandoc's document, where
+      -- the footnote is referenced, and last on the page, where the
+      -- footnotes are: its written identifier is still kept.
+      let footnoted = "Ref[^n].\n\n## Answer {#answer-2}\n\n## Answer\n\n[^n]: Note.\n\n    ## Inside {#answer}\n"
+          allIds = query (\case P.Header _ (ident, _, _) _ -> [ident]; _ -> [])
+          wikiAllIds = [ident | Right (doc, _, _, _) <- [parseWithAllMarkers footnoted], Heading _ attrs _ <- doc <> [b | Footnotes notes <- doc, Footnote _ _ bs <- notes, b <- bs], Just ident <- [lookup "id" attrs]]
+      noted <- blocksOf ToOther place footnoted
+      [ident | P.Header _ (ident, _, _) _ <- noted] `shouldBe` ["answer-2", "answer-3"]
+      allIds noted `shouldBe` ["answer", "answer-2", "answer-3"]
+      wikiAllIds `shouldBe` ["answer-2", "answer-3", "answer"]
+      pass
+    it "nests spoilers, and finds them in a quotation and a list item" $ do
+      nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
+      boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]
+      titles nested `shouldBe` [[P.Str "A"], [P.Str "B"], [P.Str "C"], [P.Str "D"]]
+      [inner | P.Div (_, ["alert-spoiler"], _) (_ : inner) <- nested, P.Div (_, ["alert-spoiler"], _) _ <- inner] `shouldSatisfy` (not . null)
+    it "shows a spoiler the page shows in red as its marker and the reason, then its blocks, and a broken line as text" $ do
+      unclosed <- blocksOf ToOther place "[[spoiler]]{x}(D)\na\n\n[[/spoiler]]{y}\n"
+      boxClasses unclosed `shouldBe` []
+      paragraphs unclosed `shouldBe` ["[[spoiler]]{x}(D) — Spoiler “x” is not closed: add [[/spoiler]]{x}", "a", "[[/spoiler]]{y} — no open spoiler of this name"]
+      cut <- blocksOf ToOther place "[[spoiler]]{s}(D)\ntext\n\n## Heading\n[[/spoiler]]{s}\n\nafter\n"
+      boxClasses cut `shouldBe` []
+      take 1 (paragraphs cut) `shouldSatisfy` all (T.isInfixOf "cuts a section")
+      paragraphs cut `shouldSatisfy` elem "after"
+      length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
 
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Spoilers in exports (WP5.62, issue #152). A block spoiler is exported as
+a box of the class `alert-spoiler`, titled with its description, its
+content shown; one the page shows in red is its marker line and the reason
+as text, then its blocks; an inline spoiler is its text in a `spoiler`
+span. The wiki's parser finds the spoilers' marker lines, which are
+rewritten before pandoc reads the page, as the boxes' markers are.
+
 The server is told when the TeX is off (WP5.61). `wiki-server serve
 --no-pdf` (`ServeOptions`' `pdf`, on by default) makes no PDFs: the server
 does not look for `xelatex` at its start or when the administration
