@@ -179,9 +179,12 @@ articleLink router event = do
     (Nothing, Nothing) -> Nothing
   where
     -- A footnote's reference is the link's own id (@fnref-1@, or
-    -- @fnref-1-2@ for the second reference to the note).
+    -- @fnref-1-2@ for the second reference to the note). The renderer
+    -- writes the class @footnote-ref@ on references only, so the link is
+    -- taken by it and not by its target's name: on "What's new?" every id
+    -- starts with its entry's prefix (@#pr-158-fn-1@).
     noteReference anchor = do
-      _ <- Element.closestNow anchor "sup.footnote-ref > a[href^='#fn-']"
+      _ <- Element.closestNow anchor "sup.footnote-ref > a"
       mfilter (not . T.null) (Element.getAttributeNow anchor "id")
 
 -- | The link a plain click landed on: the main button with no modifier

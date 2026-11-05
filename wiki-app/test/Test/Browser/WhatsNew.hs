@@ -7,9 +7,10 @@
 -- listing highlighted, a spoiler hidden); the dot on the link while the
 -- server has an entry newer than the newest the reader has seen, which
 -- opening the page clears; and no link where the server's page is off, nor
--- in the demo. A link in an entry to a place on the page scrolls there and
--- stays on the page, and each entry's ids start with its number, so two
--- entries with the same sections have no id in common.
+-- in the demo. A link in an entry to a place on the page, or a footnote's
+-- reference to its note, scrolls there and stays on the page, and each
+-- entry's ids start with its number, so two entries with the same sections
+-- have no id in common.
 module Test.Browser.WhatsNew (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -104,6 +105,26 @@ spec m = do
         [top, bottom, height] -> (top >= 0 && bottom <= height) `shouldBe` True
         _ -> expectationFailure ("no box for the heading: " <> box)
 
+  -- Under the test's router the fragment is the route's, so a note gets no
+  -- history entry of its own there ('Wiki.App.Browser.followNote'); what is
+  -- checked is that the reference, whose id has its entry's prefix, is
+  -- taken for one and leads to its own entry's note.
+  it "follows a footnote's reference in an entry to that entry's own note" $ runPage $ do
+    serving m (Just 0) news
+    ui <- startServer m WhatsNewPage
+    reference <- find ui ".whats-new-entry[data-pr=\"157\"] sup.footnote-ref a"
+    getAttribute reference "href" `shouldReturn` Just "#pr-157-fn-1"
+    getAttribute reference "id" `shouldReturn` Just "pr-157-fnref-1"
+    _ <- find ui ".whats-new-entry[data-pr=\"157\"] #pr-157-fn-1"
+    click reference
+    find ui ".whats-new h1" >>= (`shouldHaveText` "What's new?")
+    unsafeIOToPageM (fromJSText <$> js_location_hash) `shouldReturn` "#/whats-new/"
+    eventually $ do
+      box <- unsafeIOToPageM (fromJSText <$> js_box (toJSText "#pr-157-fn-1"))
+      case mapMaybe (readMaybe . T.unpack) (T.words box) :: [Double] of
+        [top, bottom, height] -> (top >= 0 && bottom <= height) `shouldBe` True
+        _ -> expectationFailure ("no box for the note: " <> box)
+
   it "marks the link while the server has an entry newer than the newest the reader has seen, and opening the page clears it" $ runPage $ do
     -- Seen up to #157: #158 is new.
     serving m (Just 157) news
@@ -151,7 +172,7 @@ spec m = do
                 , title = "A copy button on code blocks"
                 , markdown = "### New features\n\n- A button copies the code:\n\n  ```haskell\n  main :: IO ()\n  main = pure ()\n  ```\n\n- The murderer is ||the butler||.\n- See [the fixes](#bug-fixes).\n\n### Bug fixes\n\n- The button no longer copies the line numbers."
                 }
-            , WhatsNewEntry {pr = 157, url = pullRequestUrl 157, title = "A deploy that checks its TeX once", markdown = "### Bug fixes\n\n- The deploy no longer hangs."}
+            , WhatsNewEntry {pr = 157, url = pullRequestUrl 157, title = "A deploy that checks its TeX once", markdown = "### Bug fixes\n\n- The deploy no longer hangs.[^1]\n\n[^1]: It waited on a question no one saw."}
             ]
         }
 
