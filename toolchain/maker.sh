@@ -8,7 +8,13 @@
 #   sh toolchain/maker.sh toolchain install [TARGET…]  install components (wasm-sysroot,
 #                                                     wasm-ghc, node, chromium, fourmolu, store)
 #   sh toolchain/maker.sh tui                         the terminal interface
+#   sh toolchain/maker.sh build native|wasm|wasm-opt [CABAL-ARG…]
+#   sh toolchain/maker.sh test native|wasm|all [CABAL-ARG…]
+#   sh toolchain/maker.sh serve [CABAL-ARG…]
 #   sh toolchain/maker.sh --help
+#
+# The npm scripts run the builds and tests through it. WIKI_MAKER names a
+# maker built elsewhere, which runs instead (the bootstrap's tests use it).
 #
 # GHC and cabal must be there first: toolchain/bootstrap.sh installs them
 # (and runs the maker itself for the rest of the toolchain). The terminal
@@ -17,11 +23,20 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 eval "$(sh "$ROOT/toolchain/bootstrap.sh" env)"
+# The maker is a native program, and it computes the wasm build's
+# environment itself: a shell that loaded ~/.ghc-wasm/env (CI exports it to
+# every later step) must not hand it the cross compiler's CC and friends,
+# which break cabal's native configuration.
+unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
 exe=maker
 if [ "${1:-}" = tui ]; then
   exe=maker-tui
   shift
   set -- --root "$ROOT"
+fi
+if [ "$exe" = maker ] && [ -n "${WIKI_MAKER:-}" ]; then
+  cd "$ROOT"
+  exec "$WIKI_MAKER" "$@"
 fi
 command -v cabal >/dev/null 2>&1 ||
   { printf 'maker: cabal is not on PATH; run sh toolchain/bootstrap.sh native first\n' >&2; exit 1; }

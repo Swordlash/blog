@@ -409,21 +409,23 @@ jobs:
         SAVED: ${{ steps.native-build.outputs.cache-primary-key }}
       run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
-    - name: Check native test groups cover the full suite
-      if: matrix.group == 'unit'
-      run: |
-        server_test=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)
-        node toolchain/test-native-groups.mjs "$server_test"
-
-    # The bootstrap's second stage: its own tests, its terminal interface
-    # built (with -Werror, as the maker's project sets), then the bootstrap's
-    # tests, which run it against fake tools.
+    # The bootstrap's second stage and the builds' runner: its own tests,
+    # its terminal interface built (with -Werror, as the maker's project
+    # sets), then the bootstrap's tests, which run it against fake tools,
+    # and the native test groups' check, which runs its `test native`.
     - name: Build and test the maker
       if: matrix.group == 'unit'
       run: |
         cd maker
         cabal build all --enable-tests
         cabal test maker-test
+
+    - name: Check native test groups cover the full suite
+      if: matrix.group == 'unit'
+      run: |
+        server_test=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)
+        maker=$(cd maker && cabal list-bin -v0 exe:maker)
+        node toolchain/test-native-groups.mjs "$server_test" "$maker"
 
     - name: Test bootstrap scripts
       if: matrix.group == 'unit'
@@ -671,7 +673,7 @@ jobs:
 
     # Separate from native's snapshot: the wasm job also builds native
     # prerender, browser-test and smoke-test programs. Only Cabal's build
-    # directories are cached; public/ is generated afresh by build-wasm.sh.
+    # directories are cached; public/ is generated afresh by the maker's build.
     # Restored whatever the sources say, as native's snapshot is: the newest
     # copy of this ref (or of main) from the same compilers, runner kind and
     # version tag (v2, bumped by hand); Cabal and GHC validate their own
@@ -697,12 +699,14 @@ jobs:
 
     # Everything the later steps take from the store, built here so that it
     # is saved even if they fail: the native dependencies of the prerender,
+    # the maker's (Shake and the rest: `npm run` builds and runs the maker),
     # the hspec-halogen executable (a haskell-halogen package, so it lives in
     # the store, and `--only-dependencies` does not reach it), and the wasm
     # dependencies, with the arguments toolchain/bootstrap.sh's warm-up uses.
     - name: Install dependencies
       run: |
         cabal build all --only-dependencies --project-file=cabal-native-fast.project --builddir=dist-newstyle/native-fast
+        (cd maker && cabal build exe:maker --only-dependencies)
         sh toolchain/build-hspec-halogen.sh
         (
           # shellcheck source=/dev/null

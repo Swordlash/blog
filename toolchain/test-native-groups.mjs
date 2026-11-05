@@ -1,13 +1,17 @@
 // Check that CI's groups partition the full server spec, including duplicate
-// descriptions, and that the native command dispatches only the intended suites.
+// descriptions, and that the native command, the maker's `test native`,
+// dispatches only the intended suites.
+//
+//   node toolchain/test-native-groups.mjs <wiki-server-test> <maker>
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-assert(process.argv[2], "usage: node toolchain/test-native-groups.mjs /path/to/wiki-server-test");
+assert(process.argv[2] && process.argv[3], "usage: node toolchain/test-native-groups.mjs /path/to/wiki-server-test /path/to/maker");
 const binary = resolve(process.argv[2]);
+const maker = resolve(process.argv[3]);
 const repo = resolve(import.meta.dirname, "..");
 const work = mkdtempSync(join(tmpdir(), "wiki-native-groups-"));
 const bin = join(work, "bin");
@@ -78,15 +82,15 @@ try {
     const environment = { ...dispatchEnv };
     if (group === undefined) delete environment.WIKI_TEST_GROUP;
     else environment.WIKI_TEST_GROUP = group;
-    succeeded(run("sh", ["toolchain/test-native.sh", ...args], environment));
+    succeeded(run(maker, ["test", "native", ...args], environment));
     const target = group === "sqlite" || group === "postgres" ? "wiki-server:test:wiki-server-test" : "all";
     assert.deepEqual(readFileSync(calls, "utf8").split("\0").slice(0, -1), ["test", target, "--builddir=dist-newstyle/native", ...args]);
   }
-  const failed = run("sh", ["toolchain/test-native.sh"], { ...dispatchEnv, WIKI_TEST_GROUP: "unit", NATIVE_CABAL_EXIT: "37" });
+  const failed = run(maker, ["test", "native"], { ...dispatchEnv, WIKI_TEST_GROUP: "unit", NATIVE_CABAL_EXIT: "37" });
   assert.equal(failed.status, 37, "Native dispatcher swallowed a failed test command");
   for (const group of ["", "typo"]) {
     rmSync(calls, { force: true });
-    const result = run("sh", ["toolchain/test-native.sh"], { ...dispatchEnv, WIKI_TEST_GROUP: group });
+    const result = run(maker, ["test", "native"], { ...dispatchEnv, WIKI_TEST_GROUP: group });
     assert.equal(result.status, 2);
     assert.throws(() => readFileSync(calls));
   }
