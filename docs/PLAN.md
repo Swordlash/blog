@@ -827,6 +827,45 @@ In the order to do it, unless the owner says otherwise.
   (the entry is part of every pull request; the label is the owner's), the
   guide's server tour (one sentence), wiki-server's and wiki-app's CHANGELOGs.
 
+- **WP5.67 A deploy for a locked-down machine** (the owner, 2026-11-05; one pull
+  request, toolchain only). For a server whose packages must come from vetted
+  mirrors (the owner's bank), four options of `toolchain/deploy-local.sh`, each
+  also on the wizard's screens and remembered in the state, usable together or
+  apart, beside what exists; the deploy without them is unchanged. (a)
+  `--bundle-locally`, with `--backend-only[=REF]`: of the page CI built, only what
+  needs the wasm toolchain is taken (`app.wasm`, `index.html` and the prerendered
+  files), and the JavaScript and CSS bundles are built on the machine by
+  `web/bundle.sh` (`npm ci`, esbuild, sass) with its Node; afterwards the set of
+  files is compared with the zip's and every file whose bytes differ is named
+  (with the lockfile's versions they should be identical, which is the evidence
+  the machine's owner wants). (b) `--npm-registry URL`: the npm registry
+  `npm ci` and `npx` use (`NPM_CONFIG_REGISTRY` for the deploy's npm calls; npm
+  rewrites the lockfile's `registry.npmjs.org` URLs to it, `replace-registry-host`),
+  so the mirror serves esbuild's and sass's binaries too. (c) `--system-tools`:
+  nothing is downloaded for the toolchain; Node (24 or later, with npm), GHC
+  (9.14.1) and cabal (3.16.1.0) must be on PATH, and ghcup is not needed; a
+  missing or wrong-version tool stops the deploy before anything else, naming
+  it, the version found, and that removing `--system-tools` lets
+  `toolchain/bootstrap.sh` install it. `bootstrap.sh` gains the same switch
+  (`--system-tools`), which the deploy passes; `--backend-only` with
+  `--system-tools` still downloads the page (or takes it from a file, below),
+  since that is not the toolchain. (d) `--hackage-mirror URL`: the Hackage
+  mirror cabal's index and packages come from, written as the `hackage.haskell.org`
+  repository's `url` into the toolchain's own cabal config (`CABAL_DIR` under the
+  toolchain directory, so the user's `~/.cabal` is untouched), before `cabal
+  update`. Also `--app-page FILE`: the page's zip from a file instead of GitHub's
+  release, for a machine that cannot reach github.com, with the same cache and
+  checks as a downloaded one (the file's commit is not checked against the
+  checkout's; the deploy says which commit's page it is from the zip's name or
+  its manifest, if any). Tests in `toolchain/test-deploy-local.sh` and
+  `test-bootstrap.sh`: each option through the state and the wizard; the
+  local bundle built with a fake `npm`/`npx` and compared; the registry reaching
+  npm; `--system-tools` refusing with each tool missing or the wrong version, and
+  passing with all present; the mirror written into the cabal config and
+  `~/.cabal` untouched; the page from a file. Docs: README (a section "A machine
+  that installs nothing from the internet", with the options together), the
+  deploy's usage text, the wizard's texts.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
