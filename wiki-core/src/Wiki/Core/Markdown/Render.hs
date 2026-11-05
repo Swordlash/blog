@@ -126,6 +126,7 @@ module Wiki.Core.Markdown.Render
   , renderBlocks
   , renderLines
   , renderSections
+  , renderSectionsWithIds
   , renderRawHtml
   , boxOf
   , scrollingCode
@@ -286,12 +287,43 @@ renderLines opts located =
 -- are numbered across them, as they would be if the sections were one
 -- page.
 renderSections :: forall page w i. Options page w i -> [[Block]] -> [[HH.HTML w i]]
-renderSections opts sections = evalState (traverse section sections) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering))
+renderSections opts = renderSectionsWithIds opts . map ("",)
+
+-- | 'renderSections', with a prefix for the ids of each section: every id
+-- the section's HTML has (a heading's, a box's, a footnote's and its
+-- references', one written in braces), every spoiler's name, and every
+-- link to a place in the document (@#intro@) start with it. Sections that
+-- were written apart, such as the changelog's entries on the page "What's
+-- new?", then do not share ids even when they have the same headings or
+-- footnotes, and a link in one leads to its own heading. A section with
+-- the prefix @""@ is rendered as 'renderSections' renders it.
+--
+-- Raw HTML is left as written, and @[[toc]]@ lists the ids without their
+-- prefixes: neither is in a changelog's entry.
+renderSectionsWithIds :: forall page w i. Options page w i -> [(Text, [Block])] -> [[HH.HTML w i]]
+renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "")
   where
+    sections = map snd prefixed
+
     -- A section's own notes are read first, the others' after: comments
     -- shown together are sections each numbering its notes from 1, and a
     -- slide's notes come in a section after its references.
-    section bs = modify (\c -> c {sectionNotes = noteTexts [bs]}) >> renderBlocks' bs
+    section (prefix, bs) = modify (\c -> c {sectionNotes = noteTexts [bs], idPrefix = prefix}) >> renderBlocks' bs
+
+    -- An id the document writes, with the section's prefix.
+    ownId :: Text -> R Text
+    ownId ident = gets (\c -> if T.null ident then ident else c.idPrefix <> ident)
+
+    -- Attributes, their id with the section's prefix.
+    ownAttrs :: Attributes -> R Attributes
+    ownAttrs = traverse (\(key, v) -> if key == "id" then (key,) <$> ownId v else pure (key, v))
+
+    -- A link's destination: one to a place in the document (@#intro@)
+    -- with the section's prefix, any other as written.
+    ownDestination :: Text -> R Text
+    ownDestination dest = case T.stripPrefix "#" dest of
+      Just fragment | not (T.null fragment) -> ("#" <>) <$> ownId fragment
+      _ -> pure dest
 
     -- Each footnote's text, by its number, for the title of its
     -- references: the notes come last, after the references.
@@ -302,10 +334,11 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
     renderBlock = \case
       Para xs -> single . HH.p_ <$> renderInlines xs
       Plain xs -> renderInlines xs
-      Heading level attrs xs -> do
+      Heading level written xs -> do
         -- A level-two heading starts a section, which a box's number may
         -- count ("Wiki.Core.Markdown.Box").
         when (level == 2) $ modify (\c -> c {boxCounter = countSection c.boxCounter})
+        attrs <- ownAttrs written
         inner <- renderInlines xs
         pure [headingOf level (idAndClasses attrs []) (inner <> (if opts.headingAnchors then headingAnchor attrs else []))]
       ThematicBreak -> pure [HH.hr_]
@@ -326,14 +359,17 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
         | otherwise -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows
-      Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
+      Div written bs -> do
+        attrs <- ownAttrs written
+        single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
       Alert kind box bs -> do
         number <- if box.numbered then state (\c -> second (\b -> c {boxCounter = b}) (countBox kind c.boxCounter)) else pure Nothing
         let defined = definedKind opts.boxes kind
         title <- withPieces [PText (boxCaption defined kind number (isJust box.title))] (maybe [] (map displayInline) box.title) []
         inner <- renderBlocks' bs
-        let anchor = if opts.headingAnchors then concatMap (\i -> headingAnchor [("id", i)]) box.id else []
-        pure [boxWith defined kind box.id (title <> anchor) inner]
+        ident <- traverse ownId box.id
+        let anchor = if opts.headingAnchors then concatMap (\i -> headingAnchor [("id", i)]) ident else []
+        pure [boxWith defined kind ident (title <> anchor) inner]
       -- A heading spoiler's summary is its heading, rendered as any
       -- heading is: its id, its link to itself, the section it starts
       -- for the boxes' numbers.
@@ -343,13 +379,15 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
               then do
                 summary <- renderBlock heading
                 inner <- renderBlocks' rest
-                pure [HH.details [classesProp ["spoiler", "spoiler-section"], HP.attr (HH.AttrName "data-spoiler") h.name] (HH.summary_ summary : inner)]
+                name <- ownId h.name
+                pure [HH.details [classesProp ["spoiler", "spoiler-section"], HP.attr (HH.AttrName "data-spoiler") name] (HH.summary_ summary : inner)]
               else renderBlocks' (heading : rest)
       Spoiler h bs -> case h.problem of
         Nothing -> do
           summary <- renderInlines (map displayInline h.description)
           inner <- renderBlocks' bs
-          pure [HH.details [classesProp ["spoiler"], HP.attr (HH.AttrName "data-spoiler") h.name] (HH.summary_ summary : inner)]
+          name <- ownId h.name
+          pure [HH.details [classesProp ["spoiler"], HP.attr (HH.AttrName "data-spoiler") name] (HH.summary_ summary : inner)]
         Just problem -> do
           inner <- renderBlocks' bs
           pure [spoilerError h.marker (spoilerProblemText h problem), HH.div [classesProp ["spoiler-unclosed"]] inner]
@@ -392,11 +430,13 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
 
     renderNote :: Footnote -> R (HH.HTML w i)
     renderNote (Footnote n _ bs) = do
-      let back = [PText " ", PNode (HH.a [HP.href ("#fnref-" <> show n), classesProp ["footnote-back"]] [HH.text "↩"])]
+      reference <- ownId ("fnref-" <> show n)
+      noteId <- ownId ("fn-" <> show n)
+      let back = [PText " ", PNode (HH.a [HP.href ("#" <> reference), classesProp ["footnote-back"]] [HH.text "↩"])]
       inner <- case unsnoc bs of
         Just (start, Para xs) -> (<>) <$> renderBlocks' start <*> (single . HH.p_ <$> withPieces [] xs back)
         _ -> (<> fromPieces (drop 1 back)) <$> renderBlocks' bs
-      pure (HH.li [HP.id ("fn-" <> show n)] inner)
+      pure (HH.li [HP.id noteId] inner)
 
     renderInlines :: [Inline] -> R [HH.HTML w i]
     renderInlines xs = withPieces [] xs []
@@ -453,17 +493,25 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
         node (HH.span [classesProp ["spoiler"], HP.tabIndex 0, HP.attr (HH.AttrName "role") "button", HP.attr (HH.AttrName "aria-label") "Spoiler: click to reveal"])
           . fromPieces
           <$> inlinePieces inLink xs
-      Code attrs code -> pure [PNode (HH.code (idAndClasses attrs []) [HH.text code])]
+      Code written code -> do
+        attrs <- ownAttrs written
+        pure [PNode (HH.code (idAndClasses attrs []) [HH.text code])]
       Link _ _ _ xs | inLink -> inlinePieces True xs
-      Link attrs dest title xs -> renderLink attrs dest title xs
-      Image attrs dest title xs -> pure (renderEmbed attrs dest title (plainText xs))
+      Link written dest title xs -> do
+        attrs <- ownAttrs written
+        dest' <- ownDestination dest
+        renderLink attrs dest' title xs
+      Image written dest title xs -> do
+        attrs <- ownAttrs written
+        pure (renderEmbed attrs dest title (plainText xs))
       Math InlineMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathInline k ms tex)]
       Math DisplayMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathDisplay k ms tex)]
       FootnoteRef n _ -> do
         ident <- footnoteRefId n
+        noteId <- ownId ("fn-" <> show n)
         own <- gets (.sectionNotes)
         let noteTitle = fromMaybe "" (M.lookup n own <|> M.lookup n allNotes)
-        pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a ([HP.href ("#fn-" <> show n), HP.id ident] <> titleProp noteTitle) [HH.text (show n)]])]
+        pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a ([HP.href ("#" <> noteId), HP.id ident] <> titleProp noteTitle) [HH.text (show n)]])]
       Emoji keyword emoji -> pure [PNode (HH.span [classesProp ["emoji"], HP.title (":" <> keyword <> ":")] [HH.text emoji])]
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
@@ -537,9 +585,9 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
 
     footnoteRefId :: Int -> R Text
     footnoteRefId n = state $ \c ->
-      let seen = M.findWithDefault 0 n c.footnoteRefs
-          ident = "fnref-" <> show n <> (if seen == 0 then "" else "-" <> show (seen + 1))
-       in (ident, c {footnoteRefs = M.insert n (seen + 1) c.footnoteRefs})
+      let seen = M.findWithDefault 0 (c.idPrefix, n) c.footnoteRefs
+          ident = c.idPrefix <> "fnref-" <> show n <> (if seen == 0 then "" else "-" <> show (seen + 1))
+       in (ident, c {footnoteRefs = M.insert (c.idPrefix, n) (seen + 1) c.footnoteRefs})
 
 -- | The counters rendering keeps as it goes: islands by source (for their
 -- keys), references to each footnote (for their ids), the formulas so
@@ -547,11 +595,15 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
 -- their numbers.
 data Counts = Counts
   { islands :: Map Text Int
-  , footnoteRefs :: Map Int Int
+  , footnoteRefs :: Map (Text, Int) Int
+  -- ^ By the section's id prefix and the note's number.
   , definitions :: [Text]
   , sectionNotes :: Map Int Text
   -- ^ The footnotes of the section being rendered, by number, as titles.
   , boxCounter :: BoxCounter
+  , idPrefix :: Text
+  -- ^ What the section being rendered puts before its ids
+  -- ('renderSectionsWithIds').
   }
 
 type R = State Counts

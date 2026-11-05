@@ -9,9 +9,13 @@
 -- a page.
 --
 -- The entries are rendered as sections of one document
--- ('Md.renderSections'), so that no two entries' islands have the same
--- key. Their spoilers are remembered under one scope, @whats-new@, as a
--- page's are under the page's.
+-- ('Md.renderSectionsWithIds'), so that no two entries' islands have the
+-- same key. Each entry was written apart, so each has its own headings
+-- and footnotes: its ids, spoiler names and links to its own places start
+-- with @pr-N-@ ('idPrefix'), so that two entries with a "New features"
+-- section have two ids and a link in an entry leads to its own heading.
+-- Their spoilers are remembered under one scope, @whats-new@, as a page's
+-- are under the page's.
 --
 -- It reads the entries at once where the backend answers at once (the page
 -- the server prerendered carries them), and otherwise in its initializer.
@@ -22,6 +26,7 @@ module Wiki.App.View.WhatsNew
   ( Input (..)
   , component
   , builtOn
+  , idPrefix
   )
 where
 
@@ -98,7 +103,7 @@ component =
               <p class="empty">Nothing yet.</p>
             {% else %}
               <article class="page-body whats-new-entries" data-spoilers="whats-new">
-                {% for (entry, nodes) in zip w.entries (Md.renderSections (options st.input.context) (map parsed w.entries)) %}
+                {% for (entry, nodes) in zip w.entries (Md.renderSectionsWithIds (options st.input.context) [(idPrefix e, parsed e) | e <- w.entries]) %}
                   <section class="whats-new-entry" data-pr={{ show entry.pr :: Text }}>
                     <h2 class="whats-new-title"><a href={{ entry.url }}>{{ "#" <> show entry.pr <> " " <> entry.title :: Text }}</a></h2>
                     {{ nodes }}
@@ -135,6 +140,11 @@ options ctx = (Body.islandOptions ctx mempty) {Md.resolveLink = resolve}
       Md.ToAnchor fragment -> Md.External ("#" <> fragment)
       Md.ToAttachment _ -> Md.Unresolved
       Md.ToPath _ -> Md.Unresolved
+
+-- | What an entry's ids start with on the page: @pr-158-@, by its pull
+-- request's number, which no two shown entries share.
+idPrefix :: WhatsNewEntry -> Text
+idPrefix e = "pr-" <> show e.pr <> "-"
 
 -- | The day a build was made, as the page writes it: @5 November 2026@.
 builtOn :: UTCTime -> Text
