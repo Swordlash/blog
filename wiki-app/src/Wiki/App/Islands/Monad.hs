@@ -19,6 +19,7 @@
 module Wiki.App.Islands.Monad
   ( MonadIslands (..)
   , MathMode (..)
+  , drawnProblem
   )
 where
 
@@ -28,10 +29,12 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Type.Equality (type (~))
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, isNull, jsValText, toJSText)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Protolude
 import Web.DOM.Internal.Types (Element (..))
+import Web.Event.CustomEvent (CustomEvent (..))
+import Web.Event.Event (Event)
 import Wiki.App.Browser (localTime)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..))
 import Wiki.Core.Math (Macros (..))
@@ -47,7 +50,7 @@ import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
 -- 'renderMermaid'.
 $( browserJS
      ["jsbits/islands.js"]
-     [ ("js_render_math", "wiki_islands_render_math", Safe, [t|Element -> JSText -> Bool -> JSText -> IO ()|])
+     [ ("js_render_math", "wiki_islands_render_math", Safe, [t|Element -> JSText -> Bool -> JSText -> IO JSText|])
      , ("js_check_macros", "wiki_islands_check_macros", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_builtin_macros", "wiki_islands_builtin_macros", Safe, [t|IO JSText|])
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
@@ -69,7 +72,10 @@ data MathMode = Inline | Display
 -- drawing may need a fetch (and for TikZ a run of TeX), and the library
 -- fills the element when it is done, unless the element was given a newer
 -- source meanwhile (@web/src/islands.js@ counts the requests). They do not
--- wait for the drawing. When they did (a safe import, forced, from a
+-- wait for the drawing. When it is done, the element gets a
+-- @wiki-island-drawn@ event ('drawnProblem'), which says whether the
+-- library failed; a drawing dropped for a newer one, or finished after the
+-- element left the page, sends none. When they did (a safe import, forced, from a
 -- component's 'lift'), following a link in the built page while a page's
 -- diagram or picture was still being drawn left the page unchanged, for
 -- as long as anyone watched. The cause is not known yet (the browser
@@ -81,8 +87,12 @@ data MathMode = Inline | Display
 class (Monad m) => MonadIslands m where
   -- | A formula, typeset with the macros of its space and of the formulas
   -- before it on its page ("Wiki.Core.Math"), on top of the built-in ones.
-  renderMath :: MathMode -> Macros -> Text -> Element -> m ()
-  default renderMath :: (MonadTrans t, MonadIslands n, m ~ t n) => MathMode -> Macros -> Text -> Element -> m ()
+  -- The result is KaTeX's error when it cannot parse the formula: the
+  -- element then shows the formula in red, as KaTeX renders it, and the
+  -- editor marks the formula's lines. Natively there is no KaTeX, and no
+  -- error.
+  renderMath :: MathMode -> Macros -> Text -> Element -> m (Maybe Text)
+  default renderMath :: (MonadTrans t, MonadIslands n, m ~ t n) => MathMode -> Macros -> Text -> Element -> m (Maybe Text)
   renderMath mode macros tex = lift . renderMath mode macros tex
 
   -- | KaTeX's error for a block of macro definitions read on top of
@@ -131,7 +141,9 @@ instance (MonadIslands m) => MonadIslands (ReaderT r m)
 -- does nothing; nothing runs 'BrowserDOM' there, but code written against
 -- it (a browser test suite) still type-checks.
 instance MonadIslands BrowserDOM where
-  renderMath mode macros tex element = liftIO $ js_render_math element (toJSText tex) (mode == Display) (macrosJSON macros)
+  renderMath mode macros tex element = liftIO $ do
+    message <- fromJSText <$> js_render_math element (toJSText tex) (mode == Display) (macrosJSON macros)
+    pure (if T.null message then Nothing else Just message)
 
   checkMacros macros block = liftIO $ do
     message <- fromJSText <$> js_check_macros (macrosJSON macros) (toJSText block)
@@ -148,6 +160,15 @@ instance MonadIslands BrowserDOM where
 
   renderTime at element = liftIO $ localTime at >>= element.textContent_set
 
+-- | What a @wiki-island-drawn@ event says of a diagram or a picture just
+-- drawn: the library's error, or nothing when the drawing succeeded (the
+-- event's detail is then empty). Pure, since the event does not change.
+drawnProblem :: Event -> Maybe Text
+drawnProblem event =
+  let detail = (CustomEvent event).detail
+      message = if isNull detail then "" else jsValText detail
+   in if T.null message then Nothing else Just message
+
 -- | The blocks as a JSON array of strings, the one form in which a binding
 -- can pass a list.
 macrosJSON :: Macros -> JSText
@@ -158,7 +179,7 @@ macrosJSON (Macros blocks) = toJSText (decodeUtf8 (BSL.toStrict (encode blocks))
 -- holds its source as text, so the page arrives readable, though
 -- unrendered.
 instance MonadIslands MemDOM where
-  renderMath _ _ = asText
+  renderMath _ _ tex element = Nothing <$ asText tex element
   checkMacros _ _ = pure Nothing
   builtinMacros = pure ""
   renderMermaid = asText

@@ -7,11 +7,14 @@
 // island's source, as the prerendered page does, rather than nothing.
 
 // `macros` is a JSON array of blocks of TeX definitions (Wiki.Core.Math's
-// Macros), since a binding passes text rather than arrays.
+// Macros), since a binding passes text rather than arrays. The result is
+// KaTeX's error, or the empty string when it set the formula (and without
+// the page's islands.js, which has no KaTeX to ask).
 function wiki_islands_render_math(element, tex, displayMode, macros) {
   const islands = globalThis.wikiIslands;
-  if (islands) islands.renderMath(element, tex, displayMode, JSON.parse(macros));
-  else element.textContent = tex;
+  if (islands) return islands.renderMath(element, tex, displayMode, JSON.parse(macros));
+  element.textContent = tex;
+  return "";
 }
 
 // KaTeX's error for a block of macros over others (a JSON array, as
@@ -29,6 +32,9 @@ function wiki_islands_builtin_macros() {
   return islands ? islands.builtinMacros() : "";
 }
 
+// A diagram and a picture are drawn later: the page's islands.js tells the
+// element with a "wiki-island-drawn" event when it is done
+// (Wiki.App.Islands.Monad's drawnProblem).
 function wiki_islands_render_mermaid(element, source) {
   const islands = globalThis.wikiIslands;
   if (islands) islands.renderMermaid(element, source);
