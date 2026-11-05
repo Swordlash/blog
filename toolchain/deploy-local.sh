@@ -1943,7 +1943,10 @@ tag_asset() { printf 'app-%s-%s.zip\n' "$page_kind" "$(printf '%s' "$1" | tr / -
 # in wiki-core/reference (a change to the reference changes
 # docs/markdown.md, not the link). The `paths` filters of
 # .github/workflows/build.yml and server-page.yml must say the same, since
-# CI builds a page only for a commit that changes code.
+# CI builds a page only for a commit that changes code. build.yml also runs
+# on changelog/, whose entries wiki-server embeds but the page is not built
+# from: a commit that changes entries alone has no page of its own, and the
+# page of the commit before it is the one to download.
 is_code() {
   case $1 in
     wiki-core/templates/* | wiki-core/reference/* | docs/markdown.md) return 0 ;;
