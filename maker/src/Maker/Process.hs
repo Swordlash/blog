@@ -16,12 +16,12 @@ where
 
 import Control.Exception (IOException, try)
 import Control.Monad (when)
-import Data.Char (isSpace)
-import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, removeDirectoryRecursive, removeFile)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isSpace)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
 import Data.Text.Encoding.Error (lenientDecode)
+import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, removeDirectoryRecursive, removeFile)
 import System.Process.Typed
 
 -- | What a command prints on its standard output when it succeeds, or
