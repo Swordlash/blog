@@ -2952,20 +2952,21 @@ pass 'without a TeX the service finds: said, PDFs off by --no-pdf in the unit, n
 # it; neither is for the demo, and the two exclude each other. The build
 # is given the version the page shows: WIKI_BUILD_VERSION when the
 # environment sets it, else git describe of the checkout, which the
-# fixture's copy is not, so "unknown".
+# fixture's copy is not, so "unknown". The test sets the variable itself
+# for each build, since CI sets it for its whole run.
 fixture whats-new
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
 fake_xelatex "$case_dir/bin" working
 out=$case_dir/first
-deploy --server --sqlite --no-whats-new --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with --no-whats-new failed'
+(unset WIKI_BUILD_VERSION; deploy --server --sqlite --no-whats-new --port "$p" --admin-port "$a") >"$out" 2>&1 || fail 'the deploy with --no-whats-new failed'
 grep -x 'ExecStart=.* --no-whats-new' "$HOME/$unit" >/dev/null || fail 'the unit does not run wiki-server with --no-whats-new'
 [ "$(state whats_new)" = no ] || fail "--no-whats-new was remembered as '$(state whats_new)'"
 assert_contains "$EVENTS" 'cabal build WIKI_BUILD_VERSION=unknown'
 deploy --status >"$out" 2>&1 || fail '--status failed'
 assert_contains "$out" 'the page "What'"'"'s new?": off in the unit (--no-whats-new); --whats-new shows it again'
 : >"$EVENTS"
-WIKI_BUILD_VERSION=v1.2.3-4-gabcdef0 deploy >"$out" 2>&1 || fail 'the redeploy failed'
+(WIKI_BUILD_VERSION=v1.2.3-4-gabcdef0 && export WIKI_BUILD_VERSION && deploy) >"$out" 2>&1 || fail 'the redeploy failed'
 assert_contains "$HOME/$unit" ' --no-whats-new'
 assert_contains "$EVENTS" 'cabal build WIKI_BUILD_VERSION=v1.2.3-4-gabcdef0'
 deploy --whats-new --no-build >"$out" 2>&1 || fail 'the deploy with --whats-new failed'
