@@ -30,8 +30,9 @@ import Foreign.C.Error (throwErrnoIfMinus1Retry)
 import Foreign.C.Types (CInt (..))
 import Maker.Context (Context (..), Mode (..), logFile)
 import Maker.Process (succeeds)
-import System.Directory (doesFileExist, getFileSize)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
 import System.Exit (ExitCode (..), exitWith)
+import System.FilePath (takeDirectory)
 import System.IO
 import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
 import System.Posix.User (getEffectiveUserID)
@@ -167,7 +168,12 @@ withLock ctx path what action =
       pure ()
     action
   where
-    open = openFd path WriteOnly defaultFileFlags {creat = Just 0o644}
+    -- The lock lives in the state directory, which a first run of
+    -- @maker toolchain install@ finds missing: only an installing run of
+    -- the bootstrap makes it before handing over.
+    open = do
+      createDirectoryIfMissing True (takeDirectory path)
+      openFd path WriteOnly defaultFileFlags {creat = Just 0o644}
 
 foreign import ccall interruptible "flock"
   c_flock :: CInt -> CInt -> IO CInt
