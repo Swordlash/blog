@@ -863,9 +863,12 @@ In the order to do it, unless the owner says otherwise.
   stays POSIX sh and shrinks to the minimum a Haskell program cannot do for itself:
   ghcup, GHC and cabal at the pinned versions, unless `--system-tools` (then only
   the check, with the floors), then `exec cabal run maker -- "$@"`. *Stage 2*,
-  `maker`, a package of the repository under `maker/` with a `cabal.project` of its
-  own (so that running it resolves and fetches nothing of the wiki's project; `cabal
-  run maker` builds it once and keeps it), on Shake: rules for the toolchain's
+  `maker`, a package of the repository under `maker/` (the owner, 2026-11-05: a
+  package, not a script, so that it has a test suite, the warning flags, fourmolu
+  and HLS, and is split into modules of a reasonable size, one per area, never one
+  file) with a `cabal.project` of its own (so that running it resolves and fetches
+  nothing of the wiki's project; `cabal run maker` builds it once and keeps it), on
+  Shake: rules for the toolchain's
   components (Node, the wasm GHC from ghc-wasm-meta, Playwright's Chromium, TeX
   Live with its Perl), the builds (native, wasm, wasm-opt, the bundle, the page,
   the prerender), the tests and checks (the native dependencies, TeX, the
