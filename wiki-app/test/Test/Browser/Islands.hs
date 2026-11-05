@@ -109,7 +109,11 @@ spec m = do
       find ui "span.wiki-math-inline" >>= (`shouldBeSameElement` island)
 
     it "shows what KaTeX cannot parse as an error in its place" $ runPage $ do
-      ui <- mount m harness (MathInline mempty "\\frac{")
+      -- Mounted with a formula that parses first: the outputs a test reads
+      -- are those raised after the mount.
+      ui <- mount m harness (MathInline mempty "x")
+      _ <- find ui "span.wiki-math-inline .katex"
+      changeTo ui (MathInline mempty "\\frac{")
       find ui "span.wiki-math-inline .katex-error" >>= (`shouldHaveText` "\\frac{")
       -- KaTeX's message goes to the parent; the formula fixed clears it.
       eventually $ failures ui >>= (`shouldSatisfy` \case [message] -> "KaTeX parse error" `T.isPrefixOf` message; _ -> False)

@@ -13,6 +13,7 @@ module Test.Browser.Text
   , movedBy
   , completing
   , setMarkdown
+  , insertText
   , clearBody
   , mathIn
   , problemsMarked
@@ -32,6 +33,7 @@ $( browserJS
      , ("js_jump", "wiki_test_editor_jump", Safe, [t|IO JSText|])
      , ("js_completing", "wiki_test_editor_completing", Safe, [t|IO JSText|])
      , ("js_set", "wiki_test_editor_set", Safe, [t|JSText -> IO ()|])
+     , ("js_insert", "wiki_test_editor_insert", Safe, [t|Int -> JSText -> IO ()|])
      , ("js_clear_body", "wiki_test_editor_clear_body", Safe, [t|IO ()|])
      , ("js_math", "wiki_test_editor_math", Safe, [t|IO JSText|])
      , ("js_problems", "wiki_test_editor_problems", Safe, [t|IO JSText|])
@@ -76,6 +78,14 @@ setMarkdown :: Mounted s q o m -> Text -> PageM s ()
 setMarkdown ui text = do
   _ <- editorText ui
   unsafeIOToPageM (js_set (toJSText text))
+  settle
+
+-- | Put text into the editor's text at a position (in UTF-16 units), as
+-- one small edit.
+insertText :: Mounted s q o m -> Int -> Text -> PageM s ()
+insertText ui at text = do
+  _ <- editorText ui
+  unsafeIOToPageM (js_insert at (toJSText text))
   settle
 
 -- | Empty the editor's text but for its title line and a blank line after

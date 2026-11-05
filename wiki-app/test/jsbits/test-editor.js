@@ -79,3 +79,10 @@ function wiki_test_editor_math() {
 function wiki_test_editor_problems() {
   return JSON.stringify(wikiTestEditor()?.marked() ?? []);
 }
+
+// Put text into the open editor's text at a position (UTF-16 units), as one
+// small edit, with the cursor after it: an edit inside a problem's range,
+// whose mark CodeMirror keeps until the problems are set again.
+function wiki_test_editor_insert(at, text) {
+  wikiTestEditor()?.replace(at, at, text, at + text.length, at + text.length);
+}

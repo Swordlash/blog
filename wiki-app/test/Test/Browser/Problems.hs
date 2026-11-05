@@ -15,7 +15,7 @@ import Data.Text qualified as T
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startWith)
-import Test.Browser.Text (editorSelection, problemsMarked, setMarkdown)
+import Test.Browser.Text (editorSelection, insertText, problemsMarked, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
@@ -41,9 +41,12 @@ spec m = do
     underlined `shouldSatisfy` T.isInfixOf "graph LR"
     _ <- find ui ".editor-cm .cm-gutter-lint .cm-lint-marker-error"
     find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
-    setMarkdown ui "# Hello, world\n\nA diagram:\n\n```mermaid\ngraph LR\n  a --> b\n```\n\nAfter."
+    -- Fixed by typing inside the marked lines, which CodeMirror's mark
+    -- keeps covering: the problem goes once the text is checked again, its
+    -- island's source being another.
+    insertText ui (snd (linesOf broken 7 7)) " b"
     eventuallyWithin 15000 $ problemsMarked ui `shouldReturn` []
-    length <$> findAll ui ".editor-problems" `shouldReturn` 0
+    eventually $ length <$> findAll ui ".editor-problems" `shouldReturn` 0
     length <$> findAll ui ".editor-cm .cm-lintRange-error" `shouldReturn` 0
 
   it "marks a formula KaTeX cannot parse on its line, with KaTeX's message, and the preview still shows it in red" $ runPage $ do
@@ -58,7 +61,7 @@ spec m = do
       pure found
     [(start, end) | (start, end, _) <- marked] `shouldBe` [linesOf broken 4 4]
     [message | (_, _, message) <- marked] `shouldSatisfy` all (T.isPrefixOf "KaTeX parse error")
-    setMarkdown ui "# Hello, world\n\nFirst line.\nHalf: $\\frac{1}{2}$ here."
+    insertText ui (fst (linesOf broken 4 4) + T.length "Half: $\\frac{1}") "{2}"
     eventually $ problemsMarked ui `shouldReturn` []
 
   it "marks a spoiler that is not closed, without the preview, until it is closed" $ runPage $ do
@@ -67,7 +70,7 @@ spec m = do
     setMarkdown ui broken
     eventually $ problemsMarked ui `shouldReturn` [(fst (linesOf broken 3 3), snd (linesOf broken 3 3), "Spoiler “answer” is not closed: add [[/spoiler]]{answer}")]
     find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
-    setMarkdown ui (broken <> "\n[[/spoiler]]{answer}")
+    insertText ui (T.length broken) "\n[[/spoiler]]{answer}"
     eventually $ problemsMarked ui `shouldReturn` []
 
   it "counts the problems, and goes to the next one at each click on the count" $ runPage $ do
