@@ -361,12 +361,12 @@ jobs:
     - name: Install dependencies
       run: cabal build all --builddir=dist-newstyle/native --only-dependencies
 
-    # The maker's own dependencies (Shake, optparse-applicative, hspec), from
-    # its own project, into the same store before it is saved; brick's, for
-    # the terminal interface, are not needed by the tests and stay out.
+    # The maker's own dependencies (Shake, optparse-applicative, hspec, and
+    # brick for its terminal interface), from its own project, into the same
+    # store before it is saved, so later runs take them from the cache.
     - name: Install the maker's dependencies
       if: matrix.group == 'unit'
-      run: cd maker && cabal build exe:maker test:maker-test --enable-tests --only-dependencies
+      run: cd maker && cabal build all --enable-tests --only-dependencies
 
     # Before the build, so a run that fails on our own code still banks the
     # dependencies it compiled; after them, so a store whose dependencies
