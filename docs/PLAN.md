@@ -787,6 +787,39 @@ confirms it against reality and the plan is amended if it does not hold.
     deploy's machine need not have. `sh toolchain/maker.sh status`, `… toolchain
     install TARGET…` and `… tui` run it by hand. The package declares the MIT
     licence and ships its copy, as every package does.
+52. **The builds and tests through the maker (WP5.68b).** `maker build
+    native|wasm|wasm-opt`, `maker test native|wasm|all`, `maker serve` and `maker
+    hspec-halogen` do what the build scripts did, with the same environment
+    variables, build directories, messages and cabal cache workarounds; the npm
+    scripts keep the readiness check and the locale in `npm-command.sh` and hand
+    each command to the maker through `maker.sh`. The native and the wasm build's
+    environments are computed once and passed to each tool. In the wasm build the
+    JavaScript glue, wasm-opt's output and the islands' bundle are Shake file rules
+    kept in `$WASM_BUILDDIR/maker` (Shake's database beside them, per checkout),
+    with oracles for the versions of node and wasm-opt and for the binary's path
+    and the wasm libdir; the service worker is written again over the page. The
+    page is byte for byte the scripts' page; a rebuild with nothing changed takes
+    seconds. Processes start through libraries: `typed-process` outside Shake,
+    Shake's `cmd` inside its rules (the owner, 2026-11-05), in the first stage's
+    modules too. `web/bundle.sh` and `changelog-stamp.sh` stay scripts the maker
+    runs, since the deploy's `--bundle-locally` on a `node` machine, the browser
+    suite's own bundle, the Dockerfile and the smoke test call them without the
+    maker; `dev-test.sh` stays a script (a GHCi loop, not a build).
+    `test-wasm.sh`, `run-tests.sh` and `serve-wasm.sh` are gone; `build-wasm.sh`,
+    `test-native.sh` and `build-hspec-halogen.sh` are wrappers until (d).
+53. **The native build supports GHC 9.10 and later (the owner, 2026-11-05: "cały
+    blog ma wspierać dla wersji native ghc od 9.10").** The pins stay the tested
+    versions; 9.10 is the floor `--system-tools` takes (decision 48), and CI checks
+    it: a job that builds the wiki's packages and the maker with GHC 9.10 on every
+    pull request, and the same with 9.12 weekly and by hand.
+54. **One cabal store in CI per cabal version (the owner, 2026-11-05).** The store
+    keeps each compiler's packages in a directory of its own, so one cache entry,
+    keyed by the runner's OS and kind and cabal's version, holds the native, the
+    wasm and the 9.10 store together; cabal decides what to build on top of it. A
+    job saves it only when it added packages, so jobs that run side by side do not
+    undo each other for more than a run or two. A workflow run by hand deletes it
+    when it grows too large. The build directories (`dist-newstyle/...`) stay cached
+    per compiler, since their plan is one compiler's.
 
 ## Repository layout
 
@@ -834,6 +867,13 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.70 CI: one store per cabal version, and GHC 9.10** (decisions 53 and 54).
+  One cache entry for the cabal store, keyed by OS, runner kind and cabal's
+  version, restored by every job and saved only when a job added packages; the
+  separate native, wasm and server page stores and their pruning go. A job that
+  builds the wiki's packages and the maker with GHC 9.10 (its own build directory,
+  not cached) on every pull request, and with 9.12 weekly and by hand. A workflow
+  run by hand that deletes the store's entry.
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
@@ -874,9 +914,17 @@ In the order to do it, unless the owner says otherwise.
   TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
   shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
   maker. Each phase starts when the pull requests touching the same scripts are
-  merged. Phase (a) is merged (#167, decision 51), with the checks
-  (`check-native.sh`, `check-tex.sh`) left in shell because they run before a GHC
-  exists and the semaphore moved to (c); (b) is next.
+  merged. Phases (a) and (b) are merged (#167, #168; decisions 51 and 52);
+  `web/bundle.sh` stays a script the maker runs (decision 52). (c) is next, and
+  changes the split between the stages (the owner, 2026-11-05): `bootstrap.sh`
+  only installs ghcup, GHC and cabal (or checks the machine's own, with
+  `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
+  libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
+  to the maker, `native` included; the libraries' packages (libsodium, libpq,
+  ncurses) and `check-native.sh`'s checks move into the maker. The maker's own
+  dependencies must then build on GHC 9.10 (decision 53) and come from the Hackage
+  mirror on a machine that has no internet (decision 48). `node` stays in shell:
+  there is no GHC there.
 
 ### Later, or waiting for the owner
 
@@ -1300,12 +1348,15 @@ needs. Each was true when its package merged; check before relying on one.
   which it does not; the unseen dot is per browser, not per account, and appears a
   moment after the page shows; raw HTML in an entry keeps its own ids and `[[toc]]`
   lists them unprefixed.
-- WP5.68a (decision 51): the maker is built and tested only on GHC 9.14.1 so far,
-  though `--system-tools` allows 9.10 and the bootstrap now fails if the maker does
-  not build there; CI's `env:` blocks (`build.yml`, `server-page.yml`) still repeat
+- WP5.68a (decision 51): the maker is built and tested only on GHC 9.14.1 so far;
+  no mode builds it with another GHC yet (`--system-tools` modes do not run it), but
+  (c) makes it run there (decision 53); CI's `env:` blocks (`build.yml`, `server-page.yml`) still repeat
   the pins of `toolchain/pins.env` with nothing checking they agree; no CI job builds
-  the Dockerfile, so the maker's place in the image is untested; Shake runs phony
-  rules only, the oracles and file rules come with (b).
+  the Dockerfile, so the maker's place in the image is untested.
+- WP5.68b (decision 52): the results the wasm rules keep (`dist-newstyle/wasm/maker`)
+  are not in CI's cache, so CI runs wasm-opt and the bundle every time; Shake runs
+  one job at a time (wasm-opt and esbuild together would compete for a small
+  machine's memory).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
