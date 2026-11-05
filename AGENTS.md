@@ -46,6 +46,15 @@ earlier round's (the same mechanism, another case of it): then one more round is
 after the fix, so that the family of findings is closed by a review (the owner,
 2026-11-04).
 
+Every pull request adds one changelog entry, `changelog/<slug>.md` (the
+owner, 2026-11-05; the grammar is the README's "Changelog entries"): what
+the pull request changed, for the wiki's users, in plain language, with an
+example of each new feature. The session writes it with the branch, with
+`pr: 0`, and fills in the pull request's number in one more commit once it
+has opened the pull request, before the review; CI's `changelog` job checks
+it. The label `no-changelog` exempts a pull request; it is the owner's, and
+the session never applies it.
+
 The owner merges. The session does not merge a pull request unless the owner asks it
 to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
 work-package branches belong to the session) so CI runs on the rebased head.

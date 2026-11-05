@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+What's new (WP5.66). On a server, the page "What's new?" at
+`/whats-new/` (the route `WhatsNewPage`, `Wiki.App.View.WhatsNew`) shows
+the server's version and build date, then its newest changelog entries,
+newest first, each headed "#N Title" with a link to the pull request and
+rendered with a page's islands, so examples are highlighted and spoilers
+work. A link "What's new?" sits at the very bottom of the sidebar, on the
+front page and in a space, where the session says the page is on
+(`Session`'s `whatsNew`); it carries a dot (`data-unseen`) while the server
+has an entry newer than the newest the reader has seen there, which this
+browser keeps in its local storage (`whats-new-seen`) and opening the page
+updates. The dot is set after the first render, in a browser only, so a
+page the server prerendered never has it. The backend interface gains
+`Wiki.App.Backend.WhatsNew.MonadWhatsNew` (`whatsNew`): over HTTP the
+answer is cached and carried by the prerendered page; the demo has no
+changelog and answers `NotFound`.
+
 The editor marks what does not render (WP5.65). CodeMirror shows the page's
 problems with `@codemirror/lint` (pinned at 6.9.7, like the other CodeMirror
 packages): the lines underlined in red, a marker in a gutter, the message on

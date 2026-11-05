@@ -1412,6 +1412,14 @@ env -i HOME="$HOME" PATH="$(systemctl --user show-environment | sed -n 's/^PATH=
   marker in it), an empty one or a new one; never `~`, `/` or above `~`.
 - `--name NAME` (default `wiki-demo`) names the deployment and its unit, so that two
   can run side by side, each with its own `--prefix` (default `~/NAME`) and port.
+- `--no-whats-new` (with `--server`) runs the server with `--no-whats-new`, so
+  that the wiki shows no page "What's new?" and no link to it; it is remembered,
+  `--status` says so, and `--whats-new` shows the page again. The build gives
+  wiki-server the version that page shows: `WIKI_BUILD_VERSION` when it is set,
+  else `git describe --tags --always --dirty` of the checkout. cabal rebuilds
+  the server only when something it is built from changed (a changelog entry
+  counts), so a deploy of a checkout that changed nothing of the server's keeps
+  the version of the build before.
 
 `journalctl --user -u wiki-demo -f` shows the requests, one line each;
 `sh toolchain/deploy-local.sh --status` the deployment, its serve and its service.
@@ -1728,6 +1736,20 @@ to the demo, keeping `data/`.
   `wiki-server users add` (above). Invitations, "Create account" in an open wiki,
   sign-in providers, and a password or "Send a password link…" for a user who
   exists already work as before. A change of the setting is in "Activity".
+- **What's new.** The page "What's new?", at `/whats-new/` and linked at
+  the very bottom of the left sidebar, shows the server's version (what `git
+  describe --tags --always --dirty` said where it was compiled, or the
+  `WIKI_BUILD_VERSION` the build was given, or `unknown`), the date it was
+  built, and the newest twelve changelog entries it was compiled with
+  ([Changelog entries](#changelog-entries)), newest first: each headed "#N
+  Title", a link to its pull request, and rendered as a page is, so its
+  examples are highlighted and its spoilers open and close. The link carries
+  a dot while the server has an entry newer than the newest the reader has
+  seen on the page, which this browser remembers. `GET api/v1/whats-new`
+  answers the same to anyone. `wiki-server serve --no-whats-new` turns the page
+  off: the endpoint answers 404, the sessions say the page is off, and no link
+  shows; the deploy passes it with `--no-whats-new`, and the wizard asks on
+  its "What to deploy" screen.
 - **The guide.** A server that starts with no spaces makes one, Guide, at
   `/guide`: public, so everyone the wiki is open to reads it, and edited by
   administrators only. It holds the wiki's documentation, the demo's Docs but
@@ -2033,6 +2055,85 @@ into, is [docs/PLAN.md](docs/PLAN.md). `AGENTS.md` describes how the work is
 organised: one session cuts the plan into work packages and implements each
 itself. Toolchain and conventions follow haskell-halogen's.
 
+### Changelog entries
+
+Every pull request adds one entry under `changelog/`: a Markdown file that
+says what the pull request changed, for the wiki's users, in plain language.
+The server shows the newest twelve on its page "What's new?" (it embeds them
+when it is compiled, so a malformed entry is a compile error naming the file
+and the line), and CI's `changelog` job checks the entry on every pull
+request. An entry looks like this:
+
+````text
+---
+pr: 160
+title: Section spoilers on the heading
+---
+
+## New features
+
+- A heading that starts with `[[spoiler]]` hides its whole section until the
+  reader opens it, with the heading as what they click:
+
+  ```markdown
+  ### [[spoiler]] What is X?
+
+  X is the answer.
+  ```
+
+## Bug fixes
+
+- A spoiler's marker no longer shows in the table of contents.
+
+## Other changes
+
+- Faster builds.
+````
+
+The grammar, which `toolchain/check-changelog.sh` and wiki-server's reader
+(`wiki-server/src/Wiki/Server/WhatsNew/Entry.hs`) both enforce:
+
+- **The file** is `changelog/<slug>.md`, the slug lower-case letters and
+  digits in words joined by single hyphens (`heading-spoilers.md`, not
+  `Heading_Spoilers.md`), in UTF-8 with Unix line ends. Nothing else belongs
+  in `changelog/`.
+- **The front matter** is the file's first four lines, exactly: `---`, then
+  `pr: N`, then `title: T`, then `---`. N is the pull request's number,
+  digits without a leading zero; `pr: 0` means "not numbered yet" (the page
+  leaves such an entry out, and the check refuses it on a pull request). T is
+  the title: short, not empty, at most 80 bytes (80 letters of English; a
+  letter outside ASCII counts two or more). Spaces around N and T do not
+  count. No two entries have the same number, but for 0.
+- **The sections** come after the front matter and any blank lines: `## New
+  features`, `## Bug fixes` and `## Other changes`, each line written exactly
+  so (no other words, no trailing spaces), each at most once and in that
+  order, at least one of them. A section runs to the next one or the end of
+  the file and is not empty. No text comes before the first section.
+- **No other heading of level one or two** (`#` or `##` and a space, after at
+  most three spaces) outside a fenced code block; use `###` and deeper inside
+  a section.
+- **`## New features` holds at least one fenced code block**: every new
+  feature comes with an example, a snippet of the wiki's Markdown, a command
+  or what to type.
+- **A fenced code block** opens with a line of three or more backticks or
+  tildes, after any indentation (inside a list item too), and closes with a
+  line of at least as many of the same character and nothing else. One left
+  open at the end of the file is refused. To show a fence inside an example,
+  open the example with four backticks, as above.
+
+The body is the wiki's own Markdown, so the page highlights the examples and
+everything a page can hold works in an entry. Write for the wiki's readers
+and administrators: what they can now do and how, not how it was built.
+
+`sh toolchain/check-changelog.sh changelog/my-entry.md` checks an entry's
+form; on a pull request, CI runs `sh toolchain/check-changelog.sh --pr N
+--base origin/main`, which also requires that the pull request adds exactly
+one entry, that its `pr` is the pull request's number, and that every entry
+it changes is well formed (a typo fixed in an old entry is fine). The entry
+is written with the branch, with `pr: 0`, and the number is filled in by one
+more commit once the pull request is open. A pull request labelled
+`no-changelog` is exempt; the label is the owner's to put on.
+
 ## Toolchain
 
 The toolchain is haskell-halogen's, at the same pins: GHC 9.14.1, cabal 3.16.1.0,
@@ -2152,6 +2253,15 @@ every push to it, in parallel after a first job, `plan` (below): `native` (build
 test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`),
 `wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
 and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
+
+Besides them, on a pull request only, the job `changelog` checks the pull
+request's changelog entry (`toolchain/check-changelog.sh`, [Changelog
+entries](#changelog-entries)), in a few seconds and without waiting for any
+build. It reads the pull request's labels as it runs, so after the label
+`no-changelog` is added, re-running that job alone passes. A pull request that
+changes only Markdown outside `changelog/` runs no CI, and so no check either.
+Every build of a run is given `WIKI_BUILD_VERSION`, the commit (a pull
+request's head), for the version the page "What's new?" shows.
 
 The native job installs `libxml2-utils` and checks `xmllint` before testing, so
 Atom and RSS schema checks run in CI. It also checks for XeLaTeX, Pandoc's Latin Modern style and the `mhchem`,
