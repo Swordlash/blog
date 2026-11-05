@@ -20,11 +20,13 @@ where
 import Maker.Pins (Pins (..))
 import System.FilePath ((</>))
 
--- | What the bootstrap was run for, of the modes the maker carries on with.
--- @toolchain@ installs everything a developer needs; @build@ what a build
--- needs (no Chromium, no fourmolu); @all@ and @warm@ also build the
--- repository's dependencies into the cabal store.
-data Mode = Toolchain | Build | All | Warm
+-- | What the bootstrap was run for, of the modes the maker carries on with
+-- (every mode that installs something, but @node@). @toolchain@ installs
+-- everything a developer needs; @build@ what a build needs (no Chromium, no
+-- fourmolu); @all@ and @warm@ also build the repository's dependencies into
+-- the cabal store; @native@ only what the native build of wiki-server needs
+-- besides GHC and cabal (the C libraries' packages and their check).
+data Mode = Toolchain | Build | All | Warm | Native
   deriving (Eq, Show, Enum, Bounded)
 
 -- | The mode's name, as the bootstrap's command line has it.
@@ -34,6 +36,7 @@ modeName = \case
   Build -> "build"
   All -> "all"
   Warm -> "warm"
+  Native -> "native"
 
 -- | One run of the maker.
 data Context = Context
@@ -49,6 +52,16 @@ data Context = Context
   -- ^ ghcup's bin directory, where its tools and fourmolu go.
   , pins :: Pins
   , mode :: Mode
+  , postgres :: Bool
+  -- ^ Whether wiki-server is built with PostgreSQL, and so needs libpq.
+  -- @--without-postgres@ (@native@ and @build@) turns it off, for a wiki in
+  -- SQLite.
+  , wizard :: Bool
+  -- ^ Whether the configuration wizard is built too, which links terminfo
+  -- (@native --with-wizard@).
+  , systemTools :: Bool
+  -- ^ Whether GHC and cabal are the machine's own, as PATH finds them
+  -- (@native --system-tools@): the summary then names the versions found.
   }
 
 -- | The toolchain's own directory: its state, its log, Node, the markers.

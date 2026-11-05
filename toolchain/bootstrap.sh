@@ -19,12 +19,14 @@
 #
 # It works in two stages. This script is the first: in POSIX sh, it does
 # what must work before there is a GHC (the read-only modes, the check of
-# the machine's own tools, the Debian packages, ghcup with GHC and cabal,
-# the Hackage mirror and cabal's index) and the deploy's native and node
-# modes in full. For the other installing modes it then hands over to the
-# second, the maker (maker/, a Haskell program on Shake built with its own
-# cabal project), which installs the rest below and warms the store. The
-# maker's own command line and terminal interface are toolchain/maker.sh.
+# the machine's own tools, the system packages GHC itself needs, ghcup with
+# GHC and cabal, the Hackage mirror and cabal's index) and the deploy's node
+# mode in full, since that mode installs no GHC. Every other installing mode,
+# native included, then hands over to the second stage, the maker (maker/, a
+# Haskell program on Shake built with its own cabal project, once, from
+# Hackage or the mirror), which installs the rest below (the system packages
+# of the builds' C libraries first) and warms the store. The maker's own
+# command line and terminal interface are toolchain/maker.sh.
 #
 # It reuses compatible tools on PATH first. Missing tools are installed on
 # x86_64 Linux as follows:
@@ -51,6 +53,10 @@
 #     from Hackage with cabal (about a quarter of an hour, once);
 #   - the Debian packages these need, Chromium's included, if they are missing
 #     and it can (root or password-less sudo); otherwise it names them and stops.
+#     This script installs those GHC needs (a C toolchain, GMP's development
+#     files, curl and xz); the maker those of the builds (git, pkg-config,
+#     zlib, libsodium, libpq, ncurses for the wizard, and jq, unzip and zstd
+#     for the wasm sysroot's setup).
 #
 # Then, for each of cabal.project and cabal-wasm.project that exists in the
 # repository, it runs `cabal build all --only-dependencies` with the flags
@@ -92,10 +98,12 @@
 # Node, Chromium or fourmolu, none of which a native build of wiki-server
 # needs. toolchain/deploy-local.sh --backend-only runs it, on a
 # machine that downloads the page instead of building it. It does not assume
-# Debian: without dpkg-query it installs no system packages. Either way it
-# then runs toolchain/check-native.sh, which checks the commands and C
-# libraries wiki-server's build needs and names the Debian and RHEL packages
-# of any that are missing. `native --without-postgres` is for a
+# Debian: without dpkg-query it installs no system packages, and only checks
+# the commands GHC needs. Either way the maker then installs the C
+# libraries' packages and checks the commands and C libraries wiki-server's
+# build needs (`maker check native`, the same check as
+# toolchain/check-native.sh), naming the Debian and RHEL packages of any that
+# are missing. `native --without-postgres` is for a
 # wiki-server built without PostgreSQL (the cabal flag postgres off), which
 # needs no libpq: it does not ask Debian for libpq-dev, and passes the
 # option to the check. `build --without-postgres` leaves libpq-dev out the
@@ -182,7 +190,7 @@ esac
 # The options of the deploy's two modes, `native` and `build`:
 # --without-postgres, for a wiki-server built without PostgreSQL. Both
 # modes then leave libpq-dev out of the Debian packages (system_packages),
-# and native_check passes the option to toolchain/check-native.sh, so that
+# and the maker's check of the native build is given the option, so that
 # such a build is not stopped for want of libpq. `all` and `toolchain`, the
 # everyday install for working on the wiki, always ask for libpq-dev.
 # `native` also takes --with-wizard, for the configuration wizard
@@ -736,39 +744,26 @@ as_root() {
   fi
 }
 
-# Debian packages: a C toolchain (GHC links with it), GMP's development files
-# (native programs link libgmp), libpq's (wiki-server reaches PostgreSQL
-# through postgresql-libpq; only for a build with PostgreSQL), zlib's (the
-# zlib package links the system's zlib, which it finds through pkg-config),
-# libsodium's (wiki-server's second factor's codes are one-time-password's,
-# over sel's bindings to libsodium), pkg-config, and what ghc-wasm-meta's
-# setup.sh runs; with native --with-wizard also ncurses' (libtinfo, which
-# the configuration wizard's terminal library, vty, links).
+# The Debian packages GHC itself needs, before there is a GHC to build the
+# maker: a C toolchain and make (GHC compiles and links with them;
+# build-essential), GMP's development files (every native program links
+# libgmp), and curl and xz, with which ghcup and the downloads are fetched
+# and unpacked. GHC also loads libtinfo, which every Debian has (bash needs
+# it). The packages of the builds' own C libraries, and those the wasm
+# sysroot's setup runs, are the maker's (maker/src/Maker/Toolchain/Debian.hs),
+# which installs them first thing. On another system nothing is installed:
+# the commands are checked, and GMP's header is left to the maker's check.
 system_packages() {
   missing=
-  # A native install needs what wiki-server's build runs and links with,
-  # and none of what the wasm toolchain's setup runs (jq, unzip, xz, zstd).
-  # With --without-postgres (native or build) it needs no libpq-dev, so a
-  # machine without it, and without root, is not stopped here.
-  if [ "$mode" = native ]; then
-    debian_packages='build-essential curl git libgmp-dev libsodium-dev pkg-config zlib1g-dev'
-  else
-    debian_packages='build-essential curl git jq unzip xz-utils zstd libgmp-dev libsodium-dev pkg-config zlib1g-dev'
-  fi
-  [ -n "$check_postgres" ] || debian_packages="$debian_packages libpq-dev"
-  [ -z "$check_wizard" ] || debian_packages="$debian_packages libncurses-dev"
+  debian_packages='build-essential curl libgmp-dev xz-utils'
   if command -v dpkg-query >/dev/null 2>&1; then
     for pkg in $debian_packages; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
         missing="$missing $pkg"
       fi
     done
-  elif [ "$mode" = native ]; then
-    # Not Debian (RHEL, say): nothing is installed. native_check, which
-    # runs next, names the packages of whatever is missing.
-    return 0
   else
-    for cmd in cc make curl git jq unzip xz unzstd; do
+    for cmd in cc make curl tar xz; do
       command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
     done
     if [ -n "$missing" ]; then
@@ -790,24 +785,6 @@ system_packages() {
   # shellcheck disable=SC2086
   run "installing Debian packages" $sudo env DEBIAN_FRONTEND=noninteractive \
     apt-get install --yes --no-install-recommends $missing
-}
-
-# The check of what wiki-server's native build needs
-# (toolchain/check-native.sh), for `native`. It runs after system_packages,
-# so on Debian it confirms the packages just installed, and elsewhere it is
-# the only check. Its output is shown only when something is missing, so a
-# run with nothing to do stays one line. With --without-postgres the check
-# does not ask for libpq; with --with-wizard it checks terminfo too.
-native_check() {
-  if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_wizard:+"$check_wizard"} 2>&1); then
-    printf '%s\n' "$check_output" >&2
-    if [ -n "$check_wizard" ]; then
-      say "the native build of wiki-server and the configuration wizard need what is missing above; install it and run this again"
-    else
-      say "the native build of wiki-server needs what is missing above; install it and run this again"
-    fi
-    exit 1
-  fi
 }
 
 install_ghcup() {
@@ -1011,31 +988,21 @@ toolchain() {
     return 0
   fi
   system_packages
-  [ "$mode" != native ] || native_check
   [ -n "$system_tools" ] || install_native
-  if [ "$mode" = native ]; then
-    update_cabal_index
-    write_env
-    summary="GHC $GHC_VERSION, cabal $CABAL_VERSION; no wasm toolchain, Node, Chromium or fourmolu (native)"
-    [ -z "$system_tools" ] || summary="this machine's GHC $(numeric_version ghc) and cabal $(numeric_version cabal) (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
-    if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
-      printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
-    else
-      say "toolchain ready in $(($(date +%s) - started))s: $summary"
-    fi
-    return 0
-  fi
-  # The index first: the maker is built from Hackage's packages.
+  # The index first: the maker is built from Hackage's packages, or the
+  # mirror's.
   update_cabal_index
   write_env
   hand_over
 }
 
 # The second stage, the maker (maker/): with GHC and cabal there, it
-# installs the rest of the toolchain (the wasm sysroot and cross compiler,
-# Node, Chromium and fourmolu, as the mode asks), prints the summary, and
-# for all and warm builds the repository's dependencies into the cabal
-# store. It is built with its own cabal project (maker/cabal.project), once
+# installs the rest of the toolchain (the builds' system packages, the wasm
+# sysroot and cross compiler, Node, Chromium and fourmolu, as the mode asks;
+# for native the system packages alone, then the check of the native
+# build), prints the summary, and for all and warm builds the repository's
+# dependencies into the cabal store. The options of native and build go
+# with it. It is built with its own cabal project (maker/cabal.project), once
 # and kept, and takes over this process, which still holds the toolchain's
 # lock on descriptor 9. WIKI_MAKER names a maker built elsewhere: the
 # bootstrap's tests run it against a fake cabal, which builds nothing.
@@ -1053,7 +1020,8 @@ hand_over() {
     rm -f "$built"
   fi
   exec "$maker" bootstrap "$mode" --root "$ROOT" --base "$BASE" ${NAMED_BASE:+--named-base} \
-    --ghcup-bin "$GHCUP_BIN" --log-size "$quiet_before" --started "$started" --lock-fd 9
+    --ghcup-bin "$GHCUP_BIN" --log-size "$quiet_before" --started "$started" --lock-fd 9 \
+    ${check_postgres:+--without-postgres} ${check_wizard:+--with-wizard} ${system_tools:+--system-tools}
 }
 
 # --- Main -------------------------------------------------------------------

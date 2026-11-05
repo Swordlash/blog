@@ -1097,8 +1097,10 @@ which asks Debian for no libpq-dev and whose check does not ask for libpq; the
 full build's `bootstrap.sh build` takes the option too), which installs them through ghcup (under
 `<prefix>/toolchain`) and updates cabal's index from hackage.haskell.org, without the
 wasm sysroot, Node, Chromium or fourmolu. On Debian it installs the system packages
-when it may; elsewhere (RHEL, say) it installs none. Either way it then runs
-`toolchain/check-native.sh` (below).
+when it may; elsewhere (RHEL, say) it installs none. The bootstrap installs only GHC's
+own (a C toolchain, GMP's headers, curl and xz) and builds the maker, once; the maker
+then installs those of the C libraries and runs the same check as
+`toolchain/check-native.sh` (below), as `maker check native`.
 Reading GitHub's answers, Tailscale's status and the server's settings, and unpacking
 the zip, take `python3` (or `jq` and `unzip`); the checks that the service answers
 go through `curl`; the check that the port is free through `ss`, when there is one.
@@ -2157,7 +2159,8 @@ release zip, checked against a pinned hash, or built from Hackage where GitHub's
 downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's, zlib's and libsodium's headers, `zstd`, `jq`
 and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
-otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
+otherwise: the shell script those GHC needs (`build-essential curl libgmp-dev
+xz-utils`), the maker the rest, first thing. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
 
 `~` above is the home directory, or the directory `WIKI_TOOLCHAIN_HOME` names
@@ -2240,14 +2243,21 @@ terminal interface of its own, through `toolchain/maker.sh` (or `npm run maker -
 
 ```sh
 sh toolchain/maker.sh status                      # each component, its version, ready or missing
-sh toolchain/maker.sh toolchain install node      # one component (wasm-sysroot, wasm-ghc, node,
-                                                  # chromium, fourmolu, store), or all with none named
+sh toolchain/maker.sh toolchain install node      # one component (system-packages, wasm-sysroot,
+                                                  # wasm-ghc, node, chromium, fourmolu, store), or all
+                                                  # with none named
+sh toolchain/maker.sh check native                # what the native build of wiki-server needs
 sh toolchain/maker.sh tui                         # the same in a terminal interface, as ghcup tui
 ```
 
 The interface links libtinfo (`libncurses-dev` on Debian, which
 `sh toolchain/bootstrap.sh native --with-wizard` installs); the bootstrap never
 builds it.
+
+`sh toolchain/maker.sh check native [--without-postgres] [--with-wizard]
+[--without-tex]` is the check of what the native build of `wiki-server` needs, the
+same as `toolchain/check-native.sh`; `bootstrap.sh native` runs it after the
+packages. The script stays for the deploy, which runs it before there is a GHC.
 
 The builds and the tests are the maker's too. `npm run build-native`, `test-native`,
 `build-wasm`, `build-wasm-opt`, `serve`, `test-wasm` and `test` check that the
