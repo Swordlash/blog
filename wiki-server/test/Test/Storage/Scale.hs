@@ -72,6 +72,7 @@ import Wiki.Core.Version (Author (..), VersionInfo (..), VersionsQuery (..), lat
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
+import Wiki.Server.Password (SessionToken)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
@@ -128,7 +129,9 @@ renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (
 
 readers :: Backing -> Spec
 readers backing = describe "reads" $ do
-  let signedIn st = do
+  -- GHC 9.12 needs the signature of signedIn; without it, it cannot infer the types.
+  let signedIn :: Storage -> IO (Who, UserId, UTCTime, SessionToken)
+      signedIn st = do
         who <- whoFor st (As "reader")
         u <- case who of
           AsUser u -> pure u
@@ -297,6 +300,8 @@ writes backing = describe "a save of a watched page" $ do
         made <- subtract told <$> countOf st
         scans <- Set.fromList . concat <$> traverse (scansOf st) statements
         pure (statements, scans, made)
+      -- GHC 9.12 needs this signature; without it, it cannot infer the types.
+      countOf :: Storage -> IO Int
       countOf st = reading st (countWhere wikiDb.notifications (const (val_ True)))
 
   it "reads no table whole that grows with users, watches or notifications" $ do

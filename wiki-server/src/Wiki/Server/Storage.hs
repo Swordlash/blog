@@ -1685,6 +1685,8 @@ searchPagesTx q = do
 withAncestors :: [PageNode] -> Tx (Map PageId PageNode)
 withAncestors = go mempty
   where
+    -- GHC 9.12 needs this signature; without it, it cannot infer the types.
+    go :: Map PageId PageNode -> [PageNode] -> Tx (Map PageId PageNode)
     go found nodes = do
       let more = found <> Map.fromList [(n.id, n) | n <- nodes]
           missing = ordNub [p | n <- nodes, Just p <- [n.parent], Map.notMember p more]
@@ -3043,6 +3045,8 @@ tellTx pid sid title thread excerpt occasion logins = do
 lineageOf :: PageId -> Tx (Map PageId PageNode)
 lineageOf = go mempty
   where
+    -- GHC 9.12 needs this signature; without it, it cannot infer the types.
+    go :: Map PageId PageNode -> PageId -> Tx (Map PageId PageNode)
     go found pid
       -- A page already found means a loop, which a page tree never has.
       | Map.member pid found = pure found
