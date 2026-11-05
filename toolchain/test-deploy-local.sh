@@ -175,7 +175,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL
+    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -492,7 +492,7 @@ case $name in
     while [ $# -gt 1 ]; do
       case $1 in
         -o | --output) output=$2; shift ;;
-        -w) format=$2; shift ;;
+        -w | --write-out) format=$2; shift ;;
         --cacert) cacert=$2; shift ;;
         --connect-to) connect=$2; shift ;;
         --insecure) insecure=1 ;;
@@ -502,6 +502,20 @@ case $name in
       shift
     done
     case $url in
+      # A TeX Live repository's checksum file, which the deploy fetches to
+      # see that the repository answers. mirror.ctan.org redirects to a
+      # mirror, as the real one does; FAKE_TEX_MIRROR_DOWN makes that
+      # mirror refused, as by a proxy, with the URL curl ended at.
+      */systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512)
+        case $url in
+          https://mirror.ctan.org/*) url=https://ctan.mirror.example/tex-archive/${url#https://mirror.ctan.org/} ;;
+        esac
+        [ -z "$format" ] || printf '%s' "$url"
+        if [ -n "${FAKE_TEX_MIRROR_DOWN:-}" ]; then
+          printf 'curl: (56) CONNECT tunnel failed, response 403\n' >&2
+          exit 56
+        fi
+        exit 0 ;;
       https://api.github.com/repos/Owner/blog/releases/tags/*)
         release=$FAKE_GITHUB/releases/${url##*/}.json
         if [ -f "$release" ]; then code=200; else code=404; release=/dev/null; fi
@@ -2765,7 +2779,12 @@ fake_xelatex() {
 }
 # TeX Live's installer as the fake GitHub serves it to git clone
 # (FAKE_GIT_REPOS/github.com/TeX-Live/installer): install-tl beside tlpkg/,
-# as in the installer's git mirror. install-tl --version gives the year, as
+# as in the installer's git mirror. Like the real one, before anything
+# else, --no-interaction included, it asks on its standard input whether to
+# resume when its working directory holds an installation.profile and
+# TEXLIVE_INSTALL_NO_RESUME is not set, and says so in EVENTS; a deploy
+# whose standard input stays open then waits for ever, as the owner's did.
+# install-tl --version gives the year, as
 # the real one does, and an install says how it was called, from where and
 # with which perl, then installs a TeX Live with a tlmgr (and no bin
 # directory with FAKE_INSTALL_TL_NO_BIN). The fake tlmgr says how
@@ -2782,13 +2801,19 @@ fake_texlive() {
   printf 'package TeXLive::TLConfig;\n' >"$tl/tlpkg/TeXLive/TLConfig.pm"
   cat >"$tl/install-tl" <<'TL'
 #!/bin/sh
-if [ "$*" = --version ]; then
+if [ -r installation.profile ] && [ -z "${TEXLIVE_INSTALL_NO_RESUME+set}" ]; then
+  printf 'install-tl asked to resume the installation.profile in %s\n' "$PWD" >>"$EVENTS"
+  printf 'ABORTED TL INSTALLATION FOUND: installation.profile (in %s)\nDo you want to continue with the same settings as before (y/N): ' "$PWD"
+  read -r answer || answer=
+fi
+if [ "$*" = '--no-interaction --version' ]; then
   printf 'install-tl (TeX Live Cross Platform Installer) revision unknown\nTeX Live (https://tug.org/texlive) version 2026\n'
   exit 0
 fi
 printf 'install-tl %s\n' "$*" >>"$EVENTS"
 printf 'install-tl ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS"
 printf 'install-tl ran from %s\n' "$(cd "$(dirname "$0")" && pwd)" >>"$EVENTS"
+printf 'install-tl ran in %s with standard input %s\n' "$PWD" "$(readlink /proc/self/fd/0 || printf unknown)" >>"$EVENTS"
 texdir=
 for arg do
   case $arg in --texdir=*) texdir=${arg#--texdir=} ;; esac
@@ -2977,7 +3002,11 @@ deploy --server --sqlite --port "$p" --admin-port "$a" --texlive --texlive-mirro
   fail 'the deploy with --texlive failed'
 assert_contains "$EVENTS" "git clone --quiet --depth 1 https://github.com/TeX-Live/installer $texlive_root/installer.tmp/install-tl"
 assert_contains "$EVENTS" "install-tl ran from $texlive_root/installer.tmp/install-tl"
-assert_contains "$out" "TeX Live's installer cloned from https://github.com/TeX-Live/installer, its packages from https://ctan.example/systems/texlive/tlnet"
+assert_contains "$out" "TeX Live's installer cloned from https://github.com/TeX-Live/installer, its packages from https://ctan.example/systems/texlive/tlnet (its output"
+assert_contains "$EVENTS" 'curl https://ctan.example/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512'
+[ "$(line_of "$EVENTS" 'curl https://ctan.example/')" -lt "$(line_of "$EVENTS" 'git clone')" ] || fail 'the repository was checked after the installer was cloned'
+assert_contains "$EVENTS" "install-tl ran in $texlive_root with standard input /dev/null"
+assert_contains "$texlive_root/install.log" "+ $texlive_root/installer.tmp/install-tl/install-tl --no-interaction --version"
 assert_contains "$EVENTS" "install-tl --no-interaction --scheme=basic --texdir=$texlive_root/2026 --texuserdir=$texlive_root/user --no-doc-install --no-src-install --repository https://ctan.example/systems/texlive/tlnet"
 assert_contains "$EVENTS" 'tlmgr install xetex fontspec unicode-math lm lm-math '
 assert_contains "$EVENTS" "install-tl ran with perl=$case_dir/bin/perl"
@@ -3082,6 +3111,50 @@ assert_contains "$HOME/$unit" 'Environment="PATH='
 assert_lacks "$HOME/$unit" '--no-pdf'
 undeploy >/dev/null 2>&1
 pass 'a failed TeX Live install (tlmgr fails, no bin, or no Perl and none could be built) leaves the PDFs off with --no-pdf and is tried again; the install that works drops --no-pdf'
+
+# A repository that does not answer stops the TeX step before anything is
+# cloned, naming the repository, the mirror mirror.ctan.org sent curl to,
+# and --texlive-mirror; the deploy goes on without PDFs. Then an install
+# run from a directory that holds the installation.profile of an aborted
+# install, with a standard input that stays open, as a terminal's does:
+# install-tl runs in the toolchain's directory with TEXLIVE_INSTALL_NO_RESUME
+# and standard input from /dev/null, so it asks nothing and the deploy
+# finishes. The repository's answer names the mirror it came from.
+fixture texlive-hang
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_texlive
+usable_perl
+texlive_root=$HOME/.wiki-toolchain/texlive
+out=$case_dir/mirror-down
+FAKE_TEX_MIRROR_DOWN=1 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 ||
+  fail 'the deploy whose TeX Live repository did not answer stopped'
+assert_contains "$out" "TeX Live's repository https://mirror.ctan.org/systems/texlive/tlnet does not answer from this machine (curl ended at https://ctan.mirror.example/tex-archive/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512): curl exited 56"
+assert_contains "$out" 'mirror.ctan.org sends each request to another mirror, and a proxy may block some of them: name a mirror this machine can reach with --texlive-mirror URL'
+assert_contains "$out" 'TeX Live was not installed (see above)'
+assert_contains "$texlive_root/install.log" 'curl: (56) CONNECT tunnel failed, response 403'
+assert_lacks "$EVENTS" 'git clone'
+assert_lacks "$EVENTS" 'install-tl'
+assert_contains "$HOME/$unit" ' --no-pdf'
+mkdir "$case_dir/stale"
+printf 'selected_scheme scheme-basic\n' >"$case_dir/stale/installation.profile"
+mkfifo "$case_dir/terminal"
+sleep 300 >"$case_dir/terminal" &
+holder=$!
+: >"$EVENTS"
+out=$case_dir/stale-profile
+status=0
+(cd "$case_dir/stale" && timeout 120 sh "$case_dir/repo/toolchain/deploy-local.sh" --no-build) <"$case_dir/terminal" >"$out" 2>&1 || status=$?
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
+[ "$status" = 0 ] || fail "the deploy from a directory with an installation.profile exited $status (124: it waited on install-tl's question)"
+assert_lacks "$EVENTS" 'install-tl asked to resume'
+assert_contains "$EVENTS" "install-tl ran in $texlive_root with standard input /dev/null"
+assert_contains "$out" "its packages from https://mirror.ctan.org/systems/texlive/tlnet, which answered from the mirror https://ctan.mirror.example/tex-archive (its output"
+assert_contains "$out" "PDF exports: $texlive_root/2026/bin/x86_64-linux/xelatex works, the toolchain's TeX Live"
+assert_lacks "$HOME/$unit" '--no-pdf'
+undeploy >/dev/null 2>&1
+pass 'a TeX Live repository that does not answer stops the install before the clone, with --texlive-mirror named; install-tl never waits on a stale installation.profile, and the mirror that answered is named'
 
 # No Perl on the shell's PATH: with --texlive the deploy builds Perl from
 # a clone of the fake GitHub's under the toolchain (Configure with the prefix

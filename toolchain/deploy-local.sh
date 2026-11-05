@@ -1000,6 +1000,35 @@ texlive_step() {
   return 1
 }
 
+# Run TeX Live's install-tl or tlmgr so that it never waits on a terminal.
+# install-tl looks for an installation.profile in its working directory
+# before it reads its options, --no-interaction included, and when it
+# finds one, left there by an install that failed, it asks on its standard
+# input whether to resume. Under $(...) that question is not seen, and the
+# deploy would wait for ever. So the command runs with
+# TEXLIVE_INSTALL_NO_RESUME=1, which turns the question off, with its
+# standard input from /dev/null, and in texlive_root, so that a profile in
+# the directory the deploy was run from is never seen, and one an aborted
+# install writes lands under the toolchain. tl_path is put first on PATH.
+texlive_run() {
+  (cd "$texlive_root" && exec env TEXLIVE_INSTALL_NO_RESUME=1 PATH="$tl_path" "$@" </dev/null)
+}
+
+# Whether the TeX Live repository answers, before anything is cloned or
+# installed. curl follows redirects, as install-tl does: mirror.ctan.org
+# sends each request to another mirror, and a proxy may block some of
+# them. Sets texlive_reached to the URL curl ended at (empty when it did
+# not say); fails when the repository's checksum file cannot be fetched.
+texlive_reach() {
+  texlive_reached=
+  probe_url=$repository/tlpkg/texlive.tlpdb.sha512
+  printf '+ curl %s\n' "$probe_url" >>"$texlive_log"
+  reach_status=0
+  texlive_reached=$(curl --fail --location --silent --show-error --max-time 30 --output /dev/null \
+    --write-out '%{url_effective}' "$probe_url" 2>>"$texlive_log") || reach_status=$?
+  return "$reach_status"
+}
+
 # Install TeX Live under texlive_root from the mirror texlive_mirror names:
 # the installer from a shallow clone of TEXLIVE_INSTALLER_REPO (or of the
 # repository texlive_installer names, --texlive-installer, or from the
@@ -1010,19 +1039,34 @@ texlive_step() {
 # goes into <year>/, the year of the installer's TeX Live; an installation
 # of that year already there (one that failed its check) is replaced, and
 # those of other years are deleted once the new one works (texlive_step).
-# Sets texlive_new to the installation; fails, saying why, when a step
-# fails.
+# The repository is checked first (texlive_reach), and every run of
+# install-tl and tlmgr goes through texlive_run. Sets texlive_new to the
+# installation; fails, saying why, when a step fails.
 install_texlive() {
   mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
   repository=${mirror%/}/systems/texlive/tlnet
   mkdir -p "$texlive_root"
   texlive_log=$texlive_root/install.log
   printf '\n%s installing TeX Live from %s\n' "$(date '+%F %T')" "$repository" >>"$texlive_log"
+  if ! texlive_reach; then
+    landed=
+    [ -z "$texlive_reached" ] || [ "$texlive_reached" = "$probe_url" ] ||
+      landed=" (curl ended at $texlive_reached)"
+    warn "TeX Live's repository $repository does not answer from this machine$landed: curl exited $reach_status (see $texlive_log). mirror.ctan.org sends each request to another mirror, and a proxy may block some of them: name a mirror this machine can reach with --texlive-mirror URL (https://ctan.org/mirrors lists them)"
+    return 1
+  fi
+  reached=
+  case $texlive_reached in
+    "$probe_url" | '') ;;
+    */systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512)
+      reached=", which answered from the mirror ${texlive_reached%/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512}" ;;
+    *) reached=", which answered from $texlive_reached" ;;
+  esac
   installer_dir=$texlive_root/installer.tmp
   rm -rf "$installer_dir"
   mkdir -p "$installer_dir"
   source=${texlive_installer:-$TEXLIVE_INSTALLER_REPO}
-  say "TeX Live's installer $(source_words "$source"), its packages from $repository (its output also goes to $texlive_log)"
+  say "TeX Live's installer $(source_words "$source"), its packages from $repository$reached (its output also goes to $texlive_log)"
   # A clone goes into installer.tmp, deleted once TeX Live works; a
   # directory is used where it is. Either way install-tl runs from its
   # directory, which holds the tlpkg/ it loads its modules from.
@@ -1039,13 +1083,14 @@ install_texlive() {
   # The year of the TeX Live the installer installs, as it reports it:
   # install-tl --version says "TeX Live (https://tug.org/texlive) version
   # 2026".
-  year=$(env PATH="$tl_path" "$installer/install-tl" --version 2>>"$texlive_log" |
+  printf '+ %s\n' "$installer/install-tl --no-interaction --version" >>"$texlive_log"
+  year=$(texlive_run "$installer/install-tl" --no-interaction --version 2>>"$texlive_log" |
     sed -n 's/.*version \([0-9][0-9][0-9][0-9]\).*/\1/p' | head -n 1)
   [ -n "$year" ] || { warn "TeX Live's installer in $installer does not say its year (install-tl --version; see $texlive_log)"; return 1; }
   texlive_new=$texlive_root/$year
   rm -rf "$texlive_new"
   say "installing TeX Live $year into $texlive_new (the scheme basic, no documentation or sources)"
-  texlive_step "TeX Live's installer" env PATH="$tl_path" "$installer/install-tl" --no-interaction --scheme=basic \
+  texlive_step "TeX Live's installer" texlive_run "$installer/install-tl" --no-interaction --scheme=basic \
     --texdir="$texlive_new" --texuserdir="$texlive_root/user" --no-doc-install --no-src-install \
     --repository "$repository" || return 1
   # The scheme basic installs tlmgr but not XeTeX, which the list's xetex
@@ -1057,7 +1102,7 @@ install_texlive() {
   packages=$(sed 's/#.*//' "$ROOT/toolchain/texlive-packages.txt" | tr -s ' \t\n' ' ')
   say "installing the packages the PDF exports need (toolchain/texlive-packages.txt) with tlmgr"
   # shellcheck disable=SC2086 # the packages are words.
-  texlive_step "tlmgr install" env PATH="$tl_path" "$tlmgr_bin/tlmgr" install $packages || return 1
+  texlive_step "tlmgr install" texlive_run "$tlmgr_bin/tlmgr" install $packages || return 1
   new_bin=$(texlive_bin "$texlive_new") ||
     { warn "tlmgr installed the packages, but there is no xelatex under $texlive_new/bin (see $texlive_log)"; return 1; }
   rm -rf "$installer_dir"
