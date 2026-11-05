@@ -755,7 +755,10 @@ confirms it against reality and the plan is amended if it does not hold.
     message, and a "N problems" button that jumps to the next. Island problems
     appear once the preview has drawn the island; text-only mode shows the parser's.
 50. **"What's new?", built from one changelog entry per pull request (WP5.66).**
-    `changelog/<slug>.md` holds one entry per pull request: four lines of front
+    `changelog/<number>-<slug>.md` holds one entry per pull request, the number
+    its pr with zeros in front to five digits (the owner, 2026-11-05, #170: the
+    files list in order; `00000` before the pull request is opened), checked
+    against the entry by the reader and the CI check: four lines of front
     matter (`pr: N`, `title: T`), then `## New features`, `## Bug fixes` and
     `## Other changes` in that order, the first with a code example; the grammar is
     the README's "Changelog entries" and is the same in `toolchain/check-changelog.sh`
