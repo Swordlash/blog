@@ -1,6 +1,7 @@
 #!/bin/sh
-# Write wiki-server/changelog.stamp, the file that makes cabal rebuild
-# wiki-server when the page "What's new?" it embeds would change.
+# Write wiki-server/changelog.stamp and wiki-app/changelog.stamp, the files
+# that make cabal rebuild each package when the page "What's new?" it embeds
+# would change.
 #
 #   sh toolchain/changelog-stamp.sh
 #
@@ -21,17 +22,21 @@
 # git (.gitignore). It is rewritten only when its content changes.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-# A copy of the scripts without the packages (the deploy's tests) has no
-# server to stamp.
-[ -d "$ROOT/wiki-server" ] || exit 0
-stamp=$ROOT/wiki-server/changelog.stamp
-new=$stamp.new
-{
-  printf '# Written by toolchain/changelog-stamp.sh: what makes cabal rebuild wiki-server.\n'
-  printf 'version=%s\n' "${WIKI_BUILD_VERSION:-}"
-  for entry in "$ROOT"/changelog/*.md; do
-    [ -e "$entry" ] || continue
-    printf 'entry=%s\n' "${entry##*/}"
-  done
-} >"$new"
-if cmp -s "$new" "$stamp"; then rm -f "$new"; else mv "$new" "$stamp"; fi
+# Each package that embeds the changelog has a stamp of its own: wiki-server,
+# and wiki-app, which carries it for the demo (Wiki.App.Demo.WhatsNew). A
+# copy of the scripts without the packages (the deploy's tests) has none to
+# stamp.
+for package in wiki-server wiki-app; do
+  [ -d "$ROOT/$package" ] || continue
+  stamp=$ROOT/$package/changelog.stamp
+  new=$stamp.new
+  {
+    printf '# Written by toolchain/changelog-stamp.sh: what makes cabal rebuild %s.\n' "$package"
+    printf 'version=%s\n' "${WIKI_BUILD_VERSION:-}"
+    for entry in "$ROOT"/changelog/*.md; do
+      [ -e "$entry" ] || continue
+      printf 'entry=%s\n' "${entry##*/}"
+    done
+  } >"$new"
+  if cmp -s "$new" "$stamp"; then rm -f "$new"; else mv "$new" "$stamp"; fi
+done

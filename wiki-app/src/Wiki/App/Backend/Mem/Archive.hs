@@ -109,6 +109,9 @@ fromArchive a =
         , stars = mempty
         , current = Nothing
         , counter = 1
+        , -- Nor a page "What's new?": that is the application's, not the
+          -- archive's ('replaceFromArchive' keeps the one the wiki had).
+          whatsNew = Nothing
         }
 
 -- | Replace user content while importing the root into its existing identity.
@@ -168,6 +171,7 @@ replaceFromArchive time old a = do
         , blobs
         , counter = next
         , current = old.current
+        , whatsNew = old.whatsNew
         , server = old.server {SS.homePage = home}
         }
 

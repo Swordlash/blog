@@ -72,9 +72,15 @@ goldenArchive = do
 -- | The demo with some of everything changed: a space and a page made, a
 -- page saved, a file of every byte uploaded, a thread of comments with a
 -- reply by another user.
+-- | The demo's wiki without its page "What's new?", which belongs to the
+-- application, not to the wiki, so that an archive neither writes nor
+-- reads it back.
+demo :: MemState
+demo = (demoState demoNow) {whatsNew = Nothing}
+
 edited :: IO MemState
 edited = do
-  ref <- newMemWiki (demoState demoNow)
+  ref <- newMemWiki demo
   runMemWiki ref $ do
     switchUser (Just (UserId "user-admin"))
     docs <- ok' =<< getSpace (path "docs")
@@ -215,7 +221,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
         [c.body | ts <- Map.elems archive.threads, t <- ts, c <- t.comments] `shouldContain` ["Is the tour up to date?", "It is now."]
 
   it "keeps an attachment's name outside ASCII through the zip file, and escapes what a file system refuses" $ do
-    ref <- newMemWiki (demoState demoNow)
+    ref <- newMemWiki demo
     runMemWiki ref $ do
       switchUser (Just (UserId "user-admin"))
       docs <- either (panic . show) pure =<< getSpace (path "docs")
@@ -263,7 +269,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     refused "home page" (readArchive elsewhere)
 
   it "writes a personal space's own icon, not the owner's avatar it is shown with, and no avatar at all" $ do
-    ref <- newMemWiki (demoState demoNow)
+    ref <- newMemWiki demo
     archive <- runMemWiki ref $ do
       switchUser (Just (UserId "user-editor"))
       either (panic . show) (const pass) =<< setPersonalSpace True
@@ -444,7 +450,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       refused "spaces/docs/pages/tour/page.json" (readArchive (Map.insert "spaces/docs/pages/tour/page.json" "{ not json" files))
 
   it "leaves the pages' histories out, and starts each again with the page as it is" $ do
-    ref <- newMemWiki (demoState demoNow)
+    ref <- newMemWiki demo
     saved <- runMemWiki ref $ do
       switchUser (Just (UserId "user-admin"))
       docs <- either (panic . show) pure =<< getSpace (path "docs")
@@ -463,20 +469,20 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     it "replaces the wiki in memory and in the database, staying signed in as before" $ do
       st <- edited
       db <- fresh "import"
-      opened <- runMemDOM (openMemWiki db (demoState demoNow))
+      opened <- runMemDOM (openMemWiki db demo)
       archive <- either (panic . toS) pure (readBack (zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))))
       runMemWikiWith opened.store opened.wiki (importMemWiki archive) `shouldReturn` Right ()
       now <- readIORef opened.wiki
       -- The demo's server settings stay the demo's own.
-      normal now `shouldBe` normal st {current = (demoState demoNow).current, server = (demoState demoNow).server}
-      reopened <- runMemDOM (openMemWiki db (demoState demoNow))
+      normal now `shouldBe` normal st {current = demo.current, server = demo.server}
+      reopened <- runMemDOM (openMemWiki db demo)
       -- Loaded again, with the attachments' bytes and the versions read.
-      normal <$> runMemWikiWith reopened.store reopened.wiki readWholly `shouldReturn` normal st {current = (demoState demoNow).current, server = (demoState demoNow).server}
+      normal <$> runMemWikiWith reopened.store reopened.wiki readWholly `shouldReturn` normal st {current = demo.current, server = demo.server}
 
     it "changes nothing when the database will not take it" $ do
       st <- edited
       db <- fresh "import-refused"
-      opened <- runMemDOM (openMemWiki db (demoState demoNow))
+      opened <- runMemDOM (openMemWiki db demo)
       was <- readIORef opened.wiki
       -- A newer version of the program upgrades the database meanwhile.
       runMemDOM (IDB.put db {version = db.version + 1} spacesStore "space-1" "{}")

@@ -11,7 +11,13 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 -- Embedded into the wasm binary at compile time by Halogen.JSBits: the
 -- application's, and the browser test suite's own.
+-- The changelog's entries, which the demo carries (Wiki.App.Demo.WhatsNew):
+-- changelog is a symbolic link to the repository's changelog/, and
+-- changelog.stamp, which toolchain/changelog-stamp.sh writes before the
+-- builds, rebuilds the package when an entry is added, as wiki-server's does.
 extra-source-files:
+    changelog/*.md
+    changelog.stamp
     jsbits/*.js
     test/jsbits/*.js
     -- The export archive of version 1, which every later version imports.
@@ -86,6 +92,7 @@ library
       Wiki.App.Backend.WhatsNew
       Wiki.App.Browser
       Wiki.App.Demo
+      Wiki.App.Demo.WhatsNew
       Wiki.App.Guide
       Wiki.App.DemoUsers
       Wiki.App.Favicon
@@ -187,6 +194,7 @@ library
       servant-client-core >= 0.20.3 && < 0.21,
       servant-multipart-api,
       servant-multipart-client >= 0.13 && < 0.14,
+      template-haskell,
       text,
       time,
       transformers,

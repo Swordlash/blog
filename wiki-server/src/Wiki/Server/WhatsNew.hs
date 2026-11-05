@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 -- The changelog is a directory read when this module is compiled
--- ("Wiki.Server.WhatsNew.Embed"), and GHC knows only the files it found
+-- ("Wiki.Api.WhatsNew.Embed"), and GHC knows only the files it found
 -- there last time: an entry added later would not make it compile this
 -- module again. cabal does see the new file (extra-source-files lists
 -- the entries) and rebuilds the package, so this module is compiled
@@ -13,7 +13,7 @@
 -- | The page "What's new?" as this server was built (WP5.66 of
 -- docs/PLAN.md): the newest changelog entries of the repository's
 -- @changelog\/@, the version and the time of the build, read when the
--- server was compiled ("Wiki.Server.WhatsNew.Embed"), so that the binary
+-- server was compiled ("Wiki.Api.WhatsNew.Embed"), so that the binary
 -- carries them wherever it runs. @GET api\/v1\/whats-new@ answers
 -- 'embeddedWhatsNew', unless the server runs with @--no-whats-new@.
 module Wiki.Server.WhatsNew
@@ -30,8 +30,9 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Protolude
 import Wiki.Api.WhatsNew (WhatsNew)
-import Wiki.Server.WhatsNew.Embed (embedBuildTime, embedEntries, embedVersion)
-import Wiki.Server.WhatsNew.Entry (Entry, toWhatsNew)
+import Wiki.Api.WhatsNew.Embed (embedBuildTime, embedEntries)
+import Wiki.Api.WhatsNew.Entry (Entry, toWhatsNew)
+import Wiki.Server.WhatsNew.Version (embedVersion)
 
 -- | Every entry of the changelog this server was compiled with, numbered
 -- or not.

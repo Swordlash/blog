@@ -39,6 +39,7 @@ import Web.Storage.IndexedDB (Database)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
+import Wiki.App.Demo.WhatsNew (demoWhatsNew)
 import Wiki.App.Guide (Tour (..), earthUrl, exerciseBox, guideMacros, guideProfile, insertGuide, treePng, unwrapped)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (FileName (..), MimeType (..))
@@ -66,9 +67,11 @@ demoDatabase :: Database
 demoDatabase = memDatabase "wiki-demo"
 
 -- | The demo's wiki as it is at the given time: the pages were written in
--- the weeks before it. @admin@ is signed in.
+-- the weeks before it. @admin@ is signed in. Its page "What's new?" is the
+-- changelog compiled into the application ("Wiki.App.Demo.WhatsNew").
 demoState :: UTCTime -> MemState
 demoState now = ensureHomeDocument now $ flip execState emptyState $ do
+  modify (\st -> st {whatsNew = Just demoWhatsNew})
   modify $
     insertUser User {id = adminId, login = Login "admin", displayName = "Ada Admin", avatar = Nothing}
       . insertUser User {id = editorId, login = Login "editor", displayName = "Edgar Editor", avatar = Nothing}

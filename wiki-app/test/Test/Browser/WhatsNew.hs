@@ -6,11 +6,12 @@
 -- each headed by a link to its pull request and rendered as a page is (a
 -- listing highlighted, a spoiler hidden); the dot on the link while the
 -- server has an entry newer than the newest the reader has seen, which
--- opening the page clears; and no link where the server's page is off, nor
--- in the demo. A link in an entry to a place on the page, or a footnote's
--- reference to its note, scrolls there and stays on the page, and each
--- entry's ids start with its number, so two entries with the same sections
--- have no id in common.
+-- opening the page clears; no link where the server's page is off; and the
+-- demo's page, the changelog compiled into the application (WP5.71). A
+-- link in an entry to a place on the page, or a footnote's reference to
+-- its note, scrolls there and stays on the page, and each entry's ids start
+-- with its number, so two entries with the same sections have no id in
+-- common.
 module Test.Browser.WhatsNew (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -34,6 +35,7 @@ import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Demo.WhatsNew (demoWhatsNew)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (UserId (..))
@@ -157,9 +159,13 @@ spec m = do
     off <- startServer m WhatsNewPage
     eventually (find off ".not-found h1" >>= (`shouldHaveText` "Not found"))
 
-  it "has no link in the demo, which has no changelog" $ runPage $ do
+  it "links in the demo too, to the changelog compiled into the application, newest first" $ runPage $ do
     ui <- start m Nothing Home
-    length <$> findAll ui ".whats-new-link" `shouldReturn` 0
+    find ui "nav.wiki-sidebar > .sidebar-whats-new:last-child > a.whats-new-link" >>= click
+    find ui ".whats-new h1" >>= (`shouldHaveText` "What's new?")
+    titles <- findAll ui ".whats-new-entry .whats-new-title a"
+    traverse textContent titles `shouldReturn` ["#" <> show e.pr <> " " <> e.title | e <- demoWhatsNew.entries]
+    length titles `shouldSatisfy` (\n -> n > 0 && n <= 12)
   where
     news =
       WhatsNew

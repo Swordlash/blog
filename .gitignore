@@ -27,8 +27,9 @@ cabal.project.local~
 stack.yaml.lock
 *.tix
 .hie/
-# toolchain/changelog-stamp.sh's, written before each build of wiki-server
+# toolchain/changelog-stamp.sh's, written before each build of wiki-server and wiki-app
 wiki-server/changelog.stamp
+wiki-app/changelog.stamp
 
 # Haskell Language Server
 hie.yaml.local

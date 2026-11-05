@@ -42,6 +42,7 @@ import Development.Shake
 import Development.Shake.Classes (Binary, Hashable, NFData)
 import GHC.Generics (Generic)
 import Maker.Build.Env
+import Maker.Build.Native (changelogStamp)
 import Maker.Process (removePath)
 import System.Directory (createDirectoryIfMissing, listDirectory)
 import System.Directory qualified as Dir
@@ -146,6 +147,8 @@ prerenderProgram be wb = do
 -- arguments after the maker's.
 buildWasm :: BuildEnv -> WasmBuild -> [String] -> IO ()
 buildWasm be wb extra = do
+  -- wiki-app embeds the changelog for the demo, as wiki-server does.
+  changelogStamp be
   prerender <- prerenderProgram be wb
   wasm <- wasmEnvironment be
   tools <- wasmTools wasm
@@ -267,6 +270,7 @@ testWasm be extra = do
   hspec <- maybe (hspecHalogen be) pure (given >>= \p -> if null p then Nothing else Just p)
   wasm <- (("HSPEC_HALOGEN", hspec) :) . filter ((/= "HSPEC_HALOGEN") . fst) <$> wasmEnvironment be
   tools <- wasmTools wasm
+  changelogStamp be
   -- A failing wasm process must fail the test command, on every Node
   -- version: this checks the wrapper on a program that exits as asked.
   call wasm "sh" ["toolchain/test-wasm-runner.sh"]

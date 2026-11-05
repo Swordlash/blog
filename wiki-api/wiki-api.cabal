@@ -81,11 +81,16 @@ library
       Wiki.Api.Vault
       Wiki.Api.Version
       Wiki.Api.WhatsNew
+      Wiki.Api.WhatsNew.Embed
+      Wiki.Api.WhatsNew.Entry
   build-depends:
       aeson,
       base,
       bytestring,
       containers,
+      directory,
+      file-embed,
+      filepath,
       http-api-data,
       protolude,
       servant >= 0.20.3 && < 0.21,

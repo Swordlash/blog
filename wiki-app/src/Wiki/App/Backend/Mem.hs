@@ -439,11 +439,11 @@ instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn
   setStarred pid = write . setStarredIn pid
 
--- | The demo has no changelog: the entries are compiled into the server.
--- Its session says so ('Wiki.App.Backend.whatsNew' is 'Nothing'), so
--- nothing links here.
-instance (Monad m) => MonadWhatsNew (MemWiki m) where
-  whatsNew = pure (Left NotFound)
+-- | The page "What's new?" the wiki carries: the demo's is the changelog
+-- compiled into the application ("Wiki.App.Demo.WhatsNew"). A wiki without
+-- one answers not found, and its session says so, so nothing links here.
+instance (MonadIO m) => MonadWhatsNew (MemWiki m) where
+  whatsNew = query (\st -> maybe (Left NotFound) Right st.whatsNew)
 
 -- | Everything is in memory: every read answers at once (synchronously,
 -- without waiting for a network), and the wiki is never unreachable.
@@ -556,10 +556,11 @@ openMemWiki db source = withRunInIO $ \run -> do
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
       Right held -> case restore held of
         -- Signed in as the demo starts, with its server settings except
-        -- for the shared home page, which is kept in IndexedDB.
+        -- for the shared home page, which is kept in IndexedDB, and with
+        -- the changelog this build carries.
         Stored restored ->
           do
-            let start = ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}}
+            let start = ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}, whatsNew = seed.whatsNew}
             kept <- storeHolding start held
             let updates = changes held (records start)
             written <- tried (unless (null updates) (writeAll updates))
