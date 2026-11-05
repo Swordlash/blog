@@ -28,7 +28,8 @@
 #      which reach cabal untouched. On Debian or Ubuntu (dpkg-query on PATH)
 #      a missing package is a warning, since the bootstrap installs it, and
 #      the check runs again after the bootstrap; elsewhere the deploy stops
-#      there. Then toolchain/bootstrap.sh build
+#      there. The check does not probe xelatex (--without-tex): the TeX
+#      step below does, on the service's PATH. Then toolchain/bootstrap.sh build
 #      (installs or checks the toolchain a build needs: the compilers, the
 #      wasm sysroot and Node, with neither Chromium nor fourmolu, so no root
 #      for Chromium's libraries), npm ci and `npm run build-wasm-opt`, the
@@ -1889,19 +1890,27 @@ postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +;
 # it was.
 check_postgres=
 if [ "$mode" = server ] && [ "$db" = sqlite ]; then check_postgres=--without-postgres; fi
+# A deploy with a TeX step (tex_step, run in server mode) checks xelatex
+# there, on the service's PATH, so toolchain/check-native.sh is told not to
+# typeset its own probe on this shell's PATH: an xelatex that hangs then
+# costs its timeout once. Keep the test in step with the one before
+# tex_step.
+check_tex_flag=
+if [ "$mode" = server ]; then check_tex_flag=--without-tex; fi
 
 # The check of what wiki-server's native build needs from the machine
-# (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium. It
-# runs before anything is downloaded or built, so that a missing C library
-# stops the deploy at once, with the packages that provide it, and not after
-# an hour of compiling. It sees this script's environment, as the build does.
+# (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium,
+# without its xelatex probe (check_tex_flag). It runs before anything is
+# downloaded or built, so that a missing C library stops the deploy at once,
+# with the packages that provide it, and not after an hour of compiling. It
+# sees this script's environment, as the build does.
 # On Debian or Ubuntu (dpkg-query on PATH) the bootstrap installs the
 # missing packages, so a failed check there is a warning: the deploy goes
 # on, and recheck_native runs the check again after the bootstrap. Elsewhere
 # nothing installs them, and the deploy stops.
 check_native() {
   say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-  if check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} 2>&1); then
+  if check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_tex_flag:+"$check_tex_flag"} 2>&1); then
     printf '%s\n' "$check_output"
     return 0
   fi
@@ -1918,7 +1927,7 @@ check_native() {
 # anything is built.
 recheck_native() {
   say "checking again what the native build of wiki-server needs, after the bootstrap"
-  sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ||
+  sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_tex_flag:+"$check_tex_flag"} ||
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
 }
 
@@ -2031,6 +2040,8 @@ texlive_installer=$opt_texlive_installer
 perl_source=$opt_perl_source
 tex_bin=
 pdf=no
+# check_tex_flag is set by the same test: when this step runs,
+# toolchain/check-native.sh has not probed xelatex.
 [ "$mode" != server ] || tex_step
 if [ -n "$build" ] && [ -n "$backend_only" ]; then
   if [ "$mode" = server ]; then

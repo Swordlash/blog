@@ -1066,8 +1066,9 @@ and `working at <path>`, or `no` and `failing at <path>` with the first line of 
 reason, or `no` and `not-found`. That line is for information: it is not counted, never
 makes the check fail (a wiki without PDFs works), and the summary then says that PDF
 exports need `xelatex` and that the deploy offers TeX Live under the toolchain. The
-service's `PATH` may differ from your shell's, so the deploy checks again in its TeX step,
-below.
+service's `PATH` may differ from your shell's, so the deploy checks in its TeX step,
+below, and gives the check `--without-tex`, which leaves `xelatex` to that step: the line
+then reads `--` and "checked by the deploy's TeX step", and the check waits for no `xelatex`.
 
 | Library                 | Debian, Ubuntu   | RHEL, Fedora                                                                     |
 | ----------------------- | ---------------- | -------------------------------------------------------------------------------- |

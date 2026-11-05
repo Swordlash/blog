@@ -2,7 +2,7 @@
 # Check what the native build of wiki-server needs from the machine, before
 # anything is downloaded or built.
 #
-#   sh toolchain/check-native.sh [--without-postgres] [--with-wizard] | --help
+#   sh toolchain/check-native.sh [--without-postgres] [--with-wizard] [--without-tex] | --help
 #
 # It prints one line per item, ok or missing, with how the item was found or
 # what was tried, and then a summary. With --without-postgres, for a build
@@ -59,7 +59,10 @@
 # items and never makes the check fail: a wiki without PDFs is a working
 # wiki. This is the PATH of the shell the check runs in; a systemd service
 # has its own, which toolchain/deploy-local.sh checks again in its TeX step,
-# and where it can install TeX Live under the toolchain.
+# and where it can install TeX Live under the toolchain. With --without-tex,
+# which that deploy gives, nothing is typeset here: the line says that the
+# deploy's TeX step checks xelatex, so that an xelatex that hangs is waited
+# for once and not twice.
 #
 # The build sees the environment this script runs in. LIBRARY_PATH,
 # C_INCLUDE_PATH, CPATH and PKG_CONFIG_PATH reach cabal untouched, so a
@@ -68,15 +71,17 @@
 set -eu
 
 usage() {
-  printf 'usage: sh toolchain/check-native.sh [--without-postgres] [--with-wizard] | --help\n'
+  printf 'usage: sh toolchain/check-native.sh [--without-postgres] [--with-wizard] [--without-tex] | --help\n'
 }
 
 postgres=yes
 wizard=
+tex=yes
 for option do
   case $option in
     --without-postgres) postgres= ;;
     --with-wizard) wizard=yes ;;
+    --without-tex) tex= ;;
     -h | --help)
       usage
       printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
@@ -86,7 +91,8 @@ for option do
       printf 'needed for the build and never fails the check. --without-postgres\n'
       printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
       printf '%s\n' '--with-wizard also checks terminfo, which the configuration wizard'
-      printf '(toolchain/configure.sh) links.\n'
+      printf '(toolchain/configure.sh) links. --without-tex does not check xelatex: the\n'
+      printf 'deploy gives it, since its TeX step checks the TeX the service finds.\n'
       exit 0 ;;
     *)
       usage >&2
@@ -134,12 +140,21 @@ command_item pkg-config pkg-config pkgconf-pkg-config
 # xelatex, for the PDF exports only, through toolchain/check-tex.sh. Its
 # line is printed as the skipped lines are, so that it is not counted, and
 # it never joins the missing items. tex_note keeps what the summary says
-# about it, empty when it works.
+# about it, empty when it works or is not checked. With --without-tex the
+# deploy's TeX step checks xelatex after this script, on the service's
+# PATH, so the probe does not run here: an xelatex that hangs would
+# otherwise cost its timeout twice.
 tex_note=
 tex_status=0
-tex_report=$(sh "$(dirname "$0")/check-tex.sh" 2>&1) || tex_status=$?
-tex_first=$(printf '%s\n' "$tex_report" | sed -n '1p')
+if [ -z "$tex" ]; then
+  tex_status=skipped
+else
+  tex_report=$(sh "$(dirname "$0")/check-tex.sh" 2>&1) || tex_status=$?
+  tex_first=$(printf '%s\n' "$tex_report" | sed -n '1p')
+fi
 case $tex_status in
+  skipped)
+    printf '%-8s %-11s %s\n' -- xelatex "checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)" ;;
   0)
     printf '%-8s %-11s %s\n' ok xelatex "working at ${tex_first#working } (for the PDF exports; not counted)" ;;
   1)

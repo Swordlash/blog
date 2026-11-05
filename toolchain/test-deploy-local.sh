@@ -187,9 +187,11 @@ EOF
   chmod +x "$HOME/.wiki-toolchain/node/bin/node"
   # An xelatex on this shell's PATH, ahead of the host's own: one that
   # typesets toolchain/check-tex.sh's probe at once, for the item xelatex
-  # of toolchain/check-native.sh, which checks the shell's PATH. The
-  # host's would take seconds, or fail, at every check. The deploy's TeX
-  # step checks the service's PATH (FAKE_SERVICE_PATH), without it.
+  # of toolchain/check-native.sh run alone, which checks the shell's PATH
+  # (a server deploy gives it --without-tex), and for the TeX step's note
+  # on an xelatex this shell finds and the service does not. The host's
+  # would take seconds, or fail, at every check. The deploy's TeX step
+  # checks the service's PATH (FAKE_SERVICE_PATH), without it.
   printf '#!/bin/sh\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$case_dir/bin/xelatex"
   chmod +x "$case_dir/bin/xelatex"
 
@@ -1781,6 +1783,32 @@ sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=
 [ "$status" = 2 ] || fail "the check with an unknown option exited $status, not 2"
 pass 'toolchain/check-native.sh --without-postgres reports libpq as not needed, and does not count it'
 
+# With --without-tex, which a server deploy gives because its TeX step
+# checks xelatex itself, the check does not run toolchain/check-tex.sh. The
+# xelatex on PATH here leaves a file behind when it runs, and then hangs
+# until WIKI_TEX_TIMEOUT's two seconds stop it, so a probe shows as that
+# file.
+mv "$case_dir/bin/xelatex" "$case_dir/xelatex-fast"
+printf '#!/bin/sh\n: >"%s"\nexec sleep 600\n' "$case_dir/xelatex-ran" >"$case_dir/bin/xelatex"
+chmod +x "$case_dir/bin/xelatex"
+out=$case_dir/check-without-tex
+WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" --without-tex >"$out" 2>&1 ||
+  fail 'the check --without-tex failed with everything there'
+[ ! -e "$case_dir/xelatex-ran" ] || fail 'the check --without-tex ran xelatex'
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-tex did not report nine items ok'
+assert_lacks "$out" 'PDF exports need xelatex'
+# Without the option the same xelatex is probed, and reported as failing.
+out=$case_dir/check-hanging-tex
+WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 ||
+  fail 'the check with an xelatex that hangs failed'
+[ -e "$case_dir/xelatex-ran" ] || fail 'the check without --without-tex did not run xelatex'
+assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex"
+assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails"
+mv "$case_dir/xelatex-fast" "$case_dir/bin/xelatex"
+pass 'toolchain/check-native.sh --without-tex leaves xelatex to the deploy'"'"'s TeX step and does not probe it'
+
 # toolchain/check-semaphore.sh itself, the real one, with the real cc and
 # ghc: on this machine GHC can open the semaphore. Then with a fake ghc
 # that fails on -jsem with the RHEL server's error and compiles without it,
@@ -1833,6 +1861,9 @@ if FAKE_NO_ZLIB=1 PATH=$case_dir/bin:$NO_DPKG deploy --server --sqlite --port "$
 fi
 assert_contains "$out" 'missing  zlib'
 assert_contains "$out" 'the native build of wiki-server needs what is missing above; nothing was changed'
+# The deploy's TeX step checks xelatex, so the check does not.
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_lacks "$out" "working at $case_dir/bin/xelatex"
 assert_lacks "$out" 'warning: missing for the native build'
 assert_lacks "$EVENTS" 'bootstrap'
 assert_lacks "$EVENTS" 'npm'
@@ -1843,6 +1874,7 @@ assert_lacks "$EVENTS" 'systemctl restart'
 out=$case_dir/static
 deploy --static --port "$p" >"$out" 2>&1 || fail 'the demo was refused for want of zlib'
 assert_lacks "$out" 'check-native.sh'
+assert_lacks "$out" 'xelatex     '
 undeploy >/dev/null 2>&1
 pass 'a server deploy that builds the page here checks the native build first and stops without zlib; the demo builds no wiki-server and is not checked'
 
@@ -1871,8 +1903,11 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 # The check after the bootstrap is told, as the first was, that a wiki in
-# SQLite needs no libpq: eight items.
+# SQLite needs no libpq: eight items. Neither check probes xelatex.
 assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c -F -- "--       xelatex     checked by the deploy's TeX step" "$out")" = 2 ] ||
+  fail 'the check and the check after the bootstrap did not both leave xelatex to the TeX step'
+assert_lacks "$out" "working at $case_dir/bin/xelatex"
 assert_contains "$EVENTS" 'bootstrap build'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'
@@ -2832,6 +2867,10 @@ out=$case_dir/first
 deploy --server --sqlite --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy without TeX failed'
 assert_contains "$out" "PDF exports: no xelatex on the service's PATH ($NO_TEX)"
 assert_contains "$out" "this shell finds $case_dir/bin/xelatex, but the service does not"
+# The trap is named by the TeX step; toolchain/check-native.sh, before it,
+# left xelatex to that step and did not probe this shell's.
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_lacks "$out" "xelatex     working at"
 assert_contains "$out" "--texlive installs TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org"
 assert_lacks "$HOME/$unit" 'Environment="PATH='
 grep -x 'ExecStart=.* --no-pdf' "$HOME/$unit" >/dev/null || fail 'the unit does not run wiki-server with --no-pdf'
