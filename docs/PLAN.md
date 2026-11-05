@@ -855,6 +855,45 @@ In the order to do it, unless the owner says otherwise.
   that installs nothing from the internet", with the options together), the
   deploy's usage text, the wizard's texts.
 
+- **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
+  2026-11-05; four pull requests, a to d, each leaving the old scripts in place
+  until the maker replaces them). The shell under `toolchain/` has grown to some
+  twelve thousand lines (the deploy and its tests six thousand) and the owner does
+  not want to maintain it in shell. Two stages. *Stage 1*, `toolchain/bootstrap.sh`,
+  stays POSIX sh and shrinks to the minimum a Haskell program cannot do for itself:
+  ghcup, GHC and cabal at the pinned versions, unless `--system-tools` (then only
+  the check, with the floors), then `exec cabal run maker -- "$@"`. *Stage 2*,
+  `maker`, a package of the repository under `maker/` with a `cabal.project` of its
+  own (so that running it resolves and fetches nothing of the wiki's project; `cabal
+  run maker` builds it once and keeps it), on Shake: rules for the toolchain's
+  components (Node, the wasm GHC from ghc-wasm-meta, Playwright's Chromium, TeX
+  Live with its Perl), the builds (native, wasm, wasm-opt, the bundle, the page,
+  the prerender), the tests and checks (the native dependencies, TeX, the
+  semaphore), the deploy (the state, the units, the TeX step, `--backend-only`
+  pages, the locked-down options) and the CI helpers (`ci-*`), with oracles for
+  tool versions and the environment, file rules for artefacts, and the same
+  messages as today where the owner relies on them. Two front ends over one set of
+  rules: a CLI with optparse-applicative whose subcommands mirror today's `npm run
+  …` and the deploy's options (`maker build native`, `maker test wasm`, `maker
+  deploy --server …`, `maker toolchain install node`, `maker check`), and a TUI on
+  brick as `ghcup tui`: a list of components with their status (installed,
+  version, missing) and actions, and the deploy's screens as the wizard has them
+  today. The Playwright tests (`smoke-test*.mjs`, `test-deploy-server.mjs`,
+  `test-assistant.mjs`, `screenshots.mjs`) stay JavaScript, run by the maker.
+  Tests: hspec in `maker/` for the pure parts (options, the state, the plans) and
+  integration tests with fake binaries on PATH, ported from the shell tests as each
+  area moves; `-Wall -Wextra` and `-Werror` as the other packages; fourmolu.
+  Phases: (a) the skeleton (the package, Shake, the CLI, the TUI's shell), stage 1,
+  the toolchain's components, the checks, the TUI's status screen; CI and the
+  `npm` scripts switched for those parts. (b) The builds and the tests as rules,
+  `web/bundle.sh` included; `npm run` delegates. (c) The deploy: everything
+  `deploy-local.sh`, `deploy-lib.sh`, `undeploy-local.sh` and the wizard do, the
+  TeX step included, `test-deploy-local.sh` ported, the wizard's screens as the
+  TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
+  shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
+  maker. Each phase starts when the pull requests touching the same scripts are
+  merged (a after WP5.66 and WP5.67).
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
