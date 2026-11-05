@@ -1,5 +1,5 @@
 # Delete a cabal store from GitHub's cache (decision 54 of docs/PLAN.md), by
-# hand, from the Actions tab: when a store has grown too large with old
+# hand, from the Actions tab, every cabal version's: when a store has grown too large with old
 # versions of libraries or of compilers, or when it is suspected of holding
 # something broken. Every copy of it goes, on every branch; the next run of
 # build.yml's native job (for "native") or wasm job (for "wasm") builds it
@@ -21,9 +21,6 @@ on:
 permissions:
   actions: write
 
-env:
-  CABAL_VERSION: '3.16.1.0'
-
 jobs:
   delete:
     runs-on: ubuntu-latest
@@ -38,8 +35,15 @@ jobs:
           both) kinds="native wasm" ;;
           *) kinds=$STORE ;;
         esac
+        # Linux-native- and Linux-wasm- take the store under its key and under
+        # the older keys build.yml and server-page.yml still restore as a
+        # fallback (Linux-native-ghc-..., Linux-wasm-<compiler>-...,
+        # Linux-wasm-opt-...), which would otherwise bring the store back. No
+        # other cache starts with them: the build directories, apt archives
+        # and ghcup caches start with Linux-X64-, Linux-ghcup- or
+        # Linux-ghc-wasm-.
         for kind in $kinds; do
-          prefix="Linux-$kind-store-cabal-$CABAL_VERSION-"
+          prefix="Linux-$kind-"
           ids=$(gh cache list --key "$prefix" --limit 1000 --json id,key --jq '.[] | "\(.id) \(.key)"')
           if [ -z "$ids" ]; then
             echo "No copy of $prefix* is cached."
