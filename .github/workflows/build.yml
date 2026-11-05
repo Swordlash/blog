@@ -5,9 +5,13 @@ name: CI
 # counts as code here: wiki-core's built-in templates (wiki-core/templates) and
 # its Markdown reference (wiki-core/reference/markdown.md, a symbolic link
 # to docs/markdown.md, which is the file a change to the reference
-# touches). The filter is `paths` with `!` rather than `paths-ignore`:
-# GitHub documents `!` for `paths` only, where a later pattern takes a path
-# back. server-page.yml and toolchain/deploy-local.sh's is_code say the same.
+# touches), and the changelog's entries (changelog/), which wiki-server
+# embeds for its page "What's new?" and the changelog job checks. The
+# filter is `paths` with `!` rather than `paths-ignore`: GitHub documents
+# `!` for `paths` only, where a later pattern takes a path back.
+# server-page.yml and toolchain/deploy-local.sh's is_code say the same of
+# what the page is built from, which the changelog is not part of: they
+# leave changelog/ out.
 on:
   push:
     branches:
@@ -15,6 +19,7 @@ on:
     paths:
       - '**'
       - '!**.md'
+      - 'changelog/**'
       - 'wiki-core/templates/**'
       - 'wiki-core/reference/**'
       - 'docs/markdown.md'
@@ -24,6 +29,7 @@ on:
     paths:
       - '**'
       - '!**.md'
+      - 'changelog/**'
       - 'wiki-core/templates/**'
       - 'wiki-core/reference/**'
       - 'docs/markdown.md'
@@ -129,6 +135,10 @@ permissions:
 # together with the haskell-halogen commit cabal.project pins, whose own CI
 # these follow.
 env:
+  # The version wiki-server's page "What's new?" shows for the builds of a
+  # run (Wiki.Server.WhatsNew): the commit's, the pull request's head for a
+  # pull request rather than the merge commit GitHub tests.
+  WIKI_BUILD_VERSION: ${{ github.event.pull_request.head.sha || github.sha }}
   GHC_VERSION: '9.14.1'
   CABAL_VERSION: '3.16.1.0'
   # Keep WASM_GHC_VERSION in step with with-compiler in cabal-wasm.project.
@@ -143,6 +153,38 @@ env:
   FOURMOLU_SHA256: 'aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7'
 
 jobs:
+  # A pull request's changelog entry (toolchain/check-changelog.sh, the
+  # README's "Changelog entries"): it adds exactly one entry under
+  # changelog/, well formed, with the pull request's number, and every
+  # entry it changes is well formed. A few seconds, on its own: it needs
+  # no toolchain and waits for no build. A pull request labelled
+  # no-changelog is exempt; the label is the owner's (AGENTS.md). The
+  # labels are read when the job runs, so that after adding the label a
+  # re-run of this job alone passes: a label does not start a run of this
+  # workflow, which would build everything again. Pushes to main have no
+  # pull request and no check.
+  changelog:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+
+    - name: Check the changelog entry
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+        BASE: ${{ github.event.pull_request.base.ref }}
+        EVENT_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: |
+        labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name' 2>/dev/null) || labels=$EVENT_LABELS
+        sh toolchain/check-changelog.sh --pr "$PR" --base "origin/$BASE" --labels "$labels"
+
   # What the run does and where, decided on a hosted runner for every run:
   # whether the build jobs need to run at all (on a push), and which runner
   # wasm takes (see the top).
@@ -376,6 +418,12 @@ jobs:
     - name: Test check-tex.sh
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-tex.sh
+
+    # The changelog job's check, on pull requests made in a repository of
+    # its own: a few seconds.
+    - name: Test check-changelog.sh
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-check-changelog.sh
 
     # The two database groups use separate hosted VMs. Only PostgreSQL
     # needs a container; unit and SQLite never start or discover a cluster.
