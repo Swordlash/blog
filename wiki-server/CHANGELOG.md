@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Numbered listings in exports (WP5.63). A code block whose fence has the
+class `numbered` has pandoc's class `numberLines` in its place, so a PDF
+numbers its lines as the wiki does. Pandoc's Word writer does not number
+lines, so a Word document shows the listing without numbers.
+
 Spoilers in exports (WP5.62, issue #152). A block spoiler is exported as
 a box of the class `alert-spoiler`, titled with its description, its
 content shown; one the page shows in red is its marker line and the reason

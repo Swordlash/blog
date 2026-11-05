@@ -1287,7 +1287,7 @@ try {
   prerendered.gate = new Promise(() => {});
   await prerendered.goto(url("/s/docs/p/markdown-guide/"), { waitUntil: "domcontentloaded" });
   const listing = prerendered.locator("#app .page-body .code-block", { has: prerendered.locator("pre", { hasText: "main = putStrLn" }) }).first();
-  const code = await listing.locator("pre").textContent();
+  const code = await listing.locator("pre > code").textContent();
   assert.ok(code.startsWith("main :: IO ()\n") && code.endsWith("\n"), `the first listing is not the guide's Haskell: ${JSON.stringify(code)}`);
   await listing.locator("button.code-copy").click();
   await listing.locator("button.code-copy[data-copy='copied']").waitFor({ timeout });

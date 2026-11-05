@@ -1354,7 +1354,8 @@ select {
   line-height: 1.45;
 }
 
-.page-body pre code {
+.page-body pre code,
+.page-body pre .code-lines {
   padding: 0;
   font-size: 0.85rem;
   background: transparent;
@@ -1371,8 +1372,43 @@ select {
   font-size: 0.85rem;
 }
 
-.page-body pre.code-scroll code {
+.page-body pre.code-scroll code,
+.page-body pre.code-scroll .code-lines {
   font-size: 1em;
+}
+
+/* A numbered listing (Wiki.Core.Markdown.Render's lineNumbers): the
+   gutter and the code side by side in the <pre>, so that both scroll
+   together in a listing that scrolls, down and sideways. The gutter holds
+   an empty span for each line of the code, at the code's font size and
+   line height, and the numbers are drawn here, right-aligned and dimmed:
+   they are no text, so a selection or a copy of the code has none of
+   them. A listing without the class is laid out as before. */
+pre.numbered {
+  display: flex;
+  gap: 1em;
+}
+
+pre.numbered > code {
+  flex: none;
+}
+
+.code-lines {
+  flex: none;
+  counter-reset: code-line;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  opacity: 0.75;
+}
+
+.code-lines > span {
+  display: block;
+  counter-increment: code-line;
+}
+
+.code-lines > span::before {
+  content: counter(code-line);
 }
 
 /* A code block with its copy button (Wiki.Core.Markdown.Render's
@@ -2430,6 +2466,7 @@ body:has(.slides-view) {
 }
 
 .slide .page-body pre code,
+.slide .page-body pre .code-lines,
 .slide .page-body code {
   font-size: 0.85em;
 }

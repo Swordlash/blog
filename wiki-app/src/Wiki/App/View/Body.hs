@@ -274,7 +274,7 @@ options place =
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
 islandOptions ctx spaceOwn =
   Md.defaultOptions
-    { Md.codeBlock = \k language rows code -> island k (Islands.CodeBlock language rows code)
+    { Md.codeBlock = \k language rows numbered code -> island k (Islands.CodeBlock language rows numbered code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
     , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)

@@ -60,3 +60,30 @@ function wiki_test_corner(selector) {
   const parent = element.parentElement.getBoundingClientRect();
   return (box.top - parent.top) + " " + (parent.right - box.right);
 }
+
+// Select everything in the first element a selector finds, as a reader
+// dragging over it would, and give the selection's text; "" when there is
+// none. The selection is cleared after.
+function wiki_test_selected_text(selector) {
+  const element = document.querySelector(selector);
+  const selection = window.getSelection();
+  if (!element || selection === null) return "";
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const text = selection.toString();
+  selection.removeAllRanges();
+  return text;
+}
+
+// The heights of the first two elements two selectors find, as
+// "first second", or "" when either is missing: a numbered listing's
+// gutter and its code, which are as high as each other when each number
+// is on its line.
+function wiki_test_heights(first, second) {
+  const a = document.querySelector(first);
+  const b = document.querySelector(second);
+  if (!a || !b) return "";
+  return a.getBoundingClientRect().height + " " + b.getBoundingClientRect().height;
+}

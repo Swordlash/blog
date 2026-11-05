@@ -243,11 +243,15 @@ const renderTikz = async (element, source, preamble, picture) => {
   }
 };
 
+// The application's island is the <code> in a listing's <pre>
+// (Wiki.App.Islands), which is filled where it is, so that what else the
+// <pre> holds, a numbered listing's gutter, stays. Any other element gets a
+// <code> of its own.
 const highlight = (element, language, code) => {
   nextGeneration(element);
   try {
     const text = String(code);
-    const block = document.createElement("code");
+    const block = element.tagName === "CODE" ? element : document.createElement("code");
     // A language highlight.js does not know (or none) is shown as plain text
     // rather than guessed at: auto-detection is slow and often wrong on the
     // short snippets a wiki has.
@@ -258,7 +262,7 @@ const highlight = (element, language, code) => {
     } else {
       block.textContent = text;
     }
-    element.replaceChildren(block);
+    if (block !== element) element.replaceChildren(block);
   } catch (error) {
     showError(element, error);
   }
@@ -500,11 +504,12 @@ else restoreWithin(document.body);
 // Copy buttons (wiki-core's Wiki.Core.Markdown.Render). A code block is a
 // <div class="code-block"> that holds the listing's <pre> and an empty
 // <button class="code-copy">, whose label the stylesheet draws from the
-// button's data-copy. A click on the button puts the text of the <pre> on
-// the clipboard. That text is the code exactly as the fence holds it, with
-// its last newline: the <pre> holds the code as text on a page prerendered
-// on the server, and highlight.js's markup once highlighted, whose text is
-// the same. The listener is on the document, so the button works the same
+// button's data-copy. A click on the button puts the text of the <pre>'s
+// <code> on the clipboard. That text is the code exactly as the fence holds
+// it, with its last newline: the <code> holds the code as text on a page
+// prerendered on the server, and highlight.js's markup once highlighted,
+// whose text is the same. A numbered listing's gutter is beside the <code>,
+// and has no text anyway: its numbers are the stylesheet's. The listener is on the document, so the button works the same
 // in a page, in the editor's preview and in a prerendered page before the
 // program runs. Enter and Space on the focused button click it, as on any
 // button.
@@ -519,11 +524,11 @@ else restoreWithin(document.body);
 const copyShown = 2000;
 const copying = new WeakMap();
 
-const copyByHand = (pre) => {
+const copyByHand = (code) => {
   const selection = window.getSelection();
   if (selection === null) return false;
   const range = document.createRange();
-  range.selectNodeContents(pre);
+  range.selectNodeContents(code);
   selection.removeAllRanges();
   selection.addRange(range);
   try {
@@ -535,8 +540,8 @@ const copyByHand = (pre) => {
   return true;
 };
 
-const copyCode = async (pre) => {
-  const text = pre.textContent;
+const copyCode = async (code) => {
+  const text = code.textContent;
   try {
     const clipboard = navigator.clipboard;
     if (clipboard) {
@@ -544,7 +549,7 @@ const copyCode = async (pre) => {
       return true;
     }
   } catch {}
-  return copyByHand(pre);
+  return copyByHand(code);
 };
 
 const showCopied = (button, copied) => {
@@ -566,7 +571,7 @@ document.addEventListener("click", (event) => {
   const button = event.target instanceof Element ? event.target.closest(".code-block > button.code-copy") : null;
   const pre = button?.parentElement.querySelector(":scope > pre");
   if (!pre) return;
-  copyCode(pre).then((copied) => showCopied(button, copied));
+  copyCode(pre.querySelector(":scope > code") ?? pre).then((copied) => showCopied(button, copied));
 });
 
 globalThis.wikiIslands = Object.freeze({

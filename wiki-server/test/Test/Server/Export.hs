@@ -379,6 +379,13 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       paragraphs cut `shouldSatisfy` elem "after"
       length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
 
+  it "numbers the lines of a listing the wiki numbers, with pandoc's numberLines" $ do
+    let source = "```haskell {.numbered rows=3}\nx = 1\n```\n\n```{.numbered .python}\ny = 2\n```\n\n```haskell\nz = 3\n```\n"
+    for_ [ToOther, ToTeX] $ \output -> do
+      blocks <- blocksOf output place source
+      [cls | P.CodeBlock (_, cls, _) _ <- query (\case b@P.CodeBlock {} -> [b]; _ -> []) blocks]
+        `shouldBe` [["haskell", "numberLines"], ["numberLines", "python"], ["haskell"]]
+
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"
     other <- blocksOf ToOther place source

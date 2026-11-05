@@ -67,13 +67,19 @@
 -- scrolls inside. The @lh@ unit is the block's own line height, and an
 -- inline style works in a page prerendered on the server before any
 -- script runs; the stylesheet's @code-scroll@ makes the box's lines and
--- its @lh@ the same height (web/style.css).
+-- its @lh@ the same height (web/style.css). A fence with the class
+-- @numbered@ ('codeNumbered') shows a number before each line: its
+-- @\<pre>@ gets the class @numbered@ and starts with a gutter, a
+-- @\<span class=\"code-lines\" aria-hidden=\"true\">@ that holds an empty
+-- @\<span>@ for each line ('lineNumbers'), whose numbers the stylesheet
+-- draws with a counter. The gutter has no text, so the code's text, what
+-- a reader selects and what the copy button copies are the code alone.
 --
 -- __Copy buttons.__ With 'copyButtons' on, a code block is a
 -- @\<div class=\"code-block\">@ that holds what 'codeBlock' made and,
 -- after it, an empty @\<button class=\"code-copy\">@ with an
 -- @aria-label@ ('copyButton'). The islands' script copies the text of the
--- block's @\<pre>@ when the button is clicked (web/src/islands.js), and
+-- block's @\<code>@ when the button is clicked (web/src/islands.js), and
 -- the stylesheet draws the button's label, so that the page's text (what
 -- a comment quotes, "Wiki.Core.Anchor", and what the reader selects) has
 -- no "Copy" after every listing. The button is beside the @\<pre>@, not in
@@ -116,6 +122,7 @@ module Wiki.Core.Markdown.Render
   , renderRawHtml
   , boxOf
   , scrollingCode
+  , lineNumbers
   )
 where
 
@@ -143,10 +150,11 @@ import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
 -- type for a page: 'resolveLink' returns it, and 'pageHref' makes a link
 -- to it.
 data Options page w i = Options
-  { codeBlock :: IslandKey -> Maybe Text -> Maybe Int -> Text -> HH.HTML w i
+  { codeBlock :: IslandKey -> Maybe Text -> Maybe Int -> Bool -> Text -> HH.HTML w i
   -- ^ A code block: its language, if it has one, the number of lines it
   -- shows before it scrolls, if its fence says ('codeRows'; see
-  -- 'scrollingCode'), and its code.
+  -- 'scrollingCode'), whether its lines are numbered ('codeNumbered'; see
+  -- 'lineNumbers'), and its code.
   , mathInline :: IslandKey -> Macros -> Text -> HH.HTML w i
   -- ^ Inline math, @$…$@: the formulas before it that define macros, and
   -- its TeX.
@@ -213,8 +221,10 @@ data IslandKey = IslandKey
 defaultOptions :: Options Text w i
 defaultOptions =
   Options
-    { codeBlock = \_ lang rows code ->
-        HH.pre (scrollingCode rows []) [HH.code (foldMap (\l -> [HP.class_ (HH.ClassName ("language-" <> l))]) lang) [HH.text code]]
+    { codeBlock = \_ lang rows numbered code ->
+        HH.pre
+          (scrollingCode rows ["numbered" | numbered])
+          ([lineNumbers code | numbered] <> [HH.code (foldMap (\l -> [HP.class_ (HH.ClassName ("language-" <> l))]) lang) [HH.text code]])
     , mathInline = \_ _ tex -> HH.span [HP.class_ (HH.ClassName "math inline")] [HH.text tex]
     , mathDisplay = \_ _ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
@@ -292,7 +302,7 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
       CodeBlock attrs lang code ->
         island code <&> \k ->
-          let listing = opts.codeBlock k lang (codeRows attrs) code
+          let listing = opts.codeBlock k lang (codeRows attrs) (codeNumbered attrs) code
            in [if opts.copyButtons then HH.div [classesProp ["code-block"]] [listing, copyButton] else listing]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
@@ -658,6 +668,24 @@ scrollingCode :: (HasType "class" Text r, HasType "style" Text r) => Maybe Int -
 scrollingCode rows own = case rows of
   Nothing -> [classesProp own | not (null own)]
   Just n -> [classesProp (own <> ["code-scroll"]), HP.styleText ("max-height: " <> show n <> "lh; overflow: auto")]
+
+-- | The gutter of a numbered code block ('codeNumbered'), the first child
+-- of its @\<pre>@, before the @\<code>@: an empty @\<span>@ for each line
+-- of the code, the last one counted whether a newline ends it or not. The
+-- stylesheet shows the spans as lines of the code's height and numbers
+-- them with a counter, so the numbers are no text of the page: they are
+-- not selected with the code, copied or searched. The gutter is
+-- @aria-hidden@, since a screen reader reading numbers between the lines
+-- would only get in the way. It is beside the @\<code>@, not in it,
+-- because the highlighter replaces what the @\<code>@ holds; in the
+-- @\<pre>@, it scrolls with the code in a listing that scrolls. The
+-- default code block and the application's highlighted one
+-- ("Wiki.App.Islands") both use it.
+lineNumbers :: Text -> HH.HTML w i
+lineNumbers code =
+  HH.span
+    [classesProp ["code-lines"], HP.attr (HH.AttrName "aria-hidden") "true"]
+    (replicate (length (T.lines code)) (HH.span_ []))
 
 -- | The button a code block ends with when 'copyButtons' is on. It is
 -- empty: the stylesheet draws its label, "Copy", and the islands' script

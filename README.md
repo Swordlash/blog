@@ -194,6 +194,12 @@ Three lines of it show, and the rest scrolls inside the block:
 ` ```{.haskell rows=3} ` says the same, and a value that is not a whole number
 above zero is ignored.
 
+The class `numbered` puts a number before each line, beside `rows` or
+without it: ` ```haskell {.numbered} `, ` ```haskell {.numbered rows=3} `.
+The numbers are in a dimmed margin that is not part of the code: neither
+selected nor copied with it, and not searched. A PDF export numbers the same
+listings.
+
 ### Alerts
 
 GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,

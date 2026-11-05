@@ -156,6 +156,8 @@ These languages are highlighted, by the names a fence may give them (in any case
 
 A long listing can be shown a few lines at a time: `rows=N` in braces after the fence's language (` ```haskell {rows=3} `, or ` ```{.haskell rows=3} `) makes the block that many lines high, and the rest of the code scrolls inside it. A value that is not a whole number above zero is ignored, and the block is as long as its code. The toolbar's code block button writes a fence without it.
 
+The class `numbered` puts a number before each line: ` ```haskell {.numbered} `, also with `rows` (` ```haskell {.numbered rows=3} `, or ` ```{.haskell .numbered rows=3} `). The numbers are in a margin beside the code, dimmed: they are not selected with the code, not copied by the **Copy** button, and not searched. In a listing that scrolls they scroll with the code. An export numbers the same listings in a PDF; a Word document shows the code without numbers.
+
 ```haskell {rows=3}
 -- Only three of these lines show; scroll the block for the rest.
 fibs :: [Integer]

@@ -175,7 +175,7 @@ spec = describe "Markdown.Render" $ do
     let keyed = \key -> show key.occurrence :: Text
         opts =
           defaultOptions
-            { codeBlock = \key lang _ code -> HH.span [HP.title (keyed key)] [HH.text (fromMaybe "-" lang <> ":" <> code)]
+            { codeBlock = \key lang _ _ code -> HH.span [HP.title (keyed key)] [HH.text (fromMaybe "-" lang <> ":" <> code)]
             , mathInline = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("i:" <> tex)]
             , mathDisplay = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("d:" <> tex)]
             , mermaid = \key src -> HH.span [HP.title (keyed key)] [HH.text ("m:" <> src)]
@@ -390,6 +390,21 @@ spec = describe "Markdown.Render" $ do
         `shows'` "<pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">x = 1\n</code></pre>"
       "```haskell {rows=0}\nx = 1\n```" `shows'` "<pre><code class=\"language-haskell\">x = 1\n</code></pre>"
 
+  describe "numbered listings" $ do
+    let gutter n = "<span aria-hidden=\"true\" class=\"code-lines\">" <> T.concat (replicate n "<span></span>") <> "</span>"
+    it "starts the pre with an empty span for each line, before the code" $ do
+      "```haskell {.numbered}\nx = 1\ny = 2\n```"
+        `shows'` ("<pre class=\"numbered\">" <> gutter 2 <> "<code class=\"language-haskell\">x = 1\ny = 2\n</code></pre>")
+      "```{.haskell .numbered rows=5}\na\n\nb\n```"
+        `shows'` ("<pre class=\"numbered code-scroll\" style=\"max-height: 5lh; overflow: auto\">" <> gutter 3 <> "<code class=\"language-haskell\">a\n\nb\n</code></pre>")
+    it "counts the last line without a newline after it" $
+      showsWith defaultOptions {codeBlock = \_ _ _ numbered code -> if numbered then lineNumbers code else HH.text code} "```{.numbered}\nx\n```" (gutter 1)
+    it "leaves a listing without the class as it was" $
+      "```haskell\nx = 1\n```" `shows'` "<pre><code class=\"language-haskell\">x = 1\n</code></pre>"
+    it "keeps the copy button outside the pre"
+      $ showsWith defaultOptions {copyButtons = True} "```haskell {.numbered}\nx\n```"
+      $ "<div class=\"code-block\"><pre class=\"numbered\">" <> gutter 1 <> "<code class=\"language-haskell\">x\n</code></pre><button aria-label=\"Copy the code\" class=\"code-copy\" type=\"button\"></button></div>"
+
   describe "copy buttons" $ do
     let copying = defaultOptions {copyButtons = True}
         button = "<button aria-label=\"Copy the code\" class=\"code-copy\" type=\"button\"></button>"
@@ -400,7 +415,7 @@ spec = describe "Markdown.Render" $ do
       $ showsWith copying "```haskell {rows=3}\nx = 1\n```"
       $ "<div class=\"code-block\"><pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">x = 1\n</code></pre>" <> button <> "</div>"
     it "wraps the block the caller's codeBlock makes, an island too"
-      $ showsWith copying {codeBlock = \_ _ _ code -> HH.pre [HP.class_ (HH.ClassName "wiki-code")] [HH.text code]} "```\nx\n```"
+      $ showsWith copying {codeBlock = \_ _ _ _ code -> HH.pre [HP.class_ (HH.ClassName "wiki-code")] [HH.text code]} "```\nx\n```"
       $ "<div class=\"code-block\"><pre class=\"wiki-code\">x\n</pre>" <> button <> "</div>"
     it "gives no other island a button" $ do
       showsWith copying "```mermaid\ngraph TD; A-->B\n```" "<pre class=\"mermaid\">graph TD; A--&gt;B\n</pre>"

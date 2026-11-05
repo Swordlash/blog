@@ -11,6 +11,15 @@ has no text, so `Wiki.Core.Anchor.renderedText` and `renderedBlocks` read
 the same with it as without it. A feed keeps the default and has no
 button.
 
+Numbered listings (WP5.63). `codeNumbered` reads a fence's class
+`numbered`, which is never taken for the block's language (` ```{.numbered
+.haskell} ` is Haskell). `Options.codeBlock` takes whether the lines are
+numbered as its fourth argument, before the code, and a numbered block's
+`<pre>` has the class `numbered` and starts with `lineNumbers`, a
+`<span class="code-lines" aria-hidden="true">` holding an empty `<span>` for
+each line, numbered by the stylesheet. The copy button copies the block's
+`<code>`.
+
 Spoilers, and code listings that scroll (WP5.62, issue #152). The parser
 reads `||text||` as an inline spoiler, the new `Inline` constructor
 `Hidden`, read as the strikethrough is. A block spoiler sits between two

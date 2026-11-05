@@ -44,7 +44,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..))
-import Wiki.Core.Markdown.Render (scrollingCode)
+import Wiki.Core.Markdown.Render (lineNumbers, scrollingCode)
 import Wiki.Core.Markdown.Tikz (tikzDocument)
 import Wiki.Core.Math (Macros (..))
 
@@ -60,8 +60,10 @@ data Island
   | -- | A TikZ picture's source, as a @tikz@ fence.
     Tikz Text
   | -- | Code, in a language if the fence names one, showing this many
-    -- lines before it scrolls if the fence says ('Wiki.Core.Markdown.Ast.codeRows').
-    CodeBlock (Maybe Text) (Maybe Int) Text
+    -- lines before it scrolls if the fence says ('Wiki.Core.Markdown.Ast.codeRows'),
+    -- and with its lines numbered if the fence says
+    -- ('Wiki.Core.Markdown.Ast.codeNumbered').
+    CodeBlock (Maybe Text) (Maybe Int) Bool Text
   | -- | A moment in time, written as the reader's browser writes one.
     LocalTime UTCTime
   deriving stock (Eq, Show)
@@ -94,9 +96,18 @@ component =
       MathDisplay _ _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
       Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
       Tikz _ -> [hh|<div ref={{ ref }} class="wiki-tikz"></div>|]
-      -- The height and the scrolling are on the element itself, so a
-      -- prerendered page has them before the program runs.
-      CodeBlock _ rows _ -> HH.pre (HP.ref ref : scrollingCode rows ["wiki-code"]) []
+      -- The height and the scrolling are on the <pre>, so a prerendered
+      -- page has them before the program runs. The island is the <code>
+      -- in it, which the highlighter fills; a numbered listing's gutter
+      -- ('lineNumbers') comes before it, so that it survives the
+      -- highlighting and scrolls with the code. Every listing has the
+      -- <code>, numbered or not: a listing that gains or loses its
+      -- numbers is then patched child by child, and the <code> the
+      -- highlighter filled is replaced with the rest, never left behind.
+      CodeBlock _ rows numbered code ->
+        HH.pre
+          (scrollingCode rows (["wiki-code"] <> ["numbered" | numbered]))
+          ([lineNumbers code | numbered] <> [HH.code [HP.ref ref] []])
       LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -126,7 +137,7 @@ component =
       -- one's; islands.js keeps the newer.
       Mermaid source -> H.liftEffect (renderMermaid source element)
       Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
-      CodeBlock language _ code -> H.liftEffect (highlightCode language code element)
+      CodeBlock language _ _ code -> H.liftEffect (highlightCode language code element)
       LocalTime at -> H.liftEffect (renderTime at element)
 
     iso :: UTCTime -> Text

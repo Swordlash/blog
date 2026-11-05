@@ -14,6 +14,16 @@ before the program runs. The stylesheet draws its label, so the page's
 text and the anchors of comments have nothing of it. The guide's Markdown
 page says so under Code.
 
+Numbered listings (WP5.63). A fence with the class `numbered` shows a
+number before each line, in a gutter that the stylesheet draws: neither
+selected, copied nor searched, and scrolled with the code in a listing that
+scrolls. `Islands.CodeBlock` takes whether the lines are numbered as its
+third argument, before the code. Its island is now the `<code>` inside the
+listing's `<pre>`, which the highlighter fills in place, rather than the
+`<pre>` itself, so that the gutter before the `<code>` survives the
+highlighting; a prerendered listing is `<pre><code>` where it was a bare
+`<pre>`. The guide's Code section shows a numbered listing.
+
 Spoilers, and code listings that scroll (WP5.62, issue #152). A page
 shows `||text||` blurred until it is clicked, and a block spoiler,
 `[[spoiler]]{name}(Description)` to `[[/spoiler]]{name}`, closed until its

@@ -192,6 +192,10 @@ spec = describe "Anchor" $ do
       renderedText doc `shouldNotSatisfy` T.isInfixOf "Copy"
       renderedBlocks doc `shouldBe` blocksOf source
 
+    it "has no line numbers of a numbered listing" $ do
+      let doc = either (panic . show) identity (renderMarkdown defaultOptions "Before.\n\n```haskell {.numbered}\nx = 1\ny = 2\n```\n\nAfter.")
+      renderedText doc `shouldBe` "Before.x = 1\ny = 2\nAfter."
+
     it "leaves out what a child component (an island) draws" $ do
       let doc = [HH.p_ [HH.text "before "], Core.widget (), HH.p_ [HH.text "after"]] :: [HH.HTML () ()]
       renderedText doc `shouldBe` "before after"

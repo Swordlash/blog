@@ -101,9 +101,12 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "gives a code block its copy button beside the code, which a listing that scrolls keeps outside its pre" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
     let button = "<button aria-label=\"Copy the code\" class=\"code-copy\" type=\"button\"></button>"
-    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code\">main :: IO ()\nmain = putStrLn"
-    html `contains` ("const answer = [6, 7].reduce((a, b) =&gt; a * b);\n</pre>" <> button <> "</div>")
-    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code code-scroll\" style=\"max-height: 3lh; overflow: auto\">-- Scroll this block"
+    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code\"><code>main :: IO ()\nmain = putStrLn"
+    html `contains` ("const answer = [6, 7].reduce((a, b) =&gt; a * b);\n</code></pre>" <> button <> "</div>")
+    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code>-- Scroll this block"
+    -- A numbered listing's gutter: an empty span for each of its four
+    -- lines, before the code, whose numbers the stylesheet draws.
+    html `contains` ("<div class=\"code-block\"><pre class=\"wiki-code numbered\"><span aria-hidden=\"true\" class=\"code-lines\">" <> T.concat (replicate 4 "<span></span>") <> "</span><code>quicksort :: Ord a")
     -- The label is the stylesheet's: no button says "Copy" in the page.
     html `lacks` ">Copy</button>"
 
