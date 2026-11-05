@@ -15,10 +15,11 @@ module Test.Browser.Text
   , setMarkdown
   , clearBody
   , mathIn
+  , problemsMarked
   )
 where
 
-import Data.Aeson (decodeStrict)
+import Data.Aeson (FromJSON (..), decodeStrict, withObject, (.:))
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Protolude hiding (find)
 import Test.Hspec.Halogen
@@ -33,6 +34,7 @@ $( browserJS
      , ("js_set", "wiki_test_editor_set", Safe, [t|JSText -> IO ()|])
      , ("js_clear_body", "wiki_test_editor_clear_body", Safe, [t|IO ()|])
      , ("js_math", "wiki_test_editor_math", Safe, [t|IO JSText|])
+     , ("js_problems", "wiki_test_editor_problems", Safe, [t|IO JSText|])
      ]
  )
 
@@ -93,3 +95,18 @@ mathIn ui = do
   _ <- editorText ui
   found <- unsafeIOToPageM (fromJSText <$> js_math)
   pure (fromMaybe [] (decodeStrict (encodeUtf8 found)))
+
+-- | The problems the editor marks in its text (WP5.65 of docs/PLAN.md):
+-- each one's range, in UTF-16 units, and its message, in the order of the
+-- text.
+problemsMarked :: Mounted s q o m -> PageM s [(Int, Int, Text)]
+problemsMarked ui = do
+  _ <- editorText ui
+  found <- unsafeIOToPageM (fromJSText <$> js_problems)
+  pure [(start, end, message) | Marked start end message <- fromMaybe [] (decodeStrict (encodeUtf8 found))]
+
+-- | A problem as CodeMirror marks it.
+data Marked = Marked Int Int Text
+
+instance FromJSON Marked where
+  parseJSON = withObject "problem" $ \o -> Marked <$> o .: "from" <*> o .: "to" <*> o .: "message"

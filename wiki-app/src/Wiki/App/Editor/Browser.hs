@@ -69,6 +69,10 @@ module Wiki.App.Editor.Browser
   , proposeEdit
   , settleChanges
 
+    -- * Problems
+  , showProblems
+  , nextProblem
+
     -- * Mentions
   , mentionAsked
   , answerMention
@@ -110,6 +114,7 @@ import Web.HTML.HTMLTextAreaElement (HTMLTextAreaElement)
 import Web.HTML.HTMLTextAreaElement qualified as HTMLTextAreaElement
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.App.Browser (forgetPreviewEntry, historyBack, onPreviewEntry, pushPreviewEntry)
+import Wiki.App.Editor.Problems (ProblemRange)
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Replacement (..), plan, propose, settle)
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
@@ -133,6 +138,8 @@ $( browserJS
      , ("js_settle", "wiki_editor_settle", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
      , ("js_title_line", "wiki_editor_title_line", Safe, [t|Element -> IO ()|])
+     , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_next_problem", "wiki_editor_next_problem", Safe, [t|Element -> IO ()|])
      ]
  )
 
@@ -411,6 +418,20 @@ clearField element = liftIO $ for_ (HTMLInputElement.fromElement element) (\inpu
 -- | Click an element, as the user would.
 clickElement :: (MonadIO m) => Element -> m ()
 clickElement element = liftIO (coerce element :: HTMLElement).click
+
+-- | Mark the page's problems in the editor's text (the host's), replacing
+-- the ones marked before: CodeMirror underlines each range, puts a marker
+-- in its gutter and shows the message on hover. Before CodeMirror has
+-- loaded, the problems are kept on the host and marked once it has. The
+-- textarea marks nothing.
+showProblems :: (MonadIO m) => Element -> [ProblemRange] -> m ()
+showProblems host ranges = liftIO (js_problems host (jsonText ranges))
+
+-- | Move the editor's cursor to the next problem after it, or to the first
+-- after the last one, show its message and give the text the focus. Run
+-- it in 'Halogen.liftEffect'.
+nextProblem :: (MonadIO m) => Element -> m ()
+nextProblem = liftIO . js_next_problem
 
 -- | The keys the editor handles itself.
 data EditorKey

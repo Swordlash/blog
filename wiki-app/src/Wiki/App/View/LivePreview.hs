@@ -119,7 +119,7 @@ fetchSaved input =
 
 data Action = Initialize | Finalize | Receive Input | Listened Text
 
-type Slots = ("preview" .== H.Slot (Const Void) Void ())
+type Slots = ("preview" .== H.Slot (Const Void) Preview.Output ())
 
 -- | The name of a page on the channel between the wiki's windows: its
 -- space's id and its path. The editor's CodeMirror is given the same

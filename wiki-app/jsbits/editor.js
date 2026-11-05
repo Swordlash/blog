@@ -262,3 +262,18 @@ function wiki_editor_title_line(host) {
   textarea.setSelectionRange(at, at);
   textarea.scrollTop = 0;
 }
+
+// The page's problems (WP5.65), as JSON: [{from, to, kind, message}], from
+// and to in characters of the text (Wiki.App.Editor.Problems). They are
+// kept on the host, so that a CodeMirror that loads later marks them too
+// (web/src/editor.js), and given to the CodeMirror there is, which turns
+// the characters into its positions.
+function wiki_editor_problems(host, problems) {
+  host.wikiProblems = JSON.parse(problems);
+  host.wikiEditor?.problems(host.wikiProblems);
+}
+
+// The cursor to the next problem, its message shown.
+function wiki_editor_next_problem(host) {
+  host.wikiEditor?.nextProblem();
+}

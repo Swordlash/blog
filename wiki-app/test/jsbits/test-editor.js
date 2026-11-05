@@ -73,3 +73,9 @@ function wiki_test_editor_clear_body() {
 function wiki_test_editor_math() {
   return JSON.stringify(wikiTestEditor()?.nodes("TeXMath") ?? []);
 }
+
+// The problems the open editor marks (WP5.65), as JSON [{from, to,
+// message}] in UTF-16 units, as CodeMirror's lint state has them.
+function wiki_test_editor_problems() {
+  return JSON.stringify(wikiTestEditor()?.marked() ?? []);
+}

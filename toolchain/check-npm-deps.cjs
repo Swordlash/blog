@@ -25,6 +25,7 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["@codemirror/commands", ["@codemirror/commands"]],
   ["@codemirror/language", ["@codemirror/language"]],
   ["@codemirror/lang-markdown", ["@codemirror/lang-markdown"]],
+  ["@codemirror/lint", ["@codemirror/lint"]],
   ["@lezer/highlight", ["@lezer/highlight"]],
   // The avatar's cropper (web/src/avatar.js).
   ["cropperjs", ["cropperjs"]],

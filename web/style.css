@@ -2875,6 +2875,22 @@ body:has(.slides-view) {
   color: var(--muted);
 }
 
+/* How many problems the editor marks in the text (WP5.65): quiet, beside
+   the buttons, in the colour of the marks; a click moves to the next one. */
+.editor-problems {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--danger);
+  background: none;
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+}
+
+.editor-problems:hover,
+.editor-problems:focus-visible {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 /* A draft found when the page was opened, taken up or offered. */
 .editor-draft-found {
   display: flex;
