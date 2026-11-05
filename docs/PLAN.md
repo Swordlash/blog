@@ -754,6 +754,20 @@ confirms it against reality and the plan is amended if it does not hold.
     shows them through `@codemirror/lint` (6.9.7): lines underlined, a gutter, the
     message, and a "N problems" button that jumps to the next. Island problems
     appear once the preview has drawn the island; text-only mode shows the parser's.
+50. **"What's new?", built from one changelog entry per pull request (WP5.66).**
+    `changelog/<slug>.md` holds one entry per pull request: four lines of front
+    matter (`pr: N`, `title: T`), then `## New features`, `## Bug fixes` and
+    `## Other changes` in that order, the first with a code example; the grammar is
+    the README's "Changelog entries" and is the same in `toolchain/check-changelog.sh`
+    and the server's reader. The server embeds the entries at compile time
+    (Template Haskell, a stamp file listing them so cabal rebuilds for a new one)
+    with its version (`WIKI_BUILD_VERSION`, else `git describe`) and build time,
+    and serves the newest twelve at `GET api/v1/whats-new`; `--no-whats-new` (the
+    deploy's and the wizard's too) turns the page off. The page shows them as one
+    document, each entry's ids prefixed `pr-N-`, its links followed on the page;
+    a dot on the sidebar's link marks entries newer than the reader's browser has
+    seen. CI's `changelog` job requires exactly one new entry numbered with the pull
+    request; the owner's label `no-changelog` exempts one (AGENTS.md).
 
 ## Repository layout
 
@@ -801,51 +815,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.66 What's new: a changelog page in the wiki** (the owner, 2026-11-05; one
-  pull request). (a) *Entries.* `changelog/` in the repository holds one Markdown
-  file per pull request, in the wiki's own Markdown (so examples are highlighted and
-  the page's features work on it), named by a slug (`changelog/heading-spoilers.md`),
-  with a front matter of `pr: N` and `title:`, then optional sections `## New
-  features`, `## Bug fixes` and `## Other changes`, written for users in plain
-  language, every new feature with an example in a code block. The session writes
-  the entry with the branch and, once it has opened the pull request, fills in
-  `pr:` in one more commit before the review. (b) *CI.* A small job of its own on
-  pull requests, independent of the builds and quick (`toolchain/check-changelog.sh`
-  behind it): the diff adds exactly one new file under `changelog/`, its `pr` is the
-  pull request's own number, its front matter and sections are well formed, and
-  nothing else under `changelog/` changed; it fails with a message saying what to
-  add. A pull request labelled `no-changelog` is exempt (the owner's label: the
-  session never applies it; a rule in AGENTS.md), and pushes straight to `main`
-  have no pull request and no check. CI pushes nothing: a commit a workflow
-  pushes with its token runs no CI, so the head would show no checks (the owner,
-  2026-11-05, asked whether CI could create or fill the file; this is why not).
-  (c) *Built in.* `wiki-server` embeds, at compile time through Template Haskell,
-  the newest twelve entries by `pr` from `changelog/` (`extra-source-files`, so an
-  edit rebuilds), and the build's version: `git describe --tags --always --dirty`
-  run at compile time, overridden by `WIKI_BUILD_VERSION` (CI and the deploy set
-  it), "unknown" without either. `GET api/v1/whats-new` returns the version, the
-  build date and the entries (number, link to the pull request, title, Markdown);
-  `SessionInfo` says whether the page is on. `wiki-server serve --no-whats-new`
-  turns the endpoint and the link off; the wizard's server screen asks; the
-  deploy passes it. (d) *The page.* The route `whats-new`, titled "What's new?",
-  linked at the very bottom of the left Spaces bar, with a dot when there are
-  entries newer than the newest the reader has seen (the number kept in
-  localStorage, per browser); at the top the version and the build date, then
-  the entries newest first, each headed "#N Title" linking to the pull request,
-  its sections rendered with the wiki's renderer; prerendered like the other
-  pages the server renders. (e) *Backfill, time-boxed:* entries for the merged
-  pull requests #149 to #158 only, written from their descriptions and decisions
-  40 to 46 of this plan, not from the commits; nothing older. Tests: wiki-core
-  or wiki-server (the entry's front matter and sections parsed, the newest twelve
-  chosen, a malformed entry refused at compile time with a clear error),
-  wiki-api (the response's JSON), the check script (`toolchain/test-check-
-  changelog.sh`: one new file, wrong number, missing, two files, the label),
-  browser (the link at the bottom of the bar, the page with the version and
-  entries, the dot and its clearing, no link with the page off), deploy test (the
-  option through). Docs: README (the changelog convention, the option), AGENTS.md
-  (the entry is part of every pull request; the label is the owner's), the
-  guide's server tour (one sentence), wiki-server's and wiki-app's CHANGELOGs.
-
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
@@ -886,7 +855,7 @@ In the order to do it, unless the owner says otherwise.
   TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
   shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
   maker. Each phase starts when the pull requests touching the same scripts are
-  merged (a after WP5.66; WP5.67 is merged).
+  merged (WP5.66 and WP5.67 are merged, so a is under way).
 
 ### Later, or waiting for the owner
 
@@ -1302,6 +1271,14 @@ needs. Each was true when its package merged; check before relying on one.
   lines, whose `> ` markers are not in its source, is placed by its first line. TeX's
   `l.N` and Mermaid's "on line N" are not used to narrow a range. A new failure of
   an island the preview has not drawn yet appears with the next preview render.
+- WP5.66 (decision 50): a pull request that changes only Markdown outside
+  `changelog/` runs no workflow, so its entry is not checked; a bare `cabal build`
+  without the stamp does not rebuild the server for a new entry, and a local build's
+  version refreshes only when the server compiles for another reason;
+  `Wiki.Server.Storage.Migrate`'s comment says cabal sees a new migration file,
+  which it does not; the unseen dot is per browser, not per account, and appears a
+  moment after the page shows; raw HTML in an entry keeps its own ids and `[[toc]]`
+  lists them unprefixed.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
