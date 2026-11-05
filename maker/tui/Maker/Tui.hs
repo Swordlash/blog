@@ -34,7 +34,7 @@ import Maker.Context (Context (..))
 import Maker.Status (Component (..), State (..), status)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.Process (proc, waitForProcess, withCreateProcess)
+import System.Process.Typed (proc, runProcess)
 
 -- | What the screen shows: the components, and what the last action said.
 data Screen = Screen
@@ -88,7 +88,7 @@ handle = \case
     screen <- get
     suspendAndResume $ do
       putStrLn "Running toolchain/bootstrap.sh toolchain; its output follows."
-      code <- withCreateProcess (proc "sh" [screen.context.root </> "toolchain" </> "bootstrap.sh", "toolchain"]) $ \_ _ _ p -> waitForProcess p
+      code <- runProcess (proc "sh" [screen.context.root </> "toolchain" </> "bootstrap.sh", "toolchain"])
       putStrLn "Press Enter to go back."
       _ <- getLine
       refresh screen $ case code of

@@ -37,23 +37,20 @@ if [ -z "${LC_ALL:-}" ]; then
   esac
 fi
 sh toolchain/bootstrap.sh ready "$command"
-# wiki-server embeds the changelog: the stamp makes cabal rebuild it when an
-# entry is added (toolchain/changelog-stamp.sh).
+# The builds and the tests are the maker's (maker/, docs/PLAN.md WP5.68):
+# toolchain/maker.sh builds it once and runs it from the repository's root.
+# The changelog's stamp, the environments of the native and the wasm build
+# and cabal's arguments are its business now. dev-test is a GHCi loop, not
+# a build, and stays a script.
 case $command in
-  build-native | test-native | test) sh toolchain/changelog-stamp.sh ;;
-esac
-case $command in
-  build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
-  test-native) exec sh toolchain/test-native.sh "$@" ;;
-  build-wasm) exec sh toolchain/build-wasm.sh "$@" ;;
+  build-native) exec sh toolchain/maker.sh build native "$@" ;;
+  test-native) exec sh toolchain/maker.sh test native "$@" ;;
+  build-wasm) exec sh toolchain/maker.sh build wasm "$@" ;;
   # The -O2 production build, in a build directory of its own so that it and
   # the everyday build never invalidate each other (cabal-wasm-opt.project).
-  build-wasm-opt)
-    WASM_PROJECT=cabal-wasm-opt.project WASM_BUILDDIR=dist-newstyle/wasm-opt
-    export WASM_PROJECT WASM_BUILDDIR
-    exec sh toolchain/build-wasm.sh "$@" ;;
-  test-wasm) exec sh toolchain/test-wasm.sh "$@" ;;
-  test) exec sh toolchain/run-tests.sh "$@" ;;
+  build-wasm-opt) exec sh toolchain/maker.sh build wasm-opt "$@" ;;
+  test-wasm) exec sh toolchain/maker.sh test wasm "$@" ;;
+  test) exec sh toolchain/maker.sh test all "$@" ;;
   dev-test) exec sh toolchain/dev-test.sh "$@" ;;
-  serve-wasm) exec sh toolchain/serve-wasm.sh "$@" ;;
+  serve-wasm) exec sh toolchain/maker.sh serve "$@" ;;
 esac

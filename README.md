@@ -2246,6 +2246,22 @@ The interface links libtinfo (`libncurses-dev` on Debian, which
 `sh toolchain/bootstrap.sh native --with-wizard` installs); the bootstrap never
 builds it.
 
+The builds and the tests are the maker's too. `npm run build-native`, `test-native`,
+`build-wasm`, `build-wasm-opt`, `serve`, `test-wasm` and `test` check that the
+toolchain is ready, then run `maker build native`, `maker test wasm` and so on, with
+their arguments passed on to cabal. The maker keeps the native and the wasm build's
+environments apart and skips what has not changed in the application's build:
+wasm-opt runs again only when the compiled binary changes, and the islands' bundle
+(`web/bundle.sh`) only when its sources, `package-lock.json` or the installed packages
+change. The variables the build read before still apply (`WASM_PROJECT`,
+`WASM_BUILDDIR`, `WIKI_PUBLIC_DIR`, `WIKI_BACKEND`, `HALOGEN_BASE_PATH`,
+`WIKI_TEST_GROUP`):
+
+```sh
+sh toolchain/maker.sh build wasm -j2              # what npm run build-wasm -- -j2 runs
+sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
+```
+
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing
 tools. Commands' output goes to
@@ -2656,7 +2672,7 @@ suite, or one test, with hspec's `--match`:
 ```sh
 cabal test wiki-core:test:wiki-core-test --builddir=dist-newstyle/native \
   --test-options='--match "/Slug/"'
-sh toolchain/test-wasm.sh --test-options='--match "/Slug/"'   # extra args go to cabal
+npm run test-wasm -- --test-options='--match "/Slug/"'      # extra args go to cabal
 ```
 
 `npm run format` needs fourmolu 0.21.0.0 on `PATH`; `toolchain/bootstrap.sh` installs it.

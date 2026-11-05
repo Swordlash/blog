@@ -194,10 +194,12 @@ jobs:
         key: ${{ env.compatibility }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', 'wiki-*/**', 'web/src/katex-macros.tex') }}
         restore-keys: ${{ env.compatibility }}-
 
-    # Built here so that the store is saved even if the build after fails.
+    # Built here so that the store is saved even if the build after fails,
+    # the maker's among them (`npm run` builds and runs the maker).
     - name: Install dependencies
       run: |
         cabal build all --only-dependencies --project-file=cabal-native-fast.project --builddir=dist-newstyle/native-fast
+        (cd maker && cabal build exe:maker --only-dependencies)
         (
           # shellcheck source=/dev/null
           . ~/.ghc-wasm/env

@@ -18,3 +18,9 @@ spec = describe "the command line" $ do
     parseArgs ["toolchain", "install", "ghc"] `shouldBe` Nothing
   it "reports the status of the repository given" $
     parseArgs ["status", "--root", ".."] `shouldBe` Just (Status (Just ".."))
+  it "passes a build's remaining arguments, options included, to cabal" $
+    parseArgs ["build", "native", "--constraint=example ==1", "-j2"] `shouldBe` Just (RunBuild BuildNative ["--constraint=example ==1", "-j2"])
+  it "passes a test's options to cabal" $
+    parseArgs ["test", "wasm", "--test-options=--match \"/Slug/\""] `shouldBe` Just (RunTest TestWasm ["--test-options=--match \"/Slug/\""])
+  it "knows the production build and the serve command" $
+    (parseArgs ["build", "wasm-opt"], parseArgs ["serve", "-j2"]) `shouldBe` (Just (RunBuild BuildWasmOpt []), Just (Serve ["-j2"]))

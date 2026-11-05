@@ -31,6 +31,9 @@ library
   import:          shared
   hs-source-dirs:  src
   exposed-modules:
+    Maker.Build.Env
+    Maker.Build.Native
+    Maker.Build.Wasm
     Maker.Cli
     Maker.Context
     Maker.Log
@@ -48,13 +51,16 @@ library
 
   build-depends:
     , base                  >=4.20  && <4.23
+    , bytestring            >=0.11  && <0.13
     , containers            >=0.6   && <0.9
     , directory             >=1.3   && <1.4
     , filepath              >=1.4   && <1.6
     , optparse-applicative  >=0.18  && <0.20
     , process               >=1.6   && <1.7
     , shake                 >=0.19  && <0.20
+    , text                  >=2.0   && <2.2
     , time                  >=1.12  && <1.16
+    , typed-process         >=0.2.11 && <0.3
     , unix                  >=2.8   && <2.9
 
 -- The command line: what toolchain/bootstrap.sh runs after GHC and cabal.
@@ -81,7 +87,7 @@ executable maker-tui
     , brick               >=2.4  && <3.1
     , filepath
     , maker
-    , process
+    , typed-process
     , vty                 >=6.2  && <6.7
 
   ghc-options:    -threaded
@@ -92,6 +98,7 @@ test-suite maker-test
   hs-source-dirs: test
   main-is:        Test.hs
   other-modules:
+    Maker.BuildSpec
     Maker.CliSpec
     Maker.PinsSpec
     Maker.StoreSpec
