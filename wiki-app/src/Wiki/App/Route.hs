@@ -39,6 +39,7 @@
 -- > /verify-email/<secret>/        VerifyEmail (VerificationToken <secret>)
 -- > /unsubscribe/<secret>/         Unsubscribe (UnsubscribeToken <secret>)
 -- > /assistant/                    AssistantSettings
+-- > /whats-new/                    WhatsNewPage
 --
 -- Every address except the home's ends in a slash. On a static host each
 -- route is a directory with an @index.html@ in it (the prerender writes
@@ -172,6 +173,9 @@ data Route
   | -- | The writing assistant's settings, the signed-in user's own (WP4.19
     -- of docs/PLAN.md): their API keys, and the provider and model to use.
     AssistantSettings
+  | -- | The page "What's new?" (WP5.66 of docs/PLAN.md): the server's
+    -- version and build date, and the newest changelog entries.
+    WhatsNewPage
   deriving stock (Eq, Show)
 
 -- | 'AdminSection' is a section of the administration: one page of it, with
@@ -314,6 +318,7 @@ route =
           (prefix "search" (directory searchParams))
       , alternative (\case Admin s -> Just s; _ -> Nothing) Admin (prefix "admin" adminSection)
       , alternative (\case AssistantSettings -> Just (); _ -> Nothing) (const AssistantSettings) (prefix "assistant" (directory noArgs))
+      , alternative (\case WhatsNewPage -> Just (); _ -> Nothing) (const WhatsNewPage) (prefix "whats-new" (directory noArgs))
       , alternative
           (\case PageHistory s p v a -> Just ((s, p), (v, a)); _ -> Nothing)
           (\((s, p), (v, a)) -> PageHistory s p v a)

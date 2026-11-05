@@ -57,6 +57,7 @@ genRoute =
     , VerifyEmail . VerificationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , Unsubscribe . UnsubscribeToken <$> elements ["u-1.0123abcd", "x"]
     , pure AssistantSettings
+    , pure WhatsNewPage
     ]
 
 -- | A section of the administration, the users' with any listing.
@@ -160,6 +161,9 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/unsubscribe/u-1.0123abcd/" `shouldBe` Right (Unsubscribe (UnsubscribeToken "u-1.0123abcd"))
       parse route "/assistant/" `shouldBe` Right AssistantSettings
       print route AssistantSettings `shouldBe` "/assistant/"
+      parse route "/whats-new/" `shouldBe` Right WhatsNewPage
+      parse route "/whats-new" `shouldBe` Right WhatsNewPage
+      print route WhatsNewPage `shouldBe` "/whats-new/"
       -- A space may be called invite: spaces are below /s/.
       print route (Space (slugs ["invite"])) `shouldBe` "/s/invite/"
 

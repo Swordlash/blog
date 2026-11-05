@@ -229,7 +229,7 @@ serveDemo = do
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = []}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
   for_ home $ \document@(space, page) -> do
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 document
     answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [page.slug])) 200 page
@@ -372,10 +372,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = []}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = (demoState demoNow).server.homePage, mathMacros = Nothing, assistantServices = []}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = (demoState demoNow).server.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -544,7 +544,7 @@ ownPassword m = describe "one's own password" $ do
     serverStarts
     serveDemo
     rita <- unsafeIOToPageM (signedInAs "user-admin")
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = rita.homePage, mathMacros = Nothing, assistantServices = []}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = [], boxes = [], homePage = rita.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
     ui <- startServer m Home
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     length <$> findAll ui ".account-toggle" `shouldReturn` 0

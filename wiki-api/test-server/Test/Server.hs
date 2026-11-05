@@ -89,6 +89,7 @@ stubs =
           }
     , homeDocument = pure (Sample.space, Sample.page)
     , session = pure Sample.sessionInfo
+    , whatsNew = pure Sample.whatsNew
     , signIn = \c ->
         if c.login == "ada" && c.password == Password "secret"
           then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
@@ -445,6 +446,7 @@ spec = describe "a server of the API's type" $ do
   it "describes itself, and says who is asking" $ do
     answers (getAt links.info) 200 ServerInfo {name = "Stub", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
     answers (getAt links.session) 200 Sample.sessionInfo
+    answers (getAt links.whatsNew) 200 Sample.whatsNew
 
   describe "spaces" $ do
     it "lists them, and finds one by its path" $ do

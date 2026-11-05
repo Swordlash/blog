@@ -332,7 +332,9 @@ async function loadAdopted(page, path) {
       if (!app.contains(node)) {
         if (node.nodeType !== Node.TEXT_NODE || was.trim() !== "") found.push(`gone: ${was}`);
       } else {
-        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => !["data-prerendered", "data-stuck", "data-current"].includes(a.name)).map((a) => `${a.name}=${a.value}`).join(" ");
+        // data-unseen is the shell's, set on the link to "What's new?" from
+        // what this browser has seen, which the server cannot know.
+        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => !["data-prerendered", "data-stuck", "data-current", "data-unseen"].includes(a.name)).map((a) => `${a.name}=${a.value}`).join(" ");
         const before = node.nodeType === Node.TEXT_NODE ? was : was.replace(/ ?data-prerendered=true/, "");
         if (now !== before) found.push(`changed: ${before} -> ${now}`);
       }
@@ -1198,6 +1200,7 @@ try {
     ["/admin/users/", 200, "Manage"],
     ["/admin/groups/", 200, "Smoke testers"],
     ["/unsubscribe/not-a-secret/", 200, "Stop the mail"],
+    ["/whats-new/", 200, "What's new?"],
     ["/s/smoke-space/p/no-such-page/", 404, "There is nothing here"],
     ["/no/such/address", 404, "Not found"],
   ];

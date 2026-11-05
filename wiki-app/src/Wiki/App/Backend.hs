@@ -282,6 +282,13 @@ data Session = Session
   -- assistant may use, as a server's administration lists them (WP5.60
   -- of docs/PLAN.md): the assistant's settings offer them. The demo has
   -- no server, and offers none.
+  , whatsNew :: Maybe Int
+  -- ^ Whether the backend has the page "What's new?" (WP5.66 of
+  -- docs/PLAN.md, "Wiki.Api.WhatsNew"): 'Nothing' for none (the demo, or
+  -- a server started with @--no-whats-new@), and otherwise the number of
+  -- the newest entry it has, 0 for none. The shell links to the page at
+  -- the bottom of the spaces' sidebar, and marks the link while this is
+  -- newer than the newest entry the reader has seen.
   }
   deriving stock (Eq, Show)
 
@@ -294,7 +301,7 @@ anonymous = anonymousIn Open
 -- wiki is open to ("Wiki.Core.Access"), so that the application knows
 -- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.
@@ -309,7 +316,7 @@ sessionPrincipal s = (\u -> Principal {user = u.id, groups = s.groups}) <$> s.us
 -- | The session with the signed-in user's record as it now is, after a
 -- change of their own (their avatar), which changes nothing else of it.
 withOwnUser :: User -> Session -> Session
-withOwnUser u s = Session {user = Just u, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports, homePage = s.homePage, boxes = s.boxes, mathMacros = s.mathMacros, assistantServices = s.assistantServices}
+withOwnUser u s = Session {user = Just u, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports, homePage = s.homePage, boxes = s.boxes, mathMacros = s.mathMacros, assistantServices = s.assistantServices, whatsNew = s.whatsNew}
 
 -- | Whether two sessions are of the same requester with the same rights:
 -- the same user (or nobody), groups, grants and standing. The user's own

@@ -67,6 +67,7 @@ import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
 import Wiki.Server.Tls (loadTls)
 import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
+import Wiki.Server.WhatsNew (embeddedWhatsNew)
 
 -- | A configuration the server cannot run with, with every reason.
 newtype ServerError = ServerError [Text]
@@ -180,6 +181,7 @@ withServerUsing given raw sendMail action = do
               , feeds
               , assistantHosts = options.assistantHosts
               , ceremonies
+              , whatsNew = if options.whatsNew then Just embeddedWhatsNew else Nothing
               }
           public =
             Listener

@@ -83,6 +83,7 @@ library
       Wiki.App.Backend.Mem.State
       Wiki.App.Backend.Notifications
       Wiki.App.Backend.Stars
+      Wiki.App.Backend.WhatsNew
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.Guide
@@ -155,6 +156,7 @@ library
       Wiki.App.View.UserDialog
       Wiki.App.View.Users
       Wiki.App.View.VerifyEmail
+      Wiki.App.View.WhatsNew
       Wiki.App.View.Watch
       Wiki.App.Web.Rect
 
@@ -400,6 +402,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Spaces
       Test.Browser.Spoilers
       Test.Browser.Stars
+      Test.Browser.WhatsNew
       Test.Browser.Text
       Test.Browser.Vault
       Test.Browser.Workspace

@@ -80,6 +80,7 @@ library
       Wiki.Api.Upload
       Wiki.Api.Vault
       Wiki.Api.Version
+      Wiki.Api.WhatsNew
   build-depends:
       aeson,
       base,
@@ -120,6 +121,7 @@ test-suite wiki-api-test
       Test.Url
       Test.Users
       Test.Version
+      Test.WhatsNew
   build-depends:
       QuickCheck,
       aeson,

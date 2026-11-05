@@ -135,7 +135,8 @@ genSessionInfo = do
   boxes <- resize 3 (listOf (BoxKind <$> genText <*> genText <*> elements (CustomColour "#1a7f37" : themeColours) <*> elements [minBound .. maxBound]))
   mathMacros <- oneof [pure Nothing, Just <$> genText]
   assistantServices <- resize 3 (listOf (AssistantService <$> genText <*> (Url <$> genText) <*> elements [minBound .. maxBound]))
-  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros, assistantServices}
+  whatsNew <- oneof [pure Nothing, Just <$> chooseInt (0, 999)]
+  pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros, assistantServices, whatsNew}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> (Password <$> genText)

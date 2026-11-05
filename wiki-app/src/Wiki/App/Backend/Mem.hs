@@ -92,6 +92,7 @@ import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, cha
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
+import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive)
@@ -437,6 +438,12 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn
   setStarred pid = write . setStarredIn pid
+
+-- | The demo has no changelog: the entries are compiled into the server.
+-- Its session says so ('Wiki.App.Backend.whatsNew' is 'Nothing'), so
+-- nothing links here.
+instance (Monad m) => MonadWhatsNew (MemWiki m) where
+  whatsNew = pure (Left NotFound)
 
 -- | Everything is in memory: every read answers at once (synchronously,
 -- without waiting for a network), and the wiki is never unreachable.

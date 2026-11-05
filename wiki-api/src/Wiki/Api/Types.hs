@@ -90,14 +90,21 @@ data SessionInfo = SessionInfo
   -- ('Wiki.Api.ServerSettings.assistantServices'): the assistant's
   -- settings offer them. Every session carries them, signed in or not,
   -- since the page's Content Security Policy names their addresses anyway.
+  , whatsNew :: Maybe Int
+  -- ^ Whether the server shows the page "What's new?" ("Wiki.Api.WhatsNew"):
+  -- 'Nothing' when it runs with @--no-whats-new@, and otherwise the number
+  -- of its newest changelog entry (0 when it has none). The shell links to
+  -- the page, and marks the link when this number is newer than the
+  -- newest the reader has seen, without asking for the entries.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON)
 
 -- | Read by hand rather than derived, so that a session written before
--- @boxes@, @mathMacros@ or @assistantServices@ existed (in a page an offline copy kept, with the
+-- @boxes@, @mathMacros@, @assistantServices@ or @whatsNew@ existed (in a page an offline copy kept, with the
 -- responses it was rendered from) reads as having no kinds of box, the
--- built-in macros the wiki ships with, and no service of the assistant.
+-- built-in macros the wiki ships with, no service of the assistant, and
+-- no page "What's new?".
 instance FromJSON SessionInfo where
   parseJSON = withObject "SessionInfo" $ \o ->
     SessionInfo
@@ -112,6 +119,7 @@ instance FromJSON SessionInfo where
       <*> o .:? "boxes" .!= []
       <*> o .:? "mathMacros"
       <*> o .:? "assistantServices" .!= []
+      <*> o .:? "whatsNew"
 
 -- | 'NewSpace': a space to create, @createSpace@.
 data NewSpace = NewSpace

@@ -72,7 +72,8 @@ preloadId = "wiki-preload"
 -- response or @error@: @spacesAt@, @pages@, @pagesAt@, @drafts@,
 -- @searches@, @versionLists@ and @versions@ always, and @invitationsAt@,
 -- @postDetails@, @threads@ and @watches@ as @null@ when empty, since they
--- were added later. The starred pages are @stars@, an answer or @null@. The administration's reads are an object with their
+-- were added later. The starred pages are @stars@, and the server's
+-- changelog @whatsNew@, each an answer or @null@. The administration's reads are an object with their
 -- response or @error@, or @null@. @people@ is by login, or @null@ when
 -- empty. A preload written before a field existed reads as without it.
 preloadJSON :: Cache -> Value
@@ -105,6 +106,7 @@ preloadJSON c =
     , "notices" .= answer "notifications" c.notices
     , "watches" .= orNull (answers "watch" watchTarget c.watches)
     , "stars" .= answer "stars" c.stars
+    , "whatsNew" .= answer "whatsNew" c.whatsNew
     ]
   where
     orNull = \case
@@ -173,6 +175,7 @@ parsePreload = withObject "the page's payload" $ \o -> do
   notices <- traverse (withObject "an answer" (answerIn "notifications")) =<< o .:? "notices"
   watches <- byArguments "watch" watchTarget . fold =<< o .:? "watches"
   stars <- traverse (withObject "an answer" (answerIn "stars")) =<< o .:? "stars"
+  whatsNew <- traverse (withObject "an answer" (answerIn "whatsNew")) =<< o .:? "whatsNew"
   pure Cache {..}
   where
     watchTarget e =

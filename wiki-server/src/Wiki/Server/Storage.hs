@@ -1543,6 +1543,9 @@ sessionTx = do
           mathMacros = ctx.server.mathMacros
         , -- The assistant's services, as every session has them.
           assistantServices = ctx.server.assistantServices
+        , -- Nor whether the page "What's new?" is on, which is the
+          -- server's option: the API adds it.
+          whatsNew = Nothing
         }
 
 listSpacesTx :: Tx [Space]

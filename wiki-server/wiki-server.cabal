@@ -10,8 +10,12 @@ category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 -- Embedded into the library at compile time (Wiki.Server.Storage.Migrate), so
--- that the binary carries its schema with it.
+-- that the binary carries its schema with it. The changelog's entries too
+-- (Wiki.Server.WhatsNew): changelog is a symbolic link to the repository's
+-- changelog/, listed here so that an entry added or edited rebuilds the
+-- server.
 extra-source-files: migrations/*.sql
+                    changelog/*.md
                     test/schemas/*.rng
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
@@ -129,6 +133,9 @@ library
         Wiki.Server.Totp
         Wiki.Server.Vault
         Wiki.Server.WebAuthn
+        Wiki.Server.WhatsNew
+        Wiki.Server.WhatsNew.Embed
+        Wiki.Server.WhatsNew.Entry
     other-modules:
         Paths_wiki_server
     autogen-modules:
@@ -177,6 +184,7 @@ library
         smtp-mail >= 0.5.0.1,
         sqlite-simple,
         stm,
+        template-haskell,
         temporary,
         texmath,
         text,
@@ -331,6 +339,7 @@ test-suite wiki-server-test
         Test.Server.Totp
         Test.Server.Vault
         Test.Server.WebAuthn
+        Test.Server.WhatsNew
         Test.Storage
         Test.Storage.Accounts
         Test.Storage.Audit

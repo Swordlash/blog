@@ -831,6 +831,8 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
       , -- Nor does it offer the assistant other services: the browser
         -- reaches only Anthropic's and OpenAI's from the demo's page.
         B.assistantServices = []
+      , -- Nor a page "What's new?": the changelog is the server's.
+        B.whatsNew = Nothing
       }
 
 -- | The spaces the current user may view, with their ancestors.

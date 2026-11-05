@@ -129,4 +129,4 @@ withApiEnv storage test = Ki.scoped $ \resetTasks -> do
   metrics <- newMetrics
   feeds <- newFeedCache
   ceremonies <- newCeremonies
-  test Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, texEngine, backups, resets, resetTasks, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies}
+  test Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, texEngine, backups, resets, resetTasks, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies, whatsNew = Nothing}

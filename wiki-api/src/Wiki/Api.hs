@@ -107,6 +107,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
+import Wiki.Api.WhatsNew (WhatsNew)
 import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
 import Wiki.Core.Attachment (Attachment, FileName)
 import Wiki.Core.Blog (PostDetails)
@@ -138,6 +139,11 @@ data WikiApi form mode = WikiApi
   -- ^ The server's description of itself.
   , session :: mode :- "session" :> Get '[JSON] SessionInfo
   -- ^ The current user, if any: @session@.
+  , whatsNew :: mode :- "whats-new" :> Get '[JSON] WhatsNew
+  -- ^ The version and build date of the server and the newest changelog
+  -- entries it was compiled with ("Wiki.Api.WhatsNew"), the same for
+  -- everyone. A server started with @--no-whats-new@ answers
+  -- 'Wiki.Api.Error.NotFound'.
   , signIn :: mode :- "session" :> ReqBody '[JSON] Credentials :> Post '[JSON] (WithCookie SessionInfo)
   -- ^ Sign in ("Wiki.Api.Account"). The response is the user's new session
   -- and the cookie that carries it. A login and password that do not

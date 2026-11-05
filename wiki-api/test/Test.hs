@@ -17,6 +17,7 @@ import Test.Upload qualified as Upload
 import Test.Url qualified as Url
 import Test.Users qualified as Users
 import Test.Version qualified as Version
+import Test.WhatsNew qualified as WhatsNew
 
 main :: IO ()
 main = hspec . parallel $ do
@@ -32,3 +33,4 @@ main = hspec . parallel $ do
   Backups.spec
   ContentPolicy.spec
   Users.spec
+  WhatsNew.spec

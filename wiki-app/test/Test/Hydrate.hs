@@ -48,6 +48,7 @@ import Wiki.Api.ServerSettings (HomePage (..), defaultHomePage)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
+import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..), newestEntry, pullRequestUrl)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -248,6 +249,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , VerifyEmail (VerificationToken "secret")
            , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
+           , WhatsNewPage
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections
@@ -346,7 +348,7 @@ apiOver providers seed = do
     stars <- starred
     pure
       ( Map.fromList
-          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = []} :: Either WikiError SessionInfo))
+          ( (endpointUrl (\e -> e.session), answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports, boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Just (newestEntry news)} :: Either WikiError SessionInfo))
               : (endpointUrl (\e -> e.homeDocument), answerOf home)
               : (endpointUrl (\e -> e.spaces.list), answerOf (Right spaces :: Either WikiError [S.Space]))
               : (endpointUrl (\e -> e.spaces.pageCounts), answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
@@ -360,6 +362,7 @@ apiOver providers seed = do
               : (endpointUrl (\e -> e.admin.texEngine), answerOf (Right engine :: Either WikiError TexEngine))
               : (endpointUrl (\e -> e.notifications.list), answerOf told)
               : (endpointUrl (\e -> e.stars.list), answerOf stars)
+              : (endpointUrl (\e -> e.whatsNew), answerOf (Right news :: Either WikiError WhatsNew))
               : (endpointUrl (\e -> e.invitations.details (InvitationToken "valid")), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : usersPages
                 <> concat perSpace
@@ -387,6 +390,17 @@ apiOver providers seed = do
         , connections = 0
         , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
         , guideInstallable = False
+        }
+    -- What the server says is new: two entries, the first with a listing
+    -- (an island) and a spoiler.
+    news =
+      WhatsNew
+        { version = "v0.3.0-1-gabcdef0"
+        , built = demoNow
+        , entries =
+            [ WhatsNewEntry {pr = 158, url = pullRequestUrl 158, title = "A copy button", markdown = "### New features\n\n- Copy it:\n\n  ```haskell\n  main = pure ()\n  ```\n\n- ||Hidden||."}
+            , WhatsNewEntry {pr = 157, url = pullRequestUrl 157, title = "A deploy that does not hang", markdown = "### Bug fixes\n\n- Fixed."}
+            ]
         }
     -- A TeX engine that fails, so that the Server section shows the most.
     engine = TexEngine {status = TexFailing, path = Just "/usr/bin/xelatex", output = Just "I can't find the format file `xelatex.fmt'!", checkedAt = demoNow}

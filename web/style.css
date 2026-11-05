@@ -757,6 +757,49 @@ select {
   margin-top: 1rem;
 }
 
+/* The link to "What's new?", last in the sidebar, with a dot while there
+   are entries newer than the newest the reader has seen (data-unseen,
+   which the shell sets once it has read what this browser keeps). */
+.sidebar-whats-new {
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.whats-new-link {
+  position: relative;
+}
+
+.whats-new-link[aria-current="page"] {
+  font-weight: 600;
+}
+
+.whats-new-link[data-unseen]::after {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-left: 0.4rem;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+/* The page "What's new?": the build, then an entry per pull request. */
+.whats-new-build {
+  color: var(--muted);
+}
+
+.whats-new-entry + .whats-new-entry {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.whats-new-title {
+  margin-bottom: 0.5rem;
+}
+
 /* ---- Views ---------------------------------------------------------------- */
 
 .view-header {
