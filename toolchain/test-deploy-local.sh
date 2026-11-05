@@ -331,10 +331,10 @@ if [ "${1:-}" = native ]; then
   fi
 fi
 EOF
-  # The real bootstrap, for its check of the machine's own tools, and its
-  # pins and floors at the end of the fake, which the deploy reads.
+  # The real bootstrap, for its check of the machine's own tools, and the
+  # pins and floors it sources, which the deploy reads too.
   cp "$SOURCE_DIR/bootstrap.sh" "$case_dir/repo/toolchain/bootstrap-real.sh"
-  grep -E '^(GHC_VERSION|GHC_MIN_VERSION|CABAL_VERSION|CABAL_MIN_VERSION|NODE_MIN_MAJOR)=' "$SOURCE_DIR/bootstrap.sh" >>"$case_dir/repo/toolchain/bootstrap.sh"
+  cp "$SOURCE_DIR/pins.env" "$case_dir/repo/toolchain/pins.env"
   # The probe of cabal's build semaphore (toolchain/check-semaphore.sh): it
   # says that it ran, and exits with FAKE_SEMAPHORE, 0 (the semaphore works)
   # when unset, 1 (GHC cannot open it) or 2 (the probe could not run), with
