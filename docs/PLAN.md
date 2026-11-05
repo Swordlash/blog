@@ -694,6 +694,25 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.63 A copy button on code blocks** (the owner, 2026-11-05; one pull request).
+  Every fenced code block on a page, in the editor's preview and in the guide gets a
+  button in its top right corner that copies the whole listing to the clipboard: the
+  code's text exactly as written (not the highlighter's markup, not the button's own
+  label, with the final newline as the fence had it), through the clipboard API. The
+  button is unobtrusive (shown on hover and on keyboard focus, always reachable by
+  keyboard, labelled for assistive technology), says "Copied" for a moment after a
+  click and "Copy" again after, and never ends up in the copied text, in the plain
+  text, in search, in exports or in the feed. It works on the server-rendered page
+  before the application runs (a listener in `web/src/islands.js`, as the spoilers'),
+  and the DOM the server renders and the one the application adopts stay the same
+  (the smoke test's adoption of every prerendered page passes). The package chooses
+  where the button lives (inside the `<pre>` positioned over the code, or a wrapper
+  around it) and says why; a scrolling listing (`{rows=N}`) keeps its button in view.
+  The guide's Markdown page mentions it under Code. Tests: wiki-core (the rendered
+  shape, the plain text without the button), browser (a click copies the code, the
+  label changes and changes back, the button is not in the page's text), the smoke
+  test. Docs: README's Markdown section, wiki-app's CHANGELOG.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
