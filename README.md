@@ -2428,6 +2428,18 @@ the machine instead of being cached to GitHub; the built page is uploaded as the
 `native` and `format` run in parallel on hosted runners. When another run has a job
 on the machine, `plan` sends wasm to the hosted runners too (see above).
 
+Two cabal stores are cached, one per cabal version whatever the compilers (cabal keeps
+each compiler's packages apart inside it): the native one, saved only by the `unit` job,
+and the wasm one, saved only by the wasm job; `server-page.yml` restores the wasm one
+and saves nothing. The build directories are cached apart, per compiler. When a store
+has grown too large, the workflow "Delete a cabal store" (Actions, Run workflow) deletes
+it, and the next run builds it again.
+
+`native (GHC 9.10.3)` builds the wiki's packages and the maker with the oldest GHC the
+native build supports, on every run, with its dependencies from the native store (the
+`unit` job installs them there); the weekly run and a run by hand also build with GHC
+9.12.4. It runs no tests: the native jobs run them with the pinned GHC.
+
 Native CI has three independent hosted jobs: `unit`, `sqlite` and `postgres`.
 The unit job runs every other native suite and the server's database-free
 examples. The database jobs run only their own server backing. A dry-run
