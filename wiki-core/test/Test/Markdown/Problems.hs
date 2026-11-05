@@ -115,6 +115,11 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
                    , (("\\bad", 1), (2, 2, Formula))
                    ]
 
+    it "places a formula by its whole source between its delimiters, not by a longer formula it starts" $ do
+      places "Good $\\frac{1}{2}$\nBad $\\frac{1}$" `shouldBe` [(("\\frac{1}", 0), (2, 2, Formula)), (("\\frac{1}{2}", 0), (1, 1, Formula))]
+      -- Display math holds the inline delimiters, and is one formula.
+      places "$$x$$ and $x$\n\\[x\\]" `shouldBe` [(("x", 0), (1, 1, Formula)), (("x", 1), (1, 1, Formula)), (("x", 2), (2, 2, Formula))]
+
     it "counts a block of macro definitions, which shows nothing, as the renderer does" $
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 

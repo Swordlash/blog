@@ -43,7 +43,7 @@ module Wiki.Core.Markdown.Problems
   )
 where
 
-import Data.List (span, zipWith3)
+import Data.List (span, zip3)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
@@ -196,7 +196,15 @@ boxMarkerProblem = \case
 islandPlaces :: Text -> Map IslandKey IslandPlace
 islandPlaces source = case A.parseWithLines source of
   Left _ -> Map.empty
-  Right located -> Map.fromList (concat (zipWith3 placed located (extents located) (renderSections probe (map (pure . snd) located))))
+  Right located ->
+    let blocks = zip3 located (extents located) (map (concatMap widgets) (renderSections probe (map (pure . snd) located)))
+        -- A paragraph split around its display math is several blocks
+        -- in a row on the same lines, and its formulas are counted across
+        -- them, in order: each block's islands come after the sources of
+        -- the islands of the blocks before it on those lines.
+        sameLines = groupBy (\(_, l, _) (_, l', _) -> l == l') blocks
+        before earlier = [written | (_, _, found) <- earlier, Probe _ _ written <- found]
+     in Map.fromList (concat [placed (before earlier) block | run <- sameLines, (earlier, block) <- zip (inits run) run])
   where
     sourceLines = T.lines source
     lineCount = max 1 (length sourceLines)
@@ -220,13 +228,12 @@ islandPlaces source = case A.parseWithLines source of
       | e > s && blank e = lastNonBlank s (e - 1)
       | otherwise = min e lineCount
 
-    placed :: (Maybe Int, A.Block) -> (Int, Int) -> [HH.HTML Probe Void] -> [(IslandKey, IslandPlace)]
-    placed (_, b) (s, e) html =
-      let found = concatMap widgets html
-          whole = isIsland s b && length found == 1
+    placed :: [Text] -> ((Maybe Int, A.Block), (Int, Int), [Probe]) -> [(IslandKey, IslandPlace)]
+    placed before ((_, b), (s, e), found) =
+      let whole = isIsland s b && length found == 1
        in [ (key, IslandPlace {from = lo, to = hi, kind})
           | (n, Probe key kind written) <- zip [0 :: Int ..] found
-          , let earlier = length [() | Probe _ _ w <- take n found, w == written]
+          , let earlier = length [() | w <- before <> [w | Probe _ _ w <- take n found], w == written]
                 (lo, hi)
                   | whole = (s, e)
                   | otherwise = fromMaybe (s, e) (locate kind written earlier (s, e))
@@ -242,30 +249,58 @@ islandPlaces source = case A.parseWithLines source of
       A.MathBlock _ -> any (`T.isPrefixOf` T.stripStart (lineAt s)) ["```", "~~~"]
       _ -> False
 
-    -- The lines an island's source is written on within a block's lines:
-    -- the line of the n-th occurrence (from 0) of its first line, for the
-    -- n-th island of that source in the block. Each occurrence counts, so
-    -- that two islands of the same source on one line are both placed
-    -- there. A formula is looked for after
-    -- its opening delimiter first, so that a formula @x@ is not found in
-    -- the word "example".
+    -- The lines an island's source is written on within a block's lines,
+    -- for the n-th island (from 0) of that source in the block.
+    --
+    -- A formula is looked for whole: an opening delimiter, the source
+    -- exactly as the parser gives it (what lies between the delimiters,
+    -- line breaks included), and the closing delimiter, in the block's
+    -- lines joined by line breaks. So a formula @\\frac{1}@ is not found
+    -- in @$\\frac{1}{2}$@, nor @x@ in the word "example". The matches of
+    -- every delimiter are taken in the order of the source, one for each
+    -- formula written, and the n-th is the n-th island's.
+    --
+    -- A source found otherwise (a diagram, a picture, or a formula the
+    -- whole search misses, such as a math fence in a list or a formula
+    -- over the lines of a quotation, whose markers are not in its source)
+    -- is placed at the line of the n-th occurrence of its first line.
     locate :: ProblemKind -> Text -> Int -> (Int, Int) -> Maybe (Int, Int)
-    locate kind written n (s, e) = do
-      let pieces = T.lines written
-          (leading, rest) = span (T.all isSpace) pieces
-      firstLine <- head rest
-      let stripped = T.strip firstLine
-          delimiters = if kind == Formula && null leading then ["$", "\\(", "\\["] else []
-          -- Where a needle starts on each line, by line and then column.
-          starts needle = [(j, T.length before) | j <- [s .. e], (before, _) <- T.breakOnAll needle (lineAt j)]
-          -- Every delimiter's matches in one list in the order of the
-          -- source, so that the n-th formula is the n-th match whichever
-          -- delimiter each is written with. No two delimiters match at the
-          -- same place, and 'ordNub' makes sure a place counts once.
-          delimited = map fst (ordNub (sort (concatMap (\d -> starts (d <> firstLine)) delimiters)))
-          candidates = [delimited, map fst (starts stripped)]
-      at <- head =<< head [drop n js | js <- candidates, length js > n]
-      pure (at, min e (at + length rest - 1))
+    locate kind written n (s, e) = whole <|> byFirstLine
+      where
+        block = T.intercalate "\n" [lineAt j | j <- [s .. e]]
+        -- The line of an offset into the block.
+        lineOf offset = s + T.count "\n" (T.take offset block)
+
+        whole = do
+          guard (kind == Formula)
+          (offset, size) <- head (drop n (formulasWritten written))
+          pure (lineOf offset, lineOf (offset + size - 1))
+
+        -- Where the source is written as a formula in the block: each
+        -- match's offset and length, in the order of the block, without
+        -- overlaps, the longer delimiter first (@$$x$$@ holds @$x$@). A
+        -- dollar after a backslash is an escape, not a delimiter.
+        formulasWritten tex =
+          let matches =
+                [ (offset, T.length needle)
+                | (open, close) <- [("$$", "$$"), ("\\[", "\\]"), ("\\(", "\\)"), ("$", "$")]
+                , let needle = open <> tex <> close
+                , (before, _) <- T.breakOnAll needle block
+                , let offset = T.length before
+                , not ("$" `T.isPrefixOf` open && "\\" `T.isSuffixOf` before)
+                ]
+              apart = \case
+                (o, l) : rest -> (o, l) : apart (dropWhile (\(o', _) -> o' < o + l) rest)
+                [] -> []
+           in apart (sortOn (\(o, l) -> (o, Down l)) matches)
+
+        byFirstLine = do
+          let (_, rest) = span (T.all isSpace) (T.lines written)
+          firstLine <- head rest
+          let stripped = T.strip firstLine
+              holding = [j | j <- [s .. e], _ <- T.breakOnAll stripped (lineAt j)]
+          at <- head (drop n holding)
+          pure (at, min e (at + length rest - 1))
 
 -- | What the probe's islands are: the key, the kind and the source.
 data Probe = Probe IslandKey ProblemKind Text
