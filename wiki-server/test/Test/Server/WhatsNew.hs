@@ -20,10 +20,10 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..), newestEntry)
+import Wiki.Api.WhatsNew.Entry
 import Wiki.Server.Options (ServeOptions (..), defaultServeOptions, serveOptions)
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.WhatsNew (buildVersion, changelogEntries, embeddedWhatsNew)
-import Wiki.Server.WhatsNew.Entry
 
 -- | What needs no server: the entries' grammar, the newest twelve, and
 -- what the server was compiled with.

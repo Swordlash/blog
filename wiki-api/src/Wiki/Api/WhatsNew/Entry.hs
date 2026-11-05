@@ -57,7 +57,7 @@
 --   tildes (after any indentation, as in a list item) and closes with a
 --   line of at least as many of the same character and nothing else; one
 --   left open at the end of the file is refused.
-module Wiki.Server.WhatsNew.Entry
+module Wiki.Api.WhatsNew.Entry
   ( -- * Entries
     Entry (..)
   , Section (..)
