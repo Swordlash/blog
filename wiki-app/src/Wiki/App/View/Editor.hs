@@ -480,7 +480,9 @@ data State = State
   -- ^ The text that check read, which the problems' lines are lines of.
   , failedIslands :: Map IslandKey Text
   -- ^ The preview's islands whose libraries failed, by key, with their
-  -- messages.
+  -- messages. A failure is kept while the text the preview has drawn
+  -- holds its key, since its island is still there ('keepDrawnFailures');
+  -- only those whose key is in the checked text are marked.
   , problemCount :: Int
   -- ^ How many problems the text is marked with.
   , edits :: Int
@@ -1910,6 +1912,7 @@ component =
     catchUp = do
       cancelPreview
       modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
+      modify keepDrawnFailures
 
     -- Load the page and the author's draft of it, as the initial state
     -- would have: what the editor opens with on a backend that waits.
@@ -1962,6 +1965,7 @@ component =
         liftIO (threadDelay previewDelay)
         modify (\st -> st {pending = Nothing})
         modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
+        modify keepDrawnFailures
       modify (\st -> st {pending = Just waiting})
 
     -- Check the text for problems once the typing has stopped for the
@@ -1976,18 +1980,28 @@ component =
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.body)))
-            modify $ \st ->
-              st
-                { checkWait = Nothing
-                , checked = found
-                , checkedText = w.body
-                , -- An island no longer in the text has a problem no
-                  -- longer: its source changed, or it went.
-                  failedIslands = Map.restrictKeys st.failedIslands (Map.keysSet found.islands)
-                }
+            modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
             publishProblems
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
+
+    -- Drop the failures of islands the preview no longer has. The preview
+    -- has an island for each key of the text it has drawn ('shownBody'),
+    -- and keeps it, with its failure, until it draws another text. So a
+    -- failure goes only once the text the preview has drawn is the text
+    -- checked and the key is not in it. A text that only the editor has
+    -- (the preview hidden, or not caught up yet) drops nothing: undone
+    -- back to the text the preview shows, the failure is marked again,
+    -- though no island reports it again. Dropping the key once the
+    -- preview has drawn a text without it matters because a new island
+    -- of the same source reports nothing when it succeeds (after the
+    -- page's macros changed, say), and its old failure would stay.
+    keepDrawnFailures :: State -> State
+    keepDrawnFailures st = case st.loaded of
+      Ready w
+        | w.shownBody == st.checkedText ->
+            st {failedIslands = Map.restrictKeys st.failedIslands (Map.keysSet st.checked.islands)}
+      _ -> st
 
     -- Mark the problems of the last check, and the failed islands' that are
     -- in its text, in CodeMirror, and count them.

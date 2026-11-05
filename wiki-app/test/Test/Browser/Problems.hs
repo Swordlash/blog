@@ -1,7 +1,8 @@
 -- | The editor marks what does not render (WP5.65 of docs/PLAN.md), in a
 -- browser, in the shell, over the demo's wiki: a Mermaid fence that does
 -- not parse, marked on the fence's lines once the preview has drawn it and
--- no longer once it is fixed; a formula KaTeX cannot parse; a spoiler that
+-- no longer once it is fixed; a formula KaTeX cannot parse, marked again
+-- when the text is undone back to what a hidden preview shows; a spoiler that
 -- is not closed, which the parser finds without the preview; and the count
 -- beside the buttons, which moves to the next problem at each click.
 --
@@ -15,7 +16,7 @@ import Data.Text qualified as T
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startWith)
-import Test.Browser.Text (editorSelection, insertText, problemsMarked, setMarkdown)
+import Test.Browser.Text (editorSelection, insertText, markdown, problemsMarked, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
@@ -63,6 +64,33 @@ spec m = do
     [message | (_, _, message) <- marked] `shouldSatisfy` all (T.isPrefixOf "KaTeX parse error")
     insertText ui (fst (linesOf broken 4 4) + T.length "Half: $\\frac{1}") "{2}"
     eventually $ problemsMarked ui `shouldReturn` []
+
+  it "marks a formula's failure again once the text is undone back to what the hidden preview still shows" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    let broken = "# Hello, world\n\nFirst line.\nHalf: $\\frac{1}$ here."
+        formula = (linesOf broken 4 4, "KaTeX parse error")
+        markedAs = map (\(start, end, message) -> ((start, end), T.take 17 message))
+    setMarkdown ui broken
+    _ <- find ui ".editor-preview .wiki-math-inline .katex-error"
+    eventually $ markedAs <$> problemsMarked ui `shouldReturn` [formula]
+    -- The preview hidden keeps the text it drew, the broken formula in it.
+    find ui ".editor-side-by-side" >>= click
+    find ui ".editor-side-by-side" >>= \b -> getAttribute b "aria-pressed" `shouldReturn` Just "false"
+    -- An escaped dollar: the formula is text, and the check marks nothing.
+    insertText ui (fst (linesOf broken 4 4) + T.length "Half: ") "\\"
+    eventually $ problemsMarked ui `shouldReturn` []
+    eventually $ length <$> findAll ui ".editor-problems" `shouldReturn` 0
+    -- Undone, the text is the one the preview shows, and the formula's
+    -- failure is marked again, though its island never reported it again.
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` broken
+    eventually $ markedAs <$> problemsMarked ui `shouldReturn` [formula]
+    -- Shown again, the preview has nothing new to draw, and the mark stays.
+    sideBySide ui
+    find ui ".editor-preview .wiki-math-inline .katex-error" >>= (`shouldHaveText` "\\frac{1}")
+    markedAs <$> problemsMarked ui `shouldReturn` [formula]
+    find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
 
   it "marks a spoiler that is not closed, without the preview, until it is closed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
