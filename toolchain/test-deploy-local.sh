@@ -175,7 +175,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL
+    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -187,9 +187,11 @@ EOF
   chmod +x "$HOME/.wiki-toolchain/node/bin/node"
   # An xelatex on this shell's PATH, ahead of the host's own: one that
   # typesets toolchain/check-tex.sh's probe at once, for the item xelatex
-  # of toolchain/check-native.sh, which checks the shell's PATH. The
-  # host's would take seconds, or fail, at every check. The deploy's TeX
-  # step checks the service's PATH (FAKE_SERVICE_PATH), without it.
+  # of toolchain/check-native.sh run alone, which checks the shell's PATH
+  # (a server deploy gives it --without-tex), and for the TeX step's note
+  # on an xelatex this shell finds and the service does not. The host's
+  # would take seconds, or fail, at every check. The deploy's TeX step
+  # checks the service's PATH (FAKE_SERVICE_PATH), without it.
   printf '#!/bin/sh\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$case_dir/bin/xelatex"
   chmod +x "$case_dir/bin/xelatex"
 
@@ -490,7 +492,7 @@ case $name in
     while [ $# -gt 1 ]; do
       case $1 in
         -o | --output) output=$2; shift ;;
-        -w) format=$2; shift ;;
+        -w | --write-out) format=$2; shift ;;
         --cacert) cacert=$2; shift ;;
         --connect-to) connect=$2; shift ;;
         --insecure) insecure=1 ;;
@@ -500,6 +502,20 @@ case $name in
       shift
     done
     case $url in
+      # A TeX Live repository's checksum file, which the deploy fetches to
+      # see that the repository answers. mirror.ctan.org redirects to a
+      # mirror, as the real one does; FAKE_TEX_MIRROR_DOWN makes that
+      # mirror refused, as by a proxy, with the URL curl ended at.
+      */systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512)
+        case $url in
+          https://mirror.ctan.org/*) url=https://ctan.mirror.example/tex-archive/${url#https://mirror.ctan.org/} ;;
+        esac
+        [ -z "$format" ] || printf '%s' "$url"
+        if [ -n "${FAKE_TEX_MIRROR_DOWN:-}" ]; then
+          printf 'curl: (56) CONNECT tunnel failed, response 403\n' >&2
+          exit 56
+        fi
+        exit 0 ;;
       https://api.github.com/repos/Owner/blog/releases/tags/*)
         release=$FAKE_GITHUB/releases/${url##*/}.json
         if [ -f "$release" ]; then code=200; else code=404; release=/dev/null; fi
@@ -1781,6 +1797,32 @@ sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=
 [ "$status" = 2 ] || fail "the check with an unknown option exited $status, not 2"
 pass 'toolchain/check-native.sh --without-postgres reports libpq as not needed, and does not count it'
 
+# With --without-tex, which a server deploy gives because its TeX step
+# checks xelatex itself, the check does not run toolchain/check-tex.sh. The
+# xelatex on PATH here leaves a file behind when it runs, and then hangs
+# until WIKI_TEX_TIMEOUT's two seconds stop it, so a probe shows as that
+# file.
+mv "$case_dir/bin/xelatex" "$case_dir/xelatex-fast"
+printf '#!/bin/sh\n: >"%s"\nexec sleep 600\n' "$case_dir/xelatex-ran" >"$case_dir/bin/xelatex"
+chmod +x "$case_dir/bin/xelatex"
+out=$case_dir/check-without-tex
+WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" --without-tex >"$out" 2>&1 ||
+  fail 'the check --without-tex failed with everything there'
+[ ! -e "$case_dir/xelatex-ran" ] || fail 'the check --without-tex ran xelatex'
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-tex did not report nine items ok'
+assert_lacks "$out" 'PDF exports need xelatex'
+# Without the option the same xelatex is probed, and reported as failing.
+out=$case_dir/check-hanging-tex
+WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 ||
+  fail 'the check with an xelatex that hangs failed'
+[ -e "$case_dir/xelatex-ran" ] || fail 'the check without --without-tex did not run xelatex'
+assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex"
+assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails"
+mv "$case_dir/xelatex-fast" "$case_dir/bin/xelatex"
+pass 'toolchain/check-native.sh --without-tex leaves xelatex to the deploy'"'"'s TeX step and does not probe it'
+
 # toolchain/check-semaphore.sh itself, the real one, with the real cc and
 # ghc: on this machine GHC can open the semaphore. Then with a fake ghc
 # that fails on -jsem with the RHEL server's error and compiles without it,
@@ -1833,6 +1875,9 @@ if FAKE_NO_ZLIB=1 PATH=$case_dir/bin:$NO_DPKG deploy --server --sqlite --port "$
 fi
 assert_contains "$out" 'missing  zlib'
 assert_contains "$out" 'the native build of wiki-server needs what is missing above; nothing was changed'
+# The deploy's TeX step checks xelatex, so the check does not.
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_lacks "$out" "working at $case_dir/bin/xelatex"
 assert_lacks "$out" 'warning: missing for the native build'
 assert_lacks "$EVENTS" 'bootstrap'
 assert_lacks "$EVENTS" 'npm'
@@ -1843,6 +1888,7 @@ assert_lacks "$EVENTS" 'systemctl restart'
 out=$case_dir/static
 deploy --static --port "$p" >"$out" 2>&1 || fail 'the demo was refused for want of zlib'
 assert_lacks "$out" 'check-native.sh'
+assert_lacks "$out" 'xelatex     '
 undeploy >/dev/null 2>&1
 pass 'a server deploy that builds the page here checks the native build first and stops without zlib; the demo builds no wiki-server and is not checked'
 
@@ -1871,8 +1917,11 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 # The check after the bootstrap is told, as the first was, that a wiki in
-# SQLite needs no libpq: eight items.
+# SQLite needs no libpq: eight items. Neither check probes xelatex.
 assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c -F -- "--       xelatex     checked by the deploy's TeX step" "$out")" = 2 ] ||
+  fail 'the check and the check after the bootstrap did not both leave xelatex to the TeX step'
+assert_lacks "$out" "working at $case_dir/bin/xelatex"
 assert_contains "$EVENTS" 'bootstrap build'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the bootstrap installed zlib'
@@ -2730,7 +2779,12 @@ fake_xelatex() {
 }
 # TeX Live's installer as the fake GitHub serves it to git clone
 # (FAKE_GIT_REPOS/github.com/TeX-Live/installer): install-tl beside tlpkg/,
-# as in the installer's git mirror. install-tl --version gives the year, as
+# as in the installer's git mirror. Like the real one, before anything
+# else, --no-interaction included, it asks on its standard input whether to
+# resume when its working directory holds an installation.profile and
+# TEXLIVE_INSTALL_NO_RESUME is not set, and says so in EVENTS; a deploy
+# whose standard input stays open then waits for ever, as the owner's did.
+# install-tl --version gives the year, as
 # the real one does, and an install says how it was called, from where and
 # with which perl, then installs a TeX Live with a tlmgr (and no bin
 # directory with FAKE_INSTALL_TL_NO_BIN). The fake tlmgr says how
@@ -2747,13 +2801,19 @@ fake_texlive() {
   printf 'package TeXLive::TLConfig;\n' >"$tl/tlpkg/TeXLive/TLConfig.pm"
   cat >"$tl/install-tl" <<'TL'
 #!/bin/sh
-if [ "$*" = --version ]; then
+if [ -r installation.profile ] && [ -z "${TEXLIVE_INSTALL_NO_RESUME+set}" ]; then
+  printf 'install-tl asked to resume the installation.profile in %s\n' "$PWD" >>"$EVENTS"
+  printf 'ABORTED TL INSTALLATION FOUND: installation.profile (in %s)\nDo you want to continue with the same settings as before (y/N): ' "$PWD"
+  read -r answer || answer=
+fi
+if [ "$*" = '--no-interaction --version' ]; then
   printf 'install-tl (TeX Live Cross Platform Installer) revision unknown\nTeX Live (https://tug.org/texlive) version 2026\n'
   exit 0
 fi
 printf 'install-tl %s\n' "$*" >>"$EVENTS"
 printf 'install-tl ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS"
 printf 'install-tl ran from %s\n' "$(cd "$(dirname "$0")" && pwd)" >>"$EVENTS"
+printf 'install-tl ran in %s with standard input %s\n' "$PWD" "$(readlink /proc/self/fd/0 || printf unknown)" >>"$EVENTS"
 texdir=
 for arg do
   case $arg in --texdir=*) texdir=${arg#--texdir=} ;; esac
@@ -2832,6 +2892,10 @@ out=$case_dir/first
 deploy --server --sqlite --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy without TeX failed'
 assert_contains "$out" "PDF exports: no xelatex on the service's PATH ($NO_TEX)"
 assert_contains "$out" "this shell finds $case_dir/bin/xelatex, but the service does not"
+# The trap is named by the TeX step; toolchain/check-native.sh, before it,
+# left xelatex to that step and did not probe this shell's.
+assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
+assert_lacks "$out" "xelatex     working at"
 assert_contains "$out" "--texlive installs TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org"
 assert_lacks "$HOME/$unit" 'Environment="PATH='
 grep -x 'ExecStart=.* --no-pdf' "$HOME/$unit" >/dev/null || fail 'the unit does not run wiki-server with --no-pdf'
@@ -2938,7 +3002,11 @@ deploy --server --sqlite --port "$p" --admin-port "$a" --texlive --texlive-mirro
   fail 'the deploy with --texlive failed'
 assert_contains "$EVENTS" "git clone --quiet --depth 1 https://github.com/TeX-Live/installer $texlive_root/installer.tmp/install-tl"
 assert_contains "$EVENTS" "install-tl ran from $texlive_root/installer.tmp/install-tl"
-assert_contains "$out" "TeX Live's installer cloned from https://github.com/TeX-Live/installer, its packages from https://ctan.example/systems/texlive/tlnet"
+assert_contains "$out" "TeX Live's installer cloned from https://github.com/TeX-Live/installer, its packages from https://ctan.example/systems/texlive/tlnet (its output"
+assert_contains "$EVENTS" 'curl https://ctan.example/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512'
+[ "$(line_of "$EVENTS" 'curl https://ctan.example/')" -lt "$(line_of "$EVENTS" 'git clone')" ] || fail 'the repository was checked after the installer was cloned'
+assert_contains "$EVENTS" "install-tl ran in $texlive_root with standard input /dev/null"
+assert_contains "$texlive_root/install.log" "+ $texlive_root/installer.tmp/install-tl/install-tl --no-interaction --version"
 assert_contains "$EVENTS" "install-tl --no-interaction --scheme=basic --texdir=$texlive_root/2026 --texuserdir=$texlive_root/user --no-doc-install --no-src-install --repository https://ctan.example/systems/texlive/tlnet"
 assert_contains "$EVENTS" 'tlmgr install xetex fontspec unicode-math lm lm-math '
 assert_contains "$EVENTS" "install-tl ran with perl=$case_dir/bin/perl"
@@ -3043,6 +3111,50 @@ assert_contains "$HOME/$unit" 'Environment="PATH='
 assert_lacks "$HOME/$unit" '--no-pdf'
 undeploy >/dev/null 2>&1
 pass 'a failed TeX Live install (tlmgr fails, no bin, or no Perl and none could be built) leaves the PDFs off with --no-pdf and is tried again; the install that works drops --no-pdf'
+
+# A repository that does not answer stops the TeX step before anything is
+# cloned, naming the repository, the mirror mirror.ctan.org sent curl to,
+# and --texlive-mirror; the deploy goes on without PDFs. Then an install
+# run from a directory that holds the installation.profile of an aborted
+# install, with a standard input that stays open, as a terminal's does:
+# install-tl runs in the toolchain's directory with TEXLIVE_INSTALL_NO_RESUME
+# and standard input from /dev/null, so it asks nothing and the deploy
+# finishes. The repository's answer names the mirror it came from.
+fixture texlive-hang
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+fake_texlive
+usable_perl
+texlive_root=$HOME/.wiki-toolchain/texlive
+out=$case_dir/mirror-down
+FAKE_TEX_MIRROR_DOWN=1 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 ||
+  fail 'the deploy whose TeX Live repository did not answer stopped'
+assert_contains "$out" "TeX Live's repository https://mirror.ctan.org/systems/texlive/tlnet does not answer from this machine (curl ended at https://ctan.mirror.example/tex-archive/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512): curl exited 56"
+assert_contains "$out" 'mirror.ctan.org sends each request to another mirror, and a proxy may block some of them: name a mirror this machine can reach with --texlive-mirror URL'
+assert_contains "$out" 'TeX Live was not installed (see above)'
+assert_contains "$texlive_root/install.log" 'curl: (56) CONNECT tunnel failed, response 403'
+assert_lacks "$EVENTS" 'git clone'
+assert_lacks "$EVENTS" 'install-tl'
+assert_contains "$HOME/$unit" ' --no-pdf'
+mkdir "$case_dir/stale"
+printf 'selected_scheme scheme-basic\n' >"$case_dir/stale/installation.profile"
+mkfifo "$case_dir/terminal"
+sleep 300 >"$case_dir/terminal" &
+holder=$!
+: >"$EVENTS"
+out=$case_dir/stale-profile
+status=0
+(cd "$case_dir/stale" && timeout 120 sh "$case_dir/repo/toolchain/deploy-local.sh" --no-build) <"$case_dir/terminal" >"$out" 2>&1 || status=$?
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
+[ "$status" = 0 ] || fail "the deploy from a directory with an installation.profile exited $status (124: it waited on install-tl's question)"
+assert_lacks "$EVENTS" 'install-tl asked to resume'
+assert_contains "$EVENTS" "install-tl ran in $texlive_root with standard input /dev/null"
+assert_contains "$out" "its packages from https://mirror.ctan.org/systems/texlive/tlnet, which answered from the mirror https://ctan.mirror.example/tex-archive (its output"
+assert_contains "$out" "PDF exports: $texlive_root/2026/bin/x86_64-linux/xelatex works, the toolchain's TeX Live"
+assert_lacks "$HOME/$unit" '--no-pdf'
+undeploy >/dev/null 2>&1
+pass 'a TeX Live repository that does not answer stops the install before the clone, with --texlive-mirror named; install-tl never waits on a stale installation.profile, and the mirror that answered is named'
 
 # No Perl on the shell's PATH: with --texlive the deploy builds Perl from
 # a clone of the fake GitHub's under the toolchain (Configure with the prefix

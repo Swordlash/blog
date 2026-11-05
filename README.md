@@ -1066,8 +1066,9 @@ and `working at <path>`, or `no` and `failing at <path>` with the first line of 
 reason, or `no` and `not-found`. That line is for information: it is not counted, never
 makes the check fail (a wiki without PDFs works), and the summary then says that PDF
 exports need `xelatex` and that the deploy offers TeX Live under the toolchain. The
-service's `PATH` may differ from your shell's, so the deploy checks again in its TeX step,
-below.
+service's `PATH` may differ from your shell's, so the deploy checks in its TeX step,
+below, and gives the check `--without-tex`, which leaves `xelatex` to that step: the line
+then reads `--` and "checked by the deploy's TeX step", and the check waits for no `xelatex`.
 
 | Library                 | Debian, Ubuntu   | RHEL, Fedora                                                                     |
 | ----------------------- | ---------------- | -------------------------------------------------------------------------------- |
@@ -1156,8 +1157,12 @@ the Perl it builds first (below), so that one answer covers both:
 deploy-local: PDF exports need a TeX that works and none was found. Install TeX Live under ~/.wiki-toolchain/texlive from https://mirror.ctan.org, its installer cloned from https://github.com/TeX-Live/installer (about 250 MB, a few minutes), building Perl 5.44.0 under ~/.wiki-toolchain/perl first, its source cloned from https://github.com/Perl/perl5 at v5.44.0, since this machine has no Perl with its standard modules (a few minutes with cc)? [y/N]
 ```
 
-Yes clones TeX Live's installer with `git clone --depth 1` from its official mirror on
-GitHub, `https://github.com/TeX-Live/installer` (about 20 MB), and runs its `install-tl`,
+Yes first fetches the mirror's `systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512` with
+`curl`, following redirects, and says which mirror answered; when none does, the TeX
+install stops there and the deploy says to name a mirror this machine can reach with
+`--texlive-mirror URL`, since `mirror.ctan.org` sends each request to another mirror and a
+proxy may block some of them. Then it clones TeX Live's installer with `git clone --depth 1`
+from its official mirror on GitHub, `https://github.com/TeX-Live/installer` (about 20 MB), and runs its `install-tl`,
 which installs from the CTAN mirror's `systems/texlive/tlnet/` the scheme basic without
 documentation or sources into `<toolchain>/.wiki-toolchain/texlive/<year>`, installs the
 packages the exports need with `tlmgr` (the list is `toolchain/texlive-packages.txt`: XeTeX, `fontspec`,
