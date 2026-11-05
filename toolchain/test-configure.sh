@@ -304,4 +304,55 @@ if "$WIZARD" --args-from "$TMP/answers" --hackage-mirror >"$TMP/out" 2>"$TMP/err
 grep -F -- '--hackage-mirror needs a URL' "$TMP/err" >/dev/null || fail "the wizard did not say what --hackage-mirror lacks: $(cat "$TMP/err")"
 pass 'the wizard takes --system-tools, --hackage-mirror and --npm-registry as answers over the state, and an answer file wins over them'
 
+# The presets reach whichever deployment is chosen, not only the one the
+# wizard starts with: the first screen loads another deployment's state
+# through the same function an answer file's name and prefix do
+# (loadDeployment), and the presets are applied over each. Here the
+# deployment named "old" (its state in the home directory, without any of
+# them) and a deployment under a prefix whose state names other mirrors and
+# no --system-tools both come out with the presets.
+printf 'name=old\ntoolchain=~/tools\nbackend_only=head\n' >"$TMP/answers"
+"$WIZARD" --system-tools --hackage-mirror https://preset-hackage.example.org/ --npm-registry https://preset-npm.example.org/ \
+  --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err" || fail "the wizard with the presets for another deployment failed: $(cat "$TMP/err")"
+[ "$(cat "$TMP/out")" = "sh toolchain/deploy-local.sh --static --name old --backend-only --system-tools --npm-registry https://preset-npm.example.org/ --hackage-mirror https://preset-hackage.example.org/ --http --port 8100 --toolchain $HOME/tools" ] ||
+  fail "the presets did not reach the deployment named old: $(cat "$TMP/out")"
+mkdir -p "$TMP/srv/locked3/state"
+printf 'name=wiki-demo\ndir=%s/srv/locked3\nport=8090\nmode=server\nadmin_port=8091\nway=proxy\ndb=sqlite\nbackend_only=head\nsystem_tools=\nnpm_registry=https://state-npm.example.org/\nhackage_mirror=https://state-hackage.example.org/\n' "$TMP" >"$TMP/srv/locked3/state/wiki-demo.state"
+printf 'prefix=%s\n' "$TMP/srv/locked3" >"$TMP/answers"
+"$WIZARD" --system-tools --hackage-mirror https://preset-hackage.example.org/ --npm-registry https://preset-npm.example.org/ \
+  --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err" || fail "the wizard with the presets over locked3 failed: $(cat "$TMP/err")"
+[ "$(cat "$TMP/out")" = "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked3 --backend-only --system-tools --npm-registry https://preset-npm.example.org/ --hackage-mirror https://preset-hackage.example.org/ --sqlite --behind-proxy --port 8090 --admin-port 8091" ] ||
+  fail "the presets did not win over locked3's state: $(cat "$TMP/out")"
+pass 'the presets are applied over whichever deployment is loaded, its state included'
+
+# The same through the screens, where the bug was: the wizard starts with
+# the presets on the default deployment, the first screen is given another
+# deployment's prefix (Tab past the three choices of what to do and the
+# name), and Enter goes through the nine screens and runs the deploy, here
+# a fake that prints its arguments. They carry the presets over that
+# deployment's state. The keys go through script(1), a terminal for vty,
+# slowly enough for each screen to take them.
+if command -v script >/dev/null 2>&1; then
+  mkdir -p "$TMP/drive/toolchain" "$TMP/srv/driven/state"
+  printf '#!/bin/sh\nprintf "ARGS %%s\\n" "$*"\n' >"$TMP/drive/toolchain/deploy-local.sh"
+  chmod +x "$TMP/drive/toolchain/deploy-local.sh"
+  printf 'name=wiki-demo\ndir=%s/srv/driven\nport=8090\nmode=server\nadmin_port=8091\nway=proxy\ndb=sqlite\nbackend_only=head\n' "$TMP" >"$TMP/srv/driven/state/wiki-demo.state"
+  (
+    cd "$TMP/drive"
+    {
+      sleep 3
+      for _ in 1 2 3 4; do printf '\t'; sleep 0.3; done
+      printf '%s' "$TMP/srv/driven"
+      sleep 1
+      for _ in 1 2 3 4 5 6 7 8 9; do printf '\r'; sleep 1; done
+      sleep 3
+    } | TERM=xterm timeout 60 script -qec "stty cols 200 rows 50; '$WIZARD' --system-tools --hackage-mirror https://preset-hackage.example.org/ --npm-registry https://preset-npm.example.org/" /dev/null
+  ) >"$TMP/driven" 2>&1 || fail "the wizard driven through its screens did not run the deploy: $(tr -cd '[:print:]\n' <"$TMP/driven" | tail -c 2000)"
+  grep -a -F "ARGS --server --prefix $TMP/srv/driven --backend-only --system-tools --npm-registry https://preset-npm.example.org/ --hackage-mirror https://preset-hackage.example.org/ --sqlite --behind-proxy --port 8090 --admin-port 8091" "$TMP/driven" >/dev/null ||
+    fail "the deploy the screens ran lost the presets: $(grep -a -o 'ARGS.*' "$TMP/driven")"
+  pass 'through the screens: a deployment chosen on the first screen keeps the presets'
+else
+  printf 'test-configure: skipped the case through the screens: no script(1) here\n'
+fi
+
 printf 'test-configure: %s passed\n' "$passed"

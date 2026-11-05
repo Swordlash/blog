@@ -1117,6 +1117,9 @@ data Wizard = Wizard
   , filledFrom :: (Text, Text)
   , note :: Text
   , ending :: Ending
+  , presets :: [(Text, Text)]
+  -- ^ The answers the wrapper's options give (see presetArgs), applied
+  -- again over every deployment's state the first screen loads.
   }
 
 -- | How the wizard ends: still running, quit before the last screen,
@@ -1171,8 +1174,8 @@ goTo s = do
     if screen w == Which && filledFrom w /= (name a, prefix a)
       then do
         -- Another deployment starts from the defaults, not from the
-        -- answers of the one before.
-        (filled, n) <- liftIO (prefill defaultAnswers {action = action a, name = name a, prefix = prefix a})
+        -- answers of the one before, and the presets apply to it too.
+        (filled, n) <- liftIO (loadDeployment (presets w) defaultAnswers {action = action a, name = name a, prefix = prefix a})
         -- Remembered as prefill resolved them, as the form now shows them,
         -- so that coming back to the first screen does not fill again.
         pure (filled, (name filled, prefix filled), n)
@@ -1280,10 +1283,10 @@ main = do
   args <- getArgs
   case presetArgs args of
     Left e -> hPutStrLn stderr ("configure: " <> e) >> hPutStrLn stderr (T.unpack usage) >> exitFailure
-    Right (presets, rest) -> case rest of
-      ["--args-from", file] -> fromFile presets file
+    Right (given, rest) -> case rest of
+      ["--args-from", file] -> fromFile given file
       ["--help"] -> T.putStr usage
-      [] -> wizard presets
+      [] -> wizard given
       _ -> hPutStrLn stderr (T.unpack usage) >> exitFailure
 
 -- | The options for a machine that installs nothing from the internet,
@@ -1294,7 +1297,13 @@ main = do
 -- screens start with them, and before an answer file's lines, which win.
 -- The rest of the arguments are returned as they are.
 presetArgs :: [String] -> Either String ([(Text, Text)], [String])
-presetArgs = go [] []
+presetArgs args = do
+  (ps, rest) <- go [] [] args
+  -- Checked once here, so that applying them to a deployment's answers
+  -- (loadDeployment) cannot fail later.
+  case foldM applyAnswer defaultAnswers ps of
+    Left e -> Left (T.unpack e)
+    Right _ -> Right (ps, rest)
   where
     go ps rest [] = Right (reverse ps, reverse rest)
     go ps rest (arg : more) = case arg of
@@ -1323,20 +1332,30 @@ usage =
     , "screens with those answers."
     ]
 
+-- | A deployment's answers: its state over the answers given (prefill),
+-- then the presets of the wrapper's options (presetArgs, which has checked
+-- that they apply). The first screen, the start of the wizard and an
+-- answer file all load a deployment through this, so that the presets
+-- reach whichever deployment is chosen.
+loadDeployment :: [(Text, Text)] -> Answers -> IO (Answers, Text)
+loadDeployment ps given = do
+  (filled, n) <- prefill given
+  pure (either (const filled) id (foldM applyAnswer filled ps), n)
+
 -- | The answers of a file, over the state of the deployment it names, and
 -- the command line they make.
 fromFile :: [(Text, Text)] -> FilePath -> IO ()
-fromFile presets file = do
+fromFile given file = do
   -- The file is named from where toolchain/configure.sh was started.
   path <- T.unpack <$> absolute (T.pack file)
   kv <- keyValues <$> T.readFile path
   let named = defaultAnswers {name = value "name" kv (name defaultAnswers), prefix = value "prefix" kv ""}
-  (filled, n) <- prefill named
+  (filled, n) <- loadDeployment given named
   hPutStrLn stderr ("configure: " <> T.unpack n)
-  case foldM applyAnswer filled (presets <> kv) of
+  case foldM applyAnswer filled kv of
     Left e -> hPutStrLn stderr ("configure: " <> file <> ": " <> T.unpack e) >> exitFailure
-    Right given -> do
-      a <- normalise <$> resolvePaths given
+    Right answered -> do
+      a <- normalise <$> resolvePaths answered
       let ps = problems a
       unless (null ps) $ do
         mapM_ (hPutStrLn stderr . ("configure: " <>) . T.unpack) ps
@@ -1347,15 +1366,12 @@ fromFile presets file = do
 
 -- | The screens, and then the deploy or the command line.
 wizard :: [(Text, Text)] -> IO ()
-wizard presets = do
+wizard given = do
   there <- doesFileExist "toolchain/deploy-local.sh"
   unless there $ do
     hPutStrLn stderr "configure: run this from the checkout's root, where toolchain/deploy-local.sh is (sh toolchain/configure.sh does)"
     exitFailure
-  (filled, n) <- prefill defaultAnswers
-  a <- case foldM applyAnswer filled presets of
-    Left e -> hPutStrLn stderr ("configure: " <> T.unpack e) >> exitFailure
-    Right given -> pure given
+  (a, n) <- loadDeployment given defaultAnswers
   let start =
         Wizard
           { screen = Which
@@ -1363,6 +1379,7 @@ wizard presets = do
           , filledFrom = (name a, prefix a)
           , note = n
           , ending = Running
+          , presets = given
           }
   end <- defaultMain app start
   let final = normalise (answers end)
