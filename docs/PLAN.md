@@ -1072,12 +1072,20 @@ needs. Each was true when its package merged; check before relying on one.
   four minutes; the clone is about 25 MB of `.git` and 120 MB checked out, the
   installer's about 20 MB and 70 MB); `--perl-source DIR` copies the directory as it
   is, build files included; the build's whole `make`
-  output goes to the terminal as well as the log; the xelatex item runs in every
-  check-native call (a second or two with a working engine, up to 20 s with one that
-  hangs) and, before the deploy's TeX step, shows the shell's PATH, which can differ
-  from the service's; a server with `--no-pdf` keeps the PDFs off until the next
-  deploy, even if a working TeX appears meanwhile; `check-tex.sh`'s default 20 s has
-  no test of its own.
+  output goes to the terminal as well as the log; the xelatex item of check-native
+  (a second or two with a working engine, up to 20 s with one that hangs) is skipped
+  with `--without-tex`, which a server deploy passes since its TeX step probes on the
+  service's PATH anyway (#157); `bootstrap.sh native` still runs the check without
+  it, so a `--backend-only` deploy probes once more; a server with `--no-pdf` keeps
+  the PDFs off until the next deploy, even if a working TeX appears meanwhile;
+  `check-tex.sh`'s default 20 s has no test of its own. Every `install-tl` and
+  `tlmgr` call runs from `<toolchain>/texlive` with `TEXLIVE_INSTALL_NO_RESUME=1` and
+  no standard input (#157: `install-tl` reads a stale `installation.profile` in its
+  working directory before its options and asks on stdin, which hung a deploy with
+  the question captured and unseen), and the TeX step first checks with curl that the
+  mirror's `tlnet` answers, naming the mirror the redirect landed on, or stops with
+  the `--texlive-mirror` hint; `install-tl` itself is still handed `mirror.ctan.org`
+  when no mirror is named, so it may land on another mirror than curl did.
 - WP5.62 (decision 45): a spoiler's open state is per browser, not per account; the
   `hashchange` and load paths that open a spoiler around a URL fragment are
   implemented but not in the browser suite (the test hash router cannot navigate to
