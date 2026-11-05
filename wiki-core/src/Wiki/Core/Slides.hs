@@ -21,6 +21,11 @@
 --   each further item in a step of its own. A slide without either is one
 --   step.
 --
+-- A heading spoiler at a slide's top level (@## [[spoiler]] Question@)
+-- is its heading and its section as written, in a deck: its section
+-- would otherwise take in the breaks after it and the next slides'
+-- titles, and a slide cannot show half a section.
+--
 -- The deck's look is set once, anywhere in the page, by a fenced div with
 -- the class @slides@ and attributes: @::: {.slides theme=dark aspect=4:3}@
 -- then @:::@ (themes: @beamer@, the default, @light@ and @dark@; aspects:
@@ -162,7 +167,7 @@ aspectName = \case
 
 -- | The page's blocks as a deck.
 deckOf :: [Block] -> Deck
-deckOf doc =
+deckOf page =
   Deck
     { options = maybe defaultDeckOptions optionsOf (head [attrs | Div attrs _ <- doc, isOptions attrs])
     , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtBreaks content)))))
@@ -178,13 +183,24 @@ deckOf doc =
     nonEmpty' = \case
       [] -> [Slide Nothing [] [] 1]
       ss -> ss
+    doc = sectionsShown page
+
+-- | Blocks with each heading spoiler among them (not those inside a
+-- quotation, a box or a list) as its heading and section, as written
+-- ('Wiki.Core.Markdown.Ast.OnHeading'), and the heading spoilers in
+-- those sections the same.
+sectionsShown :: [Block] -> [Block]
+sectionsShown = concatMap $ \case
+  Spoiler h bs | h.kind == OnHeading -> sectionsShown bs
+  b -> [b]
 
 -- | Whether a page is written as a deck: split into slides, or setting its
 -- slides' look. Any page can be shown as slides; this says whether the
 -- page is meant to be.
 isDeck :: [Block] -> Bool
-isDeck doc = any isBreak doc || or [isOptions attrs | Div attrs _ <- doc]
+isDeck page = any isBreak doc || or [isOptions attrs | Div attrs _ <- doc]
   where
+    doc = sectionsShown page
     isBreak = \case
       ThematicBreak -> True
       _ -> False

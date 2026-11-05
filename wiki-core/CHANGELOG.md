@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+Heading spoilers (WP5.64). An ATX heading whose text starts with
+`[[spoiler]]`, or `[[spoiler]]{name}`, then a space, hides its section: the
+parser makes it a `Spoiler` whose new `SpoilerHead` field `kind` is
+`OnHeading` (the marker pair's is `BetweenMarkers`), whose first block is
+the heading without the marker, and whose other blocks are the heading's
+section, up to the next heading of the same or a higher level or the end of
+the blocks the heading is among. Its `description` is empty, and its `name`
+is the one written or else the heading's `id`. Code that builds a
+`SpoilerHead` needs the new field. A marker anywhere else in a heading, or
+without text after it, is a wiki link as before. The renderer writes it as
+`<details class="spoiler spoiler-section" data-spoiler="name">` whose
+`<summary>` holds the heading as any heading is rendered; the new `Options`
+field `hiddenSections` (on in `defaultOptions`) turns that off, for a feed,
+which shows the heading and its section as they are. The contents, the
+anchors, ids, plain text and search read the heading as a heading. The
+section rule treats a heading spoiler as a section that starts with a
+heading, so a marker pair that crosses its end cuts a section. A heading
+spoiler starts on its heading's line in `parseWithLines`, the blocks of its
+section inside it. `SpoilerRole` gains `HeadingMarker`, where the marker
+starts and the heading's text does, for the export. A deck shows a heading
+spoiler at a slide's top level as its heading and section, as written, so
+that the deck's breaks and slide titles stay.
+
 `Options` gains `copyButtons` (WP5.63), off in `defaultOptions`. When it is
 on, a code block renders as `<div class="code-block">` holding what
 `codeBlock` made and, after it, an empty

@@ -18,7 +18,10 @@
 -- * spoilers: @||hidden||@ inline, read as the strikethrough's @~~@ is
 --   read ('Hidden'), and block spoilers between two marker lines,
 --   @[[spoiler]]{name}(Description)@ and @[[/spoiler]]{name}@, read by
---   the wiki's own block syntax ('spoilerSpec'; 'Spoiler');
+--   the wiki's own block syntax ('spoilerSpec'; 'Spoiler'); and heading
+--   spoilers, @## [[spoiler]] Question@ or @## [[spoiler]]{name} Question@,
+--   which hide the heading's section ('spoilerHeadingSpec',
+--   'withHeadingSections');
 -- * a fence's @rows=N@ attribute, the number of lines its code shows
 --   before it scrolls ('codeRows'), and its class @numbered@, a number
 --   before each line ('codeNumbered');
@@ -67,6 +70,7 @@ module Wiki.Core.Markdown.Ast
   , AlertKind (..)
   , BoxHead (..)
   , SpoilerHead (..)
+  , SpoilerKind (..)
   , SpoilerProblem (..)
   , MathKind (..)
   , Attributes
@@ -104,7 +108,8 @@ import Commonmark.Extensions qualified as CME
 import Commonmark.Inlines qualified as CMI
 import Commonmark.TokParsers qualified as CM
 import Data.Char (isAsciiLower, isAsciiUpper)
-import Data.Dynamic (fromDynamic, toDyn)
+import Data.Dynamic (fromDyn, fromDynamic, toDyn)
+import Data.List (span)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
@@ -173,6 +178,13 @@ data Block
     -- head says its name, its description and whether something is
     -- wrong with it ('SpoilerHead'). Spoilers nest: an end marker ends
     -- the innermost open spoiler, and only when the names agree.
+    --
+    -- A heading spoiler (@## [[spoiler]] Question@) is a 'Spoiler' too,
+    -- of the kind 'OnHeading': its first block is the heading, without
+    -- the marker, and its other blocks are the heading's section. So
+    -- everything that reads a spoiler's blocks (the contents, the
+    -- headings' ids, search, the section rule) reads the heading as a
+    -- heading, where it is.
     Spoiler SpoilerHead [Block]
   | -- | A line that starts as a spoiler's marker but is not a whole one
     -- (@[[spoiler]]@ without its name or its description), or an end
@@ -274,7 +286,28 @@ data SpoilerHead = SpoilerHead
   -- finds the spoiler's markers in the source by it
   -- ('parseWithAllMarkers').
   , problem :: Maybe SpoilerProblem
+  , kind :: SpoilerKind
   }
+  deriving stock (Eq, Show)
+
+-- | 'SpoilerKind' is how a block spoiler is written, and so what its
+-- summary is.
+data SpoilerKind
+  = -- | Between two marker lines: the summary is the start marker's
+    -- description.
+    BetweenMarkers
+  | -- | On a heading, @## [[spoiler]] Question@ or
+    -- @## [[spoiler]]{name} Question@: the summary is the heading, the
+    -- spoiler's first block, and the rest is the heading's section, up
+    -- to the next heading of the same or a higher level, or the end of
+    -- the document or of the block the heading is in
+    -- ('withHeadingSections'). The description is empty. The name is the
+    -- one written in braces, or else the heading's @id@
+    -- ('withHeadingIds'), so the reader's browser remembers a spoiler
+    -- without a name by its heading. The marker is @[[spoiler]]@ or
+    -- @[[spoiler]]{name}@ as written, and the line the heading's. Such a
+    -- spoiler has no problem: it is a whole section by how it is made.
+    OnHeading
   deriving stock (Eq, Show)
 
 -- | 'SpoilerProblem' is why a spoiler cannot be shown as one. The page
@@ -430,12 +463,21 @@ ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
 -- ("Wiki.Core.Markdown.Render"'s 'Wiki.Core.Markdown.Render.renderLines').
 parseWithLines :: Text -> Either ParseError [(Maybe Int, Block)]
 parseWithLines source =
-  (\(Blocks bs _) -> let located = toList bs in zip (map fst located) (finished (map snd located)))
-    <$> parsed source
+  (\(Blocks bs _) -> finishedWith (toList bs)) <$> parsed source
 
--- | What every block of a page goes through once parsed, one for one.
+-- | What every block of a page goes through once parsed.
 finished :: [Block] -> [Block]
-finished = withHeadingIds . withSpoilerSections . map (withPauses . contentsMarker . withMentions)
+finished = map snd . finishedWith . map ((),)
+
+-- | 'finished' for blocks that each carry something of their own (the
+-- line of the source they start on), kept with them. The blocks are one
+-- for one with those given, except the blocks a heading spoiler's
+-- section takes in ('withHeadingSections'), which go into the spoiler;
+-- the spoiler keeps what its heading carried.
+finishedWith :: [(a, Block)] -> [(a, Block)]
+finishedWith located =
+  let grouped = withHeadingSections (map (second (withPauses . contentsMarker . withMentions)) located)
+   in zip (map fst grouped) (withHeadingIds (withSpoilerSections (map snd grouped)))
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
@@ -474,6 +516,12 @@ data SpoilerRole
   | -- | A line the page shows in red ('SpoilerError'): the line as
     -- written, and what is wrong with it.
     Faulty Text Text
+  | -- | A heading spoiler's marker, @[[spoiler]]@ or
+    -- @[[spoiler]]{name}@, starts here, and the heading's own text at
+    -- this column, after the marker and the spaces after it. The export
+    -- removes what lies between, so a document shows the heading's text
+    -- alone.
+    HeadingMarker Int
   | -- | The two bars that open an inline spoiler, @||@, are here; the
     -- line and the column of the two that close it. Only the bars the
     -- parser read as a spoiler's are listed, so the export knows them
@@ -517,6 +565,7 @@ syntax =
     <> CME.footnoteSpec
     <> alertSpec
     <> spoilerSpec
+    <> spoilerHeadingSpec
     <> CME.mathSpec
     <> texMathSpec
     <> CME.wikilinksSpec CME.TitleAfterPipe
@@ -672,7 +721,13 @@ withHeadingIds doc = evalState (traverse assign doc) (written, mempty)
             else pure (headingSlug . plainText <$> mfilter (T.any isAlphaNum . plainText) box.title)
         ident <- traverse (\b -> fresh ("box-" <> name <> "-" <> b)) base
         Alert kind box {id = ident} <$> traverse assign bs
-      Spoiler h bs -> Spoiler h <$> traverse assign bs
+      -- A heading spoiler without a name is known by its heading's id.
+      Spoiler h bs -> do
+        inner <- traverse assign bs
+        let named = case inner of
+              Heading _ attrs _ : _ | h.kind == OnHeading, T.null h.name -> h {name = fromMaybe "" (attribute "id" attrs)}
+              _ -> h
+        pure (Spoiler named inner)
       Footnotes notes -> Footnotes <$> traverse (\(Footnote n label bs) -> Footnote n label <$> traverse assign bs) notes
       other -> pure other
     -- The name, or the first of @name-2@, @name-3@, … that is free, taken
@@ -755,6 +810,13 @@ withMentions = \case
 -- ("Wiki.Core.Markdown.Toc"). A spoiler inside another is checked the
 -- same way, within the blocks of the outer one. A spoiler already wrong
 -- ('NotClosed') stays so.
+--
+-- A heading spoiler ('OnHeading') is not checked: it is its heading's
+-- section by how it is made. For the marker pair around it, it is a
+-- section that starts with a heading, as a pair that wraps a section is.
+-- So a pair that holds a heading spoiler and the blocks after it, or
+-- starts in a heading spoiler's section and ends after it, cuts a
+-- section.
 withSpoilerSections :: [Block] -> [Block]
 withSpoilerSections = checked
   where
@@ -762,7 +824,7 @@ withSpoilerSections = checked
     checkOne b next = case b of
       Spoiler h bs ->
         let inner = checked bs
-            problem = h.problem <|> (CutsSection <$ guard (not (fits inner next)))
+            problem = h.problem <|> (CutsSection <$ guard (h.kind == BetweenMarkers && not (fits inner next)))
          in Spoiler h {problem} inner
       BlockQuote bs -> BlockQuote (checked bs)
       List kind items -> List kind [ListItem task (checked bs) | ListItem task bs <- items]
@@ -780,6 +842,38 @@ withSpoilerSections = checked
       Nothing -> True
       Just (Footnotes _) -> True
       Just b -> maybe False (<= level) (leadingHeading b)
+
+-- | The blocks with each heading spoiler's section in it. The parser
+-- makes a heading spoiler of its heading alone ('spoilerHeadingSpec');
+-- here it takes in the blocks after it, up to the next block that
+-- starts a section of the same or a higher level ('leadingHeading': a
+-- heading, or a spoiler whose first block is one), the footnotes, or the
+-- end of the blocks it is among. So a section never leaves the
+-- quotation, list item, box or spoiler its heading is in. A deeper
+-- heading spoiler in the section takes in its own subsection, and a
+-- marker pair that holds a heading without starting with it is taken in
+-- whole (the pair then cuts a section: 'withSpoilerSections').
+withHeadingSections :: [(a, Block)] -> [(a, Block)]
+withHeadingSections = \case
+  [] -> []
+  (at, Spoiler h (heading@(Heading level _ _) : own)) : rest
+    | h.kind == OnHeading ->
+        let (inside, after) = break (endsSection . snd) rest
+            endsSection = \case
+              Footnotes _ -> True
+              b -> maybe False (<= level) (leadingHeading b)
+         in (at, Spoiler h (heading : sectionsIn (own <> map snd inside))) : withHeadingSections after
+  (at, b) : rest -> (at, within b) : withHeadingSections rest
+  where
+    within = \case
+      BlockQuote bs -> BlockQuote (sectionsIn bs)
+      List kind items -> List kind [ListItem task (sectionsIn bs) | ListItem task bs <- items]
+      Div attrs bs -> Div attrs (sectionsIn bs)
+      Alert kind box bs -> Alert kind box (sectionsIn bs)
+      Spoiler h bs -> Spoiler h (sectionsIn bs)
+      Footnotes notes -> Footnotes [Footnote n label (sectionsIn bs) | Footnote n label bs <- notes]
+      other -> other
+    sectionsIn = map snd . withHeadingSections . map ((),)
 
 -- | The level of the heading a block starts a section with: a heading's,
 -- or that of the first block of a spoiler that wraps a section.
@@ -906,6 +1000,9 @@ instance CM.HasAttributes Blocks where
     where
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
+        -- A heading spoiler's attributes are its heading's
+        -- (@## [[spoiler]] Question {#q}@).
+        Spoiler h (Heading l attrs xs' : rest) | h.kind == OnHeading -> Spoiler h (Heading l (attrs <> new) xs' : rest)
         CodeBlock attrs lang t -> codeBlockWith (attrs <> new) lang t
         Div attrs xs' -> Div (attrs <> new) xs'
         other -> other
@@ -1191,7 +1288,7 @@ spoilerBlockSpec =
                   | T.strip (CM.untokenize o.openDescriptionToks) == o.openDescription = o.openDescriptionToks
                   | otherwise = CM.tokenize "spoiler" o.openDescription
             parsedDescription <- CM.runInlineParser toks
-            let h = SpoilerHead {name = o.openName, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended)}
+            let h = SpoilerHead {name = o.openName, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended), kind = BetweenMarkers}
                 found = Markers [] ([SpoilerMarker o.openLine o.openColumn (Starts o.openName o.openDescription)] <> [SpoilerMarker l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription)
             pure (Blocks (Seq.singleton (Nothing, Spoiler h (blocks inside))) (found <> markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
@@ -1250,6 +1347,100 @@ spoilerErrorSpec =
         Just m@(SpoilerMarker _ _ (Faulty written why)) -> Blocks (Seq.singleton (Nothing, SpoilerError written why)) (Markers [] [m])
         _ -> mempty
     , CM.blockFinalize = CM.defaultFinalizer
+    }
+
+-- | Heading spoilers: an ATX heading whose text starts with
+-- @[[spoiler]]@, or @[[spoiler]]{name}@, then a space and the heading's
+-- own text (@## [[spoiler]] Question@). The heading is read as
+-- commonmark reads any ATX heading (its closing hashes and its
+-- attributes in braces taken off); this spec takes the heading's node
+-- only when its text starts with the marker, and makes a 'Spoiler' of the
+-- kind 'OnHeading' holding the heading alone, with the marker taken out
+-- of its text. 'withHeadingSections' then gives it its section.
+--
+-- The marker is read from the heading's tokens, so it counts only as
+-- written, at the start of the text: escaped, spelled otherwise
+-- (@[[ spoiler ]]@), with a name that is not one ('validSpoilerName'),
+-- without a space and text after it, or anywhere later in the heading,
+-- it is the wiki link to a page named @spoiler@ that it was before. A
+-- setext heading has no marker: its first line, starting with
+-- @[[spoiler]]@, is a marker pair's line ('spoilerSpec').
+spoilerHeadingSpec :: CM.SyntaxSpec Identity Inlines Blocks
+spoilerHeadingSpec = mempty {CM.syntaxBlockSpecs = [spoilerHeadingBlockSpec]}
+
+-- | A heading spoiler's marker as 'headingMarker' finds it.
+data HeadingMarkerAt = HeadingMarkerAt
+  { markerName :: Maybe Text
+  , markerWritten :: Text
+  , markerAt :: Parsec.SourcePos
+  , textAt :: Parsec.SourcePos
+  , textToks :: [CM.Tok]
+  }
+
+-- | The marker at the start of a heading's text, if there is one.
+headingMarker :: [CM.Tok] -> Maybe HeadingMarkerAt
+headingMarker = \case
+  open : open' : word : close : close' : rest
+    | CM.hasType (CM.Symbol '[') open
+    , CM.hasType (CM.Symbol '[') open'
+    , CM.hasType CM.WordChars word
+    , CM.tokContents word == "spoiler"
+    , CM.hasType (CM.Symbol ']') close
+    , CM.hasType (CM.Symbol ']') close' -> do
+        (name, named, afterName) <- case rest of
+          brace : more | CM.hasType (CM.Symbol '{') brace -> do
+            let (inside, closing) = break (CM.hasType (CM.Symbol '}')) more
+                name = CM.untokenize inside
+            guard (validSpoilerName name)
+            after <- tail' closing
+            pure (Just name, [brace] <> inside <> take 1 closing, after)
+          _ -> pure (Nothing, [], rest)
+        let (spaces, text) = span (\t -> CM.hasType CM.Spaces t || CM.hasType CM.UnicodeSpace t) afterName
+        first' <- head text
+        guard (not (null spaces))
+        pure
+          HeadingMarkerAt
+            { markerName = name
+            , markerWritten = CM.untokenize ([open, open', word, close, close'] <> named)
+            , markerAt = CM.tokPos open
+            , textAt = CM.tokPos first'
+            , textToks = text
+            }
+  _ -> Nothing
+  where
+    tail' = \case
+      _ : after -> Just after
+      [] -> Nothing
+
+spoilerHeadingBlockSpec :: CM.BlockSpec Identity Inlines Blocks
+spoilerHeadingBlockSpec =
+  CM.atxHeadingSpec
+    { CM.blockType = "SpoilerHeading"
+    , -- commonmark's own ATX heading, its node then made this spec's
+      -- when its text starts with the marker.
+      CM.blockStart = try $ do
+        started <- CM.blockStart CM.atxHeadingSpec
+        st <- getState
+        case CM.nodeStack st of
+          top : rest
+            | CM.blockType (CM.blockSpec (rootLabel top)) == "ATXHeading"
+            , isJust (headingMarker (CM.getBlockText top)) -> do
+                Parsec.putState st {CM.nodeStack = top {rootLabel = (rootLabel top) {CM.blockSpec = spoilerHeadingBlockSpec}} : rest}
+                pure started
+          _ -> mzero
+    , -- The heading's attributes are off its text by now. Without any
+      -- text after the marker, it is an ordinary heading.
+      CM.blockConstructor = \node -> do
+        let level = fromDyn (CM.blockData (rootLabel node)) (1 :: Int)
+            toks = CM.getBlockText node
+        case headingMarker toks of
+          Just m -> do
+            text <- CM.runInlineParser m.textToks
+            let line = Parsec.sourceLine m.markerAt
+                h = SpoilerHead {name = fromMaybe "" m.markerName, description = [], marker = m.markerWritten, line, problem = Nothing, kind = OnHeading}
+                found = SpoilerMarker line (Parsec.sourceColumn m.markerAt) (HeadingMarker (Parsec.sourceColumn m.textAt))
+            pure (Blocks (Seq.singleton (Nothing, Spoiler h [Heading level [] (inlines text)])) (Markers [] (found : barsOf text)))
+          Nothing -> CM.heading level <$> CM.runInlineParser toks
     }
 
 listKind :: CM.ListType -> ListKind

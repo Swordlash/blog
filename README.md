@@ -255,6 +255,32 @@ section, or wraps a whole one: its heading first, up to the next heading of the
 same or a higher level; the section stays in the page's contents, and following
 its entry, or a link to its heading, opens it.
 
+A heading can also hide its own section, with no end marker, which suits a FAQ:
+
+```markdown
+### [[spoiler]] Does a heading spoiler need an end marker?
+
+No: its section ends where the next heading of its level, or a higher one, starts.
+
+### [[spoiler]]{faq-nesting} Can heading spoilers nest?
+
+Yes. The question below is a spoiler inside this one.
+
+#### [[spoiler]] How deep can they go?
+
+As deep as headings go, down to `######`.
+```
+
+Three questions, the third inside the second, each closed under its heading:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#spoilers).
+The heading shows, with its anchor and its entry in the contents, and a click
+on it opens the section, up to the next heading of the same or a higher level
+or the end of the quotation, box or spoiler the heading is in. A name in braces
+after the marker keys what the browser remembers; without one, the heading's
+anchor does. Only `[[spoiler]]` at the very start of a heading's text is a
+marker; anywhere else it is a wiki link, as in any text. A document exported,
+and a feed, show the section as written.
+
 Mistakes show in red where they are, on the page and in the editor's preview as
 they are typed: a start marker without its name or description, an end marker
 that names no open spoiler, a spoiler never closed or one that cuts a section

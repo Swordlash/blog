@@ -387,6 +387,9 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
         , Md.pageHref = \(PageLink r fragment) -> addressOf base (Duplex.print route r) <> fragment
         , -- A feed reader has no stylesheet to show them on hover.
           Md.headingAnchors = False
+        , -- A heading spoiler's section is shown, as an export shows it:
+          -- a feed reader is no place to open one.
+          Md.hiddenSections = False
         , Md.boxes = boxes
         , Md.numbering = Numbering {form = space.boxNumbering, number = Nothing}
         }

@@ -373,6 +373,18 @@ spec = describe "Markdown.Render" $ do
         `shows'` "<details class=\"spoiler\" data-spoiler=\"a\"><summary>A</summary><details class=\"spoiler\" data-spoiler=\"b\"><summary>B</summary><p>x</p></details></details>"
       "[[spoiler]]{s}(Solutions)\n## Solutions\n\nx\n[[/spoiler]]{s}"
         `shows'` "<details class=\"spoiler\" data-spoiler=\"s\"><summary>Solutions</summary><h2 id=\"solutions\">Solutions<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#solutions\"></a></h2><p>x</p></details>"
+    it "writes a heading spoiler as a closed details whose summary is the heading, with its id and its link, and its section inside" $ do
+      "## [[spoiler]]{q1} What is *X*?\n\nAn answer.\n\n## Next"
+        `shows'` ( "<details class=\"spoiler spoiler-section\" data-spoiler=\"q1\"><summary><h2 id=\"what-is-x\">What is <em>X</em>?<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#what-is-x\"></a></h2></summary><p>An answer.</p></details>"
+                     <> "<h2 id=\"next\">Next<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#next\"></a></h2>"
+                 )
+      -- Without a name, the spoiler is known by its heading's id.
+      "### [[spoiler]] Why?\n\nBecause."
+        `shows'` "<details class=\"spoiler spoiler-section\" data-spoiler=\"why\"><summary><h3 id=\"why\">Why?<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#why\"></a></h3></summary><p>Because.</p></details>"
+    it "nests heading spoilers, and shows the section as written where sections are not hidden (a feed)" $ do
+      showsWith defaultOptions {headingAnchors = False} "## [[spoiler]]{a} A\n\nx\n\n### [[spoiler]]{b} B\n\ny" $
+        "<details class=\"spoiler spoiler-section\" data-spoiler=\"a\"><summary><h2 id=\"a\">A</h2></summary><p>x</p><details class=\"spoiler spoiler-section\" data-spoiler=\"b\"><summary><h3 id=\"b\">B</h3></summary><p>y</p></details></details>"
+      showsWith defaultOptions {headingAnchors = False, hiddenSections = False} "## [[spoiler]]{a} A\n\nx\n\n### [[spoiler]] B\n\ny" "<h2 id=\"a\">A</h2><p>x</p><h3 id=\"b\">B</h3><p>y</p>"
     it "writes a broken marker line in red, with the reason as its title" $
       "[[/spoiler]]{x}"
         `shows'` "<p class=\"spoiler-error\" title=\"no spoiler is open here\">[[/spoiler]]{x}<span class=\"spoiler-error-reason\">no spoiler is open here</span></p>"

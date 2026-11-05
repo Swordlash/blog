@@ -19,7 +19,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Guide
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
-import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Hidden, Link, SoftBreak, Strikeout, Strong), ListItem (..), SpoilerHead (..), parseMarkdown, plainText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Hidden, Link, SoftBreak, Strikeout, Strong), ListItem (..), SpoilerHead (..), SpoilerKind (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -147,15 +147,22 @@ spec = describe "Wiki.App.Guide" $ do
     shown `shouldSatisfy` elem (Custom "exercise", Just "The area of a circle, \\pi r^2")
     boxHeads parsed `shouldSatisfy` elem (Note, Nothing, False)
 
-  it "shows spoilers in the Markdown guide: an inline one, nested ones, one that wraps a section, none in red" $ do
+  it "shows spoilers in the Markdown guide: an inline one, nested ones, one that wraps a section, a FAQ of heading spoilers, none in red" $ do
     let parsed = either (const []) identity . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")
         spoilers = concatMap $ \case
-          Spoiler h bs -> (h.name, h.problem, take 1 [level | Heading level _ _ <- take 1 bs]) : spoilers bs
+          Spoiler h bs -> (h.name, h.problem, h.kind, take 1 [level | Heading level _ _ <- take 1 bs]) : spoilers bs
           _ -> []
         hidden = concatMap $ \case
           Para xs -> [plainText ys | Hidden ys <- xs]
           _ -> []
-    spoilers parsed `shouldBe` [("hint", Nothing, []), ("answer", Nothing, []), ("exercise-answers", Nothing, [3])]
+    spoilers parsed
+      `shouldBe` [ ("hint", Nothing, BetweenMarkers, [])
+                 , ("answer", Nothing, BetweenMarkers, [])
+                 , ("exercise-answers", Nothing, BetweenMarkers, [3])
+                 , ("does-a-heading-spoiler-need-an-end-marker", Nothing, OnHeading, [3])
+                 , ("faq-nesting", Nothing, OnHeading, [3])
+                 , ("how-deep-can-they-go", Nothing, OnHeading, [4])
+                 ]
     hidden parsed `shouldBe` ["the butler"]
     [() | SpoilerError {} <- parsed] `shouldBe` []
 

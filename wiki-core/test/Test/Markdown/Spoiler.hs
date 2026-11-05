@@ -2,16 +2,18 @@
 -- as the parser reads them: inline spoilers, @||hidden||@; block spoilers
 -- between @[[spoiler]]{name}(Description)@ and @[[/spoiler]]{name}@, with
 -- the lines the page shows in red and the rule that a spoiler does not
--- cut across sections; and a fence's @rows=N@. These run on both
--- backends.
+-- cut across sections; heading spoilers, @## [[spoiler]] Question@, which
+-- hide the heading's section (WP5.64); and a fence's @rows=N@. These run
+-- on both backends.
 module Test.Markdown.Spoiler (spec) where
 
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Wiki.Core.Markdown.Ast
-import Wiki.Core.Markdown.Toc (tableOfContents)
+import Wiki.Core.Markdown.Toc (anchors, tableOfContents)
 import Wiki.Core.Search (bodyText)
+import Wiki.Core.Slides (Deck (..), Slide (..), SlideTitle (..), deckOf, isDeck)
 
 parses :: Text -> [Block] -> Expectation
 parses source expected = parseMarkdown source `shouldBe` Right expected
@@ -38,9 +40,30 @@ errors = concatMap $ \case
   BlockQuote bs -> errors bs
   _ -> []
 
+-- | Some blocks as a short text each, to compare their shape: a heading
+-- as @h2 Text@, a paragraph as its text, and a block that holds blocks
+-- with them in braces (a spoiler after its name).
+shape :: [Block] -> [Text]
+shape = map $ \case
+  Heading level _ xs -> "h" <> show level <> " " <> plainText xs
+  Para xs -> plainText xs
+  Plain xs -> plainText xs
+  Spoiler h bs -> h.name <> " {" <> inside bs <> "}"
+  BlockQuote bs -> "> {" <> inside bs <> "}"
+  Div _ bs -> "::: {" <> inside bs <> "}"
+  List _ items -> "- {" <> T.intercalate " | " [inside bs | ListItem _ bs <- items] <> "}"
+  other -> show other
+  where
+    inside = T.intercalate ", " . shape
+
+-- | A heading spoiler's head as the parser makes it, after its name or
+-- its heading's id.
+onHeading :: Text -> Text -> Int -> SpoilerHead
+onHeading name marker line = SpoilerHead {name, description = [], marker, line, problem = Nothing, kind = OnHeading}
+
 -- | A spoiler's head as the parser makes it: right, on this line.
 headOf :: Text -> [Inline] -> Text -> Int -> SpoilerHead
-headOf name description marker line = SpoilerHead {name, description, marker, line, problem = Nothing}
+headOf name description marker line = SpoilerHead {name, description, marker, line, problem = Nothing, kind = BetweenMarkers}
 
 spec :: Spec
 spec = describe "Markdown spoilers and listings" $ do
@@ -163,6 +186,85 @@ spec = describe "Markdown spoilers and listings" $ do
           plain = "# Page\n\n## A\n\na\n\n## B\n\nb\n\n### B1\n\nc\n\n## C\n"
       tableOfContents (blocksOf marked) `shouldBe` tableOfContents (blocksOf plain)
       T.replace "Hidden part " "" (bodyText marked) `shouldBe` bodyText plain
+
+  describe "heading spoilers, ## [[spoiler]] Question" $ do
+    it "hides a heading's section under its heading, the marker out of the heading's text, with a name or without" $ do
+      "## [[spoiler]]{q1} What is *X*?\n\nAn answer.\n"
+        `parses` [ Spoiler
+                     (onHeading "q1" "[[spoiler]]{q1}" 1)
+                     [Heading 2 [("id", "what-is-x")] [Str "What is ", Emph [Str "X"], Str "?"], Para [Str "An answer."]]
+                 ]
+      -- Without a name, the heading's id is its name.
+      "### [[spoiler]] What is Y?\n\nAnother.\n"
+        `parses` [Spoiler (onHeading "what-is-y" "[[spoiler]]" 1) [Heading 3 [("id", "what-is-y")] [Str "What is Y?"], Para [Str "Another."]]]
+    it "gives a heading spoiler the id the heading would have, a written one or a fresh one" $ do
+      shape (blocksOf "## Intro\n\n## [[spoiler]] Intro\n\nx\n") `shouldBe` ["h2 Intro", "intro-2 {h2 Intro, x}"]
+      [attribute "id" attrs | Spoiler _ (Heading _ attrs _ : _) <- blocksOf "## Intro\n\n## [[spoiler]] Intro\n"] `shouldBe` [Just "intro-2"]
+      shape (blocksOf "## [[spoiler]] Question {#faq-1}\n\nx\n") `shouldBe` ["faq-1 {h2 Question, x}"]
+      shape (blocksOf "## [[spoiler]]{named} Question {#faq-1}\n\nx\n") `shouldBe` ["named {h2 Question, x}"]
+    it "ends the section before the next heading of the same or a higher level, at every level" $
+      for_ [1 .. 5] $ \level -> do
+        let hashes n = T.replicate n "#"
+            same = hashes level <> " [[spoiler]]{s} Q\n\na\n\n" <> hashes (level + 1) <> " Deeper\n\nb\n\n" <> hashes level <> " Next\n\nc\n"
+        (level, shape (blocksOf same)) `shouldBe` (level, ["s {h" <> show level <> " Q, a, h" <> show (level + 1) <> " Deeper, b}", "h" <> show level <> " Next", "c"])
+        when (level > 1) $
+          (level, shape (blocksOf (hashes level <> " [[spoiler]]{s} Q\n\na\n\n" <> hashes (level - 1) <> " Up\n")))
+            `shouldBe` (level, ["s {h" <> show level <> " Q, a}", "h" <> show (level - 1) <> " Up"])
+    it "ends the section at the end of the document, before the footnotes" $ do
+      shape (blocksOf "# Page\n\n## [[spoiler]]{s} Q\n\na\n\n- b\n") `shouldBe` ["h1 Page", "s {h2 Q, a, - {b}}"]
+      case blocksOf "## [[spoiler]]{s} Q\n\na[^1]\n\n[^1]: A note.\n" of
+        [Spoiler _ [Heading {}, Para _], Footnotes _] -> pass
+        other -> expectationFailure ("the footnotes in the section: " <> show other)
+    it "ends the section at the end of the marker pair, fenced div or quotation the heading is in" $ do
+      shape (blocksOf "[[spoiler]]{p}(P)\n## [[spoiler]]{s} Q\n\na\n[[/spoiler]]{p}\n\n## Next\n") `shouldBe` ["p {s {h2 Q, a}}", "h2 Next"]
+      spoilers (blocksOf "[[spoiler]]{p}(P)\n## [[spoiler]]{s} Q\n\na\n[[/spoiler]]{p}\n\n## Next\n") `shouldBe` [("p", Nothing), ("s", Nothing)]
+      shape (blocksOf "::: note\n## [[spoiler]]{s} Q\n\na\n:::\n\nafter\n") `shouldBe` ["::: {s {h2 Q, a}}", "after"]
+      shape (blocksOf "> ## [[spoiler]]{s} Q\n>\n> a\n\nafter\n") `shouldBe` ["> {s {h2 Q, a}}", "after"]
+    it "nests, a deeper heading spoiler hiding its own subsection" $
+      shape (blocksOf "## [[spoiler]]{a} A\n\nx\n\n### [[spoiler]]{b} B\n\ny\n\n### C\n\nz\n\n## D\n")
+        `shouldBe` ["a {h2 A, x, b {h3 B, y}, h3 C, z}", "h2 D"]
+    it "takes a marker pair in its section whole, and the pair that crosses the section's end cuts a section" $ do
+      let crossing = blocksOf "## [[spoiler]]{a} A\n\nx\n\n[[spoiler]]{p}(P)\ny\n\n## B\n\nz\n[[/spoiler]]{p}\n"
+      spoilers crossing `shouldBe` [("a", Nothing), ("p", Just CutsSection)]
+      shape crossing `shouldBe` ["a {h2 A, x, p {y, h2 B, z}}"]
+      let outer = blocksOf "[[spoiler]]{p}(P)\nx\n\n## [[spoiler]]{a} A\n\ny\n[[/spoiler]]{p}\n\nz\n"
+      spoilers outer `shouldBe` [("p", Just CutsSection), ("a", Nothing)]
+      shape outer `shouldBe` ["p {x, a {h2 A, y}}", "z"]
+      -- A pair around a whole heading spoiler wraps its section, and must
+      -- end where the section ends.
+      spoilers (blocksOf "[[spoiler]]{p}(P)\n## [[spoiler]]{a} A\n\ny\n[[/spoiler]]{p}\n\nz\n") `shouldBe` [("p", Just CutsSection), ("a", Nothing)]
+    it "leaves a marker that is not at the start of the heading's text, or not whole, a wiki link" $ do
+      let wikilink = Link [("class", "wikilink")] "spoiler" "" [Str "spoiler"]
+      "## See [[spoiler]] here" `parses` [Heading 2 [("id", "see-spoiler-here")] [Str "See ", wikilink, Str " here"]]
+      "## [[spoiler]]" `parses` [Heading 2 [("id", "spoiler")] [wikilink]]
+      "## [[spoiler]]{bad name} Q" `parses` [Heading 2 [("id", "spoilerbad-name-q")] [wikilink, Str "{bad name} Q"]]
+      "## [[spoiler]]{q}Q" `parses` [Heading 2 [("id", "spoilerqq")] [wikilink, Str "{q}Q"]]
+      "## [[spoiler]]{q}" `parses` [Heading 2 [("id", "spoilerq")] [wikilink, Str "{q}"]]
+      "## *[[spoiler]]* Q" `parses` [Heading 2 [("id", "spoiler-q")] [Emph [wikilink], Str " Q"]]
+      "## \\[[spoiler]] Q" `parses` [Heading 2 [("id", "spoiler-q")] [Str "[[spoiler]] Q"]]
+      "## [[spoiler|spoiler]] Q" `parses` [Heading 2 [("id", "spoiler-q")] [wikilink, Str " Q"]]
+      -- A setext heading's first line is a marker pair's line.
+      spoilers (blocksOf "[[spoiler]] Q\n---\n") `shouldBe` []
+    it "reads the heading without the marker in the contents, the anchors, the plain text and the search text" $ do
+      let marked = "# Page\n\n## [[spoiler]]{a} What is X?\n\nx\n\n### [[spoiler]] Why?\n\ny\n\n## After\n"
+          plain = "# Page\n\n## What is X?\n\nx\n\n### Why?\n\ny\n\n## After\n"
+      tableOfContents (blocksOf marked) `shouldBe` tableOfContents (blocksOf plain)
+      anchors (blocksOf marked) `shouldBe` anchors (blocksOf plain)
+      bodyText marked `shouldBe` bodyText plain
+      [plainText xs | Spoiler _ (Heading _ _ xs : _) <- blocksOf marked] `shouldBe` ["What is X?"]
+    it "gives the export where the marker is and where the heading's text starts" $
+      (\(_, _, ms, _) -> ms) <$> parseWithAllMarkers "# T\n\n## [[spoiler]]{q1} Q ||x||\n\n>  ### [[spoiler]]\tR\n"
+        `shouldBe` Right
+          [ SpoilerMarker 3 4 (HeadingMarker 20)
+          , SpoilerMarker 3 22 (InlineBars 3 25)
+          , SpoilerMarker 5 8 (HeadingMarker 21)
+          ]
+    it "starts the spoiler on its heading's line, for the editor's preview" $
+      map fst <$> parseWithLines "## [[spoiler]] Q\n\na\n\nb\n\n## B\n" `shouldBe` Right [Just 1, Just 7]
+    it "is its section as written on a slide, so the deck's breaks and titles stay" $ do
+      let deck = deckOf (blocksOf "## [[spoiler]] Q\n\na\n\n---\n\n## [[spoiler]]{r} R\n\nb\n")
+      isDeck (blocksOf "## [[spoiler]] Q\n\na\n\n---\n\nb\n") `shouldBe` True
+      [(plainText . (.text) <$> s.title, shape s.body) | s <- deck.slides] `shouldBe` [(Just "Q", ["a"]), (Just "R", ["b"])]
 
   describe "listings that scroll, {rows=N}" $ do
     let rowsOf source = [codeRows attrs | CodeBlock attrs _ _ <- blocksOf source]

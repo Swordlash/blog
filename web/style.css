@@ -1674,6 +1674,22 @@ pre.numbered > code {
   color: var(--muted);
 }
 
+/* A heading spoiler (## [[spoiler]] Question): its summary is the
+   section's heading, in its level's size and the text's colour, on the
+   line of the disclosure triangle. The box's bar marks the section as
+   hidden, in place of the heading's rule. */
+.page-body details.spoiler-section > summary {
+  color: inherit;
+  font-weight: inherit;
+}
+
+.page-body details.spoiler-section > summary > :is(h1, h2, h3, h4, h5, h6) {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* A spoiler's marker line that is wrong, with the reason under it, and the
    blocks of a spoiler that is not closed or cuts a section: in red, so the
    author sees the mistake in the preview as it is typed. Boxes and code

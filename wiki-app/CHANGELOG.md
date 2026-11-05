@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Heading spoilers (WP5.64). A heading written `### [[spoiler]] Question`,
+or `### [[spoiler]]{name} Question`, shows closed with its heading as the
+spoiler's summary, in its level's size, and a click opens its section. Its
+open or closed state is remembered by its name, or by the heading's anchor
+when it has none, as the marker pair's is; a contents entry, a link to the
+heading and the address's fragment open it. The contents' current-section
+marker (`jsbits/toc.js`) watches the heading whether the spoiler is open or
+not, and the headings inside it only while it is open. The guide's Spoilers
+section ends with a FAQ of heading spoilers, one nested in another.
+
 A copy button on code blocks (WP5.63). Every code block of a page, of the
 editor's preview, of a comment and of the guide has a **Copy** button in its
 top right corner, shown on hover and on keyboard focus, which puts the

@@ -8,7 +8,10 @@
 -- again in this browser; a spoiler that wraps a section opened by its
 -- entry in the page's contents and by a link to its heading, and marked
 -- in the contents as the section read only while it is open
--- (jsbits/toc.js); and a code
+-- (jsbits/toc.js); a heading spoiler (WP5.64), closed under its heading,
+-- marked as the section read while closed, opened by its contents entry
+-- and by a link to its heading, nested, and remembered by its name or its
+-- heading's id; and a code
 -- block with @rows=3@ three lines high, scrolling inside. The behaviour is
 -- the islands' script's (web/src/islands.js), which the test page loads.
 module Test.Browser.Spoilers (spec) where
@@ -36,6 +39,7 @@ $( browserJS
      ["jsbits/test-style.js", "jsbits/test-layout.js"]
      [ ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_listing", "wiki_test_listing", Safe, [t|JSText -> IO JSText|])
+     , ("js_box", "wiki_test_box", Safe, [t|JSText -> IO JSText|])
      , ("js_scroll_into_viewPromise", "wiki_test_scroll_into_view", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_scroll_toPromise", "wiki_test_scroll_to", Safe, [t|Int -> IO (Promise ())|])
      ]
@@ -132,6 +136,73 @@ spec m = describe "spoilers and listings in a page" $ do
     eventually $ current ui `shouldReturn` ["#intro"]
     unsafeIOToPageM (evaluate =<< js_scroll_into_view (toJSText ("#after" :: Text)))
     eventually $ current ui `shouldReturn` ["#after"]
+
+  it "keeps a heading spoiler closed under its heading, nested ones each on their own, and remembers the open ones by name or by heading" $ runPage $ do
+    let body = "## [[spoiler]]{q1} What is X?\n\nAn answer.\n\n### [[spoiler]] Why?\n\nBecause.\n\n## [[spoiler]] Unnamed\n\nHidden too.\n\n## After\n\nThe end."
+        spoiler key = ".page-body details.spoiler.spoiler-section[data-spoiler='" <> key <> "']"
+        opened ui key = find ui (spoiler key) >>= (`getAttribute` "open")
+        summary ui key = find ui (spoiler key <> " > summary")
+    ui <- page m body
+    -- Closed, with the heading shown: its id, its text without the marker.
+    for_ ["q1", "why", "unnamed"] $ \key -> ((\o -> (key, o)) <$> opened ui key) `shouldReturn` (key, Nothing)
+    find ui (spoiler "q1" <> " > summary > h2#what-is-x") >>= \h -> shouldBeVisible h >> (h `shouldHaveText` "What is X?")
+    find ui (spoiler "q1" <> " > p") >>= shouldBeHidden
+    find ui (spoiler "unnamed" <> " > summary > h2#unnamed") >>= shouldBeVisible
+    summary ui "q1" >>= click
+    eventually $ opened ui "q1" `shouldReturn` Just ""
+    find ui (spoiler "q1" <> " > p") >>= shouldBeVisible
+    -- The nested one is now shown, closed.
+    find ui (spoiler "why" <> " > summary > h3#why") >>= shouldBeVisible
+    opened ui "why" `shouldReturn` Nothing
+    summary ui "why" >>= click
+    eventually $ opened ui "why" `shouldReturn` Just ""
+    summary ui "unnamed" >>= click
+    eventually $ opened ui "unnamed" `shouldReturn` Just ""
+    -- The page shown again in this browser: the three open.
+    reloaded <- again m body
+    eventually $ for_ ["q1", "why", "unnamed"] $ \key -> ((\o -> (key, o)) <$> opened reloaded key) `shouldReturn` (key, Just "")
+    summary reloaded "unnamed" >>= click
+    eventually $ opened reloaded "unnamed" `shouldReturn` Nothing
+    third <- again m body
+    eventually $ opened third "q1" `shouldReturn` Just ""
+    opened third "unnamed" `shouldReturn` Nothing
+
+  it "opens a heading spoiler for its entry in the contents, and for a link to its heading" $ runPage $ do
+    let body = "## Intro\n\nText.\n\n## [[spoiler]] Answers\n\nThe answer.\n\n### Details\n\nMore.\n\n## After\n\nSee [the answers](#answers)."
+        opened ui = find ui ".page-body details.spoiler-section[data-spoiler='answers']" >>= (`getAttribute` "open")
+    ui <- page m body
+    opened ui `shouldReturn` Nothing
+    entries <- traverse textContent =<< findAll ui ".page-contents nav a"
+    entries `shouldSatisfy` (\es -> "Answers" `elem` es && "Details" `elem` es)
+    find ui ".page-contents nav a[href='#answers']" >>= click
+    eventually $ opened ui `shouldReturn` Just ""
+    find ui ".page-body details.spoiler-section > p" >>= shouldBeVisible
+    find ui ".page-body details.spoiler-section > summary" >>= click
+    eventually $ opened ui `shouldReturn` Nothing
+    find ui ".page-body p a[href='#answers']" >>= click
+    eventually $ opened ui `shouldReturn` Just ""
+
+  it "marks a heading spoiler's section as the one read while it is closed, and the headings inside only once it is open" $ runPage $ do
+    let long = T.intercalate "\n\n" (replicate 30 "A paragraph of text, to take room on the page.")
+        body = "## Intro\n\n" <> long <> "\n\n## [[spoiler]]{findings} Findings\n\nHidden.\n\n### Details\n\nMore.\n\n## After\n\n" <> long
+        current ui = do
+          marked <- findAll ui ".toc-list a[data-current]"
+          ordNub . catMaybes <$> traverse (`getAttribute` "href") marked
+    ui <- page m body
+    eventually $ current ui `shouldReturn` ["#intro"]
+    -- The closed spoiler's heading just above the line a quarter of the
+    -- way down the window, where a heading is read from, and the next
+    -- heading below it.
+    unsafeIOToPageM (evaluate =<< js_scroll_to 0)
+    box <- unsafeIOToPageM (fromJSText <$> js_box (toJSText ("#findings" :: Text)))
+    case mapMaybe (readMaybe . T.unpack) (T.words box) :: [Double] of
+      [top, _, height] -> unsafeIOToPageM (evaluate =<< js_scroll_to (round (top - height / 4 + 20)))
+      other -> expectationFailure ("no box for the heading: " <> show other)
+    eventually $ current ui `shouldReturn` ["#findings"]
+    find ui ".page-body details.spoiler-section > summary" >>= click
+    eventually $ find ui ".page-body details.spoiler-section" >>= (`getAttribute` "open") >>= (`shouldBe` Just "")
+    unsafeIOToPageM (evaluate =<< js_scroll_into_view (toJSText ("#details" :: Text)))
+    eventually $ current ui `shouldReturn` ["#details"]
 
   it "shows three lines of a listing with rows=3, and scrolls inside it" $ runPage $ do
     ui <- page m "```haskell {rows=3}\none = 1\ntwo = 2\nthree = 3\nfour = 4\nfive = 5\nsix = 6\n```"
