@@ -3515,10 +3515,25 @@ out=$case_dir/file-gone-again
 locked >"$out" 2>&1 || fail "the rerun without the changed file failed: $(cat "$out")"
 assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $changed"
 [ -f "$pre/app/changed.txt" ] || fail 'the copy of the change was not the one deployed'
+# The wizard gives the remembered path again (--app-page), and the deploy
+# takes the copy as for a path the state remembers. A path given for the
+# first time that is not there is still refused, before anything is built.
+out=$case_dir/file-gone-given
+locked --app-page "$files/page.zip" >"$out" 2>&1 || fail "the rerun that names the gone file failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $changed"
+[ "$(pstate app_page)" = "$files/page.zip" ] || fail "the state does not keep the gone file: $(pstate app_page)"
+: >"$EVENTS"
+out=$case_dir/never-seen
+if locked --app-page "$files/never-seen.zip" >"$out" 2>&1; then fail 'a missing file never deployed was taken'; fi
+assert_contains "$out" "--app-page $files/never-seen.zip: no such file here, or it cannot be read, and the page cache $pages keeps no copy of it from an earlier deploy"
+assert_lacks "$EVENTS" 'bootstrap'
+[ "$(pstate app_page)" = "$files/page.zip" ] || fail 'a refused --app-page changed the state'
 rm "$changed" "$changed.meta"
 out=$case_dir/file-no-copy
 if locked >"$out" 2>&1; then fail 'a deploy with neither the file nor a copy went on'; fi
 assert_contains "$out" "--app-page $files/page.zip is gone, or cannot be read, and the page cache $pages keeps no copy of it"
+if locked --app-page "$files/page.zip" >"$out" 2>&1; then fail 'a deploy naming a gone file without a copy went on'; fi
+assert_contains "$out" "--app-page $files/page.zip: no such file here, or it cannot be read, and the page cache $pages keeps no copy of it from an earlier deploy"
 [ -f "$pre/app/changed.txt" ] || fail 'the deployed page was changed by a deploy that stopped'
 cp "$files/app-server-$head1.zip" "$files/page.zip"
 pass 'a page from a file has a cache entry of its own: a rerun without the file deploys it, saying so, and a changed file replaces it'

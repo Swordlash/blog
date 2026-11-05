@@ -297,7 +297,9 @@
 #                    which must hold app.wasm. It is checked, and kept in the page cache
 #                    under a name of its own (app-<kind>-file-<SHA-256>.zip, its path in
 #                    the .meta file beside it): a run that finds the file gone takes
-#                    that copy, saying so, and a changed file replaces it. The deploy
+#                    that copy, saying so, also when --app-page names the path again
+#                    (as the configuration wizard does), and a changed file replaces
+#                    it; a path that is neither a file nor in the cache is refused. The deploy
 #                    goes on as with
 #                    --backend-only (with --server only wiki-server is built). The
 #                    deploy says which page it is: the page of <hash>, from the zip's
@@ -554,10 +556,14 @@ sys.exit(0 if "app.wasm" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$1
     die "--app-page: reading the zip takes python3, which is not installed here (nor unzip, which would do instead)"
   fi
 }
-# The page's zip from a file (--app-page): it must be there now, a zip
-# holding app.wasm, and it is named by absolute path from here on, as the
-# state remembers it. It replaces GitHub, so --backend-only and
-# --no-backend-only given with it contradict it.
+# The page's zip from a file (--app-page): a zip holding app.wasm, named by
+# absolute path from here on, as the state remembers it. A file that is not
+# there (or cannot be read) is taken only when the page cache keeps a copy
+# of it from an earlier deploy (app_page_missing; checked once the cache's
+# directory is known), as the configuration wizard gives the remembered
+# path again. It replaces GitHub, so --backend-only and --no-backend-only
+# given with it contradict it.
+app_page_missing=
 if [ -n "$opt_app_page" ]; then
   case $opt_app_page in
     *'
@@ -565,9 +571,13 @@ if [ -n "$opt_app_page" ]; then
   esac
   [ "$opt_backend_only" != none ] || die "--app-page takes the page CI built from a file, and --no-backend-only builds it here: give one"
   [ -z "$opt_backend_only" ] || die "--app-page takes the page from a file, and --backend-only downloads it from GitHub: give one"
-  { [ -f "$opt_app_page" ] && [ -r "$opt_app_page" ]; } || die "--app-page $opt_app_page: no such file here, or it cannot be read"
-  zip_holds_app "$opt_app_page" || die "--app-page $opt_app_page: not a page CI built (a zip with app.wasm at its root)"
-  opt_app_page=$(realpath "$opt_app_page")
+  if [ -f "$opt_app_page" ] && [ -r "$opt_app_page" ]; then
+    zip_holds_app "$opt_app_page" || die "--app-page $opt_app_page: not a page CI built (a zip with app.wasm at its root)"
+    opt_app_page=$(realpath "$opt_app_page")
+  else
+    app_page_missing=$opt_app_page
+    opt_app_page=$(realpath -m "$opt_app_page")
+  fi
 fi
 # Where the TeX step takes TeX Live's installer and Perl's source from: a
 # git repository's http:// or https:// URL, cloned, or a directory of this
@@ -1549,6 +1559,28 @@ if [ "$mode" = server ]; then
   fi
 fi
 
+# The page cache: the zips of the pages CI built, downloaded or from a file,
+# under the toolchain directory, or in the user's cache directory when the
+# toolchain is in the home directory.
+page_cache_dir() {
+  if [ -n "$toolchain_home" ]; then
+    printf '%s\n' "$toolchain_home/.wiki-toolchain/pages"
+  else
+    printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/wiki-demo/pages"
+  fi
+}
+
+# The cache entries of the page from a file (--app-page) named by
+# page_meta (file=<its path>), one a line: the zips whose .meta file says
+# that path. See app_page_cache.
+app_page_entries() {
+  for meta in "$page_cache/app-$page_kind-file-"*.zip.meta; do
+    if [ -f "$meta" ] && [ -f "${meta%.meta}" ] && [ "$(cat "$meta")" = "$page_meta" ]; then
+      printf '%s\n' "${meta%.meta}"
+    fi
+  done
+}
+
 # The page from GitHub (--backend-only), now or on an earlier run, unless
 # --no-backend-only goes back to building it here. CI builds two pages of
 # each commit, the server's and the demo's (prerendered per route), so
@@ -1571,6 +1603,14 @@ else
   app_page=$prev_app_page
 fi
 [ -z "$app_page" ] || backend_only=
+# A file given now that is not there: taken only when the cache keeps its
+# copy, as a remembered file that is gone is (see app_page_cache).
+if [ -n "$app_page_missing" ]; then
+  page_cache=$(page_cache_dir)
+  page_meta="file=$app_page"
+  [ -n "$(app_page_entries)" ] ||
+    die "--app-page $app_page_missing: no such file here, or it cannot be read, and the page cache $page_cache keeps no copy of it from an earlier deploy"
+fi
 prebuilt=$backend_only$app_page
 if [ -n "$app_page" ]; then page_option=--app-page; else page_option=--backend-only; fi
 backend_only_commit=
@@ -2033,16 +2073,6 @@ file_sha256() {
   fi
 }
 
-# The cache entries of the page from a file (--app-page) named by
-# page_meta (file=<its path>), one a line: the zips whose .meta file says
-# that path.
-app_page_entries() {
-  for meta in "$page_cache/app-$page_kind-file-"*.zip.meta; do
-    if [ -f "$meta" ] && [ -f "${meta%.meta}" ] && [ "$(cat "$meta")" = "$page_meta" ]; then
-      printf '%s\n' "${meta%.meta}"
-    fi
-  done
-}
 
 # The page from a file (--app-page) and the page cache. The cache keeps
 # the file's zip under a name of its own, app-<kind>-file-<SHA-256>.zip,
@@ -2106,8 +2136,7 @@ write_page_meta() {
 # so a broken or partial download is never taken from there.
 download_page() {
   url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
-  page_cache=${toolchain_home:+$toolchain_home/.wiki-toolchain/pages}
-  [ -n "$page_cache" ] || page_cache=${XDG_CACHE_HOME:-$HOME/.cache}/wiki-demo/pages
+  page_cache=$(page_cache_dir)
   cached=$page_cache/$page_asset
   work=$ROOT/dist-newstyle/wasm-opt/download
   rm -rf "$work"

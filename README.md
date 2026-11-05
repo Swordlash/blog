@@ -1262,8 +1262,9 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
   The file must be a zip with `app.wasm` at its root; it is unpacked, checked and kept
   in the page cache under a name of its own (`app-<kind>-file-<SHA-256>.zip`, with the
   file's path in the `.meta` file beside it), among the five newest pages. A later run
-  that finds the file gone (the state still names it) deploys that copy, and says so;
-  a changed file replaces it. The deploy says which page it is: the
+  that finds the file gone (the state still names it, or `--app-page` names it again,
+  as the wizard does) deploys that copy, and says so; a changed file replaces it. The
+  deploy says which page it is: the
   page of the commit in its name when it follows CI's naming, or else a page from the
   file. The commit is not checked against the checkout's, so take the page of the
   commit you deploy. `--backend-only` or `--no-backend-only` forgets the file.
