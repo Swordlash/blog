@@ -18,8 +18,11 @@ import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Char (isSpace)
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, removeDirectoryRecursive, removeFile)
-import System.Exit (ExitCode (..))
-import System.Process (CreateProcess (..), proc, readCreateProcess, readCreateProcessWithExitCode)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
+import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
+import Data.Text.Encoding.Error (lenientDecode)
+import System.Process.Typed
 
 -- | What a command prints on its standard output when it succeeds, or
 -- 'Nothing' when it fails or cannot be started. Its standard error is
@@ -30,9 +33,9 @@ output = outputIn Nothing
 -- | 'output', run in the directory given.
 outputIn :: Maybe FilePath -> FilePath -> [String] -> IO (Maybe String)
 outputIn dir command args = do
-  result <- try (readCreateProcessWithExitCode (proc command args) {cwd = dir} "")
+  result <- try (readProcess (maybe id setWorkingDir dir (proc command args)))
   pure $ case result of
-    Right (ExitSuccess, out, _) -> Just out
+    Right (ExitSuccess, out, _) -> Just (text out)
     Right _ -> Nothing
     Left (_ :: IOException) -> Nothing
 
@@ -65,7 +68,12 @@ sha256Matches file expected = (== Just expected) <$> sha256Of file
 
 -- | The SHA-256 of a text, by @sha256sum@, in hexadecimal.
 sha256Text :: String -> IO String
-sha256Text text = takeWhile (not . isSpace) <$> readCreateProcess (proc "sha256sum" []) text
+sha256Text input = takeWhile (not . isSpace) . text <$> readProcessStdout_ (setStdin (byteStringInput (LBS.fromStrict (encodeUtf8 (T.pack input)))) (proc "sha256sum" []))
+
+-- | What a program printed, as text. A program's output is UTF-8 here; a
+-- byte that is not is replaced rather than stopping the run.
+text :: LBS.ByteString -> String
+text = T.unpack . decodeUtf8With lenientDecode . LBS.toStrict
 
 -- | Remove a file or a directory with everything in it, if it is there.
 removePath :: FilePath -> IO ()

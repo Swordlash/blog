@@ -4,12 +4,18 @@
 -- > maker bootstrap MODE --root DIR …    the bootstrap's second stage (toolchain/bootstrap.sh runs it)
 -- > maker status                        the toolchain, component by component
 -- > maker toolchain install [TARGET…]   install components (all a developer needs when none is named)
+-- > maker build native|wasm|wasm-opt [CABAL-ARG…]   the builds (npm run build-native, build-wasm, build-wasm-opt)
+-- > maker test native|wasm|all [CABAL-ARG…]         the tests (npm run test-native, test-wasm, test)
+-- > maker serve [CABAL-ARG…]                        build the application and serve it (npm run serve)
+-- > maker hspec-halogen                              build the browser tests' runner and print its path
 --
 -- @toolchain/maker.sh@ builds the maker with its own cabal project and runs
 -- it, and also starts the terminal interface (@toolchain/maker.sh tui@).
 module Maker.Cli
   ( Command (..)
   , Bootstrap (..)
+  , BuildTarget (..)
+  , TestTarget (..)
   , parser
   , parseArgs
   , main
@@ -19,6 +25,9 @@ where
 
 import Control.Monad (unless)
 import Data.Maybe (fromMaybe)
+import Maker.Build.Env (buildEnv)
+import Maker.Build.Native (buildNative, testNative)
+import Maker.Build.Wasm (buildWasm, hspecHalogen, serveWasm, testWasm, wasmBuildFrom)
 import Maker.Context
 import Maker.Log (say, withLock)
 import Maker.Pins (readPins)
@@ -27,10 +36,10 @@ import Maker.Rules
 import Maker.Status (ready, render, status)
 import Options.Applicative
 import System.Directory (canonicalizePath, getCurrentDirectory, getHomeDirectory, makeAbsolute)
-import System.Environment (lookupEnv)
-import System.Exit (exitFailure)
+import System.Environment (getEnvironment, lookupEnv)
+import System.Exit (ExitCode (..), exitFailure, exitWith)
 import System.FilePath ((</>))
-import System.IO (BufferMode (..), hSetBuffering, stdout)
+import System.IO (BufferMode (..), hPutStrLn, hSetBuffering, stderr, stdout)
 
 -- | How the bootstrap hands over to the maker.
 data Bootstrap = Bootstrap
@@ -45,11 +54,24 @@ data Bootstrap = Bootstrap
   }
   deriving (Eq, Show)
 
--- | A command of the maker.
+-- | What @maker build@ builds.
+data BuildTarget = BuildNative | BuildWasm | BuildWasmOpt
+  deriving (Eq, Show)
+
+-- | What @maker test@ runs.
+data TestTarget = TestNative | TestWasm | TestAll
+  deriving (Eq, Show)
+
+-- | A command of the maker. The builds' and tests' arguments go to cabal
+-- after the maker's own, as the npm scripts passed theirs.
 data Command
   = RunBootstrap Bootstrap
   | Status (Maybe FilePath)
   | Install (Maybe FilePath) [Target]
+  | RunBuild BuildTarget [String]
+  | RunTest TestTarget [String]
+  | Serve [String]
+  | HspecHalogen
   deriving (Eq, Show)
 
 -- | The command line's parser.
@@ -69,7 +91,34 @@ parser =
                   (hsubparser (command "install" (info installOptions (progDesc "Install the components named, or all a developer needs"))))
                   (progDesc "The toolchain's components")
               )
+            <> command
+              "build"
+              ( info
+                  ( hsubparser
+                      ( passing "native" (RunBuild BuildNative) "Every package with the host GHC (npm run build-native)"
+                          <> passing "wasm" (RunBuild BuildWasm) "The browser application and its pages (npm run build-wasm)"
+                          <> passing "wasm-opt" (RunBuild BuildWasmOpt) "The -O2 production build of the application (npm run build-wasm-opt)"
+                      )
+                  )
+                  (progDesc "The builds")
+              )
+            <> command
+              "test"
+              ( info
+                  ( hsubparser
+                      ( passing "native" (RunTest TestNative) "The native test suites of WIKI_TEST_GROUP (npm run test-native)"
+                          <> passing "wasm" (RunTest TestWasm) "The test suites on wasm, browser suites in Chromium (npm run test-wasm)"
+                          <> passing "all" (RunTest TestAll) "Native, then wasm (npm run test)"
+                      )
+                  )
+                  (progDesc "The tests")
+              )
+            <> passing "serve" Serve "Build the application and serve it on PORT, default 8080 (npm run serve)"
+            <> command "hspec-halogen" (info (pure HspecHalogen) (progDesc "Build the browser tests' runner and print its path"))
         )
+    -- A command whose remaining arguments, options included, go to cabal.
+    passing name make what =
+      command name (info (make <$> many (strArgument (metavar "CABAL-ARG"))) (progDesc what <> forwardOptions))
     rootOption = optional (strOption (long "root" <> metavar "DIR" <> help "The repository (default: the current directory)"))
     installOptions = Install <$> rootOption <*> many (argument targetReader (metavar "TARGET" <> help targetsHelp))
     targetsHelp = "One of: " <> unwords (map targetName [minBound .. maxBound])
@@ -139,3 +188,34 @@ main = do
       withLock ctx (stateDir ctx </> "toolchain.lock") "the toolchain" $ do
         _ <- runTargets ctx wanted
         say ctx ("installed or checked: " <> unwords (map targetName wanted))
+    RunBuild target args -> do
+      be <- buildEnv
+      case target of
+        BuildNative -> buildNative be args
+        BuildWasm -> wasmBuild False >>= \wb -> buildWasm be wb args
+        BuildWasmOpt -> wasmBuild True >>= \wb -> buildWasm be wb args
+    RunTest target args -> do
+      be <- buildEnv
+      case target of
+        TestNative -> testNative be args
+        TestWasm -> testWasm be args
+        TestAll -> do
+          putStrLn "Running native"
+          testNative be args
+          putStrLn "Running wasm"
+          testWasm be args
+    Serve args -> do
+      be <- buildEnv
+      wb <- wasmBuild False
+      serveWasm be wb args
+    HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
+  where
+    -- The build the environment describes, or the maker stops with status 2
+    -- and the reason, as the build script did.
+    wasmBuild optimised = do
+      environment <- getEnvironment
+      case wasmBuildFrom optimised (`lookup` environment) of
+        Right wb -> pure wb
+        Left message -> do
+          hPutStrLn stderr ("maker: " <> message)
+          exitWith (ExitFailure 2)

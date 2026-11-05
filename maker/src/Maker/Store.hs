@@ -15,6 +15,7 @@ import Control.Monad (forM, unless, when)
 import Data.IORef
 import Data.List (sort)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Maker.Build.Env (withoutCross)
 import Maker.Context
 import Maker.Log
 import Maker.Process
@@ -22,7 +23,7 @@ import System.Directory
 import System.Environment (getEnvironment)
 import System.FilePath ((</>))
 import System.IO (readFile')
-import System.Process (CreateProcess (..))
+import System.Process.Typed (setEnv, setWorkingDir)
 
 -- | The text whose SHA-256 is a project's fingerprint: the files given, the
 -- freeze and local files, every package description, then the two
@@ -86,7 +87,7 @@ warmOne ctx updated project files builder = do
         done <- readIORef updated
         unless done $ do
           say ctx "updating cabal's package index"
-          runLong ctx "updating cabal's package index" (\p -> p {cwd = Just (stateDir ctx)}) ["cabal", "update"]
+          runLong ctx "updating cabal's package index" (setWorkingDir (stateDir ctx)) ["cabal", "update"]
           writeIORef updated True
         say ctx ("building " <> project <> "'s dependencies into the cabal store (this can take a while)")
         started <- getPOSIXTime
@@ -100,17 +101,15 @@ warmOne ctx updated project files builder = do
 -- variables, which a shell may have loaded.
 warmNative :: Context -> IO ()
 warmNative ctx = do
-  environment <- getEnvironment
-  let dropped = ["CC", "CXX", "LD", "AR", "NM", "RANLIB", "STRIP", "OBJCOPY", "OBJDUMP", "SIZE", "STRINGS"]
-      clean = filter ((`notElem` dropped) . fst) environment
+  clean <- withoutCross <$> getEnvironment
   runWith
     ctx
     "building cabal.project's dependencies"
-    (\p -> p {cwd = Just ctx.root, env = Just clean})
+    (setWorkingDir ctx.root . setEnv clean)
     ["cabal", "build", "all", "--only-dependencies", "--project-file=cabal.project", "--builddir=dist-newstyle/native"]
 
 -- | The wasm project's dependencies, with the sysroot's environment loaded,
--- as toolchain/build-wasm.sh builds. Cabal may reuse the host ghc-pkg from
+-- as the maker's wasm build ("Maker.Build.Wasm") builds. Cabal may reuse the host ghc-pkg from
 -- its cached compiler configuration when switching toolchains, and miss a
 -- change to cabal.project, which cabal-wasm.project imports, so both are
 -- removed first.
@@ -119,7 +118,7 @@ warmWasm ctx =
   runWith
     ctx
     "building cabal-wasm.project's dependencies"
-    (\p -> p {cwd = Just ctx.root})
+    (setWorkingDir ctx.root)
     [ "sh"
     , "-c"
     , unwords

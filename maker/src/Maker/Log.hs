@@ -31,12 +31,13 @@ import Foreign.C.Types (CInt (..))
 import Maker.Context (Context (..), Mode (..), logFile)
 import Maker.Process (succeeds)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
-import System.Exit (ExitCode (..), exitWith)
+import System.Exit (exitWith)
 import System.FilePath (takeDirectory)
 import System.IO
 import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
 import System.Posix.User (getEffectiveUserID)
-import System.Process
+import System.Process qualified as Pipe (createPipe)
+import System.Process.Typed
 
 -- | A step, on the terminal and in the log with the time.
 say :: Context -> String -> IO ()
@@ -76,39 +77,39 @@ run :: Context -> String -> [String] -> IO ()
 run ctx step = runWith ctx step id
 
 -- | 'run', with the process changed first (its directory, its environment).
-runWith :: Context -> String -> (CreateProcess -> CreateProcess) -> [String] -> IO ()
+runWith :: Context -> String -> (ProcessConfig () () () -> ProcessConfig () () ()) -> [String] -> IO ()
 runWith _ _ _ [] = pure ()
 runWith ctx step change (program : args) = do
   logLine ctx ("+ " <> command (program : args))
-  code <- withFile (logFile ctx) AppendMode $ \h -> do
-    (_, _, _, p) <- createProcess (change (proc program args)) {std_in = NoStream, std_out = UseHandle h, std_err = UseHandle h}
-    waitForProcess p
+  code <- withFile (logFile ctx) AppendMode $ \h -> runProcess (intoLog h (change (proc program args)))
   unless (code == ExitSuccess) (failStep ctx step)
+
+-- | A process with no input whose output and errors go to the log.
+intoLog :: Handle -> ProcessConfig () () () -> ProcessConfig () () ()
+intoLog h = setStdin nullStream . setStdout (useHandleOpen h) . setStderr (useHandleOpen h)
 
 -- | Run a command with its output in the log, and answer how it ended,
 -- without stopping the run when it fails.
 runQuiet :: Context -> [String] -> IO ExitCode
 runQuiet _ [] = pure ExitSuccess
 runQuiet ctx (program : args) =
-  withFile (logFile ctx) AppendMode $ \h -> do
-    (_, _, _, p) <- createProcess (proc program args) {std_in = NoStream, std_out = UseHandle h, std_err = UseHandle h}
-    waitForProcess p
+  withFile (logFile ctx) AppendMode $ \h -> runProcess (intoLog h (proc program args))
 
 -- | Run a long step (a compiler's install, the wasm sysroot's setup, the
 -- index's update) as 'run' does. In the build mode, which the deploy uses,
 -- its output is also shown as it comes, so that a deploy does not sit
 -- silent for minutes; the other modes keep it in the log alone.
-runLong :: Context -> String -> (CreateProcess -> CreateProcess) -> [String] -> IO ()
+runLong :: Context -> String -> (ProcessConfig () () () -> ProcessConfig () () ()) -> [String] -> IO ()
 runLong ctx step change args
   | ctx.mode /= Build = runWith ctx step change args
 runLong _ _ _ [] = pure ()
 runLong ctx step change (program : args) = do
   logLine ctx ("+ " <> command (program : args))
-  (readEnd, writeEnd) <- createPipe
+  (readEnd, writeEnd) <- Pipe.createPipe
   code <- withFile (logFile ctx) AppendMode $ \h -> do
     hSetBuffering h LineBuffering
-    (_, _, _, p) <-
-      createProcess (change (proc program args)) {std_in = NoStream, std_out = UseHandle writeEnd, std_err = UseHandle writeEnd}
+    -- Its output and its errors through one pipe, in the order they come.
+    p <- startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) (change (proc program args)))))
     hClose writeEnd
     let copy = do
           end <- hIsEOF readEnd
@@ -118,7 +119,7 @@ runLong ctx step change (program : args) = do
             hPutStrLn h l
             copy
     copy `finally` hClose readEnd
-    waitForProcess p
+    waitExitCode p
   hFlush stdout
   unless (code == ExitSuccess) (failStep ctx step)
 
@@ -126,15 +127,8 @@ runLong ctx step change (program : args) = do
 -- when the download fails.
 fetch :: Context -> String -> FilePath -> IO Bool
 fetch ctx url file =
-  withFile (logFile ctx) AppendMode $ \h -> do
-    (_, _, _, p) <-
-      createProcess
-        (proc "curl" ["--fail", "--location", "--retry", "5", "--silent", "--show-error", "--output", file, url])
-          { std_in = NoStream
-          , std_out = UseHandle h
-          , std_err = UseHandle h
-          }
-    (== ExitSuccess) <$> waitForProcess p
+  withFile (logFile ctx) AppendMode $ \h ->
+    (== ExitSuccess) <$> runProcess (intoLog h (proc "curl" ["--fail", "--location", "--retry", "5", "--silent", "--show-error", "--output", file, url]))
 
 -- | The log's size, to tell a run that did nothing (the log unchanged) from
 -- one that did.
