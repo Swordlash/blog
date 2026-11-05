@@ -893,23 +893,6 @@ In the order to do it, unless the owner says otherwise.
   maker. Each phase starts when the pull requests touching the same scripts are
   merged (a after WP5.66; WP5.67 is merged).
 
-- **WP5.69 The live channel's permission-check test made deterministic** (the
-  session, 2026-11-05; one pull request). `wiki-server/test/Test/Storage/Scale.hs`,
-  "the live channel checks once for each user whether they may read a page an
-  event is about, not once for each tab", counts the `BEGIN` statements the storage
-  runs while an event is published and heard by every tab, and expects one per
-  user. On PostgreSQL in CI it fails now and then with one `BEGIN` too many (twice
-  in a row on #161, once on #153): some other read transaction lands in the
-  window, or the channel really checks twice under a race. The package finds out
-  which (reproduce with the seeds CI printed, 1050570649 and 548986842, and by
-  running the case many times on PostgreSQL and SQLite), fixes the channel if it
-  double-checks, and otherwise makes the test count only the checks themselves
-  (statements attributed to the permission checks, or the channel's own counter
-  exposed for tests) rather than every `BEGIN` on the connection; it also looks at
-  the other `statementsOf` counts in that spec for the same weakness. Native tests
-  on both backends; no behaviour change for users unless a double check is found,
-  in which case wiki-server's CHANGELOG says so.
-
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
@@ -1241,13 +1224,20 @@ needs. Each was true when its package merged; check before relying on one.
   TeX, up to 60 s with a hanging one), and a TeX repaired afterwards takes effect at
   "Check again" or a restart; the export buttons do nothing until the program has
   loaded, where the old links worked before it.
-- A flaky server test (seen 2026-11-04 on #153, a run of `main`'s code): "the live
-  channel checks once for each user whether they may read a page an event is about,
-  not once for each tab" (`wiki-server/test/Test/Storage/Scale.hs`) counts the `BEGIN`
-  statements while a hundred tabs hear an event and expects one per user; other
-  transactions of the server that begin in that window (a "last seen" write, a
-  notification) are counted too, so under load it sees more. Count the permission
-  checks themselves, or the readers' transactions only, when it next fails.
+- The live channel's permission checks (WP5.69, #164). The flaky test "the live
+  channel checks once for each user whether they may read a page an event is about"
+  (`Test.Storage.Scale`) counted the checks of `Reading` events in its window: a
+  tab's subscription changes who reads the page, `tellReaders` tells the other tabs
+  through `tellSubscribers`, and its `Check` runs one `mayReadPage` per user like a
+  save, whenever each tab's sending thread reaches it; the test also took any event
+  for a heard save and closed tabs early. The test now counts only `PageChanged`,
+  drains the queues with one uncounted save first and keeps the tabs open; the
+  channel itself never checked twice. Left for the owner: every update of who reads
+  or edits a page (`Reading`, `Editing`) costs one permission check per subscribed
+  user although it carries no page content and is frequent on a busy page; whether
+  those updates should skip the check is a design call. A test binary run by hand
+  without `LC_ALL=C.UTF-8` (which `npm-command.sh` exports) fails three encoding
+  tests; that is the runner, not the code.
 - WP5.59 and WP5.60 (decisions 42 and 43): the crop dialog's backdrop click closes
   it as the link dialog's does but is not browser-tested (Playwright's click lands on
   the dialog's body); Escape during an upload in flight closes the dialog while the
