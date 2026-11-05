@@ -286,4 +286,22 @@ expect "sh toolchain/deploy-local.sh --server --system-tools --postgres --db-por
   system_tools=yes no_build=yes
 pass 'the wizard refuses --system-tools with a page built here, a mirror that is not a URL, and a Hackage mirror for the home directory'"'"'s toolchain'
 
+# The options toolchain/configure.sh takes for a locked-down machine, given
+# to the wizard as arguments: they are answers over the deployment's state
+# (locked2's names the file, the bundles and both mirrors), so the command
+# line has them; an answer file's lines come after them and win.
+printf 'prefix=%s\nsystem_tools=no\n' "$TMP/srv/locked2" >"$TMP/answers"
+"$WIZARD" --system-tools --hackage-mirror https://other-hackage.example.org/ --npm-registry=https://other-npm.example.org/ \
+  --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err" || fail "the wizard with the presets failed: $(cat "$TMP/err")"
+[ "$(cat "$TMP/out")" = "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked2 --app-page $TMP/pages/app-server-0123.zip --bundle-locally --no-system-tools --npm-registry https://other-npm.example.org/ --hackage-mirror https://other-hackage.example.org/ $rest" ] ||
+  fail "the presets did not reach the command line, or the answers did not win: $(cat "$TMP/out")"
+printf 'mode=static\nbackend_only=head\n' >"$TMP/answers"
+"$WIZARD" --system-tools --npm-registry https://npm.example.org/ --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err" ||
+  fail "the wizard with the presets on a first run failed: $(cat "$TMP/err")"
+[ "$(cat "$TMP/out")" = 'sh toolchain/deploy-local.sh --static --backend-only --system-tools --npm-registry https://npm.example.org/ --https --port 8080' ] ||
+  fail "the presets did not reach a first run's command line: $(cat "$TMP/out")"
+if "$WIZARD" --args-from "$TMP/answers" --hackage-mirror >"$TMP/out" 2>"$TMP/err"; then fail 'the wizard took --hackage-mirror without a URL'; fi
+grep -F -- '--hackage-mirror needs a URL' "$TMP/err" >/dev/null || fail "the wizard did not say what --hackage-mirror lacks: $(cat "$TMP/err")"
+pass 'the wizard takes --system-tools, --hackage-mirror and --npm-registry as answers over the state, and an answer file wins over them'
+
 printf 'test-configure: %s passed\n' "$passed"

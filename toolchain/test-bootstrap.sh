@@ -992,6 +992,7 @@ assert_contains "$case_dir/mirror" "bootstrap: cabal's index and packages come f
 sed -n '/^repository hackage.haskell.org$/,/^$/p' "$tc/.cabal/config" >"$case_dir/stanza"
 [ "$(cat "$case_dir/stanza")" = "$(printf 'repository hackage.haskell.org\n  url: https://hackage.example.org/\n  secure: True\n  -- url: written by toolchain/bootstrap.sh --hackage-mirror\n  -- secure: True\n  -- root-keys:\n')" ] ||
   fail "the stanza is not as expected: $(cat "$case_dir/stanza")"
+# shellcheck disable=SC2016 # cabal's own text, $ncpus included, kept from its default configuration.
 assert_contains "$tc/.cabal/config" 'jobs: $ncpus'
 cmp "$HOME/.cabal/config" "$case_dir/users-config" || fail 'the user'"'"'s ~/.cabal/config changed'
 # The environment of the machine's own tools still names the toolchain's

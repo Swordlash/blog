@@ -829,6 +829,20 @@ it. The first run compiles brick and vty, which takes a few minutes; cabal keeps
 and later runs start at once. Everything the wizard does can be done with the options
 below, which it only writes out.
 
+On a machine that installs nothing from the internet (see
+[A machine that installs nothing from the internet](#a-machine-that-installs-nothing-from-the-internet)),
+give the wrapper the deploy's options for it. `--system-tools` and `--hackage-mirror`
+reach the bootstrap that installs the wizard's compiler, so the wizard is compiled with
+the machine's own GHC and cabal, and brick and vty come from the mirror. All three
+start the wizard's screens with those answers, so the deploy it runs takes them too.
+The mirror is written into the toolchain's own cabal configuration, so name the
+deployment's toolchain directory:
+
+```sh
+WIKI_TOOLCHAIN_HOME=/srv/wiki/toolchain sh toolchain/configure.sh --system-tools \
+  --hackage-mirror https://hackage.example.org/ --npm-registry https://npm.example.org/
+```
+
 `toolchain/deploy-local.sh` builds the wiki's server (see
 [The wiki's server](#the-wikis-server)), or with `--static` the demo, and serves it
 from a Linux machine of your own (x86_64 Debian or Ubuntu) as a systemd user

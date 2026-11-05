@@ -3713,6 +3713,23 @@ sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrap
 assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
 pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through cabal run -z'
 
+# On a machine that installs nothing from the internet: --system-tools and
+# --hackage-mirror reach the bootstrap that installs the wizard's compiler,
+# --npm-registry the environment, and all three the wizard, as given.
+: >"$EVENTS"
+(cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --system-tools --hackage-mirror https://hackage.example.org/ \
+  --npm-registry=https://npm.example.org/ --args-from answers) >"$out" 2>&1 ||
+  fail "the wrapper with the options of a locked-down machine failed: $(cat "$out")"
+assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME='
+assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
+status=0
+sh "$case_dir/repo/toolchain/configure.sh" --hackage-mirror >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the wrapper with --hackage-mirror and no URL exited $status, not 1"
+assert_contains "$out" 'configure: --hackage-mirror needs a URL'
+sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
+assert_contains "$out" '--system-tools         compile the wizard with this machine'"'"'s own GHC and'
+pass 'toolchain/configure.sh gives --system-tools and --hackage-mirror to the bootstrap, and the three options to the wizard'
+
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"
 if [ -n "$WIKI_SERVER" ] && [ -x "$WIKI_SERVER" ]; then

@@ -30,7 +30,13 @@ ghc-options: -threaded
 -- and cabal (toolchain/bootstrap.sh native), and runs this file as a cabal
 -- script from the checkout's root:
 --
--- >   cabal run -z -v0 toolchain/configure.hs -- [--args-from FILE]
+-- >   cabal run -z -v0 toolchain/configure.hs -- [--system-tools] [--hackage-mirror URL] [--npm-registry URL] [--args-from FILE]
+--
+-- --system-tools, --hackage-mirror URL and --npm-registry URL are the
+-- deploy's options for a machine that installs nothing from the internet.
+-- The wrapper gives them to the bootstrap that installs GHC and cabal for
+-- the wizard, and the wizard takes them as answers over the state (see
+-- presetArgs), so that its screens start with them.
 --
 -- The -z (--ignore-project) matters: without it cabal would build the
 -- script inside the repository's cabal.project, and resolve and fetch every
@@ -1272,34 +1278,62 @@ app =
 main :: IO ()
 main = do
   args <- getArgs
-  case args of
-    ["--args-from", file] -> fromFile file
-    ["--help"] -> T.putStr usage
-    [] -> wizard
-    _ -> hPutStrLn stderr (T.unpack usage) >> exitFailure
+  case presetArgs args of
+    Left e -> hPutStrLn stderr ("configure: " <> e) >> hPutStrLn stderr (T.unpack usage) >> exitFailure
+    Right (presets, rest) -> case rest of
+      ["--args-from", file] -> fromFile presets file
+      ["--help"] -> T.putStr usage
+      [] -> wizard presets
+      _ -> hPutStrLn stderr (T.unpack usage) >> exitFailure
+
+-- | The options for a machine that installs nothing from the internet,
+-- which toolchain/configure.sh also gives the bootstrap that installs the
+-- wizard's compiler: --system-tools, --hackage-mirror URL and
+-- --npm-registry URL, as answers (system_tools, hackage_mirror,
+-- npm_registry). They are applied over the deployment's state, so that the
+-- screens start with them, and before an answer file's lines, which win.
+-- The rest of the arguments are returned as they are.
+presetArgs :: [String] -> Either String ([(Text, Text)], [String])
+presetArgs = go [] []
+  where
+    go ps rest [] = Right (reverse ps, reverse rest)
+    go ps rest (arg : more) = case arg of
+      "--system-tools" -> go (("system_tools", "yes") : ps) rest more
+      "--hackage-mirror" -> withValue "hackage_mirror" more
+      "--npm-registry" -> withValue "npm_registry" more
+      _
+        | Just v <- T.stripPrefix "--hackage-mirror=" (T.pack arg) -> go (("hackage_mirror", v) : ps) rest more
+        | Just v <- T.stripPrefix "--npm-registry=" (T.pack arg) -> go (("npm_registry", v) : ps) rest more
+        | otherwise -> go ps (arg : rest) more
+      where
+        withValue key (v : after) = go ((key, T.pack v) : ps) rest after
+        withValue _ [] = Left (arg <> " needs a URL")
 
 usage :: Text
 usage =
   T.unlines
-    [ "usage: sh toolchain/configure.sh [--args-from FILE]"
+    [ "usage: sh toolchain/configure.sh [--system-tools] [--hackage-mirror URL] [--npm-registry URL] [--args-from FILE]"
     , ""
     , "Asks for the options of toolchain/deploy-local.sh in a few screens and runs"
     , "the deploy with them. With --args-from FILE it reads the answers from FILE"
     , "(key=value lines; see the header of toolchain/configure.hs) and prints the"
-    , "command line instead."
+    , "command line instead. --system-tools, --hackage-mirror and --npm-registry,"
+    , "for a machine that installs nothing from the internet, are given to the"
+    , "bootstrap that installs the wizard's compiler, and start the wizard's"
+    , "screens with those answers."
     ]
 
 -- | The answers of a file, over the state of the deployment it names, and
 -- the command line they make.
-fromFile :: FilePath -> IO ()
-fromFile file = do
+fromFile :: [(Text, Text)] -> FilePath -> IO ()
+fromFile presets file = do
   -- The file is named from where toolchain/configure.sh was started.
   path <- T.unpack <$> absolute (T.pack file)
   kv <- keyValues <$> T.readFile path
   let named = defaultAnswers {name = value "name" kv (name defaultAnswers), prefix = value "prefix" kv ""}
   (filled, n) <- prefill named
   hPutStrLn stderr ("configure: " <> T.unpack n)
-  case foldM applyAnswer filled kv of
+  case foldM applyAnswer filled (presets <> kv) of
     Left e -> hPutStrLn stderr ("configure: " <> file <> ": " <> T.unpack e) >> exitFailure
     Right given -> do
       a <- normalise <$> resolvePaths given
@@ -1312,13 +1346,16 @@ fromFile file = do
     value key kv def = fromMaybe def (lookup key (reverse kv))
 
 -- | The screens, and then the deploy or the command line.
-wizard :: IO ()
-wizard = do
+wizard :: [(Text, Text)] -> IO ()
+wizard presets = do
   there <- doesFileExist "toolchain/deploy-local.sh"
   unless there $ do
     hPutStrLn stderr "configure: run this from the checkout's root, where toolchain/deploy-local.sh is (sh toolchain/configure.sh does)"
     exitFailure
-  (a, n) <- prefill defaultAnswers
+  (filled, n) <- prefill defaultAnswers
+  a <- case foldM applyAnswer filled presets of
+    Left e -> hPutStrLn stderr ("configure: " <> T.unpack e) >> exitFailure
+    Right given -> pure given
   let start =
         Wizard
           { screen = Which
