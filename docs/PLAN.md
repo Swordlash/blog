@@ -768,6 +768,25 @@ confirms it against reality and the plan is amended if it does not hold.
     a dot on the sidebar's link marks entries newer than the reader's browser has
     seen. CI's `changelog` job requires exactly one new entry numbered with the pull
     request; the owner's label `no-changelog` exempts one (AGENTS.md).
+51. **The maker, the toolchain's second stage in Haskell (WP5.68a).** `maker/` is a
+    package with a `cabal.project` of its own (`-Werror` for it), on Shake 0.19,
+    optparse-applicative and, for `maker-tui`, brick 3.0. `toolchain/pins.env` holds
+    the pins and floors as `KEY=VALUE` lines that the shell sources and the maker
+    parses. `toolchain/bootstrap.sh` keeps what runs before a GHC exists: the
+    read-only modes, the Debian packages, ghcup with GHC and cabal, the Hackage
+    mirror and index, `check-native.sh` and `check-tex.sh`, and the deploy's
+    `native` and `node` modes in full (so Node's install exists in both stages until
+    the deploy moves). For `toolchain`, `build`, `all` and `warm` it builds the maker
+    once and execs the binary (`cabal list-bin`, not `cabal run`, so a built maker
+    costs no solver pass), passing its state as options and the lock as fd 9. The
+    lock is `flock(2)` in both stages, so they exclude each other; the maker makes
+    the state directory before taking it. Each component is a phony Shake rule run
+    with one thread; the messages are the bootstrap's, word for word.
+    `WIKI_MAKER` names a maker built elsewhere, for the bootstrap's tests. The TUI is
+    a separate executable because brick's terminal library links libtinfo, which a
+    deploy's machine need not have. `sh toolchain/maker.sh status`, `… toolchain
+    install TARGET…` and `… tui` run it by hand. The package declares the MIT
+    licence and ships its copy, as every package does.
 
 ## Repository layout
 
@@ -855,7 +874,9 @@ In the order to do it, unless the owner says otherwise.
   TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
   shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
   maker. Each phase starts when the pull requests touching the same scripts are
-  merged (WP5.66 and WP5.67 are merged, so a is under way).
+  merged. Phase (a) is merged (#167, decision 51), with the checks
+  (`check-native.sh`, `check-tex.sh`) left in shell because they run before a GHC
+  exists and the semaphore moved to (c); (b) is next.
 
 ### Later, or waiting for the owner
 
@@ -1279,6 +1300,12 @@ needs. Each was true when its package merged; check before relying on one.
   which it does not; the unseen dot is per browser, not per account, and appears a
   moment after the page shows; raw HTML in an entry keeps its own ids and `[[toc]]`
   lists them unprefixed.
+- WP5.68a (decision 51): the maker is built and tested only on GHC 9.14.1 so far,
+  though `--system-tools` allows 9.10 and the bootstrap now fails if the maker does
+  not build there; CI's `env:` blocks (`build.yml`, `server-page.yml`) still repeat
+  the pins of `toolchain/pins.env` with nothing checking they agree; no CI job builds
+  the Dockerfile, so the maker's place in the image is untested; Shake runs phony
+  rules only, the oracles and file rules come with (b).
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
