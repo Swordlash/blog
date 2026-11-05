@@ -57,7 +57,8 @@ confirms it against reality and the plan is amended if it does not hold.
    `th` to `wiki-app`'s dependencies, and until haskell-halogen 893fefa native `alex`
    and `happy < 2.2` to the wasm job for a one-off `ghc-lib-parser` build; since that
    pin (2026-11-03) the quotes are parsed by the compiling GHC's own `ghc` library,
-   so neither is needed. `clay` is optional:
+   so neither is needed; since 3459805 (#166, 2026-11-05) that library may be 9.10's,
+   9.12's or 9.14's. `clay` is optional:
    `web/style.css` stays the home of the stylesheet. The pin is bumped deliberately, in
    its own commit.
 4. **Targets: native GHC and wasm.** Not the JavaScript backend: `th` does not build
@@ -699,18 +700,21 @@ confirms it against reality and the plan is amended if it does not hold.
     `--status`, offered by the wizard and taken by `toolchain/configure.sh`, usable
     together or apart; the deploy without them is unchanged. `--system-tools`: GHC,
     cabal and Node are the machine's own; `bootstrap.sh` keeps floors beside the
-    pins (`GHC_MIN_VERSION=9.12`, since `haskell-halogen-th` requires
-    `ghc >= 9.12 && < 9.15`; `CABAL_MIN_VERSION=3.12`, the first with `--semaphore`
+    pins (`GHC_MIN_VERSION=9.10`, the oldest GHC haskell-halogen builds and
+    tests with; `CABAL_MIN_VERSION=3.12`, the first with `--semaphore`
     and `cabal path`; `NODE_MIN_MAJOR=24`), and its read-only
     `system-tools [native] [node]` runs before anything else and checks only what
     the run needs: a missing or too-old tool stops the deploy, named with the
     version found and the note that removing the option lets the bootstrap
     install it; another version than the pinned one is used with a warning.
-    Refused with a page built here, which needs the wasm toolchain. The floor is
-    9.12, not the 9.10 first hoped for: a CI experiment with 9.10.3 fails in the
-    solver on th's bound, and 9.12.2 builds everything once four local helpers
-    that 9.14 typed by itself carry their types (two in `Wiki.Server.Storage`,
-    two in `Test.Storage.Scale`; #163). `--npm-registry URL`: `NPM_CONFIG_REGISTRY` for every npm and npx
+    Refused with a page built here, which needs the wasm toolchain. The floor was
+    9.12 while `haskell-halogen-th` required `ghc >= 9.12`; haskell-halogen
+    3459805 (its #103) takes the `ghc` library of 9.10 to 9.14, and with that
+    pin (#166) the wiki builds on 9.10.3 and 9.12.2 once four local helpers that
+    9.14 typed by itself carry their types (two in `Wiki.Server.Storage`, two in
+    `Test.Storage.Scale`; #163), so the floor is 9.10. No CI job builds with an
+    older GHC: the experiment's stores, several GB each, pushed the main
+    branch's caches out of the repository's 10 GB. `--npm-registry URL`: `NPM_CONFIG_REGISTRY` for every npm and npx
     call; `npm ci` rewrites the lockfile's `registry.npmjs.org` addresses to it.
     `--hackage-mirror URL`: written into `$CABAL_DIR/config` before `cabal update`
     (forced when the address changes), `secure: True` kept, so the bootstrap
