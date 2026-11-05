@@ -424,6 +424,7 @@ hub backing = describe "the live channel" $
       testWithApplication (pure app) $ \port -> do
         subscribed <- newEmptyMVar
         heard <- newEmptyMVar
+        counted <- newEmptyMVar
         let tab i = WS.runClientWith "127.0.0.1" port ("/" <> toS eventsPath) WS.defaultConnectionOptions [("X-Test-User", show (i `mod` length users))] $ \c -> do
               WS.sendTextData c (encode (Subscribe notes.id))
               let next = timeout 10_000_000 (WS.receiveData c) >>= maybe (assertFailure "nothing heard in ten seconds") (pure . decode)
@@ -431,26 +432,46 @@ hub backing = describe "the live channel" $
                     next >>= \case
                       Just (Subscribed {}) -> putMVar subscribed ()
                       _ -> untilSubscribed
-                  untilEvents n
+                  -- Only the page's saves are counted as heard. Who reads
+                  -- the page comes as an event too ('Reading'), when
+                  -- another user's first tab subscribes, and is skipped.
+                  untilSaves n
                     | n <= (0 :: Int) = pass
                     | otherwise =
                         next >>= \case
-                          Just (Event _ _) -> putMVar heard () >> untilEvents (n - 1)
-                          _ -> untilEvents n
+                          Just (Event _ (PageChanged _)) -> putMVar heard () >> untilSaves (n - 1)
+                          _ -> untilSaves n
               untilSubscribed
-              untilEvents 2
+              untilSaves 3
+              -- The tab stays open until the counting is done. The last
+              -- tab of a user to close changes who reads the page, the
+              -- other tabs are told, and that 'Reading' event is checked
+              -- too.
+              readMVar counted
         running <- for [1 .. tabs] (async . tab)
         flip finally (traverse_ cancel running) $ do
           replicateM_ tabs (takeMVar subscribed)
-          -- Each permission check is a read transaction on a reader, which
-          -- begins with a plain BEGIN; a write begins with BEGIN IMMEDIATE.
-          let checksFor event = do
-                (_, statements) <- statementsOf st $ do
-                  publish events notes.id event
-                  replicateM_ tabs (takeMVar heard)
+          let everyTabHears event = publish events notes.id event >> replicateM_ tabs (takeMVar heard)
+              -- Each permission check is a read transaction on a reader,
+              -- which begins with a plain BEGIN; a write begins with
+              -- BEGIN IMMEDIATE.
+              checksFor event = do
+                (_, statements) <- statementsOf st (everyTabHears event)
                 pure (length (filter (== "BEGIN") statements))
+          -- A save first, not counted, so that the channel is quiet when
+          -- the counting starts. Each subscription that changed who reads
+          -- the page put a 'Reading' event in the other tabs' queues, in
+          -- the same transaction as its own answer, so before the last
+          -- answer the loop above waited for. Those events are checked
+          -- too, as each tab's thread reaches them. A tab's queue is sent
+          -- in order, and an event is sent only once its check is
+          -- answered, so a tab that has heard this save has had every
+          -- earlier check answered. Once every tab has heard it, no check
+          -- is left but those of the saves counted below.
+          everyTabHears (PageChanged notes.updatedAt)
           checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
           checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
+          putMVar counted ()
           traverse_ wait running
 
 search :: Backing -> Spec
