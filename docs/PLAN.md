@@ -815,14 +815,18 @@ confirms it against reality and the plan is amended if it does not hold.
     versions; 9.10 is the floor `--system-tools` takes (decision 48), and CI checks
     it: a job that builds the wiki's packages and the maker with GHC 9.10 on every
     pull request, and the same with 9.12 weekly and by hand.
-54. **One cabal store in CI per cabal version (the owner, 2026-11-05).** The store
-    keeps each compiler's packages in a directory of its own, so one cache entry,
-    keyed by the runner's OS and kind and cabal's version, holds the native, the
-    wasm and the 9.10 store together; cabal decides what to build on top of it. A
-    job saves it only when it added packages, so jobs that run side by side do not
-    undo each other for more than a run or two. A workflow run by hand deletes it
-    when it grows too large. The build directories (`dist-newstyle/...`) stay cached
-    per compiler, since their plan is one compiler's.
+54. **Two cabal stores in CI, keyed by cabal's version (the owner, 2026-11-05: "jeden
+    na native, który pisany jest tylko przez jeden z trzech (np. unit), jeden na wasm,
+    osobno dist-newstyles"; #169).** The store keeps each compiler's packages in a
+    directory of its own, so a key needs only cabal's version and the runner's OS and
+    kind. The native store is saved by the unit job alone, which installs GHC 9.10.3's
+    dependencies into it before saving, for `native (GHC 9.10.3)` to restore; the wasm
+    store is saved by the wasm job alone, and `server-page.yml` restores it and saves
+    nothing (its -O2 dependencies are built on top in each run, on main and tags
+    only). The workflow "Delete a cabal store" (by hand) deletes every copy of one,
+    under its key and the old ones, for the next run to build again. The build
+    directories (`dist-newstyle/...`) stay cached per compiler. The first runs fell
+    back on the old keys once; those restore keys go at the next bump of the tag.
 
 ## Repository layout
 
@@ -882,13 +886,6 @@ In the order to do it, unless the owner says otherwise.
   of answering not found, and its session names the newest entry, so the
   sidebar's link and its dot work as on a server. `app.wasm` stays one binary
   for both backends. Browser tests: the page and the dot on the demo.
-- **WP5.70 CI: one store per cabal version, and GHC 9.10** (decisions 53 and 54).
-  One cache entry for the cabal store, keyed by OS, runner kind and cabal's
-  version, restored by every job and saved only when a job added packages; the
-  separate native, wasm and server page stores and their pruning go. A job that
-  builds the wiki's packages and the maker with GHC 9.10 (its own build directory,
-  not cached) on every pull request, and with 9.12 weekly and by hand. A workflow
-  run by hand that deletes the store's entry.
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
