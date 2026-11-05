@@ -897,6 +897,23 @@ In the order to do it, unless the owner says otherwise.
   maker. Each phase starts when the pull requests touching the same scripts are
   merged (a after WP5.66 and WP5.67).
 
+- **WP5.69 The live channel's permission-check test made deterministic** (the
+  session, 2026-11-05; one pull request). `wiki-server/test/Test/Storage/Scale.hs`,
+  "the live channel checks once for each user whether they may read a page an
+  event is about, not once for each tab", counts the `BEGIN` statements the storage
+  runs while an event is published and heard by every tab, and expects one per
+  user. On PostgreSQL in CI it fails now and then with one `BEGIN` too many (twice
+  in a row on #161, once on #153): some other read transaction lands in the
+  window, or the channel really checks twice under a race. The package finds out
+  which (reproduce with the seeds CI printed, 1050570649 and 548986842, and by
+  running the case many times on PostgreSQL and SQLite), fixes the channel if it
+  double-checks, and otherwise makes the test count only the checks themselves
+  (statements attributed to the permission checks, or the channel's own counter
+  exposed for tests) rather than every `BEGIN` on the connection; it also looks at
+  the other `statementsOf` counts in that spec for the same weakness. Native tests
+  on both backends; no behaviour change for users unless a double check is found,
+  in which case wiki-server's CHANGELOG says so.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
