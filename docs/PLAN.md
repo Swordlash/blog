@@ -647,6 +647,31 @@ confirms it against reality and the plan is amended if it does not hold.
     `style="max-height: Nlh; overflow: auto"`, so it scrolls in the server-rendered
     page before any script runs; `overflow` is in the inline style as well as the
     class so a feed or an unstyled page still contains the listing.
+46. **A copy button on code blocks, and numbered listings (WP5.63).** Every code
+    block on a page, in the editor's preview, in comments, on slides and in the guide
+    has a button in its top right corner that copies the listing (the owner,
+    2026-11-05). The renderer's `copyButtons` option (off by default, on in the
+    application's island options, so the feed has none) wraps the block in
+    `div.code-block` holding the `<pre>` and an empty `button.code-copy` beside it,
+    not inside it: the highlighter replaces what it fills, and a scrolling listing
+    would carry a child button away. The label (Copy, Copied, Not copied) is drawn by
+    the stylesheet from `data-copy`, so the button has no text: none in the page's
+    text, comment anchors, search or a selection. It shows on hover, on keyboard
+    focus and while a label is up, always on touch screens, never in print or
+    without scripting. A document-level click listener in the islands script copies
+    the `<code>`'s `textContent` with the clipboard API, falls back to selecting the
+    code and the old copy command, and says Not copied when both fail; so it works on
+    the server-rendered page before the application runs, which the smoke test
+    checks with a real clipboard. A fence with the class `numbered`
+    (` ```haskell {.numbered} `, with `rows=N` too) shows a number before each line
+    (the owner, 2026-11-05): the `<pre>` gets the class `numbered` and starts with an
+    `aria-hidden` span of one empty span per line, numbered by a CSS counter, so the
+    gutter has no text, is right-aligned, dimmed, not selectable, and scrolls with
+    the code; `numbered` is never read as the language. For the gutter to survive
+    highlighting every listing is `<pre class="wiki-code"><code>…</code></pre>` with
+    the island's ref on the `<code>`, which the highlighter fills in place. Exports
+    give such a block pandoc's `numberLines` class: the LaTeX writer numbers the
+    lines, the Word writer does not. The toolbar's code block command is unchanged.
 
 ## Repository layout
 
@@ -693,33 +718,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.63 A copy button on code blocks** (the owner, 2026-11-05; one pull request).
-  Every fenced code block on a page, in the editor's preview and in the guide gets a
-  button in its top right corner that copies the whole listing to the clipboard: the
-  code's text exactly as written (not the highlighter's markup, not the button's own
-  label, with the final newline as the fence had it), through the clipboard API. The
-  button is unobtrusive (shown on hover and on keyboard focus, always reachable by
-  keyboard, labelled for assistive technology), says "Copied" for a moment after a
-  click and "Copy" again after, and never ends up in the copied text, in the plain
-  text, in search, in exports or in the feed. It works on the server-rendered page
-  before the application runs (a listener in `web/src/islands.js`, as the spoilers'),
-  and the DOM the server renders and the one the application adopts stay the same
-  (the smoke test's adoption of every prerendered page passes). The package chooses
-  where the button lives (inside the `<pre>` positioned over the code, or a wrapper
-  around it) and says why; a scrolling listing (`{rows=N}`) keeps its button in view.
-  The guide's Markdown page mentions it under Code. Tests: wiki-core (the rendered
-  shape, the plain text without the button), browser (a click copies the code, the
-  label changes and changes back, the button is not in the page's text), the smoke
-  test. Docs: README's Markdown section, wiki-app's CHANGELOG. Also line numbers (the
-  owner, 2026-11-05): a fence with the class `numbered` (` ```haskell {.numbered} `,
-  with or without `rows=N`) shows a number before each line, in a gutter that is not
-  part of the code's text: not selected with it, not copied by the button, not in the
-  plain text or search; the gutter scrolls with the code in a scrolling listing and
-  keeps its place after the highlighter has run; the toolbar's code block command is
-  unchanged. Exports number the same listings (pandoc's `numberLines` class, which
-  its writers already handle). Tests as for the button, plus a numbered listing in the
-  guide's Code section.
 
 ### Later, or waiting for the owner
 
@@ -1102,6 +1100,14 @@ needs. Each was true when its package merged; check before relying on one.
   once, apparently a timing race older than WP5.62 (Mermaid and TikZ finish about
   2 s after load and push the page down), which the guide's longer Spoilers section
   makes easier to hit; CI has not hit it.
+- WP5.63 (decision 46): a Word export shows no line numbers (pandoc's Word writer
+  ignores `numberLines`); if highlighting fails, the error text written into the
+  `<code>` is what the button copies; the button covers the end of the first line
+  of code; the gutter scrolls sideways with a long line rather than staying put; a
+  fence whose first line is blank has no test on the prerendered page; with the
+  islands script missing but scripting on, the button shows and does nothing; the
+  browser suite stubs the clipboard, since hspec-halogen's browser context grants
+  no clipboard permission, and only the smoke test uses the real one.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
