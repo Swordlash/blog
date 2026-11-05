@@ -54,7 +54,9 @@ RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates curl git \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY toolchain/bootstrap.sh toolchain/bootstrap.sh
+# The bootstrap, its pins, and its second stage, the maker, which it builds.
+COPY toolchain/bootstrap.sh toolchain/pins.env toolchain/
+COPY maker/ maker/
 RUN sh toolchain/bootstrap.sh build \
  && rm -rf /var/lib/apt/lists/* /root/.ghcup/cache /root/.ghcup/tmp /root/.ghcup/logs
 ENV PATH=/root/.wiki-toolchain/node/bin:/root/.ghcup/bin:$PATH

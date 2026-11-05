@@ -1,3 +1,4 @@
 libpq-dev
 libsodium-dev
 libxml2-utils
+libncurses-dev
