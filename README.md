@@ -2092,9 +2092,12 @@ title: Section spoilers on the heading
 The grammar, which `toolchain/check-changelog.sh` and wiki-server's reader
 (`wiki-server/src/Wiki/Server/WhatsNew/Entry.hs`) both enforce:
 
-- **The file** is `changelog/<slug>.md`, the slug lower-case letters and
-  digits in words joined by single hyphens (`heading-spoilers.md`, not
-  `Heading_Spoilers.md`), in UTF-8 with Unix line ends. Nothing else belongs
+- **The file** is `changelog/<number>-<slug>.md`: the number is the entry's
+  `pr` with zeros in front to five digits (`00000` before the pull request is
+  opened), so that the files list in the order the pull requests were opened;
+  the slug is lower-case letters and digits in words joined by single hyphens
+  (`00160-heading-spoilers.md`, not `heading-spoilers.md` or
+  `00160-Heading_Spoilers.md`). UTF-8 with Unix line ends. Nothing else belongs
   in `changelog/`.
 - **The front matter** is the file's first four lines, exactly: `---`, then
   `pr: N`, then `title: T`, then `---`. N is the pull request's number,

@@ -12,9 +12,12 @@
 --
 -- = The grammar
 --
--- A file is named @\<slug>.md@, the slug lower-case letters and digits in
--- words joined by single hyphens (@heading-spoilers.md@). It is UTF-8 with
--- Unix line ends, and reads:
+-- A file is named @\<number>-\<slug>.md@: the number is the entry's @pr@
+-- with zeros in front to five digits (@00000@ while it is not numbered
+-- yet), so that the files list in the order the pull requests were opened;
+-- the slug is lower-case letters and digits in words joined by single
+-- hyphens (@00160-heading-spoilers.md@). It is UTF-8 with Unix line ends,
+-- and reads:
 --
 -- > ---
 -- > pr: 158
@@ -224,13 +227,22 @@ topHeading l =
 entryMarkdown :: Entry -> Text
 entryMarkdown e = T.intercalate "\n\n" ["### " <> sectionHeading s <> "\n\n" <> text | (s, text) <- e.sections]
 
--- | Whether a file's name is an entry's: a slug, then @.md@.
+-- | Whether a file's name is an entry's: a number of five digits or more,
+-- a hyphen, a slug, then @.md@. That the number is the entry's own is
+-- checked by 'readEntries', which has read the entry.
 entryFileName :: FilePath -> Bool
-entryFileName path = takeExtension name == ".md" && slug (T.pack (take (length name - 3) name))
+entryFileName path = takeExtension name == ".md" && named (T.splitOn "-" (T.pack (take (length name - 3) name)))
   where
     name = takeFileName path
-    slug t = not (T.null t) && all word (T.splitOn "-" t)
+    named = \case
+      number : slug@(_ : _) -> T.length number >= 5 && T.all isDigit number && all word slug
+      _ -> False
     word w = not (T.null w) && T.all (\c -> isAsciiLower c || isDigit c) w
+
+-- | The number an entry's file is named with: its @pr@, with zeros in front
+-- to five digits.
+fileNumber :: Int -> Text
+fileNumber n = let digits = show n in T.replicate (5 - T.length digits) "0" <> digits
 
 -- | The entries of the directory's files, by their names and texts; or the
 -- first problem, naming its file. Every file must be an entry, and no two
@@ -239,8 +251,12 @@ readEntries :: [(FilePath, Text)] -> Either Text [Entry]
 readEntries files = do
   entries <- for (sortOn fst files) $ \(path, contents) -> do
     unless (entryFileName path) $
-      Left (toS path <> ": not an entry's name; an entry is named changelog/<slug>.md, the slug lower-case letters and digits in words joined by hyphens")
-    first (\e -> toS path <> ": " <> e) ((path,) <$> parseEntry contents)
+      Left (toS path <> ": not an entry's name; an entry is named changelog/<number>-<slug>.md, the number its pr with zeros in front to five digits, the slug lower-case letters and digits in words joined by hyphens")
+    e <- first (\problem -> toS path <> ": " <> problem) (parseEntry contents)
+    let named = T.takeWhile (/= '-') (T.pack (takeFileName path))
+    unless (named == fileNumber e.pr) $
+      Left (toS path <> ": named with " <> named <> " but its pr is " <> show e.pr <> ": name it " <> fileNumber e.pr <> "-" <> T.drop 1 (T.dropWhile (/= '-') (T.pack (takeFileName path))))
+    pure (path, e)
   let numbered = Map.fromListWith (<>) [(e.pr, [p]) | (p, e) <- entries, e.pr /= 0]
   case [(n, ps) | (n, ps) <- Map.toList numbered, length ps > 1] of
     (n, ps) : _ -> Left ("pr " <> show n <> " is in more than one entry: " <> T.intercalate ", " (map toS (sort ps)))
