@@ -15,10 +15,10 @@ import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hPutStrLn, stderr)
 
--- | Write @wiki-server/changelog.stamp@, which makes cabal rebuild
--- wiki-server when an entry of the changelog is added
--- (@toolchain/changelog-stamp.sh@ says why). The Dockerfile, the deploy
--- and the smoke test run the same script.
+-- | Write @wiki-server/changelog.stamp@ and @wiki-app/changelog.stamp@,
+-- which make cabal rebuild each package when an entry of the changelog is
+-- added (@toolchain/changelog-stamp.sh@ says why). The Dockerfile, the
+-- deploy and the smoke test run the same script.
 changelogStamp :: BuildEnv -> IO ()
 changelogStamp be = call be.native "sh" ["toolchain/changelog-stamp.sh"]
 

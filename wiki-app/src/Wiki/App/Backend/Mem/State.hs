@@ -187,6 +187,7 @@ import Wiki.Api.ServerSettings (HomePage, MailTestResult, ProviderChange, Provid
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
 import Wiki.Api.Stars qualified as Star
+import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
@@ -324,6 +325,10 @@ data MemState = MemState
   , counter :: Natural
   -- ^ The number in the next id made, so that ids are the same from one
   -- run to the next.
+  , whatsNew :: Maybe WhatsNew
+  -- ^ The page "What's new?" this wiki answers, or 'Nothing' for none. The
+  -- demo's is the changelog compiled into the application
+  -- ("Wiki.App.Demo.WhatsNew"); the tab never changes it or stores it.
   }
   deriving stock (Eq, Show)
 
@@ -358,6 +363,7 @@ emptyState =
     , stars = mempty
     , current = Nothing
     , counter = 1
+    , whatsNew = Nothing
     }
 
 -- | A version of a page as the state stores it, under the page and its
@@ -808,7 +814,7 @@ repage space parent slug position p =
 -- box the settings define, which everyone's pages are rendered with.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.mathMacros = st.server.mathMacros, B.homePage = if st.grants.access == Closed && not st.server.homePage.showAnonymous then SS.defaultHomePage else st.server.homePage}
+  Nothing -> (anonymousIn st.grants.access) {B.boxes = st.server.boxes, B.mathMacros = st.server.mathMacros, B.homePage = if st.grants.access == Closed && not st.server.homePage.showAnonymous then SS.defaultHomePage else st.server.homePage, B.whatsNew = newestEntry <$> st.whatsNew}
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -831,8 +837,9 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
       , -- Nor does it offer the assistant other services: the browser
         -- reaches only Anthropic's and OpenAI's from the demo's page.
         B.assistantServices = []
-      , -- Nor a page "What's new?": the changelog is the server's.
-        B.whatsNew = Nothing
+      , -- The page "What's new?" when the wiki has one: the demo's is the
+        -- changelog compiled into it.
+        B.whatsNew = newestEntry <$> st.whatsNew
       }
 
 -- | The spaces the current user may view, with their ancestors.

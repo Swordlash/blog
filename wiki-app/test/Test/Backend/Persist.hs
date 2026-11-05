@@ -89,6 +89,9 @@ lasting st =
     , adminCreatesPasswordAccounts = True
     , invitations = mempty
     , server = noServerSettings {SS.homePage = st.server.homePage}
+    , -- The page "What's new?" is the application's, not the stores': the
+      -- tab that opens them puts back the one its build carries.
+      whatsNew = Nothing
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one
