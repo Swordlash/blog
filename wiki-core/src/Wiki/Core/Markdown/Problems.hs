@@ -243,8 +243,10 @@ islandPlaces source = case A.parseWithLines source of
       _ -> False
 
     -- The lines an island's source is written on within a block's lines:
-    -- the n-th line (from 0) that holds its first line, for the n-th
-    -- island of that source in the block. A formula is looked for after
+    -- the line of the n-th occurrence (from 0) of its first line, for the
+    -- n-th island of that source in the block. A line is counted once for
+    -- each time it holds the first line, so that two islands of the same
+    -- source on one line are both placed there. A formula is looked for after
     -- its opening delimiter first, so that a formula @x@ is not found in
     -- the word "example".
     locate :: ProblemKind -> Text -> Int -> (Int, Int) -> Maybe (Int, Int)
@@ -254,7 +256,7 @@ islandPlaces source = case A.parseWithLines source of
       firstLine <- head rest
       let stripped = T.strip firstLine
           delimited = if kind == Formula && null leading then [d <> firstLine | d <- ["$", "\\(", "\\["]] else []
-          holding needle = [j | j <- [s .. e], needle `T.isInfixOf` lineAt j]
+          holding needle = concat [replicate (T.count needle (lineAt j)) j | j <- [s .. e]]
           candidates = filter (not . null) (map holding (delimited <> [stripped]))
       at <- head =<< head [drop n js | js <- candidates, length js > n]
       pure (at, min e (at + length rest - 1))

@@ -101,6 +101,14 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       -- cannot fail, takes the first.
       places source `shouldBe` [(("a", 0), (1, 1, Formula)), (("a", 1), (7, 7, Formula)), (("a", 1), (9, 11, Diagram))]
 
+    it "places two islands of the same source on one line both on it, and the next on its own line" $ do
+      let source = "Intro.\n\n$\\bad$ and $\\bad$\nthen $\\bad$ again."
+      places source
+        `shouldBe` [ (("\\bad", 0), (3, 3, Formula))
+                   , (("\\bad", 1), (3, 3, Formula))
+                   , (("\\bad", 2), (4, 4, Formula))
+                   ]
+
     it "counts a block of macro definitions, which shows nothing, as the renderer does" $
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 
