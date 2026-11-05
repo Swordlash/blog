@@ -927,8 +927,9 @@ In the order to do it, unless the owner says otherwise.
   shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
   maker. Each phase starts when the pull requests touching the same scripts are
   merged. Phases (a) and (b) are merged (#167, #168; decisions 51 and 52);
-  `web/bundle.sh` stays a script the maker runs (decision 52). (c) is next, and
-  changes the split between the stages (the owner, 2026-11-05): `bootstrap.sh`
+  `web/bundle.sh` stays a script the maker runs (decision 52). (c) is cut in two:
+  (c1), #172, the new split between the stages; (c2) the deploy, as above, after
+  it. The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
