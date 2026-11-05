@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+The editor marks what does not render (WP5.65). CodeMirror shows the page's
+problems with `@codemirror/lint` (pinned at 6.9.7, like the other CodeMirror
+packages): the lines underlined in red, a marker in a gutter, the message on
+hover, and a count beside the buttons ("2 problems") that moves to the next
+one at each click. The parser's problems (wiki-core's
+`Wiki.Core.Markdown.Problems`: a spoiler's broken marker, a spoiler not
+closed or cutting a section, a quotation that starts like a box's marker
+but is not a box) are found from the text a moment after the typing stops,
+on a worker thread, preview or not. An island's come from the preview: the
+islands' script now tells the application when KaTeX, Mermaid or TeX fails
+(`renderMath` returns KaTeX's error, found with `throwOnError` before the
+formula is rendered as before; a diagram or a picture sends its element a
+`wiki-island-drawn` event, only for its current drawing), and
+`Wiki.App.Islands.reporting`, the island the preview renders, raises
+`Failed` and, when the island is drawn again and succeeds, `Cleared`. The
+editor keeps the failures by island key and marks each at the lines its
+island has in the text; a failure whose island is no longer in the text
+goes. `MonadIslands.renderMath` now returns `Maybe Text`;
+`Wiki.App.Islands.component` raises nothing, and a page ignores its
+islands. `Body.articleLines` takes a handler for the islands' outputs, and
+`Preview.component` passes them on as `IslandDrawn`. The tours' editing
+sections and the README say so.
+
 Heading spoilers (WP5.64). A heading written `### [[spoiler]] Question`,
 or `### [[spoiler]]{name} Question`, shows closed with its heading as the
 spoiler's summary, in its level's size, and a click opens its section. Its
