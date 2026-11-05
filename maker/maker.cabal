@@ -8,7 +8,8 @@ description:
   compiler, Node, Playwright's Chromium, fourmolu), writes the environment
   file and warms the cabal store. A terminal interface, maker-tui, shows the
   toolchain's state. See docs/PLAN.md, WP5.68.
-license:       NONE
+license:       MIT
+license-file:  LICENSE
 build-type:    Simple
 tested-with:   GHC ==9.10.3 || ==9.12.4 || ==9.14.1
 
