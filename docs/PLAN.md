@@ -489,8 +489,12 @@ confirms it against reality and the plan is amended if it does not hold.
     says so when the shell finds an xelatex the service does not. When the engine is
     missing or failing it offers TeX Live under the toolchain,
     `<toolchain>/.wiki-toolchain/texlive/<year>` (not `~/texlive`, where people keep
-    their own): `install-tl` from the mirror (`--texlive-mirror`, default
-    `https://mirror.ctan.org`, remembered), `scheme-basic` without docs and sources,
+    their own): `install-tl` cloned from its GitHub mirror,
+    `https://github.com/TeX-Live/installer` (`--texlive-installer URL|DIR` names
+    another repository or a directory; the owner, 2026-11-05, since a proxy of the
+    owner's rejects CTAN's `.tar.gz` and lets GitHub through), the packages from
+    the mirror (`--texlive-mirror`, default `https://mirror.ctan.org`, remembered),
+    `scheme-basic` without docs and sources,
     then `tlmgr install` of `toolchain/texlive-packages.txt` (scheme-basic has no XeTeX;
     the list brings it, with what pandoc's template, Beamer, TikZ, `tikz-cd`,
     `pgfplots` and `mhchem` need), then the check again with the new `bin` first;
@@ -592,9 +596,12 @@ confirms it against reality and the plan is amended if it does not hold.
     or its check failing, `--no-texlive` or the question declined); a later run that
     ends with a working engine drops it; `--status` reads the unit and says so. When
     the install needs Perl and the machine has none, or one without its standard
-    modules, the deploy builds Perl (one pinned version from CPAN's source tarball,
-    its published SHA-256 checked; `Configure -des -Duserelocatableinc`, `make`, `make
-    install`, no `make test`) under `<toolchain>/.wiki-toolchain/perl`, for
+    modules, the deploy builds Perl (one pinned version, a shallow `git clone` of
+    `https://github.com/Perl/perl5` at its tag, with no checksum: the owner,
+    2026-11-05, over CPAN's tarball, which the owner's proxy rejects, and over
+    re-pinning; `--perl-source URL|DIR` names another repository or a directory;
+    `Configure -des -Duserelocatableinc`, `make`, `make install`, no `make test`)
+    under `<toolchain>/.wiki-toolchain/perl`, for
     `install-tl` and `tlmgr` only, never on the unit's PATH, records `perl_dir` and
     reuses it; the terminal's question is one, naming the TeX Live download and, when
     needed, the Perl build; `--texlive` answers yes to both; the undeploy keeps that
@@ -1033,8 +1040,11 @@ needs. Each was true when its package merged; check before relying on one.
   long. `getBoundingClientRect` belongs in haskell-halogen's `Element` (decision 30);
   until it is there, `Wiki.App.Web.Rect` reads it through a newtype of its own: a
   follow-up for haskell-halogen, after which the newtype goes.
-- WP5.61 (decision 44): CI tests the Perl build with a fake source tarball only (the
-  real build was done by hand once, under four minutes); the build's whole `make`
+- WP5.61 (decision 44): CI tests the Perl build and the installer's clone with a fake
+  `git` only (the real build from the GitHub clone was done by hand once, under
+  four minutes; the clone is about 25 MB of `.git` and 120 MB checked out, the
+  installer's about 20 MB and 70 MB); `--perl-source DIR` copies the directory as it
+  is, build files included; the build's whole `make`
   output goes to the terminal as well as the log; the xelatex item runs in every
   check-native call (a second or two with a working engine, up to 20 s with one that
   hangs) and, before the deploy's TeX step, shows the shell's PATH, which can differ
