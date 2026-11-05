@@ -267,7 +267,10 @@ islandPlaces source = case A.parseWithLines source of
     locate :: ProblemKind -> Text -> Int -> (Int, Int) -> Maybe (Int, Int)
     locate kind written n (s, e) = whole <|> byFirstLine
       where
-        block = T.intercalate "\n" [lineAt j | j <- [s .. e]]
+        -- The block's lines, a formula's code spans blanked out: the
+        -- source of a formula written in code is no formula.
+        block = (if kind == Formula then blankCodeSpans else identity) (T.intercalate "\n" [lineAt j | j <- [s .. e]])
+        blockLines = T.splitOn "\n" block
         -- The line of an offset into the block.
         lineOf offset = s + T.count "\n" (T.take offset block)
 
@@ -298,9 +301,41 @@ islandPlaces source = case A.parseWithLines source of
           let (_, rest) = span (T.all isSpace) (T.lines written)
           firstLine <- head rest
           let stripped = T.strip firstLine
-              holding = [j | j <- [s .. e], _ <- T.breakOnAll stripped (lineAt j)]
+              holding = [j | (j, l) <- zip [s .. e] blockLines, _ <- T.breakOnAll stripped l]
           at <- head (drop n holding)
           pure (at, min e (at + length rest - 1))
+
+-- | A text with each code span made spaces, its line breaks kept, so that
+-- every offset into the text, and every line, stays where it was. A code
+-- span is read as CommonMark reads one: a run of backticks opens it, the
+-- next run of exactly as many closes it, and a run with no such closer is
+-- text. Inside a span a backslash escapes nothing. A run of three or more
+-- at the start of a line, after white space or a list's or quotation's
+-- marker, is a fence of a block in the text (a list item's fence), and is
+-- left as it is with what it holds: a math fence's source is found there.
+blankCodeSpans :: Text -> Text
+blankCodeSpans = T.pack . go True . T.unpack
+  where
+    go :: Bool -> [Char] -> [Char]
+    go lineStart = \case
+      [] -> []
+      text@('`' : _) ->
+        let (run, after) = span (== '`') text
+            size = length run
+         in if lineStart && size >= 3
+              then run <> go False after
+              else case closing size [] after of
+                Just (inside, rest) -> map blank (run <> inside <> run) <> go False rest
+                Nothing -> run <> go False after
+      c : rest -> c : go (c == '\n' || (lineStart && (isSpace c || isDigit c || c `elem` (">-*+.)" :: [Char])))) rest
+    -- What lies before the next run of exactly @size@ backticks, and what
+    -- comes after that run.
+    closing size seen text = case break (== '`') text of
+      (_, []) -> Nothing
+      (before, rest) ->
+        let (run, after) = span (== '`') rest
+         in if length run == size then Just (seen <> before, after) else closing size (seen <> before <> run) after
+    blank c = if c == '\n' then '\n' else ' '
 
 -- | What the probe's islands are: the key, the kind and the source.
 data Probe = Probe IslandKey ProblemKind Text

@@ -120,6 +120,14 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       -- Display math holds the inline delimiters, and is one formula.
       places "$$x$$ and $x$\n\\[x\\]" `shouldBe` [(("x", 0), (1, 1, Formula)), (("x", 1), (1, 1, Formula)), (("x", 2), (2, 2, Formula))]
 
+    it "does not take a formula's source written in code for the formula" $ do
+      places "Example: `$\\frac{1}$`\nActual: $\\frac{1}$" `shouldBe` [(("\\frac{1}", 0), (2, 2, Formula))]
+      -- A longer run of backticks holds a shorter one; a run never closed
+      -- is text, and the formula after it is found.
+      places "``a ` $y$`` and $y$\n`` $y$ here" `shouldBe` [(("y", 0), (1, 1, Formula)), (("y", 1), (2, 2, Formula))]
+      -- A list item's math fence is still found by its source.
+      places "- item\n\n  ```math\n  \\frac{\n  ```" `shouldBe` [(("\\frac{", 0), (4, 4, Formula))]
+
     it "counts a block of macro definitions, which shows nothing, as the renderer does" $
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 
