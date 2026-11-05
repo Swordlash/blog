@@ -3632,10 +3632,10 @@ system_refused() {
   assert_lacks "$EVENTS" 'cabal build'
 }
 FAKE_CABAL_VERSION=3.16.1.0 system
-system_refused 'no GHC' "--system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
+system_refused 'no GHC' "--system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.10 or later is needed: haskell-halogen, which the wiki builds with, is tested with GHC 9.10 and later, and its th package asks for ghc 9.10 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
 assert_contains "$EVENTS" 'bootstrap system-tools native WIKI_TOOLCHAIN_HOME='
-FAKE_GHC_VERSION=9.10.3 FAKE_CABAL_VERSION=3.16.1.0 system
-system_refused 'GHC 9.10.3' "--system-tools: GHC 9.10.3 ($sysbin/ghc) is too old: GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later"
+FAKE_GHC_VERSION=9.8.4 FAKE_CABAL_VERSION=3.16.1.0 system
+system_refused 'GHC 9.8.4' "--system-tools: GHC 9.8.4 ($sysbin/ghc) is too old: GHC 9.10 or later is needed: haskell-halogen, which the wiki builds with, is tested with GHC 9.10 and later, and its th package asks for ghc 9.10 or later"
 FAKE_GHC_VERSION=9.14.1 system
 system_refused 'no cabal' '--system-tools: cabal: not found (no cabal on PATH answers --numeric-version). cabal 3.12 or later is needed: cabal.project sets semaphore:, a field cabal reads from 3.12. Without --system-tools, toolchain/bootstrap.sh installs cabal 3.16.1.0'
 FAKE_GHC_VERSION=9.14.1 FAKE_CABAL_VERSION=3.10.3.0 system
@@ -3652,10 +3652,10 @@ pass '--system-tools stops before the native check and any download, naming a GH
 # the zip itself comes from the cache by now), and the bootstrap's native
 # and node modes are told to install nothing.
 rm -rf "$pre/toolchain/.wiki-toolchain/node"
-FAKE_GHC_VERSION=9.12.2 FAKE_CABAL_VERSION=3.16.1.0 FAKE_NODE_VERSION=v24.3.0 system --bundle-locally
+FAKE_GHC_VERSION=9.10.3 FAKE_CABAL_VERSION=3.16.1.0 FAKE_NODE_VERSION=v24.3.0 system --bundle-locally
 [ "$status" = 0 ] || fail "the deploy with the machine's own tools failed: $(cat "$out")"
-assert_contains "$out" "--system-tools: GHC 9.12.2 ($sysbin/ghc)"
-assert_contains "$out" "warning: the pinned GHC is 9.14.1; the build with 9.12.2 is untested here and may fail; a failure then is not this script's"
+assert_contains "$out" "--system-tools: GHC 9.10.3 ($sysbin/ghc)"
+assert_contains "$out" "warning: the pinned GHC is 9.14.1; the build with 9.10.3 is untested here and may fail; a failure then is not this script's"
 assert_contains "$out" "--system-tools: cabal 3.16.1.0 ($case_dir/bin/cabal)"
 assert_lacks "$out" 'the pinned cabal'
 assert_contains "$out" "--system-tools: Node v24.3.0 ($sysbin/node), npm 11.0.0 ($case_dir/bin/npm)"
@@ -3669,7 +3669,7 @@ assert_contains "$EVENTS" "bootstrap node --system-tools WIKI_TOOLCHAIN_HOME=$pr
 [ "$(pstate system_tools)" = yes ] || fail 'the state does not keep --system-tools'
 out=$case_dir/system-status
 deploy --status --prefix "$pre" >"$out" 2>&1
-assert_contains "$out" "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC 9.12 or later, cabal 3.12 or later and Node 24 or later on PATH (GHC 9.14.1 and cabal 3.16.1.0 are the tested ones)"
+assert_contains "$out" "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC 9.10 or later, cabal 3.12 or later and Node 24 or later on PATH (GHC 9.14.1 and cabal 3.16.1.0 are the tested ones)"
 locked --no-build --no-system-tools >"$out" 2>&1 || fail "--no-system-tools failed: $(cat "$out")"
 [ -z "$(pstate system_tools)" ] || fail '--no-system-tools did not forget it'
 pass '--system-tools with every tool there: a GHC that is not the pinned one is used with a warning, the page is still looked up on GitHub, and the bootstrap installs nothing; --no-system-tools forgets it'

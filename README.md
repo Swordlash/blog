@@ -1195,10 +1195,11 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
 - `--system-tools`: nothing is downloaded for the toolchain. GHC, cabal and Node are
   the machine's own, on `PATH`, and ghcup is not needed. Before anything else (before
   the check of the C libraries and before any download) the deploy checks those it
-  needs: GHC 9.12 or later and cabal 3.12 or later for the server, Node 24 or later
-  with npm for the demo or `--bundle-locally`. GHC 9.12 is the oldest that
-  haskell-halogen-th builds with (it parses quotes with the compiler's own `ghc`
-  library, and asks for `ghc >= 9.12`); cabal 3.12 is the
+  needs: GHC 9.10 or later and cabal 3.12 or later for the server, Node 24 or later
+  with npm for the demo or `--bundle-locally`. GHC 9.10 is the oldest that
+  haskell-halogen is tested with (its CI runs 9.10, 9.12 and 9.14, and
+  haskell-halogen-th, which parses quotes with the compiler's own `ghc` library,
+  asks for `ghc >= 9.10`); cabal 3.12 is the
   first that reads `cabal.project`'s `semaphore:` field. A tool that is missing or
   older stops the deploy, named with the version found and with a note that without
   `--system-tools` the bootstrap would install it. GHC 9.14.1 and cabal 3.16.1.0 are
