@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -38,6 +40,7 @@ import Control.Monad (forM_, unless, void, when)
 import Data.Maybe (fromMaybe)
 import Development.Shake
 import Development.Shake.Classes (Binary, Hashable, NFData)
+import GHC.Generics (Generic)
 import Maker.Build.Env
 import Maker.Process (removePath)
 import System.Directory (createDirectoryIfMissing, listDirectory)
@@ -94,6 +97,17 @@ newtype ToolVersion = ToolVersion String
 
 type instance RuleResult ToolVersion = String
 
+-- | The binary cabal built and the wasm compiler's library directory, which
+-- holds @post-link.mjs@, as this run found them. Shake checks a rule's
+-- recorded dependencies on the next run without running the rule, so a
+-- binary at a new path (cabal's path carries the package's version) would
+-- otherwise leave the rules on the old file, which is still there.
+data Linked = Linked
+  deriving (Eq, Show, Generic)
+  deriving anyclass (Hashable, Binary, NFData)
+
+type instance RuleResult Linked = (FilePath, FilePath)
+
 -- | The wasm toolchain's programs, found on the wasm environment's PATH.
 data WasmTools = WasmTools
   { ghc :: FilePath
@@ -148,7 +162,9 @@ buildWasm be wb extra = do
   runRules wasm kept $ do
     want [kept </> "ghc_wasm_jsffi.js", kept </> "app.wasm", kept </> "bundle.stamp"]
     -- The JavaScript glue for this binary's imports and exports.
+    _ <- addOracle $ \Linked -> pure (binary, libdir)
     kept </> "ghc_wasm_jsffi.js" %> \out -> do
+      void (askOracle Linked)
       need [binary]
       void (askOracle (ToolVersion "node"))
       stage "post-link" (cmd_ (Env wasm) ("node" :: String) [libdir </> "post-link.mjs", "--input", binary, "--output", out])
@@ -158,6 +174,7 @@ buildWasm be wb extra = do
     -- gzipped. wasm-opt leaves the imports and exports the glue binds to
     -- untouched.
     kept </> "app.wasm" %> \out -> do
+      void (askOracle Linked)
       need [binary]
       void (askOracle (ToolVersion "wasm-opt"))
       stage "wasm-opt" (cmd_ (Env wasm) ("wasm-opt" :: String) ["-Oz", "--strip-debug", "--strip-producers", binary, "-o", out])
