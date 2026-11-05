@@ -770,7 +770,15 @@ confirms it against reality and the plan is amended if it does not hold.
     document, each entry's ids prefixed `pr-N-`, its links followed on the page;
     a dot on the sidebar's link marks entries newer than the reader's browser has
     seen. CI's `changelog` job requires exactly one new entry numbered with the pull
-    request; the owner's label `no-changelog` exempts one (AGENTS.md).
+    request; the owner's label `no-changelog` exempts one (AGENTS.md). The demo
+    has the page too (WP5.71, #171; the owner, 2026-11-05): the reader and the
+    splices that embed the entries are `wiki-api`'s (`Wiki.Api.WhatsNew.Entry`,
+    `.Embed`), and `wiki-app` embeds the same entries (`Wiki.App.Demo.WhatsNew`,
+    through a `changelog` link beside its cabal file), with the version its own
+    stamp records, since Template Haskell on wasm sees no environment and runs
+    no git. The in-memory backend answers `whatsNew` with them and its sessions
+    name the newest entry, so the link and its dot work as on a server; an
+    export or import of the demo leaves them out, as the application's.
 51. **The maker, the toolchain's second stage in Haskell (WP5.68a).** `maker/` is a
     package with a `cabal.project` of its own (`-Werror` for it), on Shake 0.19,
     optparse-applicative and, for `maker-tui`, brick 3.0. `toolchain/pins.env` holds
@@ -874,18 +882,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.71 "What's new?" in the demo** (the owner, 2026-11-05: "a w demo nie
-  ma changeloga? nie widze"). Decision 50 compiled the entries into
-  wiki-server, so the demo, which has no server, shows no page and no link. The
-  parser of entries (`Wiki.Server.WhatsNew.Entry`) moves to `wiki-api`, so that
-  the server and the demo's build read the changelog with one piece of code.
-  The demo's build (the maker's wasm build, through `wiki-app-prerender`)
-  writes `whats-new.json` into the page: the newest twelve entries, the
-  build's version and time, the same answer as `GET api/v1/whats-new`. The
-  demo's backend (`Wiki.App.Backend.Mem`) fetches it beside the page instead
-  of answering not found, and its session names the newest entry, so the
-  sidebar's link and its dot work as on a server. `app.wasm` stays one binary
-  for both backends. Browser tests: the page and the dot on the demo.
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
@@ -1361,6 +1357,11 @@ needs. Each was true when its package merged; check before relying on one.
   which it does not; the unseen dot is per browser, not per account, and appears a
   moment after the page shows; raw HTML in an entry keeps its own ids and `[[toc]]`
   lists them unprefixed.
+- WP5.71 (decision 50): the demo's version is `unknown` when its build has no
+  `WIKI_BUILD_VERSION` and no git (the stamp records what
+  `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
+  `wiki-app` without the stamp does not rebuild it for a new entry, as with the
+  server.
 - WP5.68a (decision 51): the maker is built and tested only on GHC 9.14.1 so far;
   no mode builds it with another GHC yet (`--system-tools` modes do not run it), but
   (c) makes it run there (decision 53); CI's `env:` blocks (`build.yml`, `server-page.yml`) still repeat
