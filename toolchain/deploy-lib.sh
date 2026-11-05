@@ -18,7 +18,12 @@
 #     what undeploying turns off; and for a deployment that downloads its
 #     page from GitHub (--backend-only), the REF it names (backend_only:
 #     main, a tag, a hash, or head for the checkout's own commit) and the
-#     commit whose page it downloaded last (backend_only_commit); and for
+#     commit whose page it downloaded last (backend_only_commit), or for
+#     one that takes it from a file (--app-page) the file (app_page); for a
+#     machine that installs nothing from the internet, whether the page's
+#     bundles are built here (bundle_locally=yes), whether the toolchain is
+#     the machine's own (system_tools=yes), and the npm registry and the
+#     Hackage mirror given (npm_registry, hackage_mirror); and for
 #     the PDF exports of a server, whether TeX Live is installed under the
 #     toolchain directory (texlive: yes, no, or empty before anyone
 #     answered), the installation the unit uses (texlive_dir, set once one
@@ -210,6 +215,11 @@ state_write() {
     printf 'db_port=%s\n' "${db_port:-}"
     printf 'backend_only=%s\n' "${backend_only:-}"
     printf 'backend_only_commit=%s\n' "${backend_only_commit:-}"
+    printf 'app_page=%s\n' "${app_page:-}"
+    printf 'bundle_locally=%s\n' "${bundle_locally:-}"
+    printf 'system_tools=%s\n' "${system_tools:-}"
+    printf 'npm_registry=%s\n' "${npm_registry:-}"
+    printf 'hackage_mirror=%s\n' "${hackage_mirror:-}"
     printf 'texlive=%s\n' "${texlive:-}"
     printf 'texlive_dir=%s\n' "${texlive_dir:-}"
     printf 'texlive_mirror=%s\n' "${texlive_mirror:-}"
@@ -521,6 +531,11 @@ undeploy() {
   db_port=$(state_get db_port)
   backend_only=$(state_get backend_only)
   backend_only_commit=$(state_get backend_only_commit)
+  app_page=$(state_get app_page)
+  bundle_locally=$(state_get bundle_locally)
+  system_tools=$(state_get system_tools)
+  npm_registry=$(state_get npm_registry)
+  hackage_mirror=$(state_get hackage_mirror)
   texlive=$(state_get texlive)
   texlive_dir=$(state_get texlive_dir)
   texlive_mirror=$(state_get texlive_mirror)

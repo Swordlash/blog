@@ -10,6 +10,9 @@
 #                                [--toolchain DIR] [--name NAME]
 #                                [--postgres | --sqlite] [--db-port N] [--fresh]
 #                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
+#                                [--app-page FILE] [--bundle-locally | --no-bundle-locally]
+#                                [--system-tools | --no-system-tools] [--npm-registry URL]
+#                                [--hackage-mirror URL]
 #                                [--no-build] [--semaphore | --no-semaphore]
 #                                [--texlive | --no-texlive] [--texlive-mirror URL]
 #                                [--texlive-installer URL|DIR] [--perl-source URL|DIR]
@@ -84,6 +87,13 @@
 #      and --backend-only the demo's page is downloaded the same way and
 #      nothing is built: toolchain/bootstrap.sh node installs Node alone,
 #      which serves the page and writes its brotli copies.
+#      For a machine that installs nothing from the internet (see the README's
+#      "A machine that installs nothing from the internet"): --app-page FILE
+#      takes that page from a file instead of GitHub; --bundle-locally builds
+#      its JavaScript and CSS bundles here and compares them with CI's;
+#      --system-tools checks this machine's own GHC, cabal and Node first,
+#      before anything else, and downloads none; --npm-registry and
+#      --hackage-mirror name the mirrors npm and cabal take packages from.
 #      With --server the wiki's database is PostgreSQL by default: the
 #      postgres service of docker-compose.yml (postgres:17), run with Docker
 #      as the compose project <name>, its data in the named volume
@@ -281,6 +291,64 @@
 #                    build the page on this machine again, after a run with --backend-only
 #   --refresh-page   with --backend-only, download the page even when the cache has
 #                    it; for this run only
+#   --app-page FILE  take the page's zip from FILE instead of GitHub, for a machine that
+#                    cannot reach github.com: a zip CI built, as --backend-only downloads
+#                    it (app-server-<hash>.zip, or app-demo-<hash>.zip with --static),
+#                    which must hold app.wasm. It is checked and kept in the page cache
+#                    as a downloaded zip is, and the deploy goes on as with
+#                    --backend-only (with --server only wiki-server is built). The
+#                    deploy says which page it is: the page of <hash>, from the zip's
+#                    name when it follows CI's naming, or else a page from FILE; the
+#                    commit is not checked against the checkout's. Remembered, by
+#                    absolute path; --backend-only, --no-backend-only and --app-page=
+#                    forget it
+#   --bundle-locally with --backend-only or --app-page: of the page CI built, keep only
+#                    what needs the wasm toolchain (app.wasm, its ghc_wasm_jsffi.js, the
+#                    prerendered index.html and the page's other files), and build the
+#                    JavaScript and CSS bundles here: npm ci, then web/bundle.sh
+#                    (islands.js, islands/, islands.css, fonts/, tikzjax/, wasi-shim.js,
+#                    licenses.txt, icon.svg, icons/ and sw.js), with Node
+#                    (toolchain/bootstrap.sh node, or the machine's with
+#                    --system-tools). Then the page is compared with CI's, file by file:
+#                    the deploy says that they are identical, or names every file whose
+#                    bytes differ and every file only one of them has. The page built
+#                    here is the one served. Remembered
+#   --no-bundle-locally
+#                    take the bundles in CI's page again, after a run with --bundle-locally
+#   --system-tools   download nothing for the toolchain: GHC, cabal and Node are the
+#                    machine's own, on PATH, and ghcup is not needed (toolchain/bootstrap.sh
+#                    --system-tools). Before anything else the deploy checks those it
+#                    needs: GHC and cabal with --server, Node with --static or
+#                    --bundle-locally, at least the versions toolchain/bootstrap.sh names
+#                    (GHC_MIN_VERSION, CABAL_MIN_VERSION and NODE_MIN_MAJOR: GHC 9.10,
+#                    cabal 3.12, Node 24 with npm). A tool missing or older stops the
+#                    deploy, named with the version found; one that is not the pinned
+#                    version is used with a warning. It needs the page CI built
+#                    (--backend-only or --app-page), since building the page needs the
+#                    wasm toolchain, which no machine has of its own; with --backend-only
+#                    the page is still downloaded from GitHub, since it is not the
+#                    toolchain. The Debian packages a build links with still come through
+#                    apt, from the machine's own sources. Remembered
+#   --no-system-tools
+#                    let toolchain/bootstrap.sh install the toolchain again
+#   --npm-registry URL
+#                    the npm registry npm ci and npx use (NPM_CONFIG_REGISTRY, for every
+#                    npm call of the deploy and of toolchain/bootstrap.sh). npm rewrites
+#                    the lockfile's https://registry.npmjs.org/ URLs to it (its
+#                    replace-registry-host, npmjs by default), so the registry serves
+#                    every package, the binaries of esbuild included. Remembered;
+#                    --npm-registry= forgets it
+#   --hackage-mirror URL
+#                    the Hackage mirror cabal takes its index and packages from, written
+#                    by toolchain/bootstrap.sh before cabal update as the url of the
+#                    repository hackage.haskell.org in the toolchain's own cabal
+#                    configuration (<toolchain>/.cabal/config), never in ~/.cabal: so it
+#                    needs a toolchain directory other than the home directory (--prefix
+#                    or --toolchain). cabal still checks the index against Hackage's own
+#                    keys, so the mirror must serve Hackage's signed metadata (root.json
+#                    and the rest) as a full mirror does; the bootstrap fetches its
+#                    root.json first. Remembered; --hackage-mirror= forgets it, and the
+#                    next build writes Hackage's own address back
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --semaphore      build wiki-server with cabal's build semaphore, through which cabal
 #                    and GHC share one budget of jobs, without the probe
@@ -357,6 +425,8 @@ usage() {
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 opt_backend_only='' refresh_page=''
+opt_app_page='' opt_app_page_given='' opt_bundle_locally='' opt_system_tools=''
+opt_npm_registry='' opt_npm_registry_given='' opt_hackage_mirror='' opt_hackage_mirror_given=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 opt_texlive='' opt_texlive_mirror='' opt_texlive_installer='' opt_perl_source=''
 action=deploy
@@ -390,6 +460,16 @@ while [ $# -gt 0 ]; do
     --backend-only=*) opt_backend_only=${1#*=}; [ -n "$opt_backend_only" ] || opt_backend_only='head' ;;
     --no-backend-only) opt_backend_only='none' ;;
     --refresh-page) refresh_page=1 ;;
+    --app-page) need_value $# "$1"; opt_app_page=$2 opt_app_page_given=1; shift ;;
+    --app-page=*) opt_app_page=${1#*=} opt_app_page_given=1 ;;
+    --bundle-locally) opt_bundle_locally=yes ;;
+    --no-bundle-locally) opt_bundle_locally=no ;;
+    --system-tools) opt_system_tools=yes ;;
+    --no-system-tools) opt_system_tools=no ;;
+    --npm-registry) need_value $# "$1"; opt_npm_registry=$2 opt_npm_registry_given=1; shift ;;
+    --npm-registry=*) opt_npm_registry=${1#*=} opt_npm_registry_given=1 ;;
+    --hackage-mirror) need_value $# "$1"; opt_hackage_mirror=$2 opt_hackage_mirror_given=1; shift ;;
+    --hackage-mirror=*) opt_hackage_mirror=${1#*=} opt_hackage_mirror_given=1 ;;
     --github-token-file | --github-token-file=*)
       die "--github-token-file is not needed: the pages CI builds are public release assets, downloaded without a token" ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
@@ -446,6 +526,46 @@ case $opt_texlive_mirror in
   http://?* | https://?*) ;;
   *) die "--texlive-mirror $opt_texlive_mirror: an http:// or https:// URL, such as https://mirror.ctan.org" ;;
 esac
+# The npm registry and the Hackage mirror are URLs as the CTAN mirror is.
+for option in npm-registry hackage-mirror; do
+  case $option in
+    npm-registry) url=$opt_npm_registry example=https://npm.example.org/ ;;
+    hackage-mirror) url=$opt_hackage_mirror example=https://hackage.example.org/ ;;
+  esac
+  case $url in
+    '') ;;
+    *[[:space:]\"\'\\\`\$]*) die "--$option $url: an http:// or https:// URL without spaces or quotes" ;;
+    http://?* | https://?*) ;;
+    *) die "--$option $url: an http:// or https:// URL, such as $example" ;;
+  esac
+done
+# Whether a zip holds app.wasm at its root, as the pages CI builds do: read
+# with python3, or unzip where there is none.
+zip_holds_app() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, zipfile
+sys.exit(0 if "app.wasm" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$1" 2>/dev/null
+  elif command -v unzip >/dev/null 2>&1; then
+    unzip -Z1 "$1" 2>/dev/null | grep -qx 'app[.]wasm'
+  else
+    die "--app-page: reading the zip takes python3, which is not installed here (nor unzip, which would do instead)"
+  fi
+}
+# The page's zip from a file (--app-page): it must be there now, a zip
+# holding app.wasm, and it is named by absolute path from here on, as the
+# state remembers it. It replaces GitHub, so --backend-only and
+# --no-backend-only given with it contradict it.
+if [ -n "$opt_app_page" ]; then
+  case $opt_app_page in
+    *'
+'*) die "--app-page $opt_app_page holds a newline, which the state file cannot hold" ;;
+  esac
+  [ "$opt_backend_only" != none ] || die "--app-page takes the page CI built from a file, and --no-backend-only builds it here: give one"
+  [ -z "$opt_backend_only" ] || die "--app-page takes the page from a file, and --backend-only downloads it from GitHub: give one"
+  { [ -f "$opt_app_page" ] && [ -r "$opt_app_page" ]; } || die "--app-page $opt_app_page: no such file here, or it cannot be read"
+  zip_holds_app "$opt_app_page" || die "--app-page $opt_app_page: not a page CI built (a zip with app.wasm at its root)"
+  opt_app_page=$(realpath "$opt_app_page")
+fi
 # Where the TeX step takes TeX Live's installer and Perl's source from: a
 # git repository's http:// or https:// URL, cloned, or a directory of this
 # machine. A directory must be there now, rather than when the TeX step
@@ -521,6 +641,15 @@ prev_db_port=$(state_get db_port)
 # the REF it was given, and the commit whose page it downloaded last.
 prev_backend_only=$(state_get backend_only)
 prev_backend_only_commit=$(state_get backend_only_commit)
+# For a machine that installs nothing from the internet: the page's zip
+# from a file (app_page, its absolute path, set instead of backend_only),
+# the bundles built here (bundle_locally=yes), the machine's own toolchain
+# (system_tools=yes), and the npm registry and the Hackage mirror given.
+prev_app_page=$(state_get app_page)
+prev_bundle_locally=$(state_get bundle_locally)
+prev_system_tools=$(state_get system_tools)
+prev_npm_registry=$(state_get npm_registry)
+prev_hackage_mirror=$(state_get hackage_mirror)
 # Whether the deployment installs TeX Live under the toolchain directory for
 # its PDF exports (yes, no, or empty when nobody has answered yet), the
 # installation it uses (texlive_dir, set once one has worked), and the CTAN
@@ -1225,6 +1354,27 @@ tex_step() {
   say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $tex_bin first on its PATH"
 }
 
+# A pin or a floor of toolchain/bootstrap.sh (GHC_VERSION, GHC_MIN_VERSION,
+# CABAL_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR), read from the script,
+# which is the one place that says them.
+bootstrap_pin() { sed -n "s/^$1=//p" "$ROOT/toolchain/bootstrap.sh" | head -n 1; }
+
+# What --status says of the options for a machine that installs nothing
+# from the internet, from the state.
+locked_down_status() {
+  if [ -n "$prev_app_page" ]; then
+    if [ "$prev_mode" = server ]; then built='only wiki-server is built here'; else built='nothing is built here'; fi
+    say "its page is a zip CI built, from a file (--app-page $prev_app_page${prev_backend_only_commit:+, the page of $prev_backend_only_commit}), and $built"
+  fi
+  [ -z "$prev_bundle_locally" ] ||
+    say "the page's JavaScript and CSS bundles are built here (--bundle-locally), and each deploy compares them with CI's"
+  [ -z "$prev_system_tools" ] ||
+    say "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC $(bootstrap_pin GHC_MIN_VERSION) or later, cabal $(bootstrap_pin CABAL_MIN_VERSION) or later and Node $(bootstrap_pin NODE_MIN_MAJOR) or later on PATH (GHC $(bootstrap_pin GHC_VERSION) and cabal $(bootstrap_pin CABAL_VERSION) are the tested ones)"
+  [ -z "$prev_npm_registry" ] || say "npm's registry: $prev_npm_registry (--npm-registry)"
+  [ -z "$prev_hackage_mirror" ] ||
+    say "cabal's Hackage mirror: $prev_hackage_mirror (--hackage-mirror), in the toolchain's own $toolchain_base/.cabal/config"
+}
+
 # The state of the PDF exports for --status. A unit whose wiki-server runs
 # with --no-pdf makes no PDFs whatever TeX there is: that is said, and
 # nothing is checked. Otherwise the check runs with the PATH the installed
@@ -1269,6 +1419,7 @@ if [ "$action" = status ]; then
   elif [ -n "$prev_backend_only" ]; then
     say "its page, the demo's, is downloaded from GitHub (--backend-only=$prev_backend_only${prev_backend_only_commit:+, the page of $prev_backend_only_commit}), and nothing is built here"
   fi
+  locked_down_status
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
     case $prev_db in
@@ -1333,7 +1484,7 @@ if [ "$action" = status ]; then
   fi
   linger_report
   if [ -n "$prev_port" ]; then
-    if [ -n "$prev_backend_only" ] && [ "$prev_mode" = server ]; then
+    if [ -n "$prev_backend_only$prev_app_page" ] && [ "$prev_mode" = server ]; then
       node='' nodeless=1
     else
       node=$(command -v "$toolchain_base/.wiki-toolchain/node/bin/node" node 2>/dev/null | head -n 1 || true)
@@ -1405,21 +1556,73 @@ case $opt_backend_only in
   none) backend_only= ;;
   *) backend_only=$opt_backend_only ;;
 esac
+# The page's zip from a file (--app-page), given now or remembered: a
+# --backend-only or --no-backend-only given now forgets it, as --app-page=
+# does. While it is in effect, backend_only is empty (nothing is
+# downloaded), and prebuilt says, for both, that the page is one CI built.
+if [ -n "$opt_app_page_given" ]; then
+  app_page=$opt_app_page
+elif [ -n "$opt_backend_only" ]; then
+  app_page=
+else
+  app_page=$prev_app_page
+fi
+[ -z "$app_page" ] || backend_only=
+prebuilt=$backend_only$app_page
+if [ -n "$app_page" ]; then page_option=--app-page; else page_option=--backend-only; fi
 backend_only_commit=
 nodeless=
-if [ -n "$backend_only" ]; then
+if [ -n "$prebuilt" ]; then
   backend_only_commit=$prev_backend_only_commit
   # Nothing in the server's mode runs Node; the demo's runs it to serve
   # the page, as when the page is built here.
   [ "$mode" != server ] || nodeless=1
-  command -v curl >/dev/null 2>&1 || die "--backend-only downloads the page with curl, which is not installed here"
+  if [ -n "$backend_only" ]; then
+    command -v curl >/dev/null 2>&1 || die "--backend-only downloads the page with curl, which is not installed here"
+  elif [ -n "$nodeless" ]; then
+    command -v curl >/dev/null 2>&1 || die "--app-page with --server checks that the server answers with curl, which is not installed here"
+  fi
   if ! command -v python3 >/dev/null 2>&1; then
     if [ -n "$build" ] && ! { command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; }; then
-      die "--backend-only reads GitHub's answers and unpacks the page with python3, which is not installed here (nor jq and unzip, which would do instead)"
+      die "$page_option reads GitHub's answers and unpacks the page with python3, which is not installed here (nor jq and unzip, which would do instead)"
     elif [ -n "$nodeless" ] && ! command -v jq >/dev/null 2>&1; then
-      die "--backend-only reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
+      die "$page_option reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
     fi
   fi
+fi
+
+# For a machine that installs nothing from the internet, given now or
+# remembered: the bundles of CI's page built here (--bundle-locally), the
+# machine's own toolchain (--system-tools), the npm registry and the
+# Hackage mirror.
+case $opt_bundle_locally in
+  yes) bundle_locally=yes ;;
+  no) bundle_locally= ;;
+  *) bundle_locally=$prev_bundle_locally ;;
+esac
+if [ -n "$bundle_locally" ] && [ -z "$prebuilt" ]; then
+  [ "$opt_bundle_locally" != yes ] ||
+    die "--bundle-locally builds here the bundles of the page CI built: it goes with --backend-only[=REF] or --app-page FILE (a page built here has its bundles built here anyway)"
+  bundle_locally=
+fi
+case $opt_system_tools in
+  yes) system_tools=yes ;;
+  no) system_tools= ;;
+  *) system_tools=$prev_system_tools ;;
+esac
+if [ -n "$system_tools" ] && [ -z "$prebuilt" ] && [ -n "$build" ]; then
+  die "--system-tools takes GHC, cabal and Node from this machine, and building the page here needs the wasm toolchain too, which only toolchain/bootstrap.sh installs: take the page CI built (--backend-only[=REF] or --app-page FILE), or let the bootstrap install the toolchain (--no-system-tools)"
+fi
+if [ -n "$opt_npm_registry_given" ]; then npm_registry=$opt_npm_registry; else npm_registry=$prev_npm_registry; fi
+# Every npm and npx of the deploy and of the bootstrap reads it from the
+# environment.
+if [ -n "$npm_registry" ]; then
+  NPM_CONFIG_REGISTRY=$npm_registry
+  export NPM_CONFIG_REGISTRY
+fi
+if [ -n "$opt_hackage_mirror_given" ]; then hackage_mirror=$opt_hackage_mirror; else hackage_mirror=$prev_hackage_mirror; fi
+if [ -n "$hackage_mirror" ] && [ -z "$toolchain_home" ]; then
+  die "--hackage-mirror $hackage_mirror is written into the toolchain's own cabal configuration, and this deployment's toolchain is in the home directory, whose cabal configuration (~/.cabal) is yours and is left alone: give the toolchain a directory of its own (--prefix DIR, which puts it under DIR/toolchain, or --toolchain DIR)"
 fi
 
 # The way it is served, one of four, remembered: tailscale (HTTPS through
@@ -1759,6 +1962,37 @@ resolve_page() {
   page_meta=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { printf "id=%s updated_at=%s size=%s\n", $4, $2, $3; exit }')
 }
 
+# The page --app-page names, instead of resolve_page: page_asset, the zip's
+# name, under which the page cache keeps it; backend_only_commit, the
+# commit in that name when it follows CI's naming (app-<kind>-<hash>.zip),
+# and otherwise empty; app_page_words, what the deploy calls the page. A
+# name of CI's that says the other kind of page is refused.
+app_page_names() {
+  github_repo='' page_tag=$app_page page_meta=''
+  page_asset=${app_page##*/}
+  case $page_asset in
+    app-server-*.zip) named_kind=server ;;
+    app-demo-*.zip) named_kind=demo ;;
+    *) named_kind= ;;
+  esac
+  if [ -n "$named_kind" ] && [ "$named_kind" != "$page_kind" ]; then
+    die "--app-page $app_page is the $named_kind's page, by its name, and this deploy is of the $page_kind (--$mode): give an app-$page_kind-….zip"
+  fi
+  backend_only_commit=
+  if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
+    backend_only_commit=${page_asset#"app-$page_kind-"}
+    backend_only_commit=${backend_only_commit%.zip}
+    app_page_words="the page of $backend_only_commit, from $app_page"
+  else
+    app_page_words="a page from $app_page"
+  fi
+}
+# Which page the deploy takes: from a file (--app-page) or from GitHub
+# (--backend-only).
+page_source() {
+  if [ -n "$app_page" ]; then app_page_names; else resolve_page; fi
+}
+
 # Unpack a page's zip into $work/app and check that it is a page of the kind
 # page_kind names. On failure it sets unpack_error to the reason and returns
 # 1. python3 unpacks it (unzip where there is none).
@@ -1814,7 +2048,9 @@ download_page() {
   rm -rf "$work"
   mkdir -p "$work"
   from_cache=
-  if [ -z "$refresh_page" ] && [ -f "$cached" ]; then
+  # A page from a file (--app-page) is taken from the file, and from the
+  # cache only once the file cannot be read any more.
+  if [ -z "$refresh_page" ] && [ -f "$cached" ] && { [ -z "$app_page" ] || [ ! -r "$app_page" ]; }; then
     if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
       from_cache=1
     else
@@ -1835,10 +2071,16 @@ download_page() {
       from_cache=
     fi
   fi
-  if [ -z "$from_cache" ]; then
+  if [ -z "$from_cache" ] && [ -n "$app_page" ]; then
+    say "the page: $app_page_words"
+    cp "$app_page" "$work/page.zip" || die "--app-page $app_page: cannot read it (see above); give the file again, or another"
+    unpack_page "$work/page.zip" || die "$unpack_error"
+  elif [ -z "$from_cache" ]; then
     say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
     curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
     unpack_page "$work/page.zip" || die "$unpack_error"
+  fi
+  if [ -z "$from_cache" ]; then
     if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
       mv -f "$page_cache/.$page_asset.part" "$cached"; then
       write_page_meta
@@ -1847,6 +2089,20 @@ download_page() {
       rm -f "$page_cache/.$page_asset.part"
       warn "could not keep the page in the cache $page_cache; the next deploy downloads it again"
     fi
+  fi
+  # A file's page says which kind it is in its <meta name="wiki-backend">,
+  # as CI's pages do; one of the other kind is refused before it replaces
+  # anything.
+  if [ -n "$app_page" ]; then
+    file_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$work/app/index.html" | head -n 1)
+    if [ -n "$file_backend" ] && [ "$file_backend" != "$page_kind" ]; then
+      die "--app-page $app_page is the $file_backend's page (its index.html says so), and this deploy is of the $page_kind (--$mode)"
+    fi
+  fi
+  # CI's page as it is, for the comparison after the bundles are built here.
+  if [ -n "$bundle_locally" ]; then
+    rm -rf "$ci_page"
+    cp -R "$work/app" "$ci_page"
   fi
   rm -rf "$out"
   mkdir -p "${out%/*}"
@@ -1857,7 +2113,11 @@ download_page() {
   # talks to no server, but a demo of another commit than the checkout's is
   # as easily a surprise, so it is said too.
   checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
-  if [ -z "$backend_only_commit" ]; then
+  if [ -n "$app_page" ]; then
+    # A file's page is not checked against the checkout: the deploy has
+    # said which page it is.
+    :
+  elif [ -z "$backend_only_commit" ]; then
     if [ "$page_kind" = server ]; then
       warn "cannot tell which commit the page of $page_tag was built from (the tag is not in this checkout); wiki-server is built from ${checkout:-this checkout}, and the two should be of one version"
     else
@@ -1870,6 +2130,68 @@ download_page() {
       warn "the demo page is of $backend_only_commit, and this checkout is ${checkout:-of no commit}: the demo served is that commit's (deploy with --backend-only alone for the checkout's own)"
     fi
   fi
+}
+
+# --- The bundles built here (--bundle-locally) -------------------------------
+#
+# Of a page CI built, everything but what web/bundle.sh writes needs the
+# wasm toolchain or comes from the checkout's web/ (app.wasm, its
+# ghc_wasm_jsffi.js, the prerendered index.html and the page's other
+# files). With --bundle-locally what web/bundle.sh writes is deleted from
+# the page and built again here, from the checkout's package-lock.json,
+# with npm ci and web/bundle.sh, into the page itself: its service worker
+# (sw.js) is versioned by a hash of the page's files, the kept ones
+# included. Then the page is compared with CI's (ci_page, a copy of the
+# zip's files): with the lockfile's versions the two should be identical,
+# which is the evidence that the bundles CI built hold nothing else.
+# BUNDLE_OUTPUTS are the names at the page's root that web/bundle.sh
+# writes, as its header lists them; toolchain/test-deploy-local.sh checks
+# that the two agree.
+BUNDLE_OUTPUTS='islands.js islands tikzjax islands.css fonts wasi-shim.js licenses.txt icon.svg icons sw.js'
+ci_page=$ROOT/dist-newstyle/wasm-opt/ci-page
+
+# The files of a directory, one relative path a line, sorted.
+page_files() { (cd "$1" && find . -type f | sed 's|^[.]/||' | LC_ALL=C sort); }
+
+# Compare the page built here ($out) with CI's (ci_page): says that they
+# are identical, or warns with every file whose bytes differ and every file
+# only one of them has.
+compare_bundles() {
+  lists=$(mktemp -d)
+  page_files "$ci_page" >"$lists/ci"
+  page_files "$out" >"$lists/here"
+  LC_ALL=C comm -12 "$lists/ci" "$lists/here" | while IFS= read -r file; do
+    cmp -s "$ci_page/$file" "$out/$file" || printf '%s\n' "$file"
+  done >"$lists/differ"
+  LC_ALL=C comm -23 "$lists/ci" "$lists/here" >"$lists/only-ci"
+  LC_ALL=C comm -13 "$lists/ci" "$lists/here" >"$lists/only-here"
+  total=$(wc -l <"$lists/ci" | tr -d ' ')
+  if [ ! -s "$lists/differ" ] && [ ! -s "$lists/only-ci" ] && [ ! -s "$lists/only-here" ]; then
+    say "the page with the bundles built here and the page CI built are identical: the same $total files, byte for byte"
+  else
+    warn "the page with the bundles built here differs from the page CI built ($total files): $(wc -l <"$lists/differ" | tr -d ' ') differ, $(wc -l <"$lists/only-ci" | tr -d ' ') are in CI's alone, $(wc -l <"$lists/only-here" | tr -d ' ') are here alone; the page built here is the one deployed"
+    sed 's/^/    differs:          /' "$lists/differ" >&2
+    sed "s/^/    only in CI's:     /" "$lists/only-ci" >&2
+    sed 's/^/    only built here:  /' "$lists/only-here" >&2
+  fi
+  rm -rf "$lists" "$ci_page"
+}
+
+# Build the page's bundles here: what web/bundle.sh writes is deleted from
+# the page CI built (in $out), npm ci installs the lockfile's packages
+# (from the registry --npm-registry names, if any), and web/bundle.sh
+# writes the bundles into the page. Then compare_bundles.
+bundle_locally_step() {
+  [ -d "$ci_page" ] || die "--bundle-locally: there is no copy of the page CI built to compare with (dist-newstyle/wasm-opt/ci-page)"
+  # Not $name, which is the deployment's.
+  for bundle_output in $BUNDLE_OUTPUTS; do
+    rm -rf "${out:?}/$bundle_output"
+  done
+  say "npm ci, for the page's bundles${npm_registry:+, from the npm registry $npm_registry}"
+  (cd "$ROOT" && npm ci --no-audit --no-fund) || die "npm ci failed (see above), so nothing was changed"
+  say "building the page's JavaScript and CSS bundles here (sh web/bundle.sh)"
+  (cd "$ROOT" && sh web/bundle.sh "$out") || die "web/bundle.sh failed (see above), so nothing was changed"
+  compare_bundles
 }
 
 # wiki-server, natively, with this repository's packages at -O2 and the
@@ -2037,40 +2359,66 @@ server_build_native() {
   die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
+# --system-tools: the machine's own GHC and cabal (for the server) and Node
+# (for the demo, or the bundles built here), checked by
+# toolchain/bootstrap.sh system-tools before anything else, which names
+# each and stops the deploy when one is missing or too old.
+system_tools_check() {
+  needs=
+  [ "$mode" != server ] || needs=' native'
+  if [ "$mode" != server ] || [ -n "$bundle_locally" ]; then needs="$needs node"; fi
+  say "--system-tools: checking this machine's own toolchain (toolchain/bootstrap.sh system-tools$needs)"
+  # shellcheck disable=SC2086 # the words of what is needed.
+  sh "$ROOT/toolchain/bootstrap.sh" system-tools $needs ||
+    die "--system-tools: this machine's own toolchain will not do (see above), so nothing was changed; without --system-tools (--no-system-tools) toolchain/bootstrap.sh installs it"
+}
+# The options the bootstrap's modes take for those of the deploy: the
+# machine's own tools, and the Hackage mirror (which the bootstrap also
+# takes back out of cabal's configuration when none is given).
+system_tools_flag=${system_tools:+--system-tools}
+hackage_flag=${hackage_mirror:+--hackage-mirror=$hackage_mirror}
+
 if [ -n "$build" ]; then
+  [ -z "$system_tools" ] || system_tools_check
   # wiki-server is built natively in server mode, whether the page is
   # downloaded or built here: its check comes before anything else.
   native_recheck=
   [ "$mode" != server ] || check_native
-  if [ -n "$backend_only" ] && [ "$mode" != server ]; then
+  if [ -n "$prebuilt" ] && [ "$mode" != server ]; then
     # The demo's page from GitHub: nothing is built here. Node, which
     # serves the page and writes its brotli copies, is all it installs.
-    resolve_page
+    page_source
     download_page
     say "installing or checking Node, which serves the demo (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" node
-  elif [ -n "$backend_only" ]; then
+    sh "$ROOT/toolchain/bootstrap.sh" node ${system_tools_flag:+"$system_tools_flag"}
+  elif [ -n "$prebuilt" ]; then
     # The page first: a REF with no page stops the deploy before anything
     # is installed or built.
-    resolve_page
+    page_source
     download_page
     say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"}
+    sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"} ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
+    if [ -n "$bundle_locally" ]; then
+      say "installing or checking Node, which builds the page's bundles (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
+      sh "$ROOT/toolchain/bootstrap.sh" node ${system_tools_flag:+"$system_tools_flag"}
+    fi
   else
     if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
       say "first -O2 build: every dependency is compiled again at -O2 for wasm, so this can take over an hour once; later runs rebuild only what changed."
     fi
     say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"}
+    sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"} ${hackage_flag:+"$hackage_flag"}
   fi
   [ -z "$native_recheck" ] || recheck_native
 fi
-# The environment npm's own entry points load, for npm and Node here.
-if [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
+# The environment npm's own entry points load, for npm and Node here. With
+# --system-tools the tools are the machine's, as PATH finds them, and only
+# the variables of a toolchain directory are taken.
+if [ -z "$system_tools" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
   # shellcheck source=/dev/null
   . "$toolchain_base/.wiki-toolchain/env"
 fi
-bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env)
+bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env ${system_tools_flag:+"$system_tools_flag"})
 eval "$bootstrap_env"
 # The TeX of the PDF exports, checked after the toolchain and before the
 # build, so that an install of TeX Live, when one is wanted, happens before
@@ -2088,7 +2436,8 @@ pdf=no
 # check_tex_flag is set by the same test: when this step runs,
 # toolchain/check-native.sh has not probed xelatex.
 [ "$mode" != server ] || tex_step
-if [ -n "$build" ] && [ -n "$backend_only" ]; then
+if [ -n "$build" ] && [ -n "$prebuilt" ]; then
+  [ -z "$bundle_locally" ] || bundle_locally_step
   if [ "$mode" = server ]; then
     say "building wiki-server at -O2 (cabal-native-opt.project)"
     server_build_native
@@ -2132,7 +2481,7 @@ fi
 # wiki-server, and does the rest with curl, python3 and wiki-server.
 if [ -n "$nodeless" ]; then
   node=
-elif [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
+elif [ -z "$system_tools" ] && [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
   node=$toolchain_base/.wiki-toolchain/node/bin/node
 elif node=$(command -v node); then
   node=$(realpath "$node")

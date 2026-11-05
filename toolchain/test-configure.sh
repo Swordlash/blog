@@ -222,4 +222,68 @@ for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 
 done
 pass 'answers the deploy would refuse are refused, with a reason'
 
+# For a machine that installs nothing from the internet: the page from a
+# file (its path resolved as the deploy resolves it) or from GitHub, with
+# its bundles built here, the machine's own toolchain and the two mirrors,
+# given after the page's options.
+mkdir -p "$TMP/pages"
+: >"$TMP/pages/app-server-0123.zip"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked --app-page $TMP/pages/app-server-0123.zip --bundle-locally --system-tools --npm-registry https://npm.example.org/ --hackage-mirror https://hackage.example.org/ --sqlite --behind-proxy --port 8090 --admin-port 8081" \
+  "prefix=$TMP/srv/locked" "app_page=$TMP/srv/../pages/app-server-0123.zip" bundle_locally=yes system_tools=yes \
+  npm_registry=https://npm.example.org/ hackage_mirror=https://hackage.example.org/ db=sqlite way=proxy port=8090
+expect "sh toolchain/deploy-local.sh --static --backend-only=main --bundle-locally --system-tools --npm-registry https://npm.example.org/ --behind-proxy --port 8090" \
+  mode=static backend_only=main bundle_locally=yes system_tools=yes npm_registry=https://npm.example.org/ way=proxy port=8090
+pass 'the page from a file or from GitHub with --bundle-locally, --system-tools and the two mirrors'
+
+# From the state: a rerun gives them all again, and what the answers drop
+# is forgotten explicitly: --no-bundle-locally, --no-system-tools,
+# --npm-registry= and --hackage-mirror=; a page built here again forgets
+# the file (--no-backend-only), and needs no --no-bundle-locally.
+mkdir -p "$TMP/srv/locked2/state"
+cat >"$TMP/srv/locked2/state/wiki-demo.state" <<EOF
+name=wiki-demo
+dir=$TMP/srv/locked2
+toolchain=$TMP/srv/locked2/toolchain
+port=8090
+mode=server
+admin_port=8091
+way=proxy
+db=sqlite
+backend_only=
+backend_only_commit=0123456789abcdef0123456789abcdef01234567
+app_page=$TMP/pages/app-server-0123.zip
+bundle_locally=yes
+system_tools=yes
+npm_registry=https://npm.example.org/
+hackage_mirror=https://hackage.example.org/
+EOF
+rest="--sqlite --behind-proxy --port 8090 --admin-port 8091 --toolchain $TMP/srv/locked2/toolchain"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked2 --app-page $TMP/pages/app-server-0123.zip --bundle-locally --system-tools --npm-registry https://npm.example.org/ --hackage-mirror https://hackage.example.org/ $rest" \
+  "prefix=$TMP/srv/locked2"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked2 --app-page $TMP/pages/app-server-0123.zip --no-bundle-locally --no-system-tools --npm-registry= --hackage-mirror= $rest" \
+  "prefix=$TMP/srv/locked2" bundle_locally=no system_tools=no npm_registry= hackage_mirror=
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked2 --backend-only=main --bundle-locally --system-tools --npm-registry https://npm.example.org/ --hackage-mirror https://hackage.example.org/ $rest" \
+  "prefix=$TMP/srv/locked2" backend_only=main
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked2 --no-backend-only --no-system-tools --npm-registry https://npm.example.org/ --hackage-mirror https://hackage.example.org/ $rest" \
+  "prefix=$TMP/srv/locked2" backend_only= system_tools=no
+pass 'the options for a locked-down machine from the state, and forgotten explicitly when the answers drop them'
+
+# What the deploy would refuse of them: the machine's own toolchain with a
+# page built here, a mirror that is not an http:// or https:// URL, a
+# Hackage mirror without a toolchain directory of its own (no prefix and
+# no --toolchain), and an answer that is not yes or no.
+for answers in 'system_tools=yes' 'backend_only=head npm_registry=ftp://npm.example.org/' \
+  'backend_only=head hackage_mirror=hackage.example.org' 'backend_only=head hackage_mirror=https://hackage.example.org/' \
+  'backend_only=head bundle_locally=maybe'; do
+  # shellcheck disable=SC2086 # the answers are words.
+  printf '%s\n' $answers >"$TMP/answers"
+  if "$WIZARD" --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err"; then
+    fail "the wizard accepted $answers: $(cat "$TMP/out")"
+  fi
+  [ -s "$TMP/err" ] || fail "the wizard refused $answers without a word"
+done
+expect "sh toolchain/deploy-local.sh --server --system-tools --postgres --db-port 5433 --https --port 8080 --admin-port 8081 --no-build" \
+  system_tools=yes no_build=yes
+pass 'the wizard refuses --system-tools with a page built here, a mirror that is not a URL, and a Hackage mirror for the home directory'"'"'s toolchain'
+
 printf 'test-configure: %s passed\n' "$passed"
