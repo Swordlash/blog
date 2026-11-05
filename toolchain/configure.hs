@@ -61,6 +61,7 @@ ghc-options: -threaded
 -- >   mode=server|static            backend_only=|head|REF
 -- >   db=postgres|sqlite            db_port=N
 -- >   texlive=machine|toolchain|none  texlive_mirror=URL
+-- >   texlive_installer=URL|DIR  perl_source=URL|DIR
 -- >   way=tailscale|cert|proxy|http tls_cert=FILE  tls_key=FILE  tls_ca=FILE
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
 -- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
@@ -70,7 +71,11 @@ ghc-options: -threaded
 -- checkout's commit, or a REF (main, a tag, a commit hash), as the state
 -- file keeps it. texlive is the TeX of the PDF exports: the TeX on this
 -- machine (no option), TeX Live under the toolchain (--texlive, with
--- --texlive-mirror when a mirror is given) or none (--no-texlive). Answers
+-- --texlive-mirror when a mirror is given) or none (--no-texlive).
+-- texlive_installer and perl_source are the git repositories (or
+-- directories) TeX Live's installer and Perl's source come from, when not
+-- from their GitHub mirrors; the deploy does not remember them, so the
+-- state file does not give them. Answers
 -- that the deploy would refuse are printed on
 -- standard error, and the wizard exits 1.
 --
@@ -199,6 +204,8 @@ data Answers = Answers
   , fresh :: Bool
   , tex :: TexChoice
   , texMirror :: Text
+  , texInstaller :: Text
+  , perlSource :: Text
   , way :: Way
   , tlsCert :: Text
   , tlsKey :: Text
@@ -233,6 +240,8 @@ defaultAnswers =
     , fresh = False
     , tex = MachineTex
     , texMirror = ""
+    , texInstaller = ""
+    , perlSource = ""
     , way = Tailscale
     , tlsCert = ""
     , tlsKey = ""
@@ -310,6 +319,8 @@ applyAnswer a (key, v) = case key of
   "db_port" -> Right a {dbPort = v}
   "texlive" -> pick (\x -> a {tex = x}) [("machine", MachineTex), ("toolchain", ToolchainTex), ("none", NoTex)]
   "texlive_mirror" -> Right a {texMirror = v}
+  "texlive_installer" -> Right a {texInstaller = v}
+  "perl_source" -> Right a {perlSource = v}
   "way" ->
     pick
       (\x -> a {way = x})
@@ -401,7 +412,11 @@ deployArgs a = case action a of
     -- which --no-texlive forgets.
     texArgs = case tex a of
       MachineTex -> flag "--no-texlive" (rememberedTexLive a)
-      ToolchainTex -> "--texlive" : option "--texlive-mirror" (texMirror a)
+      ToolchainTex ->
+        "--texlive"
+          : option "--texlive-mirror" (texMirror a)
+          ++ option "--texlive-installer" (texInstaller a)
+          ++ option "--perl-source" (perlSource a)
       NoTex -> ["--no-texlive"]
     semaphoreArgs = case semaphore a of
       Probe -> []
@@ -445,6 +460,13 @@ problems a =
               , not (T.null (texMirror a))
               , not (validMirror (texMirror a))
               ]
+            , [ what <> " is a git repository's http:// or https:// URL, without spaces or quotes, or a directory of this machine."
+              | server
+              , tex a == ToolchainTex
+              , (what, v) <- [("TeX Live's installer", texInstaller a), ("Perl's source", perlSource a)]
+              , "://" `T.isInfixOf` v
+              , not (validMirror v)
+              ]
             , ["A certificate needs its key's file (the same file when one .pem holds both)." | way a == Certificate, T.null (tlsKey a)]
             ]
         _ -> []
@@ -456,7 +478,9 @@ problems a =
       | T.all isDigit v && not ("0" `T.isPrefixOf` v) && T.length v <= 5 && within (read (T.unpack v) :: Int) = []
       | otherwise = [what <> " is a number from 1024 to 65535."]
     within n = n >= 1024 && n <= 65535
-    -- As the deploy checks --texlive-mirror.
+    -- As the deploy checks --texlive-mirror, and the URLs of
+    -- --texlive-installer and --perl-source (a value without :// is a
+    -- directory, whose existence the deploy checks).
     validMirror m =
       any (\scheme -> scheme `T.isPrefixOf` m && T.length m > T.length scheme) ["http://", "https://"]
         && not (T.any (\c -> c `elem` ("\"'\\`$" :: String) || c == ' ' || c == '\t' || c == '\n') m)
@@ -519,8 +543,9 @@ absolute t
             )
 
 -- | The answers' paths as the deploy will resolve them ('absolute'): the
--- prefix as the deploy keeps it in the state, and the toolchain and the
--- certificate's files as the unit will name them.
+-- prefix as the deploy keeps it in the state, the toolchain and the
+-- certificate's files as the unit will name them, and the directories TeX
+-- Live's installer and Perl's source come from, as the deploy reads them.
 resolvePaths :: Answers -> IO Answers
 resolvePaths a = do
   p <- absolute (prefix a)
@@ -528,7 +553,12 @@ resolvePaths a = do
   c <- absolute (tlsCert a)
   k <- absolute (tlsKey a)
   ca <- absolute (tlsCa a)
-  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca}
+  i <- source (texInstaller a)
+  ps <- source (perlSource a)
+  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca, texInstaller = i, perlSource = ps}
+  where
+    -- A source of the TeX step is a URL, kept as it is, or a directory.
+    source v = if "://" `T.isInfixOf` v then pure v else absolute v
 
 -- | The state file of a deployment, found as deploy-lib.sh's layout finds
 -- it: under the prefix (<prefix>/state/<name>.state), or for a deployment
@@ -601,6 +631,8 @@ data Name
   | FreshField
   | TexChoiceName TexChoice
   | MirrorField
+  | InstallerField
+  | PerlSourceField
   | WayChoice Way
   | CertField
   | KeyField
@@ -732,7 +764,7 @@ fieldsFor s a = case s of
                  MachineTex ->
                    "The xelatex the service finds on its PATH (the systemd user manager's, not your shell's), checked at the deploy by typesetting a small document under the export's limits. When there is none, or it fails (TeX Live 2020 and older loop on unicode-math's table), the deploy asks whether to install TeX Live under the toolchain, unless an earlier deploy was told no (--no-texlive, or no at its question)."
                  ToolchainTex ->
-                   "TeX Live installed under the toolchain directory (.wiki-toolchain/texlive) from a CTAN mirror, about 250 MB and a few minutes, when the TeX the service finds does not work; one installed there already is checked and used. Its installer needs curl and tar, and Perl with its standard modules: where the machine has none, the deploy builds Perl from its source under the toolchain (.wiki-toolchain/perl, a few minutes with cc), for the installer only. The unit puts TeX Live's bin directory first on the service's PATH."
+                   "TeX Live installed under the toolchain directory (.wiki-toolchain/texlive) from a CTAN mirror, about 250 MB and a few minutes, when the TeX the service finds does not work; one installed there already is checked and used. Its installer is cloned with git from its GitHub mirror, and needs curl and tar, and Perl with its standard modules: where the machine has none, the deploy clones Perl's source from its GitHub mirror and builds it under the toolchain (.wiki-toolchain/perl, a few minutes with cc), for the installer only. The unit puts TeX Live's bin directory first on the service's PATH."
                  NoTex ->
                    "No TeX Live is installed. The server makes PDFs only with a TeX of this machine's that works; otherwise it offers no PDFs, and its administration's Server section says why."
              )
@@ -747,6 +779,20 @@ fieldsFor s a = case s of
              "The CTAN mirror TeX Live is downloaded from, through the proxy https_proxy names, if any. Empty: https://mirror.ctan.org, which redirects to a mirror near you."
              texMirrorL
              MirrorField
+         | tex a == ToolchainTex
+         ]
+      ++ [ text
+             "--texlive-installer"
+             "Optional: the git repository TeX Live's installer is cloned from, an http:// or https:// URL, or a directory of this machine holding install-tl, used as it is. Empty: https://github.com/TeX-Live/installer, its official mirror. Not remembered."
+             texInstallerL
+             InstallerField
+         | tex a == ToolchainTex
+         ]
+      ++ [ text
+             "--perl-source"
+             "Optional, for a machine without a Perl that works: the git repository Perl's source is cloned from at its tag v5.44.0, an http:// or https:// URL, or a directory of this machine with that source, copied and built under the toolchain. Empty: https://github.com/Perl/perl5. Not remembered."
+             perlSourceL
+             PerlSourceField
          | tex a == ToolchainTex
          ]
   Reach ->
@@ -878,12 +924,14 @@ framed title help w =
 actionL :: Lens' Answers Action
 actionL = lens action (\a v -> a {action = v})
 
-nameL, prefixL, pageRefL, dbPortL, texMirrorL, tlsCertL, tlsKeyL, tlsCaL, portL, bindL, adminPortL, toolchainL :: Lens' Answers Text
+nameL, prefixL, pageRefL, dbPortL, texMirrorL, texInstallerL, perlSourceL, tlsCertL, tlsKeyL, tlsCaL, portL, bindL, adminPortL, toolchainL :: Lens' Answers Text
 nameL = lens name (\a v -> a {name = v})
 prefixL = lens prefix (\a v -> a {prefix = v})
 pageRefL = lens pageRef (\a v -> a {pageRef = v})
 dbPortL = lens dbPort (\a v -> a {dbPort = v})
 texMirrorL = lens texMirror (\a v -> a {texMirror = v})
+texInstallerL = lens texInstaller (\a v -> a {texInstaller = v})
+perlSourceL = lens perlSource (\a v -> a {perlSource = v})
 tlsCertL = lens tlsCert (\a v -> a {tlsCert = v})
 tlsKeyL = lens tlsKey (\a v -> a {tlsKey = v})
 tlsCaL = lens tlsCa (\a v -> a {tlsCa = v})

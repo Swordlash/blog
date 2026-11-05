@@ -89,6 +89,16 @@ expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
   mode=static texlive=toolchain texlive_mirror=https://ctan.example way=proxy port=8090
 pass 'the PDF exports: nothing for this machine'"'"'s TeX, --texlive with its mirror, --no-texlive, nothing for the demo'
 
+# Where the installer and Perl's source come from: a URL as it is, a
+# directory resolved as the deploy resolves it; with --texlive only.
+mkdir -p "$TMP/mnt/tl" "$TMP/srv"
+ln -s ../mnt/tl "$TMP/srv/tl"
+expect "sh toolchain/deploy-local.sh --server --sqlite --texlive --texlive-installer $TMP/mnt/tl --perl-source https://git.example/perl5 --behind-proxy --port 8090 --admin-port 8081" \
+  mode=server db=sqlite texlive=toolchain "texlive_installer=$TMP/srv/tl" perl_source=https://git.example/perl5 way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --server --sqlite --no-texlive --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite texlive=none texlive_installer=https://git.example/installer perl_source=https://git.example/perl5 way=proxy port=8090
+pass 'the installer and Perl'"'"'s source: a URL as given, a directory resolved, only with --texlive'
+
 # The demo, downloaded at a tag, over plain HTTP everywhere, under a prefix
 # with a space: no server option (the deploy refuses them for the demo),
 # and the prefix quoted.
@@ -201,7 +211,8 @@ pass 'paths are resolved by realpath -m: links before .., also after a missing d
 # listeners on one port, a certificate without its key, an unknown key or
 # value, a CTAN mirror that is not an http:// or https:// URL.
 for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue' 'semaphore=yes' \
-  'texlive=yes' 'texlive=toolchain texlive_mirror=ftp://ctan.example' 'texlive=toolchain texlive_mirror=https://'; do
+  'texlive=yes' 'texlive=toolchain texlive_mirror=ftp://ctan.example' 'texlive=toolchain texlive_mirror=https://' \
+  'texlive=toolchain texlive_installer=ftp://git.example/installer' 'texlive=toolchain perl_source=git://git.example/perl5'; do
   # shellcheck disable=SC2086 # the answers are words.
   printf '%s\n' $answers >"$TMP/answers"
   if "$WIZARD" --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err"; then
