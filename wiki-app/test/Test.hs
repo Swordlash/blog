@@ -23,6 +23,7 @@ import Test.Live qualified as Live
 import Test.Manifest qualified as Manifest
 import Test.Passwords qualified as Passwords
 import Test.Policy qualified as Policy
+import Test.Problems qualified as Problems
 import Test.Readme qualified as Readme
 import Test.Rect qualified as Rect
 import Test.Route qualified as Route
@@ -59,6 +60,7 @@ main = do
       Import.spec
       Manifest.spec
       Policy.spec
+      Problems.spec
       Licence.spec
       Readme.spec
     around_ (holding maxBound) $ do

@@ -15,11 +15,17 @@
 -- islands, in slots keyed by their source ('Wiki.Core.Markdown.IslandKey'),
 -- are drawn again only when their own source changes.
 --
+-- Its islands tell of their libraries' failures (a formula, a diagram or a
+-- picture that cannot be drawn), each with its key, and the preview passes
+-- them on ('IslandDrawn'): the editor marks them in its text (WP5.65 of
+-- docs/PLAN.md). The preview in a window of its own ignores them.
+--
 -- The people the draft mentions are looked up as it is typed, for the
 -- logins not looked up yet ("Wiki.App.View.Body"), on a fiber of the
 -- preview's own, so that a mention becomes a link once it is known.
 module Wiki.App.View.Preview
   ( Input (..)
+  , Output (..)
   , component
   )
 where
@@ -32,9 +38,11 @@ import Wiki.App.Backend (MonadLoad (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Islands qualified as Islands
 import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..))
+import Wiki.Core.Markdown.Render (IslandKey)
 
 -- | The preview's input: the draft's title and Markdown, and the place it
 -- is read in.
@@ -50,9 +58,13 @@ data State = State
   -- ^ The people the draft mentions, as far as they have been looked up.
   }
 
-data Action = Initialize | Receive Input | FollowLink ArticleLink
+-- | What the preview tells its parent: an island's output, with the
+-- island's key in the draft.
+data Output = IslandDrawn IslandKey Islands.Output
 
-component :: forall query output m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input output m
+data Action = Initialize | Receive Input | FollowLink ArticleLink | FromIsland IslandKey Islands.Output
+
+component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input Output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -64,10 +76,10 @@ component =
     render :: State -> H.ComponentHTML Action IslandSlots m
     render State {input = Input {place, title, body}, known} =
       [hh|
-        <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink (Body.withPeople known.found place) body }}</div>
+        <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink FromIsland (Body.withPeople known.found place) body }}</div>
       |]
 
-    handleAction :: Action -> H.HalogenM State Action IslandSlots output m ()
+    handleAction :: Action -> H.HalogenM State Action IslandSlots Output m ()
     handleAction = \case
       Initialize -> resolvePeople
       Receive new -> do
@@ -80,8 +92,9 @@ component =
       FollowLink target -> do
         router <- gets (\st -> st.input.place.context.router)
         H.liftEffect (followArticleLink router target)
+      FromIsland key out -> H.raise (IslandDrawn key out)
 
-    resolvePeople :: H.HalogenM State Action IslandSlots output m ()
+    resolvePeople :: H.HalogenM State Action IslandSlots Output m ()
     resolvePeople = do
       st <- get
       let logins = Body.unasked st.known [st.input.body]

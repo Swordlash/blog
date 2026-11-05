@@ -143,13 +143,15 @@ answered logins found p = People {found = found <> p.found, asked = Set.fromList
 
 -- | A page's islands, one child component each, indexed by their keys in
 -- the document. An island whose key stays the same across a render keeps
--- its component, and what its library drew, untouched.
-type IslandSlots = ("island" .== H.Slot (Const Void) Void Md.IslandKey)
+-- its component, and what its library drew, untouched. Their output, a
+-- library's failure, is read only by the editor's preview
+-- ('articleLines'); a page ignores it.
+type IslandSlots = ("island" .== H.Slot (Const Void) Islands.Output Md.IslandKey)
 
 -- | A constraint saying a component's slots include the islands', for a
 -- component that has children of its own besides (the page view's
 -- comments).
-type HasIslands slots = HasType "island" (H.Slot (Const Void) Void Md.IslandKey) slots
+type HasIslands slots = HasType "island" (H.Slot (Const Void) Islands.Output Md.IslandKey) slots
 
 -- | The page's title as a heading, unless its Markdown starts with its own.
 heading :: Text -> Text -> [HH.HTML w i]
@@ -178,15 +180,21 @@ article onLink place source = articleOf onLink place source (rendered place sour
 -- | 'article', with each block of the page after an empty marker of the
 -- source line it starts on ('Md.renderLines'): what the editor's preview,
 -- and the preview in a window of its own, are scrolled by to show the
--- block being written (WP5.36 of docs/PLAN.md).
+-- block being written (WP5.36 of docs/PLAN.md). Its islands tell of their
+-- libraries' failures ('Islands.reporting'), each with its key, through
+-- @onIsland@: the editor marks them in its text (WP5.65).
 articleLines
   :: forall action slots m
    . (MonadIslands m, MonadUUID m, HasIslands slots)
   => (ArticleLink -> action)
+  -> (Md.IslandKey -> Islands.Output -> action)
   -> Place
   -> Text
   -> H.ComponentHTML action slots m
-articleLines onLink place source = articleOf onLink place source (Md.renderLines (options place) <$> Md.parseWithLines source)
+articleLines onLink onIsland place source =
+  articleOf onLink place source (Md.renderLines (optionsWith reported place) <$> Md.parseWithLines source)
+  where
+    reported key input = HH.slot "island" key Islands.reporting input (onIsland key)
 
 -- | A page's Markdown rendered as 'article' renders it, before it is put
 -- in its article. The page view highlights its comments' quotes in this
@@ -260,8 +268,16 @@ slides
 slides place = Slides.renderDeck (options place)
 
 options :: (MonadIslands m, MonadUUID m, HasIslands slots) => Place -> Md.Options PageLink (H.ComponentSlot slots m action) action
-options place =
-  (islandOptions place.context (spaceMacros place.context.spaces place.space.id))
+options = optionsWith quietIsland
+
+-- | 'options', with the islands made by the given function from their keys
+-- and inputs.
+optionsWith
+  :: (Md.IslandKey -> Islands.Island -> H.ComponentHTML action slots m)
+  -> Place
+  -> Md.Options PageLink (H.ComponentSlot slots m action) action
+optionsWith island place =
+  (islandOptionsWith island place.context (spaceMacros place.context.spaces place.space.id))
     { Md.resolveLink = resolve place
     , Md.pageHref = \(PageLink r fragment) -> Router.href place.context.router r <> fragment
     , Md.resolveMention = \login ->
@@ -272,7 +288,19 @@ options place =
 
 -- | Renderer options shared by page bodies, previews and the front page.
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
-islandOptions ctx spaceOwn =
+islandOptions = islandOptionsWith quietIsland
+
+-- | An island whose output is ignored.
+quietIsland :: (MonadIslands m, MonadUUID m, HasIslands slots) => Md.IslandKey -> Islands.Island -> H.ComponentHTML action slots m
+quietIsland key = HH.slot_ "island" key Islands.component
+
+-- | 'islandOptions', with the islands made by the given function.
+islandOptionsWith
+  :: (Md.IslandKey -> Islands.Island -> H.ComponentHTML action slots m)
+  -> Context
+  -> Islands.Macros
+  -> Md.Options PageLink (H.ComponentSlot slots m action) action
+islandOptionsWith island ctx spaceOwn =
   Md.defaultOptions
     { Md.codeBlock = \k language rows numbered code -> island k (Islands.CodeBlock language rows numbered code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
@@ -286,7 +314,6 @@ islandOptions ctx spaceOwn =
       Md.copyButtons = True
     }
   where
-    island key = HH.slot_ "island" key Islands.component
     -- The wiki's built-in macros as the administration keeps them, if it
     -- does, before the space's.
     spaceDefined = wikiMacrosOf ctx.session <> spaceOwn

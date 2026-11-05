@@ -16,6 +16,7 @@ import Test.Markdown.Box qualified as Box
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Mention qualified as Mention
+import Test.Markdown.Problems qualified as Problems
 import Test.Markdown.Spoiler qualified as Spoiler
 import Test.Markdown.Tikz qualified as Tikz
 import Test.Markdown.Toc qualified as Toc
@@ -47,6 +48,7 @@ main = hspec . parallel $ do
   Link.spec
   Mention.spec
   Spoiler.spec
+  Problems.spec
   Path.spec
   Order.spec
   Permission.spec

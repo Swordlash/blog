@@ -2,7 +2,10 @@
 
 -- | The islands in a browser, drawn by the page's islands.js: each fills its
 -- element with what its library makes, and draws again when its source
--- changes.
+-- changes. The island is the one that tells its parent of its library's
+-- failures ('Islands.reporting'): a formula, a diagram and a picture that
+-- fail raise 'Islands.Failed' with the library's message, and the same
+-- island drawn again without one raises 'Islands.Cleared'.
 module Test.Browser.Islands (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -78,10 +81,13 @@ spec m = do
       message `shouldHaveText'` "l.2 \\undefinedcommand"
       find ui "div.wiki-tikz > pre.wiki-tikz-source" >>= (`shouldHaveText` source)
       count ui "div.wiki-tikz svg" `shouldReturn` 0
+      -- The editor is told, with TeX's message.
+      eventually $ failures ui >>= (`shouldSatisfy` any (T.isInfixOf "Undefined control sequence"))
       -- And the worker goes on to the next picture.
       changeTo ui (Tikz "\\draw (0,0) -- (1,1);")
       _ <- waitForPicture ui
       count ui "div.wiki-tikz .wiki-island-error" `shouldReturn` 0
+      eventually $ lastOutput ui `shouldReturn` Just Islands.Cleared
 
   describe "MathInline" $ do
     it "is set by KaTeX, in the line" $ runPage $ do
@@ -91,6 +97,8 @@ spec m = do
       countIn island ".katex-display" `shouldReturn` 0
       -- KaTeX's MathML copy carries the source, for screen readers.
       findIn island "annotation" >>= (`shouldHaveText` "x^2")
+      -- A formula that parses says nothing to its parent.
+      outputs ui `shouldReturn` []
 
     it "is set again when its TeX changes" $ runPage $ do
       ui <- mount m harness (MathInline mempty "x^2")
@@ -101,8 +109,21 @@ spec m = do
       find ui "span.wiki-math-inline" >>= (`shouldBeSameElement` island)
 
     it "shows what KaTeX cannot parse as an error in its place" $ runPage $ do
-      ui <- mount m harness (MathInline mempty "\\frac{")
+      -- Mounted with a formula that parses first: the outputs a test reads
+      -- are those raised after the mount.
+      ui <- mount m harness (MathInline mempty "x")
+      _ <- find ui "span.wiki-math-inline .katex"
+      changeTo ui (MathInline mempty "\\frac{")
       find ui "span.wiki-math-inline .katex-error" >>= (`shouldHaveText` "\\frac{")
+      -- KaTeX's message goes to the parent; the formula fixed clears it.
+      eventually $ failures ui >>= (`shouldSatisfy` \case [message] -> "KaTeX parse error" `T.isPrefixOf` message; _ -> False)
+      changeTo ui (MathInline mempty "\\frac{1}{2}")
+      _ <- find ui "span.wiki-math-inline .katex .mfrac"
+      eventually $ lastOutput ui `shouldReturn` Just Islands.Cleared
+      -- Drawn again without a problem, it says nothing more.
+      changeTo ui (MathInline mempty "\\frac{1}{3}")
+      _ <- find ui "span.wiki-math-inline annotation"
+      eventually $ length <$> outputs ui `shouldReturn` 2
 
   describe "MathDisplay" $
     it "is set by KaTeX, on its own" $
@@ -130,6 +151,11 @@ spec m = do
       ui <- mount m harness (Mermaid "graph LR\n  first -->")
       _ <- eventuallyWithin 15000 (find ui "div.wiki-mermaid .wiki-island-error")
       count ui "div.wiki-mermaid svg" `shouldReturn` 0
+      -- Mermaid's message goes to the parent; the diagram fixed clears it.
+      eventually $ failures ui >>= (`shouldSatisfy` ((== 1) . length))
+      changeTo ui (Mermaid "graph LR\n  first --> second")
+      _ <- waitForDiagram ui
+      eventually $ lastOutput ui `shouldReturn` Just Islands.Cleared
 
   describe "CodeBlock" $ do
     it "is highlighted by highlight.js" $ runPage $ do
@@ -192,6 +218,8 @@ spec m = do
         count ui "pre" `shouldReturn` 0
   where
     changeTo ui island = void (query ui (H.mkTell (SetIsland island)))
+    failures ui = (\os -> [message | Islands.Failed message <- os]) <$> outputs ui
+    lastOutput ui = lastMay <$> outputs ui
     count ui selector = length <$> findAll ui selector
     countIn element selector = length <$> findAllIn element selector
     -- Mermaid's bundle is fetched the first time a diagram is drawn, which
@@ -209,19 +237,20 @@ spec m = do
 -- a page re-rendered with a new source would.
 data Query a = SetIsland Island a
 
-type Slots = ("island" .== H.Slot (Const Void) Void ())
+type Slots = ("island" .== H.Slot (Const Void) Islands.Output ())
 
-harness :: forall m. (MonadIslands m, MonadUUID m) => H.Component Query Island Void m
+-- | Raises what its island raises.
+harness :: forall m. (MonadIslands m, MonadUUID m) => H.Component Query Island Islands.Output m
 harness =
   H.mkComponent
     H.ComponentSpec
       { initialState = pure
       , render
-      , eval = H.mkEval H.defaultEval {H.handleQuery = handleQuery}
+      , eval = H.mkEval H.defaultEval {H.handleQuery = handleQuery, H.handleAction = H.raise}
       }
   where
-    render :: Island -> H.ComponentHTML Void Slots m
-    render island = HH.div_ [HH.slot_ "island" () Islands.component island]
+    render :: Island -> H.ComponentHTML Islands.Output Slots m
+    render island = HH.div_ [HH.slot "island" () Islands.reporting island identity]
 
-    handleQuery :: Query a -> H.HalogenM Island Void Slots Void m (Maybe a)
+    handleQuery :: Query a -> H.HalogenM Island Islands.Output Slots Islands.Output m (Maybe a)
     handleQuery (SetIsland island next) = put island $> Just next

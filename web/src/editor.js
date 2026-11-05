@@ -3,8 +3,9 @@
 // larger, their markers kept but dimmed; code in its own background, fenced
 // code highlighted by highlight.js as the page will be; links, quotes and
 // lists set off), and nothing else of CodeMirror's but the completion of
-// mentions: no line numbers, no gutter, no keys of its own but moving,
-// selecting, deleting, undoing and choosing a completion.
+// mentions and the marks of the page's problems: no line numbers, no keys of
+// its own but moving, selecting, deleting, undoing and choosing a
+// completion.
 //
 // web/bundle.sh bundles this into islands/editor.js, which islands.js
 // imports the first time the editor asks for it (wikiIslands.attachEditor),
@@ -47,6 +48,12 @@
 //   backend through the component: a "wiki-mention" event on the host asks
 //   for them ({id, letters}), and the component answers through
 //   wikiEditor.mentioned(id, people).
+// - the page's problems (WP5.65 of docs/PLAN.md: a formula, a diagram or a
+//   picture that cannot be drawn, a broken spoiler or box marker) are
+//   diagnostics of @codemirror/lint, set by the component
+//   (wikiEditor.problems, through jsbits/editor.js) and never computed here:
+//   their ranges underlined in red, a marker in a gutter of their own, the
+//   message on hover, and wikiEditor.nextProblem moving to the next one.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
@@ -61,6 +68,7 @@ import { Language, LanguageSupport, ensureSyntaxTree, syntaxHighlighting, syntax
 // tag completion, none of which the editor wants.
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
+import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics } from "@codemirror/lint";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -171,6 +179,14 @@ const decorations = (codeTokens) =>
 
 // How many characters (code points) the first `units` UTF-16 units of a
 // text hold: what Haskell's Text counts.
+// The UTF-16 position of a number of characters (code points) into a text,
+// as far as the text goes: the inverse of characters below.
+const unitsOf = (text, count) => {
+  let at = 0;
+  for (let n = 0; n < count && at < text.length; n++) at += text.codePointAt(at) > 0xffff ? 2 : 1;
+  return at;
+};
+
 const characters = (text, units) => {
   let count = 0;
   for (let at = 0; at < units && at < text.length; at++) {
@@ -936,6 +952,7 @@ export function attach(textarea, host, original, codeTokens) {
       decorations(codeTokens),
       unclosedMath,
       keptSelection,
+      lintGutter(),
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",
@@ -1037,6 +1054,37 @@ export function attach(textarea, host, original, codeTokens) {
       });
       return found;
     },
+    // The page's problems, as [{from, to, kind, message}] in characters of
+    // the text, in place of those shown before. The text may have changed
+    // since they were found, so each range is clamped to the text there is.
+    problems: (list) => {
+      const text = view.state.doc.toString();
+      const diagnostics = (Array.isArray(list) ? list : []).map((problem) => {
+        const from = unitsOf(text, Math.max(0, Number(problem.from) || 0));
+        const to = unitsOf(text, Math.max(0, Number(problem.to) || 0));
+        return {
+          from: Math.min(from, to),
+          to: Math.max(from, to),
+          severity: "error",
+          source: String(problem.kind ?? ""),
+          message: String(problem.message ?? ""),
+        };
+      });
+      view.dispatch(setDiagnostics(view.state, diagnostics));
+    },
+    // The cursor to the next problem after it (or the first), with its
+    // message shown, and the focus in the text.
+    nextProblem: () => {
+      nextDiagnostic(view);
+      view.focus();
+    },
+    // The problems marked, as {from, to, message} in UTF-16 units, for the
+    // browser tests.
+    marked: () => {
+      const found = [];
+      forEachDiagnostic(view.state, (d, from, to) => found.push({ from, to, message: d.message }));
+      return found;
+    },
     // The tracked changes, as {id, from, to, removed}, in UTF-16 units.
     changes: () => view.state.field(changes.field).map((change) => ({ ...change })),
     // The assistant's edit: from..to replaced with `insert`, tracked as the
@@ -1088,6 +1136,8 @@ export function attach(textarea, host, original, codeTokens) {
     },
   };
   host.wikiEditor = editor;
+  // The problems found before CodeMirror had loaded.
+  if (host.wikiProblems) editor.problems(host.wikiProblems);
   // For the browser tests, which find the text by what one types into.
   view.contentDOM.wikiEditor = editor;
   editors.add(editor);

@@ -82,6 +82,7 @@ library
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Mention
+      Wiki.Core.Markdown.Problems
       Wiki.Core.Markdown.Render
       Wiki.Core.Markdown.TexMath
       Wiki.Core.Markdown.Tikz
@@ -158,6 +159,7 @@ test-suite wiki-core-test
       Test.Markdown.Edit
       Test.Markdown.Link
       Test.Markdown.Mention
+      Test.Markdown.Problems
       Test.Markdown.Spoiler
       Test.Markdown.Tikz
       Test.Markdown.Toc

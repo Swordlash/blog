@@ -8,7 +8,7 @@
 // under tikzjax/), and fetched the first time a diagram or a picture is
 // drawn. What the page gets is one object on globalThis:
 //
-//   wikiIslands.renderMath(element, tex, displayMode, macros)
+//   wikiIslands.renderMath(element, tex, displayMode, macros): string
 //   wikiIslands.checkMacros(macros, block): string
 //   wikiIslands.renderMermaid(element, source): Promise<void>
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
@@ -24,8 +24,13 @@
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
 // rejects shows the library's error in the element instead, which is what an
-// author previewing a page wants to see. wiki-app/jsbits/islands.js is the
-// application's side of this.
+// author previewing a page wants to see. The error also goes to the
+// application, whose editor marks the island's lines in the text (WP5.65 of
+// docs/PLAN.md): renderMath returns it ("" when the formula was set), and
+// renderMermaid and renderTikz, which finish later, send the element a
+// "wiki-island-drawn" event whose detail is the error, or "" when the drawing
+// succeeded (drawn). wiki-app/jsbits/islands.js is the application's side of
+// this.
 //
 // KaTeX comes with mhchem (\ce and \pu, its contrib extension) and the
 // wiki's built-in macros (katex-macros.tex, bundled as text), under the
@@ -147,11 +152,24 @@ const nextGeneration = (element) => {
 };
 const isCurrent = (element, generation) => generations.get(element) === generation;
 
+// A library's error as text: what the element shows, and what the editor
+// is told. An error without words still says something.
+const errorText = (error) => String(error?.message ?? error ?? "") || "The library could not draw this.";
+
 const showError = (element, error) => {
   const message = document.createElement("pre");
   message.className = "wiki-island-error";
-  message.textContent = String(error?.message ?? error);
+  message.textContent = errorText(error);
   element.replaceChildren(message);
+};
+
+// Tell the application that a diagram or a picture is done: with the error,
+// or with "" when it was drawn. Only for the element's current drawing, and
+// only while the element is in the page: an element Halogen has removed
+// belongs to an island that is gone, whose result nobody wants.
+const drawn = (element, error) => {
+  if (!element.isConnected) return;
+  element.dispatchEvent(new CustomEvent("wiki-island-drawn", { detail: error === null ? "" : errorText(error) }));
 };
 
 // The built-in macros, read once; web/bundle.sh has checked that KaTeX
@@ -177,20 +195,32 @@ const macrosOf = (blocks) =>
 const renderMath = (element, tex, displayMode, macros) => {
   nextGeneration(element);
   try {
-    // throwOnError: false renders a formula KaTeX cannot parse as its source,
-    // in red, with the error as its title: the author sees where it went wrong
-    // in place. The catch is for everything else (an option KaTeX rejects).
     // The formula is rendered in a group of its own, so what it defines
-    // stays in it: a later formula has it from its own `macros`.
+    // stays in it: a later formula has it from its own `macros`. KaTeX
+    // writes into the macros it is handed, so each run gets a copy.
     const defined = macrosOf(Array.isArray(macros) ? macros : []).macros;
-    katex.render(String(tex), element, {
+    const options = (throwOnError) => ({
       displayMode: Boolean(displayMode),
-      throwOnError: false,
+      throwOnError,
       output: "htmlAndMathml",
       macros: forgetting(defined, tex),
     });
+    // First with throwOnError, for KaTeX's error, which is what the editor
+    // is told. A formula KaTeX cannot parse is then rendered again with
+    // throwOnError: false, which shows its source in red with the error as
+    // its title: the author sees where it went wrong in place. The outer
+    // catch is for everything else (an option KaTeX rejects).
+    try {
+      katex.render(String(tex), element, options(true));
+      return "";
+    } catch (error) {
+      if (!(error instanceof katex.ParseError)) throw error;
+      katex.render(String(tex), element, options(false));
+      return errorText(error);
+    }
   } catch (error) {
     showError(element, error);
+    return errorText(error);
   }
 };
 
@@ -215,8 +245,12 @@ const renderMermaid = async (element, source) => {
     if (!isCurrent(element, generation)) return;
     element.innerHTML = svg;
     bindFunctions?.(element);
+    drawn(element, null);
   } catch (error) {
-    if (isCurrent(element, generation)) showError(element, error);
+    if (isCurrent(element, generation)) {
+      showError(element, error);
+      drawn(element, error);
+    }
   }
 };
 
@@ -231,15 +265,20 @@ const renderTikz = async (element, source, preamble, picture) => {
     if (drawing === null || !isCurrent(element, generation)) return;
     if (drawing.svg) {
       element.replaceChildren(tikz.picture(drawing.svg));
+      drawn(element, null);
     } else {
       const shown = document.createElement("pre");
       shown.className = "wiki-tikz-source";
       shown.textContent = String(source);
       showError(element, drawing.error);
       element.prepend(shown);
+      drawn(element, drawing.error);
     }
   } catch (error) {
-    if (isCurrent(element, generation)) showError(element, error);
+    if (isCurrent(element, generation)) {
+      showError(element, error);
+      drawn(element, error);
+    }
   }
 };
 

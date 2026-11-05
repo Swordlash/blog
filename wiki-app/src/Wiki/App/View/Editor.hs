@@ -233,6 +233,7 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
+import Halogen.JSBits (inBrowser)
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
@@ -275,6 +276,7 @@ import Wiki.App.Editor.Browser
   , historyBack
   , insertAtCursor
   , mentionAsked
+  , nextProblem
   , onPreviewEntry
   , paneShown
   , pastedFiles
@@ -286,9 +288,11 @@ import Wiki.App.Editor.Browser
   , readPickedFile
   , selectedSpan
   , settleChanges
+  , showProblems
   , textShown
   , typedText
   )
+import Wiki.App.Editor.Problems (problemRanges)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..))
@@ -345,6 +349,8 @@ import Wiki.Core.Markdown.Edit
   , textColourClass
   , textColours
   )
+import Wiki.Core.Markdown.Problems qualified as Problems
+import Wiki.Core.Markdown.Render (IslandKey)
 import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
@@ -375,7 +381,7 @@ data Input = Input
 data Query a = IsDirty (Bool -> a)
 
 type Slots =
-  ("preview" .== H.Slot (Const Void) Void ())
+  ("preview" .== H.Slot (Const Void) Preview.Output ())
     .+ ("time" .== H.Slot (Const Void) Void Int)
     .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
     .+ ("macros" .== H.Slot (Const Void) MacrosPanel.Output ())
@@ -465,6 +471,20 @@ data State = State
   -- ^ The running wait before the preview follows the work, if any.
   , autosave :: Maybe H.ForkId
   -- ^ The running wait before the work is saved as a draft, if any.
+  , checkWait :: Maybe H.ForkId
+  -- ^ The running wait before the text is checked for problems, if any.
+  , checked :: Problems.Checked
+  -- ^ What the last check of the text found: the parser's problems, and
+  -- where each island that can fail is.
+  , checkedText :: Text
+  -- ^ The text that check read, which the problems' lines are lines of.
+  , failedIslands :: Map IslandKey Text
+  -- ^ The preview's islands whose libraries failed, by key, with their
+  -- messages. A failure is kept while the text the preview has drawn
+  -- holds its key, since its island is still there ('keepDrawnFailures');
+  -- only those whose key is in the checked text are marked.
+  , problemCount :: Int
+  -- ^ How many problems the text is marked with.
   , edits :: Int
   -- ^ How many changes have been made: the autosave's wait continues
   -- until this has stopped changing for 'draftDelay'.
@@ -610,6 +630,8 @@ data Action
   | ChangesLeft Int
   | Decide Decision Int
   | MentionAsked Int Text
+  | FromPreview Preview.Output
+  | NextProblem
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
@@ -681,6 +703,11 @@ component =
               , loaded
               , pending = Nothing
               , autosave = Nothing
+              , checkWait = Nothing
+              , checked = Problems.checkText ""
+              , checkedText = ""
+              , failedIslands = mempty
+              , problemCount = 0
               , edits = 0
               , found
               , hasDraft
@@ -789,6 +816,9 @@ component =
               <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
               {% if st.pendingChanges > 0 %}
                 <span class="editor-pending-note" role="status">{{ pendingNote st.pendingChanges }}</span>
+              {% end %}
+              {% if st.problemCount > 0 %}
+                <button type="button" class="editor-problems" title="Go to the next problem" onClick={{ const NextProblem }}>{{ problemsNote st.problemCount }}</button>
               {% end %}
             </div>
           </div>
@@ -1120,7 +1150,7 @@ component =
           Just
             [hh|
               <div class="editor-preview" aria-label="Preview">
-                {{ HH.slot_ "preview" () Preview.component Preview.Input {place = placeOf st.input work, title = work.shownTitle, body = work.shownBody} }}
+                {{ HH.slot "preview" () Preview.component Preview.Input {place = placeOf st.input work, title = work.shownTitle, body = work.shownBody} FromPreview }}
               </div>
             |]
       | otherwise = Nothing
@@ -1666,6 +1696,19 @@ component =
         found <- mentionCandidates letters
         host <- gets (\st -> st.hostElement)
         for_ host $ \h -> H.liftEffect (answerMention h i (rightToMaybe found))
+      -- An island of the preview failed, or was drawn after failing. The
+      -- failure is kept even for a key the last check has not seen (the
+      -- preview may have drawn a text the check has not read yet); only
+      -- those in the checked text are marked.
+      FromPreview (Preview.IslandDrawn key out) -> do
+        before <- gets (\st -> st.failedIslands)
+        let after = case out of
+              Islands.Failed message -> Map.insert key message before
+              Islands.Cleared -> Map.delete key before
+        when (after /= before) $ do
+          modify (\st -> st {failedIslands = after})
+          publishProblems
+      NextProblem -> gets (\st -> st.hostElement) >>= traverse_ (H.liftEffect . nextProblem)
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -1735,6 +1778,11 @@ component =
           found <- H.getRef st.host
           modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
+          -- The text loaded is checked at once, the typing after a pause.
+          -- Only in a browser: a page prerendered natively has no
+          -- CodeMirror to mark, and its first render must be the
+          -- browser's, which counts no problems yet.
+          when inBrowser (scheduleCheck 0)
         _ -> pass
 
     -- Read the user's assistant settings, then ask each provider that can
@@ -1864,6 +1912,7 @@ component =
     catchUp = do
       cancelPreview
       modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
+      modify keepDrawnFailures
 
     -- Load the page and the author's draft of it, as the initial state
     -- would have: what the editor opens with on a backend that waits.
@@ -1900,6 +1949,7 @@ component =
       -- Typing has started, past the question about others editing.
       whenM (gets (\st -> st.presence == Asking)) announce
       scheduleAutosave
+      scheduleCheck previewDelay
       -- Only a preview visible beside the Markdown follows the typing; one
       -- shown on its own catches up when it is shown.
       gets (\st -> st.sideBySide) >>= \case
@@ -1915,7 +1965,52 @@ component =
         liftIO (threadDelay previewDelay)
         modify (\st -> st {pending = Nothing})
         modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
+        modify keepDrawnFailures
       modify (\st -> st {pending = Just waiting})
+
+    -- Check the text for problems once the typing has stopped for the
+    -- given time (in microseconds), as the preview follows it: a wait of
+    -- its own, which the next change kills. The check runs on a worker
+    -- thread ('liftIO'), so a long page does not hold up the typing.
+    scheduleCheck :: Int -> H.HalogenM State Action Slots ViewOutput m ()
+    scheduleCheck delay = do
+      gets (\st -> st.checkWait) >>= traverse_ H.kill
+      waiting <- H.fork $ do
+        when (delay > 0) $ liftIO (threadDelay delay)
+        gets (\st -> st.loaded) >>= \case
+          Ready w -> do
+            found <- liftIO (evaluate (force (Problems.checkText w.body)))
+            modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
+            publishProblems
+          _ -> modify (\st -> st {checkWait = Nothing})
+      modify (\st -> st {checkWait = Just waiting})
+
+    -- Drop the failures of islands the preview no longer has. The preview
+    -- has an island for each key of the text it has drawn ('shownBody'),
+    -- and keeps it, with its failure, until it draws another text. So a
+    -- failure goes only once the text the preview has drawn is the text
+    -- checked and the key is not in it. A text that only the editor has
+    -- (the preview hidden, or not caught up yet) drops nothing: undone
+    -- back to the text the preview shows, the failure is marked again,
+    -- though no island reports it again. Dropping the key once the
+    -- preview has drawn a text without it matters because a new island
+    -- of the same source reports nothing when it succeeds (after the
+    -- page's macros changed, say), and its old failure would stay.
+    keepDrawnFailures :: State -> State
+    keepDrawnFailures st = case st.loaded of
+      Ready w
+        | w.shownBody == st.checkedText ->
+            st {failedIslands = Map.restrictKeys st.failedIslands (Map.keysSet st.checked.islands)}
+      _ -> st
+
+    -- Mark the problems of the last check, and the failed islands' that are
+    -- in its text, in CodeMirror, and count them.
+    publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
+    publishProblems = do
+      st <- get
+      let problems = Problems.allProblems st.checked st.failedIslands
+      traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
+      when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
 
     cancelPreview :: H.HalogenM State Action Slots ViewOutput m ()
     cancelPreview = do
@@ -2369,6 +2464,11 @@ tableTool = Tool Table "Table" Nothing "M1.5 2.5h13v11h-13zM1.5 6h13M6 2.5v11M10
 
 -- | What the line beside Save says about the assistant's undecided
 -- changes.
+-- | The count of problems beside the buttons.
+problemsNote :: Int -> Text
+problemsNote 1 = "1 problem"
+problemsNote n = show n <> " problems"
+
 pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."

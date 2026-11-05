@@ -73,3 +73,16 @@ function wiki_test_editor_clear_body() {
 function wiki_test_editor_math() {
   return JSON.stringify(wikiTestEditor()?.nodes("TeXMath") ?? []);
 }
+
+// The problems the open editor marks (WP5.65), as JSON [{from, to,
+// message}] in UTF-16 units, as CodeMirror's lint state has them.
+function wiki_test_editor_problems() {
+  return JSON.stringify(wikiTestEditor()?.marked() ?? []);
+}
+
+// Put text into the open editor's text at a position (UTF-16 units), as one
+// small edit, with the cursor after it: an edit inside a problem's range,
+// whose mark CodeMirror keeps until the problems are set again.
+function wiki_test_editor_insert(at, text) {
+  wikiTestEditor()?.replace(at, at, text, at + text.length, at + text.length);
+}

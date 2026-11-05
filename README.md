@@ -560,6 +560,14 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   the text scrolls. A page's title is its first line, `# Title`, which the
   editor keeps there. Inline math left open on its line, a `$` or a `\(` that
   nothing closes there, is underlined in red to the line's end.
+  What does not render is marked in the text as well (@codemirror/lint): a
+  spoiler's broken marker, a spoiler not closed or cutting a section, a
+  quotation that starts like a box's marker but is not one (`> [!]`), all
+  found as the text is parsed; and a formula KaTeX cannot parse, a Mermaid
+  diagram or a TikZ picture that fails, once the preview has drawn it. Their
+  lines are underlined in red, with a mark in a gutter and the message on
+  hover, and a count beside the buttons (**2 problems**) goes to the next one
+  at each click. A problem goes as the source is fixed.
   The preview beside the text scrolls to the block being written; **Detach
   preview** opens it in a window of its own (on another monitor, say), which
   follows the editor as it is typed. **A−** and **A+** set the size of the
