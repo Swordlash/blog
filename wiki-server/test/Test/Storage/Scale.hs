@@ -129,7 +129,7 @@ renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (
 
 readers :: Backing -> Spec
 readers backing = describe "reads" $ do
-  -- GHC 9.12 needs the signature of signedIn; without it, it cannot infer the types.
+  -- GHC 9.10 and 9.12 need the signature of signedIn to infer the types; GHC 9.14 does not.
   let signedIn :: Storage -> IO (Who, UserId, UTCTime, SessionToken)
       signedIn st = do
         who <- whoFor st (As "reader")
@@ -300,7 +300,7 @@ writes backing = describe "a save of a watched page" $ do
         made <- subtract told <$> countOf st
         scans <- Set.fromList . concat <$> traverse (scansOf st) statements
         pure (statements, scans, made)
-      -- GHC 9.12 needs this signature; without it, it cannot infer the types.
+      -- GHC 9.10 and 9.12 need this signature to infer the types; GHC 9.14 does not.
       countOf :: Storage -> IO Int
       countOf st = reading st (countWhere wikiDb.notifications (const (val_ True)))
 

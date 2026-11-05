@@ -896,9 +896,9 @@ PATH=$case_dir/bin:$no_tools
 export PATH
 rm "$case_dir/bin/node"
 status=0
-GHC_REPORT=9.10.3 CABAL_REPORT=3.10.3.0 bootstrap system-tools native node >"$case_dir/old" 2>&1 || status=$?
+GHC_REPORT=9.8.4 CABAL_REPORT=3.10.3.0 bootstrap system-tools native node >"$case_dir/old" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "system-tools with old tools exited $status, not 1"
-assert_contains "$case_dir/old" "bootstrap: --system-tools: GHC 9.10.3 ($case_dir/bin/ghc) is too old: GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
+assert_contains "$case_dir/old" "bootstrap: --system-tools: GHC 9.8.4 ($case_dir/bin/ghc) is too old: GHC 9.10 or later is needed: haskell-halogen, which the wiki builds with, is tested with GHC 9.10 and later, and its th package asks for ghc 9.10 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
 assert_contains "$case_dir/old" "bootstrap: --system-tools: cabal 3.10.3.0 ($case_dir/bin/cabal) is too old: cabal 3.12 or later is needed: cabal.project sets semaphore:, a field cabal reads from 3.12. Without --system-tools, toolchain/bootstrap.sh installs cabal 3.16.1.0"
 assert_contains "$case_dir/old" 'bootstrap: --system-tools: Node: not found (no node on PATH answers --version). Node 24 or later with npm is needed. Without --system-tools, toolchain/bootstrap.sh installs Node 24.21.0, with its npm'
 assert_contains "$case_dir/old" 'bootstrap: --system-tools: this machine lacks what is named above, so nothing was installed or changed'
@@ -907,7 +907,7 @@ ln -s tool "$case_dir/bin/node"
 status=0
 NODE_REPORT=v22.11.0 bootstrap system-tools >"$case_dir/missing" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "system-tools without GHC and cabal exited $status, not 1"
-assert_contains "$case_dir/missing" 'bootstrap: --system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.12 or later is needed'
+assert_contains "$case_dir/missing" 'bootstrap: --system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.10 or later is needed'
 assert_contains "$case_dir/missing" 'bootstrap: --system-tools: cabal: not found (no cabal on PATH answers --numeric-version). cabal 3.12 or later is needed'
 assert_contains "$case_dir/missing" "bootstrap: --system-tools: Node v22.11.0 ($case_dir/bin/node) is too old: Node 24 or later with npm is needed"
 ln -s tool "$case_dir/bin/ghc"
@@ -918,24 +918,24 @@ GHC_REPORT=9.14.1 bootstrap native --system-tools >"$case_dir/native-no-node" 2>
 [ ! -e "$HOME/.wiki-toolchain/bootstrap.log" ] || [ -n "$(cat "$HOME/.wiki-toolchain/bootstrap.log")" ] || fail 'native --system-tools left an empty log'
 rm -rf "$HOME/.wiki-toolchain"
 status=0
-GHC_REPORT=9.10.3 bootstrap native --system-tools >"$case_dir/native-old" 2>&1 || status=$?
-[ "$status" = 1 ] || fail "native --system-tools with GHC 9.10.3 exited $status, not 1"
-assert_contains "$case_dir/native-old" 'GHC 9.10.3'
+GHC_REPORT=9.8.4 bootstrap native --system-tools >"$case_dir/native-old" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --system-tools with GHC 9.8.4 exited $status, not 1"
+assert_contains "$case_dir/native-old" 'GHC 9.8.4'
 [ ! -e "$HOME/.wiki-toolchain" ] || fail 'native --system-tools with a GHC too old changed something before it stopped'
 [ ! -s "$EVENTS" ] || fail "the check of the machine's tools installed something: $(cat "$EVENTS")"
 pass '--system-tools refuses a GHC, cabal or Node that is missing or older than its floor, naming each, before anything else'
 
-GHC_REPORT=9.12.2 CABAL_REPORT=3.12.1.0 NODE_REPORT=v24.3.0 bootstrap system-tools native node >"$case_dir/new" 2>&1 ||
-  fail "system-tools with GHC 9.12.2, cabal 3.12.1.0 and Node 24 failed: $(cat "$case_dir/new")"
-assert_contains "$case_dir/new" "bootstrap: --system-tools: GHC 9.12.2 ($case_dir/bin/ghc)"
-assert_contains "$case_dir/new" "bootstrap: warning: the pinned GHC is 9.14.1; the build with 9.12.2 is untested here and may fail; a failure then is not this script's"
+GHC_REPORT=9.10.3 CABAL_REPORT=3.12.1.0 NODE_REPORT=v24.3.0 bootstrap system-tools native node >"$case_dir/new" 2>&1 ||
+  fail "system-tools with GHC 9.10.3, cabal 3.12.1.0 and Node 24 failed: $(cat "$case_dir/new")"
+assert_contains "$case_dir/new" "bootstrap: --system-tools: GHC 9.10.3 ($case_dir/bin/ghc)"
+assert_contains "$case_dir/new" "bootstrap: warning: the pinned GHC is 9.14.1; the build with 9.10.3 is untested here and may fail; a failure then is not this script's"
 assert_contains "$case_dir/new" "bootstrap: warning: the pinned cabal is 3.16.1.0; the build with 3.12.1.0 is untested here and may fail; a failure then is not this script's"
 assert_contains "$case_dir/new" "bootstrap: --system-tools: Node v24.3.0 ($case_dir/bin/node), npm 11.0.0 ($case_dir/bin/npm)"
 [ ! -e "$HOME/.wiki-toolchain" ] || fail 'system-tools, a check, wrote something'
-GHC_REPORT=9.12.2 bootstrap native --system-tools >"$case_dir/native" 2>&1 ||
-  fail "native --system-tools with GHC 9.12.2 failed: $(cat "$case_dir/native")"
-assert_contains "$case_dir/native" "this machine's GHC 9.12.2 and cabal 3.16.1.0 (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
-assert_contains "$case_dir/native" 'the pinned GHC is 9.14.1; the build with 9.12.2 is untested here'
+GHC_REPORT=9.10.3 bootstrap native --system-tools >"$case_dir/native" 2>&1 ||
+  fail "native --system-tools with GHC 9.10.3 failed: $(cat "$case_dir/native")"
+assert_contains "$case_dir/native" "this machine's GHC 9.10.3 and cabal 3.16.1.0 (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
+assert_contains "$case_dir/native" 'the pinned GHC is 9.14.1; the build with 9.10.3 is untested here'
 [ ! -e "$HOME/.ghcup" ] || fail 'native --system-tools installed ghcup'
 if grep -E '^(PATH=|export PATH)' "$HOME/.wiki-toolchain/env" >/dev/null; then fail "native --system-tools put its directories on PATH: $(cat "$HOME/.wiki-toolchain/env")"; fi
 NODE_REPORT=v24.3.0 bootstrap node --system-tools >"$case_dir/node" 2>&1 ||
