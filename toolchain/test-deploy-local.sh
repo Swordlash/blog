@@ -29,6 +29,10 @@ set -eu
 
 SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 NODE_REAL=$(command -v node)
+# The machine's git, which the fixtures' fake git hands every command but
+# clone.
+GIT_REAL=$(command -v git)
+export GIT_REAL
 # The wizard's command lines, which take GHC, cabal and a compiled brick:
 # only when asked for (WIKI_TEST_WIZARD=1) and cabal is on PATH. They run
 # first, before the fixtures change HOME, PATH and cabal's directory, so
@@ -171,7 +175,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_TEXLIVE FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL FAKE_PERL_MAKE_FAIL WIKI_DEPLOY_PERL_SHA256
+    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -502,18 +506,6 @@ case $name in
         if [ -n "$output" ]; then cat "$release" >"$output"; else cat "$release"; fi
         [ -z "$format" ] || printf '%s' "$code"
         exit 0 ;;
-      # CPAN: Perl's source is the tarball FAKE_PERL names (none when
-      # unset).
-      https://www.cpan.org/src/5.0/perl-*.tar.gz)
-        [ -n "${FAKE_PERL:-}" ] && [ -f "$FAKE_PERL" ] || { printf 'curl: (22) The requested URL returned error: 404\n' >&2; exit 22; }
-        cp "$FAKE_PERL" "$output"
-        exit 0 ;;
-      # A CTAN mirror: TeX Live's installer is the tarball FAKE_TEXLIVE
-      # names (none when unset).
-      */systems/texlive/tlnet/install-tl-unx.tar.gz)
-        [ -n "${FAKE_TEXLIVE:-}" ] && [ -f "$FAKE_TEXLIVE" ] || { printf 'curl: (22) The requested URL returned error: 404\n' >&2; exit 22; }
-        cp "$FAKE_TEXLIVE" "$output"
-        exit 0 ;;
       https://github.com/Owner/blog/releases/download/*)
         asset=$FAKE_GITHUB/download/${url#https://github.com/Owner/blog/releases/download/}
         [ -f "$asset" ] || exit 22
@@ -650,6 +642,24 @@ EOF
   for cmd in id npm cabal sudo ufw loginctl tailscale curl systemctl docker pkg-config pg_config cc make; do
     ln -s tool "$case_dir/bin/$cmd"
   done
+  # git clones the repositories FAKE_GIT_REPOS holds, by their URL
+  # without the scheme (<host>/<path>), and says how it was called; any
+  # other git command is the machine's git.
+  cat >"$case_dir/bin/git" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *' clone '*)
+    printf 'git %s\n' "$*" >>"$EVENTS"
+    url='' dest=''
+    for arg do url=$dest dest=$arg; done
+    repo=${FAKE_GIT_REPOS:-/nonexistent}/${url#*://}
+    [ -d "$repo" ] || { printf "fatal: repository '%s' not found\n" "$url" >&2; exit 128; }
+    cp -R "$repo" "$dest"
+    exit 0 ;;
+esac
+exec "$GIT_REAL" "$@"
+EOF
+  chmod +x "$case_dir/bin/git"
 }
 
 deploy() { sh "$case_dir/repo/toolchain/deploy-local.sh" "$@"; }
@@ -2718,23 +2728,32 @@ fake_xelatex() {
   esac
   chmod +x "$1/xelatex"
 }
-# TeX Live's installer as the fake CTAN mirror serves it (FAKE_TEXLIVE):
-# install-tl-20260301/ with release-texlive.txt and an install-tl that
-# says how it was called and does what the scheme basic does: it makes
-# <texdir>/bin/x86_64-linux with tlmgr and no xelatex (and with
-# FAKE_INSTALL_TL_NO_BIN, no bin directory at all). The fake tlmgr says how
+# TeX Live's installer as the fake GitHub serves it to git clone
+# (FAKE_GIT_REPOS/github.com/TeX-Live/installer): install-tl beside tlpkg/,
+# as in the installer's git mirror. install-tl --version gives the year, as
+# the real one does, and an install says how it was called, from where and
+# with which perl, then installs a TeX Live with a tlmgr (and no bin
+# directory with FAKE_INSTALL_TL_NO_BIN). The fake tlmgr says how
 # it was called, fails with FAKE_TLMGR_FAIL, and makes the working xelatex
 # beside itself when it is asked for the package xetex, as the real one
 # installs XeTeX. So a deploy that looked for xelatex before running tlmgr
 # would fail here as it fails with the real installer.
 fake_texlive() {
-  tl=$case_dir/texlive-mirror/install-tl-20260301
-  mkdir -p "$tl"
+  FAKE_GIT_REPOS=$case_dir/git-repos
+  export FAKE_GIT_REPOS
+  tl=$FAKE_GIT_REPOS/github.com/TeX-Live/installer
+  mkdir -p "$tl/tlpkg/TeXLive"
   printf 'TeX Live (https://tug.org/texlive) version 2026\n\nThis file is public domain.\n' >"$tl/release-texlive.txt"
+  printf 'package TeXLive::TLConfig;\n' >"$tl/tlpkg/TeXLive/TLConfig.pm"
   cat >"$tl/install-tl" <<'TL'
 #!/bin/sh
+if [ "$*" = --version ]; then
+  printf 'install-tl (TeX Live Cross Platform Installer) revision unknown\nTeX Live (https://tug.org/texlive) version 2026\n'
+  exit 0
+fi
 printf 'install-tl %s\n' "$*" >>"$EVENTS"
 printf 'install-tl ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS"
+printf 'install-tl ran from %s\n' "$(cd "$(dirname "$0")" && pwd)" >>"$EVENTS"
 texdir=
 for arg do
   case $arg in --texdir=*) texdir=${arg#--texdir=} ;; esac
@@ -2761,9 +2780,6 @@ TLMGR
 chmod +x "$bin/tlmgr"
 TL
   chmod +x "$tl/install-tl"
-  (cd "$case_dir/texlive-mirror" && tar -czf ../install-tl-unx.tar.gz install-tl-20260301)
-  FAKE_TEXLIVE=$case_dir/install-tl-unx.tar.gz
-  export FAKE_TEXLIVE
 }
 
 # A perl with the standard modules TeX Live's installer uses, ahead of the
@@ -2773,14 +2789,16 @@ usable_perl() {
   printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/perl"
   chmod +x "$case_dir/bin/perl"
 }
-# Perl's source as the fake CPAN serves it (FAKE_PERL): perl-5.44.0/ with
-# a Configure that says how it was called and keeps the prefix, and a
-# Makefile whose build says so (and fails with FAKE_PERL_MAKE_FAIL) and
-# whose install writes <prefix>/bin/perl, a script that answers the
-# deploy's check of the modules. WIKI_DEPLOY_PERL_SHA256 is set to the
-# tarball's checksum, as the pinned one is the real tarball's.
+# Perl's source as the fake GitHub serves it to git clone
+# (FAKE_GIT_REPOS/github.com/Perl/perl5): a Configure that says how it was
+# called and keeps the prefix, and a Makefile whose build says so (and
+# fails with FAKE_PERL_MAKE_FAIL) and whose install writes
+# <prefix>/bin/perl, a script that answers the deploy's check of the
+# modules.
 fake_perl_source() {
-  src=$case_dir/perl-source/perl-5.44.0
+  FAKE_GIT_REPOS=$case_dir/git-repos
+  export FAKE_GIT_REPOS
+  src=$FAKE_GIT_REPOS/github.com/Perl/perl5
   mkdir -p "$src"
   cat >"$src/Configure" <<'CONFIGURE'
 #!/bin/sh
@@ -2798,10 +2816,6 @@ chmod +x "$prefix/bin/perl"
 INSTALL
   # shellcheck disable=SC2016 # $$EVENTS is make's, for the recipe's shell.
   printf 'all:\n\t@printf "perl make\\n" >>"$$EVENTS"\n\t@if [ -n "$$FAKE_PERL_MAKE_FAIL" ]; then echo "perl.c: error: the fake build fails"; exit 1; fi\ninstall:\n\t@printf "perl make install\\n" >>"$$EVENTS"\n\t@sh ./install.sh\n' >"$src/Makefile"
-  (cd "$case_dir/perl-source" && tar -czf ../perl-5.44.0.tar.gz perl-5.44.0)
-  FAKE_PERL=$case_dir/perl-5.44.0.tar.gz
-  WIKI_DEPLOY_PERL_SHA256=$(sha256sum "$FAKE_PERL" | cut -d' ' -f1)
-  export FAKE_PERL WIKI_DEPLOY_PERL_SHA256
 }
 
 # No TeX the service finds, and no terminal to ask on: the deploy says so,
@@ -2843,6 +2857,29 @@ if deploy --texlive-mirror ftp://ctan.example >"$out" 2>&1; then fail 'an ftp mi
 assert_contains "$out" 'an http:// or https:// URL'
 undeploy >/dev/null 2>&1
 pass 'without a TeX the service finds: said, PDFs off by --no-pdf in the unit, nothing asked or installed; --no-texlive remembered'
+
+# --texlive-installer and --perl-source, where the TeX step takes the
+# installer and Perl's source from, are refused for the demo, as the other
+# TeX options are; a directory that is not there (or a file), a value that
+# is neither a directory nor an http:// or https:// URL, and a URL with a
+# space are refused before anything is done, naming the option.
+mkdir "$case_dir/a-dir"
+: >"$case_dir/a-file"
+: >"$EVENTS"
+for option in --texlive-installer --perl-source; do
+  if deploy --static "$option" "$case_dir/a-dir" >"$out" 2>&1; then fail "$option was taken for the demo"; fi
+  assert_contains "$out" '--texlive-installer and --perl-source are for the wiki'"'"'s server, which makes the PDFs: add --server'
+  for bad in "$case_dir/missing" "$case_dir/a-file" git@github.com:Perl/perl5.git; do
+    if deploy "$option" "$bad" >"$out" 2>&1; then fail "$option took $bad"; fi
+    assert_contains "$out" "$option $bad: no such directory here, and not a git repository's http:// or https:// URL"
+  done
+  if deploy "$option" ftp://git.example/perl5 >"$out" 2>&1; then fail "$option took an ftp URL"; fi
+  assert_contains "$out" "$option ftp://git.example/perl5: a git repository's http:// or https:// URL, or a directory of this machine"
+  if deploy "$option" 'https://git.example/a b' >"$out" 2>&1; then fail "$option took a URL with a space"; fi
+  assert_contains "$out" "a git repository's http:// or https:// URL without spaces or quotes, or a directory of this machine"
+done
+assert_lacks "$EVENTS" 'bootstrap'
+pass '--texlive-installer and --perl-source: refused for the demo, and a missing directory, a file, or a value other than an http:// or https:// URL refused before anything is done'
 
 # A TeX of the machine's that works, on the service's PATH: used as it is,
 # with no PATH line and no --no-pdf in the unit. One that fails (as TeX
@@ -2899,7 +2936,9 @@ mkdir -p "$texlive_root/2025/bin/x86_64-linux"
 out=$case_dir/first
 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive --texlive-mirror https://ctan.example/ >"$out" 2>&1 ||
   fail 'the deploy with --texlive failed'
-assert_contains "$EVENTS" 'curl https://ctan.example/systems/texlive/tlnet/install-tl-unx.tar.gz'
+assert_contains "$EVENTS" "git clone --quiet --depth 1 https://github.com/TeX-Live/installer $texlive_root/installer.tmp/install-tl"
+assert_contains "$EVENTS" "install-tl ran from $texlive_root/installer.tmp/install-tl"
+assert_contains "$out" "TeX Live's installer cloned from https://github.com/TeX-Live/installer, its packages from https://ctan.example/systems/texlive/tlnet"
 assert_contains "$EVENTS" "install-tl --no-interaction --scheme=basic --texdir=$texlive_root/2026 --texuserdir=$texlive_root/user --no-doc-install --no-src-install --repository https://ctan.example/systems/texlive/tlnet"
 assert_contains "$EVENTS" 'tlmgr install xetex fontspec unicode-math lm lm-math '
 assert_contains "$EVENTS" "install-tl ran with perl=$case_dir/bin/perl"
@@ -2953,7 +2992,7 @@ pass '--texlive installs TeX Live under the toolchain once, the unit puts its bi
 # --no-pdf in the unit, and records no installation, and the deploy goes
 # on; the next run tries again, as texlive=yes says. A Perl without its
 # standard modules (RHEL's perl-interpreter alone) is built from source
-# first; when that fails (here CPAN has no tarball), TeX Live's installer
+# first; when that fails (here GitHub has no Perl to clone), TeX Live's installer
 # does not run, and the PDFs stay off. The install that then succeeds
 # drops --no-pdf.
 fixture texlive-fails
@@ -2964,7 +3003,7 @@ usable_perl
 out=$case_dir/first
 FAKE_TLMGR_FAIL=1 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 ||
   fail 'the deploy whose TeX Live install failed stopped'
-assert_contains "$EVENTS" 'curl https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz'
+assert_contains "$EVENTS" 'git clone --quiet --depth 1 https://github.com/TeX-Live/installer'
 assert_contains "$out" 'tlmgr install failed (exit 1)'
 assert_contains "$out" 'tlmgr: package repository unreachable'
 assert_contains "$out" 'TeX Live was not installed (see above)'
@@ -2987,10 +3026,11 @@ printf '#!/bin/sh\nprintf "Can'"'"'t locate Digest/SHA.pm in @INC\\n" >&2\nexit 
 chmod +x "$case_dir/bin/perl"
 out=$case_dir/no-perl
 deploy --no-build >"$out" 2>&1 || fail 'the deploy without Perl'"'"'s modules stopped'
-assert_contains "$EVENTS" 'curl https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz'
-assert_contains "$out" "downloading Perl's source failed"
+assert_contains "$EVENTS" "git -c advice.detachedHead=false clone --quiet --depth 1 --branch v5.44.0 https://github.com/Perl/perl5 $HOME/.wiki-toolchain/perl/src/perl5"
+assert_contains "$out" "cloning Perl's source failed"
+assert_contains "$out" "fatal: repository 'https://github.com/Perl/perl5' not found"
 assert_contains "$out" 'Perl 5.44.0 was not built (see above), so TeX Live was not installed'
-assert_lacks "$EVENTS" 'install-tl-unx.tar.gz'
+assert_lacks "$EVENTS" 'TeX-Live/installer'
 assert_contains "$HOME/$unit" ' --no-pdf'
 [ ! -e "$HOME/.wiki-toolchain/perl" ] || fail 'a failed Perl build left its directory'
 [ -z "$(state perl_dir)" ] || fail 'a failed Perl build was remembered'
@@ -3005,13 +3045,12 @@ undeploy >/dev/null 2>&1
 pass 'a failed TeX Live install (tlmgr fails, no bin, or no Perl and none could be built) leaves the PDFs off with --no-pdf and is tried again; the install that works drops --no-pdf'
 
 # No Perl on the shell's PATH: with --texlive the deploy builds Perl from
-# the fake CPAN's source under the toolchain (Configure with the prefix
+# a clone of the fake GitHub's under the toolchain (Configure with the prefix
 # and relocatable @INC, make, make install), records it, and runs the fake
 # install-tl and tlmgr with it first on their PATH; the unit's PATH holds
 # only TeX Live's bin. A second run that installs TeX Live again reuses the
-# Perl, building nothing. A build that fails, or a tarball whose checksum
-# differs, leaves no Perl, does not start TeX Live's installer, and leaves
-# the PDFs off with --no-pdf.
+# Perl, building nothing. A build that fails leaves no Perl, does not
+# start TeX Live's installer, and leaves the PDFs off with --no-pdf.
 fixture texlive-perl
 p=$(free_port 127.0.0.1)
 a=$(other_port "$p")
@@ -3027,7 +3066,8 @@ texlive_root=$HOME/.wiki-toolchain/texlive
 command -v perl >/dev/null 2>&1 && fail "the case's PATH has a perl: $(command -v perl)"
 out=$case_dir/first
 deploy --server --sqlite --port "$p" --admin-port "$a" --texlive >"$out" 2>&1 || fail 'the deploy that builds Perl failed'
-assert_contains "$EVENTS" 'curl https://www.cpan.org/src/5.0/perl-5.44.0.tar.gz'
+assert_contains "$EVENTS" "git -c advice.detachedHead=false clone --quiet --depth 1 --branch v5.44.0 https://github.com/Perl/perl5 $perl_root/src/perl5"
+assert_contains "$out" "building Perl 5.44.0 under $perl_root for TeX Live's installer, its source cloned from https://github.com/Perl/perl5 at v5.44.0"
 assert_contains "$EVENTS" "perl Configure -des -Dprefix=$perl_root -Duserelocatableinc"
 assert_contains "$EVENTS" 'perl make install'
 [ "$(line_of "$EVENTS" 'perl make install')" -lt "$(line_of "$EVENTS" 'install-tl --no-interaction')" ] || fail 'TeX Live was installed before Perl'
@@ -3046,7 +3086,7 @@ rm -rf "$texlive_root/2026"
 : >"$EVENTS"
 out=$case_dir/again
 deploy --no-build >"$out" 2>&1 || fail 'the deploy that reuses the Perl failed'
-assert_lacks "$EVENTS" 'perl-5.44.0.tar.gz'
+assert_lacks "$EVENTS" 'Perl/perl5'
 assert_lacks "$EVENTS" 'perl Configure'
 assert_contains "$EVENTS" "install-tl ran with perl=$perl_root/bin/perl"
 assert_lacks "$HOME/$unit" '--no-pdf'
@@ -3069,17 +3109,66 @@ assert_lacks "$EVENTS" 'install-tl'
 [ ! -e "$perl_root" ] || fail 'a failed Perl build left its directory'
 [ -z "$(state perl_dir)" ] || fail 'a failed Perl build was remembered'
 assert_contains "$HOME/$unit" ' --no-pdf'
-# A tarball that is not the one pinned: refused before it is unpacked.
+# Directories of this machine (--perl-source DIR, --texlive-installer
+# DIR, relative here): nothing is cloned. Perl's source is copied under the
+# toolchain and built there, leaving the directory given as it was; the
+# installer runs where it is. Neither is remembered.
+rm -rf "$texlive_root/2026" "$perl_root"
+cp -R "$FAKE_GIT_REPOS/github.com/Perl/perl5" "$case_dir/my-perl"
+cp -R "$FAKE_GIT_REPOS/github.com/TeX-Live/installer" "$case_dir/my-installer"
+mine=$(realpath "$case_dir")
 : >"$EVENTS"
-out=$case_dir/checksum
-WIKI_DEPLOY_PERL_SHA256=0000000000000000000000000000000000000000000000000000000000000000 deploy --no-build >"$out" 2>&1 ||
-  fail 'the deploy whose Perl tarball has another checksum stopped'
-assert_contains "$out" 'not 0000000000000000000000000000000000000000000000000000000000000000'
+out=$case_dir/dirs
+(cd "$case_dir" && deploy --no-build --perl-source my-perl --texlive-installer "$case_dir/my-installer") >"$out" 2>&1 ||
+  fail 'the deploy with Perl'"'"'s source and the installer from directories failed'
+assert_lacks "$EVENTS" 'clone'
+assert_contains "$out" "building Perl 5.44.0 under $perl_root for TeX Live's installer, its source from the directory $mine/my-perl"
+assert_contains "$texlive_root/install.log" "cp -R $mine/my-perl $perl_root/src/perl5"
+assert_contains "$EVENTS" "perl Configure -des -Dprefix=$perl_root -Duserelocatableinc"
+[ ! -e "$case_dir/my-perl/prefix" ] || fail 'Perl was configured in the directory given, not in a copy'
+assert_contains "$out" "TeX Live's installer from the directory $mine/my-installer, its packages from https://mirror.ctan.org/systems/texlive/tlnet"
+assert_contains "$EVENTS" "install-tl ran from $mine/my-installer"
+assert_contains "$EVENTS" "install-tl ran with perl=$perl_root/bin/perl"
+[ -f "$case_dir/my-installer/install-tl" ] || fail 'the installer'"'"'s directory was deleted'
+assert_lacks "$HOME/$unit" '--no-pdf'
+assert_lacks "$HOME/.config/wiki-demo/wiki-demo.state" 'my-'
+# Other repositories (--perl-source URL, --texlive-installer URL): cloned
+# as GitHub's are, Perl's at the tag.
+rm -rf "$texlive_root/2026" "$perl_root"
+mkdir -p "$FAKE_GIT_REPOS/git.example"
+cp -R "$case_dir/my-perl" "$FAKE_GIT_REPOS/git.example/perl5"
+cp -R "$case_dir/my-installer" "$FAKE_GIT_REPOS/git.example/installer"
+: >"$EVENTS"
+out=$case_dir/urls
+deploy --no-build --perl-source https://git.example/perl5 --texlive-installer https://git.example/installer >"$out" 2>&1 ||
+  fail 'the deploy with other repositories failed'
+assert_contains "$EVENTS" "git -c advice.detachedHead=false clone --quiet --depth 1 --branch v5.44.0 https://git.example/perl5 $perl_root/src/perl5"
+assert_contains "$EVENTS" "git clone --quiet --depth 1 https://git.example/installer $texlive_root/installer.tmp/install-tl"
+assert_lacks "$EVENTS" 'github.com'
+assert_contains "$out" "TeX Live's installer cloned from https://git.example/installer, its packages from https://mirror.ctan.org/systems/texlive/tlnet"
+assert_lacks "$HOME/$unit" '--no-pdf'
+# With the Perl built, --perl-source is not needed, and the deploy says so.
+rm -rf "$texlive_root/2026"
+: >"$EVENTS"
+deploy --no-build --perl-source my-perl >"$out" 2>&1 && fail 'a relative --perl-source was found outside its directory'
+(cd "$case_dir" && deploy --no-build --perl-source my-perl) >"$out" 2>&1 || fail 'the deploy with a Perl and --perl-source failed'
+assert_contains "$out" "--perl-source: not used, since TeX Live's installer has a Perl that works"
+assert_lacks "$EVENTS" 'perl Configure'
+# A directory without Configure: no Perl, no TeX Live, PDFs off.
+rm -rf "$texlive_root/2026" "$perl_root"
+: >"$EVENTS"
+out=$case_dir/no-configure
+deploy --no-build --perl-source "$case_dir/a-dir-of-nothing" >"$out" 2>&1 && fail 'a --perl-source that is not there was taken'
+mkdir "$case_dir/a-dir-of-nothing"
+deploy --no-build --perl-source "$case_dir/a-dir-of-nothing" >"$out" 2>&1 || fail 'the deploy with Perl'"'"'s source without Configure stopped'
+assert_contains "$out" "Perl's source from the directory $mine/a-dir-of-nothing has no Configure at its top"
+assert_contains "$out" 'Perl 5.44.0 was not built (see above), so TeX Live was not installed'
 assert_lacks "$EVENTS" 'perl Configure'
 assert_lacks "$EVENTS" 'install-tl'
+[ ! -e "$perl_root" ] || fail 'a source without Configure left the Perl directory'
 assert_contains "$HOME/$unit" ' --no-pdf'
 undeploy >/dev/null 2>&1
-pass 'without a Perl, --texlive builds one from source under the toolchain for TeX Live'"'"'s installer only, reuses it, and a failed build or another checksum leaves the PDFs off'
+pass 'without a Perl, --texlive builds one from a clone under the toolchain for TeX Live'"'"'s installer only, reuses it, and a failed build leaves the PDFs off; --perl-source and --texlive-installer take directories as they are and other repositories, cloned, for one run'
 
 # The question, on a terminal (script(1) gives the deploy one): no is
 # remembered as texlive=no, and nothing is installed.
@@ -3092,7 +3181,7 @@ if command -v script >/dev/null 2>&1; then
   out=$case_dir/first
   printf 'n\n' | script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a" /dev/null >"$out" 2>&1 ||
     fail 'the deploy on a terminal failed'
-  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes)? [y/N]"
+  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org, its installer cloned from https://github.com/TeX-Live/installer (about 250 MB, a few minutes)? [y/N]"
   [ "$(state texlive)" = no ] || fail "no was remembered as '$(state texlive)'"
   assert_lacks "$EVENTS" 'install-tl'
   assert_contains "$HOME/$unit" ' --no-pdf'
@@ -3106,13 +3195,23 @@ if command -v script >/dev/null 2>&1; then
   out=$case_dir/no-perl
   printf 'n\n' | PATH=$case_dir/bin:$NO_PERL script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a" /dev/null >"$out" 2>&1 ||
     fail 'the deploy on a terminal without Perl failed'
-  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org (about 250 MB, a few minutes), building Perl 5.44.0 from its source under $HOME/.wiki-toolchain/perl first, since this machine has no Perl with its standard modules (a few minutes with cc)? [y/N]"
+  assert_contains "$out" "PDF exports need a TeX that works and none was found. Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org, its installer cloned from https://github.com/TeX-Live/installer (about 250 MB, a few minutes), building Perl 5.44.0 under $HOME/.wiki-toolchain/perl first, its source cloned from https://github.com/Perl/perl5 at v5.44.0, since this machine has no Perl with its standard modules (a few minutes with cc)? [y/N]"
   [ "$(grep -c 'Install TeX Live under' "$out")" = 1 ] || fail 'the deploy asked more than once'
-  assert_lacks "$EVENTS" 'perl-5.44.0.tar.gz'
+  assert_lacks "$EVENTS" 'clone'
   assert_lacks "$EVENTS" 'install-tl'
   assert_contains "$HOME/$unit" ' --no-pdf'
   undeploy >/dev/null 2>&1
-  pass 'the question on a terminal: one, naming the Perl build when there is no Perl; no is remembered, and the unit gets --no-pdf'
+  # With another repository and a directory, the question names them.
+  rm -f "$HOME/.config/wiki-demo/wiki-demo.state"
+  mkdir "$case_dir/my-installer"
+  mine=$(realpath "$case_dir/my-installer")
+  out=$case_dir/sources
+  printf 'n\n' | PATH=$case_dir/bin:$NO_PERL script -qec "sh '$case_dir/repo/toolchain/deploy-local.sh' --server --sqlite --port $p --admin-port $a --perl-source https://git.example/perl5 --texlive-installer '$case_dir/my-installer'" /dev/null >"$out" 2>&1 ||
+    fail 'the deploy on a terminal with other sources failed'
+  assert_contains "$out" "Install TeX Live under $HOME/.wiki-toolchain/texlive from https://mirror.ctan.org, its installer from the directory $mine (about 250 MB, a few minutes), building Perl 5.44.0 under $HOME/.wiki-toolchain/perl first, its source cloned from https://git.example/perl5 at v5.44.0, since"
+  assert_lacks "$EVENTS" 'clone'
+  undeploy >/dev/null 2>&1
+  pass 'the question on a terminal: one, naming where the installer comes from, and the Perl build when there is no Perl; no is remembered, and the unit gets --no-pdf'
 fi
 
 # The wizard, toolchain/configure.hs, knows the deploy's options: every
