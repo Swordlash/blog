@@ -672,6 +672,28 @@ confirms it against reality and the plan is amended if it does not hold.
     the island's ref on the `<code>`, which the highlighter fills in place. Exports
     give such a block pandoc's `numberLines` class: the LaTeX writer numbers the
     lines, the Word writer does not. The toolbar's code block command is unchanged.
+47. **Section spoilers marked on the heading (WP5.64).** A heading whose text starts
+    with `[[spoiler]]`, or `[[spoiler]]{name}`, a space and text hides its whole
+    section (the owner, 2026-11-05: marking the heading says at once that the section
+    is hidden, and a FAQ writes the question once; a name is optional, the heading's
+    anchor id keys the remembered state otherwise): from the heading to just before
+    the next heading of the same or a higher level, the footnotes, the end of the
+    document or of the container the heading is in (a marker pair, a fenced div, a
+    blockquote, a list item, a box); no end marker; nesting by structure. In the
+    AST it is `Spoiler` with `kind = OnHeading` (`SpoilerHead.kind`), the heading
+    without the marker as the first block and no description, so every walker that
+    looks inside spoilers reads the heading as a heading. It renders as
+    `details.spoiler.spoiler-section` whose summary holds the heading itself, at
+    its level's size, with its id, anchor and contents entry; closed by default; the
+    contents, an in-page link and a URL fragment open it as they open the pair's;
+    the current-section marker watches the summary heading always and the headings
+    inside only when every spoiler around them is open. `[[spoiler]]` elsewhere in a
+    heading, with a bad name, no space or no text stays a wiki link; a setext
+    heading cannot carry it. The pair's section rule treats a heading spoiler as a
+    section starting with a heading. Exports drop the marker and export the section
+    plain, with the wiki's ids; the feed shows the section without the box
+    (`hiddenSections` off); a deck shows a top-level heading spoiler as its plain
+    section; blog excerpts skip its paragraphs.
 
 ## Repository layout
 
@@ -718,39 +740,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.64 Section spoilers on the heading** (the owner, 2026-11-05; one pull
-  request). A heading whose text starts with `[[spoiler]]` puts its whole
-  section under a spoiler: `### [[spoiler]] What is X?` is a section spoiler from
-  that heading to just before the next heading of the same or a higher level, or
-  the end of the document (or of the container the heading is in), with no end
-  marker (the owner, 2026-11-05: marking the heading says at once that the section
-  is hidden, and a FAQ writes the question once). A name is optional
-  (`### [[spoiler]]{q1} What is X?`; the owner, 2026-11-05: a heading spoiler needs
-  none): the remembered state is keyed by the name when one is given and by the
-  heading's anchor id otherwise; the heading's text is the summary.
-  It renders as `<details class="spoiler spoiler-section" data-spoiler="name">`
-  (the name or the heading's id)
-  whose `<summary>` holds the heading itself (its level's size, its anchor id, its
-  entry in the contents), closed by default; the contents, an in-page link and a
-  URL fragment open it as they open the marker pair's; the current-section marker
-  watches the summary heading whether the spoiler is open or not, and the headings
-  inside only when it is open. Nesting is by structure: a deeper heading with the
-  marker inside the section is a spoiler of its own subsection. The marker pair
-  stays as it is (any blocks, nesting by name, its section rule); a pair that
-  crosses a heading spoiler's end is the section rule's error. The marker counts
-  only at the start of a heading's text, with or without a name; `[[spoiler]]`
-  anywhere else in a heading is a wiki link as before. Plain text, search and the
-  TOC read the heading without the marker. Exports show the section as it is
-  (heading and content, no box: a document cannot hide); the feed likewise. The
-  toolbar is unchanged. Guide: the Spoilers section shows a FAQ of two heading
-  spoilers; docs/markdown.md and the README's Markdown section. Tests: wiki-core
-  (the parse, the section's extent at each level and at the document's end, nesting,
-  a marker not at the start left as a link, a name given and not, the plain text and
-  the TOC without the marker, the render), browser (closed by default, the heading
-  visible and current when scrolled to, opened by its contents entry and by a
-  link, remembered, nested), export (the section exported plain). CHANGELOGs of
-  wiki-core and wiki-app.
 
 - **WP5.65 The editor marks what does not render** (the owner, 2026-11-05; one pull
   request). Today a formula, a Mermaid diagram or a TikZ picture that fails shows
@@ -1255,6 +1244,10 @@ needs. Each was true when its package merged; check before relying on one.
   islands script missing but scripting on, the button shows and does nothing; the
   browser suite stubs the clipboard, since hspec-halogen's browser context grants
   no clipboard permission, and only the smoke test uses the real one.
+- WP5.64 (decision 47): a nameless heading spoiler is remembered by its heading's
+  id, so renaming the heading forgets its open state, and an id equal to another
+  spoiler's written name shares state with it; a marker pair that cuts a section
+  inside a heading spoiler shows its error inside the closed box.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
