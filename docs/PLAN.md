@@ -733,6 +733,27 @@ confirms it against reality and the plan is amended if it does not hold.
     replacement leaves the last good copy; with the file gone the cached copy for
     that path is used and said so. README has "A machine that installs nothing
     from the internet".
+49. **The editor marks what does not render (WP5.65).** `Wiki.Core.Markdown.Problems`
+    lists a page's problems as a first and last source line, a kind (formula,
+    diagram, picture, spoiler, box) and a message, without touching the parser:
+    `parserProblems` from the tree (a spoiler marker line in red, a spoiler not
+    closed or cutting a section, a quotation that starts like a box marker but is
+    not one, top-level only), `islandPlaces` the lines of every island by the key
+    the renderer itself gives it (the page rendered with callbacks that record the
+    keys), `allProblems` the two together. An island's lines are found by searching
+    its block's text, since the parser keeps lines for top-level blocks only: a
+    formula by its whole match between its delimiters in source order, code spans
+    blanked out, the blocks a paragraph is split into by display math counted
+    together, the source's first line as the fallback. The islands report: KaTeX
+    once with `throwOnError` for the message, then as before; Mermaid and TikZ by a
+    `wiki-island-drawn` event on their element; `Islands.reporting` raises `Failed`
+    and `Cleared`, `Islands.component` nothing, so the reader's page is unchanged.
+    The editor checks its text on a worker thread after typing stops, keeps island
+    failures by key until the preview draws a text without the key
+    (`keepDrawnFailures`, so an undo with the preview hidden brings a mark back), and
+    shows them through `@codemirror/lint` (6.9.7): lines underlined, a gutter, the
+    message, and a "N problems" button that jumps to the next. Island problems
+    appear once the preview has drawn the island; text-only mode shows the parser's.
 
 ## Repository layout
 
@@ -779,36 +800,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.65 The editor marks what does not render** (the owner, 2026-11-05; one pull
-  request). Today a formula, a Mermaid diagram or a TikZ picture that fails shows
-  its error only in the preview, in place of the island (`wiki-island-error`), and
-  a spoiler's broken marker shows red there; the editor's text says nothing. The
-  package gives the editor problems: a problem is a range of source lines, a kind
-  (formula, diagram, picture, spoiler, …) and a message. Two sources. (a) The
-  parser's own, synchronous: `Wiki.Core.Markdown.Problems` (a module of its own, so
-  the parser is untouched) lists a document's problems from its AST, with the source
-  lines the blocks carry: a spoiler marker line in red, an unclosed spoiler, a
-  spoiler that cuts a section, a box marker with no kind, anything else the AST
-  already marks as wrong. (b) The islands', asynchronous: the renderers in
-  `web/src/islands.js` tell their caller when they fail (a formula: KaTeX run once
-  with `throwOnError` to get the message, then rendered as now; a diagram: Mermaid's
-  parse error; a picture: TeX's error; a listing: nothing, an unknown language is
-  not an error), the `Islands` component raises the problem with its island's key
-  and source lines, and raises its clearing when the island renders again and
-  succeeds (the generation logic drops stale results). The editor keeps the set by
-  key and shows them in CodeMirror with `@codemirror/lint` (pinned like the other
-  CodeMirror packages): the lines underlined in red, a marker in a lint gutter, the
-  message on hover, and a count in the editor's status line ("2 problems") that
-  jumps to the next one on a click (`nextDiagnostic`); the preview shows the error
-  in place as today. The reader's page is unchanged. The problems clear as the
-  author fixes the source; a problem the parser found is replaced on every parse, an
-  island's on its next render. Tests: wiki-core (`Problems` for each kind, with the
-  right lines), wiki-app (the mapping from problems to editor ranges), browser (an
-  editor with a broken diagram shows the diagnostic on the fence's lines and loses
-  it once the fence is fixed; a broken formula; an unclosed spoiler from the
-  parser; the count and the jump). Docs: the guide's editor page, the README's
-  editor section, wiki-app's and wiki-core's CHANGELOGs.
 
 - **WP5.66 What's new: a changelog page in the wiki** (the owner, 2026-11-05; one
   pull request). (a) *Entries.* `changelog/` in the repository holds one Markdown
@@ -1304,6 +1295,13 @@ needs. Each was true when its package merged; check before relying on one.
   "semopen" case can fail when the fake cabal's log lands in the same timestamp
   tick as the build's start (`find -newer`), a race older than the branch;
   `--hackage-mirror` is accepted with `--static`, where it has no effect.
+- WP5.65 (decision 49): an island's place comes from a search of its block's text,
+  not from source spans; four review rounds narrowed it case by case (occurrences on
+  one line, delimiters in source order, whole matches, code spans), and the parser
+  keeping spans for inline formulas would replace the search. A formula over quoted
+  lines, whose `> ` markers are not in its source, is placed by its first line. TeX's
+  `l.N` and Mermaid's "on line N" are not used to narrow a range. A new failure of
+  an island the preview has not drawn yet appears with the next preview render.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
