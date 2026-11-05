@@ -782,6 +782,51 @@ In the order to do it, unless the owner says otherwise.
   parser; the count and the jump). Docs: the guide's editor page, the README's
   editor section, wiki-app's and wiki-core's CHANGELOGs.
 
+- **WP5.66 What's new: a changelog page in the wiki** (the owner, 2026-11-05; one
+  pull request). (a) *Entries.* `changelog/` in the repository holds one Markdown
+  file per pull request, in the wiki's own Markdown (so examples are highlighted and
+  the page's features work on it), named by a slug (`changelog/heading-spoilers.md`),
+  with a front matter of `pr: N` and `title:`, then optional sections `## New
+  features`, `## Bug fixes` and `## Other changes`, written for users in plain
+  language, every new feature with an example in a code block. The session writes
+  the entry with the branch and, once it has opened the pull request, fills in
+  `pr:` in one more commit before the review. (b) *CI.* A small job of its own on
+  pull requests, independent of the builds and quick (`toolchain/check-changelog.sh`
+  behind it): the diff adds exactly one new file under `changelog/`, its `pr` is the
+  pull request's own number, its front matter and sections are well formed, and
+  nothing else under `changelog/` changed; it fails with a message saying what to
+  add. A pull request labelled `no-changelog` is exempt (the owner's label: the
+  session never applies it; a rule in AGENTS.md), and pushes straight to `main`
+  have no pull request and no check. CI pushes nothing: a commit a workflow
+  pushes with its token runs no CI, so the head would show no checks (the owner,
+  2026-11-05, asked whether CI could create or fill the file; this is why not).
+  (c) *Built in.* `wiki-server` embeds, at compile time through Template Haskell,
+  the newest twelve entries by `pr` from `changelog/` (`extra-source-files`, so an
+  edit rebuilds), and the build's version: `git describe --tags --always --dirty`
+  run at compile time, overridden by `WIKI_BUILD_VERSION` (CI and the deploy set
+  it), "unknown" without either. `GET api/v1/whats-new` returns the version, the
+  build date and the entries (number, link to the pull request, title, Markdown);
+  `SessionInfo` says whether the page is on. `wiki-server serve --no-whats-new`
+  turns the endpoint and the link off; the wizard's server screen asks; the
+  deploy passes it. (d) *The page.* The route `whats-new`, titled "What's new?",
+  linked at the very bottom of the left Spaces bar, with a dot when there are
+  entries newer than the newest the reader has seen (the number kept in
+  localStorage, per browser); at the top the version and the build date, then
+  the entries newest first, each headed "#N Title" linking to the pull request,
+  its sections rendered with the wiki's renderer; prerendered like the other
+  pages the server renders. (e) *Backfill, time-boxed:* entries for the merged
+  pull requests #149 to #158 only, written from their descriptions and decisions
+  40 to 46 of this plan, not from the commits; nothing older. Tests: wiki-core
+  or wiki-server (the entry's front matter and sections parsed, the newest twelve
+  chosen, a malformed entry refused at compile time with a clear error),
+  wiki-api (the response's JSON), the check script (`toolchain/test-check-
+  changelog.sh`: one new file, wrong number, missing, two files, the label),
+  browser (the link at the bottom of the bar, the page with the version and
+  entries, the dot and its clearing, no link with the page off), deploy test (the
+  option through). Docs: README (the changelog convention, the option), AGENTS.md
+  (the entry is part of every pull request; the label is the owner's), the
+  guide's server tour (one sentence), wiki-server's and wiki-app's CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
