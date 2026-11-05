@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+`Wiki.Core.Markdown.Problems` (WP5.65), new: the places in a page's Markdown
+that do not render as written, for the editor to mark. `parserProblems`
+lists the parser's, each a `Problem` with its first and last source line, a
+`ProblemKind` and a message: a spoiler's broken marker line, a spoiler not
+closed or cutting a section (at its start marker), and a quotation that
+starts like a box's marker but is not one (`> [!]`, `> [!Two words]`,
+`> [!TIP]Title`), which the parser reads as a quotation. `islandPlaces`
+gives the lines of each formula, diagram and picture by its `IslandKey`,
+found by rendering the page with island callbacks that record the keys, so
+that they are the renderer's own; the lines are those of the page's block
+the island is in, narrowed to where its source is written in it.
+`allProblems` adds the islands that failed to the parser's problems. The
+parser and the renderer are unchanged.
+
 Heading spoilers (WP5.64). An ATX heading whose text starts with
 `[[spoiler]]`, or `[[spoiler]]{name}`, then a space, hides its section: the
 parser makes it a `Spoiler` whose new `SpoilerHead` field `kind` is
