@@ -2095,6 +2095,14 @@ app_page_cache() {
     say "the page: $app_page_words"
     cp "$app_page" "$work/page.zip" || die "--app-page $app_page: cannot read it (see above); give the file again, or another"
     unpack_page "$work/page.zip" || die "$unpack_error"
+    # The file's page says which kind it is in its <meta
+    # name="wiki-backend">, as CI's pages do. One of the other kind is
+    # refused here, before the cache is touched, so that the copy of the
+    # last page that passed stays there for a run without the file.
+    file_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$work/app/index.html" | head -n 1)
+    if [ -n "$file_backend" ] && [ "$file_backend" != "$page_kind" ]; then
+      die "--app-page $app_page is the $file_backend's page (its index.html says so), and this deploy is of the $page_kind (--$mode); the page cache keeps the last page of the $page_kind given from it"
+    fi
     cached=$page_cache/app-$page_kind-file-$(file_sha256 "$work/page.zip").zip
     if [ -f "$cached" ] && [ "$(cat "$cached.meta" 2>/dev/null || true)" = "$page_meta" ]; then
       touch "$cached"
@@ -2187,15 +2195,6 @@ download_page() {
     else
       rm -f "$page_cache/.$page_asset.part"
       warn "could not keep the page in the cache $page_cache; the next deploy downloads it again"
-    fi
-  fi
-  # A file's page says which kind it is in its <meta name="wiki-backend">,
-  # as CI's pages do; one of the other kind is refused before it replaces
-  # anything.
-  if [ -n "$app_page" ]; then
-    file_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$work/app/index.html" | head -n 1)
-    if [ -n "$file_backend" ] && [ "$file_backend" != "$page_kind" ]; then
-      die "--app-page $app_page is the $file_backend's page (its index.html says so), and this deploy is of the $page_kind (--$mode)"
     fi
   fi
   # CI's page as it is, for the comparison after the bundles are built here.

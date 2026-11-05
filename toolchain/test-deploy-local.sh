@@ -3538,6 +3538,29 @@ assert_contains "$out" "--app-page $files/page.zip: no such file here, or it can
 cp "$files/app-server-$head1.zip" "$files/page.zip"
 pass 'a page from a file has a cache entry of its own: a rerun without the file deploys it, saying so, and a changed file replaces it'
 
+# A replacement that is refused leaves the cache as it was: the file of a
+# server's page overwritten with the demo's zip (its name says no kind, its
+# index.html does) is refused before the cache is touched, so the copy of
+# the last server page is still there for a run without the file.
+locked >"$out" 2>&1 || fail "the deploy of the server's page.zip failed: $(cat "$out")"
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the server's page.zip is not in the cache as $entry"
+page_zip "$files/page.zip" "$demo_page"
+: >"$EVENTS"
+out=$case_dir/file-of-the-demo
+if locked >"$out" 2>&1; then fail 'the demo'"'"'s zip was deployed as the server'"'"'s page'; fi
+assert_contains "$out" "--app-page $files/page.zip is the demo's page (its index.html says so), and this deploy is of the server (--server); the page cache keeps the last page of the server given from it"
+assert_lacks "$EVENTS" 'cabal build'
+cmp "$entry" "$files/app-server-$head1.zip" || fail 'the refused replacement changed the cached copy'
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the refused replacement changed the copy's .meta: $(cat "$entry.meta")"
+[ -z "$(find "$pages" -name 'app-*-file-*.zip' ! -path "$entry")" ] || fail "the refused replacement entered the cache: $(ls "$pages")"
+rm "$files/page.zip"
+out=$case_dir/file-gone-after-refusal
+locked >"$out" 2>&1 || fail "the rerun after the refused replacement failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $entry"
+grep -F 'content="server"' "$pre/app/index.html" >/dev/null || fail 'the page deployed from the cache is not the server'"'"'s'
+cp "$files/app-server-$head1.zip" "$files/page.zip"
+pass 'a file overwritten with a page of the other kind is refused before the cache is touched, and the last good copy is deployed once the file is gone'
+
 # What the deploy refuses, before anything is built or installed.
 mkdir -p "$case_dir/no-wasm"
 cp "$page/index.html" "$case_dir/no-wasm/"
