@@ -394,7 +394,9 @@ const fragmentTarget = (hash) => {
 };
 
 // Open every closed spoiler around an element, so that it can be seen and
-// scrolled to. Whether it was hidden.
+// scrolled to. Whether it was hidden. A heading spoiler's heading is in its
+// summary, inside the spoiler, so a link to that heading opens the spoiler
+// too: the section is what the link is for.
 const openAround = (element) => {
   let opened = false;
   for (let spoiler = element?.closest("details.spoiler") ?? null; spoiler; spoiler = spoiler.parentElement?.closest("details.spoiler") ?? null) {

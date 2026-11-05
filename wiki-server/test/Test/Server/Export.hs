@@ -379,6 +379,17 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       paragraphs cut `shouldSatisfy` elem "after"
       length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
 
+    it "shows a heading spoiler's section as written: its heading without the marker, with the wiki's identifier, and its content" $ do
+      let source = "## Intro\n\nx\n\n## [[spoiler]]{q1} What is *X*?\n\nAn answer.\n\n### [[spoiler]] Intro\n\nDeeper.\n\n> ## [[spoiler]]\tQuoted ||y||\n\n## After\n\nSee [the question](#what-is-x) and [the second intro](#intro-2).\n"
+          headings = query (\case P.Header level (ident, _, _) xs -> [(level, ident, stringify xs)]; _ -> [])
+      shown <- blocksOf ToOther place source
+      headings shown `shouldBe` [(2, "intro", "Intro"), (2, "what-is-x", "What is X?"), (3, "intro-2", "Intro"), (2, "quoted-y", "Quoted y"), (2, "after", "After")]
+      boxClasses shown `shouldBe` []
+      paragraphs shown `shouldSatisfy` (\ps -> "An answer." `elem` ps && "Deeper." `elem` ps)
+      query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> []) shown `shouldBe` [[P.Str "y"]]
+      show shown `shouldNotSatisfy` T.isInfixOf "spoiler]]"
+      show shown `shouldNotSatisfy` T.isInfixOf "wikibox"
+
   it "numbers the lines of a listing the wiki numbers, with pandoc's numberLines" $ do
     let source = "```haskell {.numbered rows=3}\nx = 1\n```\n\n```{.numbered .python}\ny = 2\n```\n\n```haskell\nz = 3\n```\n"
     for_ [ToOther, ToTeX] $ \output -> do

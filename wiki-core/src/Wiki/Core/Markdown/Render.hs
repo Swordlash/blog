@@ -97,7 +97,14 @@
 -- ('SpoilerError'), show a @\<p class=\"spoiler-error\">@ with the line as
 -- written and the reason; the wrong spoiler's blocks follow, as they are,
 -- in a @\<div class=\"spoiler-unclosed\">@, which the stylesheet draws in
--- red. So the editor's preview shows the mistake as it is typed.
+-- red. So the editor's preview shows the mistake as it is typed. A
+-- heading spoiler (@## [[spoiler]] Question@) is
+-- @\<details class=\"spoiler spoiler-section\" data-spoiler=\"name\">@
+-- whose @\<summary>@ holds the heading itself, rendered as any heading
+-- is (its @id@, its link to itself), and whose other blocks are the
+-- heading's section; its name is the one written, or else the heading's
+-- @id@. With 'hiddenSections' off (a feed) it is the heading and its
+-- section as they are.
 --
 -- __Line breaks.__ A line break in the source is a line break on the page,
 -- a @\<br>@, wherever text is: in paragraphs, list items, quotations,
@@ -177,6 +184,11 @@ data Options page w i = Options
   , headingAnchors :: Bool
   -- ^ Whether a heading ends with its link to itself: in a page, but not
   -- where nothing shows it (a feed, read without the stylesheet).
+  , hiddenSections :: Bool
+  -- ^ Whether a heading spoiler hides its section in a @\<details>@, as
+  -- on a page. Off, its heading and section are shown as they are, as a
+  -- document exported from the page shows them: a feed, read apart from
+  -- the wiki, gets the section, not a closed box with a heading on it.
   , copyButtons :: Bool
   -- ^ Whether a code block has a button that copies its code
   -- ('copyButton'): in the application, whose page loads the islands'
@@ -233,6 +245,7 @@ defaultOptions =
     , pageHref = identity
     , resolveMention = const Nothing
     , headingAnchors = True
+    , hiddenSections = True
     , copyButtons = False
     , boxes = []
     , numbering = noNumbers
@@ -321,6 +334,17 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
         inner <- renderBlocks' bs
         let anchor = if opts.headingAnchors then concatMap (\i -> headingAnchor [("id", i)]) box.id else []
         pure [boxWith defined kind box.id (title <> anchor) inner]
+      -- A heading spoiler's summary is its heading, rendered as any
+      -- heading is: its id, its link to itself, the section it starts
+      -- for the boxes' numbers.
+      Spoiler h (heading@Heading {} : rest)
+        | h.kind == OnHeading ->
+            if opts.hiddenSections
+              then do
+                summary <- renderBlock heading
+                inner <- renderBlocks' rest
+                pure [HH.details [classesProp ["spoiler", "spoiler-section"], HP.attr (HH.AttrName "data-spoiler") h.name] (HH.summary_ summary : inner)]
+              else renderBlocks' (heading : rest)
       Spoiler h bs -> case h.problem of
         Nothing -> do
           summary <- renderInlines (map displayInline h.description)

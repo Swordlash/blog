@@ -40,7 +40,10 @@
 --   pandoc reads the page ('withBoxes'). A spoiler the page shows in red
 --   (not closed, or cutting a section) is its blocks as they are, after
 --   its marker line and the reason as text, and so is a broken marker
---   line. An inline spoiler, @||text||@, is its text in a @spoiler@ span
+--   line. A heading spoiler (@## [[spoiler]] Question@) is its heading
+--   and its section as they are: its marker is taken out of the
+--   heading's line in the same pass, so pandoc reads an ordinary heading.
+--   An inline spoiler, @||text||@, is its text in a @spoiler@ span
 --   ('hiddenSpans').
 -- * __Math macros__ ("Wiki.Core.Math"): pandoc's writers typeset each
 --   formula on its own, so the macros it uses in the wiki (its space's,
@@ -385,6 +388,9 @@ data SpoilerEdit
     ShowLine Text
   | -- | Nothing: the end marker of a spoiler shown as its blocks.
     DropLine
+  | -- | A heading spoiler's marker, from its column up to this one,
+    -- where the heading's text starts, taken out of the line.
+    DropMarker Int
   deriving stock (Eq, Show)
 
 -- | What becomes of each spoiler marker line of a page, by its line: a
@@ -411,6 +417,7 @@ spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, e)) |
         Just h | isNothing h.problem -> CloseBox start
         _ -> DropLine
       Faulty written why -> Just (ShowLine (written <> " — " <> why))
+      HeadingMarker end -> Just (DropMarker end)
       -- An inline spoiler's bars are rewritten apart ('withBoxes').
       InlineBars _ _ -> Nothing
 
@@ -490,9 +497,10 @@ type Boxes = Map Text (BoxMarker, Text)
 -- alone, which 'spoilersOf' replaces with the line's text, so that
 -- nothing in the text is read as Markdown. Pandoc wants a fenced div
 -- apart from the blocks around it, so each of these lines has an empty
--- line (of the prefix's quotation marks) before and after it. The third
--- result is each spoiler line's placeholder, with its line and what it
--- becomes.
+-- line (of the prefix's quotation marks) before and after it. A heading
+-- spoiler's marker is taken out of its heading's line, with the spaces
+-- after it, and nothing else of the line changes. The third result is
+-- each spoiler line's placeholder, with its line and what it becomes.
 --
 -- The bars of each inline spoiler the wiki's parser found are replaced
 -- too, each pair by a placeholder ('Bars', the fourth result), which
@@ -540,6 +548,9 @@ withBoxes source markers spoilers bars = case family of
                         CloseBox _ -> around [before <> ":::"]
                         ShowLine _ -> around [before <> placeholder]
                         DropLine -> [quoteOnly before]
+                        DropMarker end -> case (indexAt text column, indexAt text end) of
+                          (Just i, Just j) | "[[spoiler]]" `T.isPrefixOf` T.drop i text -> [T.take i text <> T.drop j text]
+                          _ -> [text]
                 (Nothing, Nothing) -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
@@ -550,10 +561,14 @@ withBoxes source markers spoilers bars = case family of
     -- The index in a line of the bars at a column, if they are there. A
     -- tab counts to the next multiple of four columns, as CommonMark
     -- counts it.
-    barsAt text column = go 0 1 (T.unpack text)
+    barsAt text column = do
+      i <- indexAt text column
+      i <$ guard ("||" `T.isPrefixOf` T.drop i text)
+    -- The index in a line of the character at a column, counted so.
+    indexAt text column = go 0 1 (T.unpack text)
       where
         go i c rest
-          | c == column = i <$ guard ("||" `T.isPrefixOf` T.drop i text)
+          | c == column = Just i
           | c > column = Nothing
           | otherwise = case rest of
               [] -> Nothing

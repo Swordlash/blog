@@ -232,6 +232,10 @@ html = describe "a post's HTML" $
                 , "```haskell"
                 , "main = pure ()"
                 , "```"
+                , ""
+                , "## [[spoiler]]{q1} A question"
+                , ""
+                , "Its answer."
                 ]
             )
             [tree]
@@ -245,6 +249,9 @@ html = describe "a post's HTML" $
     out `shouldSatisfy` T.isInfixOf "href=\"https://wiki.example/s/blog/p/other/#top\""
     out `shouldSatisfy` T.isInfixOf "href=\"https://example.org/\""
     out `shouldSatisfy` T.isInfixOf "<code class=\"language-haskell\">main = pure ()"
+    -- A heading spoiler's section is shown as written, without its marker.
+    out `shouldSatisfy` T.isInfixOf "<h2 id=\"a-question\">A question</h2><p>Its answer.</p>"
+    out `shouldNotSatisfy` T.isInfixOf "<details"
 
 --------------------------------------------------------------------------------
 -- Served

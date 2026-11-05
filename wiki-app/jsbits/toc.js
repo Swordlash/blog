@@ -32,14 +32,17 @@ function wiki_keep_contents() {
   // top of the page's text, and those of the sections a spoiler wraps
   // (details.spoiler, at any depth), as the lists have them. A closed
   // spoiler's headings are not shown, so they are left out until it opens.
+  // A heading spoiler's heading is its summary, shown whether the spoiler
+  // is open or not, so only the spoilers around that spoiler count.
   const headingsShown = () =>
     [
       ...document.querySelectorAll(
-        ".page-text .page-body > :is(h1, h2, h3, h4, h5, h6)[id], .page-text .page-body details.spoiler[open] > :is(h1, h2, h3, h4, h5, h6)[id]",
+        ".page-text .page-body > :is(h1, h2, h3, h4, h5, h6)[id], .page-text .page-body details.spoiler[open] > :is(h1, h2, h3, h4, h5, h6)[id], .page-text .page-body details.spoiler > summary > :is(h1, h2, h3, h4, h5, h6)[id]",
       ),
     ].filter((heading) => {
       // Spoilers all the way up to the page's text, each of them open.
       let parent = heading.parentElement;
+      if (parent.matches("details.spoiler > summary")) parent = parent.parentElement.parentElement;
       while (parent !== null && !parent.classList.contains("page-body")) {
         if (!parent.matches("details.spoiler[open]")) return false;
         parent = parent.parentElement;

@@ -357,11 +357,25 @@ The toolbar's **Block spoiler** button puts the two markers around the selected 
 
 A spoiler lies within one section, or wraps a whole one: either it holds no heading, or its first line is a heading, every other heading in it is deeper, and the next block after it is a heading of the same or a higher level, or nothing. The section's entry stays in the page's contents, and following it, or any link to the heading, opens the spoiler. Section spoilers nest the same way, a subsection's inside its section's.
 
+A heading can hide its own section, with no end marker: start its text with `[[spoiler]]` and a space.
+
+```markdown
+### [[spoiler]] What is X?
+
+X is what this page is about.
+
+#### [[spoiler]]{x-why} Why does it matter?
+
+Because the rest depends on it.
+```
+
+The heading is shown, in its level's size, with its anchor and its entry in the contents, and a click on it opens the section: from the heading to just before the next heading of the same or a higher level, or to the end of the page, or of the quotation, box, fenced div or spoiler the heading is in. A deeper heading spoiler inside is a spoiler of its own subsection, as `x-why` is above. A name in braces right after the marker (`[[spoiler]]{x-why}`, one word as for the marker pair) is what the reader's browser remembers the spoiler by; without one, it is remembered by the heading's anchor, so renaming the heading forgets it. The marker counts only at the very start of the heading's text, written as here: `[[spoiler]]` anywhere else in a heading, or without a space and text after it, is a wiki link to a page named `spoiler`, shown in red as a page that does not exist. The contents, search and links read the heading without the marker. A marker pair that starts inside a heading spoiler's section and ends after it, or the other way round, cuts a section and shows in red.
+
 What is wrong shows in red where it is, in the page and in the editor's preview as you type: a start marker without its name in braces or its description in parentheses, an end marker whose name is not that of the innermost open spoiler, or that has more after it, and the marker of a spoiler that is never closed or that cuts a section, with the reason under it. A spoiler that is not closed, or cuts a section, has its blocks shown in red after its marker, as they are, so that nothing is lost while you fix it.
 
 A spoiler starts closed. Whether a reader left it open is kept in their browser, for each page and each name, and it opens again when they come back; a reader not signed in is one reader. Two spoilers with one name on one page open and close together. The state is kept in that browser only: on another device the spoilers start closed again. `[[spoiler]]` and `[[/spoiler]]` at the start of a line are always markers, so they are never a wiki link to a page of that name.
 
-Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, and an inline spoiler is its text. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
+Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, a heading spoiler is its heading (without the marker) and its section as they are, with no box, and an inline spoiler is its text. A blog's feed shows a heading spoiler's section the same way, and a deck shows it on its slide as written. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
 
 ## Presentations
 

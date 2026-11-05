@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Heading spoilers in exports and feeds (WP5.64). A heading spoiler,
+`## [[spoiler]] Question`, is exported as its heading, without the marker,
+and its section, with no box: the marker is taken out of the heading's line
+in the pass that rewrites the marker pair's lines, so the heading keeps the
+wiki's identifier. A blog's feed shows the section the same way
+(`hiddenSections` off).
+
 Numbered listings in exports (WP5.63). A code block whose fence has the
 class `numbered` has pandoc's class `numberLines` in its place, so a PDF
 numbers its lines as the wiki does. Pandoc's Word writer does not number
