@@ -109,6 +109,12 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
                    , (("\\bad", 2), (4, 4, Formula))
                    ]
 
+    it "places formulas of one source written with different delimiters in the order they are written" $
+      places "\\(\\bad\\)\n$\\bad$"
+        `shouldBe` [ (("\\bad", 0), (1, 1, Formula))
+                   , (("\\bad", 1), (2, 2, Formula))
+                   ]
+
     it "counts a block of macro definitions, which shows nothing, as the renderer does" $
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 

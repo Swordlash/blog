@@ -244,9 +244,9 @@ islandPlaces source = case A.parseWithLines source of
 
     -- The lines an island's source is written on within a block's lines:
     -- the line of the n-th occurrence (from 0) of its first line, for the
-    -- n-th island of that source in the block. A line is counted once for
-    -- each time it holds the first line, so that two islands of the same
-    -- source on one line are both placed there. A formula is looked for after
+    -- n-th island of that source in the block. Each occurrence counts, so
+    -- that two islands of the same source on one line are both placed
+    -- there. A formula is looked for after
     -- its opening delimiter first, so that a formula @x@ is not found in
     -- the word "example".
     locate :: ProblemKind -> Text -> Int -> (Int, Int) -> Maybe (Int, Int)
@@ -255,9 +255,15 @@ islandPlaces source = case A.parseWithLines source of
           (leading, rest) = span (T.all isSpace) pieces
       firstLine <- head rest
       let stripped = T.strip firstLine
-          delimited = if kind == Formula && null leading then [d <> firstLine | d <- ["$", "\\(", "\\["]] else []
-          holding needle = concat [replicate (T.count needle (lineAt j)) j | j <- [s .. e]]
-          candidates = filter (not . null) (map holding (delimited <> [stripped]))
+          delimiters = if kind == Formula && null leading then ["$", "\\(", "\\["] else []
+          -- Where a needle starts on each line, by line and then column.
+          starts needle = [(j, T.length before) | j <- [s .. e], (before, _) <- T.breakOnAll needle (lineAt j)]
+          -- Every delimiter's matches in one list in the order of the
+          -- source, so that the n-th formula is the n-th match whichever
+          -- delimiter each is written with. No two delimiters match at the
+          -- same place, and 'ordNub' makes sure a place counts once.
+          delimited = map fst (ordNub (sort (concatMap (\d -> starts (d <> firstLine)) delimiters)))
+          candidates = [delimited, map fst (starts stripped)]
       at <- head =<< head [drop n js | js <- candidates, length js > n]
       pure (at, min e (at + length rest - 1))
 
