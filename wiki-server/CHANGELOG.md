@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+What's new (WP5.66). The server embeds, when it is compiled, the
+repository's changelog entries (`changelog/*.md`, reached through the
+symbolic link `wiki-server/changelog`, listed in `extra-source-files` so
+that an entry added or edited rebuilds the server), its version (the
+environment's `WIKI_BUILD_VERSION`, else `git describe --tags --always
+--dirty`, else `unknown`) and the time of the build
+(`Wiki.Server.WhatsNew`). cabal does not rebuild a package for a file
+added to a glob of its `extra-source-files`, so `changelog.stamp`, which
+`toolchain/changelog-stamp.sh` writes before the builds with the entries'
+names and the version, is listed beside them. An entry that is not written as the grammar says
+(`Wiki.Server.WhatsNew.Entry`, the README's "Changelog entries") is a
+compile error naming the file, the line and the problem. `GET
+api/v1/whats-new` answers the version, the build's time and the newest
+twelve entries by number, newest first, leaving out the ones not numbered
+yet (`pr: 0`); every session says the newest entry's number
+(`SessionInfo`'s `whatsNew`); the server renders the page `/whats-new/`.
+`wiki-server serve --no-whats-new` (`ServeOptions`' `whatsNew`, on by
+default) turns it off: the endpoint and the page answer 404 and the
+sessions say `null`. `Env` gains `whatsNew`.
+
 Heading spoilers in exports and feeds (WP5.64). A heading spoiler,
 `## [[spoiler]] Question`, is exported as its heading, without the marker,
 and its section, with no box: the marker is taken out of the heading's line

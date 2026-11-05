@@ -277,6 +277,41 @@ spec = describe "Markdown.Render" $ do
     it "drops an unsafe source to the caption" $
       "![pic](javascript:alert(1)) ![pic2](data:image/png;base64,AA)" `shows'` "<p>pic pic2</p>"
 
+  describe "sections with their own ids" $ do
+    let parsed source = either (panic . show) identity (parseMarkdown source)
+        entry = "## New features\n\nSee [below](#new-features) and A[^n].\n\n[^n]: Note."
+        sectioned prefixes = renderHtml @Empty (concat (renderSectionsWithIds defaultOptions [(p, parsed entry) | p <- prefixes]))
+    it "puts each section's prefix before its ids and its links to its own places" $
+      sectioned ["pr-2-", "pr-1-"]
+        `shouldReturn` T.concat
+          [ "<h2 id=\""
+              <> p
+              <> "new-features\">New features<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#"
+              <> p
+              <> "new-features\"></a></h2>"
+              <> "<p>See <a href=\"#"
+              <> p
+              <> "new-features\">below</a> and A<sup class=\"footnote-ref\"><a href=\"#"
+              <> p
+              <> "fn-1\" id=\""
+              <> p
+              <> "fnref-1\" title=\"Note.\">1</a></sup>.</p>"
+              <> "<section class=\"footnotes\"><ol><li id=\""
+              <> p
+              <> "fn-1\"><p>Note. <a class=\"footnote-back\" href=\"#"
+              <> p
+              <> "fnref-1\">↩</a></p></li></ol></section>"
+          | p <- ["pr-2-", "pr-1-"]
+          ]
+    it "gives two sections with the same headings and footnotes no id in common" $ do
+      html <- sectioned ["pr-2-", "pr-1-"]
+      let ids = [T.takeWhile (/= '"') rest | rest <- drop 1 (T.splitOn " id=\"" html)]
+      length ids `shouldBe` 6
+      ordNub ids `shouldBe` ids
+    it "renders sections with the prefix \"\" as renderSections does" $ do
+      plain <- renderHtml @Empty (concat (renderSections defaultOptions [parsed entry]))
+      sectioned [""] `shouldReturn` plain
+
   describe "footnotes" $ do
     it "links references and notes both ways, each reference titled with its note" $
       "A[^n] B[^n].\n\n[^n]: Note."

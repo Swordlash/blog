@@ -64,6 +64,7 @@ spec = describe "golden JSON" $ do
     golden "health" Health {status = "ok", schemaVersion = 9, lastBackupAgeSeconds = Just 3600}
     golden "activity" Sample.activity
     golden "session" Sample.sessionInfo
+    golden "whats-new" Sample.whatsNew
     golden "space" Sample.space
     golden "personal-space" (Just Sample.personalSpace)
     golden "no-personal-space" (Nothing :: Maybe Space)

@@ -13,6 +13,7 @@ module Test.Sample
   , version
   , hit
   , sessionInfo
+  , whatsNew
   , user
   , account
   , importPlan
@@ -77,6 +78,7 @@ import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..), Discov
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), Vault (..), VaultTag (..), WrappedKey (..))
@@ -253,6 +255,29 @@ sessionInfo =
     , homePage = defaultHomePage
     , mathMacros = Just "\\newcommand{\\Prob}{\\operatorname{P}}"
     , assistantServices = [AssistantService {name = "Corporate gateway", baseUrl = Url "https://claude-gateway.example.com", api = AnthropicApi}]
+    , whatsNew = Just 158
+    }
+
+-- | What a server says is new: its build, and two entries.
+whatsNew :: WhatsNew
+whatsNew =
+  WhatsNew
+    { version = "v0.3.0-12-gc728d7f"
+    , built = UTCTime (fromGregorian 2026 11 5) (picosecondsToDiffTime 43_200_000_000_000_000)
+    , entries =
+        [ WhatsNewEntry
+            { pr = 158
+            , url = "https://github.com/Swordlash/blog/pull/158"
+            , title = "A copy button on code blocks"
+            , markdown = "### New features\n\n- A button copies the code.\n\n  ```haskell {.numbered}\n  main = pure ()\n  ```"
+            }
+        , WhatsNewEntry
+            { pr = 157
+            , url = "https://github.com/Swordlash/blog/pull/157"
+            , title = "A deploy that checks its TeX once"
+            , markdown = "### Bug fixes\n\n- The deploy no longer hangs."
+            }
+        ]
     }
 
 -- | A user's account, as the administration sees it.

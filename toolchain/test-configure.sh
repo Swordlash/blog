@@ -89,6 +89,16 @@ expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
   mode=static texlive=toolchain texlive_mirror=https://ctan.example way=proxy port=8090
 pass 'the PDF exports: nothing for this machine'"'"'s TeX, --texlive with its mirror, --no-texlive, nothing for the demo'
 
+# The page "What's new?": on is the deploy's default and takes no option,
+# off is --no-whats-new; the demo, which has no server, gets neither.
+expect 'sh toolchain/deploy-local.sh --server --sqlite --no-whats-new --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite whats_new=no way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --server --sqlite --behind-proxy --port 8090 --admin-port 8081' \
+  mode=server db=sqlite whats_new=yes way=proxy port=8090
+expect 'sh toolchain/deploy-local.sh --static --behind-proxy --port 8090' \
+  mode=static whats_new=no way=proxy port=8090
+pass 'the page "What'"'"'s new?": nothing when on, --no-whats-new when off, nothing for the demo'
+
 # Where the installer and Perl's source come from: a URL as it is, a
 # directory resolved as the deploy resolves it; with --texlive only.
 mkdir -p "$TMP/mnt/tl" "$TMP/srv"
@@ -167,6 +177,16 @@ expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/tex --sqlite --b
   "prefix=$TMP/srv/tex" texlive=machine
 pass 'the PDF exports from the state: texlive=yes is --texlive with its mirror, and this machine'"'"'s TeX over it is --no-texlive'
 
+# The page off in the state (whats_new=no) stays off, with --no-whats-new;
+# turned on again, --whats-new forgets it.
+mkdir -p "$TMP/srv/news/state"
+printf 'name=wiki-demo\ndir=%s/srv/news\nport=8090\nmode=server\nadmin_port=8091\nway=proxy\ndb=sqlite\nwhats_new=no\n' "$TMP" >"$TMP/srv/news/state/wiki-demo.state"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/news --sqlite --no-whats-new --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/news"
+expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/news --sqlite --whats-new --behind-proxy --port 8090 --admin-port 8091" \
+  "prefix=$TMP/srv/news" whats_new=yes
+pass 'the page from the state: whats_new=no is --no-whats-new, and on again is --whats-new'
+
 # The status and the stop of that deployment name it, and nothing else.
 expect "sh toolchain/deploy-local.sh --status --prefix $TMP/srv/wiki" action=status "prefix=$TMP/srv/wiki"
 expect "sh toolchain/deploy-local.sh --stop --name team" action=stop name=team
@@ -211,7 +231,7 @@ pass 'paths are resolved by realpath -m: links before .., also after a missing d
 # listeners on one port, a certificate without its key, an unknown key or
 # value, a CTAN mirror that is not an http:// or https:// URL.
 for answers in 'port=80' 'port=8080 admin_port=8080' 'way=cert tls_cert=/a.pem' 'colour=blue' 'semaphore=yes' \
-  'texlive=yes' 'texlive=toolchain texlive_mirror=ftp://ctan.example' 'texlive=toolchain texlive_mirror=https://' \
+  'texlive=yes' 'whats_new=off' 'texlive=toolchain texlive_mirror=ftp://ctan.example' 'texlive=toolchain texlive_mirror=https://' \
   'texlive=toolchain texlive_installer=ftp://git.example/installer' 'texlive=toolchain perl_source=git://git.example/perl5'; do
   # shellcheck disable=SC2086 # the answers are words.
   printf '%s\n' $answers >"$TMP/answers"

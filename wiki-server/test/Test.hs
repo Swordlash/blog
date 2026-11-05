@@ -36,6 +36,7 @@ import Test.Server.Tls qualified as Tls
 import Test.Server.Totp qualified as Totp
 import Test.Server.Vault qualified as Vault
 import Test.Server.WebAuthn qualified as WebAuthn
+import Test.Server.WhatsNew qualified as WhatsNew
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Audit qualified as Audit
@@ -66,6 +67,7 @@ main = secureMain $ do
         Metrics.spec
         Compress.spec
         Tls.keySpec
+        WhatsNew.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
@@ -99,6 +101,7 @@ main = secureMain $ do
           Audit.spec b
           Observability.spec b
           Notifications.spec b
+          WhatsNew.spec b
         alone $ do
           Options.environmentSpec
           Export.environmentSpec b

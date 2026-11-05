@@ -40,6 +40,7 @@ if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
 fi
 native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
 native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}
+sh toolchain/changelog-stamp.sh
 cabal build -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-server:exe:wiki-server wiki-app:exe:wiki-app-prerender
 WIKI_SERVER=${WIKI_SERVER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-server:exe:wiki-server)}
 WIKI_PRERENDER=${WIKI_PRERENDER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-app:exe:wiki-app-prerender)}

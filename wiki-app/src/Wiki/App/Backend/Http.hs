@@ -131,6 +131,7 @@ import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noRespo
 import Wiki.App.Backend.Http.Transport
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
+import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
@@ -691,6 +692,12 @@ instance (MonadIO m) => MonadStars (HttpWiki m) where
     result <- send (endpoints.stars.setPage p Starring {starred = wanted})
     when (isRight result) (modifyCache (withStars result))
     pure result
+
+-- | The server's changelog, which changes only when the server is
+-- replaced: cached like the server's settings, so that the page the
+-- server prerendered is the program's first render, and read once a tab.
+instance (MonadIO m) => MonadWhatsNew (HttpWiki m) where
+  whatsNew = cached (\c -> c.whatsNew) endpoints.whatsNew withWhatsNew
 
 -- | The tab's live channel: one per backend, made with it, and opened when
 -- the first page is watched.

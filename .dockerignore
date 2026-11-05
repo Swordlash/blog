@@ -1,5 +1,6 @@
 # Only what the image is built from goes to the builder: the packages, the
-# page, the scripts and the project files. Not the build directories or
+# page, the scripts, the project files, and the changelog's entries, which
+# wiki-server embeds (through its link wiki-server/changelog). Not the build directories or
 # node_modules (the builder makes its own), and not .git, docs/ or anything
 # else in the working tree, a cabal.project.local included.
 *
@@ -15,6 +16,7 @@
 !wiki-api/
 !wiki-app/
 !wiki-server/
+!changelog/
 **/dist-newstyle
 **/node_modules
 **/.ghc.environment.*

@@ -170,6 +170,8 @@ statusOf at c = case at of
   Unsubscribe _ -> status200
   _ | maybe False shutOut c.session, not (publicHome at) -> status401
   Unknown -> status404
+  -- Off (--no-whats-new), the page is not there.
+  WhatsNewPage -> refusal c.whatsNew
   Space s -> ofSpace s
   Posts s _ -> ofSpace s
   SpacePages s -> ofSpace s

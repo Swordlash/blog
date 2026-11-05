@@ -73,7 +73,7 @@ ghc-options: -threaded
 -- >   way=tailscale|cert|proxy|http tls_cert=FILE  tls_key=FILE  tls_ca=FILE
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
 -- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
--- >   semaphore=probe|on|off
+-- >   whats_new=yes|no              semaphore=probe|on|off
 -- >   app_page=FILE  bundle_locally|system_tools=yes|no
 -- >   npm_registry=URL  hackage_mirror=URL
 --
@@ -86,6 +86,9 @@ ghc-options: -threaded
 -- which a backend_only answer replaces); bundle_locally builds its
 -- bundles here. system_tools, npm_registry and hackage_mirror are the
 -- options for a machine that installs nothing from the internet.
+-- whats_new is whether the server shows the page "What's new?": yes (no
+-- option, unless the state remembers no, which --whats-new forgets) or no
+-- (--no-whats-new).
 -- texlive_installer and perl_source are the git repositories (or
 -- directories) TeX Live's installer and Perl's source come from, when not
 -- from their GitHub mirrors; the deploy does not remember them, so the
@@ -211,6 +214,7 @@ data Answers = Answers
   , name :: Text
   , prefix :: Text
   , mode :: Mode
+  , whatsNew :: Bool
   , page :: Page
   , pageRef :: Text
   , refreshPage :: Bool
@@ -245,6 +249,7 @@ data Answers = Answers
   , rememberedSystemTools :: Bool
   , rememberedNpmRegistry :: Bool
   , rememberedHackageMirror :: Bool
+  , rememberedNoWhatsNew :: Bool
   }
   deriving (Eq, Show)
 
@@ -256,6 +261,7 @@ defaultAnswers =
     , name = "wiki-demo"
     , prefix = ""
     , mode = Server
+    , whatsNew = True
     , page = BuiltHere
     , pageRef = ""
     , refreshPage = False
@@ -290,6 +296,7 @@ defaultAnswers =
     , rememberedSystemTools = False
     , rememberedNpmRegistry = False
     , rememberedHackageMirror = False
+    , rememberedNoWhatsNew = False
     }
 
 -- | The answers a deployment's state file gives: what the deploy would
@@ -299,6 +306,7 @@ fromState :: [(Text, Text)] -> Answers -> Answers
 fromState kv a =
   a
     { mode = if value "mode" == "server" then Server else Demo
+    , whatsNew = value "whats_new" /= "no"
     , page =
         if not (T.null appPageFile)
           then FromFile
@@ -333,6 +341,7 @@ fromState kv a =
     , rememberedSystemTools = value "system_tools" == "yes"
     , rememberedNpmRegistry = not (T.null (value "npm_registry"))
     , rememberedHackageMirror = not (T.null (value "hackage_mirror"))
+    , rememberedNoWhatsNew = value "whats_new" == "no"
     }
   where
     -- As state_get: the last line of the key wins.
@@ -357,6 +366,7 @@ applyAnswer a (key, v) = case key of
   "name" -> Right a {name = v}
   "prefix" -> Right a {prefix = v}
   "mode" -> pick (\x -> a {mode = x}) [("server", Server), ("static", Demo)]
+  "whats_new" -> yesNo (\x -> a {whatsNew = x})
   "backend_only"
     | T.null v -> Right a {page = BuiltHere, pageRef = ""}
     | v == "head" -> Right a {page = Downloaded, pageRef = ""}
@@ -435,6 +445,7 @@ deployArgs a = case action a of
       , sourceArgs
       , if server then databaseArgs else []
       , if server then texArgs else []
+      , if server then whatsNewArgs else []
       , wayArgs
       , option "--port" (port a)
       , if way a `elem` [PlainHttp, Certificate] then option "--bind" (bind a) else []
@@ -489,6 +500,11 @@ deployArgs a = case action a of
           ++ option "--texlive-installer" (texInstaller a)
           ++ option "--perl-source" (perlSource a)
       NoTex -> ["--no-texlive"]
+    -- The page is on by default, so it takes no option, unless the state
+    -- remembers it off, which --whats-new forgets.
+    whatsNewArgs
+      | whatsNew a = flag "--whats-new" (rememberedNoWhatsNew a)
+      | otherwise = ["--no-whats-new"]
     semaphoreArgs = case semaphore a of
       Probe -> []
       SemaphoreOn -> ["--semaphore"]
@@ -711,6 +727,7 @@ data Name
   | NameField
   | PrefixField
   | ModeChoice Mode
+  | WhatsNewField
   | PageChoice Page
   | RefField
   | RefreshField
@@ -802,6 +819,13 @@ fieldsFor s a = case s of
         , (Demo, ModeChoice Demo, "--static  the demo")
         ]
     ]
+      ++ [ check
+             "The page \"What's new?\", linked at the bottom of the sidebar, shows the server's version and build date and what the last pull requests changed (the changelog entries it was built with). Unticked, the server runs with --no-whats-new: no page and no link. Ticked after that, the deploy gives --whats-new."
+             whatsNewL
+             WhatsNewField
+             "show the page \"What's new?\" (--no-whats-new when unticked)"
+         | mode a == Server
+         ]
   PageSource ->
     [ choice
         "The page"
@@ -1099,7 +1123,8 @@ wayL = lens way (\a v -> a {way = v})
 semaphoreL :: Lens' Answers Semaphore
 semaphoreL = lens semaphore (\a v -> a {semaphore = v})
 
-refreshPageL, freshL, noBuildL, noFirewallL, enableLingerL :: Lens' Answers Bool
+refreshPageL, freshL, noBuildL, noFirewallL, enableLingerL, whatsNewL :: Lens' Answers Bool
+whatsNewL = lens whatsNew (\a v -> a {whatsNew = v})
 refreshPageL = lens refreshPage (\a v -> a {refreshPage = v})
 freshL = lens fresh (\a v -> a {fresh = v})
 noBuildL = lens noBuild (\a v -> a {noBuild = v})

@@ -248,7 +248,7 @@ exporting formats = do
   me <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki session
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = formats, boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = []}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = formats, boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 -- | The server says this of its TeX engine.
 engineIs :: TexEngine -> PageM s ()

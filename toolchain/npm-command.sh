@@ -37,6 +37,11 @@ if [ -z "${LC_ALL:-}" ]; then
   esac
 fi
 sh toolchain/bootstrap.sh ready "$command"
+# wiki-server embeds the changelog: the stamp makes cabal rebuild it when an
+# entry is added (toolchain/changelog-stamp.sh).
+case $command in
+  build-native | test-native | test) sh toolchain/changelog-stamp.sh ;;
+esac
 case $command in
   build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
   test-native) exec sh toolchain/test-native.sh "$@" ;;

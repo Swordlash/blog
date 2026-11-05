@@ -121,6 +121,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
+import Halogen.JSBits (inBrowser)
 import Halogen.Query.Event.Window qualified as Window
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
@@ -140,6 +141,7 @@ import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
+import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
 import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
@@ -189,6 +191,7 @@ import Wiki.App.View.Status qualified as StatusView
 import Wiki.App.View.Unsubscribe qualified as UnsubscribeView
 import Wiki.App.View.Users qualified as UsersView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
+import Wiki.App.View.WhatsNew qualified as WhatsNewView
 import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Comment (Thread (..))
@@ -292,6 +295,7 @@ data PartSlot
   | VerifyEmailSlot
   | UnsubscribeSlot
   | AssistantSettingsSlot
+  | WhatsNewSlot
   deriving stock (Eq, Ord)
 
 -- | The space the route is in, as far as it has been loaded.
@@ -375,6 +379,12 @@ data State m = State
   -- ^ The page the page view last said it shows ('Showing'), with its
   -- body: the head's preview describes the page with it. The space's list
   -- of pages has no bodies.
+  , seen :: Maybe Int
+  -- ^ The number of the newest changelog entry the reader has seen on the
+  -- page "What's new?", as this browser keeps it ('whatsNewSeenKey'): 0
+  -- when they never opened it. 'Nothing' until the shell has read it,
+  -- after its first render, since a page the server prerendered cannot
+  -- know it; and always natively, where there is no reader's browser.
   }
 
 -- | What the administration's section on the wiki's data shows.
@@ -424,7 +434,7 @@ data Action
 
 component
   :: forall output m
-   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadWhatsNew m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -480,6 +490,7 @@ component =
               , offlineCopy = Nothing
               , installable = False
               , shown = Nothing
+              , seen = Nothing
               }
       , render
       , eval =
@@ -857,6 +868,24 @@ component =
     sidebarFoldedKey :: Text
     sidebarFoldedKey = "sidebar-folded"
 
+    -- The key of local storage that keeps the number of the newest entry
+    -- the reader has seen on the page "What's new?".
+    whatsNewSeenKey :: Text
+    whatsNewSeenKey = "whats-new-seen"
+
+    -- On the page "What's new?", every entry the backend has is seen, once
+    -- the shell has read what the reader had seen ('seen').
+    whatsNewSeen :: H.HalogenM (State m) Action Slots output m ()
+    whatsNewSeen = do
+      st <- get
+      case (st.session.whatsNew, st.seen) of
+        (Just newest, Just before)
+          | st.route == WhatsNewPage
+          , before < newest -> do
+              modify (\s -> s {seen = Just newest})
+              H.liftEffect (Storage.setItem LocalStorage whatsNewSeenKey newest)
+        _ -> pass
+
     -- The key of local storage that keeps how wide pages are laid out:
     -- @"compact"@ or @"full"@.
     pageWidthKey :: Text
@@ -905,8 +934,32 @@ component =
             {% end %}
           </ul>
           {{ newSpace st "new-space-link" }}
+          {{ whatsNewLink st }}
         </nav>
       |]
+
+    -- The link to the page "What's new?", at the very bottom of the
+    -- sidebar, where the backend has the page. It is marked (a dot, drawn
+    -- by the stylesheet from data-unseen) while the backend has an entry
+    -- newer than the newest the reader has seen there. The mark is set
+    -- after the first render, once the shell has read what the reader has
+    -- seen ('seen'), and never on the page itself, which marks everything
+    -- seen.
+    whatsNewLink :: State m -> Maybe (H.ComponentHTML Action Slots m)
+    whatsNewLink st =
+      st.session.whatsNew <&> \newest ->
+        [hh|
+          <div class="sidebar-whats-new">
+            <a
+              class="whats-new-link"
+              {{ [attr "aria-current" "page" | st.route == WhatsNewPage] }}
+              {{ [attr "data-unseen" "true" | st.route /= WhatsNewPage, maybe False (< newest) st.seen] }}
+              {{ Router.linkProps st.router Followed WhatsNewPage }}
+            >
+              What's new?
+            </a>
+          </div>
+        |]
 
     -- A space in a list of spaces, with its icon: a link to it, unless the
     -- user may not view it.
@@ -984,6 +1037,7 @@ component =
               {% for x in subspaces %}<li>{{ spaceEntry st x }}</li>{% end %}
             </ul>
           {% end %}
+          {{ whatsNewLink st }}
         </nav>
       |]
       where
@@ -1033,6 +1087,7 @@ component =
       VerifyEmail token -> HH.slot_ "part" VerifyEmailSlot VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
       Unsubscribe token -> HH.slot_ "part" UnsubscribeSlot UnsubscribeView.component UnsubscribeView.Input {token}
       AssistantSettings -> HH.slot_ "part" AssistantSettingsSlot AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
+      WhatsNewPage -> HH.slot_ "part" WhatsNewSlot WhatsNewView.component WhatsNewView.Input {context = context st}
       Home -> homeContent st
       _ -> case st.here of
         NoSpace -> notFound st
@@ -1141,6 +1196,14 @@ component =
         -- And how wide pages are, which a prerendered page shows compact.
         wide <- H.liftEffect (Storage.getItem LocalStorage pageWidthKey)
         when (wide == Just (Right ("full" :: Text))) $ modify (\st -> st {chosenWidth = FullWidth})
+        -- And the newest entry of "What's new?" the reader has seen, which
+        -- a prerendered page does not mark. Only in a browser: natively
+        -- this is the server's prerender, whose storage is the process's
+        -- and nobody's.
+        when inBrowser $ do
+          seen <- H.liftEffect (Storage.getItem LocalStorage whatsNewSeenKey)
+          modify (\st -> st {seen = Just (fromMaybe 0 (seen >>= rightToMaybe))})
+          whatsNewSeen
         -- Made in 'H.liftEffect', before anything here waits, so that the
         -- shell listens to the browser from the moment it has started.
         whenM (gets overNetwork) $ do
@@ -1375,6 +1438,7 @@ component =
       -- again on coming back to the administration.
       modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
+      whatsNewSeen
       loadHere False
 
     -- After a change: reload everything, and every view's own data too.
@@ -1404,7 +1468,11 @@ component =
     loadWorld = do
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
-        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady})
+        Right w -> do
+          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady})
+          -- A session loaded now may name a newer entry than the page
+          -- shown has marked seen.
+          whatsNewSeen
         Left e -> modify (\st -> st {world = WorldFailed e})
 
     -- Load the space the route is in, unless it is the one loaded already
@@ -1668,6 +1736,7 @@ crumbs st = case st.route of
   Search {} -> [("Search", Nothing)]
   Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]
+  WhatsNewPage -> [("What's new?", Nothing)]
   where
     spaceCrumbs path =
       [ (s.name, if mayView (context st) s.id then Just (Space (spacePathOf st.spaces s.id)) else Nothing)

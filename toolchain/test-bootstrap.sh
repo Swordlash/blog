@@ -641,7 +641,7 @@ pass 'project Playwright must match the lockfile version'
 readiness_fixture() {
   fixture "$1"
   sysroot
-  cp "$SOURCE_DIR/check-npm-deps.cjs" "$SOURCE_DIR/npm-command.sh" "$SOURCE_DIR/test-native.sh" "$SOURCE_DIR/serve-wasm.sh" "$case_dir/repo/toolchain/"
+  cp "$SOURCE_DIR/check-npm-deps.cjs" "$SOURCE_DIR/npm-command.sh" "$SOURCE_DIR/test-native.sh" "$SOURCE_DIR/serve-wasm.sh" "$SOURCE_DIR/changelog-stamp.sh" "$case_dir/repo/toolchain/"
   cp "$SOURCE_DIR/../package.json" "$case_dir/repo/package.json"
   mkdir -p "$HOME/.ghc-wasm/compiler/bin" "$case_dir/repo/node_modules/.bin"
   mv "$case_dir/bin/wasm32-wasi-ghc" "$HOME/.ghc-wasm/compiler/bin/wasm32-wasi-ghc"

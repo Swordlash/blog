@@ -791,7 +791,7 @@ settingsOver m services = do
   me <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId "user-editor")})
     runMemWiki wiki session
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = services}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = services, whatsNew = Nothing}
   ui <- startServer m AssistantSettings
   _ <- eventually $ find ui ".assistant-provider-settings[data-provider='anthropic'] .assistant-service"
   pure ui

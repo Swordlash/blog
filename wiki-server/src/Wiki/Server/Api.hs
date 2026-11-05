@@ -106,6 +106,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
+import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -212,6 +213,10 @@ data Env = Env
   , ceremonies :: Ceremonies
   -- ^ The passkeys' challenges waiting for the browser's answer
   -- ("Wiki.Server.Vault").
+  , whatsNew :: Maybe WhatsNew
+  -- ^ The page "What's new?": the version, build date and changelog
+  -- entries this server was compiled with ("Wiki.Server.WhatsNew"), or
+  -- 'Nothing' when it runs with @--no-whats-new@.
   }
 
 -- | 'Caller' is who sent a request, as the listener identified them.
@@ -373,6 +378,10 @@ handlers env caller =
   WikiApi
     { info = liftIO (storageCapabilities env.storage) <&> \capabilities -> ServerInfo {name = "Wiki", apiVersion, capabilities}
     , session = ask' session >>= sessionInfo
+    , -- The same for everyone, signed in or not: what the server was
+      -- built with is no secret. Off, it is not there, as a PDF export is
+      -- not with --no-pdf.
+      whatsNew = maybe (refuse ApiError.NotFound) pure env.whatsNew
     , signIn = \credentials -> do
         s <- signingHere
         now <- liftIO getCurrentTime
@@ -877,7 +886,7 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO (availableFormats env.texEngine)
       settings <- liftIO (readServerSettings env.storage)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage, assistantServices = settings.assistantServices}
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports, boxes = settings.boxes, mathMacros = settings.mathMacros, homePage = if shutOut s && not settings.homePage.showAnonymous then defaultHomePage else settings.homePage, assistantServices = settings.assistantServices, whatsNew = newestEntry <$> env.whatsNew}
     -- The signed-in user, for what only a signed-in user has. Refused to
     -- someone who has not signed in, and to the operator, who never signs
     -- in.

@@ -53,6 +53,7 @@ module Wiki.App.View.Body
   , startsWithHeading
   , slides
   , followingLinks
+  , followingLinksIn
   , islandOptions
   )
 where
@@ -247,11 +248,17 @@ commentBodies place = Md.renderSections (options place) {Md.numbering = noNumber
 -- follows it, and passed to @onLink@; any other click is left to the
 -- browser.
 followingLinks :: (ArticleLink -> action) -> Place -> HH.IProp r action
-followingLinks onLink place = HE.preventingDefault (HE.handler' (EventType "click") clicked)
+followingLinks onLink place = followingLinksIn onLink place.context
+
+-- | 'followingLinks' around Markdown that is not a wiki page's (the
+-- changelog's entries on the page "What's new?"): it needs only the
+-- application's router, which knows the application's own addresses.
+followingLinksIn :: (ArticleLink -> action) -> Context -> HH.IProp r action
+followingLinksIn onLink ctx = HE.preventingDefault (HE.handler' (EventType "click") clicked)
   where
     -- Decided in the listener: a 'Just' for the link is what stops the
     -- browser from following it.
-    clicked event = case articleLink place.context.router event of
+    clicked event = case articleLink ctx.router event of
       Nothing -> Nothing
       Just target -> Just $! onLink target
 

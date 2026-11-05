@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+What's new (WP5.66). `GET api/v1/whats-new` (`WikiApi`'s `whatsNew`)
+answers `Wiki.Api.WhatsNew.WhatsNew` `{version, built, entries}`, each
+entry `WhatsNewEntry` `{pr, url, title, markdown}`; `pullRequestUrl` makes
+an entry's address and `newestEntry` the newest number. `SessionInfo`
+gains `whatsNew :: Maybe Int`: the number of the server's newest entry
+when the page is on, `null` when the server runs with `--no-whats-new`. A
+session written without the field reads as `null`.
+
 The server is told when the TeX is off (WP5.61). `TexStatus` gains
 `TexOff`, JSON `off`: the status of a server started with `--no-pdf`,
 which neither tries its TeX engine nor offers the PDFs; its `TexEngine` has

@@ -46,6 +46,7 @@ import Test.Browser.Spoilers qualified as Spoilers
 import Test.Browser.Stars qualified as Stars
 import Test.Browser.Vault qualified as Vault
 import Test.Browser.Workspace qualified as Workspace
+import Test.Browser.WhatsNew qualified as WhatsNew
 #endif
 
 -- | Built as a reactor exporting @hs_start@, which the browser test runner
@@ -112,6 +113,7 @@ spec = do
   describe "Copying a code block" (CopyCode.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
+  describe "What's new" (WhatsNew.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

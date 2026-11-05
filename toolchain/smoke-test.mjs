@@ -298,8 +298,10 @@ async function repairsOf(page) {
           // data-stuck is the layout's, set on a bar that sticks under the
           // header once the window scrolls (wiki-app/jsbits/layout.js), and
           // data-current the contents', set on the link to the section
-          // being read (wiki-app/jsbits/toc.js).
-          const scripts = ["data-prerendered", "data-stuck", "data-current"];
+          // being read (wiki-app/jsbits/toc.js), and data-unseen the
+          // shell's, on the link to "What's new?", from what this browser
+          // has seen (a server's; the demo has no such link).
+          const scripts = ["data-prerendered", "data-stuck", "data-current", "data-unseen"];
           if (scripts.includes(name) || mark.attributes[name] === now[name]) continue;
           const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
           (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);

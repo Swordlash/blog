@@ -136,6 +136,7 @@ module Wiki.App.Backend.Http.Cache
   , withInvitations
   , withInvitationAt
   , withServerSettings
+  , withWhatsNew
   , withBackups
   , withActivity
   , withStatus
@@ -172,6 +173,7 @@ import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Stars (StarredPage)
+import Wiki.Api.WhatsNew (WhatsNew)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
@@ -260,6 +262,9 @@ data Cache = Cache
   , stars :: Maybe (Either WikiError [StarredPage])
   -- ^ 'Wiki.App.Backend.Stars.starred': the user's starred pages, which
   -- the header's list and every page's star button read.
+  , whatsNew :: Maybe (Either WikiError WhatsNew)
+  -- ^ 'Wiki.App.Backend.WhatsNew.whatsNew': the server's version and
+  -- changelog entries, which change only when the server is replaced.
   }
   deriving stock (Eq, Show)
 
@@ -322,6 +327,7 @@ emptyCache =
     , notices = Nothing
     , watches = mempty
     , stars = Nothing
+    , whatsNew = Nothing
     }
 
 -- | Whether a response is cached. A successful one is, and so are the
@@ -401,6 +407,9 @@ withInvitationAt t i c = c {invitationAt = Map.insert t i c.invitationAt}
 
 withServerSettings :: Either WikiError ServerSettings -> Cache -> Cache
 withServerSettings s c = c {server = Just s}
+
+withWhatsNew :: Either WikiError WhatsNew -> Cache -> Cache
+withWhatsNew w c = c {whatsNew = Just w}
 
 withBackups :: Either WikiError Backups -> Cache -> Cache
 withBackups b c = c {backups = Just b}
