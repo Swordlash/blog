@@ -45,8 +45,13 @@ case $name in
   wasm32-wasi-ghc) printf '9.14.1.20260731\n' ;;
   cabal)
     case $1 in
-      --numeric-version) printf '3.16.1.0\n' ;;
+      --numeric-version) printf '%s\n' "${CABAL_REPORT:-3.16.1.0}" ;;
       path) printf '%s/index\n' "$HOME" ;;
+      user-config)
+        # As cabal user-config init writes its default configuration.
+        printf 'cabal %s CABAL_DIR=%s\n' "$*" "${CABAL_DIR:-}" >>"$EVENTS"
+        mkdir -p "$CABAL_DIR"
+        printf -- '-- This is the configuration file for the cabal command line tool.\nrepository hackage.haskell.org\n  url: http://hackage.haskell.org/\n  -- secure: True\n  -- root-keys:\n\n-- ignore-expiry: False\njobs: $ncpus\n' >"$CABAL_DIR/config" ;;
       build | test) printf 'cabal'; printf ' <%s>' "$@"; printf '\n' ;;
       update)
         printf 'cabal %s\n' "$*" >>"$EVENTS"
@@ -57,7 +62,9 @@ case $name in
     esac ;;
   node)
     if [ "${1:-}" = --version ]; then printf '%s\n' "$NODE_REPORT"; else exec "$NODE_REAL" "$@"; fi ;;
-  npm) printf 'unexpected npm %s\n' "$*" >>"$EVENTS"; exit 91 ;;
+  npm)
+    [ "${1:-}" != --version ] || { printf '11.0.0\n'; exit 0; }
+    printf 'unexpected npm %s\n' "$*" >>"$EVENTS"; exit 91 ;;
   fourmolu) printf 'fourmolu 0.21.0.0\n' ;;
   dpkg-query) printf 'install ok installed\n' ;;
   curl|apt-get|sudo) printf 'unexpected %s %s\n' "$name" "$*" >>"$EVENTS"; exit 91 ;;
@@ -866,5 +873,155 @@ printf 'export NODE_REPORT=v23.11.0\n' >>"$HOME/.ghc-wasm/env"
 if bootstrap ready >"$case_dir/wasm-node" 2>&1; then fail 'wasm environment shadowed compatible Node'; fi
 assert_contains "$case_dir/wasm-node" 'wasm environment must provide Node >=24'
 pass 'effective wasm environment cannot hide incompatible Node behind a compatible caller'
+
+# --system-tools: the machine's own GHC, cabal and Node, which the
+# bootstrap checks first and never installs. These runs get a PATH of the
+# fake tools and links to the host's commands without its own ghc, cabal,
+# node and npm, so that a missing tool is missing whatever the host has.
+fixture system-tools
+# The native case's fakes of what toolchain/check-native.sh checks.
+cp "$TMP/native/bin/cc" "$TMP/native/bin/pkg-config" "$case_dir/bin/"
+printf '#!/bin/sh\nprintf "/usr/lib/postgresql/17/bin\\n"\n' >"$case_dir/bin/pg_config"
+printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
+chmod +x "$case_dir/bin/pg_config" "$case_dir/bin/make"
+no_tools=$case_dir/no-tools
+mkdir "$no_tools"
+for cmd in /usr/bin/* /bin/*; do
+  name=${cmd##*/}
+  case $name in ghc* | cabal* | node | npm | npx) continue ;; esac
+  if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
+  [ -e "$no_tools/$name" ] || [ -L "$no_tools/$name" ] || ln -s "$cmd" "$no_tools/$name"
+done
+PATH=$case_dir/bin:$no_tools
+export PATH
+rm "$case_dir/bin/node"
+status=0
+GHC_REPORT=9.10.3 CABAL_REPORT=3.10.3.0 bootstrap system-tools native node >"$case_dir/old" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "system-tools with old tools exited $status, not 1"
+assert_contains "$case_dir/old" "bootstrap: --system-tools: GHC 9.10.3 ($case_dir/bin/ghc) is too old: GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
+assert_contains "$case_dir/old" "bootstrap: --system-tools: cabal 3.10.3.0 ($case_dir/bin/cabal) is too old: cabal 3.12 or later is needed: cabal.project sets semaphore:, a field cabal reads from 3.12. Without --system-tools, toolchain/bootstrap.sh installs cabal 3.16.1.0"
+assert_contains "$case_dir/old" 'bootstrap: --system-tools: Node: not found (no node on PATH answers --version). Node 24 or later with npm is needed. Without --system-tools, toolchain/bootstrap.sh installs Node 24.21.0, with its npm'
+assert_contains "$case_dir/old" 'bootstrap: --system-tools: this machine lacks what is named above, so nothing was installed or changed'
+rm "$case_dir/bin/ghc" "$case_dir/bin/cabal"
+ln -s tool "$case_dir/bin/node"
+status=0
+NODE_REPORT=v22.11.0 bootstrap system-tools >"$case_dir/missing" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "system-tools without GHC and cabal exited $status, not 1"
+assert_contains "$case_dir/missing" 'bootstrap: --system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.12 or later is needed'
+assert_contains "$case_dir/missing" 'bootstrap: --system-tools: cabal: not found (no cabal on PATH answers --numeric-version). cabal 3.12 or later is needed'
+assert_contains "$case_dir/missing" "bootstrap: --system-tools: Node v22.11.0 ($case_dir/bin/node) is too old: Node 24 or later with npm is needed"
+ln -s tool "$case_dir/bin/ghc"
+ln -s tool "$case_dir/bin/cabal"
+status=0
+GHC_REPORT=9.14.1 bootstrap native --system-tools >"$case_dir/native-no-node" 2>&1 || status=$?
+[ "$status" = 0 ] || fail "native --system-tools asked for Node: $(cat "$case_dir/native-no-node")"
+[ ! -e "$HOME/.wiki-toolchain/bootstrap.log" ] || [ -n "$(cat "$HOME/.wiki-toolchain/bootstrap.log")" ] || fail 'native --system-tools left an empty log'
+rm -rf "$HOME/.wiki-toolchain"
+status=0
+GHC_REPORT=9.10.3 bootstrap native --system-tools >"$case_dir/native-old" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --system-tools with GHC 9.10.3 exited $status, not 1"
+assert_contains "$case_dir/native-old" 'GHC 9.10.3'
+[ ! -e "$HOME/.wiki-toolchain" ] || fail 'native --system-tools with a GHC too old changed something before it stopped'
+[ ! -s "$EVENTS" ] || fail "the check of the machine's tools installed something: $(cat "$EVENTS")"
+pass '--system-tools refuses a GHC, cabal or Node that is missing or older than its floor, naming each, before anything else'
+
+GHC_REPORT=9.12.2 CABAL_REPORT=3.12.1.0 NODE_REPORT=v24.3.0 bootstrap system-tools native node >"$case_dir/new" 2>&1 ||
+  fail "system-tools with GHC 9.12.2, cabal 3.12.1.0 and Node 24 failed: $(cat "$case_dir/new")"
+assert_contains "$case_dir/new" "bootstrap: --system-tools: GHC 9.12.2 ($case_dir/bin/ghc)"
+assert_contains "$case_dir/new" "bootstrap: warning: the pinned GHC is 9.14.1; the build with 9.12.2 is untested here and may fail; a failure then is not this script's"
+assert_contains "$case_dir/new" "bootstrap: warning: the pinned cabal is 3.16.1.0; the build with 3.12.1.0 is untested here and may fail; a failure then is not this script's"
+assert_contains "$case_dir/new" "bootstrap: --system-tools: Node v24.3.0 ($case_dir/bin/node), npm 11.0.0 ($case_dir/bin/npm)"
+[ ! -e "$HOME/.wiki-toolchain" ] || fail 'system-tools, a check, wrote something'
+GHC_REPORT=9.12.2 bootstrap native --system-tools >"$case_dir/native" 2>&1 ||
+  fail "native --system-tools with GHC 9.12.2 failed: $(cat "$case_dir/native")"
+assert_contains "$case_dir/native" "this machine's GHC 9.12.2 and cabal 3.16.1.0 (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
+assert_contains "$case_dir/native" 'the pinned GHC is 9.14.1; the build with 9.12.2 is untested here'
+[ ! -e "$HOME/.ghcup" ] || fail 'native --system-tools installed ghcup'
+if grep -E '^(PATH=|export PATH)' "$HOME/.wiki-toolchain/env" >/dev/null; then fail "native --system-tools put its directories on PATH: $(cat "$HOME/.wiki-toolchain/env")"; fi
+NODE_REPORT=v24.3.0 bootstrap node --system-tools >"$case_dir/node" 2>&1 ||
+  fail "node --system-tools failed: $(cat "$case_dir/node")"
+assert_contains "$case_dir/node" "this machine's Node v24.3.0 (--system-tools)"
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'node --system-tools installed Node'
+[ ! -s "$EVENTS" ] || fail "--system-tools downloaded or installed something: $(cat "$EVENTS")"
+status=0
+bootstrap build --system-tools >"$case_dir/build" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "build --system-tools exited $status, not 2"
+assert_contains "$case_dir/build" "bootstrap: build takes no --system-tools: the page's build needs the wasm toolchain, which the bootstrap installs (--system-tools is for native and node)"
+pass '--system-tools takes a GHC, cabal and Node at their floors or later, with a warning for each that is not the pinned version, and installs none; build refuses it'
+
+# --hackage-mirror=URL: written into the toolchain's own cabal
+# configuration (CABAL_DIR under WIKI_TOOLCHAIN_HOME), which cabal
+# user-config init writes first, after the mirror's root.json is fetched;
+# the index is updated again from it; the user's ~/.cabal is untouched.
+# Without a toolchain directory of its own the option is refused. A run
+# without it puts Hackage's own url back.
+rm "$case_dir/bin/curl"
+cat >"$case_dir/bin/curl" <<'EOF'
+#!/bin/sh
+output=
+for arg do
+  case $arg in --output) output=next ;; *) [ "$output" != next ] || output=$arg ;; esac
+done
+for url do :; done
+printf 'curl %s\n' "$url" >>"$EVENTS"
+case $url in
+  */root.json) [ -z "${FAKE_NO_ROOT:-}" ] || { printf 'curl: (22) The requested URL returned error: 404\n' >&2; exit 22; }
+    printf '{"signed":{}}\n' >"$output" ;;
+  *) exit 91 ;;
+esac
+EOF
+chmod +x "$case_dir/bin/curl"
+mkdir -p "$HOME/.cabal"
+printf 'repository hackage.haskell.org\n  url: http://the-users-own.example/\n' >"$HOME/.cabal/config"
+cp "$HOME/.cabal/config" "$case_dir/users-config"
+status=0
+bootstrap native --hackage-mirror=https://hackage.example.org >"$case_dir/mirror-home" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "--hackage-mirror without a toolchain directory exited $status, not 2"
+assert_contains "$case_dir/mirror-home" "bootstrap: --hackage-mirror writes the mirror into the toolchain's own cabal configuration, which exists only under a WIKI_TOOLCHAIN_HOME other than the home directory"
+tc=$case_dir/tc
+: >"$EVENTS"
+WIKI_TOOLCHAIN_HOME=$tc bootstrap native --system-tools --hackage-mirror=https://hackage.example.org >"$case_dir/mirror" 2>&1 ||
+  fail "native --hackage-mirror failed: $(cat "$case_dir/mirror")"
+assert_contains "$EVENTS" 'curl https://hackage.example.org/root.json'
+assert_contains "$EVENTS" "cabal user-config init CABAL_DIR=$tc/.cabal"
+assert_contains "$EVENTS" 'cabal update'
+{ [ "$(line_of "$EVENTS" 'root.json')" -lt "$(line_of "$EVENTS" 'user-config')" ] &&
+  [ "$(line_of "$EVENTS" 'user-config')" -lt "$(line_of "$EVENTS" 'cabal update')" ]; } ||
+  fail "the mirror was not checked, written and then updated from, in that order: $(cat "$EVENTS")"
+assert_contains "$case_dir/mirror" "bootstrap: cabal's index and packages come from the Hackage mirror https://hackage.example.org/: written into $tc/.cabal/config"
+sed -n '/^repository hackage.haskell.org$/,/^$/p' "$tc/.cabal/config" >"$case_dir/stanza"
+[ "$(cat "$case_dir/stanza")" = "$(printf 'repository hackage.haskell.org\n  url: https://hackage.example.org/\n  secure: True\n  -- url: written by toolchain/bootstrap.sh --hackage-mirror\n  -- secure: True\n  -- root-keys:\n')" ] ||
+  fail "the stanza is not as expected: $(cat "$case_dir/stanza")"
+# shellcheck disable=SC2016 # cabal's own text, $ncpus included, kept from its default configuration.
+assert_contains "$tc/.cabal/config" 'jobs: $ncpus'
+cmp "$HOME/.cabal/config" "$case_dir/users-config" || fail 'the user'"'"'s ~/.cabal/config changed'
+# The environment of the machine's own tools still names the toolchain's
+# CABAL_DIR, so that the deploy's cabal build reads the mirror written
+# there; it only puts nothing first on PATH.
+WIKI_TOOLCHAIN_HOME=$tc bootstrap env --system-tools >"$case_dir/env-system"
+assert_contains "$case_dir/env-system" "CABAL_DIR='$tc/.cabal'"
+assert_contains "$tc/.wiki-toolchain/env" "CABAL_DIR='$tc/.cabal'"
+if grep -E '^(PATH=|export PATH)' "$case_dir/env-system" "$tc/.wiki-toolchain/env" >/dev/null; then fail 'the environment of --system-tools sets PATH'; fi
+: >"$EVENTS"
+WIKI_TOOLCHAIN_HOME=$tc bootstrap native --system-tools --hackage-mirror=https://hackage.example.org/ >"$case_dir/mirror-again" 2>&1 ||
+  fail "native --hackage-mirror again failed: $(cat "$case_dir/mirror-again")"
+[ ! -s "$EVENTS" ] || fail "the same mirror again fetched or updated something: $(cat "$EVENTS")"
+cp "$tc/.cabal/config" "$case_dir/mirror-config"
+: >"$EVENTS"
+status=0
+FAKE_NO_ROOT=1 WIKI_TOOLCHAIN_HOME=$tc bootstrap native --system-tools --hackage-mirror=https://other.example.org/ >"$case_dir/mirror-no-root" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "a mirror without root.json exited $status, not 1"
+assert_contains "$case_dir/mirror-no-root" "bootstrap: the Hackage mirror https://other.example.org/ does not serve root.json"
+cmp "$tc/.cabal/config" "$case_dir/mirror-config" || fail 'a mirror without root.json changed the configuration'
+: >"$EVENTS"
+WIKI_TOOLCHAIN_HOME=$tc bootstrap native --system-tools >"$case_dir/mirror-gone" 2>&1 ||
+  fail "native without the mirror failed: $(cat "$case_dir/mirror-gone")"
+assert_contains "$case_dir/mirror-gone" "bootstrap: cabal's index and packages come from Hackage again: its url written back into $tc/.cabal/config"
+assert_contains "$EVENTS" 'cabal update'
+sed -n '/^repository hackage.haskell.org$/,/^$/p' "$tc/.cabal/config" >"$case_dir/stanza"
+[ "$(cat "$case_dir/stanza")" = "$(printf 'repository hackage.haskell.org\n  url: http://hackage.haskell.org/\n  -- secure: True\n  -- root-keys:\n')" ] ||
+  fail "Hackage's url was not written back: $(cat "$case_dir/stanza")"
+cmp "$HOME/.cabal/config" "$case_dir/users-config" || fail 'the user'"'"'s ~/.cabal/config changed'
+pass '--hackage-mirror is checked for root.json, written into the toolchain'"'"'s own cabal configuration with secure: True, and the index updated from it; ~/.cabal is untouched; without it Hackage comes back'
 
 printf 'Passed %s bootstrap regression cases.\n' "$passed"

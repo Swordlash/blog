@@ -295,12 +295,29 @@ EOF
 #!/bin/sh
 [ "${1:-}" = env ] && exit 0
 printf 'bootstrap %s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
+# The check of the machine's own tools (--system-tools) is the real
+# bootstrap's, a copy beside this one, which changes nothing; with
+# --system-tools no managed Node is installed, and the options are not the
+# native check's.
+[ "${1:-}" != system-tools ] || exec sh "$(dirname "$0")/bootstrap-real.sh" "$@"
+system_tools=
+mode=${1:-}
+[ $# -eq 0 ] || shift
+for option do
+  shift
+  case $option in
+    --system-tools) system_tools=1 ;;
+    --hackage-mirror=*) ;;
+    *) set -- "$@" "$option" ;;
+  esac
+done
+set -- "$mode" "$@"
 # As the bootstrap installs zlib1g-dev on Debian: the file
 # FAKE_BOOTSTRAP_ZLIB names makes the fake pkg-config find zlib.
 [ -z "${FAKE_BOOTSTRAP_ZLIB:-}" ] || : >"$FAKE_BOOTSTRAP_ZLIB"
 base=${WIKI_TOOLCHAIN_HOME:-$HOME}
 mkdir -p "$base/.wiki-toolchain"
-if [ "${1:-}" != native ]; then
+if [ "${1:-}" != native ] && [ -z "$system_tools" ]; then
   mkdir -p "$base/.wiki-toolchain/node/bin"
   printf '#!/bin/sh\nexec "$NODE_REAL" "$@"\n' >"$base/.wiki-toolchain/node/bin/node"
   chmod +x "$base/.wiki-toolchain/node/bin/node"
@@ -314,6 +331,10 @@ if [ "${1:-}" = native ]; then
   fi
 fi
 EOF
+  # The real bootstrap, for its check of the machine's own tools, and its
+  # pins and floors at the end of the fake, which the deploy reads.
+  cp "$SOURCE_DIR/bootstrap.sh" "$case_dir/repo/toolchain/bootstrap-real.sh"
+  grep -E '^(GHC_VERSION|GHC_MIN_VERSION|CABAL_VERSION|CABAL_MIN_VERSION|NODE_MIN_MAJOR)=' "$SOURCE_DIR/bootstrap.sh" >>"$case_dir/repo/toolchain/bootstrap.sh"
   # The probe of cabal's build semaphore (toolchain/check-semaphore.sh): it
   # says that it ran, and exits with FAKE_SEMAPHORE, 0 (the semaphore works)
   # when unset, 1 (GHC cannot open it) or 2 (the probe could not run), with
@@ -339,6 +360,8 @@ case $name in
     esac ;;
   npm)
     printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
+    [ -z "${NPM_CONFIG_REGISTRY:-}" ] || printf 'npm registry %s\n' "$NPM_CONFIG_REGISTRY" >>"$EVENTS"
+    [ "${1:-}" != --version ] || printf '11.0.0\n'
     if [ "$1 $2" = "run build-wasm-opt" ]; then
       [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
       out=dist-newstyle/wasm-opt/public/app
@@ -355,6 +378,7 @@ case $name in
     printf 'cabal %s\n' "$*" >>"$EVENTS"
     bin=$PWD/dist-newstyle/native-opt/wiki-server
     case $1 in
+      --numeric-version) [ -z "${FAKE_CABAL_VERSION:-}" ] || printf '%s\n' "$FAKE_CABAL_VERSION" ;;
       build)
         [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
         printf 'cabal build PKG_CONFIG_PATH=%s LIBRARY_PATH=%s C_INCLUDE_PATH=%s\n' "${PKG_CONFIG_PATH:-}" "${LIBRARY_PATH:-}" "${C_INCLUDE_PATH:-}" >>"$EVENTS"
@@ -3326,6 +3350,340 @@ if command -v script >/dev/null 2>&1; then
   pass 'the question on a terminal: one, naming where the installer comes from, and the Perl build when there is no Perl; no is remembered, and the unit gets --no-pdf'
 fi
 
+# --- A machine that installs nothing from the internet ----------------------
+#
+# The page from a file (--app-page), its bundles built here and compared
+# with CI's (--bundle-locally), the npm registry (--npm-registry), the
+# Hackage mirror (--hackage-mirror) and the machine's own toolchain
+# (--system-tools), each through the deploy, its state and --status. The
+# page CI built here holds the bundles a fake web/bundle.sh writes, through
+# a fake npx, so that the bundles built again by the deploy are the same
+# bytes unless FAKE_BUNDLE_DIFF changes islands.js. The machine's own GHC,
+# Node and cabal are fakes that answer the versions FAKE_GHC_VERSION,
+# FAKE_NODE_VERSION and FAKE_CABAL_VERSION give, and nothing when unset;
+# the check of them is the real bootstrap's.
+github_page_fixture locked-down
+release main-latest "app-server-$head1.zip" 2026-10-31T10:00:00Z
+pre=$case_dir/srv/wiki
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+locked() { deploy --server --sqlite --prefix "$pre" --bind 0.0.0.0 --no-firewall --port "$p" --admin-port "$a" "$@"; }
+cat >"$case_dir/bin/npx" <<'EOF'
+#!/bin/sh
+printf 'npx %s NPM_CONFIG_REGISTRY=%s\n' "$*" "${NPM_CONFIG_REGISTRY:-}" >>"$EVENTS"
+for arg do
+  case $arg in --outfile=*) printf 'islands%s\n' "${FAKE_BUNDLE_DIFF:+, changed}" >"${arg#--outfile=}" ;; esac
+done
+EOF
+chmod +x "$case_dir/bin/npx"
+mkdir -p "$case_dir/repo/web"
+cat >"$case_dir/repo/web/bundle.sh" <<'EOF'
+#!/bin/sh
+# What web/bundle.sh writes, the first file through npx; sw.js, as the
+# real one's, depends on the page's own files.
+set -eu
+out=$1
+printf 'bundle.sh %s\n' "$out" >>"$EVENTS"
+npx esbuild web/src/islands.js --bundle --outfile="$out/islands.js"
+mkdir -p "$out/islands" "$out/fonts"
+printf 'mermaid\n' >"$out/islands/mermaid.js"
+printf 'font\n' >"$out/fonts/KaTeX.woff2"
+printf 'css\n' >"$out/islands.css"
+printf 'sw %s\n' "$(cksum <"$out/app.wasm")" >"$out/sw.js"
+EOF
+sysbin=$case_dir/sysbin
+mkdir -p "$sysbin"
+for tool in ghc node; do
+  cat >"$sysbin/$tool" <<'EOF'
+#!/bin/sh
+case ${0##*/}:${1:-} in
+  ghc:--numeric-version) [ -n "${FAKE_GHC_VERSION:-}" ] && printf '%s\n' "$FAKE_GHC_VERSION" ;;
+  node:--version) [ -n "${FAKE_NODE_VERSION:-}" ] && printf '%s\n' "$FAKE_NODE_VERSION" ;;
+  node:*) exec "$NODE_REAL" "$@" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$sysbin/$tool"
+done
+# The page CI built: the server's page with its glue and its bundles, as
+# the fake web/bundle.sh writes them.
+ci=$case_dir/ci-page
+cp -R "$page" "$ci"
+printf 'glue\n' >"$ci/ghc_wasm_jsffi.js"
+(cd "$case_dir/repo" && sh web/bundle.sh "$ci")
+files=$case_dir/files
+mkdir -p "$files"
+page_zip "$files/app-server-$head1.zip" "$ci"
+page_zip "$files/app-demo-$head1.zip" "$ci"
+cp "$files/app-server-$head1.zip" "$files/page.zip"
+page_zip "$FAKE_GITHUB/download/main-latest/app-server-$head1.zip" "$ci"
+total=$(find "$ci" -type f | wc -l | tr -d ' ')
+
+: >"$EVENTS"
+out=$case_dir/app-page
+locked --app-page "$files/app-server-$head1.zip" --bundle-locally --npm-registry https://npm.example.org/ >"$out" 2>&1 ||
+  fail "the deploy with --app-page and --bundle-locally failed: $(cat "$out")"
+assert_lacks "$EVENTS" 'curl https://api.github.com/'
+assert_lacks "$EVENTS" 'curl https://github.com/'
+assert_contains "$out" "the page: the page of $head1, from $files/app-server-$head1.zip"
+assert_contains "$EVENTS" "bootstrap native --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" 'npm ci --no-audit --no-fund'
+assert_contains "$EVENTS" 'npm registry https://npm.example.org/'
+assert_contains "$EVENTS" 'npx esbuild web/src/islands.js --bundle --outfile='
+assert_contains "$EVENTS" 'NPM_CONFIG_REGISTRY=https://npm.example.org/'
+assert_contains "$EVENTS" "bundle.sh $case_dir/repo/dist-newstyle/wasm-opt/public/app"
+{ [ "$(line_of "$EVENTS" 'bootstrap node')" -lt "$(line_of "$EVENTS" 'npm ci')" ] &&
+  [ "$(line_of "$EVENTS" 'npm ci')" -lt "$(line_of "$EVENTS" 'bundle.sh')" ] &&
+  [ "$(line_of "$EVENTS" 'bundle.sh')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
+  fail 'Node, npm ci and the bundles did not come in order, before the build of wiki-server'
+assert_contains "$out" "the page with the bundles built here and the page CI built are identical: the same $total files, byte for byte"
+for file in app.wasm ghc_wasm_jsffi.js index.html islands.js islands/mermaid.js sw.js; do
+  cmp "$pre/app/$file" "$ci/$file" || fail "the deployed $file is not the page's"
+done
+# The file's zip is kept under a name of its own, its path beside it.
+pages=$pre/toolchain/.wiki-toolchain/pages
+entry=$pages/app-server-file-$(sha256sum "$files/app-server-$head1.zip" | cut -d' ' -f1).zip
+cmp "$entry" "$files/app-server-$head1.zip" || fail "the page from the file was not kept in the cache as $entry: $(ls "$pages")"
+[ "$(cat "$entry.meta")" = "file=$files/app-server-$head1.zip" ] || fail "the cache entry does not name the file: $(cat "$entry.meta")"
+[ ! -e "$pages/app-server-$head1.zip" ] || fail 'the page from the file was kept as one downloaded from GitHub'
+assert_contains "$HOME/$unit" "--listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --sqlite"
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the page from the file is not served'
+{ [ "$(pstate app_page)" = "$files/app-server-$head1.zip" ] && [ -z "$(pstate backend_only)" ] &&
+  [ "$(pstate backend_only_commit)" = "$head1" ] && [ "$(pstate bundle_locally)" = yes ] &&
+  [ "$(pstate npm_registry)" = https://npm.example.org/ ]; } || fail "the state does not keep the page's file, the bundles and the registry: $(cat "$pre/state/wiki-demo.state")"
+out=$case_dir/app-page-status
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "its page is a zip CI built, from a file (--app-page $files/app-server-$head1.zip, the page of $head1), and only wiki-server is built here"
+assert_contains "$out" "the page's JavaScript and CSS bundles are built here (--bundle-locally), and each deploy compares them with CI's"
+assert_contains "$out" "npm's registry: https://npm.example.org/ (--npm-registry)"
+pass '--app-page takes the page from a file, without GitHub; --bundle-locally builds its bundles here with Node and npm ci from the registry, and finds them identical to CI'"'"'s; the state and --status keep them'
+
+# Remembered: the next run takes the file, the bundles and the registry
+# again. A bundle that differs from CI's is named, and the page built here
+# is the one deployed.
+: >"$EVENTS"
+out=$case_dir/differs
+FAKE_BUNDLE_DIFF=1 locked >"$out" 2>&1 || fail "the rerun with remembered options failed: $(cat "$out")"
+assert_contains "$out" "the page: the page of $head1, from $files/app-server-$head1.zip"
+assert_contains "$EVENTS" 'npm registry https://npm.example.org/'
+assert_contains "$out" "warning: the page with the bundles built here differs from the page CI built ($total files): 1 differ, 0 are in CI's alone, 0 are here alone; the page built here is the one deployed"
+assert_contains "$out" '    differs:          islands.js'
+assert_lacks "$out" 'differs:          sw.js'
+[ "$(cat "$pre/app/islands.js")" = 'islands, changed' ] || fail 'the page deployed is not the one built here'
+pass 'a rerun remembers --app-page, --bundle-locally and --npm-registry; a bundle that differs from CI'"'"'s is named'
+
+# A file that does not follow CI's naming is a page from that file;
+# --no-bundle-locally takes CI's bundles again, and --npm-registry= forgets
+# the registry.
+: >"$EVENTS"
+out=$case_dir/plain-name
+locked --app-page "$files/page.zip" --no-bundle-locally --npm-registry= >"$out" 2>&1 || fail "the deploy of page.zip failed: $(cat "$out")"
+assert_contains "$out" "the page: a page from $files/page.zip"
+assert_lacks "$EVENTS" 'bundle.sh'
+assert_lacks "$EVENTS" 'npm'
+{ [ -z "$(pstate bundle_locally)" ] && [ -z "$(pstate npm_registry)" ] && [ -z "$(pstate backend_only_commit)" ]; } ||
+  fail "--no-bundle-locally or --npm-registry= was not forgotten: $(cat "$pre/state/wiki-demo.state")"
+cmp "$pre/app/islands.js" "$ci/islands.js" || fail 'CI'"'"'s bundles were not taken again'
+pass 'a zip of another name is a page from its file; --no-bundle-locally and --npm-registry= forget them'
+
+# The file gone: the state still names it, and the rerun deploys the copy
+# the cache kept, saying so. A changed file replaces that copy, and the
+# copy of the change is the one a later run without the file takes. With
+# neither the file nor a copy, the deploy stops and the last page stays.
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the entry of the same bytes was not taken over by page.zip: $(cat "$entry.meta")"
+rm "$files/page.zip"
+: >"$EVENTS"
+out=$case_dir/file-gone
+locked >"$out" 2>&1 || fail "the rerun without the file failed: $(cat "$out")"
+assert_contains "$out" "--app-page $files/page.zip is gone, or cannot be read: the page is the copy the page cache kept of it when it was last deployed, $entry"
+assert_lacks "$EVENTS" 'curl https://'
+[ "$(http_get "http://127.0.0.1:$p/")" = '200 text/html' ] || fail 'the cached page is not served'
+cp -R "$ci" "$case_dir/changed-page"
+printf 'changed\n' >"$case_dir/changed-page/changed.txt"
+page_zip "$files/page.zip" "$case_dir/changed-page"
+changed=$pages/app-server-file-$(sha256sum "$files/page.zip" | cut -d' ' -f1).zip
+out=$case_dir/file-changed
+locked >"$out" 2>&1 || fail "the rerun with a changed file failed: $(cat "$out")"
+assert_contains "$out" "the page: a page from $files/page.zip"
+[ -f "$pre/app/changed.txt" ] || fail 'the changed file was not deployed'
+cmp "$changed" "$files/page.zip" || fail 'the changed file did not enter the cache'
+[ "$(cat "$changed.meta")" = "file=$files/page.zip" ] || fail "the new entry does not name the file: $(cat "$changed.meta")"
+{ [ ! -e "$entry" ] && [ ! -e "$entry.meta" ]; } || fail 'the copy of the earlier version stayed in the cache'
+rm "$files/page.zip"
+out=$case_dir/file-gone-again
+locked >"$out" 2>&1 || fail "the rerun without the changed file failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $changed"
+[ -f "$pre/app/changed.txt" ] || fail 'the copy of the change was not the one deployed'
+# The wizard gives the remembered path again (--app-page), and the deploy
+# takes the copy as for a path the state remembers. A path given for the
+# first time that is not there is still refused, before anything is built.
+out=$case_dir/file-gone-given
+locked --app-page "$files/page.zip" >"$out" 2>&1 || fail "the rerun that names the gone file failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $changed"
+[ "$(pstate app_page)" = "$files/page.zip" ] || fail "the state does not keep the gone file: $(pstate app_page)"
+: >"$EVENTS"
+out=$case_dir/never-seen
+if locked --app-page "$files/never-seen.zip" >"$out" 2>&1; then fail 'a missing file never deployed was taken'; fi
+assert_contains "$out" "--app-page $files/never-seen.zip: no such file here, or it cannot be read, and the page cache $pages keeps no copy of it from an earlier deploy"
+assert_lacks "$EVENTS" 'bootstrap'
+[ "$(pstate app_page)" = "$files/page.zip" ] || fail 'a refused --app-page changed the state'
+rm "$changed" "$changed.meta"
+out=$case_dir/file-no-copy
+if locked >"$out" 2>&1; then fail 'a deploy with neither the file nor a copy went on'; fi
+assert_contains "$out" "--app-page $files/page.zip is gone, or cannot be read, and the page cache $pages keeps no copy of it"
+if locked --app-page "$files/page.zip" >"$out" 2>&1; then fail 'a deploy naming a gone file without a copy went on'; fi
+assert_contains "$out" "--app-page $files/page.zip: no such file here, or it cannot be read, and the page cache $pages keeps no copy of it from an earlier deploy"
+[ -f "$pre/app/changed.txt" ] || fail 'the deployed page was changed by a deploy that stopped'
+cp "$files/app-server-$head1.zip" "$files/page.zip"
+pass 'a page from a file has a cache entry of its own: a rerun without the file deploys it, saying so, and a changed file replaces it'
+
+# A replacement that is refused leaves the cache as it was: the file of a
+# server's page overwritten with the demo's zip (its name says no kind, its
+# index.html does) is refused before the cache is touched, so the copy of
+# the last server page is still there for a run without the file.
+locked >"$out" 2>&1 || fail "the deploy of the server's page.zip failed: $(cat "$out")"
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the server's page.zip is not in the cache as $entry"
+page_zip "$files/page.zip" "$demo_page"
+: >"$EVENTS"
+out=$case_dir/file-of-the-demo
+if locked >"$out" 2>&1; then fail 'the demo'"'"'s zip was deployed as the server'"'"'s page'; fi
+assert_contains "$out" "--app-page $files/page.zip is the demo's page (its index.html says so), and this deploy is of the server (--server); the page cache keeps the last page of the server given from it"
+assert_lacks "$EVENTS" 'cabal build'
+cmp "$entry" "$files/app-server-$head1.zip" || fail 'the refused replacement changed the cached copy'
+[ "$(cat "$entry.meta")" = "file=$files/page.zip" ] || fail "the refused replacement changed the copy's .meta: $(cat "$entry.meta")"
+[ -z "$(find "$pages" -name 'app-*-file-*.zip' ! -path "$entry")" ] || fail "the refused replacement entered the cache: $(ls "$pages")"
+rm "$files/page.zip"
+out=$case_dir/file-gone-after-refusal
+locked >"$out" 2>&1 || fail "the rerun after the refused replacement failed: $(cat "$out")"
+assert_contains "$out" "the page is the copy the page cache kept of it when it was last deployed, $entry"
+grep -F 'content="server"' "$pre/app/index.html" >/dev/null || fail 'the page deployed from the cache is not the server'"'"'s'
+cp "$files/app-server-$head1.zip" "$files/page.zip"
+pass 'a file overwritten with a page of the other kind is refused before the cache is touched, and the last good copy is deployed once the file is gone'
+
+# What the deploy refuses, before anything is built or installed.
+mkdir -p "$case_dir/no-wasm"
+cp "$page/index.html" "$case_dir/no-wasm/"
+page_zip "$files/app-server-nowasm.zip" "$case_dir/no-wasm"
+refused() {
+  : >"$EVENTS"
+  out=$case_dir/refused
+  if "$@" >"$out" 2>&1; then fail "the deploy took $*"; fi
+  assert_contains "$out" "$expected"
+  assert_lacks "$EVENTS" 'bootstrap'
+  assert_lacks "$EVENTS" 'cabal build'
+}
+expected="--app-page $files/missing.zip: no such file here, or it cannot be read"
+refused locked --app-page "$files/missing.zip"
+expected="--app-page $files/app-server-nowasm.zip: not a page CI built (a zip with app.wasm at its root)"
+refused locked --app-page "$files/app-server-nowasm.zip"
+expected="--app-page $files/app-demo-$head1.zip is the demo's page, by its name, and this deploy is of the server (--server)"
+refused locked --app-page "$files/app-demo-$head1.zip"
+expected='--app-page takes the page from a file, and --backend-only downloads it from GitHub: give one'
+refused locked --app-page "$files/page.zip" --backend-only
+expected='--bundle-locally builds here the bundles of the page CI built: it goes with --backend-only[=REF] or --app-page FILE'
+refused locked --no-backend-only --bundle-locally
+expected='--npm-registry ftp://npm.example.org/: an http:// or https:// URL, such as https://npm.example.org/'
+refused locked --npm-registry ftp://npm.example.org/
+expected='--hackage-mirror https://hackage example.org/: an http:// or https:// URL without spaces or quotes'
+refused locked --hackage-mirror 'https://hackage example.org/'
+expected="--hackage-mirror https://hackage.example.org/ is written into the toolchain's own cabal configuration, and this deployment's toolchain is in the home directory, whose cabal configuration (~/.cabal) is yours and is left alone"
+refused deploy --server --sqlite --name home --port "$p" --admin-port "$a" --backend-only --hackage-mirror https://hackage.example.org/
+expected='--system-tools takes GHC, cabal and Node from this machine, and building the page here needs the wasm toolchain too'
+refused locked --no-backend-only --system-tools
+pass 'a missing file, a zip without app.wasm or of the demo, a page from GitHub and a file at once, --bundle-locally without CI'"'"'s page, a URL that is not one, a Hackage mirror for the home directory'"'"'s toolchain and --system-tools with a page built here are refused before anything is built'
+
+# The Hackage mirror goes to the bootstrap, which writes it into the
+# toolchain's own cabal configuration (toolchain/test-bootstrap.sh checks
+# what it writes); the home directory's ~/.cabal is never made.
+: >"$EVENTS"
+out=$case_dir/hackage
+locked --backend-only --hackage-mirror https://hackage.example.org/ >"$out" 2>&1 || fail "the deploy with --hackage-mirror failed: $(cat "$out")"
+assert_contains "$EVENTS" "bootstrap native --without-postgres --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+[ "$(pstate hackage_mirror)" = https://hackage.example.org/ ] || fail 'the state does not keep the Hackage mirror'
+[ -z "$(pstate app_page)" ] || fail '--backend-only did not forget --app-page'
+[ ! -e "$HOME/.cabal" ] || fail 'the deploy made ~/.cabal'
+out=$case_dir/hackage-status
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "cabal's Hackage mirror: https://hackage.example.org/ (--hackage-mirror), in the toolchain's own $pre/toolchain/.cabal/config"
+: >"$EVENTS"
+locked --hackage-mirror= >"$out" 2>&1 || fail "the deploy with --hackage-mirror= failed: $(cat "$out")"
+assert_contains "$EVENTS" "bootstrap native --without-postgres WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_lacks "$EVENTS" 'hackage'
+[ -z "$(pstate hackage_mirror)" ] || fail '--hackage-mirror= did not forget the mirror'
+pass '--hackage-mirror reaches the bootstrap'"'"'s native mode and the state, ~/.cabal untouched; --hackage-mirror= forgets it'
+
+# The machine's own toolchain: checked first, before the native check and
+# the page's download, by the real bootstrap's check; each tool missing or
+# too old stops the deploy, named with what was found.
+system() {
+  : >"$EVENTS"
+  out=$case_dir/system
+  status=0
+  PATH=$sysbin:$case_dir/bin:/usr/bin:/bin locked --backend-only --system-tools "$@" >"$out" 2>&1 || status=$?
+}
+system_refused() {
+  [ "$status" != 0 ] || fail "the deploy went on with $1"
+  assert_contains "$out" "$2"
+  assert_contains "$out" "this machine's own toolchain will not do (see above), so nothing was changed; without --system-tools (--no-system-tools) toolchain/bootstrap.sh installs it"
+  assert_lacks "$out" 'checking what the native build of wiki-server needs'
+  assert_lacks "$EVENTS" 'curl https://'
+  assert_lacks "$EVENTS" 'bootstrap native'
+  assert_lacks "$EVENTS" 'cabal build'
+}
+FAKE_CABAL_VERSION=3.16.1.0 system
+system_refused 'no GHC' "--system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
+assert_contains "$EVENTS" 'bootstrap system-tools native WIKI_TOOLCHAIN_HOME='
+FAKE_GHC_VERSION=9.10.3 FAKE_CABAL_VERSION=3.16.1.0 system
+system_refused 'GHC 9.10.3' "--system-tools: GHC 9.10.3 ($sysbin/ghc) is too old: GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later"
+FAKE_GHC_VERSION=9.14.1 system
+system_refused 'no cabal' '--system-tools: cabal: not found (no cabal on PATH answers --numeric-version). cabal 3.12 or later is needed: cabal.project sets semaphore:, a field cabal reads from 3.12. Without --system-tools, toolchain/bootstrap.sh installs cabal 3.16.1.0'
+FAKE_GHC_VERSION=9.14.1 FAKE_CABAL_VERSION=3.10.3.0 system
+system_refused 'cabal 3.10.3.0' "--system-tools: cabal 3.10.3.0 ($case_dir/bin/cabal) is too old: cabal 3.12 or later is needed"
+FAKE_GHC_VERSION=9.14.1 FAKE_CABAL_VERSION=3.16.1.0 system --bundle-locally
+system_refused 'no Node' '--system-tools: Node: not found (no node on PATH answers --version). Node 24 or later with npm is needed. Without --system-tools, toolchain/bootstrap.sh installs Node 24.21.0, with its npm'
+assert_contains "$EVENTS" 'bootstrap system-tools native node WIKI_TOOLCHAIN_HOME='
+FAKE_GHC_VERSION=9.14.1 FAKE_CABAL_VERSION=3.16.1.0 FAKE_NODE_VERSION=v22.11.0 system --bundle-locally
+system_refused 'Node 22' "--system-tools: Node v22.11.0 ($sysbin/node) is too old: Node 24 or later with npm is needed"
+pass '--system-tools stops before the native check and any download, naming a GHC, cabal or Node that is missing or too old'
+
+# All of them there: a GHC that is not the pinned one is used with a
+# warning; the page is still looked up on GitHub (it is not the toolchain;
+# the zip itself comes from the cache by now), and the bootstrap's native
+# and node modes are told to install nothing.
+rm -rf "$pre/toolchain/.wiki-toolchain/node"
+FAKE_GHC_VERSION=9.12.2 FAKE_CABAL_VERSION=3.16.1.0 FAKE_NODE_VERSION=v24.3.0 system --bundle-locally
+[ "$status" = 0 ] || fail "the deploy with the machine's own tools failed: $(cat "$out")"
+assert_contains "$out" "--system-tools: GHC 9.12.2 ($sysbin/ghc)"
+assert_contains "$out" "warning: the pinned GHC is 9.14.1; the build with 9.12.2 is untested here and may fail; a failure then is not this script's"
+assert_contains "$out" "--system-tools: cabal 3.16.1.0 ($case_dir/bin/cabal)"
+assert_lacks "$out" 'the pinned cabal'
+assert_contains "$out" "--system-tools: Node v24.3.0 ($sysbin/node), npm 11.0.0 ($case_dir/bin/npm)"
+{ [ "$(line_of "$EVENTS" 'bootstrap system-tools')" -lt "$(line_of "$EVENTS" 'curl https://api.github.com/')" ] &&
+  [ "$(line_of "$EVENTS" 'curl https://api.github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ]; } ||
+  fail 'the check of the machine'"'"'s tools did not come first, or the page was not looked up on GitHub'
+assert_contains "$out" "the page of $head1 from the cache"
+assert_contains "$EVENTS" "bootstrap native --without-postgres --system-tools WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap node --system-tools WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+[ ! -e "$pre/toolchain/.wiki-toolchain/node" ] || fail 'a managed Node was installed with --system-tools'
+[ "$(pstate system_tools)" = yes ] || fail 'the state does not keep --system-tools'
+out=$case_dir/system-status
+deploy --status --prefix "$pre" >"$out" 2>&1
+assert_contains "$out" "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC 9.12 or later, cabal 3.12 or later and Node 24 or later on PATH (GHC 9.14.1 and cabal 3.16.1.0 are the tested ones)"
+locked --no-build --no-system-tools >"$out" 2>&1 || fail "--no-system-tools failed: $(cat "$out")"
+[ -z "$(pstate system_tools)" ] || fail '--no-system-tools did not forget it'
+pass '--system-tools with every tool there: a GHC that is not the pinned one is used with a warning, the page is still looked up on GitHub, and the bootstrap installs nothing; --no-system-tools forgets it'
+
+# The names the deploy deletes from CI's page before web/bundle.sh writes
+# them again are those web/bundle.sh's header lists as what it writes.
+sed -n '/^# It writes:/,/^# toolchain\/build-wasm.sh runs it/s/^#   \([^ ,][^ ,]*\(, [^ ,][^ ,]*\)*\) .*/\1/p' "$SOURCE_DIR/../web/bundle.sh" |
+  sed 's/, /\n/g; s|/$||' | LC_ALL=C sort >"$TMP/bundle-header"
+sed -n "s/^BUNDLE_OUTPUTS='\(.*\)'\$/\1/p" "$SOURCE_DIR/deploy-local.sh" | tr ' ' '\n' | LC_ALL=C sort >"$TMP/bundle-deploy"
+[ "$(wc -l <"$TMP/bundle-header")" -ge 8 ] || fail "web/bundle.sh's header lists too few files; did its format change? $(cat "$TMP/bundle-header")"
+cmp -s "$TMP/bundle-header" "$TMP/bundle-deploy" ||
+  fail "the deploy's BUNDLE_OUTPUTS and the files web/bundle.sh's header lists differ: $(diff "$TMP/bundle-header" "$TMP/bundle-deploy" | grep '^[<>]' | tr '\n' ' ')"
+pass 'the files --bundle-locally builds again are those web/bundle.sh says it writes'
+
 # The wizard, toolchain/configure.hs, knows the deploy's options: every
 # option the header of deploy-local.sh describes is a string literal of the
 # wizard, and every option literal of the wizard is in the header, so that
@@ -3392,6 +3750,23 @@ assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.h
 sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
 assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
 pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through cabal run -z'
+
+# On a machine that installs nothing from the internet: --system-tools and
+# --hackage-mirror reach the bootstrap that installs the wizard's compiler,
+# --npm-registry the environment, and all three the wizard, as given.
+: >"$EVENTS"
+(cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --system-tools --hackage-mirror https://hackage.example.org/ \
+  --npm-registry=https://npm.example.org/ --args-from answers) >"$out" 2>&1 ||
+  fail "the wrapper with the options of a locked-down machine failed: $(cat "$out")"
+assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME='
+assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
+status=0
+sh "$case_dir/repo/toolchain/configure.sh" --hackage-mirror >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the wrapper with --hackage-mirror and no URL exited $status, not 1"
+assert_contains "$out" 'configure: --hackage-mirror needs a URL'
+sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
+assert_contains "$out" '--system-tools         compile the wizard with this machine'"'"'s own GHC and'
+pass 'toolchain/configure.sh gives --system-tools and --hackage-mirror to the bootstrap, and the three options to the wizard'
 
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"

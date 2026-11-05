@@ -6,6 +6,9 @@
 #   sh toolchain/bootstrap.sh build       # what a build needs: no Chromium, no fourmolu
 #   sh toolchain/bootstrap.sh native      # the host GHC and cabal alone, for wiki-server
 #   sh toolchain/bootstrap.sh node        # Node alone, to serve the demo's page CI built
+#   sh toolchain/bootstrap.sh system-tools [native] [node]
+#                                        # read-only: whether this machine's own GHC and
+#                                        # cabal (native) and Node (node) will do
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
@@ -102,6 +105,29 @@
 # (server.mjs) and to write its brotli copies (compress.mjs). Before a
 # download it checks for curl, tar and xz, which fetch and unpack Node.
 #
+# `native --system-tools` and `node --system-tools` install no GHC, cabal,
+# ghcup or Node: they take the machine's own from PATH, for a machine whose
+# software must come from its administrators' sources
+# (toolchain/deploy-local.sh --system-tools passes it). Before anything
+# else they check them: GHC $GHC_MIN_VERSION or later and cabal
+# $CABAL_MIN_VERSION or later (native), Node $NODE_MIN_MAJOR or later with npm (node). A
+# tool that is missing or older stops the run, named with the version
+# found; one that is not the pinned version is used with a warning, since
+# only the pins are tested. The rest is as without it: the Debian packages
+# a build links with still come through apt, from the machine's own package
+# sources, and the cabal index is updated. `system-tools native node` is the
+# same check alone, and changes nothing. `build` takes no --system-tools:
+# the page's build needs the wasm toolchain, which no machine has of its
+# own. The environment file then puts nothing first on PATH.
+#
+# `native --hackage-mirror=URL` and `build --hackage-mirror=URL` write URL,
+# a mirror of Hackage, into the toolchain's own cabal configuration
+# ($CABAL_DIR/config, which exists only under a WIKI_TOOLCHAIN_HOME other
+# than the home directory; elsewhere the option is refused, since cabal's
+# configuration there is the user's) before the index is updated, so that
+# cabal takes the index and every package from it. See hackage_config. A
+# later run without the option puts Hackage's own address back.
+#
 # CI on a self-hosted runner runs it the same way (`toolchain`), and appends
 # what `path` prints to $GITHUB_PATH: one directory per line, in the order
 # GitHub wants them there, where the last line is searched first.
@@ -132,6 +158,20 @@ PLAYWRIGHT_VERSION=1.63.0
 # it is unpacked.
 FOURMOLU_VERSION=0.21.0.0
 FOURMOLU_SHA256=aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7
+# The oldest tools --system-tools takes from the machine instead of the
+# pins above. The pins are the tested versions: a tool between its floor
+# and its pin is used with a warning. GHC 9.12 is the oldest GHC
+# haskell-halogen-th builds with: it parses quotes with the compiler's own
+# ghc library, and its cabal file asks for ghc >= 9.12 && < 9.15, so with
+# 9.10 the solver fails (RequiredTypeArguments, which every package of the
+# wiki enables, would allow 9.10). cabal
+# 3.12 is the first cabal that reads the field semaphore: of cabal.project
+# (and that has `cabal path`, which update_cabal_index asks for the
+# index's directory). Node 24 is what haskell-halogen's npm scripts and
+# test runners need. toolchain/deploy-local.sh reads these lines too.
+GHC_MIN_VERSION=9.12
+CABAL_MIN_VERSION=3.12
+NODE_MIN_MAJOR=24
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # Where the toolchain goes: under the home directory, or under the directory
@@ -158,9 +198,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | build | native | node | warm | env | path | check | ready) ;;
+  all | toolchain | build | native | node | warm | env | path | check | ready | system-tools) ;;
   *)
-    printf 'usage: %s [all|toolchain|build [--without-postgres]|native [--without-postgres] [--with-wizard]|node|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -174,19 +214,30 @@ esac
 # `native` also takes --with-wizard, for the configuration wizard
 # (toolchain/configure.sh): libncurses-dev joins the Debian packages, and
 # the check checks terminfo. The deploy never gives it.
+# native and node also take --system-tools, and native and build
+# --hackage-mirror=URL (see above); env takes --system-tools, for the
+# lines of an environment without the bootstrap's own tools.
 check_postgres=
 check_wizard=
-if [ "$mode" = native ]; then
-  usage_options='[--without-postgres] [--with-wizard]'
-else
-  usage_options='[--without-postgres]'
-fi
-if [ "$mode" = native ] || [ "$mode" = build ]; then
+system_tools=
+hackage_mirror=
+case $mode in
+  native) usage_options='[--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]' ;;
+  build) usage_options='[--without-postgres] [--hackage-mirror=URL]' ;;
+  *) usage_options='[--system-tools]' ;;
+esac
+if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = node ] || [ "$mode" = env ]; then
   shift
   for option do
     case $mode:$option in
-      *:--without-postgres) check_postgres=--without-postgres ;;
+      native:--without-postgres | build:--without-postgres) check_postgres=--without-postgres ;;
       native:--with-wizard) check_wizard=--with-wizard ;;
+      native:--system-tools | node:--system-tools | env:--system-tools) system_tools=1 ;;
+      build:--system-tools)
+        printf 'bootstrap: build takes no --system-tools: the page'"'"'s build needs the wasm toolchain, which the bootstrap installs (--system-tools is for native and node)\n' >&2
+        exit 2
+        ;;
+      native:--hackage-mirror=* | build:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
       *)
         printf 'usage: %s %s %s\n' "$0" "$mode" "$usage_options" >&2
         exit 2
@@ -194,6 +245,26 @@ if [ "$mode" = native ] || [ "$mode" = build ]; then
     esac
   done
 fi
+# The mirror is written into the toolchain's own cabal configuration, which
+# exists only under a named WIKI_TOOLCHAIN_HOME: in the home directory,
+# cabal's configuration is the user's own, which this script leaves alone.
+case $hackage_mirror in
+  '') ;;
+  *[[:space:]\"\'\\\`\$]*)
+    printf 'bootstrap: --hackage-mirror=%s: an http:// or https:// URL without spaces or quotes\n' "$hackage_mirror" >&2
+    exit 2
+    ;;
+  http://?* | https://?*)
+    if [ -z "$NAMED_BASE" ]; then
+      printf "bootstrap: --hackage-mirror writes the mirror into the toolchain's own cabal configuration, which exists only under a WIKI_TOOLCHAIN_HOME other than the home directory; cabal's configuration in the home directory is yours, and this script does not change it\n" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    printf 'bootstrap: --hackage-mirror=%s: an http:// or https:// URL, such as https://hackage.example.org/\n' "$hackage_mirror" >&2
+    exit 2
+    ;;
+esac
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
 # or the default one this script installs into. Under a named directory the
@@ -212,9 +283,13 @@ fi
 
 # The lines a shell needs to find ghcup's tools and this Node first. Written as
 # literal paths so they are right whenever they are read, even before the
-# install they point at has finished.
+# install they point at has finished. With --system-tools the tools are the
+# machine's own, and nothing is put first on PATH.
 env_lines() {
-  cat <<EOF
+  if [ -n "$system_tools" ]; then
+    printf "# Written by toolchain/bootstrap.sh --system-tools: GHC, cabal and Node are this machine's own, as PATH finds them.\n"
+  else
+    cat <<EOF
 # Written by toolchain/bootstrap.sh: Node $NODE_VERSION, then ghcup's GHC and cabal, ahead of the rest of PATH.
 PATH=\$(
   remaining=\$PATH
@@ -233,6 +308,7 @@ PATH=\$(
 )
 export PATH
 EOF
+  fi
   [ -z "$NAMED_BASE" ] || cat <<EOF
 # The toolchain is under $BASE, and the tools keep their files there too.
 WIKI_TOOLCHAIN_HOME='$BASE'
@@ -264,7 +340,9 @@ esac
 # Inventory and installation discover managed tools too. Readiness must see
 # the caller's actual PATH: finding an unloaded installation would hide why
 # the command this gate protects cannot run it.
-if [ "$mode" != ready ]; then
+# With --system-tools, and for its check alone, only the machine's own
+# tools count.
+if [ "$mode" != ready ] && [ "$mode" != system-tools ] && [ -z "$system_tools" ]; then
   PATH=$STATE/node/bin:$GHCUP_BIN:$PATH
   export PATH
 fi
@@ -275,7 +353,88 @@ numeric_version() {
 
 compatible_node() {
   node_major=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
-  [ -n "$node_major" ] && [ "$node_major" -ge 24 ] && command -v npm >/dev/null 2>&1
+  [ -n "$node_major" ] && [ "$node_major" -ge "$NODE_MIN_MAJOR" ] && command -v npm >/dev/null 2>&1
+}
+
+# --- The machine's own tools (--system-tools) --------------------------------
+#
+# With --system-tools the bootstrap installs no GHC, cabal or Node, and these
+# check the machine's own on PATH before anything else runs: each is named
+# with the version found, one that is not the pinned version gets a warning
+# (only the pins are tested), and one that is missing or older than its
+# floor (GHC_MIN_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR) stops the run.
+
+# Whether the version $1 is $2 or later, comparing their numbers one by one
+# (9.12.2 is 9.12 or later, 9.10.3 is not); a number missing counts as 0.
+version_at_least() {
+  awk -v found="$1" -v floor="$2" 'BEGIN {
+    split(found, f, "."); m = split(floor, g, ".")
+    for (i = 1; i <= m; i++) {
+      if (f[i] + 0 > g[i] + 0) exit 0
+      if (f[i] + 0 < g[i] + 0) exit 1
+    }
+    exit 0
+  }'
+}
+
+# One of the machine's compilers: $1 the command, $2 its name, $3 the
+# pinned version, $4 the floor, $5 why the floor is what it is. Sets
+# system_missing when it will not do.
+system_tool() {
+  found=$(numeric_version "$1")
+  if [ -z "$found" ]; then
+    printf 'bootstrap: --system-tools: %s: not found (no %s on PATH answers --numeric-version). %s %s or later is needed: %s. Without --system-tools, toolchain/bootstrap.sh installs %s %s\n' \
+      "$2" "$1" "$2" "$4" "$5" "$2" "$3" >&2
+    system_missing=1
+  elif ! version_at_least "$found" "$4"; then
+    printf 'bootstrap: --system-tools: %s %s (%s) is too old: %s %s or later is needed: %s. Without --system-tools, toolchain/bootstrap.sh installs %s %s\n' \
+      "$2" "$found" "$(command -v "$1")" "$2" "$4" "$5" "$2" "$3" >&2
+    system_missing=1
+  else
+    printf 'bootstrap: --system-tools: %s %s (%s)\n' "$2" "$found" "$(command -v "$1")"
+    [ "$found" = "$3" ] ||
+      printf "bootstrap: warning: the pinned %s is %s; the build with %s is untested here and may fail; a failure then is not this script's\n" "$2" "$3" "$found" >&2
+  fi
+}
+
+# The machine's Node and npm, for the npm scripts, the page's bundles and
+# the demo's server. Sets system_missing when they will not do.
+system_node() {
+  found=$(node --version 2>/dev/null || true)
+  found_major=$(printf '%s' "$found" | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
+  without="Without --system-tools, toolchain/bootstrap.sh installs Node $NODE_VERSION, with its npm"
+  if [ -z "$found" ]; then
+    printf 'bootstrap: --system-tools: Node: not found (no node on PATH answers --version). Node %s or later with npm is needed. %s\n' "$NODE_MIN_MAJOR" "$without" >&2
+    system_missing=1
+  elif [ -z "$found_major" ] || [ "$found_major" -lt "$NODE_MIN_MAJOR" ]; then
+    printf 'bootstrap: --system-tools: Node %s (%s) is too old: Node %s or later with npm is needed. %s\n' "$found" "$(command -v node)" "$NODE_MIN_MAJOR" "$without" >&2
+    system_missing=1
+  elif ! command -v npm >/dev/null 2>&1; then
+    printf 'bootstrap: --system-tools: npm: not found on PATH beside Node %s (%s); Node %s or later with npm is needed. %s\n' "$found" "$(command -v node)" "$NODE_MIN_MAJOR" "$without" >&2
+    system_missing=1
+  else
+    printf 'bootstrap: --system-tools: Node %s (%s), npm %s (%s)\n' "$found" "$(command -v node)" "$(npm --version 2>/dev/null || true)" "$(command -v npm)"
+  fi
+}
+
+# Check what a run needs of the machine's own tools: native (GHC and
+# cabal) and node (Node and npm), as arguments. Fails, after naming every
+# tool that will not do, when one will not.
+check_system_tools() {
+  system_missing=
+  for need do
+    case $need in
+      native)
+        system_tool ghc GHC "$GHC_VERSION" "$GHC_MIN_VERSION" "haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc $GHC_MIN_VERSION or later"
+        system_tool cabal cabal "$CABAL_VERSION" "$CABAL_MIN_VERSION" "cabal.project sets semaphore:, a field cabal reads from $CABAL_MIN_VERSION"
+        ;;
+      node) system_node ;;
+    esac
+  done
+  if [ -n "$system_missing" ]; then
+    printf 'bootstrap: --system-tools: this machine lacks what is named above, so nothing was installed or changed\n' >&2
+    return 1
+  fi
 }
 
 # A provenance marker alone does not prove setup finished. Check the actual
@@ -496,6 +655,28 @@ fi
 if [ "$mode" = check ]; then
   check
   exit $?
+fi
+
+# The check of the machine's own tools, alone (toolchain/deploy-local.sh
+# --system-tools runs it before anything else), or as the first thing of
+# native --system-tools and node --system-tools.
+if [ "$mode" = system-tools ]; then
+  shift
+  [ $# -gt 0 ] || set -- native node
+  for need do
+    case $need in
+      native | node) ;;
+      *)
+        printf 'usage: %s system-tools [native] [node]\n' "$0" >&2
+        exit 2
+        ;;
+    esac
+  done
+  check_system_tools "$@"
+  exit $?
+fi
+if [ -n "$system_tools" ]; then
+  check_system_tools "$mode" || exit 1
 fi
 
 # setup.sh deletes its prefix: refuse unsafe state before changing anything.
@@ -893,9 +1074,87 @@ install_fourmolu() {
   fi
 }
 
+# --- Hackage's mirror (--hackage-mirror) -------------------------------------
+#
+# The toolchain's own cabal configuration ($CABAL_DIR/config, under a named
+# WIKI_TOOLCHAIN_HOME only) can name a mirror of Hackage as the url of its
+# repository hackage.haskell.org, from which cabal then fetches the index
+# and every package. The repository keeps its name, so plans and the store
+# are as with Hackage itself. It stays secure (secure: True): for the
+# repository of that name cabal knows Hackage's root keys, and checks the
+# index against Hackage's signatures, whoever serves it. So the mirror must
+# serve Hackage's signed metadata (root.json, timestamp.json,
+# snapshot.json, mirrors.json) beside the index and the packages, as a full
+# mirror does (hackage-mirror-tool's, or a proxy that passes Hackage
+# through). A mirror without them is refused before anything is written:
+# its root.json is fetched first. The lines written carry a comment
+# (HACKAGE_MARK), so that a run without the option puts Hackage's own url
+# back. HACKAGE_URL is the url cabal's own default configuration has.
+HACKAGE_URL=http://hackage.haskell.org/
+HACKAGE_MARK='-- url: written by toolchain/bootstrap.sh --hackage-mirror'
+
+# The url of the repository hackage.haskell.org in a cabal configuration.
+hackage_url() {
+  awk '$0 == "repository hackage.haskell.org" { inside = 1; next }
+    inside && /^[ \t]/ { if ($1 == "url:") { print $2; exit } next }
+    { inside = 0 }' "$1" 2>/dev/null
+}
+
+# Write the mirror (or Hackage's own url, when a mirror was written before
+# and none is given now) into the toolchain's cabal configuration, which
+# cabal user-config init writes first when there is none. Sets
+# hackage_changed when the url changed, so that the index is fetched again
+# from the new place.
+hackage_config() {
+  hackage_changed=
+  [ -n "$NAMED_BASE" ] || return 0
+  config=$CABAL_DIR/config
+  if [ -z "$hackage_mirror" ] && ! grep -qF -- "$HACKAGE_MARK" "$config" 2>/dev/null; then
+    return 0
+  fi
+  url=${hackage_mirror:-$HACKAGE_URL}
+  case $url in */) ;; *) url=$url/ ;; esac
+  if [ "$(hackage_url "$config")" = "$url" ] && grep -qF -- "$HACKAGE_MARK" "$config" 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$hackage_mirror" ]; then
+    printf '+ fetch %sroot.json\n' "$url" >>"$LOG"
+    if ! fetch "${url}root.json" "$STATE/hackage-root.json" >>"$LOG" 2>&1; then
+      rm -f "$STATE/hackage-root.json"
+      say "the Hackage mirror $url does not serve root.json (the end of $LOG says why): cabal checks Hackage's index against Hackage's own keys, so the mirror must serve Hackage's signed metadata (root.json, timestamp.json, snapshot.json, mirrors.json) as a full mirror does; nothing was changed"
+      exit 1
+    fi
+    rm -f "$STATE/hackage-root.json"
+  fi
+  if [ ! -f "$config" ]; then
+    run "writing cabal's configuration" sh -c "cd '$STATE' && cabal user-config init"
+  fi
+  awk -v url="$url" -v mirror="$hackage_mirror" -v mark="$HACKAGE_MARK" '
+    function lines() {
+      print "  url: " url
+      if (mirror != "") { print "  secure: True"; print "  " mark }
+    }
+    $0 == "repository hackage.haskell.org" { print; lines(); inside = 1; found = 1; next }
+    inside && /^[ \t]/ {
+      if ($1 == "url:" || $1 == "secure:" || index($0, mark)) next
+      print
+      next
+    }
+    { inside = 0; print }
+    END { if (!found) { print ""; print "repository hackage.haskell.org"; lines() } }
+  ' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
+  if [ -n "$hackage_mirror" ]; then
+    say "cabal's index and packages come from the Hackage mirror $url: written into $config"
+  else
+    say "cabal's index and packages come from Hackage again: its url written back into $config"
+  fi
+  hackage_changed=1
+}
+
 update_cabal_index() {
+  hackage_config
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
-  if [ ! -f "$index" ] || [ -n "${1:-}" ]; then
+  if [ ! -f "$index" ] || [ -n "${1:-}" ] || [ -n "$hackage_changed" ]; then
     say "updating cabal's package index"
     run_long "updating cabal's package index" sh -c "cd '$STATE' && cabal update"
   fi
@@ -921,10 +1180,13 @@ toolchain() {
   started=$(date +%s)
   quiet_before=$(wc -c <"$LOG")
   if [ "$mode" = node ]; then
-    node_commands
-    install_node
+    if [ -z "$system_tools" ]; then
+      node_commands
+      install_node
+    fi
     write_env
     summary="Node $(node --version); no compilers, wasm toolchain, Chromium or fourmolu (node)"
+    [ -z "$system_tools" ] || summary="this machine's Node $(node --version) (--system-tools); no compilers, wasm toolchain, Chromium or fourmolu (node)"
     if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
       printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
     else
@@ -934,11 +1196,12 @@ toolchain() {
   fi
   system_packages
   [ "$mode" != native ] || native_check
-  install_native
+  [ -n "$system_tools" ] || install_native
   if [ "$mode" = native ]; then
     update_cabal_index
     write_env
     summary="GHC $GHC_VERSION, cabal $CABAL_VERSION; no wasm toolchain, Node, Chromium or fourmolu (native)"
+    [ -z "$system_tools" ] || summary="this machine's GHC $(numeric_version ghc) and cabal $(numeric_version cabal) (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
     if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
       printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
     else

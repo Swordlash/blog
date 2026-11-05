@@ -30,7 +30,13 @@ ghc-options: -threaded
 -- and cabal (toolchain/bootstrap.sh native), and runs this file as a cabal
 -- script from the checkout's root:
 --
--- >   cabal run -z -v0 toolchain/configure.hs -- [--args-from FILE]
+-- >   cabal run -z -v0 toolchain/configure.hs -- [--system-tools] [--hackage-mirror URL] [--npm-registry URL] [--args-from FILE]
+--
+-- --system-tools, --hackage-mirror URL and --npm-registry URL are the
+-- deploy's options for a machine that installs nothing from the internet.
+-- The wrapper gives them to the bootstrap that installs GHC and cabal for
+-- the wizard, and the wizard takes them as answers over the state (see
+-- presetArgs), so that its screens start with them.
 --
 -- The -z (--ignore-project) matters: without it cabal would build the
 -- script inside the repository's cabal.project, and resolve and fetch every
@@ -39,7 +45,9 @@ ghc-options: -threaded
 --
 -- The screens: what to do (deploy, --status or --stop) and which deployment
 -- (--name, --prefix); what to deploy (--server or --static); where the
--- page comes from (built here, or --backend-only); the database and the
+-- page comes from (built here, --backend-only, or --app-page, with
+-- --bundle-locally); where the toolchain and the packages come from
+-- (--system-tools, --npm-registry, --hackage-mirror); the database and the
 -- TeX of the PDF exports (server only); how it is reached (the ways of
 -- HTTPS, or plain HTTP); the address (port, bind address, admin port); the
 -- extras. The answers start from the deployment's state file, found by
@@ -66,12 +74,18 @@ ghc-options: -threaded
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
 -- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
 -- >   semaphore=probe|on|off
+-- >   app_page=FILE  bundle_locally|system_tools=yes|no
+-- >   npm_registry=URL  hackage_mirror=URL
 --
 -- backend_only is empty for a page built here, head for the page of the
 -- checkout's commit, or a REF (main, a tag, a commit hash), as the state
 -- file keeps it. texlive is the TeX of the PDF exports: the TeX on this
 -- machine (no option), TeX Live under the toolchain (--texlive, with
 -- --texlive-mirror when a mirror is given) or none (--no-texlive).
+-- app_page is the zip of a page CI built, taken from a file (--app-page,
+-- which a backend_only answer replaces); bundle_locally builds its
+-- bundles here. system_tools, npm_registry and hackage_mirror are the
+-- options for a machine that installs nothing from the internet.
 -- texlive_installer and perl_source are the git repositories (or
 -- directories) TeX Live's installer and Perl's source come from, when not
 -- from their GitHub mirrors; the deploy does not remember them, so the
@@ -158,9 +172,10 @@ data Action = Deploy | Status | Stop
 data Mode = Server | Demo
   deriving (Eq, Ord, Show)
 
--- | Where the page comes from: built on this machine, or downloaded from
--- the GitHub release CI keeps it in (--backend-only).
-data Page = BuiltHere | Downloaded
+-- | Where the page comes from: built on this machine, downloaded from the
+-- GitHub release CI keeps it in (--backend-only), or that zip taken from a
+-- file (--app-page).
+data Page = BuiltHere | Downloaded | FromFile
   deriving (Eq, Ord, Show)
 
 -- | Where the server keeps the wiki.
@@ -199,6 +214,11 @@ data Answers = Answers
   , page :: Page
   , pageRef :: Text
   , refreshPage :: Bool
+  , appPage :: Text
+  , bundleLocally :: Bool
+  , systemTools :: Bool
+  , npmRegistry :: Text
+  , hackageMirror :: Text
   , database :: Database
   , dbPort :: Text
   , fresh :: Bool
@@ -221,6 +241,10 @@ data Answers = Answers
   , rememberedDownload :: Bool
   , rememberedCa :: Bool
   , rememberedTexLive :: Bool
+  , rememberedBundle :: Bool
+  , rememberedSystemTools :: Bool
+  , rememberedNpmRegistry :: Bool
+  , rememberedHackageMirror :: Bool
   }
   deriving (Eq, Show)
 
@@ -235,6 +259,11 @@ defaultAnswers =
     , page = BuiltHere
     , pageRef = ""
     , refreshPage = False
+    , appPage = ""
+    , bundleLocally = False
+    , systemTools = False
+    , npmRegistry = ""
+    , hackageMirror = ""
     , database = Postgres
     , dbPort = "5433"
     , fresh = False
@@ -257,6 +286,10 @@ defaultAnswers =
     , rememberedDownload = False
     , rememberedCa = False
     , rememberedTexLive = False
+    , rememberedBundle = False
+    , rememberedSystemTools = False
+    , rememberedNpmRegistry = False
+    , rememberedHackageMirror = False
     }
 
 -- | The answers a deployment's state file gives: what the deploy would
@@ -266,8 +299,16 @@ fromState :: [(Text, Text)] -> Answers -> Answers
 fromState kv a =
   a
     { mode = if value "mode" == "server" then Server else Demo
-    , page = if T.null backendOnly then BuiltHere else Downloaded
+    , page =
+        if not (T.null appPageFile)
+          then FromFile
+          else if T.null backendOnly then BuiltHere else Downloaded
     , pageRef = if backendOnly == "head" then "" else backendOnly
+    , appPage = appPageFile
+    , bundleLocally = value "bundle_locally" == "yes"
+    , systemTools = value "system_tools" == "yes"
+    , npmRegistry = value "npm_registry"
+    , hackageMirror = value "hackage_mirror"
     , database = if value "db" == "sqlite" then Sqlite else Postgres
     , dbPort = orKeep (dbPort a) (value "db_port")
     , tex = case value "texlive" of
@@ -285,15 +326,20 @@ fromState kv a =
       bind = if value "bind_choice" == "explicit" then value "bind" else ""
     , adminPort = orKeep (adminPort a) (value "admin_port")
     , toolchain = value "toolchain"
-    , rememberedDownload = not (T.null backendOnly)
+    , rememberedDownload = not (T.null backendOnly) || not (T.null appPageFile)
     , rememberedCa = remembered == Certificate && not (T.null (value "tls_ca"))
     , rememberedTexLive = value "texlive" == "yes"
+    , rememberedBundle = value "bundle_locally" == "yes"
+    , rememberedSystemTools = value "system_tools" == "yes"
+    , rememberedNpmRegistry = not (T.null (value "npm_registry"))
+    , rememberedHackageMirror = not (T.null (value "hackage_mirror"))
     }
   where
     -- As state_get: the last line of the key wins.
     value key = fromMaybe "" (lookup key (reverse kv))
     orKeep old new = if T.null new then old else new
     backendOnly = value "backend_only"
+    appPageFile = value "app_page"
     -- A deployment from before the four ways has no way, and its https
     -- says which of the first two it was.
     remembered = case value "way" of
@@ -315,6 +361,13 @@ applyAnswer a (key, v) = case key of
     | T.null v -> Right a {page = BuiltHere, pageRef = ""}
     | v == "head" -> Right a {page = Downloaded, pageRef = ""}
     | otherwise -> Right a {page = Downloaded, pageRef = v}
+  "app_page"
+    | T.null v -> Right a {appPage = ""}
+    | otherwise -> Right a {page = FromFile, appPage = v}
+  "bundle_locally" -> yesNo (\x -> a {bundleLocally = x})
+  "system_tools" -> yesNo (\x -> a {systemTools = x})
+  "npm_registry" -> Right a {npmRegistry = v}
+  "hackage_mirror" -> Right a {hackageMirror = v}
   "db" -> pick (\x -> a {database = x}) [("postgres", Postgres), ("sqlite", Sqlite)]
   "db_port" -> Right a {dbPort = v}
   "texlive" -> pick (\x -> a {tex = x}) [("machine", MachineTex), ("toolchain", ToolchainTex), ("none", NoTex)]
@@ -379,6 +432,7 @@ deployArgs a = case action a of
       [ [if server then "--server" else "--static"]
       , which
       , pageArgs
+      , sourceArgs
       , if server then databaseArgs else []
       , if server then texArgs else []
       , wayArgs
@@ -400,7 +454,24 @@ deployArgs a = case action a of
       Downloaded ->
         (if T.null (pageRef a) then "--backend-only" else "--backend-only=" <> pageRef a)
           : flag "--refresh-page" (refreshPage a)
+          ++ bundleArgs
+      FromFile -> option "--app-page" (appPage a) ++ bundleArgs
       BuiltHere -> flag "--no-backend-only" (rememberedDownload a)
+    -- The bundles built here, for a page CI built; --no-bundle-locally
+    -- forgets a remembered choice.
+    bundleArgs
+      | bundleLocally a = ["--bundle-locally"]
+      | otherwise = flag "--no-bundle-locally" (rememberedBundle a)
+    -- For a machine that installs nothing from the internet. What the
+    -- state remembers and the answers drop is forgotten explicitly.
+    sourceArgs =
+      (if systemTools a then ["--system-tools"] else flag "--no-system-tools" (rememberedSystemTools a))
+        ++ forgettable "--npm-registry" (npmRegistry a) (rememberedNpmRegistry a)
+        ++ forgettable "--hackage-mirror" (hackageMirror a) (rememberedHackageMirror a)
+    forgettable key v remembered
+      | not (T.null v) = [key, v]
+      | remembered = [key <> "="]
+      | otherwise = []
     databaseArgs =
       ( case database a of
           Postgres -> "--postgres" : option "--db-port" (dbPort a)
@@ -468,6 +539,22 @@ problems a =
               , not (validMirror v)
               ]
             , ["A certificate needs its key's file (the same file when one .pem holds both)." | way a == Certificate, T.null (tlsKey a)]
+            , ["A page from a file needs the file, the zip CI built (--app-page)." | page a == FromFile, T.null (appPage a)]
+            , [ "The machine's own toolchain (--system-tools) needs the page CI built, downloaded or from a file: building the page here needs the wasm toolchain, which only the bootstrap installs."
+              | systemTools a
+              , page a == BuiltHere
+              , not (noBuild a)
+              ]
+            , [ what <> " is an http:// or https:// URL, without spaces or quotes."
+              | (what, v) <- [("The npm registry", npmRegistry a), ("The Hackage mirror", hackageMirror a)]
+              , not (T.null v)
+              , not (validMirror v)
+              ]
+            , [ "The Hackage mirror is written into the toolchain's own cabal configuration, never ~/.cabal: give a prefix, or a toolchain directory of its own."
+              | not (T.null (hackageMirror a))
+              , T.null (prefix a)
+              , T.null (toolchain a)
+              ]
             ]
         _ -> []
     ]
@@ -555,7 +642,8 @@ resolvePaths a = do
   ca <- absolute (tlsCa a)
   i <- source (texInstaller a)
   ps <- source (perlSource a)
-  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca, texInstaller = i, perlSource = ps}
+  ap <- absolute (appPage a)
+  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca, texInstaller = i, perlSource = ps, appPage = ap}
   where
     -- A source of the TeX step is a URL, kept as it is, or a directory.
     source v = if "://" `T.isInfixOf` v then pure v else absolute v
@@ -613,7 +701,7 @@ prefill given = do
 
 -- * The screens
 
-data Screen = Which | What | PageSource | DatabaseScreen | Reach | Address | Extras | Command
+data Screen = Which | What | PageSource | Sources | DatabaseScreen | Reach | Address | Extras | Command
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | The resource names: one per field, one per choice of a radio field,
@@ -626,6 +714,11 @@ data Name
   | PageChoice Page
   | RefField
   | RefreshField
+  | AppPageField
+  | BundleField
+  | SystemToolsField
+  | NpmRegistryField
+  | HackageMirrorField
   | DatabaseChoice Database
   | DbPortField
   | FreshField
@@ -659,6 +752,10 @@ screenTitle s = case s of
     )
   What -> ("What to deploy", "The wiki's server, or the demo that keeps its wiki in the browser.")
   PageSource -> ("Where the page comes from", "The page is the application the browser runs, compiled to WebAssembly.")
+  Sources ->
+    ( "Where the toolchain and the packages come from"
+    , "For a machine that installs nothing from the internet: the machine's own compilers, and mirrors for npm's and Hackage's packages. Empty and unticked, the deploy downloads them as usual."
+    )
   DatabaseScreen -> ("The database and PDFs", "Where the wiki's server keeps the wiki, and the TeX that makes its PDF exports.")
   Reach -> ("How it is reached", "HTTPS one of three ways, or plain HTTP. The ways exclude each other.")
   Address -> ("The address", "Where the server listens on this machine.")
@@ -713,26 +810,61 @@ fieldsFor s a = case s of
               "Compiled here, with the wasm toolchain and Node, which the bootstrap installs. The first build takes over an hour; later ones minutes. After a deployment that downloaded its page, this gives --no-backend-only."
             Downloaded ->
               "Downloaded from the GitHub release CI keeps it in, so nothing is compiled for the browser: the server is built alone (GHC and cabal, no Node), and the demo is not built at all."
+            FromFile ->
+              "The zip CI built, as it is downloaded, but from a file on this machine, for a machine that cannot reach github.com. Nothing is compiled for the browser, as when it is downloaded."
         )
         pageL
         [ (BuiltHere, PageChoice BuiltHere, "built on this machine")
         , (Downloaded, PageChoice Downloaded, "--backend-only  downloaded, as CI built it")
+        , (FromFile, PageChoice FromFile, "--app-page  CI's zip, from a file")
         ]
     ]
-      ++ if page a == Downloaded
-        then
-          [ text
-              "Which commit's page (--backend-only=REF)"
-              "Empty: the page of this checkout's commit, which matches its server. main: the newest page of main. A tag: its release's page. A commit hash, whole or its beginning."
-              pageRefL
-              RefField
-          , check
-              "Downloads go to a cache of the five newest pages; a commit's page never changes, so a cached one is used as it is."
-              refreshPageL
-              RefreshField
-              "--refresh-page  download it even when the cache has it"
-          ]
-        else []
+      ++ ( if page a == Downloaded
+             then
+               [ text
+                   "Which commit's page (--backend-only=REF)"
+                   "Empty: the page of this checkout's commit, which matches its server. main: the newest page of main. A tag: its release's page. A commit hash, whole or its beginning."
+                   pageRefL
+                   RefField
+               , check
+                   "Downloads go to a cache of the five newest pages; a commit's page never changes, so a cached one is used as it is."
+                   refreshPageL
+                   RefreshField
+                   "--refresh-page  download it even when the cache has it"
+               ]
+             else []
+         )
+      ++ [ text
+             "--app-page"
+             "The zip CI built (app-server-<hash>.zip, or app-demo-<hash>.zip for the demo), copied onto this machine from the GitHub release. It is checked and cached as a downloaded one is. Remembered."
+             appPageL
+             AppPageField
+         | page a == FromFile
+         ]
+      ++ [ check
+             "Of the page CI built, keep only what needs the wasm toolchain (app.wasm and the prerendered pages), and build its JavaScript and CSS bundles here with npm ci and web/bundle.sh, then compare the page with CI's file by file: the deploy says identical, or names every file that differs. Needs Node."
+             bundleLocallyL
+             BundleField
+             "--bundle-locally  build its JavaScript and CSS bundles here"
+         | page a /= BuiltHere
+         ]
+  Sources ->
+    [ check
+        "Nothing is downloaded for the toolchain: GHC, cabal and Node are this machine's own, on PATH, and ghcup is not needed. The deploy checks them before anything else, and stops at once naming any that is missing or older than toolchain/bootstrap.sh accepts; one that is not the version the bootstrap pins is used with a warning. Needs the page CI built (the screen before), since building the page needs the wasm toolchain."
+        systemToolsL
+        SystemToolsField
+        "--system-tools  this machine's own GHC, cabal and Node"
+    , text
+        "--npm-registry"
+        "The npm registry npm ci and npx take every package from, such as a company's mirror; npm rewrites the lockfile's registry.npmjs.org addresses to it. Empty: the registry npm is set up with. Remembered."
+        npmRegistryL
+        NpmRegistryField
+    , text
+        "--hackage-mirror"
+        "A mirror of Hackage that cabal takes its index and packages from, written into the toolchain's own cabal configuration and never into ~/.cabal, so it needs a prefix or a toolchain directory of its own. It must serve Hackage's signed index (root.json and the rest), as a full mirror does. Empty: Hackage. Remembered."
+        hackageMirrorL
+        HackageMirrorField
+    ]
   DatabaseScreen ->
     [ choice
         "The database"
@@ -940,6 +1072,15 @@ bindL = lens bind (\a v -> a {bind = v})
 adminPortL = lens adminPort (\a v -> a {adminPort = v})
 toolchainL = lens toolchain (\a v -> a {toolchain = v})
 
+appPageL, npmRegistryL, hackageMirrorL :: Lens' Answers Text
+appPageL = lens appPage (\a v -> a {appPage = v})
+npmRegistryL = lens npmRegistry (\a v -> a {npmRegistry = v})
+hackageMirrorL = lens hackageMirror (\a v -> a {hackageMirror = v})
+
+bundleLocallyL, systemToolsL :: Lens' Answers Bool
+bundleLocallyL = lens bundleLocally (\a v -> a {bundleLocally = v})
+systemToolsL = lens systemTools (\a v -> a {systemTools = v})
+
 modeL :: Lens' Answers Mode
 modeL = lens mode (\a v -> a {mode = v})
 
@@ -976,6 +1117,9 @@ data Wizard = Wizard
   , filledFrom :: (Text, Text)
   , note :: Text
   , ending :: Ending
+  , presets :: [(Text, Text)]
+  -- ^ The answers the wrapper's options give (see presetArgs), applied
+  -- again over every deployment's state the first screen loads.
   }
 
 -- | How the wizard ends: still running, quit before the last screen,
@@ -1002,14 +1146,14 @@ answers = formState . form
 nextScreen :: Answers -> Screen -> Screen
 nextScreen a s = case s of
   Which | action a /= Deploy -> Command
-  PageSource | mode a == Demo -> Reach
+  Sources | mode a == Demo -> Reach
   Command -> Command
   _ -> succ s
 
 previousScreen :: Answers -> Screen -> Screen
 previousScreen a s = case s of
   Command | action a /= Deploy -> Which
-  Reach | mode a == Demo -> PageSource
+  Reach | mode a == Demo -> Sources
   Which -> Which
   _ -> pred s
 
@@ -1030,8 +1174,8 @@ goTo s = do
     if screen w == Which && filledFrom w /= (name a, prefix a)
       then do
         -- Another deployment starts from the defaults, not from the
-        -- answers of the one before.
-        (filled, n) <- liftIO (prefill defaultAnswers {action = action a, name = name a, prefix = prefix a})
+        -- answers of the one before, and the presets apply to it too.
+        (filled, n) <- liftIO (loadDeployment (presets w) defaultAnswers {action = action a, name = name a, prefix = prefix a})
         -- Remembered as prefill resolved them, as the form now shows them,
         -- so that coming back to the first screen does not fill again.
         pure (filled, (name filled, prefix filled), n)
@@ -1137,37 +1281,81 @@ app =
 main :: IO ()
 main = do
   args <- getArgs
-  case args of
-    ["--args-from", file] -> fromFile file
-    ["--help"] -> T.putStr usage
-    [] -> wizard
-    _ -> hPutStrLn stderr (T.unpack usage) >> exitFailure
+  case presetArgs args of
+    Left e -> hPutStrLn stderr ("configure: " <> e) >> hPutStrLn stderr (T.unpack usage) >> exitFailure
+    Right (given, rest) -> case rest of
+      ["--args-from", file] -> fromFile given file
+      ["--help"] -> T.putStr usage
+      [] -> wizard given
+      _ -> hPutStrLn stderr (T.unpack usage) >> exitFailure
+
+-- | The options for a machine that installs nothing from the internet,
+-- which toolchain/configure.sh also gives the bootstrap that installs the
+-- wizard's compiler: --system-tools, --hackage-mirror URL and
+-- --npm-registry URL, as answers (system_tools, hackage_mirror,
+-- npm_registry). They are applied over the deployment's state, so that the
+-- screens start with them, and before an answer file's lines, which win.
+-- The rest of the arguments are returned as they are.
+presetArgs :: [String] -> Either String ([(Text, Text)], [String])
+presetArgs args = do
+  (ps, rest) <- go [] [] args
+  -- Checked once here, so that applying them to a deployment's answers
+  -- (loadDeployment) cannot fail later.
+  case foldM applyAnswer defaultAnswers ps of
+    Left e -> Left (T.unpack e)
+    Right _ -> Right (ps, rest)
+  where
+    go ps rest [] = Right (reverse ps, reverse rest)
+    go ps rest (arg : more) = case arg of
+      "--system-tools" -> go (("system_tools", "yes") : ps) rest more
+      "--hackage-mirror" -> withValue "hackage_mirror" more
+      "--npm-registry" -> withValue "npm_registry" more
+      _
+        | Just v <- T.stripPrefix "--hackage-mirror=" (T.pack arg) -> go (("hackage_mirror", v) : ps) rest more
+        | Just v <- T.stripPrefix "--npm-registry=" (T.pack arg) -> go (("npm_registry", v) : ps) rest more
+        | otherwise -> go ps (arg : rest) more
+      where
+        withValue key (v : after) = go ((key, T.pack v) : ps) rest after
+        withValue _ [] = Left (arg <> " needs a URL")
 
 usage :: Text
 usage =
   T.unlines
-    [ "usage: sh toolchain/configure.sh [--args-from FILE]"
+    [ "usage: sh toolchain/configure.sh [--system-tools] [--hackage-mirror URL] [--npm-registry URL] [--args-from FILE]"
     , ""
     , "Asks for the options of toolchain/deploy-local.sh in a few screens and runs"
     , "the deploy with them. With --args-from FILE it reads the answers from FILE"
     , "(key=value lines; see the header of toolchain/configure.hs) and prints the"
-    , "command line instead."
+    , "command line instead. --system-tools, --hackage-mirror and --npm-registry,"
+    , "for a machine that installs nothing from the internet, are given to the"
+    , "bootstrap that installs the wizard's compiler, and start the wizard's"
+    , "screens with those answers."
     ]
+
+-- | A deployment's answers: its state over the answers given (prefill),
+-- then the presets of the wrapper's options (presetArgs, which has checked
+-- that they apply). The first screen, the start of the wizard and an
+-- answer file all load a deployment through this, so that the presets
+-- reach whichever deployment is chosen.
+loadDeployment :: [(Text, Text)] -> Answers -> IO (Answers, Text)
+loadDeployment ps given = do
+  (filled, n) <- prefill given
+  pure (either (const filled) id (foldM applyAnswer filled ps), n)
 
 -- | The answers of a file, over the state of the deployment it names, and
 -- the command line they make.
-fromFile :: FilePath -> IO ()
-fromFile file = do
+fromFile :: [(Text, Text)] -> FilePath -> IO ()
+fromFile given file = do
   -- The file is named from where toolchain/configure.sh was started.
   path <- T.unpack <$> absolute (T.pack file)
   kv <- keyValues <$> T.readFile path
   let named = defaultAnswers {name = value "name" kv (name defaultAnswers), prefix = value "prefix" kv ""}
-  (filled, n) <- prefill named
+  (filled, n) <- loadDeployment given named
   hPutStrLn stderr ("configure: " <> T.unpack n)
   case foldM applyAnswer filled kv of
     Left e -> hPutStrLn stderr ("configure: " <> file <> ": " <> T.unpack e) >> exitFailure
-    Right given -> do
-      a <- normalise <$> resolvePaths given
+    Right answered -> do
+      a <- normalise <$> resolvePaths answered
       let ps = problems a
       unless (null ps) $ do
         mapM_ (hPutStrLn stderr . ("configure: " <>) . T.unpack) ps
@@ -1177,13 +1365,13 @@ fromFile file = do
     value key kv def = fromMaybe def (lookup key (reverse kv))
 
 -- | The screens, and then the deploy or the command line.
-wizard :: IO ()
-wizard = do
+wizard :: [(Text, Text)] -> IO ()
+wizard given = do
   there <- doesFileExist "toolchain/deploy-local.sh"
   unless there $ do
     hPutStrLn stderr "configure: run this from the checkout's root, where toolchain/deploy-local.sh is (sh toolchain/configure.sh does)"
     exitFailure
-  (a, n) <- prefill defaultAnswers
+  (a, n) <- loadDeployment given defaultAnswers
   let start =
         Wizard
           { screen = Which
@@ -1191,6 +1379,7 @@ wizard = do
           , filledFrom = (name a, prefix a)
           , note = n
           , ending = Running
+          , presets = given
           }
   end <- defaultMain app start
   let final = normalise (answers end)

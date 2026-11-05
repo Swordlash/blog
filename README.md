@@ -829,6 +829,20 @@ it. The first run compiles brick and vty, which takes a few minutes; cabal keeps
 and later runs start at once. Everything the wizard does can be done with the options
 below, which it only writes out.
 
+On a machine that installs nothing from the internet (see
+[A machine that installs nothing from the internet](#a-machine-that-installs-nothing-from-the-internet)),
+give the wrapper the deploy's options for it. `--system-tools` and `--hackage-mirror`
+reach the bootstrap that installs the wizard's compiler, so the wizard is compiled with
+the machine's own GHC and cabal, and brick and vty come from the mirror. All three
+start the wizard's screens with those answers, so the deploy it runs takes them too.
+The mirror is written into the toolchain's own cabal configuration, so name the
+deployment's toolchain directory:
+
+```sh
+WIKI_TOOLCHAIN_HOME=/srv/wiki/toolchain sh toolchain/configure.sh --system-tools \
+  --hackage-mirror https://hackage.example.org/ --npm-registry https://npm.example.org/
+```
+
 `toolchain/deploy-local.sh` builds the wiki's server (see
 [The wiki's server](#the-wikis-server)), or with `--static` the demo, and serves it
 from a Linux machine of your own (x86_64 Debian or Ubuntu) as a systemd user
@@ -1161,6 +1175,100 @@ wiki kept in each visitor's browser rather than on this machine, and any static
 server can serve it. The choice of REF, the warning for a page of another commit,
 `--no-build`, `--stop` and `--no-backend-only` work as for the server. Commits and
 tags that CI built before the demo's page was added have no `app-demo-` zip.
+
+### A machine that installs nothing from the internet
+
+A server whose software must come from vetted sources (a bank's, say) can have its
+packages from the company's mirrors and its compilers from its administrators. Five
+options of the deploy are for it, usable together or apart, each also on the
+configuration wizard's screens and remembered for the next run (`--status` shows
+them):
+
+```sh
+sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0 --no-firewall \
+  --system-tools \
+  --npm-registry https://npm.example.org/ \
+  --hackage-mirror https://hackage.example.org/ \
+  --backend-only=main --bundle-locally
+```
+
+- `--system-tools`: nothing is downloaded for the toolchain. GHC, cabal and Node are
+  the machine's own, on `PATH`, and ghcup is not needed. Before anything else (before
+  the check of the C libraries and before any download) the deploy checks those it
+  needs: GHC 9.12 or later and cabal 3.12 or later for the server, Node 24 or later
+  with npm for the demo or `--bundle-locally`. GHC 9.12 is the oldest that
+  haskell-halogen-th builds with (it parses quotes with the compiler's own `ghc`
+  library, and asks for `ghc >= 9.12`); cabal 3.12 is the
+  first that reads `cabal.project`'s `semaphore:` field. A tool that is missing or
+  older stops the deploy, named with the version found and with a note that without
+  `--system-tools` the bootstrap would install it. GHC 9.14.1 and cabal 3.16.1.0 are
+  the tested versions: another one is used with a warning, and a build that then
+  fails is not the deploy's to fix. The floors and the pins are variables of
+  `toolchain/bootstrap.sh` (`GHC_MIN_VERSION`, `CABAL_MIN_VERSION`, `NODE_MIN_MAJOR`,
+  `GHC_VERSION`, `CABAL_VERSION`), and `sh toolchain/bootstrap.sh system-tools`
+  runs the same check by itself. It needs the page CI built (`--backend-only` or
+  `--app-page`): building the page needs the wasm toolchain, which no machine has of
+  its own. The page is still downloaded from GitHub with `--backend-only`, since it
+  is not the toolchain. The Debian packages a build links with still come through
+  apt, from the machine's own package sources. `--no-system-tools` lets the bootstrap
+  install the toolchain again.
+- `--npm-registry URL`: the npm registry that `npm ci` and `npx` take every package
+  from, as `NPM_CONFIG_REGISTRY` for every npm call of the deploy and of the
+  bootstrap. `package-lock.json` names `https://registry.npmjs.org/` in each
+  package's address, and npm rewrites those addresses to the registry given (npm's
+  `replace-registry-host`, `npmjs` by default), so the mirror serves every package,
+  esbuild's binaries included. `--npm-registry=` forgets it.
+- `--hackage-mirror URL`: the mirror of Hackage that cabal takes its index and
+  packages from. The bootstrap writes it, before `cabal update`, as the `url` of the
+  `repository hackage.haskell.org` stanza in the toolchain's own cabal configuration,
+  `<toolchain>/.cabal/config` (cabal writes the file first when there is none), and
+  never in `~/.cabal`: so it needs a toolchain directory other than the home
+  directory, which `--prefix` gives (or `--toolchain DIR`). The stanza keeps
+  `secure: True`: cabal knows Hackage's root keys for the repository of that name,
+  and checks the index against Hackage's own signatures whoever serves it. So the
+  mirror must serve Hackage's signed metadata (`root.json`, `timestamp.json`,
+  `snapshot.json`, `mirrors.json`) beside the index and the packages, as a full
+  mirror does (one made with hackage-mirror-tool, or a proxy that passes Hackage
+  through); the bootstrap fetches its `root.json` before writing anything, and
+  refuses a mirror without one. The repository keeps its name, so the cabal store
+  is the one Hackage's packages would fill. `--hackage-mirror=` forgets it, and the
+  next build writes Hackage's own address back.
+- `--bundle-locally`, with `--backend-only` or `--app-page`: of the page CI built,
+  only what needs the wasm toolchain is kept (`app.wasm`, its `ghc_wasm_jsffi.js`,
+  the prerendered `index.html` and the page's other files from `web/`), and the
+  JavaScript and CSS bundles are built on the machine: `npm ci`, then `web/bundle.sh`
+  (`islands.js`, `islands/`, `islands.css`, `fonts/`, `tikzjax/`, `wasi-shim.js`,
+  `licenses.txt`, `icon.svg`, `icons/` and `sw.js`), with the deploy's Node (the
+  bootstrap's, or the machine's with `--system-tools`). Then the page is compared
+  with CI's, file by file. With the lockfile's versions they should be identical,
+  and the deploy says so ("the page with the bundles built here and the page CI built
+  are identical: the same N files, byte for byte"), which is the evidence that CI's
+  bundles hold nothing else; otherwise it warns, naming every file whose bytes
+  differ and every file only one of them has. The page built here is the one
+  deployed. `--no-bundle-locally` takes CI's bundles again.
+- `--app-page FILE`: the page's zip from a file instead of GitHub's release, for a
+  machine that cannot reach github.com. Download it elsewhere from the release (as
+  `--backend-only` would: `app-server-<commit>.zip` from the pre-release
+  `main-latest` or a tag's release, `app-demo-<commit>.zip` for `--static`) and copy
+  it over:
+
+  ```sh
+  sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0 --no-firewall \
+    --system-tools \
+    --npm-registry https://npm.example.org/ \
+    --hackage-mirror https://hackage.example.org/ \
+    --app-page /srv/incoming/app-server-0123456789abcdef0123456789abcdef01234567.zip --bundle-locally
+  ```
+
+  The file must be a zip with `app.wasm` at its root; it is unpacked, checked and kept
+  in the page cache under a name of its own (`app-<kind>-file-<SHA-256>.zip`, with the
+  file's path in the `.meta` file beside it), among the five newest pages. A later run
+  that finds the file gone (the state still names it, or `--app-page` names it again,
+  as the wizard does) deploys that copy, and says so; a changed file replaces it. The
+  deploy says which page it is: the
+  page of the commit in its name when it follows CI's naming, or else a page from the
+  file. The commit is not checked against the checkout's, so take the page of the
+  commit you deploy. `--backend-only` or `--no-backend-only` forgets the file.
 
 ### PDF exports: the TeX the service finds
 

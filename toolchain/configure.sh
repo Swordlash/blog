@@ -8,6 +8,25 @@
 #   sh toolchain/configure.sh --args-from FILE  # print the command line FILE's answers make
 #   sh toolchain/configure.sh --help
 #
+# For a machine that installs nothing from the internet, the deploy's
+# options for it are taken here too, before --args-from or alone:
+#
+#   --system-tools         compile the wizard with this machine's own GHC and
+#                          cabal, which the bootstrap checks and does not
+#                          install (bootstrap.sh native --system-tools)
+#   --hackage-mirror URL   take brick, vty and the cabal index from this
+#                          Hackage mirror, written into the toolchain's own
+#                          cabal configuration (bootstrap.sh native
+#                          --hackage-mirror=URL), so WIKI_TOOLCHAIN_HOME must
+#                          name a toolchain directory other than the home
+#                          directory: the deployment's, such as
+#                          /srv/wiki/toolchain for --prefix /srv/wiki
+#   --npm-registry URL     the npm registry (NPM_CONFIG_REGISTRY); the wizard
+#                          itself needs no npm
+#
+# Each is also given to the wizard, whose screens then start with it as the
+# answer, so that the deploy it runs takes it too.
+#
 # The wizard is a Haskell program with brick, compiled on this machine as a
 # cabal script, so this first gets what compiling it needs:
 #
@@ -20,7 +39,8 @@
 #      deploy checks it itself for a wiki in PostgreSQL.
 #   2. toolchain/bootstrap.sh native --without-postgres --with-wizard
 #      installs GHC and cabal (and on Debian the packages above, with root
-#      or a sudo that needs no password), and checks again.
+#      or a sudo that needs no password), and checks again; with
+#      --system-tools and --hackage-mirror, as above.
 #   3. The toolchain's env file (~/.wiki-toolchain/env, or under
 #      WIKI_TOOLCHAIN_HOME) puts them on PATH, and
 #      `cabal run -z toolchain/configure.hs` runs the wizard from the
@@ -50,6 +70,28 @@ case ${1:-} in
     exit 0 ;;
 esac
 
+# The options for a machine that installs nothing from the internet, for
+# the bootstrap below; all the arguments go to the wizard as they are.
+system_tools='' hackage_mirror='' npm_registry=''
+expect_value=''
+for arg do
+  case $expect_value in
+    --hackage-mirror) hackage_mirror=$arg expect_value=''; continue ;;
+    --npm-registry) npm_registry=$arg expect_value=''; continue ;;
+  esac
+  case $arg in
+    --system-tools) system_tools=--system-tools ;;
+    --hackage-mirror | --npm-registry) expect_value=$arg ;;
+    --hackage-mirror=*) hackage_mirror=${arg#*=} ;;
+    --npm-registry=*) npm_registry=${arg#*=} ;;
+  esac
+done
+[ -z "$expect_value" ] || die "$expect_value needs a URL"
+if [ -n "$npm_registry" ]; then
+  NPM_CONFIG_REGISTRY=$npm_registry
+  export NPM_CONFIG_REGISTRY
+fi
+
 if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" --without-postgres --with-wizard 2>&1); then
   printf '%s\n' "$check_output" >&2
   if command -v dpkg-query >/dev/null 2>&1; then
@@ -59,8 +101,8 @@ if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" --without-postgres --wi
   fi
 fi
 
-sh "$ROOT/toolchain/bootstrap.sh" native --without-postgres --with-wizard ||
-  die "the bootstrap could not install GHC and cabal (see above), which the wizard is compiled with"
+sh "$ROOT/toolchain/bootstrap.sh" native --without-postgres --with-wizard ${system_tools:+"$system_tools"} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"} ||
+  die "the bootstrap could not install GHC and cabal (see above), or did not take the options given, which the wizard is compiled with"
 
 env_file=${WIKI_TOOLCHAIN_HOME:-$HOME}/.wiki-toolchain/env
 if [ -r "$env_file" ]; then
