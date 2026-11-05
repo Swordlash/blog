@@ -711,7 +711,15 @@ In the order to do it, unless the owner says otherwise.
   The guide's Markdown page mentions it under Code. Tests: wiki-core (the rendered
   shape, the plain text without the button), browser (a click copies the code, the
   label changes and changes back, the button is not in the page's text), the smoke
-  test. Docs: README's Markdown section, wiki-app's CHANGELOG.
+  test. Docs: README's Markdown section, wiki-app's CHANGELOG. Also line numbers (the
+  owner, 2026-11-05): a fence with the class `numbered` (` ```haskell {.numbered} `,
+  with or without `rows=N`) shows a number before each line, in a gutter that is not
+  part of the code's text: not selected with it, not copied by the button, not in the
+  plain text or search; the gutter scrolls with the code in a scrolling listing and
+  keeps its place after the highlighter has run; the toolbar's code block command is
+  unchanged. Exports number the same listings (pandoc's `numberLines` class, which
+  its writers already handle). Tests as for the button, plus a numbered listing in the
+  guide's Code section.
 
 ### Later, or waiting for the owner
 
