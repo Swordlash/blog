@@ -160,13 +160,16 @@ FOURMOLU_VERSION=0.21.0.0
 FOURMOLU_SHA256=aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7
 # The oldest tools --system-tools takes from the machine instead of the
 # pins above. The pins are the tested versions: a tool between its floor
-# and its pin is used with a warning. GHC 9.10 is the first GHC with
-# RequiredTypeArguments, which every package of the wiki enables. cabal
+# and its pin is used with a warning. GHC 9.12 is the oldest GHC
+# haskell-halogen-th builds with: it parses quotes with the compiler's own
+# ghc library, and its cabal file asks for ghc >= 9.12 && < 9.15, so with
+# 9.10 the solver fails (RequiredTypeArguments, which every package of the
+# wiki enables, would allow 9.10). cabal
 # 3.12 is the first cabal that reads the field semaphore: of cabal.project
 # (and that has `cabal path`, which update_cabal_index asks for the
 # index's directory). Node 24 is what haskell-halogen's npm scripts and
 # test runners need. toolchain/deploy-local.sh reads these lines too.
-GHC_MIN_VERSION=9.10
+GHC_MIN_VERSION=9.12
 CABAL_MIN_VERSION=3.12
 NODE_MIN_MAJOR=24
 
@@ -362,7 +365,7 @@ compatible_node() {
 # floor (GHC_MIN_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR) stops the run.
 
 # Whether the version $1 is $2 or later, comparing their numbers one by one
-# (9.12.2 is 9.10 or later, 9.8.4 is not); a number missing counts as 0.
+# (9.12.2 is 9.12 or later, 9.10.3 is not); a number missing counts as 0.
 version_at_least() {
   awk -v found="$1" -v floor="$2" 'BEGIN {
     split(found, f, "."); m = split(floor, g, ".")
@@ -422,7 +425,7 @@ check_system_tools() {
   for need do
     case $need in
       native)
-        system_tool ghc GHC "$GHC_VERSION" "$GHC_MIN_VERSION" "every package of the wiki enables RequiredTypeArguments, which GHC has from $GHC_MIN_VERSION"
+        system_tool ghc GHC "$GHC_VERSION" "$GHC_MIN_VERSION" "haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc $GHC_MIN_VERSION or later"
         system_tool cabal cabal "$CABAL_VERSION" "$CABAL_MIN_VERSION" "cabal.project sets semaphore:, a field cabal reads from $CABAL_MIN_VERSION"
         ;;
       node) system_node ;;

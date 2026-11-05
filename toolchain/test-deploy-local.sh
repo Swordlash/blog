@@ -3609,10 +3609,10 @@ system_refused() {
   assert_lacks "$EVENTS" 'cabal build'
 }
 FAKE_CABAL_VERSION=3.16.1.0 system
-system_refused 'no GHC' "--system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.10 or later is needed: every package of the wiki enables RequiredTypeArguments, which GHC has from 9.10. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
+system_refused 'no GHC' "--system-tools: GHC: not found (no ghc on PATH answers --numeric-version). GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later. Without --system-tools, toolchain/bootstrap.sh installs GHC 9.14.1"
 assert_contains "$EVENTS" 'bootstrap system-tools native WIKI_TOOLCHAIN_HOME='
-FAKE_GHC_VERSION=9.8.4 FAKE_CABAL_VERSION=3.16.1.0 system
-system_refused 'GHC 9.8.4' "--system-tools: GHC 9.8.4 ($sysbin/ghc) is too old: GHC 9.10 or later is needed: every package of the wiki enables RequiredTypeArguments"
+FAKE_GHC_VERSION=9.10.3 FAKE_CABAL_VERSION=3.16.1.0 system
+system_refused 'GHC 9.10.3' "--system-tools: GHC 9.10.3 ($sysbin/ghc) is too old: GHC 9.12 or later is needed: haskell-halogen-th, which the wiki builds with, parses quotes with the compiler's own ghc library and asks for ghc 9.12 or later"
 FAKE_GHC_VERSION=9.14.1 system
 system_refused 'no cabal' '--system-tools: cabal: not found (no cabal on PATH answers --numeric-version). cabal 3.12 or later is needed: cabal.project sets semaphore:, a field cabal reads from 3.12. Without --system-tools, toolchain/bootstrap.sh installs cabal 3.16.1.0'
 FAKE_GHC_VERSION=9.14.1 FAKE_CABAL_VERSION=3.10.3.0 system
@@ -3646,7 +3646,7 @@ assert_contains "$EVENTS" "bootstrap node --system-tools WIKI_TOOLCHAIN_HOME=$pr
 [ "$(pstate system_tools)" = yes ] || fail 'the state does not keep --system-tools'
 out=$case_dir/system-status
 deploy --status --prefix "$pre" >"$out" 2>&1
-assert_contains "$out" "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC 9.10 or later, cabal 3.12 or later and Node 24 or later on PATH (GHC 9.14.1 and cabal 3.16.1.0 are the tested ones)"
+assert_contains "$out" "its toolchain is this machine's own (--system-tools), and nothing is downloaded for it: GHC 9.12 or later, cabal 3.12 or later and Node 24 or later on PATH (GHC 9.14.1 and cabal 3.16.1.0 are the tested ones)"
 locked --no-build --no-system-tools >"$out" 2>&1 || fail "--no-system-tools failed: $(cat "$out")"
 [ -z "$(pstate system_tools)" ] || fail '--no-system-tools did not forget it'
 pass '--system-tools with every tool there: a GHC that is not the pinned one is used with a warning, the page is still looked up on GitHub, and the bootstrap installs nothing; --no-system-tools forgets it'

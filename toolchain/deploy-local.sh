@@ -325,7 +325,7 @@
 #                    --system-tools). Before anything else the deploy checks those it
 #                    needs: GHC and cabal with --server, Node with --static or
 #                    --bundle-locally, at least the versions toolchain/bootstrap.sh names
-#                    (GHC_MIN_VERSION, CABAL_MIN_VERSION and NODE_MIN_MAJOR: GHC 9.10,
+#                    (GHC_MIN_VERSION, CABAL_MIN_VERSION and NODE_MIN_MAJOR: GHC 9.12,
 #                    cabal 3.12, Node 24 with npm). A tool missing or older stops the
 #                    deploy, named with the version found; one that is not the pinned
 #                    version is used with a warning. It needs the page CI built
