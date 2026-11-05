@@ -719,6 +719,36 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.64 Section spoilers on the heading** (the owner, 2026-11-05; one pull
+  request). A heading whose text starts with `[[spoiler]]{name}` puts its whole
+  section under a spoiler: `### [[spoiler]]{q1} What is X?` is a section spoiler from
+  that heading to just before the next heading of the same or a higher level, or
+  the end of the document (or of the container the heading is in), with no end
+  marker (the owner, 2026-11-05: marking the heading says at once that the section
+  is hidden, and a FAQ writes the question once). The name is required, as for the
+  marker pair, and keys the remembered state; the heading's text is the summary.
+  It renders as `<details class="spoiler spoiler-section" data-spoiler="name">`
+  whose `<summary>` holds the heading itself (its level's size, its anchor id, its
+  entry in the contents), closed by default; the contents, an in-page link and a
+  URL fragment open it as they open the marker pair's; the current-section marker
+  watches the summary heading whether the spoiler is open or not, and the headings
+  inside only when it is open. Nesting is by structure: a deeper heading with the
+  marker inside the section is a spoiler of its own subsection. The marker pair
+  stays as it is (any blocks, nesting by name, its section rule); a pair that
+  crosses a heading spoiler's end is the section rule's error. The marker counts
+  only at the start of a heading's text and only with a name; `[[spoiler]]`
+  anywhere else in a heading is a wiki link as before. Plain text, search and the
+  TOC read the heading without the marker. Exports show the section as it is
+  (heading and content, no box: a document cannot hide); the feed likewise. The
+  toolbar is unchanged. Guide: the Spoilers section shows a FAQ of two heading
+  spoilers; docs/markdown.md and the README's Markdown section. Tests: wiki-core
+  (the parse, the section's extent at each level and at the document's end, nesting,
+  a marker without a name or not at the start left as a link, the plain text and
+  the TOC without the marker, the render), browser (closed by default, the heading
+  visible and current when scrolled to, opened by its contents entry and by a
+  link, remembered, nested), export (the section exported plain). CHANGELOGs of
+  wiki-core and wiki-app.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
