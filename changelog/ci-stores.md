@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 169
 title: CI checks the oldest supported GHC
 ---
 
