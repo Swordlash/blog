@@ -54,7 +54,9 @@
 --   note with its source. A TikZ picture is LaTeX already: in a document
 --   LaTeX produces (a PDF, a Beamer deck) it is inserted as it is, with
 --   the packages it loads added to the preamble; elsewhere it becomes a
---   note with its source.
+--   note with its source. A code block whose fence has the class
+--   @numbered@ (@codeNumbered@ in "Wiki.Core.Markdown.Ast") has pandoc's
+--   class @numberLines@ in its place, which pandoc's writers number.
 -- * __Links and embeds__ ("Wiki.Core.Markdown.Link"): an attachment's
 --   image is put into the document (its bytes, from the blob store, go
 --   into pandoc's media bag under 'mediaPath'). An attachment that is not
@@ -929,7 +931,7 @@ prefixIds prefix = walk inline . walk block
 -- | The islands, as a document shows them.
 islands :: Output -> P.Block -> [P.Block]
 islands output = \case
-  P.CodeBlock (_, cls, _) code
+  P.CodeBlock (ident, cls, kv) code
     | "math" `elem` cls -> [P.Para [P.Math P.DisplayMath code]]
     | "mermaid" `elem` cls -> islandNote "A Mermaid diagram is drawn here in the wiki; a document cannot draw it. Its source:" code
     | "tikz" `elem` cls ->
@@ -940,6 +942,7 @@ islands output = \case
             let picture = tikzDocument code
              in [P.Div ("", ["tikz"], [("preamble", picture.preamble)]) [P.RawBlock (P.Format "latex") ("\\begin{center}\n" <> picture.picture <> "\n\\end{center}")]]
           else islandNote "A TikZ picture is drawn here in the wiki, and in a PDF; this document cannot draw it. Its source:" code
+    | "numbered" `elem` cls -> [P.CodeBlock (ident, map (\c -> if c == "numbered" then "numberLines" else c) cls, kv) code]
   b -> [b]
   where
     islandNote text code = [P.Div ("", ["island-note"], []) [P.Para [P.Emph (B.toList (B.text text))], P.CodeBlock ("", [], []) code]]

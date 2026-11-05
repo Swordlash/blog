@@ -35,7 +35,7 @@ spec m = do
         _ <- find ui "span.wiki-math-inline .katex"
         changeTo ui (Mermaid "graph LR\n  a --> b")
         _ <- waitForDiagram ui
-        changeTo ui (CodeBlock (Just "haskell") Nothing "main = pure ()")
+        changeTo ui (CodeBlock (Just "haskell") Nothing False "main = pure ()")
         _ <- find ui "pre.wiki-code code.hljs"
         fetched "tikz" `shouldReturn` 0
 
@@ -133,36 +133,50 @@ spec m = do
 
   describe "CodeBlock" $ do
     it "is highlighted by highlight.js" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "haskell") Nothing "main :: IO ()\nmain = pure ()")
+      ui <- mount m harness (CodeBlock (Just "haskell") Nothing False "main :: IO ()\nmain = pure ()")
       code <- find ui "pre.wiki-code > code.hljs.language-haskell"
       _ <- findIn code "span.hljs-type"
       code `shouldHaveText` "main :: IO ()\nmain = pure ()"
 
     it "is highlighted again when its code changes" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "haskell") Nothing "main :: IO ()")
+      ui <- mount m harness (CodeBlock (Just "haskell") Nothing False "main :: IO ()")
       _ <- find ui "pre.wiki-code code.language-haskell"
-      changeTo ui (CodeBlock (Just "javascript") Nothing "const x = 1;")
+      changeTo ui (CodeBlock (Just "javascript") Nothing False "const x = 1;")
       code <- find ui "pre.wiki-code code.language-javascript"
       _ <- findIn code "span.hljs-keyword"
       code `shouldHaveText` "const x = 1;"
       count ui "pre.wiki-code code" `shouldReturn` 1
 
+    it "keeps a numbered listing's gutter beside the code once highlighted, and gains and loses it with one code" $ runPage $ do
+      ui <- mount m harness (CodeBlock (Just "haskell") Nothing False "a = 1\nb = 2")
+      _ <- find ui "pre.wiki-code > code.hljs.language-haskell"
+      count ui "pre.wiki-code > .code-lines" `shouldReturn` 0
+      changeTo ui (CodeBlock (Just "haskell") Nothing True "a = 1\nb = 2\nc = 3")
+      code <- find ui "pre.wiki-code.numbered > .code-lines + code.hljs.language-haskell"
+      code `shouldHaveText` "a = 1\nb = 2\nc = 3"
+      count ui "pre.wiki-code.numbered > .code-lines > span" `shouldReturn` 3
+      count ui "pre.wiki-code code" `shouldReturn` 1
+      changeTo ui (CodeBlock (Just "haskell") Nothing False "a = 1")
+      eventually $ count ui "pre.wiki-code > .code-lines" `shouldReturn` 0
+      find ui "pre.wiki-code:not(.numbered) > code.hljs.language-haskell" >>= (`shouldHaveText` "a = 1")
+      count ui "pre.wiki-code code" `shouldReturn` 1
+
     it "highlights the languages added to highlight.js's common set" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "fortran") Nothing "program hello\n  print *, 'Hello'\nend program hello")
+      ui <- mount m harness (CodeBlock (Just "fortran") Nothing False "program hello\n  print *, 'Hello'\nend program hello")
       _ <- find ui "pre.wiki-code > code.hljs.language-fortran span.hljs-keyword"
-      changeTo ui (CodeBlock (Just "matlab") Nothing "function y = f(x)\n  y = x;\nend")
+      changeTo ui (CodeBlock (Just "matlab") Nothing False "function y = f(x)\n  y = x;\nend")
       _ <- find ui "pre.wiki-code > code.hljs.language-matlab span.hljs-keyword"
       pure ()
 
     it "knows a language by the names fences give it" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "c++") Nothing "int main() { return 0; }")
+      ui <- mount m harness (CodeBlock (Just "c++") Nothing False "int main() { return 0; }")
       _ <- find ui "pre.wiki-code > code.hljs.language-c\\+\\+ span.hljs-type"
-      changeTo ui (CodeBlock (Just "asm") Nothing "mov eax, 1")
+      changeTo ui (CodeBlock (Just "asm") Nothing False "mov eax, 1")
       _ <- find ui "pre.wiki-code > code.hljs.language-asm span.hljs-keyword"
       pure ()
 
     it "shows code in a language it does not know as plain text" $ runPage $ do
-      ui <- mount m harness (CodeBlock (Just "no-such-language") Nothing "a <b> c")
+      ui <- mount m harness (CodeBlock (Just "no-such-language") Nothing False "a <b> c")
       code <- find ui "pre.wiki-code > code.hljs"
       code `shouldHaveText` "a <b> c"
       countIn code "span" `shouldReturn` 0
@@ -171,7 +185,7 @@ spec m = do
   describe "an island whose kind changes" $
     it "is drawn as the new kind" $
       runPage $ do
-        ui <- mount m harness (CodeBlock Nothing Nothing "x^2")
+        ui <- mount m harness (CodeBlock Nothing Nothing False "x^2")
         _ <- find ui "pre.wiki-code code"
         changeTo ui (MathInline mempty "x^2")
         _ <- find ui "span.wiki-math-inline .katex"

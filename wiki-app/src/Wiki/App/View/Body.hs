@@ -274,7 +274,7 @@ options place =
 islandOptions :: (MonadIslands m, MonadUUID m, HasIslands slots) => Context -> Islands.Macros -> Md.Options PageLink (H.ComponentSlot slots m action) action
 islandOptions ctx spaceOwn =
   Md.defaultOptions
-    { Md.codeBlock = \k language rows code -> island k (Islands.CodeBlock language rows code)
+    { Md.codeBlock = \k language rows numbered code -> island k (Islands.CodeBlock language rows numbered code)
     , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
     , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
@@ -282,6 +282,8 @@ islandOptions ctx spaceOwn =
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes
+    , -- The page loads the islands' script, which makes the buttons work.
+      Md.copyButtons = True
     }
   where
     island key = HH.slot_ "island" key Islands.component

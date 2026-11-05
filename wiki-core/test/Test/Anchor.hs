@@ -13,7 +13,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, choose, elements, forAll, (===))
 import Wiki.Core.Anchor
-import Wiki.Core.Markdown (defaultOptions, renderMarkdown)
+import Wiki.Core.Markdown (Options (..), defaultOptions, renderMarkdown)
 
 -- | The anchor of the first occurrence of a phrase in a text.
 quoting :: Text -> Text -> Anchor
@@ -183,6 +183,18 @@ spec = describe "Anchor" $ do
     it "is the text of the rendered page, joined with nothing between blocks" $ do
       let doc = either (panic . show) identity (renderMarkdown defaultOptions "# Title\n\nA *b* [c](d).\n\n- one\n- two")
       renderedText doc `shouldBe` "TitleA b c.onetwo"
+
+    it "has nothing of a code block's copy button, nor a break of its own" $ do
+      let source = "Before.\n\n```haskell\nx = 1\n```\n\nAfter."
+          copying = defaultOptions {copyButtons = True}
+          doc = either (panic . show) identity (renderMarkdown copying source)
+      renderedText doc `shouldBe` "Before.x = 1\nAfter."
+      renderedText doc `shouldNotSatisfy` T.isInfixOf "Copy"
+      renderedBlocks doc `shouldBe` blocksOf source
+
+    it "has no line numbers of a numbered listing" $ do
+      let doc = either (panic . show) identity (renderMarkdown defaultOptions "Before.\n\n```haskell {.numbered}\nx = 1\ny = 2\n```\n\nAfter.")
+      renderedText doc `shouldBe` "Before.x = 1\ny = 2\nAfter."
 
     it "leaves out what a child component (an island) draws" $ do
       let doc = [HH.p_ [HH.text "before "], Core.widget (), HH.p_ [HH.text "after"]] :: [HH.HTML () ()]

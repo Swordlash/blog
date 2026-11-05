@@ -1354,7 +1354,8 @@ select {
   line-height: 1.45;
 }
 
-.page-body pre code {
+.page-body pre code,
+.page-body pre .code-lines {
   padding: 0;
   font-size: 0.85rem;
   background: transparent;
@@ -1371,8 +1372,127 @@ select {
   font-size: 0.85rem;
 }
 
-.page-body pre.code-scroll code {
+.page-body pre.code-scroll code,
+.page-body pre.code-scroll .code-lines {
   font-size: 1em;
+}
+
+/* A numbered listing (Wiki.Core.Markdown.Render's lineNumbers): the
+   gutter and the code side by side in the <pre>, so that both scroll
+   together in a listing that scrolls, down and sideways. The gutter holds
+   an empty span for each line of the code, at the code's font size and
+   line height, and the numbers are drawn here, right-aligned and dimmed:
+   they are no text, so a selection or a copy of the code has none of
+   them. A listing without the class is laid out as before. */
+pre.numbered {
+  display: flex;
+  gap: 1em;
+}
+
+pre.numbered > code {
+  flex: none;
+}
+
+.code-lines {
+  flex: none;
+  counter-reset: code-line;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  opacity: 0.75;
+}
+
+.code-lines > span {
+  display: block;
+  counter-increment: code-line;
+}
+
+.code-lines > span::before {
+  content: counter(code-line);
+}
+
+/* A code block with its copy button (Wiki.Core.Markdown.Render's
+   copyButton): the listing's <pre> and the button beside it, in a
+   <div class="code-block">. The block has the margins a <pre> has, and the
+   <pre> none, so that a rule for the first or last child of a page, a box
+   or a comment reaches them. The button sits over the block's top right
+   corner. It is not inside the <pre>, so a listing that scrolls, down
+   (rows=N) or sideways, scrolls under it and the button stays in view. */
+.code-block {
+  position: relative;
+  margin: 1em 0;
+}
+
+.code-block > pre {
+  margin: 0;
+}
+
+/* The button is empty, and its label is drawn here from data-copy, which
+   web/src/islands.js sets for a moment after a click: so the page's text
+   has no "Copy" in it. It shows while the pointer is over the block, while
+   it has the keyboard's focus, and while it says what a click did; on a
+   screen without a pointer that hovers, always. */
+.code-copy {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--surface);
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.code-copy::before {
+  content: "Copy";
+}
+
+.code-copy[data-copy="copied"]::before {
+  content: "Copied";
+}
+
+.code-copy[data-copy="failed"]::before {
+  content: "Not copied";
+}
+
+.code-copy[data-copy="failed"] {
+  color: var(--danger);
+}
+
+.code-block:hover > .code-copy,
+.code-copy:focus-visible,
+.code-copy[data-copy] {
+  opacity: 1;
+}
+
+.code-copy:hover {
+  color: var(--text);
+}
+
+.code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: none) {
+  .code-copy {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-copy {
+    transition: none;
+  }
+}
+
+/* Without scripts nothing would copy. */
+@media (scripting: none) {
+  .code-copy {
+    display: none;
+  }
 }
 
 .page-body .task-list {
@@ -2346,6 +2466,7 @@ body:has(.slides-view) {
 }
 
 .slide .page-body pre code,
+.slide .page-body pre .code-lines,
 .slide .page-body code {
   font-size: 0.85em;
 }
@@ -6459,7 +6580,8 @@ a.mention {
 
 @media print {
   .page-contents,
-  .heading-anchor {
+  .heading-anchor,
+  .code-copy {
     display: none;
   }
 

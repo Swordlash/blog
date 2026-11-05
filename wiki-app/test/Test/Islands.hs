@@ -29,5 +29,9 @@ spec = describe "Wiki.App.Islands, prerendered" $ do
       `shouldReturn` "<div class=\"wiki-tikz\">\\draw (0,0) -- (1,1) node {$a&lt;b$};</div>"
 
   it "shows code as plain text, escaped" $
-    renderToHtml Islands.component (CodeBlock (Just "haskell") Nothing "x < y && y > z")
-      `shouldReturn` "<pre class=\"wiki-code\">x &lt; y &amp;&amp; y &gt; z</pre>"
+    renderToHtml Islands.component (CodeBlock (Just "haskell") Nothing False "x < y && y > z")
+      `shouldReturn` "<pre class=\"wiki-code\"><code>x &lt; y &amp;&amp; y &gt; z</code></pre>"
+
+  it "shows numbered code with its gutter, an empty span for each line, before the code" $
+    renderToHtml Islands.component (CodeBlock (Just "haskell") (Just 2) True "a\nb\nc")
+      `shouldReturn` "<pre class=\"wiki-code numbered code-scroll\" style=\"max-height: 2lh; overflow: auto\"><span aria-hidden=\"true\" class=\"code-lines\"><span></span><span></span><span></span></span><code>a\nb\nc</code></pre>"

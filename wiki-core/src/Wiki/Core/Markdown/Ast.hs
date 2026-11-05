@@ -20,7 +20,8 @@
 --   @[[spoiler]]{name}(Description)@ and @[[/spoiler]]{name}@, read by
 --   the wiki's own block syntax ('spoilerSpec'; 'Spoiler');
 -- * a fence's @rows=N@ attribute, the number of lines its code shows
---   before it scrolls ('codeRows');
+--   before it scrolls ('codeRows'), and its class @numbered@, a number
+--   before each line ('codeNumbered');
 -- * boxes, @> [!KIND]@: GitHub's alerts (@> [!NOTE]@ and its four
 --   others), and any other kind (@> [!EXERCISE]@), with an optional title
 --   after the marker (@> [!TIP] Before you start@), and a star for a box
@@ -85,6 +86,7 @@ module Wiki.Core.Markdown.Ast
     -- * Reading the tree
   , plainText
   , codeRows
+  , codeNumbered
   , spoilerProblemText
   , validSpoilerName
   , formulasOf
@@ -314,6 +316,17 @@ codeRows attrs = do
   n <- readMaybe (T.unpack written)
   guard (n > 0)
   pure n
+
+-- | Whether a code block shows a number before each line: its fence has
+-- the class @numbered@ (@```haskell {.numbered}@, or
+-- @```{.haskell .numbered}@). The class is never the block's language
+-- ('codeBlockWith').
+codeNumbered :: Attributes -> Bool
+codeNumbered attrs = numberedClass `elem` classes attrs
+
+-- | The class that numbers a code block's lines ('codeNumbered').
+numberedClass :: Text
+numberedClass = "numbered"
 
 -- | A bulleted list, or a numbered one with the number it starts at.
 data ListKind = BulletList | OrderedList Int
@@ -1247,9 +1260,10 @@ listKind = \case
 -- | A code block, or a Mermaid diagram, a TikZ picture or display math
 -- when its language says so. The language is the first word of the info
 -- string; a fence written with attributes alone (@```{.mermaid}@) gives it
--- as a class.
+-- as its first class other than @numbered@ ('codeNumbered'), which says
+-- how the block is shown and is no language.
 codeBlockWith :: Attributes -> Maybe Text -> Text -> Block
-codeBlockWith attrs info code = case info <|> head (classes attrs) of
+codeBlockWith attrs info code = case info <|> head (filter (/= numberedClass) (classes attrs)) of
   Just "mermaid" -> Mermaid code
   Just "tikz" -> Tikz code
   Just "math" -> MathBlock code

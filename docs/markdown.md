@@ -82,6 +82,8 @@ main = putStrLn "Hello, wiki"
 
 Code indented by four spaces is a block too, without a language.
 
+Every block of code has a **Copy** button in its top right corner, shown when the pointer is over the block or the button has the keyboard's focus (always, on a touch screen). It puts the code on the clipboard exactly as written, without the highlighting, and says "Copied" for a moment, or "Not copied" if the browser refused. A listing that scrolls keeps the button in its corner.
+
 These languages are highlighted, by the names a fence may give them (in any case); code in any other language is shown as it is, unhighlighted:
 
 | Language | Fence names |
@@ -153,6 +155,8 @@ These languages are highlighted, by the names a fence may give them (in any case
 `m` is MATLAB; Objective-C is `objc`. COBOL, Fish, Zig and Scratch are not highlighted: highlight.js, which the wiki highlights with, has no grammar for them.
 
 A long listing can be shown a few lines at a time: `rows=N` in braces after the fence's language (` ```haskell {rows=3} `, or ` ```{.haskell rows=3} `) makes the block that many lines high, and the rest of the code scrolls inside it. A value that is not a whole number above zero is ignored, and the block is as long as its code. The toolbar's code block button writes a fence without it.
+
+The class `numbered` puts a number before each line: ` ```haskell {.numbered} `, also with `rows` (` ```haskell {.numbered rows=3} `, or ` ```{.haskell .numbered rows=3} `). The numbers are in a margin beside the code, dimmed: they are not selected with the code, not copied by the **Copy** button, and not searched. In a listing that scrolls they scroll with the code. An export numbers the same listings in a PDF; a Word document shows the code without numbers.
 
 ```haskell {rows=3}
 -- Only three of these lines show; scroll the block for the rest.

@@ -169,6 +169,12 @@ Haskell, coloured by its syntax:
 The names a fence may give each of some seventy languages are listed in
 [docs/markdown.md](docs/markdown.md#code).
 
+Every code block has a **Copy** button in its top right corner, shown when
+the pointer is over the block or the button has the keyboard's focus. It
+copies the code exactly as written, and says "Copied" for a moment. It works
+on a page the server prerendered before the application has loaded, and
+nothing of it is in the page's text, its search, its exports or the feeds.
+
 A long listing can show a few lines at a time: `rows=N` in braces after the
 language makes the block N lines high:
 
@@ -187,6 +193,12 @@ Three lines of it show, and the rest scrolls inside the block:
 [Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#code).
 ` ```{.haskell rows=3} ` says the same, and a value that is not a whole number
 above zero is ignored.
+
+The class `numbered` puts a number before each line, beside `rows` or
+without it: ` ```haskell {.numbered} `, ` ```haskell {.numbered rows=3} `.
+The numbers are in a dimmed margin that is not part of the code: neither
+selected nor copied with it, and not searched. A PDF export numbers the same
+listings.
 
 ### Alerts
 

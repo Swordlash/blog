@@ -11,6 +11,7 @@ import Test.Browser.Admin qualified as Admin
 import Test.Browser.Assistant qualified as Assistant
 import Test.Browser.Comments qualified as Comments
 import Test.Browser.Contents qualified as Contents
+import Test.Browser.CopyCode qualified as CopyCode
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Entries qualified as Entries
 import Test.Browser.Export qualified as Export
@@ -106,6 +107,7 @@ spec = do
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "Spoilers and listings that scroll" (Spoilers.spec BrowserDOM)
+  describe "Copying a code block" (CopyCode.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
 #endif

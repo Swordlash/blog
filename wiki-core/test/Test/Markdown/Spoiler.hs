@@ -178,3 +178,17 @@ spec = describe "Markdown spoilers and listings" $ do
         (attr, rowsOf ("```haskell {" <> attr <> "}\nx\n```")) `shouldBe` (attr, [Nothing])
       rowsOf "```haskell {rows}\nx\n```" `shouldBe` [Nothing]
       rowsOf "```haskell\nx\n```" `shouldBe` [Nothing]
+
+  describe "numbered listings, {.numbered}" $ do
+    let numberedOf source = [(codeNumbered attrs, lang, codeRows attrs) | CodeBlock attrs lang _ <- blocksOf source]
+    it "reads the class after a language, with rows, and among attributes alone" $ do
+      numberedOf "```haskell {.numbered}\nx\n```" `shouldBe` [(True, Just "haskell", Nothing)]
+      numberedOf "```haskell {.numbered rows=3}\nx\n```" `shouldBe` [(True, Just "haskell", Just 3)]
+      numberedOf "```{.haskell .numbered rows=5}\nx\n```" `shouldBe` [(True, Just "haskell", Just 5)]
+      numberedOf "```haskell\nx\n```" `shouldBe` [(False, Just "haskell", Nothing)]
+    it "never takes the class for the language" $ do
+      numberedOf "```{.numbered}\nx\n```" `shouldBe` [(True, Nothing, Nothing)]
+      numberedOf "```{.numbered .haskell}\nx\n```" `shouldBe` [(True, Just "haskell", Nothing)]
+      [() | Mermaid _ <- blocksOf "```{.numbered .mermaid}\ngraph TD\n```"] `shouldBe` [()]
+    it "leaves the plain text and the search text as they are" $
+      bodyText "```haskell {.numbered}\nmain = pure ()\n```" `shouldBe` bodyText "```haskell\nmain = pure ()\n```"

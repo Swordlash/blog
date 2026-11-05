@@ -17,8 +17,9 @@
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //
-// It also gives the pages' spoilers their behaviour (see "Spoilers" below),
-// with listeners on the document rather than through an object.
+// It also gives the pages' spoilers and the code blocks' copy buttons their
+// behaviour (see "Spoilers" and "Copy buttons" below), with listeners on the
+// document rather than through an object.
 //
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
@@ -242,11 +243,15 @@ const renderTikz = async (element, source, preamble, picture) => {
   }
 };
 
+// The application's island is the <code> in a listing's <pre>
+// (Wiki.App.Islands), which is filled where it is, so that what else the
+// <pre> holds, a numbered listing's gutter, stays. Any other element gets a
+// <code> of its own.
 const highlight = (element, language, code) => {
   nextGeneration(element);
   try {
     const text = String(code);
-    const block = document.createElement("code");
+    const block = element.tagName === "CODE" ? element : document.createElement("code");
     // A language highlight.js does not know (or none) is shown as plain text
     // rather than guessed at: auto-detection is slow and often wrong on the
     // short snippets a wiki has.
@@ -257,7 +262,7 @@ const highlight = (element, language, code) => {
     } else {
       block.textContent = text;
     }
-    element.replaceChildren(block);
+    if (block !== element) element.replaceChildren(block);
   } catch (error) {
     showError(element, error);
   }
@@ -495,6 +500,79 @@ window.addEventListener("hashchange", () => {
 // A prerendered page's spoilers are in the page before this script runs.
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => restoreWithin(document.body));
 else restoreWithin(document.body);
+
+// Copy buttons (wiki-core's Wiki.Core.Markdown.Render). A code block is a
+// <div class="code-block"> that holds the listing's <pre> and an empty
+// <button class="code-copy">, whose label the stylesheet draws from the
+// button's data-copy. A click on the button puts the text of the <pre>'s
+// <code> on the clipboard. That text is the code exactly as the fence holds
+// it, with its last newline: the <code> holds the code as text on a page
+// prerendered on the server, and highlight.js's markup once highlighted,
+// whose text is the same. A numbered listing's gutter is beside the <code>,
+// and has no text anyway: its numbers are the stylesheet's. The listener is on the document, so the button works the same
+// in a page, in the editor's preview and in a prerendered page before the
+// program runs. Enter and Space on the focused button click it, as on any
+// button.
+//
+// The asynchronous clipboard is tried first. Where there is none (a page
+// served over plain HTTP from another machine) or it refuses, the code is
+// selected and copied the old way, as the application's own copying does
+// (Wiki.App.Browser.copyText); if that fails too, the code stays selected,
+// for the reader to copy with the keyboard. The label says "Copied" or
+// "Not copied" for two seconds, and the button's aria-label says the same
+// meanwhile, then both go back to what they were.
+const copyShown = 2000;
+const copying = new WeakMap();
+
+const copyByHand = (code) => {
+  const selection = window.getSelection();
+  if (selection === null) return false;
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  try {
+    if (!document.execCommand("copy")) return false;
+  } catch {
+    return false;
+  }
+  selection.removeAllRanges();
+  return true;
+};
+
+const copyCode = async (code) => {
+  const text = code.textContent;
+  try {
+    const clipboard = navigator.clipboard;
+    if (clipboard) {
+      await clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  return copyByHand(code);
+};
+
+const showCopied = (button, copied) => {
+  const before = copying.get(button);
+  if (before) clearTimeout(before.timer);
+  const label = before ? before.label : button.getAttribute("aria-label");
+  button.dataset.copy = copied ? "copied" : "failed";
+  button.setAttribute("aria-label", copied ? "Copied" : "Not copied");
+  const timer = setTimeout(() => {
+    copying.delete(button);
+    delete button.dataset.copy;
+    if (label === null) button.removeAttribute("aria-label");
+    else button.setAttribute("aria-label", label);
+  }, copyShown);
+  copying.set(button, { timer, label });
+};
+
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest(".code-block > button.code-copy") : null;
+  const pre = button?.parentElement.querySelector(":scope > pre");
+  if (!pre) return;
+  copyCode(pre.querySelector(":scope > code") ?? pre).then((copied) => showCopied(button, copied));
+});
 
 globalThis.wikiIslands = Object.freeze({
   renderMath,
