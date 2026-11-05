@@ -126,7 +126,10 @@ checkText source = Checked {problems = parserProblems source, islands = islandPl
 -- the spoilers' broken marker lines, the spoilers not closed or cutting a
 -- section, and the quotations that start like a box's marker but are not
 -- boxes. None when the text cannot be parsed, which CommonMark never
--- refuses.
+-- refuses. A heading spoiler (@## [[spoiler]] Question@) has no end marker
+-- and is never wrong: the parser gives it no problem. A marker pair that
+-- crosses the end of its section cuts a section, and is marked as any
+-- other pair that does.
 parserProblems :: Text -> [Problem]
 parserProblems source = sort (spoilerLines <> spoilerHeads <> boxes)
   where

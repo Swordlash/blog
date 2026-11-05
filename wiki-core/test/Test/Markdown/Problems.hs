@@ -57,6 +57,14 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       -- A box, a starred box, and quotations that do not start so.
       placed "> [!NOTE]\n> Body.\n\n> [!TIP*] Title\n\n> [link](x)\n\n> [x] and [!y]" `shouldBe` []
 
+    it "takes a heading spoiler, which has no end marker, as closed, and marks a marker pair that crosses its end" $ do
+      parserProblems "# Title\n\n## [[spoiler]] Question\n\nAnswer.\n\n## [[spoiler]]{named} Another\n\nText.\n\n## Next\n\nMore." `shouldBe` []
+      -- A pair that starts in a heading spoiler's section and ends after
+      -- it cuts that section.
+      placed "## One\n\n### [[spoiler]] Q\n\n[[spoiler]]{s}(S)\nHidden.\n\n### Two\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(5, 5, Spoiler)]
+      -- A pair that holds a heading spoiler and the text after its section.
+      placed "[[spoiler]]{s}(S)\n## [[spoiler]] Q\n\nAnswer.\n\n# Top\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(1, 1, Spoiler)]
+
     it "lists the problems in the order of their lines" $
       placed "> [!]\n\n[[/spoiler]]{a}\n\n[[spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Spoiler), (5, 5, Spoiler)]
 
@@ -76,6 +84,14 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
                    , (("t", 0), (9, 9, Formula))
                    , (("u", 0), (13, 13, Formula))
                    , (("z", 0), (1, 1, Formula))
+                   ]
+
+    it "places islands in a heading spoiler's heading and section at their lines" $ do
+      let source = "# T\n\n## [[spoiler]] About $q$\n\nAnswer:\n\n```mermaid\ngraph LR\n```\n\n## Next\n\n$r$"
+      places source
+        `shouldBe` [ (("graph LR", 0), (8, 8, Diagram))
+                   , (("q", 0), (3, 3, Formula))
+                   , (("r", 0), (13, 13, Formula))
                    ]
 
     it "gives islands of the same source the renderer's occurrences, and leaves listings out" $ do
