@@ -13,4 +13,4 @@ Spoilers and boxes are checked as you type. Formulas, diagrams and pictures are 
 Forty-two.
 ```
 
-The editor underlines the first line, and pointing at it says: Spoiler “answer” is not closed: add [[/spoiler]]{answer}.
+The editor underlines the first line, and pointing at it says: Spoiler “answer” is not closed: add `[[/spoiler]]{answer}`.

@@ -233,6 +233,7 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
+import Halogen.JSBits (inBrowser)
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
@@ -1776,7 +1777,10 @@ component =
           modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
           -- The text loaded is checked at once, the typing after a pause.
-          scheduleCheck 0
+          -- Only in a browser: a page prerendered natively has no
+          -- CodeMirror to mark, and its first render must be the
+          -- browser's, which counts no problems yet.
+          when inBrowser (scheduleCheck 0)
         _ -> pass
 
     -- Read the user's assistant settings, then ask each provider that can

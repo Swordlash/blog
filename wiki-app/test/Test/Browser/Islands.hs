@@ -112,14 +112,14 @@ spec m = do
       ui <- mount m harness (MathInline mempty "\\frac{")
       find ui "span.wiki-math-inline .katex-error" >>= (`shouldHaveText` "\\frac{")
       -- KaTeX's message goes to the parent; the formula fixed clears it.
-      failures ui >>= (`shouldSatisfy` \case [message] -> "KaTeX parse error" `T.isPrefixOf` message; _ -> False)
+      eventually $ failures ui >>= (`shouldSatisfy` \case [message] -> "KaTeX parse error" `T.isPrefixOf` message; _ -> False)
       changeTo ui (MathInline mempty "\\frac{1}{2}")
       _ <- find ui "span.wiki-math-inline .katex .mfrac"
-      lastOutput ui `shouldReturn` Just Islands.Cleared
+      eventually $ lastOutput ui `shouldReturn` Just Islands.Cleared
       -- Drawn again without a problem, it says nothing more.
       changeTo ui (MathInline mempty "\\frac{1}{3}")
       _ <- find ui "span.wiki-math-inline annotation"
-      length <$> outputs ui `shouldReturn` 2
+      eventually $ length <$> outputs ui `shouldReturn` 2
 
   describe "MathDisplay" $
     it "is set by KaTeX, on its own" $
