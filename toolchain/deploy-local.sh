@@ -2331,7 +2331,7 @@ bundle_locally_step() {
 server_cabal() {
   cabal_command=$1
   shift
-  (cd "$ROOT" && env WIKI_BUILD_VERSION="$(build_version)" cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
+  (cd "$ROOT" && version=$(build_version) && env WIKI_BUILD_VERSION="$version" sh toolchain/changelog-stamp.sh && env WIKI_BUILD_VERSION="$version" cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
 }
 
 # The version wiki-server's page "What's new?" shows: WIKI_BUILD_VERSION
@@ -2339,9 +2339,9 @@ server_cabal() {
 # checkout (a tag, the commits since it and the commit, "-dirty" with
 # changes not committed), else "unknown". wiki-server runs the same git
 # describe itself when it is compiled; naming it here makes the deployed
-# version the checkout's whatever directory cabal compiles in. cabal does
-# not rebuild wiki-server for a new version alone: a deploy whose checkout
-# changed nothing of the server's keeps the version it was built with.
+# version the checkout's whatever directory cabal compiles in, and puts it
+# in the stamp toolchain/changelog-stamp.sh writes, so that a new version
+# or a new changelog entry rebuilds the server.
 build_version() {
   if [ -n "${WIKI_BUILD_VERSION:-}" ]; then
     printf '%s' "$WIKI_BUILD_VERSION"

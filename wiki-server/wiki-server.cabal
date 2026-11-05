@@ -12,10 +12,14 @@ extra-doc-files:    CHANGELOG.md
 -- Embedded into the library at compile time (Wiki.Server.Storage.Migrate), so
 -- that the binary carries its schema with it. The changelog's entries too
 -- (Wiki.Server.WhatsNew): changelog is a symbolic link to the repository's
--- changelog/, listed here so that an entry added or edited rebuilds the
--- server.
+-- changelog/, listed here so that an entry edited rebuilds the server. cabal
+-- does not see a file added to a glob, so changelog.stamp, which
+-- toolchain/changelog-stamp.sh writes before the builds with the entries'
+-- names and the build's version, rebuilds it when an entry is added (or the
+-- version changes); a build without the stamp (cabal by hand) still works.
 extra-source-files: migrations/*.sql
                     changelog/*.md
+                    changelog.stamp
                     test/schemas/*.rng
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built

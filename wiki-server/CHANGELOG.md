@@ -8,7 +8,10 @@ symbolic link `wiki-server/changelog`, listed in `extra-source-files` so
 that an entry added or edited rebuilds the server), its version (the
 environment's `WIKI_BUILD_VERSION`, else `git describe --tags --always
 --dirty`, else `unknown`) and the time of the build
-(`Wiki.Server.WhatsNew`). An entry that is not written as the grammar says
+(`Wiki.Server.WhatsNew`). cabal does not rebuild a package for a file
+added to a glob of its `extra-source-files`, so `changelog.stamp`, which
+`toolchain/changelog-stamp.sh` writes before the builds with the entries'
+names and the version, is listed beside them. An entry that is not written as the grammar says
 (`Wiki.Server.WhatsNew.Entry`, the README's "Changelog entries") is a
 compile error naming the file, the line and the problem. `GET
 api/v1/whats-new` answers the version, the build's time and the newest

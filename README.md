@@ -1416,10 +1416,9 @@ env -i HOME="$HOME" PATH="$(systemctl --user show-environment | sed -n 's/^PATH=
   that the wiki shows no page "What's new?" and no link to it; it is remembered,
   `--status` says so, and `--whats-new` shows the page again. The build gives
   wiki-server the version that page shows: `WIKI_BUILD_VERSION` when it is set,
-  else `git describe --tags --always --dirty` of the checkout. cabal rebuilds
-  the server only when something it is built from changed (a changelog entry
-  counts), so a deploy of a checkout that changed nothing of the server's keeps
-  the version of the build before.
+  else `git describe --tags --always --dirty` of the checkout; with each new
+  version or changelog entry the server is compiled again
+  (`toolchain/changelog-stamp.sh`).
 
 `journalctl --user -u wiki-demo -f` shows the requests, one line each;
 `sh toolchain/deploy-local.sh --status` the deployment, its serve and its service.

@@ -151,7 +151,7 @@ fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/sbin" "$case_dir/repo/toolchain" "$case_dir/systemd"
   for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh \
-    check-tex.sh texlive-packages.txt; do
+    check-tex.sh texlive-packages.txt changelog-stamp.sh; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
   cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"

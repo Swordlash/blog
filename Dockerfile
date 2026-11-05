@@ -101,7 +101,8 @@ ENV WIKI_BUILD_VERSION=$WIKI_BUILD_VERSION
 # symbols, and the application, with a brotli'd copy of each file the server
 # sends compressed, as toolchain/deploy-local.sh writes them.
 RUN --mount=type=cache,id=wiki-dist-newstyle,target=/src/dist-newstyle,sharing=locked \
-    cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server \
+    sh toolchain/changelog-stamp.sh \
+ && cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server \
  && mkdir -p /out/bin \
  && cp "$(cabal list-bin -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server)" /out/bin/wiki-server \
  && strip /out/bin/wiki-server \
