@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | The page "What's new?" in a browser (WP5.66 of docs/PLAN.md), over a
 -- server that has it: the link at the very bottom of the sidebar, the page
 -- with the server's version, its build date and the entries, newest first,
@@ -5,12 +7,15 @@
 -- listing highlighted, a spoiler hidden); the dot on the link while the
 -- server has an entry newer than the newest the reader has seen, which
 -- opening the page clears; and no link where the server's page is off, nor
--- in the demo.
+-- in the demo. A link in an entry to a place on the page scrolls there and
+-- stays on the page, and each entry's ids start with its number, so two
+-- entries with the same sections have no id in common.
 module Test.Browser.WhatsNew (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (answerWith, serveDemo, serverStarts, startServer)
@@ -31,6 +36,15 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (UserId (..))
+
+-- The address's fragment and where an element is in the window
+-- (test/jsbits/test-location.js, test/jsbits/test-layout.js).
+$( browserJS
+     ["jsbits/test-location.js", "jsbits/test-layout.js"]
+     [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
+     , ("js_box", "wiki_test_box", Safe, [t|JSText -> IO JSText|])
+     ]
+ )
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
@@ -68,6 +82,27 @@ spec m = do
     newsLink <- find ui "a.whats-new-link"
     getAttribute newsLink "aria-current" `shouldReturn` Just "page"
     getAttribute newsLink "data-unseen" `shouldReturn` Nothing
+
+  it "follows a link to a place in an entry on the page, to that entry's own heading" $ runPage $ do
+    serving m (Just 0) news
+    ui <- startServer m WhatsNewPage
+    -- Both entries have a "Bug fixes" section, each with an id of its own.
+    _ <- find ui ".whats-new-entry[data-pr=\"158\"] h3#pr-158-bug-fixes"
+    _ <- find ui ".whats-new-entry[data-pr=\"157\"] h3#pr-157-bug-fixes"
+    length <$> findAll ui "#bug-fixes" `shouldReturn` 0
+    toFixes <- find ui ".whats-new-entry[data-pr=\"158\"] a[href='#pr-158-bug-fixes']"
+    toFixes `shouldHaveText` "the fixes"
+    click toFixes
+    -- Still the page "What's new?", under the test's router (which keeps
+    -- the route in the fragment), not the front page the page's <base
+    -- href> would have led to, and the heading is in the window.
+    find ui ".whats-new h1" >>= (`shouldHaveText` "What's new?")
+    unsafeIOToPageM (fromJSText <$> js_location_hash) `shouldReturn` "#/whats-new/"
+    eventually $ do
+      box <- unsafeIOToPageM (fromJSText <$> js_box (toJSText "#pr-158-bug-fixes"))
+      case mapMaybe (readMaybe . T.unpack) (T.words box) :: [Double] of
+        [top, bottom, height] -> (top >= 0 && bottom <= height) `shouldBe` True
+        _ -> expectationFailure ("no box for the heading: " <> box)
 
   it "marks the link while the server has an entry newer than the newest the reader has seen, and opening the page clears it" $ runPage $ do
     -- Seen up to #157: #158 is new.
@@ -114,7 +149,7 @@ spec m = do
                 { pr = 158
                 , url = pullRequestUrl 158
                 , title = "A copy button on code blocks"
-                , markdown = "### New features\n\n- A button copies the code:\n\n  ```haskell\n  main :: IO ()\n  main = pure ()\n  ```\n\n- The murderer is ||the butler||."
+                , markdown = "### New features\n\n- A button copies the code:\n\n  ```haskell\n  main :: IO ()\n  main = pure ()\n  ```\n\n- The murderer is ||the butler||.\n- See [the fixes](#bug-fixes).\n\n### Bug fixes\n\n- The button no longer copies the line numbers."
                 }
             , WhatsNewEntry {pr = 157, url = pullRequestUrl 157, title = "A deploy that checks its TeX once", markdown = "### Bug fixes\n\n- The deploy no longer hangs."}
             ]

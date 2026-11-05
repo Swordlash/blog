@@ -17,6 +17,11 @@
 -- Their spoilers are remembered under one scope, @whats-new@, as a page's
 -- are under the page's.
 --
+-- A click on a link in an entry is followed by the application
+-- ('Body.followingLinksIn'), as on a page: a link to a place on the page
+-- scrolls to it, rather than the browser reading @#place@ against the
+-- page's @\<base href>@ and leaving for the front page.
+--
 -- It reads the entries at once where the backend answers at once (the page
 -- the server prerendered carries them), and otherwise in its initializer.
 -- Where the backend has no changelog (the demo, or a server started with
@@ -39,6 +44,7 @@ import Protolude hiding (State)
 import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..))
 import Wiki.App.Backend (MonadLoad (..), WikiError (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
+import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (PageLink)
 import Wiki.App.View.Body (IslandSlots)
@@ -62,8 +68,9 @@ data Action
   = Initialize
   | Receive Input
   | Retry
+  | FollowLink ArticleLink
 
-component :: forall query output m. (MonadWhatsNew m, MonadLoad m, MonadIslands m, MonadUUID m) => H.Component query Input output m
+component :: forall query output m. (MonadWhatsNew m, MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -102,7 +109,7 @@ component =
             {% if null w.entries %}
               <p class="empty">Nothing yet.</p>
             {% else %}
-              <article class="page-body whats-new-entries" data-spoilers="whats-new">
+              <article class="page-body whats-new-entries" data-spoilers="whats-new" {{ Body.followingLinksIn FollowLink st.input.context }}>
                 {% for (entry, nodes) in zip w.entries (Md.renderSectionsWithIds (options st.input.context) [(idPrefix e, parsed e) | e <- w.entries]) %}
                   <section class="whats-new-entry" data-pr={{ show entry.pr :: Text }}>
                     <h2 class="whats-new-title"><a href={{ entry.url }}>{{ "#" <> show entry.pr <> " " <> entry.title :: Text }}</a></h2>
@@ -124,6 +131,9 @@ component =
           _ -> pass
       Retry -> modify (\st -> st {loaded = Loading}) >> load
       Receive input -> modify (\st -> st {input})
+      FollowLink target -> do
+        router <- gets (\st -> st.input.context.router)
+        H.liftEffect (followArticleLink router target)
 
     load :: H.HalogenM State Action IslandSlots output m ()
     load = do
