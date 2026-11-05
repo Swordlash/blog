@@ -752,6 +752,36 @@ In the order to do it, unless the owner says otherwise.
   link, remembered, nested), export (the section exported plain). CHANGELOGs of
   wiki-core and wiki-app.
 
+- **WP5.65 The editor marks what does not render** (the owner, 2026-11-05; one pull
+  request). Today a formula, a Mermaid diagram or a TikZ picture that fails shows
+  its error only in the preview, in place of the island (`wiki-island-error`), and
+  a spoiler's broken marker shows red there; the editor's text says nothing. The
+  package gives the editor problems: a problem is a range of source lines, a kind
+  (formula, diagram, picture, spoiler, …) and a message. Two sources. (a) The
+  parser's own, synchronous: `Wiki.Core.Markdown.Problems` (a module of its own, so
+  the parser is untouched) lists a document's problems from its AST, with the source
+  lines the blocks carry: a spoiler marker line in red, an unclosed spoiler, a
+  spoiler that cuts a section, a box marker with no kind, anything else the AST
+  already marks as wrong. (b) The islands', asynchronous: the renderers in
+  `web/src/islands.js` tell their caller when they fail (a formula: KaTeX run once
+  with `throwOnError` to get the message, then rendered as now; a diagram: Mermaid's
+  parse error; a picture: TeX's error; a listing: nothing, an unknown language is
+  not an error), the `Islands` component raises the problem with its island's key
+  and source lines, and raises its clearing when the island renders again and
+  succeeds (the generation logic drops stale results). The editor keeps the set by
+  key and shows them in CodeMirror with `@codemirror/lint` (pinned like the other
+  CodeMirror packages): the lines underlined in red, a marker in a lint gutter, the
+  message on hover, and a count in the editor's status line ("2 problems") that
+  jumps to the next one on a click (`nextDiagnostic`); the preview shows the error
+  in place as today. The reader's page is unchanged. The problems clear as the
+  author fixes the source; a problem the parser found is replaced on every parse, an
+  island's on its next render. Tests: wiki-core (`Problems` for each kind, with the
+  right lines), wiki-app (the mapping from problems to editor ranges), browser (an
+  editor with a broken diagram shows the diagnostic on the fence's lines and loses
+  it once the fence is fixed; a broken formula; an unclosed spoiler from the
+  parser; the count and the jump). Docs: the guide's editor page, the README's
+  editor section, wiki-app's and wiki-core's CHANGELOGs.
+
 ### Later, or waiting for the owner
 
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
