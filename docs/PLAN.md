@@ -694,6 +694,41 @@ confirms it against reality and the plan is amended if it does not hold.
     plain, with the wiki's ids; the feed shows the section without the box
     (`hiddenSections` off); a deck shows a top-level heading spoiler as its plain
     section; blog excerpts skip its paragraphs.
+48. **A deploy for a machine that installs nothing from the internet (WP5.67).**
+    Five options of `toolchain/deploy-local.sh`, remembered in the state, shown by
+    `--status`, offered by the wizard and taken by `toolchain/configure.sh`, usable
+    together or apart; the deploy without them is unchanged. `--system-tools`: GHC,
+    cabal and Node are the machine's own; `bootstrap.sh` keeps floors beside the
+    pins (`GHC_MIN_VERSION=9.12`, since `haskell-halogen-th` requires
+    `ghc >= 9.12 && < 9.15`; `CABAL_MIN_VERSION=3.12`, the first with `--semaphore`
+    and `cabal path`; `NODE_MIN_MAJOR=24`), and its read-only
+    `system-tools [native] [node]` runs before anything else and checks only what
+    the run needs: a missing or too-old tool stops the deploy, named with the
+    version found and the note that removing the option lets the bootstrap
+    install it; another version than the pinned one is used with a warning.
+    Refused with a page built here, which needs the wasm toolchain. The floor is
+    9.12, not the 9.10 first hoped for: a CI experiment with 9.10.3 fails in the
+    solver on th's bound, and 9.12.2 needs two local type signatures in
+    `Wiki.Server.Storage` (a pull request of their own once the experiment
+    passes). `--npm-registry URL`: `NPM_CONFIG_REGISTRY` for every npm and npx
+    call; `npm ci` rewrites the lockfile's `registry.npmjs.org` addresses to it.
+    `--hackage-mirror URL`: written into `$CABAL_DIR/config` before `cabal update`
+    (forced when the address changes), `secure: True` kept, so the bootstrap
+    fetches the mirror's `root.json` first and refuses a mirror without one;
+    refused for a home-directory toolchain, where `~/.cabal` is the user's; a
+    later run without the option writes Hackage back. `--bundle-locally` (with
+    `--backend-only[=REF]` or `--app-page`): `BUNDLE_OUTPUTS` are deleted from
+    CI's page and rebuilt into it by `npm ci` and `web/bundle.sh` (into the page,
+    because `sw.js` hashes the files kept from CI), then compared file by file;
+    `app.wasm`, `index.html`, the prerendered files and `ghc_wasm_jsffi.js`
+    (written by the wasm post-link) are kept from CI's page; CI's bundles proved
+    byte-identical when rebuilt this way. `--app-page FILE`: the page's zip from a
+    file, refused without `app.wasm` or of the other kind, not combined with
+    `--backend-only`; cached as `app-<kind>-file-<SHA-256>.zip` with the path in
+    its `.meta`, checked fully before the cache is touched, so a refused
+    replacement leaves the last good copy; with the file gone the cached copy for
+    that path is used and said so. README has "A machine that installs nothing
+    from the internet".
 
 ## Repository layout
 
@@ -816,45 +851,6 @@ In the order to do it, unless the owner says otherwise.
   (the entry is part of every pull request; the label is the owner's), the
   guide's server tour (one sentence), wiki-server's and wiki-app's CHANGELOGs.
 
-- **WP5.67 A deploy for a locked-down machine** (the owner, 2026-11-05; one pull
-  request, toolchain only). For a server whose packages must come from vetted
-  mirrors (the owner's bank), four options of `toolchain/deploy-local.sh`, each
-  also on the wizard's screens and remembered in the state, usable together or
-  apart, beside what exists; the deploy without them is unchanged. (a)
-  `--bundle-locally`, with `--backend-only[=REF]`: of the page CI built, only what
-  needs the wasm toolchain is taken (`app.wasm`, `index.html` and the prerendered
-  files), and the JavaScript and CSS bundles are built on the machine by
-  `web/bundle.sh` (`npm ci`, esbuild, sass) with its Node; afterwards the set of
-  files is compared with the zip's and every file whose bytes differ is named
-  (with the lockfile's versions they should be identical, which is the evidence
-  the machine's owner wants). (b) `--npm-registry URL`: the npm registry
-  `npm ci` and `npx` use (`NPM_CONFIG_REGISTRY` for the deploy's npm calls; npm
-  rewrites the lockfile's `registry.npmjs.org` URLs to it, `replace-registry-host`),
-  so the mirror serves esbuild's and sass's binaries too. (c) `--system-tools`:
-  nothing is downloaded for the toolchain; Node (24 or later, with npm), GHC
-  (9.14.1) and cabal (3.16.1.0) must be on PATH, and ghcup is not needed; a
-  missing or wrong-version tool stops the deploy before anything else, naming
-  it, the version found, and that removing `--system-tools` lets
-  `toolchain/bootstrap.sh` install it. `bootstrap.sh` gains the same switch
-  (`--system-tools`), which the deploy passes; `--backend-only` with
-  `--system-tools` still downloads the page (or takes it from a file, below),
-  since that is not the toolchain. (d) `--hackage-mirror URL`: the Hackage
-  mirror cabal's index and packages come from, written as the `hackage.haskell.org`
-  repository's `url` into the toolchain's own cabal config (`CABAL_DIR` under the
-  toolchain directory, so the user's `~/.cabal` is untouched), before `cabal
-  update`. Also `--app-page FILE`: the page's zip from a file instead of GitHub's
-  release, for a machine that cannot reach github.com, with the same cache and
-  checks as a downloaded one (the file's commit is not checked against the
-  checkout's; the deploy says which commit's page it is from the zip's name or
-  its manifest, if any). Tests in `toolchain/test-deploy-local.sh` and
-  `test-bootstrap.sh`: each option through the state and the wizard; the
-  local bundle built with a fake `npm`/`npx` and compared; the registry reaching
-  npm; `--system-tools` refusing with each tool missing or the wrong version, and
-  passing with all present; the mirror written into the cabal config and
-  `~/.cabal` untouched; the page from a file. Docs: README (a section "A machine
-  that installs nothing from the internet", with the options together), the
-  deploy's usage text, the wizard's texts.
-
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
@@ -895,7 +891,7 @@ In the order to do it, unless the owner says otherwise.
   TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
   shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
   maker. Each phase starts when the pull requests touching the same scripts are
-  merged (a after WP5.66 and WP5.67).
+  merged (a after WP5.66; WP5.67 is merged).
 
 - **WP5.69 The live channel's permission-check test made deterministic** (the
   session, 2026-11-05; one pull request). `wiki-server/test/Test/Storage/Scale.hs`,
@@ -1307,6 +1303,13 @@ needs. Each was true when its package merged; check before relying on one.
   id, so renaming the heading forgets its open state, and an id equal to another
   spoiler's written name shares state with it; a marker pair that cuts a section
   inside a heading spoiler shows its error inside the closed box.
+- WP5.67 (decision 48): two `--app-page` paths holding the same bytes share one
+  cache entry, owned by the path deployed last; the screen-driven wizard test runs
+  the real wizard through `script(1)` with sleeps between keys (about 15 s, skipped
+  without `script`, and could be flaky on a very slow runner); the deploy test's
+  "semopen" case can fail when the fake cabal's log lands in the same timestamp
+  tick as the build's start (`find -newer`), a race older than the branch;
+  `--hackage-mirror` is accepted with `--static`, where it has no effect.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
