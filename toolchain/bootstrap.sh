@@ -17,6 +17,15 @@
 #                                        # read-only readiness gate for that npm command:
 #                                        # it checks what the command needs, no more
 #
+# It works in two stages. This script is the first: in POSIX sh, it does
+# what must work before there is a GHC (the read-only modes, the check of
+# the machine's own tools, the Debian packages, ghcup with GHC and cabal,
+# the Hackage mirror and cabal's index) and the deploy's native and node
+# modes in full. For the other installing modes it then hands over to the
+# second, the maker (maker/, a Haskell program on Shake built with its own
+# cabal project), which installs the rest below and warms the store. The
+# maker's own command line and terminal interface are toolchain/maker.sh.
+#
 # It reuses compatible tools on PATH first. Missing tools are installed on
 # x86_64 Linux as follows:
 #
@@ -133,45 +142,11 @@
 # GitHub wants them there, where the last line is searched first.
 set -eu
 
-# Pins. They must match haskell-halogen's .github/workflows/build.yml
-# (GHC_VERSION, CABAL_VERSION, WASM_GHC_VERSION, GHC_WASM_META_REV) and the
-# with-compiler of its cabal-wasm.project, for the haskell-halogen commit
-# cabal.project pins: bump them together with that pin.
-GHC_VERSION=9.14.1
-CABAL_VERSION=3.16.1.0
-WASM_GHC_VERSION=9.14.1.20260731
-GHC_WASM_META_REV=358ea50b8496a69da6ce375c0c58bc049dbcb92d
-GHC_WASM_FLAVOUR=9.14
-# Not pinned by haskell-halogen: the ghcup used when none is installed, the Node
-# the npm scripts and test runners use (haskell-halogen's need 24 or later), and
-# the Playwright whose Chromium is installed until package-lock.json names one
-# (haskell-halogen's package-lock.json).
-GHCUP_VERSION=0.2.6.2
-GHCUP_SHA256=9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8
-NODE_VERSION=24.21.0
-NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
-PLAYWRIGHT_VERSION=1.63.0
-# The formatter, at the version the README names and CI checks with
-# (.github/workflows/build.yml holds the same version and checksum). The
-# checksum is that of the release's fourmolu-<version>-linux-x86_64.zip
-# (since 0.20.0.0 the releases ship zips, one binary inside), checked before
-# it is unpacked.
-FOURMOLU_VERSION=0.21.0.0
-FOURMOLU_SHA256=aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7
-# The oldest tools --system-tools takes from the machine instead of the
-# pins above. The pins are the tested versions: a tool between its floor
-# and its pin is used with a warning. GHC 9.10 is the oldest GHC
-# haskell-halogen builds and tests with: its CI runs GHC 9.10, 9.12 and
-# 9.14, and haskell-halogen-th, which parses quotes with the compiler's own
-# ghc library, asks for ghc >= 9.10 && < 9.15. 9.10 is also the first GHC
-# with RequiredTypeArguments, which every package of the wiki enables. cabal
-# 3.12 is the first cabal that reads the field semaphore: of cabal.project
-# (and that has `cabal path`, which update_cabal_index asks for the
-# index's directory). Node 24 is what haskell-halogen's npm scripts and
-# test runners need. toolchain/deploy-local.sh reads these lines too.
-GHC_MIN_VERSION=9.10
-CABAL_MIN_VERSION=3.12
-NODE_MIN_MAJOR=24
+# The pins and floors (GHC_VERSION, NODE_VERSION, GHC_MIN_VERSION, …), in
+# toolchain/pins.env, the one place that says them: the maker (maker/) and
+# toolchain/deploy-local.sh read the same file.
+# shellcheck source=toolchain/pins.env
+. "$(cd "$(dirname "$0")" && pwd)/pins.env"
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # Where the toolchain goes: under the home directory, or under the directory
@@ -193,7 +168,6 @@ fi
 STATE=$BASE/.wiki-toolchain
 LOG=$STATE/bootstrap.log
 WASM_PREFIX=$BASE/.ghc-wasm
-META_DIR=$STATE/ghc-wasm-meta-$GHC_WASM_META_REV
 NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
@@ -882,77 +856,6 @@ install_native() {
   fi
 }
 
-# ghc-wasm-meta's setup.sh starts by deleting ~/.ghc-wasm, so the stamp it is
-# given at the end only exists after a complete run, and only for this revision.
-#
-# The pinned revision is one archive from gitlab.haskell.org, the repository's
-# home. A network that refuses that host (a company proxy; the archive endpoint
-# answers 403 there) gets the same commit from the repository's mirror on
-# GitHub, by a shallow fetch of the commit itself. Everything setup.sh then
-# downloads (wasi-sdk, the compilers' bindists, binaryen, wasmtime, Node) is on
-# GitHub already, so that mirror is the only other thing the wasm toolchain
-# needs from gitlab.haskell.org.
-fetch_wasm_meta() {
-  if [ ! -f "$META_DIR/ghcup-wasm-0.0.9.yaml" ]; then
-    say "fetching ghc-wasm-meta $GHC_WASM_META_REV"
-    rm -rf "$META_DIR" "$META_DIR.tmp"
-    mkdir -p "$META_DIR.tmp"
-    printf '+ fetch ghc-wasm-meta %s from gitlab.haskell.org\n' "$GHC_WASM_META_REV" >>"$LOG"
-    if fetch "https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$GHC_WASM_META_REV/ghc-wasm-meta-$GHC_WASM_META_REV.tar.gz" \
-      "$META_DIR.tmp.tar.gz" >>"$LOG" 2>&1; then
-      run "unpacking ghc-wasm-meta" tar xzf "$META_DIR.tmp.tar.gz" --strip-components=1 --directory "$META_DIR.tmp"
-      rm -f "$META_DIR.tmp.tar.gz"
-    else
-      rm -f "$META_DIR.tmp.tar.gz"
-      say "gitlab.haskell.org did not give the archive (the end of $LOG says why); fetching the commit from the GitHub mirror, github.com/haskell-wasm/ghc-wasm-meta"
-      run "starting a repository for ghc-wasm-meta" git init -q "$META_DIR.tmp"
-      run "fetching ghc-wasm-meta from the GitHub mirror" git -C "$META_DIR.tmp" fetch -q --depth 1 \
-        https://github.com/haskell-wasm/ghc-wasm-meta "$GHC_WASM_META_REV"
-      run "checking ghc-wasm-meta out" git -C "$META_DIR.tmp" -c advice.detachedHead=false checkout -q FETCH_HEAD
-      rm -rf "$META_DIR.tmp/.git"
-    fi
-    [ -f "$META_DIR.tmp/ghcup-wasm-0.0.9.yaml" ] || fail "fetching ghc-wasm-meta (no ghcup-wasm-0.0.9.yaml in what arrived)"
-    mv "$META_DIR.tmp" "$META_DIR"
-  fi
-}
-
-install_wasm_sysroot() {
-  if ! wasm_sysroot_ready; then
-    guard_wasm_sysroot || exit 1
-    fetch_wasm_meta
-    say "installing the wasm sysroot into $WASM_PREFIX (wasi-sdk, binaryen, wasmtime, Node)"
-    run_long "installing the wasm sysroot" env PREFIX="$WASM_PREFIX" SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" bash "$META_DIR/setup.sh"
-    touch "$WASM_PREFIX/.bootstrap-$GHC_WASM_META_REV"
-    wasm_sysroot_ready || fail "verifying the wasm sysroot (inspect it before retrying)"
-  fi
-}
-
-# The cross compiler, installed from ghc-wasm-meta's ghcup metadata with the
-# configure arguments its env file exports, as haskell-halogen's CI does.
-install_wasm_ghc() {
-  [ "$(wasm32-wasi-ghc --numeric-version 2>/dev/null || true)" != "$WASM_GHC_VERSION" ] || return 0
-  install_ghcup
-  ghcup_tool ghc "wasm32-wasi-$WASM_GHC_VERSION" "wasm32-wasi-ghc-$WASM_GHC_VERSION" "$WASM_GHC_VERSION" \
-    ghcup_wasm_install
-  if [ "$("$GHCUP_BIN/wasm32-wasi-ghc" --numeric-version 2>/dev/null || true)" != "$WASM_GHC_VERSION" ]; then
-    run "making wasm32-wasi-ghc $WASM_GHC_VERSION the default" \
-      "$GHCUP" set ghc "wasm32-wasi-$WASM_GHC_VERSION"
-  fi
-}
-
-# In a subshell: ~/.ghc-wasm/env exports CC and friends for the wasm target,
-# which the native steps after this one must not see.
-ghcup_wasm_install() {
-  fetch_wasm_meta
-  (
-    # shellcheck source=/dev/null
-    . "$WASM_PREFIX/env"
-    # shellcheck disable=SC2086
-    "$GHCUP" -s "file://$META_DIR/ghcup-wasm-0.0.9.yaml" \
-      install ghc "wasm32-wasi-$WASM_GHC_VERSION" --set -- $CONFIGURE_ARGS
-  )
-}
-
 # The commands install_node downloads and unpacks Node with, checked by the
 # node mode before a download needs them: that mode installs no system
 # packages, so a missing command is named here rather than failing halfway.
@@ -984,93 +887,6 @@ install_node() {
   fi
   if [ "$(readlink "$STATE/node" 2>/dev/null || true)" != "$NODE_DIR" ]; then
     ln -sfn "$NODE_DIR" "$STATE/node"
-  fi
-}
-
-# Chromium is the one Playwright's own registry names for the Playwright the
-# tests run with, so it is installed by that Playwright, kept in its own npm
-# prefix here so that this works before (and without) the project's
-# node_modules. Only the headless shell, as haskell-halogen's CI installs.
-#
-# The shared libraries it needs are Debian packages that differ between
-# releases (Ubuntu 24.04 renamed several), so they are not in system_packages:
-# Playwright knows the list for each release. When Chromium does not start,
-# Playwright installs them if this can run it as root, and otherwise this names
-# them and stops. Until Chromium has once started, every run tries again, so a
-# run after the packages were installed by hand finishes the job.
-install_chromium() {
-  playwright_location
-  if [ -z "$cli" ]; then
-    say "installing playwright-core $version into $prefix"
-    rm -rf "$prefix"
-    run "installing playwright-core" npm install --prefix "$prefix" --no-save --no-audit --no-fund \
-      "playwright-core@$version"
-    cli=$prefix/node_modules/playwright-core/cli.js
-  fi
-  location=$(node "$cli" install --dry-run --only-shell chromium 2>>"$LOG" |
-    sed -n 's/^ *Install location: *//p' | head -n 1)
-  [ -n "$location" ] || fail "asking Playwright $version where Chromium goes"
-  if ! chromium_cached; then
-    say "installing Chromium (headless shell) for Playwright $version into $location"
-    run "installing Chromium" node "$cli" install --only-shell chromium
-  fi
-  # A previous launch stamp cannot prove today's shared libraries or browser
-  # binary still work. Launch the cached browser on each install-mode run.
-  if ! launch_chromium "$prefix"; then
-    if ! as_root; then
-      say "Chromium does not start (the end of $LOG says why); the Debian packages Playwright would install or upgrade for it:"
-      node "$cli" install-deps --dry-run chromium 2>&1 | sed 's/^/bootstrap:   /'
-      say "install them (sudo apt-get install ...) and run this again"
-      exit 1
-    fi
-    say "installing the Debian packages Chromium needs"
-    # $sudo is empty when this already runs as root.
-    # shellcheck disable=SC2086
-    run "installing Chromium's Debian packages" $sudo "$(command -v node)" "$cli" install-deps chromium
-    launch_chromium "$prefix" || fail "launching Chromium"
-  fi
-  CHROMIUM=$location
-}
-
-launch_chromium() {
-  printf '+ launch Chromium\n' >>"$LOG"
-  node -e '
-    const { chromium } = require(process.argv[1]);
-    chromium.launch().then((browser) => browser.close());
-  ' "$1/node_modules/playwright-core" >>"$LOG" 2>&1
-}
-
-# Any fourmolu on PATH that reports the pinned version will do, wherever it
-# came from. Otherwise the release binary goes into ghcup's bin directory, which
-# the env file already puts on PATH; a network that refuses GitHub's release
-# downloads (Claude Code's cloud sessions do) gets one built from Hackage
-# instead, which is slow but needs nothing else. The log says which it was.
-install_fourmolu() {
-  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
-    FOURMOLU=$(command -v fourmolu)
-    return 0
-  fi
-  FOURMOLU=$GHCUP_BIN/fourmolu
-  mkdir -p "$GHCUP_BIN"
-  tmp=$FOURMOLU.download
-  rm -rf "$tmp" "$tmp.zip"
-  printf '+ fetch fourmolu %s release zip\n' "$FOURMOLU_VERSION" >>"$LOG"
-  if fetch "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64.zip" \
-    "$tmp.zip" >>"$LOG" 2>&1; then
-    check_sha256 "$tmp.zip" "$FOURMOLU_SHA256" || fail "checking fourmolu's checksum"
-    # The zip holds one directory with the binary in it; -j drops the directory.
-    unzip -q -o -j "$tmp.zip" '*/fourmolu' -d "$tmp" >>"$LOG" 2>&1 || fail "unpacking fourmolu's release zip"
-    chmod 755 "$tmp/fourmolu"
-    mv "$tmp/fourmolu" "$FOURMOLU"
-    rm -rf "$tmp" "$tmp.zip"
-    say "installed fourmolu $FOURMOLU_VERSION's release binary into $GHCUP_BIN"
-  else
-    rm -rf "$tmp" "$tmp.zip"
-    say "fourmolu's release binary could not be downloaded; building fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN (this takes a while)"
-    run "building fourmolu" cabal install "fourmolu-$FOURMOLU_VERSION" --ignore-project \
-      --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \
-      --install-method=copy --overwrite-policy=always
-    say "built fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN"
   fi
 }
 
@@ -1154,7 +970,7 @@ hackage_config() {
 update_cabal_index() {
   hackage_config
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
-  if [ ! -f "$index" ] || [ -n "${1:-}" ] || [ -n "$hackage_changed" ]; then
+  if [ ! -f "$index" ] || [ -n "$hackage_changed" ]; then
     say "updating cabal's package index"
     run_long "updating cabal's package index" sh -c "cd '$STATE' && cabal update"
   fi
@@ -1209,113 +1025,46 @@ toolchain() {
     fi
     return 0
   fi
-  install_wasm_sysroot
-  install_wasm_ghc
-  install_node
-  # A build (`build`, the Dockerfile's builder) runs neither the browser
-  # tests nor the formatter.
-  [ "$mode" = build ] || install_chromium
+  # The index first: the maker is built from Hackage's packages.
   update_cabal_index
-  [ "$mode" = build ] || install_fourmolu
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $(node --version)"
-  if [ "$mode" = build ]; then
-    summary="$summary; no Chromium or fourmolu (build)"
-  else
-    summary="$summary, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU"
+  hand_over
+}
+
+# The second stage, the maker (maker/): with GHC and cabal there, it
+# installs the rest of the toolchain (the wasm sysroot and cross compiler,
+# Node, Chromium and fourmolu, as the mode asks), prints the summary, and
+# for all and warm builds the repository's dependencies into the cabal
+# store. It is built with its own cabal project (maker/cabal.project), once
+# and kept, and takes over this process, which still holds the toolchain's
+# lock on descriptor 9. WIKI_MAKER names a maker built elsewhere: the
+# bootstrap's tests run it against a fake cabal, which builds nothing.
+hand_over() {
+  maker=${WIKI_MAKER:-}
+  if [ -z "$maker" ]; then
+    maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>>"$LOG") || fail "finding the maker's binary (maker/)"
+    [ -x "$maker" ] || say "building the maker (maker/; once, later runs reuse it)"
+    built=$(mktemp)
+    if ! (cd "$ROOT/maker" && cabal build -v0 exe:maker) >"$built" 2>&1; then
+      cat "$built" >>"$LOG"
+      rm -f "$built"
+      fail "building the maker (cd maker && cabal build exe:maker)"
+    fi
+    rm -f "$built"
   fi
-  if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
-    printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
-  else
-    say "toolchain ready in $(($(date +%s) - started))s: $summary"
-  fi
-}
-
-# --- Cabal store ------------------------------------------------------------
-
-# What decides a project's dependency plan: its project files, every package
-# description in the repository, and the compilers. When none of it changed
-# since the last warm-up that succeeded, there is nothing to build.
-fingerprint() {
-  {
-    for f in "$@" cabal.project.freeze cabal.project.local; do
-      [ ! -f "$ROOT/$f" ] || cat "$ROOT/$f"
-    done
-    find "$ROOT" \( -name dist-newstyle -o -name node_modules -o -name .git \) -prune \
-      -o -name '*.cabal' -type f -print | LC_ALL=C sort | xargs cat
-    ghc --numeric-version
-    wasm32-wasi-ghc --numeric-version
-  } | sha256sum | cut -d' ' -f1
-}
-
-warm_native() {
-  (
-    unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
-    cd "$ROOT"
-    cabal build all --only-dependencies --project-file=cabal.project --builddir=dist-newstyle/native
-  )
-}
-
-warm_wasm() {
-  (
-    # shellcheck source=/dev/null
-    . "$WASM_PREFIX/env"
-    cd "$ROOT"
-    # Cabal may reuse the host ghc-pkg from this cache when switching toolchains,
-    # and miss a change to cabal.project, which cabal-wasm.project imports, in
-    # this one (see build-wasm.sh).
-    rm -f dist-newstyle/wasm/cache/compiler dist-newstyle/wasm/cache/config
-    cabal build all --only-dependencies --project-file=cabal-wasm.project \
-      --builddir=dist-newstyle/wasm \
-      --with-compiler="$(command -v wasm32-wasi-ghc)" \
-      --with-hc-pkg="$(command -v wasm32-wasi-ghc-pkg)" \
-      --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
-  )
-}
-
-warm_one() {
-  project=$1 builder=$2
-  shift 2
-  [ -f "$ROOT/$project" ] || return 0
-  found=1
-  stamp=$STATE/warm-$(printf '%s' "$ROOT/$project" | sha256sum | cut -c1-16)
-  sum=$(fingerprint "$@")
-  if [ "$(cat "$stamp" 2>/dev/null || true)" = "$sum" ]; then
-    printf 'bootstrap: %s dependencies already built\n' "$project"
-    return 0
-  fi
-  if [ -z "$updated" ]; then
-    update_cabal_index force
-    updated=1
-  fi
-  say "building $project's dependencies into the cabal store (this can take a while)"
-  started=$(date +%s)
-  run "building $project's dependencies" "$builder"
-  printf '%s\n' "$sum" >"$stamp"
-  say "built $project's dependencies in $(($(date +%s) - started))s"
-}
-
-warm() {
-  found='' updated=''
-  warm_one cabal.project warm_native cabal.project
-  warm_one cabal-wasm.project warm_wasm cabal.project cabal-wasm.project
-  [ -n "$found" ] || printf 'bootstrap: no cabal.project yet, nothing to warm\n'
+  exec "$maker" bootstrap "$mode" --root "$ROOT" --base "$BASE" ${NAMED_BASE:+--named-base} \
+    --ghcup-bin "$GHCUP_BIN" --log-size "$quiet_before" --started "$started" --lock-fd 9
 }
 
 # --- Main -------------------------------------------------------------------
 
 printf '\n=== %s bootstrap %s (%s)\n' "$(date '+%F %T')" "$mode" "$ROOT" >>"$LOG"
 
-# The toolchain and the store have a lock each, so a run that is only warming
-# the store does not hold up one that only wants the toolchain.
+# The toolchain's lock, held through the maker's part of the run, which lets
+# it go before it warms the store under a lock of its own: a run that is only
+# warming the store does not hold up one that only wants the toolchain.
 (
   lock toolchain
   toolchain
 ) 9>"$STATE/toolchain.lock"
 
-if [ "$mode" = all ] || [ "$mode" = warm ]; then
-  (
-    lock "the cabal store"
-    warm
-  ) 9>"$STATE/warm.lock"
-fi

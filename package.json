@@ -25,6 +25,7 @@
     "undeploy-local": "sh toolchain/undeploy-local.sh",
     "format": "sh run_fourmolu.sh",
     "format-check": "sh run_fourmolu.sh --mode check",
+    "maker": "sh toolchain/maker.sh",
     "clean": "rm -rf dist-newstyle/wasm/public"
   },
   "allowScripts": {

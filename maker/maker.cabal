@@ -1,0 +1,107 @@
+cabal-version: 3.0
+name:          maker
+version:       0.1.0.0
+synopsis:      The wiki's toolchain installer and build system, on Shake
+description:
+  The second stage of toolchain/bootstrap.sh: once GHC and cabal are there,
+  the maker installs the rest of the toolchain (the wasm sysroot and cross
+  compiler, Node, Playwright's Chromium, fourmolu), writes the environment
+  file and warms the cabal store. A terminal interface, maker-tui, shows the
+  toolchain's state. See docs/PLAN.md, WP5.68.
+license:       MIT
+license-file:  LICENSE
+build-type:    Simple
+tested-with:   GHC ==9.10.3 || ==9.12.4 || ==9.14.1
+
+common shared
+  default-language:   GHC2021
+  default-extensions:
+    DuplicateRecordFields
+    LambdaCase
+    NoFieldSelectors
+    OverloadedRecordDot
+    OverloadedStrings
+    StrictData
+
+  ghc-options:
+    -Wall -Wextra -Wcompat -Wincomplete-uni-patterns
+    -Wincomplete-record-updates -Wredundant-constraints -Wunused-packages
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    Maker.Cli
+    Maker.Context
+    Maker.Log
+    Maker.Pins
+    Maker.Process
+    Maker.Rules
+    Maker.Status
+    Maker.Store
+    Maker.Toolchain.Chromium
+    Maker.Toolchain.Fourmolu
+    Maker.Toolchain.Ghcup
+    Maker.Toolchain.Node
+    Maker.Toolchain.Wasm
+    Maker.Version
+
+  build-depends:
+    , base                  >=4.20  && <4.23
+    , containers            >=0.6   && <0.9
+    , directory             >=1.3   && <1.4
+    , filepath              >=1.4   && <1.6
+    , optparse-applicative  >=0.18  && <0.20
+    , process               >=1.6   && <1.7
+    , shake                 >=0.19  && <0.20
+    , time                  >=1.12  && <1.16
+    , unix                  >=2.8   && <2.9
+
+-- The command line: what toolchain/bootstrap.sh runs after GHC and cabal.
+executable maker
+  import:         shared
+  hs-source-dirs: app
+  main-is:        Main.hs
+  build-depends:
+    , base
+    , maker
+
+  ghc-options:    -threaded
+
+-- The terminal interface, apart from maker itself: brick's terminal library
+-- links libtinfo, which a deploy's machine need not have, so only someone
+-- who asks for the interface builds it (toolchain/maker.sh tui).
+executable maker-tui
+  import:         shared
+  hs-source-dirs: tui
+  main-is:        Main.hs
+  other-modules:  Maker.Tui
+  build-depends:
+    , base
+    , brick               >=2.4  && <3.1
+    , filepath
+    , maker
+    , process
+    , vty                 >=6.2  && <6.7
+
+  ghc-options:    -threaded
+
+test-suite maker-test
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Test.hs
+  other-modules:
+    Maker.CliSpec
+    Maker.PinsSpec
+    Maker.StoreSpec
+    Maker.VersionSpec
+
+  build-depends:
+    , base
+    , directory
+    , filepath
+    , hspec       >=2.10 && <2.12
+    , maker
+
+  ghc-options:    -threaded

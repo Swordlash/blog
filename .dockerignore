@@ -1,4 +1,5 @@
 # Only what the image is built from goes to the builder: the packages, the
+# maker (the bootstrap's second stage, which installs the toolchain), the
 # page, the scripts, the project files, and the changelog's entries, which
 # wiki-server embeds (through its link wiki-server/changelog). Not the build directories or
 # node_modules (the builder makes its own), and not .git, docs/ or anything
@@ -17,6 +18,8 @@
 !wiki-app/
 !wiki-server/
 !changelog/
+!maker/
+maker/cabal.project.local
 **/dist-newstyle
 **/node_modules
 **/.ghc.environment.*

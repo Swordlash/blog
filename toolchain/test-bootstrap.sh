@@ -8,6 +8,16 @@ SOURCE_DIR=${SOURCE%/*}
 NODE_REAL=$(command -v node)
 NPM_REAL=$(command -v npm)
 export NODE_REAL
+# The bootstrap's second stage, the maker (maker/), built here with the real
+# cabal before PATH is narrowed to the fakes, which build nothing; the
+# bootstrap runs it through WIKI_MAKER. A maker already built may be named
+# there instead.
+if [ -z "${WIKI_MAKER:-}" ]; then
+  (cd "$SOURCE_DIR/../maker" && cabal build -v0 exe:maker) || fail_build=1
+  [ -z "${fail_build:-}" ] || { printf 'FAIL: building the maker\n' >&2; exit 1; }
+  WIKI_MAKER=$(cd "$SOURCE_DIR/../maker" && cabal list-bin -v0 exe:maker)
+fi
+export WIKI_MAKER
 # Hosted setup may export its installation prefix. Discovery in these tests
 # must use the temporary HOME rather than the runner's real ghcup.
 unset GHCUP_INSTALL_BASE_PREFIX
@@ -26,6 +36,7 @@ fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/repo/toolchain"
   cp "$SOURCE" "$case_dir/repo/toolchain/bootstrap.sh"
+  cp "$SOURCE_DIR/pins.env" "$case_dir/repo/toolchain/pins.env"
   cp "$SOURCE_DIR/check-native.sh" "$SOURCE_DIR/check-tex.sh" "$case_dir/repo/toolchain/"
   HOME=$case_dir/home
   EVENTS=$case_dir/events

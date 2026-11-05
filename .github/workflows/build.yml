@@ -361,6 +361,13 @@ jobs:
     - name: Install dependencies
       run: cabal build all --builddir=dist-newstyle/native --only-dependencies
 
+    # The maker's own dependencies (Shake, optparse-applicative, hspec, and
+    # brick for its terminal interface), from its own project, into the same
+    # store before it is saved, so later runs take them from the cache.
+    - name: Install the maker's dependencies
+      if: matrix.group == 'unit'
+      run: cd maker && cabal build all --enable-tests --only-dependencies
+
     # Before the build, so a run that fails on our own code still banks the
     # dependencies it compiled; after them, so a store whose dependencies
     # failed to build never replaces a good one. Then the ref's older copies
@@ -407,6 +414,16 @@ jobs:
       run: |
         server_test=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)
         node toolchain/test-native-groups.mjs "$server_test"
+
+    # The bootstrap's second stage: its own tests, its terminal interface
+    # built (with -Werror, as the maker's project sets), then the bootstrap's
+    # tests, which run it against fake tools.
+    - name: Build and test the maker
+      if: matrix.group == 'unit'
+      run: |
+        cd maker
+        cabal build all --enable-tests
+        cabal test maker-test
 
     - name: Test bootstrap scripts
       if: matrix.group == 'unit'

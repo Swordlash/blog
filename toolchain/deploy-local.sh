@@ -1383,10 +1383,10 @@ tex_step() {
   say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $tex_bin first on its PATH"
 }
 
-# A pin or a floor of toolchain/bootstrap.sh (GHC_VERSION, GHC_MIN_VERSION,
-# CABAL_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR), read from the script,
-# which is the one place that says them.
-bootstrap_pin() { sed -n "s/^$1=//p" "$ROOT/toolchain/bootstrap.sh" | head -n 1; }
+# A pin or a floor of the toolchain (GHC_VERSION, GHC_MIN_VERSION,
+# CABAL_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR), read from
+# toolchain/pins.env, the one place that says them.
+bootstrap_pin() { sed -n "s/^$1=//p" "$ROOT/toolchain/pins.env" | head -n 1; }
 
 # What --status says of the options for a machine that installs nothing
 # from the internet, from the state.

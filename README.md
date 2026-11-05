@@ -1212,8 +1212,8 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
   older stops the deploy, named with the version found and with a note that without
   `--system-tools` the bootstrap would install it. GHC 9.14.1 and cabal 3.16.1.0 are
   the tested versions: another one is used with a warning, and a build that then
-  fails is not the deploy's to fix. The floors and the pins are variables of
-  `toolchain/bootstrap.sh` (`GHC_MIN_VERSION`, `CABAL_MIN_VERSION`, `NODE_MIN_MAJOR`,
+  fails is not the deploy's to fix. The floors and the pins are lines of
+  `toolchain/pins.env` (`GHC_MIN_VERSION`, `CABAL_MIN_VERSION`, `NODE_MIN_MAJOR`,
   `GHC_VERSION`, `CABAL_VERSION`), and `sh toolchain/bootstrap.sh system-tools`
   runs the same check by itself. It needs the page CI built (`--backend-only` or
   `--app-page`): building the page needs the wasm toolchain, which no machine has of
@@ -2222,6 +2222,29 @@ Missing tools or incompatible versions stop with instructions to run
 without loading the environment; for direct tool commands in an unloaded shell,
 run `. ~/.wiki-toolchain/env`. The wasm environment is checked in a subshell and is still
 loaded automatically by the wasm scripts; do not export its wasm `CC` globally.
+
+The bootstrap works in two stages. `toolchain/bootstrap.sh` itself, in POSIX sh,
+does what must work before there is a GHC: the read-only modes above, the Debian
+packages, ghcup with GHC and cabal, the Hackage mirror and cabal's index, and the
+deploy's `native` and `node` modes in full. For `toolchain`, `build`, `all` and
+`warm` it then hands over to the maker (`maker/`), a Haskell program on Shake that it
+builds once with its own cabal project (`maker/cabal.project`, so it fetches nothing
+of the wiki's) and keeps: the maker installs the wasm sysroot and compiler, Node,
+Chromium and fourmolu, prints the summary, and warms the store. Its messages are the
+bootstrap's own. The pins and floors are in `toolchain/pins.env`, which the
+bootstrap sources and the maker parses. The maker also has a command line and a
+terminal interface of its own, through `toolchain/maker.sh` (or `npm run maker --`):
+
+```sh
+sh toolchain/maker.sh status                      # each component, its version, ready or missing
+sh toolchain/maker.sh toolchain install node      # one component (wasm-sysroot, wasm-ghc, node,
+                                                  # chromium, fourmolu, store), or all with none named
+sh toolchain/maker.sh tui                         # the same in a terminal interface, as ghcup tui
+```
+
+The interface links libtinfo (`libncurses-dev` on Debian, which
+`sh toolchain/bootstrap.sh native --with-wizard` installs); the bootstrap never
+builds it.
 
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing
