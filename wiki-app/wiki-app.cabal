@@ -365,6 +365,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Backups
       Test.Browser.Comments
       Test.Browser.Contents
+      Test.Browser.CopyCode
       Test.Browser.Editor
       Test.Browser.Entries
       Test.Browser.Export

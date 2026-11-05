@@ -69,6 +69,17 @@
 -- script runs; the stylesheet's @code-scroll@ makes the box's lines and
 -- its @lh@ the same height (web/style.css).
 --
+-- __Copy buttons.__ With 'copyButtons' on, a code block is a
+-- @\<div class=\"code-block\">@ that holds what 'codeBlock' made and,
+-- after it, an empty @\<button class=\"code-copy\">@ with an
+-- @aria-label@ ('copyButton'). The islands' script copies the text of the
+-- block's @\<pre>@ when the button is clicked (web/src/islands.js), and
+-- the stylesheet draws the button's label, so that the page's text (what
+-- a comment quotes, "Wiki.Core.Anchor", and what the reader selects) has
+-- no "Copy" after every listing. The button is beside the @\<pre>@, not in
+-- it: the island's library replaces what the @\<pre>@ holds, and a
+-- listing that scrolls inside its @\<pre>@ keeps the button in place.
+--
 -- __Spoilers.__ An inline spoiler, @||text||@, is a
 -- @\<span class=\"spoiler\" tabindex=\"0\" role=\"button\">@ whose text
 -- the stylesheet blurs until the islands' script gives it the class
@@ -158,6 +169,11 @@ data Options page w i = Options
   , headingAnchors :: Bool
   -- ^ Whether a heading ends with its link to itself: in a page, but not
   -- where nothing shows it (a feed, read without the stylesheet).
+  , copyButtons :: Bool
+  -- ^ Whether a code block has a button that copies its code
+  -- ('copyButton'): in the application, whose page loads the islands'
+  -- script that makes the button work. Off by default, since a button
+  -- does nothing where that script does not run (a feed).
   , boxes :: [BoxKind]
   -- ^ The kinds of box the administrator defined, with their labels,
   -- colours and icons ("Wiki.Core.Markdown.Box").
@@ -207,6 +223,7 @@ defaultOptions =
     , pageHref = identity
     , resolveMention = const Nothing
     , headingAnchors = True
+    , copyButtons = False
     , boxes = []
     , numbering = noNumbers
     }
@@ -273,7 +290,10 @@ renderSections opts sections = evalState (traverse section sections) (Counts M.e
       -- taken it out by now. A page shows nothing for it.
       Pause -> pure []
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
-      CodeBlock attrs lang code -> island code <&> \k -> [opts.codeBlock k lang (codeRows attrs) code]
+      CodeBlock attrs lang code ->
+        island code <&> \k ->
+          let listing = opts.codeBlock k lang (codeRows attrs) code
+           in [if opts.copyButtons then HH.div [classesProp ["code-block"]] [listing, copyButton] else listing]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
       -- A block of nothing but definitions (a page's macros, WP5.41) shows
@@ -638,6 +658,20 @@ scrollingCode :: (HasType "class" Text r, HasType "style" Text r) => Maybe Int -
 scrollingCode rows own = case rows of
   Nothing -> [classesProp own | not (null own)]
   Just n -> [classesProp (own <> ["code-scroll"]), HP.styleText ("max-height: " <> show n <> "lh; overflow: auto")]
+
+-- | The button a code block ends with when 'copyButtons' is on. It is
+-- empty: the stylesheet draws its label, "Copy", and the islands' script
+-- changes the label for a moment after a click by setting @data-copy@
+-- (web/src/islands.js). The @aria-label@ names it for a screen reader,
+-- and @type=\"button\"@ keeps it from submitting a form it may be in.
+copyButton :: HH.HTML w i
+copyButton =
+  HH.button
+    [ HP.type_ I.ButtonButton
+    , classesProp ["code-copy"]
+    , HP.attr (HH.AttrName "aria-label") "Copy the code"
+    ]
+    []
 
 -- | A line the page shows in red: a spoiler's marker as written, and what
 -- is wrong with it, also as the line's title.

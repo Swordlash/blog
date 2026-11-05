@@ -98,6 +98,15 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "<span class=\"wiki-math wiki-math-inline\">"
     html `contains` "class=\"page-tree\""
 
+  it "gives a code block its copy button beside the code, which a listing that scrolls keeps outside its pre" $ do
+    Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    let button = "<button aria-label=\"Copy the code\" class=\"code-copy\" type=\"button\"></button>"
+    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code\">main :: IO ()\nmain = putStrLn"
+    html `contains` ("const answer = [6, 7].reduce((a, b) =&gt; a * b);\n</pre>" <> button <> "</div>")
+    html `contains` "<div class=\"code-block\"><pre class=\"wiki-code code-scroll\" style=\"max-height: 3lh; overflow: auto\">-- Scroll this block"
+    -- The label is the stylesheet's: no button says "Copy" in the page.
+    html `lacks` ">Copy</button>"
+
   it "resolves links between pages to their routes, and attachments to their URLs" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
     html `contains` "href=\"/s/docs/p/markdown-guide/diagrams/\""

@@ -282,6 +282,8 @@ islandOptions ctx spaceOwn =
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes
+    , -- The page loads the islands' script, which makes the buttons work.
+      Md.copyButtons = True
     }
   where
     island key = HH.slot_ "island" key Islands.component

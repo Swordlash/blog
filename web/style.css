@@ -1375,6 +1375,90 @@ select {
   font-size: 1em;
 }
 
+/* A code block with its copy button (Wiki.Core.Markdown.Render's
+   copyButton): the listing's <pre> and the button beside it, in a
+   <div class="code-block">. The block has the margins a <pre> has, and the
+   <pre> none, so that a rule for the first or last child of a page, a box
+   or a comment reaches them. The button sits over the block's top right
+   corner. It is not inside the <pre>, so a listing that scrolls, down
+   (rows=N) or sideways, scrolls under it and the button stays in view. */
+.code-block {
+  position: relative;
+  margin: 1em 0;
+}
+
+.code-block > pre {
+  margin: 0;
+}
+
+/* The button is empty, and its label is drawn here from data-copy, which
+   web/src/islands.js sets for a moment after a click: so the page's text
+   has no "Copy" in it. It shows while the pointer is over the block, while
+   it has the keyboard's focus, and while it says what a click did; on a
+   screen without a pointer that hovers, always. */
+.code-copy {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--surface);
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.code-copy::before {
+  content: "Copy";
+}
+
+.code-copy[data-copy="copied"]::before {
+  content: "Copied";
+}
+
+.code-copy[data-copy="failed"]::before {
+  content: "Not copied";
+}
+
+.code-copy[data-copy="failed"] {
+  color: var(--danger);
+}
+
+.code-block:hover > .code-copy,
+.code-copy:focus-visible,
+.code-copy[data-copy] {
+  opacity: 1;
+}
+
+.code-copy:hover {
+  color: var(--text);
+}
+
+.code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (hover: none) {
+  .code-copy {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-copy {
+    transition: none;
+  }
+}
+
+/* Without scripts nothing would copy. */
+@media (scripting: none) {
+  .code-copy {
+    display: none;
+  }
+}
+
 .page-body .task-list {
   padding-left: 1.2rem;
   list-style: none;
@@ -6459,7 +6543,8 @@ a.mention {
 
 @media print {
   .page-contents,
-  .heading-anchor {
+  .heading-anchor,
+  .code-copy {
     display: none;
   }
 

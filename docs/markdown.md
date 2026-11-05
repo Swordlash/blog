@@ -82,6 +82,8 @@ main = putStrLn "Hello, wiki"
 
 Code indented by four spaces is a block too, without a language.
 
+Every block of code has a **Copy** button in its top right corner, shown when the pointer is over the block or the button has the keyboard's focus (always, on a touch screen). It puts the code on the clipboard exactly as written, without the highlighting, and says "Copied" for a moment, or "Not copied" if the browser refused. A listing that scrolls keeps the button in its corner.
+
 These languages are highlighted, by the names a fence may give them (in any case); code in any other language is shown as it is, unhighlighted:
 
 | Language | Fence names |

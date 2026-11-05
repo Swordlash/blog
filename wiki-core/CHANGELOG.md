@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+`Options` gains `copyButtons` (WP5.63), off in `defaultOptions`. When it is
+on, a code block renders as `<div class="code-block">` holding what
+`codeBlock` made and, after it, an empty
+`<button type="button" class="code-copy" aria-label="Copy the code">`,
+which the application's islands' script makes copy the code. The button
+has no text, so `Wiki.Core.Anchor.renderedText` and `renderedBlocks` read
+the same with it as without it. A feed keeps the default and has no
+button.
+
 Spoilers, and code listings that scroll (WP5.62, issue #152). The parser
 reads `||text||` as an inline spoiler, the new `Inline` constructor
 `Hidden`, read as the strikethrough is. A block spoiler sits between two

@@ -1280,6 +1280,22 @@ try {
   await copier.context().close();
   console.log("ok: Copy puts a page's source on the clipboard");
 
+  // A code block's Copy button works on the page as the server prerendered
+  // it, before the program runs: app.wasm is held back throughout, and the
+  // islands' script alone copies the code, as the fence holds it.
+  const prerendered = await newPage({ permissions: ["clipboard-read", "clipboard-write"] });
+  prerendered.gate = new Promise(() => {});
+  await prerendered.goto(url("/s/docs/p/markdown-guide/"), { waitUntil: "domcontentloaded" });
+  const listing = prerendered.locator("#app .page-body .code-block", { has: prerendered.locator("pre", { hasText: "main = putStrLn" }) }).first();
+  const code = await listing.locator("pre").textContent();
+  assert.ok(code.startsWith("main :: IO ()\n") && code.endsWith("\n"), `the first listing is not the guide's Haskell: ${JSON.stringify(code)}`);
+  await listing.locator("button.code-copy").click();
+  await listing.locator("button.code-copy[data-copy='copied']").waitFor({ timeout });
+  assert.equal(await prerendered.evaluate(() => navigator.clipboard.readText()), code, "the clipboard has something else than the code");
+  assert.equal(await prerendered.evaluate(() => typeof globalThis.wikiIslands), "object", "the islands' script did not run");
+  await prerendered.context().close();
+  console.log("ok: a code block's Copy puts its code on the clipboard on the prerendered page, before the program runs");
+
   // Comments: the first post's quote marked as it was prerendered, text
   // selected in it commented on from the button beside it, and the comment
   // and its mark there after a reload, kept in IndexedDB.

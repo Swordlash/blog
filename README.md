@@ -169,6 +169,12 @@ Haskell, coloured by its syntax:
 The names a fence may give each of some seventy languages are listed in
 [docs/markdown.md](docs/markdown.md#code).
 
+Every code block has a **Copy** button in its top right corner, shown when
+the pointer is over the block or the button has the keyboard's focus. It
+copies the code exactly as written, and says "Copied" for a moment. It works
+on a page the server prerendered before the application has loaded, and
+nothing of it is in the page's text, its search, its exports or the feeds.
+
 A long listing can show a few lines at a time: `rows=N` in braces after the
 language makes the block N lines high:
 

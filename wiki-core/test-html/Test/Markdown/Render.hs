@@ -390,6 +390,24 @@ spec = describe "Markdown.Render" $ do
         `shows'` "<pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">x = 1\n</code></pre>"
       "```haskell {rows=0}\nx = 1\n```" `shows'` "<pre><code class=\"language-haskell\">x = 1\n</code></pre>"
 
+  describe "copy buttons" $ do
+    let copying = defaultOptions {copyButtons = True}
+        button = "<button aria-label=\"Copy the code\" class=\"code-copy\" type=\"button\"></button>"
+    it "puts a code block and an empty button after it in a div, when asked" $ do
+      showsWith copying "```haskell\nx = 1\n```" ("<div class=\"code-block\"><pre><code class=\"language-haskell\">x = 1\n</code></pre>" <> button <> "</div>")
+      showsWith copying "```\nx\n```" ("<div class=\"code-block\"><pre><code>x\n</code></pre>" <> button <> "</div>")
+    it "keeps a listing that scrolls in its pre, and the button outside it"
+      $ showsWith copying "```haskell {rows=3}\nx = 1\n```"
+      $ "<div class=\"code-block\"><pre class=\"code-scroll\" style=\"max-height: 3lh; overflow: auto\"><code class=\"language-haskell\">x = 1\n</code></pre>" <> button <> "</div>"
+    it "wraps the block the caller's codeBlock makes, an island too"
+      $ showsWith copying {codeBlock = \_ _ _ code -> HH.pre [HP.class_ (HH.ClassName "wiki-code")] [HH.text code]} "```\nx\n```"
+      $ "<div class=\"code-block\"><pre class=\"wiki-code\">x\n</pre>" <> button <> "</div>"
+    it "gives no other island a button" $ do
+      showsWith copying "```mermaid\ngraph TD; A-->B\n```" "<pre class=\"mermaid\">graph TD; A--&gt;B\n</pre>"
+      showsWith copying "$$x$$" "<div class=\"math display\">x</div>"
+    it "has none by default, as in a feed" $
+      "```\nx\n```" `shows'` "<pre><code>x\n</code></pre>"
+
   it "renders nothing for an empty page" $
     "" `shows'` ""
 
