@@ -867,6 +867,18 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.71 "What's new?" in the demo** (the owner, 2026-11-05: "a w demo nie
+  ma changeloga? nie widze"). Decision 50 compiled the entries into
+  wiki-server, so the demo, which has no server, shows no page and no link. The
+  parser of entries (`Wiki.Server.WhatsNew.Entry`) moves to `wiki-api`, so that
+  the server and the demo's build read the changelog with one piece of code.
+  The demo's build (the maker's wasm build, through `wiki-app-prerender`)
+  writes `whats-new.json` into the page: the newest twelve entries, the
+  build's version and time, the same answer as `GET api/v1/whats-new`. The
+  demo's backend (`Wiki.App.Backend.Mem`) fetches it beside the page instead
+  of answering not found, and its session names the newest entry, so the
+  sidebar's link and its dot work as on a server. `app.wasm` stays one binary
+  for both backends. Browser tests: the page and the dot on the demo.
 - **WP5.70 CI: one store per cabal version, and GHC 9.10** (decisions 53 and 54).
   One cache entry for the cabal store, keyed by OS, runner kind and cabal's
   version, restored by every job and saved only when a job added packages; the
