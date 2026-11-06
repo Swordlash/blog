@@ -43,6 +43,7 @@ library
     Maker.Deploy.Plan
     Maker.Deploy.Prepare
     Maker.Deploy.State
+    Maker.Deploy.Upgrade
     Maker.Deploy.Tailscale
     Maker.Deploy.Tex
     Maker.Deploy.Unit

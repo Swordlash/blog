@@ -49,6 +49,7 @@ stateKeys =
   , ("texlive_mirror", "texlive_mirror")
   , ("perl_dir", "perl_dir")
   , ("whats_new", "whats_new")
+  , ("git_commit", "git_commit")
   ]
 
 -- | The state file's text for a plan, with the firewall's rule port as the

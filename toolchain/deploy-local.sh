@@ -404,6 +404,11 @@
 #                    disable the service, remove its unit, close its port, turn its
 #                    tailscale serve off; files and data kept)
 #   --status         show the deployment and its service, change nothing
+#   --rollback       put back the server deployment kept before the last upgrade
+#                    (its binary, page, unit and state, and the database restored
+#                    from the backup made before the upgrade: what was written
+#                    since is lost); asks first, or --yes
+#   --yes            answer --rollback's question without a terminal
 #
 # The public address serves whoever signs in there, and anyone else as an
 # anonymous reader. The first administrator is made on this machine, with the
@@ -444,7 +449,7 @@ opt_npm_registry='' opt_npm_registry_given='' opt_hackage_mirror='' opt_hackage_
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 opt_texlive='' opt_texlive_mirror='' opt_texlive_installer='' opt_perl_source=''
 opt_whats_new=''
-action=deploy
+action=deploy yes=
 build=1 no_firewall='' enable_linger='' force='' opt_semaphore=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
 while [ $# -gt 0 ]; do
@@ -525,6 +530,8 @@ while [ $# -gt 0 ]; do
     --force) force=1 ;;
     --stop) action=stop ;;
     --status) action=status ;;
+    --rollback) action=rollback ;;
+    --yes) yes=1 ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
@@ -692,6 +699,10 @@ prev_perl_dir=$(state_get perl_dir)
 # Whether the server shows the page "What's new?": no after --no-whats-new,
 # and empty (the default, on) otherwise.
 prev_whats_new=$(state_get whats_new)
+# The commit the deployment was built from (unknown when its source was not a
+# git checkout): what a rollback names (docs/PLAN.md, WP5.73).
+prev_git_commit=$(state_get git_commit)
+git_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || git_commit=unknown
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -946,6 +957,36 @@ tex_engine_report() {
   fi
 }
 
+# The maker, built with its own cabal project as the bootstrap builds it
+# (WIKI_MAKER names one built elsewhere, as in the tests), into $maker.
+find_maker() {
+  maker=${WIKI_MAKER:-}
+  if [ -z "$maker" ]; then
+    command -v cabal >/dev/null 2>&1 ||
+      die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh static)"
+    built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
+    [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
+    (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
+    maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker) || die "finding the maker's binary (cd maker && cabal list-bin exe:maker) failed"
+  fi
+}
+
+# --rollback: the maker puts back the deployment kept in <dir>/previous
+# (maker/src/Maker/Deploy/Upgrade.hs), after saying what comes back and what
+# is lost, and asking (--yes answers without a terminal). Nothing is built.
+if [ "$action" = rollback ]; then
+  [ -n "$prev_dir" ] && [ "$prev_mode" = server ] ||
+    die "there is no server deployed under the name $name${prefix:+ under $prefix} to roll back"
+  find_maker
+  plan=$(mktemp)
+  printf 'name=%s\ndir=%s\nstate_dir=%s\nunit_file=%s\nstate_file=%s\nyes=%s\n' \
+    "$name" "$prev_dir" "$STATE_DIR" "$unit_file" "$state_file" "${yes:-}" >"$plan"
+  status=0
+  "$maker" deploy rollback --plan "$plan" || status=$?
+  rm -f "$plan"
+  exit "$status"
+fi
+
 if [ "$action" = status ]; then
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
     say "nothing is deployed under the name $name${prefix:+ under $prefix}${prefix:-: a deployment under a prefix is found with --prefix DIR}"
@@ -976,6 +1017,12 @@ if [ "$action" = status ]; then
     backups=$(ls "$prev_dir/data/backups" 2>/dev/null | grep -c '[.]\(sqlite\|pgdump\)$' || true)
     latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]\(sqlite\|pgdump\)$' | tail -n 1 || true)
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
+    say "built from commit ${prev_git_commit:-unknown}"
+    if [ -f "$prev_dir/previous/info" ]; then
+      kept_commit=$(sed -n 's/^commit=//p' "$prev_dir/previous/info")
+      kept_at=$(sed -n 's/^kept=//p' "$prev_dir/previous/info")
+      say "the deployment before it, of commit ${kept_commit:-unknown}, is kept in $prev_dir/previous since $kept_at: --rollback goes back to it"
+    fi
     say "users: $prev_dir/bin/wiki users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
     say "its public address, mail server and sign-in providers: the administration's Server section, http://127.0.0.1:$prev_admin_port/admin/admin/"
     tex_status_report
@@ -1499,7 +1546,7 @@ perl_source=$opt_perl_source
 # each variable the rest reads, and for each the state file keeps (the
 # maker writes the state). A value cannot hold a newline: the plan has one
 # line per key.
-MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind refresh_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
+MAKER_PLAN_KEYS='git_commit prev_git_commit name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind refresh_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
 maker_plan() {
   printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
   printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"
@@ -1513,19 +1560,9 @@ maker_plan() {
     printf '%s=%s\n' "$key" "$value"
   done
 }
-# Hand the rest of the deploy to the maker, built with its own cabal
-# project as the bootstrap builds it (WIKI_MAKER names one built elsewhere,
-# as in the tests), and end with its status.
+# Hand the rest of the deploy to the maker, and end with its status.
 maker_apply() {
-  maker=${WIKI_MAKER:-}
-  if [ -z "$maker" ]; then
-    command -v cabal >/dev/null 2>&1 ||
-      die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh static)"
-    built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
-    [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
-    (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
-    maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker) || die "finding the maker's binary (cd maker && cabal list-bin exe:maker) failed"
-  fi
+  find_maker
   plan=$(mktemp)
   maker_plan >"$plan"
   status=0

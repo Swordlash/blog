@@ -188,7 +188,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
@@ -255,6 +255,25 @@ case \$command in
     else
       printf 'There is no database to back up yet.\n'
     fi ;;
+  migrate)
+    # As wiki-server migrate does, the schema's version a line of the
+    # file; FAKE_MIGRATE_FAIL makes it fail.
+    [ -z "\${FAKE_MIGRATE_FAIL:-}" ] || { printf 'fake migration failure\n' >&2; exit 1; }
+    [ -z "\$sqlite" ] || [ ! -f "\$sqlite" ] || printf 'migrated\n' >>"\$sqlite"
+    printf 'The database is at version 9 of the schema.\n' ;;
+  check)
+    [ -z "\${FAKE_CHECK_FAIL:-}" ] || { printf 'fake check failure: a row does not read\n' >&2; exit 5; }
+    printf 'Read every table back.\n' ;;
+  restore)
+    # As wiki-server restore does: the database it replaces set aside, the
+    # backup copied in its place.
+    [ -f "\$target" ] || { printf 'There is no file %s.\n' "\$target" >&2; exit 1; }
+    if [ -n "\$sqlite" ]; then
+      mkdir -p "\$data/replaced/fake"
+      [ ! -f "\$sqlite" ] || mv "\$sqlite" "\$data/replaced/fake/"
+      cp "\$target" "\$sqlite"
+    fi
+    printf 'Restored %s\n' "\$target" ;;
   compress)
     # As wiki-server compress does: a gzip copy of each file over 1 KiB
     # with one of the extensions toolchain/compress.mjs is given.
@@ -1437,6 +1456,96 @@ assert_contains "$out" "the wiki's server, its data in $data"
 assert_contains "$out" 'backups: 1 in'
 assert_contains "$out" "users add --data $data LOGIN --admin"
 pass '--status reports the server, its data and its backups'
+
+# An upgrade (WP5.73): the new program migrates the database and reads it
+# back before it is started, and the deployment it replaces is kept in
+# previous/, with the commit it was built from. The state records the
+# commit of this one: the checkout's, or unknown outside git.
+[ "$(state git_commit)" = unknown ] || fail 'a deploy from outside git did not record its commit as unknown'
+git -C "$case_dir/repo" init -q
+git -C "$case_dir/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+first=$(git -C "$case_dir/repo" rev-parse HEAD)
+printf '# built from outside git\n' >>"$HOME/wiki-demo/bin/wiki-server"
+: >"$EVENTS"
+out=$case_dir/upgrade
+deploy --no-build >"$out" 2>&1 || fail 'an upgrade failed'
+[ "$(state git_commit)" = "$first" ] || fail 'the state does not record the commit deployed'
+assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from outside git'
+assert_lacks "$HOME/wiki-demo/bin/wiki-server" '# built from outside git'
+assert_contains "$HOME/wiki-demo/previous/info" 'commit=unknown'
+assert_contains "$HOME/wiki-demo/previous/info" "backup=$data/backups/1.sqlite"
+assert_contains "$HOME/wiki-demo/previous/state" 'git_commit=unknown'
+[ -f "$HOME/wiki-demo/previous/unit" ] && [ -f "$HOME/wiki-demo/previous/app/index.html" ] || fail 'the unit or the page was not kept'
+assert_contains "$out" "kept the previous deployment (unknown) in $HOME/wiki-demo/previous"
+assert_contains "$EVENTS" "wiki-server migrate --data $data --sqlite $data/wiki.sqlite"
+assert_contains "$EVENTS" "wiki-server check --data $data --sqlite $data/wiki.sqlite"
+{ [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'wiki-server migrate')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server migrate')" -lt "$(line_of "$EVENTS" 'wiki-server check')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server check')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
+  fail 'the migration and the check did not run between the backup and the new server'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the upgraded server does not answer'
+deploy --status >"$case_dir/status-upgraded" 2>&1
+assert_contains "$case_dir/status-upgraded" "built from commit $first"
+assert_contains "$case_dir/status-upgraded" "the deployment before it, of commit unknown, is kept in $HOME/wiki-demo/previous since"
+pass 'an upgrade migrates and reads the database back before starting, keeps the deployment it replaces in previous/, and records its commit'
+
+# A migrated database that does not read back puts the kept deployment
+# back: the old binary restores the backup made before, the old files,
+# unit and state return, and the deploy names the commit to go back to.
+git -C "$case_dir/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+printf '# built from the first commit\n' >>"$HOME/wiki-demo/bin/wiki-server"
+printf 'written by the second\n' >>"$data/wiki.sqlite"
+: >"$EVENTS"
+out=$case_dir/check-fails
+if FAKE_CHECK_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose database does not read back succeeded'; fi
+assert_contains "$out" 'the migrated database does not read back (wiki-server check, above)'
+assert_contains "$out" "rolled back to the previous deployment, of commit $first, its database restored from $data/backups/2.sqlite"
+assert_contains "$out" "git checkout $first"
+assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'previous/ is left after the rollback'
+[ "$(state git_commit)" = "$first" ] || fail 'the state was not put back'
+assert_contains "$EVENTS" "wiki-server restore $data/backups/2.sqlite --data $data --sqlite $data/wiki.sqlite"
+assert_contains "$data/wiki.sqlite" 'written by the second'
+[ "$(grep -c migrated "$data/wiki.sqlite")" = "$(grep -c migrated "$data/backups/2.sqlite")" ] || fail 'the failed migration was not undone'
+{ [ "$(line_of "$EVENTS" 'wiki-server check')" -lt "$(line_of "$EVENTS" 'wiki-server restore')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server restore')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
+  fail 'the restore did not come between the check and the restart'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the rolled back server does not answer'
+pass 'a database that does not read back after the migration rolls the upgrade back, restoring the backup with the old binary, and names the commit'
+
+# A migration that fails rolls back the same way.
+: >"$EVENTS"
+out=$case_dir/migrate-fails
+if FAKE_MIGRATE_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose migration failed succeeded'; fi
+assert_contains "$out" 'the migration of the database (wiki-server migrate, above) failed'
+assert_contains "$out" "git checkout $first"
+assert_lacks "$EVENTS" 'wiki-server check'
+assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit'
+pass 'a failed migration rolls the upgrade back'
+
+# --rollback goes back by hand, after a successful upgrade: it asks first,
+# or --yes answers.
+: >"$EVENTS"
+deploy --no-build >"$case_dir/upgrade-again" 2>&1 || fail 'an upgrade failed'
+second=$(git -C "$case_dir/repo" rev-parse HEAD)
+[ "$(state git_commit)" = "$second" ] || fail 'the state does not record the second commit'
+out=$case_dir/rollback-asks
+if deploy --rollback </dev/null >"$out" 2>&1; then fail '--rollback without a terminal or --yes rolled back'; fi
+assert_contains "$out" 'add --yes'
+[ -e "$HOME/wiki-demo/previous" ] || fail '--rollback that was not answered changed previous/'
+out=$case_dir/rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback --yes failed'
+assert_contains "$out" "is of commit $first"
+assert_contains "$out" 'everything written since is lost'
+assert_contains "$out" "rolled back to commit $first"
+[ "$(state git_commit)" = "$first" ] || fail '--rollback did not put the state back'
+assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'previous/ is left after --rollback'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after --rollback'
+out=$case_dir/rollback-none
+if deploy --rollback --yes >"$out" 2>&1; then fail '--rollback with nothing kept succeeded'; fi
+assert_contains "$out" 'there is no previous deployment kept'
+pass '--rollback asks, or takes --yes, and puts the kept deployment back with its database'
 
 # The public address is the panel's: the deploy reminds of it, and says so
 # when it is another than the one served.
@@ -3757,12 +3866,13 @@ pass 'the files --bundle-locally builds again are those web/bundle.sh says it wr
 # wizard, and every option literal of the wizard is in the header, so that
 # a new option of the deploy cannot be missing from the wizard, nor a gone
 # one stay in it. Left out on purpose: --force, which does nothing any more
-# and which the wizard does not offer; and the wizard's own --args-from and
-# --help. --dir, the old name of --prefix, is mentioned in the header's
+# and which the wizard does not offer; --yes, which answers --rollback's
+# question where there is no terminal, and the wizard runs on one; and the
+# wizard's own --args-from and --help. --dir, the old name of --prefix, is mentioned in the header's
 # prose only.
 wizard_options_differ() {
   sed -n '2,/^set -eu/p' "$SOURCE_DIR/deploy-local.sh" |
-    sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' | sort -u >"$TMP/header-options"
+    sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' -e '--yes' | sort -u >"$TMP/header-options"
   grep -o '"--[a-z][a-z-]*' "$1" | sed 's/^"//' | grep -v -x -e '--args-from' -e '--help' | sort -u >"$TMP/wizard-options"
   [ "$(wc -l <"$TMP/header-options")" -ge 20 ] || fail "the deploy's header lists too few options; did its format change? $(cat "$TMP/header-options")"
   comm -23 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-wizard"

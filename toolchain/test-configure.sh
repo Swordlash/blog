@@ -190,7 +190,8 @@ pass 'the page from the state: whats_new=no is --no-whats-new, and on again is -
 # The status and the stop of that deployment name it, and nothing else.
 expect "sh toolchain/deploy-local.sh --status --prefix $TMP/srv/wiki" action=status "prefix=$TMP/srv/wiki"
 expect "sh toolchain/deploy-local.sh --stop --name team" action=stop name=team
-pass '--status and --stop name the deployment alone'
+expect "sh toolchain/deploy-local.sh --rollback --prefix $TMP/srv/wiki" action=rollback "prefix=$TMP/srv/wiki"
+pass '--status, --stop and --rollback name the deployment alone'
 
 # A deployment in the home directory, its state in ~/.config/wiki-demo,
 # with an address the deploy chose itself (not an answer) and a demo of a
@@ -347,7 +348,7 @@ pass 'the presets are applied over whichever deployment is loaded, its state inc
 
 # The same through the screens, where the bug was: the wizard starts with
 # the presets on the default deployment, the first screen is given another
-# deployment's prefix (Tab past the three choices of what to do and the
+# deployment's prefix (Tab past the four choices of what to do and the
 # name), and Enter goes through the nine screens and runs the deploy, here
 # a fake that prints its arguments. They carry the presets over that
 # deployment's state. The keys go through script(1), a terminal for vty,
@@ -361,7 +362,7 @@ if command -v script >/dev/null 2>&1; then
     cd "$TMP/drive"
     {
       sleep 3
-      for _ in 1 2 3 4; do printf '\t'; sleep 0.3; done
+      for _ in 1 2 3 4 5; do printf '\t'; sleep 0.3; done
       printf '%s' "$TMP/srv/driven"
       sleep 1
       for _ in 1 2 3 4 5 6 7 8 9; do printf '\r'; sleep 1; done

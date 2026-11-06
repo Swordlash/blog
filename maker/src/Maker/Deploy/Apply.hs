@@ -13,6 +13,7 @@
 -- the restart before the serve).
 module Maker.Deploy.Apply
   ( apply
+  , rollbackByHand
   , compressible
   , sanName
   )
@@ -32,14 +33,15 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
-import Maker.Deploy.State (renderState, writeState)
+import Maker.Deploy.State (renderState, stateGet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
+import Maker.Deploy.Upgrade
 import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (exitWith)
 import System.FilePath (takeExtension, (</>))
-import System.IO (hPutStr, stderr)
+import System.IO (hFlush, hIsTerminalDevice, hPutStr, stderr, stdin, stdout)
 import System.Process.Typed
 import Text.Read (readMaybe)
 
@@ -68,6 +70,7 @@ apply p = do
         | otherwise = ["--sqlite", dir </> "data" </> "wiki.sqlite"]
 
   -- From here on the running deployment changes.
+  madeBackup <- newIORef Nothing
   wasInstalled <- doesFileExist (v "unit_file")
   when wasInstalled $ do
     say ("stopping " <> service)
@@ -93,7 +96,14 @@ apply p = do
     let backup
           | db == "postgres" = ["backup", "--data", dir </> "data"] <> databaseArgs <> ["--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
           | otherwise = ["backup", "--data", dir </> "data"] <> databaseArgs
+    let backupsDir = dir </> "data" </> "backups"
+        listed = do
+          there <- doesDirectoryExist backupsDir
+          if there then map (backupsDir </>) <$> listDirectory backupsDir else pure []
+    before <- listed
     code <- runInherit serverBin backup
+    after <- listed
+    writeIORef madeBackup (newBackup before after)
     unless (code == ExitSuccess) $ do
       when wasInstalled (() <$ runInherit "systemctl" ["--user", "start", service])
       when (code == ExitFailure 3) $
@@ -126,8 +136,16 @@ apply p = do
   -- Everything but the data, which outlives every deployment of it, and,
   -- under a prefix, the state and the toolchain, which the next deploy
   -- needs.
+  -- The deployment it replaces is kept for a rollback (Maker.Deploy.Upgrade),
+  -- a server's only: its binary, page, unit and state, with its commit and
+  -- the backup just made.
+  backupMade <- readIORef madeBackup
+  kept <-
+    if server
+      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade
+      else pure False
   entries <- listDirectory dir
-  forM_ [e | e <- entries, e `notElem` ["data", "state", "toolchain", v "marker"]] $ \e ->
+  forM_ [e | e <- entries, e `notElem` (["data", "state", "toolchain", v "marker"] <> ["previous" | server])] $ \e ->
     removePathForcibly (dir </> e)
   writeFile (dir </> v "marker") ("name=" <> name <> "\ncreated-by=toolchain/deploy-local.sh\n")
   orDie =<< runInherit "cp" ["-R", v "out", dir </> "app"]
@@ -158,6 +176,35 @@ apply p = do
         orDie =<< runProcess (setStdout nullStream (proc (v "node") ((v "root" </> "toolchain" </> "compress.mjs") : batch)))
       brotli <- filter (".br" `isSuffixOf`) <$> filesUnder (dir </> "app")
       say ("copied the page and " <> show (length brotli) <> " brotli'd files")
+
+  -- The new program brings the database to its schema and reads it back
+  -- whole before it is started (WP5.73 of docs/PLAN.md): a migration that
+  -- fails, or leaves a row it cannot read, puts the kept deployment back.
+  let placeArgs = ["--data", dir </> "data"] <> databaseArgs <> pgPrograms
+      pgPrograms = if db == "postgres" then ["--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"] else []
+      rollBack why = do
+        mk <- if kept then readKept dir else pure Nothing
+        case mk of
+          Nothing -> die (why <> ", and no previous deployment is kept to go back to")
+          Just k -> do
+            warn why
+            keptArgs <- keptPlaceArgs dir pgDir
+            restorePrevious dir (v "unit_file") (v "state_file") service keptArgs k
+            running <- serviceRuns service
+            if running
+              then say ("the previous deployment runs again (" <> service <> ")")
+              else warn ("the previous deployment does not run either; see journalctl --user -u " <> name)
+            die
+              ( why
+                  <> ": rolled back to the previous deployment, of commit "
+                  <> k.commit
+                  <> (if null k.backup then "" else ", its database restored from " <> k.backup)
+                  <> ". Deploy that commit again (git checkout "
+                  <> k.commit
+                  <> ") until the cause is fixed"
+              )
+  when server $
+    migrateAndCheck (dir </> "bin" </> "wiki-server") placeArgs >>= mapM_ rollBack
 
   let listen = if ':' `elem` bind then "[" <> bind <> "]:" <> port else bind <> ":" <> port
   ldLibraryPath <- fromMaybe "" <$> lookupEnv "LD_LIBRARY_PATH"
@@ -257,7 +304,8 @@ apply p = do
           when (waited' >= wait) $ do
             _ <- runProcess (setStdout (useHandleOpen stderr) (proc "systemctl" ["--user", "status", service, "--no-pager"]))
             mapM_ Firewall.report firewall
-            die (service <> " does not answer on " <> scheme <> "://" <> probeHost <> ":" <> port <> "/; see journalctl --user -u " <> name)
+            let why = service <> " does not answer on " <> scheme <> "://" <> probeHost <> ":" <> port <> "/; see journalctl --user -u " <> name
+            if server && kept then rollBack why else die why
           threadDelay 1000000
           loop waited'
   loop 0
@@ -691,3 +739,63 @@ dropSlash s = fromMaybe s (stripSuffix "/" s)
 
 seconds :: IO Int
 seconds = truncate <$> getPOSIXTime
+
+-- | Whether a user service is active within the time a deploy waits for
+-- one (WIKI_DEPLOY_WAIT, 20 seconds by default).
+serviceRuns :: String -> IO Bool
+serviceRuns service = do
+  wait <- maybe 20 id . (>>= readMaybe) <$> lookupEnv "WIKI_DEPLOY_WAIT"
+  let loop (n :: Int) = do
+        up <- succeeds "systemctl" ["--user", "is-active", "--quiet", service]
+        if up || n >= wait then pure up else threadDelay 1000000 >> loop (n + 1)
+  loop 0
+
+-- | @deploy-local.sh --rollback@: put back the deployment kept in
+-- @previous/@ (Maker.Deploy.Upgrade), by hand, after saying what comes back
+-- and what is lost, and asking. The database goes back to the backup made
+-- before the upgrade, so everything written since is lost unless exported
+-- first. Without a terminal to ask on, @--yes@ (the plan's @yes@) answers.
+rollbackByHand :: Plan -> IO ()
+rollbackByHand p = do
+  let v = get p
+      name = v "name"
+      dir = v "dir"
+      service = name <> ".service"
+      pgDir = v "state_dir" </> (name <> ".postgres")
+  mk <- readKept dir
+  k <- maybe (die ("there is no previous deployment kept in " <> previousDir dir <> " to roll back to: a deploy keeps one when it replaces a server")) pure mk
+  placeArgs <- keptPlaceArgs dir pgDir
+  say ("the deployment kept in " <> previousDir dir <> " is of commit " <> k.commit <> ", kept " <> k.keptAt)
+  if null k.backup
+    then say "its database is left as it is: there was none when it was kept"
+    else say ("its database goes back to the backup " <> k.backup <> ": everything written since is lost, unless exported first (Export in the administration)")
+  terminal <- hIsTerminalDevice stdin
+  answer <-
+    if has p "yes"
+      then pure True
+      else
+        if terminal
+          then do
+            putStr (prog <> ": roll back? [y/N] ") >> hFlush stdout
+            reply <- getLine
+            pure (map toLower reply `elem` ["y", "yes"])
+          else die "--rollback asks first, and there is no terminal to ask on: run it on one, or add --yes"
+  unless answer (die "nothing was changed")
+  restorePrevious dir (v "unit_file") (v "state_file") service placeArgs k
+  running <- serviceRuns service
+  if running
+    then say ("rolled back to commit " <> k.commit <> "; " <> service <> " runs")
+    else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not run; see journalctl --user -u " <> name)
+
+-- | The database options of the deployment kept in @previous/@, read from
+-- the state file kept with it. The backup a rollback restores is of that
+-- database, which differs from the current one when the upgrade moved the
+-- wiki between SQLite and PostgreSQL.
+keptPlaceArgs :: FilePath -> FilePath -> IO [String]
+keptPlaceArgs dir pgDir = do
+  db <- stateGet "db" (previousDir dir </> "state")
+  dbPort <- stateGet "db_port" (previousDir dir </> "state")
+  pure $
+    if db == "postgres"
+      then ["--data", dir </> "data", "--database", dbUrl dbPort, "--database-password-file", pgDir </> "db-password", "--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
+      else ["--data", dir </> "data", "--sqlite", dir </> "data" </> "wiki.sqlite"]

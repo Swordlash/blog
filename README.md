@@ -1467,6 +1467,7 @@ into the cabal store, which takes a while (twenty minutes or more), once.
 ~/wiki-demo/bin/wiki          its console: wiki-server with the deployment's database
 ~/wiki-demo/app/              the application it serves
 ~/wiki-demo/data/             the wiki's files: attachments/, backups/ (and wiki.sqlite with --sqlite)
+~/wiki-demo/previous/         the deployment the last upgrade replaced, for --rollback
 ```
 
 **The database is PostgreSQL by default**, in Docker beside the server: the
@@ -1666,14 +1667,42 @@ to the demo, keeping `data/`.
   tables with their rows. Both run on a directory no server is running on. The
   check ends with 4 when the database is not at the program's version of the
   schema (migrate it first), 5 when something does not read (it says what), and
-  1 when the database cannot be opened. Run them with a new `wiki-server` before
-  starting it on an old database:
+  1 when the database cannot be opened. The deploy runs both (see the next
+  item); by hand, run them with a new `wiki-server` before starting it on an old
+  database:
 
   ```sh
   systemctl --user stop wiki-demo
   ~/wiki-demo/bin/wiki backup --data ~/wiki-demo/data
   ~/wiki-demo/bin/wiki migrate --data ~/wiki-demo/data
   ~/wiki-demo/bin/wiki check --data ~/wiki-demo/data
+  ```
+- **Upgrades, and going back.** A deploy over a running server is an upgrade.
+  After the backup, it moves the deployment it replaces (`bin/`, `app/`, a copy
+  of the unit and of the state) into `~/wiki-demo/previous/`, with the commit
+  it was built from and the backup just made (`previous/info`); a deployment
+  records its commit in the state (`git_commit`, `unknown` when the checkout is
+  not a git repository). Then the new `wiki-server` runs `migrate` and
+  `check` on the database before it is started. When either fails, or the new
+  server does not answer, the deploy rolls back by itself: it stops the
+  service, restores the backup with the old `wiki-server`, puts the old files,
+  unit and state back, starts the old server, and ends with the commit to go
+  back to:
+
+  ```text
+  deploy-local: the migrated database does not read back (wiki-server check, above): rolled back to the previous deployment, of commit 3f2a…, its database restored from ~/wiki-demo/data/backups/20261106T101500Z.sqlite. Deploy that commit again (git checkout 3f2a…) until the cause is fixed
+  ```
+
+  A successful upgrade keeps `previous/` too, until the next one replaces it,
+  because some faults show only later (signing in, say). `--rollback` goes back
+  to it by hand: it says which commit comes back, and that the database goes
+  back to the backup made before the upgrade, so that everything written since
+  is lost (export first what must stay), and asks; without a terminal, `--yes`
+  answers. A deployment you change by hand is yours: the deploy keeps and
+  restores only what it installed itself.
+
+  ```sh
+  sh toolchain/deploy-local.sh --rollback          # add --prefix DIR or --name NAME as deployed
   ```
 - **Who is asking.** The public address serves whoever has signed in ("Sign in"
   at the top right, with a login and a password), and anyone else as an anonymous
