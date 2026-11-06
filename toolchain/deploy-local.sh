@@ -82,9 +82,11 @@
 #      run whose step ends with one that works drops the option. Nothing
 #      about TeX stops the deploy: PDFs are optional.
 #      With --backend-only the page is not built here: it is downloaded from
-#      the GitHub release where CI keeps it (see --backend-only below), and
-#      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
-#      and cabal alone: no wasm toolchain, no Node, no npm). With --static
+#      the GitHub release where CI keeps it (see --backend-only below), after
+#      toolchain/bootstrap.sh native (GHC and cabal alone: no wasm toolchain,
+#      no Node, no npm), by the maker before its TeX step, and only
+#      wiki-server is built. A REF with no page stops the deploy there,
+#      before anything is built. With --static
 #      and --backend-only the demo's page is downloaded the same way and
 #      nothing of the wiki is built: toolchain/bootstrap.sh static installs
 #      Node, which serves the page and writes its brotli copies, and GHC and
@@ -277,8 +279,8 @@
 #                    upload time, which the cache keeps beside the zip.
 #                    The page and the server talk over the API, so the page should be
 #                    of the checkout's commit; a warning says when it is not (and for
-#                    the demo too). Reading GitHub's answers and unpacking the zip
-#                    take python3 (or jq and unzip). With --server, nothing in this
+#                    the demo too). Unpacking the zip takes python3 (or unzip); the
+#                    maker reads GitHub's answers. With --server, nothing in this
 #                    mode uses Node: wiki-server compress writes gzip copies of
 #                    the files in place of the brotli ones, the checks that the
 #                    service answers go through curl, the reading of tailscale status
@@ -1157,8 +1159,10 @@ if [ -n "$prebuilt" ]; then
     command -v curl >/dev/null 2>&1 || die "--app-page with --server checks that the server answers with curl, which is not installed here"
   fi
   if ! command -v python3 >/dev/null 2>&1; then
-    if [ -n "$build" ] && ! { command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; }; then
-      die "$page_option reads GitHub's answers and unpacks the page with python3, which is not installed here (nor jq and unzip, which would do instead)"
+    # The maker reads GitHub's answers itself; the zip is unpacked with
+    # python3, or unzip.
+    if [ -n "$build" ] && ! command -v unzip >/dev/null 2>&1; then
+      die "$page_option unpacks the page with python3, which is not installed here (nor unzip, which would do instead)"
     elif [ -n "$nodeless" ] && ! command -v jq >/dev/null 2>&1; then
       die "$page_option reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
     fi
@@ -1369,405 +1373,11 @@ fi
 
 out=$ROOT/dist-newstyle/wasm-opt/public/app
 
-# --- The page from GitHub (--backend-only) ---------------------------------
+# --- The page CI built (--backend-only, --app-page) -------------------------
 #
-# CI (.github/workflows/server-page.yml) builds the server's page and the
-# demo's as build_app does and keeps each as a zip of the directory's
-# contents, a release asset: app-server-<hash>.zip and app-demo-<hash>.zip
-# on the pre-release main-latest for each of main's newest five commits,
-# and app-server-<tag>.zip and app-demo-<tag>.zip on a tag's release. Release assets of a public repository need no token, unlike a
-# workflow's artifacts. The listing comes from api.github.com, the zip from
-# github.com.
+# The maker takes it, from GitHub or from a file, through the page cache,
+# before the TeX step (maker/src/Maker/Deploy/Page.hs).
 
-# owner/repo of the GitHub repository origin names, in its https or ssh form.
-github_repo() {
-  origin=$(git -C "$ROOT" remote get-url origin 2>/dev/null) ||
-    die "--backend-only downloads the page from the GitHub repository origin names, and this checkout has no origin (git remote get-url origin)"
-  case $origin in
-    https://github.com/* | https://*@github.com/* | http://github.com/* | git@github.com:* | ssh://git@github.com/* | ssh://git@github.com:*)
-      repo=${origin#*github.com}
-      repo=${repo#[:/]}
-      repo=${repo%/}
-      repo=${repo%.git} ;;
-    *) die "origin is $origin, not a repository on GitHub: --backend-only downloads the page from the GitHub repository origin names" ;;
-  esac
-  case $repo in
-    */*/* | /* | */ | '') die "cannot tell the GitHub repository from origin's address $origin" ;;
-    */*) printf '%s\n' "$repo" ;;
-    *) die "cannot tell the GitHub repository from origin's address $origin" ;;
-  esac
-}
-
-# The assets of a release into release_list, "name time size id" per line:
-# the time each was uploaded at (- when GitHub gives none), its size in bytes
-# and GitHub's id for it. A replaced asset gets a new id and time.
-# The list is empty when there is no such release. Stops the deploy on any
-# other answer.
-release_assets() {
-  release_list=
-  listing=$(mktemp)
-  code=$(curl -sS -L --max-time 60 --retry 3 -H 'Accept: application/vnd.github+json' -o "$listing" -w '%{http_code}' \
-    "https://api.github.com/repos/$github_repo/releases/tags/$1") || {
-    rm -f "$listing"
-    die "could not reach api.github.com to find the page (see above)"
-  }
-  case $code in
-    200)
-      release_list=$(json_read 'for a in d.get("assets") or []:
-    print(a.get("name", ""), a.get("updated_at") or a.get("created_at") or "-", a.get("size", "-"), a.get("id", "-"))' \
-        '.assets[]? | "\(.name) \(.updated_at // .created_at // "-") \(.size // "-") \(.id // "-")"' <"$listing") || {
-        rm -f "$listing"
-        die "could not read the answer of api.github.com about the release $1"
-      } ;;
-    404) ;;
-    *)
-      rm -f "$listing"
-      die "api.github.com answered $code about the release $1 (its rate limit without a token is sixty requests an hour)" ;;
-  esac
-  rm -f "$listing"
-}
-
-# The asset name of a tag's page, of the kind page_kind names (server or
-# demo): a tag may hold a slash, an asset name not.
-tag_asset() { printf 'app-%s-%s.zip\n' "$page_kind" "$(printf '%s' "$1" | tr / -)"; }
-
-# Whether a file of the repository is code: something the page or the
-# server is built from. Markdown files are documentation, except the
-# Markdown compiled into the programs: wiki-core's built-in templates, and
-# its Markdown reference, which is docs/markdown.md through a symbolic link
-# in wiki-core/reference (a change to the reference changes
-# docs/markdown.md, not the link). The `paths` filters of
-# .github/workflows/build.yml and server-page.yml must say the same, since
-# CI builds a page only for a commit that changes code. build.yml also runs
-# on changelog/, whose entries wiki-server embeds but the page is not built
-# from: a commit that changes entries alone has no page of its own, and the
-# page of the commit before it is the one to download.
-is_code() {
-  case $1 in
-    wiki-core/templates/* | wiki-core/reference/* | docs/markdown.md) return 0 ;;
-    *.md) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
-# Whether two commits differ in documentation alone (or not at all), which
-# changes nothing the page is built from. Fails when git does not know one.
-same_code() {
-  changed=$(git -C "$ROOT" diff --name-only "$1" "$2" 2>/dev/null) || return 1
-  printf '%s\n' "$changed" | while IFS= read -r file; do
-    if [ -n "$file" ] && is_code "$file"; then exit 1; fi
-  done
-}
-
-# Which page --backend-only=REF names: sets page_tag (the release), page_asset
-# (its asset, app-server-… or app-demo-… as page_kind says) and
-# backend_only_commit (the commit the page was built from, empty for a tag
-# this checkout does not have), and page_meta (the asset's identity on
-# GitHub, "id=… updated_at=… size=…", which the page cache keeps beside the
-# zip).
-resolve_page() {
-  if [ "$page_kind" = server ]; then page_name=page; else page_name='demo page'; fi
-  no_page() {
-    die "no $page_name was built for $1 on GitHub; push it, or name main, a tag or another hash (main's pages are kept for its newest five commits)"
-  }
-  github_repo=$(github_repo) || exit 1
-  ref=$backend_only
-  case $ref in
-    head | HEAD) ref=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || die "--backend-only without =REF names this checkout's commit, and git rev-parse HEAD fails here: name main, a tag or a hash" ;;
-  esac
-  case $ref in
-    main)
-      page_tag=main-latest
-      release_assets main-latest
-      page_asset=$(printf '%s\n' "$release_list" | grep -E "^app-$page_kind-[0-9a-f]{40}[.]zip " | sort -k 2 -r | head -n 1 | cut -d' ' -f1)
-      [ -n "$page_asset" ] || die "GitHub has no $page_name of main yet (the release main-latest has none): CI makes one on the next push to main"
-      backend_only_commit=${page_asset#"app-$page_kind-"}
-      backend_only_commit=${backend_only_commit%.zip} ;;
-    *)
-      if printf '%s\n' "$ref" | grep -Eqx '[0-9a-fA-F]{7,40}'; then
-        ref=$(printf '%s' "$ref" | tr 'A-F' 'a-f')
-        page_tag=main-latest
-        release_assets main-latest
-        assets=$(printf '%s\n' "$release_list" | cut -d' ' -f1)
-        page_asset=
-        if full=$(git -C "$ROOT" rev-parse -q --verify "${ref}^{commit}" 2>/dev/null); then
-          # CI builds no page for a commit that changes documentation
-          # alone (is_code), so the newest commit before it that differs
-          # from it in documentation alone has the same page.
-          for commit in $(git -C "$ROOT" rev-list --max-count=20 "$full"); do
-            same_code "$commit" "$full" || break
-            if printf '%s\n' "$assets" | grep -qx "app-$page_kind-${commit}[.]zip"; then
-              page_asset=app-$page_kind-$commit.zip
-              [ "$commit" = "$full" ] || say "$full changes Markdown files alone since $commit, which has a page on GitHub: taking that one"
-              break
-            fi
-          done
-          [ -n "$page_asset" ] || no_page "$ref"
-        else
-          matches=$(printf '%s\n' "$assets" | grep -E "^app-$page_kind-${ref}[0-9a-f]*[.]zip\$" || true)
-          case $(printf '%s' "$matches" | grep -c . || true) in
-            0) no_page "$ref" ;;
-            1) page_asset=$matches ;;
-            *) die "$ref is the start of several commits with a page on GitHub: give more of the hash" ;;
-          esac
-        fi
-        backend_only_commit=${page_asset#"app-$page_kind-"}
-        backend_only_commit=${backend_only_commit%.zip}
-      else
-        page_tag=$ref
-        page_asset=$(tag_asset "$ref")
-        release_assets "$ref"
-        tag_assets=$(printf '%s\n' "$release_list" | cut -d' ' -f1 | grep . || true)
-        [ -n "$tag_assets" ] || die "GitHub has no release $ref with a page, and $ref is neither main nor a commit hash: name main, a tag pushed since CI keeps pages, or a hash"
-        printf '%s\n' "$tag_assets" | grep -qxF "$page_asset" ||
-          die "the release $ref on GitHub has no $page_asset: CI attaches it when the tag is pushed"
-        backend_only_commit=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/${ref}^{commit}" 2>/dev/null || true)
-      fi ;;
-  esac
-  page_meta=$(printf '%s\n' "$release_list" | awk -v name="$page_asset" '$1 == name { printf "id=%s updated_at=%s size=%s\n", $4, $2, $3; exit }')
-}
-
-# The page --app-page names, instead of resolve_page: page_asset, the zip's
-# name, under which the page cache keeps it; backend_only_commit, the
-# commit in that name when it follows CI's naming (app-<kind>-<hash>.zip),
-# and otherwise empty; app_page_words, what the deploy calls the page. A
-# name of CI's that says the other kind of page is refused.
-app_page_names() {
-  github_repo='' page_tag=$app_page page_meta=''
-  page_asset=${app_page##*/}
-  case $page_asset in
-    app-server-*.zip) named_kind=server ;;
-    app-demo-*.zip) named_kind=demo ;;
-    *) named_kind= ;;
-  esac
-  if [ -n "$named_kind" ] && [ "$named_kind" != "$page_kind" ]; then
-    die "--app-page $app_page is the $named_kind's page, by its name, and this deploy is of the $page_kind (--$mode): give an app-$page_kind-….zip"
-  fi
-  backend_only_commit=
-  if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
-    backend_only_commit=${page_asset#"app-$page_kind-"}
-    backend_only_commit=${backend_only_commit%.zip}
-    app_page_words="the page of $backend_only_commit, from $app_page"
-  else
-    app_page_words="a page from $app_page"
-  fi
-}
-# Which page the deploy takes: from a file (--app-page) or from GitHub
-# (--backend-only).
-page_source() {
-  if [ -n "$app_page" ]; then app_page_names; else resolve_page; fi
-}
-
-# Unpack a page's zip into $work/app and check that it is a page of the kind
-# page_kind names. On failure it sets unpack_error to the reason and returns
-# 1. python3 unpacks it (unzip where there is none).
-unpack_page() {
-  rm -rf "$work/app"
-  mkdir -p "$work/app"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$1" "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
-  else
-    unzip -q "$1" -d "$work/app" || { unpack_error="could not unpack $page_asset (see above)"; return 1; }
-  fi
-  for file in index.html 404.html app.wasm; do
-    [ -f "$work/app/$file" ] || { unpack_error="$page_asset lacks $file: it is not a page CI built for the $page_kind"; return 1; }
-  done
-}
-
-# Delete all but the five newest zips in the page cache, by modification
-# time, with their .meta files. A zip's time is when it was downloaded or
-# last used.
-prune_pages() {
-  # shellcheck disable=SC2012 # ls -t orders by mtime; the names are asset names, without newlines.
-  ls -t "$page_cache"/*.zip 2>/dev/null | tail -n +6 | while IFS= read -r old; do
-    rm -f "$old" "$old.meta"
-  done
-}
-
-# The SHA-256 of a file, in hex.
-file_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | cut -d' ' -f1
-  else
-    python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
-  fi
-}
-
-# The page from a file (--app-page) and the page cache. The cache keeps
-# the file's zip under a name of its own, app-<kind>-file-<SHA-256>.zip,
-# with the file's path in its .meta file (file=<path>), apart from the zips
-# downloaded from GitHub: a file named as CI names its zips is still not
-# one CI's release served. While the file can be read, the file is the
-# page: its zip enters the cache when the cache does not have it (the
-# entries of an earlier version of the same file are deleted then), and is
-# touched when it does. When the file is gone, or cannot be read, on a
-# later run (the state remembers --app-page), the newest entry for its
-# path (there is one) is the page, as a downloaded page's cached zip is. A
-# zip of the same bytes given under another path takes the entry over.
-# Sets cached and
-# from_cache, and keep_file when the zip unpacked from the file is to be
-# kept in the cache.
-app_page_cache() {
-  page_meta="file=$app_page"
-  keep_file=
-  if [ -r "$app_page" ]; then
-    say "the page: $app_page_words"
-    cp "$app_page" "$work/page.zip" || die "--app-page $app_page: cannot read it (see above); give the file again, or another"
-    unpack_page "$work/page.zip" || die "$unpack_error"
-    # The file's page says which kind it is in its <meta
-    # name="wiki-backend">, as CI's pages do. One of the other kind is
-    # refused here, before the cache is touched, so that the copy of the
-    # last page that passed stays there for a run without the file.
-    file_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$work/app/index.html" | head -n 1)
-    if [ -n "$file_backend" ] && [ "$file_backend" != "$page_kind" ]; then
-      die "--app-page $app_page is the $file_backend's page (its index.html says so), and this deploy is of the $page_kind (--$mode); the page cache keeps the last page of the $page_kind given from it"
-    fi
-    cached=$page_cache/app-$page_kind-file-$(file_sha256 "$work/page.zip").zip
-    if [ -f "$cached" ] && [ "$(cat "$cached.meta" 2>/dev/null || true)" = "$page_meta" ]; then
-      touch "$cached"
-    else
-      keep_file=1
-    fi
-    return 0
-  fi
-  # One entry a path: a new version of the file replaces the old one's.
-  cached=$(app_page_entries | head -n 1)
-  [ -n "$cached" ] ||
-    die "--app-page $app_page is gone, or cannot be read, and the page cache $page_cache keeps no copy of it: give the file again (--app-page FILE), or take the page from GitHub (--backend-only)"
-  unpack_page "$cached" ||
-    die "--app-page $app_page is gone, or cannot be read, and its copy in the page cache, $cached, is not a page ($unpack_error): give the file again (--app-page FILE)"
-  touch "$cached"
-  from_cache=1
-  say "--app-page $app_page is gone, or cannot be read: the page is the copy the page cache kept of it when it was last deployed, $cached"
-}
-
-# Write the .meta file beside a cached zip: page_meta, the asset's id, time
-# and size on GitHub, through a temporary name.
-write_page_meta() {
-  [ -n "$page_meta" ] || return 0
-  if ! { printf '%s\n' "$page_meta" >"$page_cache/.$page_asset.meta.part" &&
-    mv -f "$page_cache/.$page_asset.meta.part" "$cached.meta"; }; then
-    rm -f "$page_cache/.$page_asset.meta.part"
-  fi
-}
-
-# Unpack the page resolve_page found into $out, through a directory beside
-# it, so that a failed download leaves the last page as it was. The zip comes
-# from the page cache when the cache has it and it is still the page GitHub
-# has. A page of a commit (app-<kind>-<hash>.zip) never changes. A tag's
-# asset can be uploaded again (CI replaces it), and two zips can have the
-# same size, so a tag's cached zip is taken only while its .meta file names
-# the id and time the release lists for the asset; a zip without one is
-# downloaded again. --refresh-page skips the cache. A downloaded zip enters
-# the cache only after it unpacked as a page, under a temporary name first,
-# so a broken or partial download is never taken from there.
-download_page() {
-  url=https://github.com/$github_repo/releases/download/$page_tag/$page_asset
-  page_cache=$(page_cache_dir)
-  cached=$page_cache/$page_asset
-  work=$ROOT/dist-newstyle/wasm-opt/download
-  rm -rf "$work"
-  mkdir -p "$work"
-  from_cache=
-  # A page from a file (--app-page) has a cache entry of its own; see
-  # app_page_cache.
-  if [ -n "$app_page" ]; then
-    mkdir -p "$page_cache" 2>/dev/null || true
-    app_page_cache
-  elif [ -z "$refresh_page" ] && [ -f "$cached" ]; then
-    if printf '%s\n' "$page_asset" | grep -Eqx "app-$page_kind-[0-9a-f]{40}[.]zip"; then
-      from_cache=1
-    else
-      case $page_meta in
-        '' | 'id=- '* | *' updated_at=- '*) ;;
-        *) [ "$(cat "$cached.meta" 2>/dev/null || true)" != "$page_meta" ] || from_cache=1 ;;
-      esac
-    fi
-  fi
-  if [ -n "$from_cache" ] && [ -z "$app_page" ]; then
-    if unpack_page "$cached"; then
-      touch "$cached"
-      [ -f "$cached.meta" ] || write_page_meta
-      say "the page of ${backend_only_commit:-$page_tag} from the cache: $cached"
-    else
-      warn "the cached $cached is not a page ($unpack_error), so it is deleted and downloaded again"
-      rm -f "$cached" "$cached.meta"
-      from_cache=
-    fi
-  fi
-  if [ -z "$from_cache" ] && [ -z "$app_page" ]; then
-    say "downloading the page${backend_only_commit:+ of $backend_only_commit}: $url"
-    curl -fsSL --max-time 900 --retry 3 -o "$work/page.zip" "$url" || die "could not download $url (see above)"
-    unpack_page "$work/page.zip" || die "$unpack_error"
-  fi
-  if [ -z "$from_cache" ] && { [ -z "$app_page" ] || [ -n "$keep_file" ]; }; then
-    if mkdir -p "$page_cache" && cp "$work/page.zip" "$page_cache/.$page_asset.part" &&
-      mv -f "$page_cache/.$page_asset.part" "$cached"; then
-      # The entries of an earlier version of the same file go.
-      if [ -n "$app_page" ]; then
-        app_page_entries | while IFS= read -r entry; do
-          [ "$entry" = "$cached" ] || rm -f "$entry" "$entry.meta"
-        done
-      fi
-      write_page_meta
-      prune_pages
-    else
-      rm -f "$page_cache/.$page_asset.part"
-      warn "could not keep the page in the cache $page_cache; the next deploy downloads it again"
-    fi
-  fi
-  # CI's page as it is, for the comparison after the bundles are built here.
-  if [ -n "$bundle_locally" ]; then
-    rm -rf "$ci_page"
-    cp -R "$work/app" "$ci_page"
-  fi
-  rm -rf "$out"
-  mkdir -p "${out%/*}"
-  mv "$work/app" "$out"
-  rm -rf "$work"
-  # The page and the server talk over the API, so they should be of one
-  # version; a page of another commit is taken, with a warning. The demo
-  # talks to no server, but a demo of another commit than the checkout's is
-  # as easily a surprise, so it is said too.
-  checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
-  if [ -n "$app_page" ]; then
-    # A file's page is not checked against the checkout: the deploy has
-    # said which page it is.
-    :
-  elif [ -z "$backend_only_commit" ]; then
-    if [ "$page_kind" = server ]; then
-      warn "cannot tell which commit the page of $page_tag was built from (the tag is not in this checkout); wiki-server is built from ${checkout:-this checkout}, and the two should be of one version"
-    else
-      warn "cannot tell which commit the demo page of $page_tag was built from (the tag is not in this checkout)"
-    fi
-  elif [ "$backend_only_commit" != "$checkout" ] && ! same_code "$backend_only_commit" "$checkout"; then
-    if [ "$page_kind" = server ]; then
-      warn "the page is of $backend_only_commit, and wiki-server is built from this checkout, ${checkout:-of no commit}: they talk over the API, so keep them of one version (check that commit out, or deploy with --backend-only alone, the checkout's own page)"
-    else
-      warn "the demo page is of $backend_only_commit, and this checkout is ${checkout:-of no commit}: the demo served is that commit's (deploy with --backend-only alone for the checkout's own)"
-    fi
-  fi
-}
-
-# --- The bundles built here (--bundle-locally) -------------------------------
-#
-# Of a page CI built, everything but what web/bundle.sh writes needs the
-# wasm toolchain or comes from the checkout's web/ (app.wasm, its
-# ghc_wasm_jsffi.js, the prerendered index.html and the page's other
-# files). With --bundle-locally what web/bundle.sh writes is deleted from
-# the page and built again here, from the checkout's package-lock.json,
-# with npm ci and web/bundle.sh, into the page itself: its service worker
-# (sw.js) is versioned by a hash of the page's files, the kept ones
-# included. Then the page is compared with CI's (ci_page, a copy of the
-# zip's files): with the lockfile's versions the two should be identical,
-# which is the evidence that the bundles CI built hold nothing else.
-# BUNDLE_OUTPUTS are the names at the page's root that web/bundle.sh
-# writes, as its header lists them; toolchain/test-deploy-local.sh checks
-# that the two agree.
-BUNDLE_OUTPUTS='islands.js islands tikzjax islands.css fonts wasi-shim.js licenses.txt icon.svg icons sw.js'
-ci_page=$ROOT/dist-newstyle/wasm-opt/ci-page
 
 # Only the wiki's server on SQLite opts out: the demo's build is left as
 # it was.
@@ -1842,16 +1452,13 @@ if [ -n "$build" ]; then
   if [ -n "$prebuilt" ] && [ "$mode" != server ]; then
     # The demo's page from GitHub: nothing is built here. Node serves the
     # page and writes its brotli copies; GHC and cabal build the maker,
-    # which does the rest of the deploy.
-    page_source
-    download_page
+    # which takes the page and does the rest of the deploy.
     say "installing or checking Node, which serves the demo, and GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh static)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" static ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
   elif [ -n "$prebuilt" ]; then
-    # The page first: a REF with no page stops the deploy before anything
-    # is installed or built.
-    page_source
-    download_page
+    # The maker takes the page after the toolchain, before the TeX step
+    # and the build: a REF with no page stops the deploy before anything
+    # is built.
     say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"} ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
     if [ -n "$bundle_locally" ]; then
@@ -1892,7 +1499,7 @@ perl_source=$opt_perl_source
 # each variable the rest reads, and for each the state file keeps (the
 # maker writes the state). A value cannot hold a newline: the plan has one
 # line per key.
-MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind ci_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
+MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind refresh_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
 maker_plan() {
   printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
   printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"

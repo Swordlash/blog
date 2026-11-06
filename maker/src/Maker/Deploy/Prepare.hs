@@ -243,11 +243,23 @@ pageBackend html = listToMaybe [b | l <- lines html, Just b <- [lineBackend l]]
     tails' t@(_ : more) = t : tails' more
 
 -- | What web/bundle.sh writes into the page, which --bundle-locally
--- removes first.
+-- removes first: the names at the page's root that web/bundle.sh's header
+-- lists. toolchain/test-deploy-local.sh checks that the two agree.
 bundleOutputs :: [FilePath]
 bundleOutputs = ["islands.js", "islands", "tikzjax", "islands.css", "fonts", "wasi-shim.js", "licenses.txt", "icon.svg", "icons", "sw.js"]
 
--- | Build the page's bundles here and compare the page with CI's.
+-- | Build the page's bundles here and compare the page with CI's
+-- (--bundle-locally). Of a page CI built, everything but what web/bundle.sh
+-- writes needs the wasm toolchain or comes from the checkout's web/
+-- (app.wasm, its ghc_wasm_jsffi.js, the prerendered index.html and the
+-- page's other files). Here what web/bundle.sh writes is deleted from the
+-- page and built again, from the checkout's package-lock.json, with npm ci
+-- and web/bundle.sh, into the page itself: its service worker (sw.js) is
+-- versioned by a hash of the page's files, the kept ones included. Then the
+-- page is compared with CI's (@ci_page@, a copy of the zip's files that
+-- "Maker.Deploy.Page" kept): with the lockfile's versions the two should be
+-- identical, which is the evidence that the bundles CI built hold nothing
+-- else.
 bundleLocally :: Plan -> IO ()
 bundleLocally p = do
   let ciPage = get p "ci_page"

@@ -1,11 +1,14 @@
 module Maker.DeploySpec (spec) where
 
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
+import Data.Time (UTCTime (..), fromGregorian)
 import GHC.Foreign qualified as GHC
 import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
+import Maker.Deploy.Page (Asset (..), isCode, newestCommitAsset, parseAssets, pruneOrder, repoOf, tagAsset)
 import Maker.Deploy.Plan (decodeFs, encodeFs, get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
@@ -118,6 +121,39 @@ spec = describe "the deploy's part in the maker" $ do
         `shouldContain` [ "WIKI_DB_PASSWORD_FILE='/s/wiki.postgres/db-password' WIKI_DB_PORT='5433' exec docker compose --project-name 'wiki' \\"
                         , "  --file '/s/wiki.postgres/docker-compose.yml' --file '/s/wiki.postgres/local.yml' exec -T postgres pg_dump \"$@\""
                         ]
+
+  describe "the page CI built" $ do
+    it "tells owner/repo from origin's address in its https and ssh forms" $ do
+      map repoOf ["https://github.com/Owner/blog.git", "https://token@github.com/Owner/blog/", "git@github.com:Owner/blog.git", "ssh://git@github.com/Owner/blog"]
+        `shouldBe` replicate 4 (Right "Owner/blog")
+    it "refuses an origin elsewhere, and one it cannot tell a repository from" $ do
+      repoOf "https://gitlab.com/Owner/blog" `shouldBe` Left "origin is https://gitlab.com/Owner/blog, not a repository on GitHub: --backend-only downloads the page from the GitHub repository origin names"
+      repoOf "https://github.com/Owner" `shouldBe` Left "cannot tell the GitHub repository from origin's address https://github.com/Owner"
+      repoOf "https://github.com/Owner/blog/tree" `shouldBe` Left "cannot tell the GitHub repository from origin's address https://github.com/Owner/blog/tree"
+    it "counts Markdown as documentation, except what the programs compile in" $
+      map isCode ["README.md", "changelog/00001-x.md", "wiki-core/templates/page.md", "wiki-core/reference/markdown.md", "docs/markdown.md", "web/index.html"]
+        `shouldBe` [False, False, True, True, True, True]
+    it "names a tag's asset without the tag's slashes" $
+      tagAsset "server" "release/1.0" `shouldBe` "app-server-release-1.0.zip"
+    it "reads a release's assets from api.github.com's answer, with - for what it lacks" $ do
+      parseAssets (BS8.pack "{\"assets\":[{\"name\":\"a.zip\",\"updated_at\":\"2026-11-02T10:00:00Z\",\"size\":12,\"id\":7},{\"name\":\"b.zip\",\"created_at\":\"2026-11-01T10:00:00Z\"}]}")
+        `shouldBe` Just [Asset "a.zip" "2026-11-02T10:00:00Z" "12" "7", Asset "b.zip" "2026-11-01T10:00:00Z" "-" "-"]
+      parseAssets (BS8.pack "{}") `shouldBe` Just []
+      parseAssets (BS8.pack "not json") `shouldBe` Nothing
+    it "takes main's newest commit page by its upload time, of the deploy's kind" $ do
+      let hash c = replicate 40 c
+          assets =
+            [ Asset ("app-server-" <> hash 'a' <> ".zip") "2026-11-01T10:00:00Z" "1" "1"
+            , Asset ("app-server-" <> hash 'b' <> ".zip") "2026-11-02T10:00:00Z" "1" "2"
+            , Asset ("app-demo-" <> hash 'c' <> ".zip") "2026-11-03T10:00:00Z" "1" "3"
+            , Asset "app-server-v1.zip" "2026-11-04T10:00:00Z" "1" "4"
+            ]
+      (.name) <$> newestCommitAsset "server" assets `shouldBe` Just ("app-server-" <> hash 'b' <> ".zip")
+      newestCommitAsset "server" (take 0 assets) `shouldBe` Nothing
+    it "keeps the five newest zips of the page cache, newest by time, then by name" $ do
+      let at s = UTCTime (fromGregorian 2026 11 1) s
+          zips = [("f", at 1), ("a", at 6), ("b", at 5), ("c", at 4), ("d", at 3), ("e", at 3), ("g", at 2)]
+      pruneOrder zips `shouldBe` ["g", "f"]
 
   describe "the TeX step" $ do
     it "says where a source comes from: a repository cloned at a tag, or a directory" $ do

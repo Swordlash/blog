@@ -39,6 +39,7 @@ library
     Maker.Context
     Maker.Deploy.Apply
     Maker.Deploy.Firewall
+    Maker.Deploy.Page
     Maker.Deploy.Plan
     Maker.Deploy.Prepare
     Maker.Deploy.State
@@ -125,5 +126,6 @@ test-suite maker-test
     , filepath
     , hspec       >=2.10 && <2.12
     , maker
+    , time
 
   ghc-options:    -threaded
