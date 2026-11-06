@@ -146,6 +146,9 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
+        -- Another reader's stars are not theirs: they go at once, before
+        -- the new reader's are fetched.
+        when (readerOf old /= readerOf input) $ modify (\st -> st {starredHomes = []})
         when (old.context.revision /= input.context.revision || readerOf old /= readerOf input) reload
       Typed t -> modify (\st -> st {typed = t})
       Followed f -> do

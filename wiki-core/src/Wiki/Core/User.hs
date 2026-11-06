@@ -146,7 +146,8 @@ groupsOf membership user = Map.keysSet (Map.filter (Set.member user) membership)
 -- | A new login as it is stored, or why it is invalid. It is trimmed of
 -- white space, at most 64 characters, with no white space or control
 -- character inside, only ASCII (letters, digits and punctuation; the
--- owner, 2026-11-06), and does not start with @~@, which marks the
+-- owner, 2026-11-06) with at least one letter or digit, and does not start
+-- with @~@, which marks the
 -- server's own principals (its operator is @~administrator@). Every
 -- backend creates users with this rule, so that a login the demo accepts
 -- the server accepts too.
@@ -154,8 +155,9 @@ groupsOf membership user = Map.keysSet (Map.filter (Set.member user) membership)
 -- ASCII keeps a login what it is everywhere it is used: the storage
 -- compares logins ignoring the case of ASCII letters, which both databases
 -- agree on, and a personal space's slug is its owner's login made a slug
--- ('Wiki.Core.Slug.slugify'), which spells an ASCII login without losing
--- a letter, so the login finds the space. A login made before the rule is
+-- ('Wiki.Core.Slug.slugify'), which spells an ASCII login's letters and
+-- digits without losing one (a login of punctuation alone would make no
+-- slug at all), so the login finds the space. A login made before the rule is
 -- kept, and still signs in.
 parseLogin :: Text -> Either Text Login
 parseLogin raw
@@ -163,6 +165,7 @@ parseLogin raw
   | T.length login > 64 = Left "A login has at most 64 characters."
   | T.any (\ch -> isSpace ch || isControl ch) login = Left "A login cannot have a blank in it."
   | T.any (not . isAscii) login = Left "A login has only ASCII letters, digits and punctuation."
+  | not (T.any (\ch -> isAscii ch && isAlphaNum ch) login) = Left "A login has at least one letter or digit."
   | "~" `T.isPrefixOf` login = Left "A login cannot start with ~."
   | otherwise = Right (Login login)
   where
