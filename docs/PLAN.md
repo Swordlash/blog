@@ -942,7 +942,33 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.74 End-to-end encrypted private user spaces** (the owner,
+- **WP5.73c A rollback puts back everything the upgrade changed** (the owner,
+  2026-11-06: "when we know how to roll back, we do not leave the user to do it
+  by hand"). WP5.73b keeps a deployment only when putting its files back undoes
+  the whole upgrade, and refuses otherwise. The rule stays; what it covers
+  grows: each setting the upgrade changes outside the files becomes a step of
+  the rollback, and a deployment is refused only for what a rollback still
+  cannot undo, which the deploy names. The rollback puts back the data, the
+  binary, the page and the unit, and starts the service only if it was
+  running before the deploy. In two parts:
+  - **c1, the settings.** `previous/info` records whether the service was
+    running and whether a unit existed. The rollback reconciles the old state
+    with the current one: the ufw rule (close the new port's, open the old
+    one's), tailscale serve (point it back at the old port, or off, only where
+    it serves this deployment), PostgreSQL's published port (the container up
+    on the old port, the `pg_dump`/`pg_restore` wrappers rewritten), and the
+    unit (put back, or removed and disabled when the deploy followed
+    `--stop`).
+  - **c2, the data.** A switch between SQLite and PostgreSQL, and `--fresh`,
+    start an empty wiki and set the old one aside (the file into
+    `data/replaced/<time>/`, or the stopped container's volume): the rollback
+    brings it back instead of restoring a backup. An adoption under
+    `--prefix` keeps the old PostgreSQL directory in `previous/` instead of
+    deleting it, and the rollback moves it and the state back. A deploy into
+    another directory than the deployment's keeps refusing: the old one is
+    intact where it was.
+
+ (the owner,
   2026-11-06). A user's personal space, or a subspace in it, can be made
   encrypted: turning it on at a (sub)space's home page makes the whole
   subspace encrypted. Its pages' text, titles, history, comments and
