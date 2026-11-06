@@ -85,6 +85,25 @@ apply p = do
   -- An empty wiki starts here when the database changes kind or --fresh is
   -- given: a data/wiki.sqlite is moved aside, where a rollback finds it
   -- ('setAside'), and a PostgreSQL wiki stays in its container's volume.
+  -- Before that, the old wiki-server backs its database up into
+  -- data/backups: the new server deletes the attachments' files that
+  -- neither its database nor a backup there refers to, and the old wiki's
+  -- would go, although a rollback brings that wiki back. A wiki.sqlite set
+  -- aside beside a PostgreSQL wiki that stays is not the deployment's
+  -- database, and the deploy's own backup below covers that case.
+  oldKind <- kindOf <$> stateGet "db" (v "state_file")
+  when (server && has p "incompatible" && (oldKind /= kindOf db || oldKind == "sqlite")) $ do
+    let oldBin = dir </> "bin" </> "wiki-server"
+        oldArgs
+          | oldKind == "postgres" = ["--database", dbUrl (v "prev_db_port"), "--database-password-file", pgDir </> "db-password", "--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
+          | otherwise = ["--sqlite", dir </> "data" </> "wiki.sqlite"]
+    there <- doesFileExist oldBin
+    oldFile <- doesFileExist (dir </> "data" </> "wiki.sqlite")
+    when (there && (oldKind == "postgres" || oldFile)) $ do
+      say ("backing up the wiki that is set aside, with the wiki-server that wrote it, into " <> dir </> "data" </> "backups")
+      code <- runInherit oldBin (["backup", "--data", dir </> "data"] <> oldArgs)
+      unless (code == ExitSuccess) $
+        warn "the backup of the wiki set aside failed (see above): the new server may delete the files of attachments only that wiki refers to, which a rollback to it would then miss"
   movedAside <-
     if server && has p "incompatible"
       then do

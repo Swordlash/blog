@@ -1109,6 +1109,12 @@ if [ -z "${WIKI_MAKER:-}" ]; then
   # or with no package index yet, and the bootstrap installs or checks the
   # pinned ones (with --system-tools, checks the machine's against the
   # floors). It changes nothing when they are there.
+  # The maker refuses root (a systemd user service is installed under the
+  # user who runs this); refusing it here first keeps root from installing
+  # and compiling the toolchain for a deploy that cannot go on.
+  if [ -n "$build" ] && [ "$action" = deploy ] && [ "$(id -u)" = 0 ]; then
+    die "run this as the user the wiki should run as, not root: it installs a systemd user service under that user"
+  fi
   # Under a prefix the toolchain is installed inside the deployment's
   # directory (<prefix>/toolchain), so the directory is checked and claimed
   # before the bootstrap writes there, with the maker's own check

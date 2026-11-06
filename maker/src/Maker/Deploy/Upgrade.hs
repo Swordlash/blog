@@ -34,6 +34,7 @@ import Data.List (sort, (\\))
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Maker.Deploy.Plan
+import Maker.Deploy.State (stateSet)
 import System.Directory
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
@@ -257,6 +258,11 @@ putAsideBack dir aside = do
     left <- listDirectory aside
     when (null left) (removeDirectory aside)
     say ("put the wiki set aside in " <> aside <> " back into " <> dir </> "data")
+  -- previous/info stops naming the directory once the files are back, so
+  -- that a --rollback retried after this point does not set the restored
+  -- wiki aside again as if it were the one the upgrade started.
+  infoThere <- doesFileExist (previousDir dir </> "info")
+  when infoThere (stateSet "aside" "" (previousDir dir </> "info"))
 
 -- | Undo an adoption under @--prefix@ before the rollback puts the files
 -- back: the PostgreSQL directory kept in @previous/postgres@ moves back
