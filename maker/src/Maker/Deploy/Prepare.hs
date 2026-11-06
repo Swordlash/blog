@@ -469,7 +469,9 @@ adoptIntoPrefix p
           new = get p "prefix" </> "state"
           stateFile = new </> (name <> ".state")
       createDirectoryIfMissing True new
-      renameFile (old </> (name <> ".state")) stateFile
+      -- mv, not rename(2): the prefix may be on another filesystem than
+      -- the home directory, where mv copies and removes.
+      orExit =<< runInherit "mv" [old </> (name <> ".state"), stateFile]
       removePathForcibly (old </> (name <> ".env"))
       oldPg <- doesDirectoryExist (old </> (name <> ".postgres"))
       adopted <-
