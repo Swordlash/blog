@@ -21,3 +21,10 @@ At the top, under **Starred**, are your own space and every user space
 whose home page you starred: a star on a space's home page stars the
 space. Under **Find another**, type a few letters of someone's login or
 name, such as `rita`, and their space is listed below.
+
+## Other changes
+
+A new login, chosen when signing up, given by an administrator or made
+for a provider's account, is made of ASCII letters, digits and
+punctuation only: `rita` or `rita@example.org`, but no longer `иван`. A
+login made before keeps working.

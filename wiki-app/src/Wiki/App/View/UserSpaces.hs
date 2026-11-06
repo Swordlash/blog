@@ -188,7 +188,9 @@ shown = 50
 -- login made a slug ('Wiki.Core.Slug.slugify'), which turns punctuation
 -- into dashes and spells letters in ASCII, so a login is found whether it
 -- is typed as it is (@rita\@example.org@) or as it reads in the space's
--- address (@rita-example-org@). An empty text finds every space.
+-- address (@rita-example-org@). Logins are ASCII ('Wiki.Core.User.parseLogin'),
+-- so every login made since is found this way. An empty text finds every
+-- space.
 matches :: Text -> Space -> Bool
 matches typed s =
   T.null needle
