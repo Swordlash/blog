@@ -70,6 +70,7 @@ targetsFor = \case
   All -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
   Warm -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
   Native -> [SystemPackages]
+  Static -> [Node]
 
 -- | What each rule found out, for the summary at the end.
 data Found = Found
@@ -131,7 +132,7 @@ runTargets ctx targets = do
 -- links once the packages are there.
 bootstrap :: Context -> Maybe Int -> Integer -> Integer -> IO ()
 bootstrap ctx lockFd logBefore started = do
-  allowed <- if ctx.mode == Native then pure True else guardSysroot ctx
+  allowed <- if ctx.mode `elem` [Native, Static] then pure True else guardSysroot ctx
   when (not allowed) (exitWith (ExitFailure 1))
   found' <- runTargets ctx (targetsFor ctx.mode)
   when (ctx.mode == Native) (nativeCheck ctx)
@@ -144,6 +145,9 @@ bootstrap ctx lockFd logBefore started = do
       base' = "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> ", wasm32-wasi-ghc " <> p.wasmGhcVersion <> ", Node " <> node
       noWasm = "; no wasm toolchain, Node, Chromium or fourmolu (native)"
       summary = case ctx.mode of
+        Static
+          | ctx.systemTools -> "this machine's GHC " <> ghcFound <> ", cabal " <> cabalFound <> " and Node " <> node <> " (--system-tools); no wasm toolchain, Chromium or fourmolu (static)"
+          | otherwise -> "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> ", Node " <> node <> "; no wasm toolchain, Chromium or fourmolu (static)"
         Native
           | ctx.systemTools -> "this machine's GHC " <> ghcFound <> " and cabal " <> cabalFound <> " (--system-tools)" <> noWasm
           | otherwise -> "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> noWasm

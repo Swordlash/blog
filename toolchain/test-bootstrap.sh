@@ -555,6 +555,37 @@ assert_contains "$case_dir/node-old" 'downloading Node failed'
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
 pass 'node installs Node alone, reusing a Node 24 on PATH, with no compilers, wasm toolchain, Chromium or fourmolu'
 
+# What toolchain/deploy-local.sh --static --backend-only needs: GHC and
+# cabal, which build the maker that does the rest of the deploy, and Node,
+# which serves the demo. `static` installs neither the wasm toolchain nor
+# Chromium nor fourmolu (any attempt would reach the fake curl, git or
+# Playwright and be recorded), no system packages of the C libraries, and
+# leaves a ~/.ghc-wasm it does not recognise alone. With only an older Node
+# on PATH it downloads Node; with --system-tools it takes the machine's GHC,
+# cabal and Node, and refuses a Node that is too old before anything else.
+fixture static
+rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap static >"$case_dir/static" 2>&1 || fail "static failed: $(cat "$case_dir/static")"
+[ ! -s "$EVENTS" ] || fail "static installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/static" 'GHC 9.14.1, cabal 3.16.1.0, Node v24.99.0; no wasm toolchain, Chromium or fourmolu (static)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'static did not write the environment file'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'static touched ~/.ghc-wasm'
+NODE_REPORT=v22.0.0 GHC_REPORT=9.10.3 bootstrap static --system-tools >"$case_dir/static-old-node" 2>&1 && fail 'static --system-tools with Node 22 succeeded'
+assert_contains "$case_dir/static-old-node" 'bootstrap: --system-tools: Node v22.0.0'
+assert_contains "$case_dir/static-old-node" 'is too old'
+[ ! -s "$EVENTS" ] || fail "static --system-tools with an old Node installed something: $(cat "$EVENTS")"
+GHC_REPORT=9.10.3 bootstrap static --system-tools >"$case_dir/static-system" 2>&1 || fail "static --system-tools failed: $(cat "$case_dir/static-system")"
+assert_contains "$case_dir/static-system" "this machine's GHC 9.10.3, cabal 3.16.1.0 and Node v24.99.0 (--system-tools); no wasm toolchain, Chromium or fourmolu (static)"
+[ ! -s "$EVENTS" ] || fail "static --system-tools installed something: $(cat "$EVENTS")"
+NODE_REPORT=v22.0.0
+export NODE_REPORT
+if bootstrap static >"$case_dir/static-download" 2>&1; then fail 'static succeeded without downloading Node'; fi
+assert_contains "$case_dir/static-download" 'downloading Node failed'
+assert_contains "$EVENTS" 'unexpected curl'
+pass 'static installs GHC, cabal and Node, for the maker and the demo, with no wasm toolchain, Chromium or fourmolu; with --system-tools it takes the machine'"'"'s own and refuses an old Node'
+
 # A long step in toolchain mode, which the SessionStart hooks use: here cabal
 # updating a missing package index. Its output is kept in the log alone, and
 # the next run, with the index there, does not update it again.

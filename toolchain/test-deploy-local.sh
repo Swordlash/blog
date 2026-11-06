@@ -2430,10 +2430,11 @@ undeploy --prefix "$pre" >/dev/null 2>&1
 pass '--stop keeps the choice, and --no-backend-only builds the page here again'
 
 # The demo from GitHub (--static --backend-only): the demo's page CI built
-# is downloaded and served by server.mjs under Node, the one thing the
-# bootstrap installs (its node mode). Nothing is built: no cabal, no npm,
-# no wasm build. github_page_fixture leaves no managed Node, and the
-# fixture's PATH has none, so the bootstrap must install it.
+# is downloaded and served by server.mjs under Node, which the bootstrap
+# installs with GHC and cabal for the maker (its static mode). Nothing of
+# the wiki is built: no cabal build, no npm, no wasm build.
+# github_page_fixture leaves no managed Node, and the fixture's PATH has
+# none, so the bootstrap must install it.
 github_page_fixture backend-static
 pre=$case_dir/srv/wiki
 p=$(free_port 127.0.0.1)
@@ -2445,7 +2446,7 @@ out=$case_dir/first
 deploy --static --http --bind 127.0.0.1 --port "$p" --prefix "$pre" --backend-only >"$out" 2>&1 || fail 'the deploy with --static --backend-only failed'
 assert_contains "$EVENTS" "curl https://api.github.com/repos/Owner/blog/releases/tags/main-latest"
 assert_contains "$EVENTS" "curl https://github.com/Owner/blog/releases/download/main-latest/app-demo-$head1.zip"
-assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap static WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'app-server-'
 assert_lacks "$EVENTS" 'bootstrap build'
 assert_lacks "$EVENTS" 'bootstrap native'
@@ -2464,7 +2465,7 @@ assert_lacks "$out" 'warning: the'
 [ "$(http_get "http://127.0.0.1:$p/s/blog/")" = '200 text/html; charset=utf-8' ] || fail "the demo's page of a route is not served"
 { [ "$(pstate mode)" = static ] && [ "$(pstate backend_only)" = head ] && [ "$(pstate backend_only_commit)" = "$head1" ]; } ||
   fail 'the state does not record the demo from GitHub'
-pass '--static --backend-only downloads the demo'"'"'s page, installs Node alone, builds nothing, and serves it with server.mjs and brotli copies'
+pass '--static --backend-only downloads the demo'"'"'s page, installs Node with GHC and cabal for the maker (bootstrap static), builds nothing of the wiki, and serves it with server.mjs and brotli copies'
 
 : >"$EVENTS"
 out=$case_dir/no-build
@@ -2511,7 +2512,7 @@ deploy --static --prefix "$pre" >"$out" 2>&1 || fail 'the move from the server b
 assert_contains "$out" "the page of $head1 from the cache: $pre/toolchain/.wiki-toolchain/pages/app-demo-$head1.zip"
 assert_lacks "$EVENTS" 'curl https://github.com/'
 assert_lacks "$EVENTS" 'app-server-'
-assert_contains "$EVENTS" "bootstrap node WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+assert_contains "$EVENTS" "bootstrap static WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_lacks "$EVENTS" 'cabal'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$out" "keeping the server's data in $pre/data"

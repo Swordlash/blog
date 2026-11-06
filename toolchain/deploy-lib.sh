@@ -359,9 +359,6 @@ port_rule_shared() {
   return 1
 }
 
-firewall_open() {
-  ufw_run allow in on "$TS_IFACE" to any port "$1" proto tcp comment "$name"
-}
 
 firewall_close() {
   if port_rule_shared "$1"; then

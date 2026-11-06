@@ -1175,11 +1175,12 @@ downloads `app-demo-<commit>.zip` and builds nothing. On this machine alone, at
 sh toolchain/deploy-local.sh --static --http --bind 127.0.0.1 --port 8080 --backend-only
 ```
 
-It needs Node and nothing else: no GHC, cabal, wasm toolchain or npm. The static
+It needs Node, and GHC and cabal for the maker, which does the deploy's last part
+(below); no wasm toolchain or npm, and nothing of the wiki is compiled. The static
 server, `server.mjs`, runs on Node, and `compress.mjs` writes the brotli copies with
 it. The deploy takes the Node under the toolchain directory, or a Node 24 or later
-with npm on `PATH`; with neither, `toolchain/bootstrap.sh node` installs Node alone
-under the toolchain directory. The demo's page differs from the server's: it is
+with npm on `PATH`; `toolchain/bootstrap.sh static` installs what is missing under
+the toolchain directory, or with `--system-tools` checks the machine's own. The demo's page differs from the server's: it is
 `WIKI_BACKEND=demo`, a prerendered page for each route of the demo's content, its
 wiki kept in each visitor's browser rather than on this machine, and any static
 server can serve it. The choice of REF, the warning for a page of another commit,
@@ -2280,10 +2281,11 @@ still reads the options and the state, builds or downloads what it needs and sta
 the database; then it writes a plan of what it found and runs `maker deploy apply
 --plan FILE`, which does everything that changes the running deployment: the backup,
 the files, the unit, the restart, the checks that it answers, `tailscale serve`, the
-firewall and the report at the end. A demo whose page is not built on the machine
-(`--static --backend-only`, `--static --app-page`) still does that part in shell,
-since it has no GHC to build the maker with yet. `toolchain/undeploy-local.sh` and
-`--status` stay in shell, as does `toolchain/check-native.sh`: they need no GHC.
+firewall and the report at the end. Every deploy goes through it: a demo whose page
+is not built on the machine (`--static --backend-only`, `--static --app-page`) runs
+`toolchain/bootstrap.sh static`, which installs GHC and cabal for the maker besides
+Node. `toolchain/undeploy-local.sh` and `--status` stay in shell, as does
+`toolchain/check-native.sh`: they need no GHC.
 
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing

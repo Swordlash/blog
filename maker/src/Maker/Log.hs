@@ -96,12 +96,12 @@ runQuiet ctx (program : args) =
   withFile (logFile ctx) AppendMode $ \h -> runProcess (intoLog h (proc program args))
 
 -- | Run a long step (a compiler's install, the wasm sysroot's setup, the
--- index's update) as 'run' does. In the build and native modes, which the
+-- index's update) as 'run' does. In the build, native and static modes, which the
 -- deploy uses, its output is also shown as it comes, so that a deploy does
 -- not sit silent for minutes; the other modes keep it in the log alone.
 runLong :: Context -> String -> (ProcessConfig () () () -> ProcessConfig () () ()) -> [String] -> IO ()
 runLong ctx step change args
-  | ctx.mode `notElem` [Build, Native] = runWith ctx step change args
+  | ctx.mode `notElem` [Build, Native, Static] = runWith ctx step change args
 runLong _ _ _ [] = pure ()
 runLong ctx step change (program : args) = do
   logLine ctx ("+ " <> command (program : args))
