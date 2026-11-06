@@ -168,7 +168,7 @@ import System.Process (readProcess)
 -- * The answers
 
 -- | What the wizard is asked to do with the deployment.
-data Action = Deploy | Status | Stop
+data Action = Deploy | Status | Stop | Rollback
   deriving (Eq, Ord, Show)
 
 -- | What is deployed: the wiki's server, or the serverless demo.
@@ -362,7 +362,7 @@ fromState kv a =
 -- with it.
 applyAnswer :: Answers -> (Text, Text) -> Either Text Answers
 applyAnswer a (key, v) = case key of
-  "action" -> pick (\x -> a {action = x}) [("deploy", Deploy), ("status", Status), ("stop", Stop)]
+  "action" -> pick (\x -> a {action = x}) [("deploy", Deploy), ("status", Status), ("stop", Stop), ("rollback", Rollback)]
   "name" -> Right a {name = v}
   "prefix" -> Right a {prefix = v}
   "mode" -> pick (\x -> a {mode = x}) [("server", Server), ("static", Demo)]
@@ -437,6 +437,7 @@ deployArgs :: Answers -> [Text]
 deployArgs a = case action a of
   Status -> "--status" : which
   Stop -> "--stop" : which
+  Rollback -> "--rollback" : which
   Deploy ->
     concat
       [ [if server then "--server" else "--static"]
@@ -790,11 +791,13 @@ fieldsFor s a = case s of
             Deploy -> "Build and install the deployment, or replace it with a new build. The next screens ask how."
             Status -> "Show the deployment, its service and its address, and change nothing."
             Stop -> "Stop and disable the service, remove its unit, close its port and turn its tailscale serve off. Its files and the wiki's data stay."
+            Rollback -> "Put back the server deployment the last upgrade replaced, with its database as the backup made before the upgrade: what was written since is lost. The deploy says what comes back, and asks first."
         )
         actionL
         [ (Deploy, ActionChoice Deploy, "deploy")
         , (Status, ActionChoice Status, "--status  show it")
         , (Stop, ActionChoice Stop, "--stop  take it down")
+        , (Rollback, ActionChoice Rollback, "--rollback  go back")
         ]
     , text
         "--name"

@@ -32,7 +32,7 @@ import Maker.Build.Native (buildNative, testNative)
 import Maker.Build.Wasm (buildWasm, hspecHalogen, serveWasm, testWasm, wasmBuildFrom)
 import Maker.Check.Native qualified as Check
 import Maker.Context
-import Maker.Deploy.Apply (apply)
+import Maker.Deploy.Apply (apply, rollbackByHand)
 import Maker.Deploy.Page (pageStep)
 import Maker.Deploy.Plan (readPlan)
 import Maker.Deploy.Prepare (prepare)
@@ -85,6 +85,7 @@ data Command
   | HspecHalogen
   | CheckNative (Maybe FilePath) Check.Options
   | DeployApply FilePath
+  | DeployRollback FilePath
   deriving (Eq, Show)
 
 -- | The command line's parser.
@@ -131,7 +132,7 @@ parser =
             <> command
               "deploy"
               ( info
-                  (hsubparser (command "apply" (info (DeployApply <$> strOption (long "plan" <> metavar "FILE" <> help "The plan toolchain/deploy-local.sh wrote")) (progDesc "Change the running deployment as the plan says"))))
+                  (hsubparser (command "apply" (info (DeployApply <$> strOption (long "plan" <> metavar "FILE" <> help "The plan toolchain/deploy-local.sh wrote")) (progDesc "Change the running deployment as the plan says")) <> command "rollback" (info (DeployRollback <$> strOption (long "plan" <> metavar "FILE" <> help "The plan toolchain/deploy-local.sh wrote")) (progDesc "Put back the deployment kept before the last upgrade"))))
                   (progDesc "The deploy's parts that have moved into the maker (docs/PLAN.md, WP5.68 c2)")
               )
             <> command
@@ -266,6 +267,7 @@ main = do
       serveWasm be wb args
     HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
     DeployApply file -> readPlan file >>= pageStep >>= texStep >>= prepare >>= apply
+    DeployRollback file -> readPlan file >>= rollbackByHand
     CheckNative rootArg options -> do
       root' <- maybe getCurrentDirectory makeAbsolute rootArg
       (report, ok) <- Check.checkNative root' options

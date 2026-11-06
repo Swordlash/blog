@@ -15,6 +15,9 @@ import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
 import Maker.Deploy.Tex (sourceWords, texYear, texlivePackages)
 import Maker.Deploy.Unit
+import Maker.Deploy.Upgrade (Kept (..), keepPrevious, newBackup, readKept)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, removePathForcibly)
+import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
@@ -169,3 +172,41 @@ spec = describe "the deploy's part in the maker" $ do
   describe "the firewall"
     $ it "quotes only the arguments that need it, as a shell would need them typed"
     $ quoteArgs ["allow", "in", "on", "tailscale0", "comment", "my wiki"] `shouldBe` "allow in on tailscale0 comment 'my wiki'"
+
+  describe "the upgrade" $ do
+    it "takes the newest backup a backup command added, and none when it added none" $ do
+      let listed0 = ["/d/backups/20261101T000000Z.sqlite"]
+          listed1 = listed0 <> ["/d/backups/20261106T101500Z.sqlite", "/d/backups/20261106T101500Z.pgdump.json"]
+      newBackup listed0 listed1 `shouldBe` Just "/d/backups/20261106T101500Z.sqlite"
+      newBackup listed0 listed0 `shouldBe` Nothing
+      newBackup [] ["/d/backups/a.pgdump.json", "/d/backups/a.pgdump"] `shouldBe` Just "/d/backups/a.pgdump"
+    it "keeps a server deployment in previous/ with its commit and a copy of its backup, and only a server's" $ do
+      tmp <- getTemporaryDirectory
+      let dir = tmp </> "maker-upgrade-spec"
+      removePathForcibly dir
+      createDirectoryIfMissing True (dir </> "app")
+      writeFile (dir </> "unit") "[Unit]\n"
+      writeFile (dir </> "state") "git_commit=abc\n"
+      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing
+      demo `shouldBe` False
+      createDirectoryIfMissing True (dir </> "bin")
+      writeFile (dir </> "bin" </> "wiki-server") "old"
+      createDirectoryIfMissing True (dir </> "backups")
+      writeFile (dir </> "backups" </> "b.pgdump") "dump"
+      writeFile (dir </> "backups" </> "b.pgdump.json") "facts"
+      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump"))
+      kept `shouldBe` True
+      moved <- (,) <$> doesDirectoryExist (dir </> "bin") <*> doesDirectoryExist (dir </> "app")
+      moved `shouldBe` (False, False)
+      k <- readKept dir
+      fmap (\x -> (x.commit, x.backup)) k `shouldBe` Just ("unknown", dir </> "previous" </> "b.pgdump")
+      readFile (dir </> "previous" </> "b.pgdump.json") >>= (`shouldBe` "facts")
+      readFile (dir </> "previous" </> "state") >>= (`shouldBe` "git_commit=abc\n")
+      -- A server whose unit is gone (after --stop) is not kept, and the
+      -- deployment kept before goes.
+      createDirectoryIfMissing True (dir </> "bin")
+      writeFile (dir </> "bin" </> "wiki-server") "stopped"
+      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing
+      stopped `shouldBe` False
+      doesDirectoryExist (dir </> "previous") >>= (`shouldBe` False)
+      removePathForcibly dir

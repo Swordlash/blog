@@ -13,6 +13,7 @@
 -- the restart before the serve).
 module Maker.Deploy.Apply
   ( apply
+  , rollbackByHand
   , compressible
   , sanName
   )
@@ -32,14 +33,15 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
-import Maker.Deploy.State (renderState, writeState)
+import Maker.Deploy.State (renderState, stateGet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
+import Maker.Deploy.Upgrade
 import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (exitWith)
-import System.FilePath (takeExtension, (</>))
-import System.IO (hPutStr, stderr)
+import System.FilePath (takeExtension, takeFileName, (</>))
+import System.IO (hFlush, hIsTerminalDevice, hPutStr, stderr, stdin, stdout)
 import System.Process.Typed
 import Text.Read (readMaybe)
 
@@ -68,6 +70,7 @@ apply p = do
         | otherwise = ["--sqlite", dir </> "data" </> "wiki.sqlite"]
 
   -- From here on the running deployment changes.
+  madeBackup <- newIORef Nothing
   wasInstalled <- doesFileExist (v "unit_file")
   when wasInstalled $ do
     say ("stopping " <> service)
@@ -93,7 +96,14 @@ apply p = do
     let backup
           | db == "postgres" = ["backup", "--data", dir </> "data"] <> databaseArgs <> ["--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
           | otherwise = ["backup", "--data", dir </> "data"] <> databaseArgs
+    let backupsDir = dir </> "data" </> "backups"
+        listed = do
+          there <- doesDirectoryExist backupsDir
+          if there then map (backupsDir </>) <$> listDirectory backupsDir else pure []
+    before <- listed
     code <- runInherit serverBin backup
+    after <- listed
+    writeIORef madeBackup (newBackup before after)
     unless (code == ExitSuccess) $ do
       when wasInstalled (() <$ runInherit "systemctl" ["--user", "start", service])
       when (code == ExitFailure 3) $
@@ -126,8 +136,31 @@ apply p = do
   -- Everything but the data, which outlives every deployment of it, and,
   -- under a prefix, the state and the toolchain, which the next deploy
   -- needs.
+  -- The deployment it replaces is kept for a rollback (Maker.Deploy.Upgrade),
+  -- a server's only: its binary, page, unit and state, with its commit and
+  -- the backup just made. It is kept only when the upgrade changes nothing
+  -- a rollback would not put back: the database's kind or port (the
+  -- container), the listening port or address (the firewall rule, tailscale
+  -- serve), the way HTTPS is served, the database itself (--fresh), or
+  -- the place of the state and the PostgreSQL files (an adoption under
+  -- --prefix). An older one kept before goes either way.
+  backupMade <- readIORef madeBackup
+  runningNow <- mapM (`stateGet` v "state_file") ["db", "db_port", "port", "bind", "way", "https_host", "serve_port"]
+  let changes = case runningNow of
+        [oldDb, oldDbPort, oldPort, oldBind, oldWay, oldHttpsHost, oldServePort] ->
+          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the HTTPS address or tailscale serve", oldHttpsHost /= httpsHost || oldServePort /= v "serve_port"), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
+        _ -> []
+  kept <-
+    if server && null changes
+      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade
+      else do
+        replaced <- doesFileExist (dir </> "bin" </> "wiki-server")
+        when (server && replaced) $
+          say ("the deployment it replaces is not kept for a rollback: this deploy changes " <> T.unpack (T.intercalate ", " (map T.pack changes)) <> ", which a rollback would not put back")
+        removePathForcibly (previousDir dir)
+        pure False
   entries <- listDirectory dir
-  forM_ [e | e <- entries, e `notElem` ["data", "state", "toolchain", v "marker"]] $ \e ->
+  forM_ [e | e <- entries, e `notElem` (["data", "state", "toolchain", v "marker"] <> ["previous" | server])] $ \e ->
     removePathForcibly (dir </> e)
   writeFile (dir </> v "marker") ("name=" <> name <> "\ncreated-by=toolchain/deploy-local.sh\n")
   orDie =<< runInherit "cp" ["-R", v "out", dir </> "app"]
@@ -158,6 +191,39 @@ apply p = do
         orDie =<< runProcess (setStdout nullStream (proc (v "node") ((v "root" </> "toolchain" </> "compress.mjs") : batch)))
       brotli <- filter (".br" `isSuffixOf`) <$> filesUnder (dir </> "app")
       say ("copied the page and " <> show (length brotli) <> " brotli'd files")
+
+  -- The new program brings the database to its schema and reads it back
+  -- whole before it is started (WP5.73 of docs/PLAN.md): a migration that
+  -- fails, or leaves a row it cannot read, puts the kept deployment back.
+  let placeArgs = ["--data", dir </> "data"] <> databaseArgs <> pgPrograms
+      pgPrograms = if db == "postgres" then ["--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"] else []
+      probeUrl = serverUrl server bind port way
+      answers = urlAnswers (if nodeless then Nothing else Just (v "node"))
+      rollBack why = do
+        mk <- if kept then readKept dir else pure Nothing
+        case mk of
+          Nothing -> die (why <> ", and no previous deployment is kept to go back to")
+          Just k -> do
+            warn why
+            keptArgs <- keptPlaceArgs dir pgDir
+            restored <- restorePrevious dir (v "unit_file") (v "state_file") service keptArgs k
+            unless restored $
+              die (why <> "; the rollback to commit " <> k.commit <> " stopped at the restore of its database (see above). Restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run deploy-local.sh --rollback")
+            running <- answersWithin service answers probeUrl
+            if running
+              then say ("the previous deployment runs again (" <> service <> " answers on " <> probeUrl <> ")")
+              else warn ("the previous deployment does not answer on " <> probeUrl <> " either; see journalctl --user -u " <> name)
+            die
+              ( why
+                  <> ": rolled back to the previous deployment, of commit "
+                  <> k.commit
+                  <> (if null k.backup then "" else ", its database restored from the backup made before the upgrade (" <> takeFileName k.backup <> ")")
+                  <> ". Deploy that commit again (git checkout "
+                  <> k.commit
+                  <> ") until the cause is fixed"
+              )
+  when server $
+    migrateAndCheck (dir </> "bin" </> "wiki-server") placeArgs >>= mapM_ rollBack
 
   let listen = if ':' `elem` bind then "[" <> bind <> "]:" <> port else bind <> ":" <> port
   ldLibraryPath <- fromMaybe "" <$> lookupEnv "LD_LIBRARY_PATH"
@@ -234,34 +300,21 @@ apply p = do
   -- the console and the wrappers name the copies under the prefix.
   when (has p "adopted_pg_dir") (removePathForcibly (v "adopted_pg_dir"))
   say ("starting " <> service)
-  orDie =<< runInherit "systemctl" ["--user", "restart", service]
+  restarted <- runInherit "systemctl" ["--user", "restart", service]
+  unless (restarted == ExitSuccess) $ do
+    let why = "systemctl --user restart " <> service <> " failed (see above)"
+    if server && kept then rollBack why else die why
 
-  let probeHost = case bind of
-        "0.0.0.0" -> "127.0.0.1"
-        "::" -> "[::1]"
-        b | ':' `elem` b -> "[" <> b <> "]"
-        b -> b
+  let probeHost = hostOf bind
       probePath = if server then "api/v1/info" else ""
       scheme = if way == "cert" then "https" else "http"
-      answers url
-        | "https://" `isPrefixOf` url = (== "200") . snd <$> outputOf "curl" ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", "--noproxy", "*", "--insecure", url]
-        | nodeless = (== "200") . snd <$> outputOf "curl" ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", "--noproxy", "*", url]
-        | otherwise = succeeds (v "node") ["-e", nodeFetch, url]
-      serviceActive = succeeds "systemctl" ["--user", "is-active", "--quiet", service]
-  wait <- maybe 20 id . (>>= readMaybe) <$> lookupEnv "WIKI_DEPLOY_WAIT"
-  let loop (waited :: Int) = do
-        up <- serviceActive
-        ok <- if up then answers (scheme <> "://" <> probeHost <> ":" <> port <> "/" <> probePath) else pure False
-        unless ok $ do
-          let waited' = waited + 1
-          when (waited' >= wait) $ do
-            _ <- runProcess (setStdout (useHandleOpen stderr) (proc "systemctl" ["--user", "status", service, "--no-pager"]))
-            mapM_ Firewall.report firewall
-            die (service <> " does not answer on " <> scheme <> "://" <> probeHost <> ":" <> port <> "/; see journalctl --user -u " <> name)
-          threadDelay 1000000
-          loop waited'
-  loop 0
-  say (service <> " answers on " <> scheme <> "://" <> probeHost <> ":" <> port <> "/" <> probePath)
+  up <- answersWithin service answers probeUrl
+  unless up $ do
+    _ <- runProcess (setStdout (useHandleOpen stderr) (proc "systemctl" ["--user", "status", service, "--no-pager"]))
+    mapM_ Firewall.report firewall
+    let why = service <> " does not answer on " <> scheme <> "://" <> probeHost <> ":" <> port <> "/; see journalctl --user -u " <> name
+    if server && kept then rollBack why else die why
+  say (service <> " answers on " <> probeUrl)
   -- With --tls-ca, the certificate is checked as a browser that trusts that
   -- authority checks it: its chain, and its name.
   when (way == "cert" && has p "tls_ca") $ do
@@ -691,3 +744,99 @@ dropSlash s = fromMaybe s (stripSuffix "/" s)
 
 seconds :: IO Int
 seconds = truncate <$> getPOSIXTime
+
+-- | The host a deploy probes its own listener at: the loopback address for
+-- a listener on every address, the address in brackets for IPv6.
+hostOf :: String -> String
+hostOf bind = case bind of
+  "0.0.0.0" -> "127.0.0.1"
+  "::" -> "[::1]"
+  b | ':' `elem` b -> "[" <> b <> "]"
+  b -> b
+
+-- | The URL a deploy probes a deployment at: wiki-server's
+-- @api\/v1\/info@, or the demo's page, over HTTPS when wiki-server
+-- serves it with its own certificate.
+serverUrl :: Bool -> String -> String -> String -> String
+serverUrl server bind port way =
+  (if way == "cert" then "https" else "http") <> "://" <> hostOf bind <> ":" <> port <> "/" <> (if server then "api/v1/info" else "")
+
+-- | Whether a URL answers 200: with Node's fetch when Node is given, with
+-- curl for HTTPS (the deploy probes its own listener, so the certificate
+-- is not checked here) and where there is no Node.
+urlAnswers :: Maybe FilePath -> String -> IO Bool
+urlAnswers node url = case node of
+  Just n | not ("https://" `isPrefixOf` url) -> succeeds n ["-e", nodeFetch, url]
+  _ -> (== "200") . snd <$> outputOf "curl" (["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", "--noproxy", "*"] <> ["--insecure" | "https://" `isPrefixOf` url] <> [url])
+
+-- | Whether a user service answers at a URL within the time a deploy waits
+-- for one (WIKI_DEPLOY_WAIT, 20 seconds by default). The service being
+-- active is not enough: systemd counts a service as active as soon as its
+-- program starts, before the program has opened its database and its
+-- listeners.
+answersWithin :: String -> (String -> IO Bool) -> String -> IO Bool
+answersWithin service answers url = do
+  wait <- maybe 20 id . (>>= readMaybe) <$> lookupEnv "WIKI_DEPLOY_WAIT"
+  let loop (n :: Int) = do
+        up <- succeeds "systemctl" ["--user", "is-active", "--quiet", service]
+        ok <- if up then answers url else pure False
+        if ok || n + 1 >= wait then pure ok else threadDelay 1000000 >> loop (n + 1)
+  loop 0
+
+-- | @deploy-local.sh --rollback@: put back the deployment kept in
+-- @previous/@ (Maker.Deploy.Upgrade), by hand, after saying what comes back
+-- and what is lost, and asking. The database goes back to the backup made
+-- before the upgrade, so everything written since is lost unless exported
+-- first. Without a terminal to ask on, @--yes@ (the plan's @yes@) answers.
+rollbackByHand :: Plan -> IO ()
+rollbackByHand p = do
+  let v = get p
+      name = v "name"
+      dir = v "dir"
+      service = name <> ".service"
+      pgDir = v "state_dir" </> (name <> ".postgres")
+  mk <- readKept dir
+  k <- maybe (die ("there is no previous deployment kept in " <> previousDir dir <> " to roll back to: a deploy keeps one when it replaces a server")) pure mk
+  placeArgs <- keptPlaceArgs dir pgDir
+  say ("the deployment kept in " <> previousDir dir <> " is of commit " <> k.commit <> ", kept " <> k.keptAt)
+  if null k.backup
+    then say "its database is left as it is: there was none when it was kept"
+    else say ("its database goes back to the backup " <> k.backup <> ": everything written since is lost, unless exported first (Export in the administration)")
+  terminal <- hIsTerminalDevice stdin
+  answer <-
+    if has p "yes"
+      then pure True
+      else
+        if terminal
+          then do
+            putStr (prog <> ": roll back? [y/N] ") >> hFlush stdout
+            reply <- getLine
+            pure (map toLower reply `elem` ["y", "yes"])
+          else die "--rollback asks first, and there is no terminal to ask on: run it on one, or add --yes"
+  unless answer (die "nothing was changed")
+  restored <- restorePrevious dir (v "unit_file") (v "state_file") service placeArgs k
+  unless restored $
+    die ("nothing else was changed: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
+  -- The deployment as the restored state describes it.
+  restoredState <- mapM (`stateGet` v "state_file") ["bind", "port", "way"]
+  node <- findExecutable "node"
+  let url = case restoredState of
+        [bind, port, way] -> serverUrl True bind port way
+        _ -> ""
+  running <- answersWithin service (urlAnswers node) url
+  if running
+    then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
+    else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
+
+-- | The database options of the deployment kept in @previous/@, read from
+-- the state file kept with it. The backup a rollback restores is of that
+-- database, which differs from the current one when the upgrade moved the
+-- wiki between SQLite and PostgreSQL.
+keptPlaceArgs :: FilePath -> FilePath -> IO [String]
+keptPlaceArgs dir pgDir = do
+  db <- stateGet "db" (previousDir dir </> "state")
+  dbPort <- stateGet "db_port" (previousDir dir </> "state")
+  pure $
+    if db == "postgres"
+      then ["--data", dir </> "data", "--database", dbUrl dbPort, "--database-password-file", pgDir </> "db-password", "--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
+      else ["--data", dir </> "data", "--sqlite", dir </> "data" </> "wiki.sqlite"]
