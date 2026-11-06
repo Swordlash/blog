@@ -1261,7 +1261,8 @@ try {
   assert.equal(metrics.status, 200, "the metrics on the admin listener");
   assert.ok((metrics.headers.get("content-type") ?? "").startsWith("text/plain; version=0.0.4"), metrics.headers.get("content-type"));
   const scraped = await metrics.text();
-  assert.ok(scraped.includes('wiki_http_requests_total{listener="public",route="/api/v1/session",method="POST",status="2xx"}'), "signing in is counted by its route");
+  // A password signs in through OPAQUE, whose last message is the PUT.
+  assert.ok(scraped.includes('wiki_http_requests_total{listener="public",route="/api/v1/session/password",method="PUT",status="2xx"}'), "signing in is counted by its route");
   assert.ok(/^wiki_users \d+$/m.test(scraped) && /^wiki_database_bytes \d+$/m.test(scraped), "the gauges");
   assert.ok(!scraped.includes(sessionToken), "a session's secret in the metrics");
   assert.equal((await fetch(url("/metrics"))).status, 404, "the metrics on the public listener");
