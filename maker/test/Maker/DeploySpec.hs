@@ -180,7 +180,7 @@ spec = describe "the deploy's part in the maker" $ do
       newBackup listed0 listed1 `shouldBe` Just "/d/backups/20261106T101500Z.sqlite"
       newBackup listed0 listed0 `shouldBe` Nothing
       newBackup [] ["/d/backups/a.pgdump.json", "/d/backups/a.pgdump"] `shouldBe` Just "/d/backups/a.pgdump"
-    it "keeps a server deployment in previous/ with its commit and backup, and only a server's" $ do
+    it "keeps a server deployment in previous/ with its commit and a copy of its backup, and only a server's" $ do
       tmp <- getTemporaryDirectory
       let dir = tmp </> "maker-upgrade-spec"
       removePathForcibly dir
@@ -191,11 +191,15 @@ spec = describe "the deploy's part in the maker" $ do
       demo `shouldBe` False
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "old"
-      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just "/d/backups/b.sqlite")
+      createDirectoryIfMissing True (dir </> "backups")
+      writeFile (dir </> "backups" </> "b.pgdump") "dump"
+      writeFile (dir </> "backups" </> "b.pgdump.json") "facts"
+      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump"))
       kept `shouldBe` True
       moved <- (,) <$> doesDirectoryExist (dir </> "bin") <*> doesDirectoryExist (dir </> "app")
       moved `shouldBe` (False, False)
       k <- readKept dir
-      fmap (\x -> (x.commit, x.backup)) k `shouldBe` Just ("unknown", "/d/backups/b.sqlite")
+      fmap (\x -> (x.commit, x.backup)) k `shouldBe` Just ("unknown", dir </> "previous" </> "b.pgdump")
+      readFile (dir </> "previous" </> "b.pgdump.json") >>= (`shouldBe` "facts")
       readFile (dir </> "previous" </> "state") >>= (`shouldBe` "git_commit=abc\n")
       removePathForcibly dir

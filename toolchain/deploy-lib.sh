@@ -192,6 +192,7 @@ state_write() {
     printf 'texlive_mirror=%s\n' "${texlive_mirror:-}"
     printf 'perl_dir=%s\n' "${perl_dir:-}"
     printf 'whats_new=%s\n' "${whats_new:-}"
+    printf 'git_commit=%s\n' "${git_commit:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -504,6 +505,8 @@ undeploy() {
   texlive_dir=$(state_get texlive_dir)
   texlive_mirror=$(state_get texlive_mirror)
   perl_dir=$(state_get perl_dir)
+  whats_new=$(state_get whats_new)
+  git_commit=$(state_get git_commit)
   # A deployment that moved from PostgreSQL to --sqlite still has the
   # stopped container and its volume: --purge deletes them too.
   pg_down

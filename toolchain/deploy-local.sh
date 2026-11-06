@@ -977,6 +977,11 @@ find_maker() {
 if [ "$action" = rollback ]; then
   [ -n "$prev_dir" ] && [ "$prev_mode" = server ] ||
     die "there is no server deployed under the name $name${prefix:+ under $prefix} to roll back"
+  # The toolchain the maker was built with, as a deploy loads it.
+  if [ -z "$(state_get system_tools)" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
+    # shellcheck source=/dev/null
+    . "$toolchain_base/.wiki-toolchain/env"
+  fi
   find_maker
   plan=$(mktemp)
   printf 'name=%s\ndir=%s\nstate_dir=%s\nunit_file=%s\nstate_file=%s\nyes=%s\n' \

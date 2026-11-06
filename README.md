@@ -1680,17 +1680,21 @@ to the demo, keeping `data/`.
 - **Upgrades, and going back.** A deploy over a running server is an upgrade.
   After the backup, it moves the deployment it replaces (`bin/`, `app/`, a copy
   of the unit and of the state) into `~/wiki-demo/previous/`, with the commit
-  it was built from and the backup just made (`previous/info`); a deployment
+  it was built from and a copy of the backup just made (`previous/info`; a
+  copy, since the server's own backups prune `data/backups`). A deployment
   records its commit in the state (`git_commit`, `unknown` when the checkout is
-  not a git repository). Then the new `wiki-server` runs `migrate` and
+  not a git repository). Nothing is kept when the deploy changes what putting
+  the files back would not undo: the database's kind or port, the port or
+  address, the way HTTPS is served, or `--fresh`; the deploy says so. Then the new `wiki-server` runs `migrate` and
   `check` on the database before it is started. When either fails, or the new
   server does not answer, the deploy rolls back by itself: it stops the
   service, restores the backup with the old `wiki-server`, puts the old files,
   unit and state back, starts the old server, and ends with the commit to go
-  back to:
+  back to. If the restore itself fails, it stops there, with the service
+  stopped and `previous/` as it was, and says so:
 
   ```text
-  deploy-local: the migrated database does not read back (wiki-server check, above): rolled back to the previous deployment, of commit 3f2a…, its database restored from ~/wiki-demo/data/backups/20261106T101500Z.sqlite. Deploy that commit again (git checkout 3f2a…) until the cause is fixed
+  deploy-local: the migrated database does not read back (wiki-server check, above): rolled back to the previous deployment, of commit 3f2a…, its database restored from the backup made before the upgrade (20261106T101500Z.sqlite). Deploy that commit again (git checkout 3f2a…) until the cause is fixed
   ```
 
   A successful upgrade keeps `previous/` too, until the next one replaces it,

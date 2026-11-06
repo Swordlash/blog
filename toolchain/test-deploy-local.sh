@@ -188,7 +188,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
@@ -267,6 +267,7 @@ case \$command in
   restore)
     # As wiki-server restore does: the database it replaces set aside, the
     # backup copied in its place.
+    [ -z "\${FAKE_RESTORE_FAIL:-}" ] || { printf 'fake restore failure\n' >&2; exit 1; }
     [ -f "\$target" ] || { printf 'There is no file %s.\n' "\$target" >&2; exit 1; }
     if [ -n "\$sqlite" ]; then
       mkdir -p "\$data/replaced/fake"
@@ -882,6 +883,7 @@ assert_lacks "$EVENTS" 'ufw delete'
 [ -f "$HOME/wiki-demo/app/index.html" ] || fail '--stop deleted the files'
 [ "$(http_get "http://127.0.0.1:$p2/")" = unreachable ] || fail '--stop left the server running'
 { [ -z "$(state serve_port)" ] && [ "$(state port)" = "$p2" ]; } || fail '--stop did not record the serve turned off'
+[ "$(state git_commit)" = unknown ] || fail '--stop forgot the commit'
 : >"$EVENTS"
 out=$case_dir/stop-again
 undeploy >"$out" 2>&1 || fail 'undeploying a stopped deployment failed'
@@ -1479,7 +1481,10 @@ deploy --no-build >"$out" 2>&1 || fail 'an upgrade failed'
 assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from outside git'
 assert_lacks "$HOME/wiki-demo/bin/wiki-server" '# built from outside git'
 assert_contains "$HOME/wiki-demo/previous/info" 'commit=unknown'
-assert_contains "$HOME/wiki-demo/previous/info" "backup=$data/backups/1.sqlite"
+# The backup is copied into previous/, out of reach of the server's pruning
+# of data/backups.
+assert_contains "$HOME/wiki-demo/previous/info" "backup=$HOME/wiki-demo/previous/1.sqlite"
+cmp -s "$data/backups/1.sqlite" "$HOME/wiki-demo/previous/1.sqlite" || fail 'the backup was not copied into previous/'
 assert_contains "$HOME/wiki-demo/previous/state" 'git_commit=unknown'
 [ -f "$HOME/wiki-demo/previous/unit" ] && [ -f "$HOME/wiki-demo/previous/app/index.html" ] || fail 'the unit or the page was not kept'
 assert_contains "$out" "kept the previous deployment (unknown) in $HOME/wiki-demo/previous"
@@ -1505,12 +1510,12 @@ printf 'written by the second\n' >>"$data/wiki.sqlite"
 out=$case_dir/check-fails
 if FAKE_CHECK_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose database does not read back succeeded'; fi
 assert_contains "$out" 'the migrated database does not read back (wiki-server check, above)'
-assert_contains "$out" "rolled back to the previous deployment, of commit $first, its database restored from $data/backups/2.sqlite"
+assert_contains "$out" "rolled back to the previous deployment, of commit $first, its database restored from the backup made before the upgrade (2.sqlite)"
 assert_contains "$out" "git checkout $first"
 assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit'
 [ ! -e "$HOME/wiki-demo/previous" ] || fail 'previous/ is left after the rollback'
 [ "$(state git_commit)" = "$first" ] || fail 'the state was not put back'
-assert_contains "$EVENTS" "wiki-server restore $data/backups/2.sqlite --data $data --sqlite $data/wiki.sqlite"
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/2.sqlite --data $data --sqlite $data/wiki.sqlite"
 assert_contains "$data/wiki.sqlite" 'written by the second'
 [ "$(grep -c migrated "$data/wiki.sqlite")" = "$(grep -c migrated "$data/backups/2.sqlite")" ] || fail 'the failed migration was not undone'
 { [ "$(line_of "$EVENTS" 'wiki-server check')" -lt "$(line_of "$EVENTS" 'wiki-server restore')" ] &&
@@ -1519,15 +1524,21 @@ assert_contains "$data/wiki.sqlite" 'written by the second'
 [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the rolled back server does not answer'
 pass 'a database that does not read back after the migration rolls the upgrade back, restoring the backup with the old binary, and names the commit'
 
-# A migration that fails rolls back the same way.
+# A migration that fails rolls back the same way; when the restore of the
+# backup fails too, the rollback stops there, with the service stopped and
+# the previous deployment kept, and --rollback finishes it.
 : >"$EVENTS"
 out=$case_dir/migrate-fails
-if FAKE_MIGRATE_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose migration failed succeeded'; fi
+if FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose migration failed succeeded'; fi
 assert_contains "$out" 'the migration of the database (wiki-server migrate, above) failed'
-assert_contains "$out" "git checkout $first"
+assert_contains "$out" 'stopped at the restore of its database'
 assert_lacks "$EVENTS" 'wiki-server check'
+assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from the first commit'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = unreachable ] || fail 'a server runs on the database the restore did not put back'
+deploy --rollback --yes >"$case_dir/rollback-after" 2>&1 || fail '--rollback after a failed restore failed'
 assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit'
-pass 'a failed migration rolls the upgrade back'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after --rollback'
+pass 'a failed migration rolls the upgrade back, and a failed restore stops the rollback for --rollback to finish'
 
 # --rollback goes back by hand, after a successful upgrade: it asks first,
 # or --yes answers.
@@ -1552,6 +1563,18 @@ out=$case_dir/rollback-none
 if deploy --rollback --yes >"$out" 2>&1; then fail '--rollback with nothing kept succeeded'; fi
 assert_contains "$out" 'there is no previous deployment kept'
 pass '--rollback asks, or takes --yes, and puts the kept deployment back with its database'
+
+# An upgrade that changes what a rollback would not put back (here the
+# port, and so the firewall rule and the serve) keeps nothing, and says so.
+deploy --no-build >"$case_dir/keep-again" 2>&1 || fail 'a redeploy failed'
+[ -e "$HOME/wiki-demo/previous" ] || fail 'a redeploy kept nothing'
+p_other=$(other_port "$p1")
+out=$case_dir/port-change
+deploy --no-build --port "$p_other" >"$out" 2>&1 || fail 'a redeploy on another port failed'
+assert_contains "$out" 'is not kept for a rollback: this deploy changes the port'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment was kept across a port change'
+deploy --no-build --port "$p1" >"$case_dir/port-back" 2>&1 || fail 'a redeploy on the first port failed'
+pass 'an upgrade that changes the port keeps no deployment for a rollback'
 
 # The public address is the panel's: the deploy reminds of it, and says so
 # when it is another than the one served.
