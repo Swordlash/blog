@@ -143,7 +143,7 @@ import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
-import Wiki.Server.Opaque (Attempt (..), Attempts, Proofs, attemptLifetime, holdAttempt, prove, recordFromStored, registrationChallenge, respondTo, takeAttempt, takeProof)
+import Wiki.Server.Opaque (Attempt (..), Attempts, Proof (..), Proofs, attemptLifetime, holdAttempt, prove, recordFromStored, registrationChallenge, respondTo, takeAttempt, takeProof)
 import Wiki.Server.Password (SessionToken (..), newToken, tokenHash)
 import Wiki.Server.Reset qualified as Reset
 import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken (..), checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
@@ -427,14 +427,14 @@ handlers env caller =
                 -- yet: the second factor's code comes next, with the
                 -- cookie that names this sign-in.
                 held <- liftIO (holdSignIn env.pending now user.id user.login "")
-                liftIO (prove env.proofs now (pendingKey held) user.id)
+                liftIO (prove env.proofs now (pendingKey held) user.id ByOldPassword)
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
               Left _ -> do
                 unless counted $ liftIO (Limiter.failed env.limiter now credentials.login s.address)
                 refuse ApiError.Unauthenticated
               Right (user, token) -> do
                 liftIO (Limiter.succeeded env.limiter credentials.login s.address)
-                liftIO (prove env.proofs now (tokenHash token.text) user.id)
+                liftIO (prove env.proofs now (tokenHash token.text) user.id ByOldPassword)
                 startedAs s user token
     , startPasswordSignIn = \body -> do
         s <- signingHere
@@ -629,7 +629,7 @@ handlers env caller =
               a <- finishedAttempt now body
               unless (a.user == Just u) (refuse ApiError.Unauthenticated)
               liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
-              liftIO (prove env.proofs now (tokenHash token.text) u)
+              liftIO (prove env.proofs now (tokenHash token.text) u ByOpaque)
               pure NoContent
           , changePassword = ownPassword
           , sessions = do
@@ -976,18 +976,27 @@ handlers env caller =
     finishedAttempt :: UTCTime -> LoginFinish -> Handler Attempt
     finishedAttempt now body = do
       a <- liftIO (takeAttempt env.attempts now body.attempt) >>= maybe (refuse ApiError.Unauthenticated) pure
-      ke3 <- maybe (refuse ApiError.Unauthenticated) pure (Opaque.bytesOf body.ke3 >>= rightToMaybe . O.decode)
-      unless (a.hasRecord && isRight (O.serverFinish a.state ke3)) (refuse ApiError.Unauthenticated)
+      -- The attempt is used up: its state, and the session key a right
+      -- message releases (the session is the server's own token), are
+      -- zeroed now rather than when they are collected.
+      ok <- liftIO $ case Opaque.bytesOf body.ke3 >>= rightToMaybe . O.decode of
+        Nothing -> False <$ O.scrub a.state
+        Just ke3 -> do
+          let finish = O.serverFinish a.state ke3
+          for_ (rightToMaybe finish) O.scrub
+          O.scrub a.state
+          pure (a.hasRecord && isRight finish)
+      unless ok (refuse ApiError.Unauthenticated)
       pure a
     -- Use up the session's proof of its user's password, if it has one.
-    proofOf :: Signing -> UTCTime -> UserId -> IO Bool
-    proofOf s now u = maybe (pure False) (\t -> takeProof env.proofs now (tokenHash t.text) u) s.token
+    proofOf :: Signing -> UTCTime -> UserId -> IO (Maybe Proof)
+    proofOf s now u = maybe (pure Nothing) (\t -> takeProof env.proofs now (tokenHash t.text) u) s.token
     -- Move the proof a sign-in from before OPAQUE left on the sign-in
     -- waiting for its second factor to the session it became.
     carryProof :: UTCTime -> PendingToken -> UserId -> SessionToken -> Handler ()
     carryProof now held u token = liftIO $ do
       had <- takeProof env.proofs now (pendingKey held) u
-      when had (prove env.proofs now (tokenHash token.text) u)
+      for_ had (prove env.proofs now (tokenHash token.text) u)
     -- 'signInAs', carrying the waiting sign-in's proof to the session.
     signInAsCarrying s now u held =
       liftIO (Accounts.accountOf env.storage u) >>= \case

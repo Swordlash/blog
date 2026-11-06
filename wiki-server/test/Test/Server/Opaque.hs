@@ -54,12 +54,14 @@ unitSpec = describe "OPAQUE sign-ins under way" $ do
     for [old, fresh, fresher] (fmap isJust . takeAttempt attempts later) `shouldReturn` [False, True, True]
 
   describe "proofs of a password" $
-    it "are taken once, by their user, and not after they expire" $ do
+    it "are taken once, by their user, with how they were made, and not after they expire" $ do
       now <- getCurrentTime
       proofs <- newProofs
-      prove proofs now "session" (UserId "user-editor")
-      takeProof proofs now "session" (UserId "user-reader") `shouldReturn` False
-      takeProof proofs now "session" (UserId "user-editor") `shouldReturn` True
-      takeProof proofs now "session" (UserId "user-editor") `shouldReturn` False
-      prove proofs now "session" (UserId "user-editor")
-      takeProof proofs (addUTCTime (proofLifetime + 1) now) "session" (UserId "user-editor") `shouldReturn` False
+      prove proofs now "session" (UserId "user-editor") ByOpaque
+      takeProof proofs now "session" (UserId "user-reader") `shouldReturn` Nothing
+      takeProof proofs now "session" (UserId "user-editor") `shouldReturn` Just ByOpaque
+      takeProof proofs now "session" (UserId "user-editor") `shouldReturn` Nothing
+      prove proofs now "session" (UserId "user-editor") ByOldPassword
+      takeProof proofs now "session" (UserId "user-editor") `shouldReturn` Just ByOldPassword
+      prove proofs now "session" (UserId "user-editor") ByOpaque
+      takeProof proofs (addUTCTime (proofLifetime + 1) now) "session" (UserId "user-editor") `shouldReturn` Nothing

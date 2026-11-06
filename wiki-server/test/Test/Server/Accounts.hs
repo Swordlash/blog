@@ -39,7 +39,7 @@ import Wiki.Api.Account
 import Wiki.Api.Admin (Directory (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), NewAccountRecord (..), PasswordRecordChange (..), RegistrationFor (..), bytesOf, messageOf)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), NewAccountRecord (..), PasswordRecordChange (..), RegistrationFor (..), Stretch (..), bytesOf, messageOf)
 import Wiki.Api.Types (NewPage (..), NewSpace (..), SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId, UserId (..))
@@ -49,9 +49,11 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
+import Wiki.Server.Opaque (loadServerSetup, registerHere)
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Password (hashWith, parameters)
 import Wiki.Server.Storage (withStorageAside, writing)
+import Wiki.Server.Storage.Rows (storeRecord)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
@@ -479,6 +481,35 @@ opaque backing = describe "passwords through OPAQUE" $ do
     (challengeFor r "editor" "editor's old password") >>= (`shouldBe` False) . (\c -> c.fallback)
     _ <- signInAs r "editor" "editor's old password"
     (sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's old password", attempt = Nothing} >>= jsonAs 401) `shouldReturn` Unauthenticated
+
+  it "answers the old sign-in alike for an account with a record, a login nobody has, and a wrong old password" $ withPasswords backing identity $ \r -> do
+    -- One account from before OPAQUE keeps the old sign-in open.
+    legacyAccount r "user-editor" "editor's old password"
+    let oldWay login password = sendJson r methodPost (onPublic r links.signIn) Credentials {login, password = Password password, attempt = Nothing}
+    withRecordRight <- oldWay "admin" "admin's password"
+    nobody <- oldWay "nobody" "a guess"
+    wrongOld <- oldWay "editor" "not the old password"
+    let shape reply = (reply.status, reply.body, setCookie reply)
+    shape withRecordRight `shouldBe` shape wrongOld
+    shape nobody `shouldBe` shape wrongOld
+    wrongOld.status `shouldBe` 401
+
+  it "never lets the old password's proof replace a record the account has got meanwhile" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    -- Signed in the old way: the session holds a proof by the old password.
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    -- Meanwhile the account gets a record by another way, without its
+    -- sessions ending.
+    withStorageAside r.place $ \st -> writing st $ do
+      setup <- loadServerSetup
+      stored <- liftIO (registerHere setup Stretch {opsLimit = 1, memLimit = 8192} (UserId "user-editor") (Password "a password set elsewhere"))
+      either (panic . show) (storeRecord (UserId "user-editor")) stored
+    -- The migration path cannot overwrite it.
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "the session's own choice"
+    (sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    _ <- signInAs r "editor" "a password set elsewhere"
+    (.status) <$> passwordSignIn r (onPublic r) [] "editor" "the session's own choice" `shouldReturn` 401
 
   it "lets a session prove its password again, once, for a change that needs it" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"

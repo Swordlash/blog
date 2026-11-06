@@ -911,11 +911,12 @@ passwordSignIn login password =
     Right (st, ke1) ->
       withPassword (endpoints.startPasswordSignIn LoginStart {login, ke1 = messageOf (O.encode ke1)}) >>= \case
         Left e -> pure (Left e)
-        Right challenge -> case finished st challenge of
-          Just ke3 -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3})
-          Nothing
-            | challenge.fallback -> oldWay (Just challenge.attempt)
-            | otherwise -> pure (Left WrongCredentials)
+        Right challenge ->
+          finished st challenge >>= \case
+            Just ke3 -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3})
+            Nothing
+              | challenge.fallback -> oldWay (Just challenge.attempt)
+              | otherwise -> pure (Left WrongCredentials)
   where
     oldWay tried =
       withPassword (getResponse <$> endpoints.signIn Credentials {login, password, attempt = tried}) >>= \case
@@ -957,13 +958,24 @@ started = \case
     pure (Right s)
 
 -- | The client's last message, if the password is right: 'Nothing' for a
--- wrong password, and for an account without a record.
-finished :: O.ClientLoginState -> LoginChallenge -> Maybe Message
-finished st challenge = do
-  bytes <- bytesOf challenge.ke2
-  ke2 <- rightToMaybe (O.decode bytes)
-  (ke3, _, _) <- rightToMaybe (O.clientFinish (opaqueConfig challenge.stretch) st ke2 O.defaultIdentities)
-  pure (messageOf (O.encode ke3))
+-- wrong password, and for an account without a record. The login's state,
+-- which holds the password, and the keys the login agreed on, which the
+-- application does not use (the session is the server's cookie), are
+-- zeroed at once.
+finished :: (MonadIO m) => O.ClientLoginState -> LoginChallenge -> m (Maybe Message)
+finished st challenge = liftIO $ do
+  let result = do
+        bytes <- bytesOf challenge.ke2
+        ke2 <- rightToMaybe (O.decode bytes)
+        rightToMaybe (O.clientFinish (opaqueConfig challenge.stretch) st ke2 O.defaultIdentities)
+  message <- case result of
+    Nothing -> pure Nothing
+    Just (ke3, key, exportKey) -> do
+      O.scrub key
+      O.scrub exportKey
+      pure (Just (messageOf (O.encode ke3)))
+  O.scrub st
+  pure message
 
 -- | A record of a new password, for what the server's challenge is asked
 -- for. The password is checked by the rules here, since the server cannot
@@ -983,6 +995,11 @@ recordFor purpose password =
             made <- liftIO $ case bytesOf challenge.response >>= rightToMaybe . O.decode of
               Nothing -> pure Nothing
               Just response -> rightToMaybe <$> O.finalizeRegistration (opaqueConfig challenge.stretch) st response O.defaultIdentities
+            -- The registration's state holds the password, and the export
+            -- key is not used: both are zeroed at once.
+            liftIO $ do
+              for_ made (O.scrub . snd)
+              O.scrub st
             pure $ case made of
               Nothing -> Left (SignInFailed (Invalid "The server's answer to the new password was not valid: try again."))
               Just (record, _) -> Right PasswordRecord {credential = challenge.credential, record = messageOf (O.encode record), stretch = challenge.stretch}
@@ -1000,14 +1017,15 @@ proven = \case
       Right (st, ke1) ->
         withPassword (endpoints.account.startPasswordProof ProofStart {ke1 = messageOf (O.encode ke1)}) >>= \case
           Left e -> pure (Left e)
-          Right challenge -> case finished st challenge of
-            Nothing
-              | challenge.fallback -> pure (Right (Just password))
-              | otherwise -> pure (Left WrongCredentials)
-            Just ke3 ->
-              withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) <&> \case
-                Right _ -> Right Nothing
-                Left e -> Left e
+          Right challenge ->
+            finished st challenge >>= \case
+              Nothing
+                | challenge.fallback -> pure (Right (Just password))
+                | otherwise -> pure (Left WrongCredentials)
+              Just ke3 ->
+                withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) <&> \case
+                  Right _ -> Right Nothing
+                  Left e -> Left e
 
 -- | An account to create, as it travels: its record instead of its
 -- password.

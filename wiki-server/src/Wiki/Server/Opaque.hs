@@ -39,7 +39,9 @@
 -- the same exchange, may make one change that needs the password, within
 -- five minutes. So may the session a sign-in from before OPAQUE has just
 -- made, so that the browser can register the account's record at once
--- without sending the password a second time.
+-- without sending the password a second time. A proof says which of the two
+-- it is ('Proof'): a proof by the old password moves an account from before
+-- OPAQUE, and never replaces a record an account already has.
 module Wiki.Server.Opaque
   ( -- * The server's secret
     loadServerSetup
@@ -68,6 +70,7 @@ module Wiki.Server.Opaque
   , attemptLifetime
 
     -- * Proofs
+  , Proof (..)
   , Proofs
   , newProofs
   , prove
@@ -251,10 +254,20 @@ respondTo setup current found credential ke1 = do
 --------------------------------------------------------------------------------
 -- Proofs
 
+-- | 'Proof' is how a session proved its user's password.
+data Proof
+  = -- | Through OPAQUE, against the account's record
+    -- (@account\/password\/proof@).
+    ByOpaque
+  | -- | By signing in with the password from before OPAQUE, which only an
+    -- account without a record can do.
+    ByOldPassword
+  deriving stock (Eq, Show)
+
 -- | The sessions that have proved their password, by a key (the hash of
 -- their session's id, or of a sign-in waiting for a second factor), with
--- the user and until when.
-newtype Proofs = Proofs (IORef (Map Text (UserId, UTCTime)))
+-- the user, until when, and how.
+newtype Proofs = Proofs (IORef (Map Text (UserId, UTCTime, Proof)))
 
 newProofs :: IO Proofs
 newProofs = Proofs <$> newIORef mempty
@@ -263,16 +276,16 @@ newProofs = Proofs <$> newIORef mempty
 proofLifetime :: NominalDiffTime
 proofLifetime = 5 * 60
 
--- | Record that a session has proved its user's password now.
-prove :: Proofs -> UTCTime -> Text -> UserId -> IO ()
-prove (Proofs ref) now key u = atomicModifyIORef' ref $ \m ->
-  let live = Map.filter (\(_, until') -> until' > now) m
-      bounded = if Map.size live >= maxAttempts then Map.fromList (drop (Map.size live - maxAttempts + 1) (sortOn (\(_, (_, t)) -> t) (Map.toList live))) else live
-   in (Map.insert key (u, addUTCTime proofLifetime now) bounded, ())
+-- | Record that a session has proved its user's password now, and how.
+prove :: Proofs -> UTCTime -> Text -> UserId -> Proof -> IO ()
+prove (Proofs ref) now key u how = atomicModifyIORef' ref $ \m ->
+  let live = Map.filter (\(_, until', _) -> until' > now) m
+      bounded = if Map.size live >= maxAttempts then Map.fromList (drop (Map.size live - maxAttempts + 1) (sortOn (\(_, (_, t, _)) -> t) (Map.toList live))) else live
+   in (Map.insert key (u, addUTCTime proofLifetime now, how) bounded, ())
 
 -- | Use up a session's proof of its user's password, if it has one that
--- has not expired.
-takeProof :: Proofs -> UTCTime -> Text -> UserId -> IO Bool
+-- has not expired: how it was proved.
+takeProof :: Proofs -> UTCTime -> Text -> UserId -> IO (Maybe Proof)
 takeProof (Proofs ref) now key u = atomicModifyIORef' ref $ \m -> case Map.lookup key m of
-  Just (owner, until') | owner == u && until' > now -> (Map.delete key m, True)
-  _ -> (m, False)
+  Just (owner, until', how) | owner == u && until' > now -> (Map.delete key m, Just how)
+  _ -> (m, Nothing)

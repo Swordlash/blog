@@ -149,7 +149,7 @@ import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Subject (SubjectUser))
 import Wiki.Core.User (Email (..), Login (..), Password (..), User (..), parseLogin)
-import Wiki.Server.Opaque (storedRecordOf)
+import Wiki.Server.Opaque (Proof (..), storedRecordOf)
 import Wiki.Server.Password (SessionToken (..), checkNewPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
@@ -519,15 +519,17 @@ data PasswordRefusal
   deriving stock (Eq, Show)
 
 -- | A user changes their own password, which they must prove first: a
--- user with an OPAQUE record by the session's proof ('proved', which is
--- used up only when it is needed), a user from before OPAQUE by the proof or
--- by their current password, checked against its hash ('WrongCurrent' if
--- neither). The new password is the record the browser made
+-- user with an OPAQUE record by the session's proof through OPAQUE
+-- ('proved', which is used up only when it is needed), a user from before
+-- OPAQUE by any proof or by their current password, checked against its
+-- hash ('WrongCurrent' if neither). A proof by the old password, which a
+-- sign-in from before OPAQUE leaves, never replaces a record: an account
+-- that got one meanwhile must be proved through OPAQUE. The new password is the record the browser made
 -- ("Wiki.Server.Opaque"). The result is how they sign in afterwards. A
 -- user without a password who signs in with a server provider is refused
 -- ('Invalid'): they have no password to set. Every session of theirs ends
 -- except the one with this id (from the request's cookie), if any.
-changePassword :: Storage -> UserId -> Maybe SessionToken -> IO Bool -> Maybe Password -> PasswordRecord -> IO (Either PasswordRefusal SignInMethods)
+changePassword :: Storage -> UserId -> Maybe SessionToken -> IO (Maybe Proof) -> Maybe Password -> PasswordRecord -> IO (Either PasswordRefusal SignInMethods)
 changePassword st u keep proved current new = runExceptT $ do
   stored <- either (throwError . PasswordRefused . Invalid) pure (storedRecordOf u new)
   configured <- liftIO (providerNames <$> readServerSettings st)
@@ -539,7 +541,7 @@ changePassword st u keep proved current new = runExceptT $ do
   -- its sign-in left, rather than by giving it, is moving its password to
   -- OPAQUE: the password stays the same, and so do its other sessions.
   (right, moving) <- liftIO $ case before of
-    LegacyHash phc | not (maybe False (verifyPassword phc) current) -> (\p -> (p, p)) <$> proved
+    LegacyHash phc | not (maybe False (verifyPassword phc) current) -> (\p -> (p, p)) . isJust <$> proved
     _ -> (,False) <$> passwordProved before proved current
   unless right (throwError WrongCurrent)
   ExceptT $ writingEither st $ do
@@ -554,20 +556,21 @@ changePassword st u keep proved current new = runExceptT $ do
         first PasswordRefused <$> methodsOf u
 
 -- | Whether a user proved the password they have: by the session's proof
--- for a record; by the proof or the password given, against its hash, for
--- an account from before OPAQUE; and at once for a user without one.
-passwordProved :: StoredPassword -> IO Bool -> Maybe Password -> IO Bool
+-- through OPAQUE for a record; by any proof or the password given, against
+-- its hash, for an account from before OPAQUE; and at once for a user
+-- without one.
+passwordProved :: StoredPassword -> IO (Maybe Proof) -> Maybe Password -> IO Bool
 passwordProved stored proved given = case stored of
   NoPassword -> pure True
-  WithRecord _ -> proved
+  WithRecord _ -> (== Just ByOpaque) <$> proved
   LegacyHash phc
     | maybe False (verifyPassword phc) given -> pure True
-    | otherwise -> proved
+    | otherwise -> isJust <$> proved
 
 -- | Whether the requesting user has proved their current password, for
 -- what a session alone may not do (WP4.11 of docs/PLAN.md): see
 -- 'passwordProved'. 'Nothing' for a user who does not exist.
-currentPasswordIs :: Storage -> UserId -> IO Bool -> Maybe Password -> IO (Maybe Bool)
+currentPasswordIs :: Storage -> UserId -> IO (Maybe Proof) -> Maybe Password -> IO (Maybe Bool)
 currentPasswordIs st u proved given =
   reading st (passwordOf u) >>= traverse (\stored -> passwordProved stored proved given)
 
