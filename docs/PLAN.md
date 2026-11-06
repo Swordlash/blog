@@ -967,30 +967,64 @@ In the order to do it, unless the owner says otherwise.
     another directory than the deployment's keeps refusing: the old one is
     intact where it was.
 
- (the owner,
-  2026-11-06). A user's personal space, or a subspace in it, can be made
-  encrypted: turning it on at a (sub)space's home page makes the whole
-  subspace encrypted. Its pages' text, titles, history, comments and
-  attachments are encrypted in the browser (WebCrypto, AES-GCM) with a key
-  of the subspace; the server and its administrator see ciphertext only,
-  in the database and in backups. The subspace's key is wrapped with the
-  user's account key, which the browser derives from the password with a
-  KDF and never sends: the login protocol changes so that the password is
-  hashed on the client into a login key (which the server checks, as it
-  checks a password's hash now) and an encryption key that stays in the
-  browser, so a change of password wraps the account key again and
-  re-encrypts nothing. A passkey's PRF output can wrap the account key too
-  (the vault of WP5.21), for a user without a password. Keys are kept in
-  the browser as non-extractable WebCrypto keys. A password reset loses the
-  encrypted pages, and says so before it is done ("if you have encrypted
-  pages, they will be destroyed"); an export, decrypted in the browser, is
-  the way to keep them. What the server does with a page's text does not
-  work in an encrypted subspace and says so (search on the server, PDF and
-  Word exports, feeds, link previews, notifications' excerpts): search runs
-  in the browser over the decrypted pages; slugs there are random, since a
-  title's slug would show the title. Not protected: an administrator who
-  changes the JavaScript the server sends, which then reads what the user
-  decrypts; no browser API closes that today.
+- **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
+  rewritten the same day). Two packages, a then b, built so that a single page
+  can later be shared with another user.
+  - **a, login without the password leaving the browser: OPAQUE.** The
+    password logs in through OPAQUE (the CFRG's augmented PAKE, ristretto255
+    with SHA-512 and Argon2id): an OPRF and a triple Diffie-Hellman. The server
+    keeps a registration record. Neither the server nor anyone on the wire
+    learns the password or anything equivalent to it, and an eavesdropper has
+    nothing to replay or to attack offline. The protocol is written by hand
+    from libsodium's primitives (ristretto255, scalar multiplication,
+    hash-to-group, HKDF, HMAC-SHA512, Argon2id). The primitives are never
+    written by hand. The owner, the same day: no Rust toolchain; an audited C
+    library is acceptable when built from source. libsodium is built from
+    source for `wasm32-wasi` with the wasi-sdk of ghc-wasm-meta, so that one
+    Haskell implementation runs natively on the server and as wasm in the
+    browser. It is a small library of its own (a package such as
+    `opaque-hs`), written to be published upstream later, and tested against
+    the RFCs' test vectors (OPAQUE, and RFC 9497 for the OPRF) on both
+    targets. An existing account moves to OPAQUE at its next login: it logs in
+    the old way one last time and registers an OPAQUE record at once. The
+    session key OPAQUE agrees on is not used to encrypt traffic (no
+    transport layer of our own, the owner: "let's forget our own TLS"); TLS,
+    or Tailscale's WireGuard, carries the traffic.
+  - **b, encrypted spaces, with a key per page.** Each user has a long-term
+    key pair (X25519, for libsodium's sealed boxes). The server keeps every
+    user's public key; the private key is stored on the server wrapped by the
+    account key, and the account key is wrapped by a key derived from
+    OPAQUE's `export_key` (which only the client knows) and, as the AI keys'
+    vault does already, by a passkey's PRF. Every page of an encrypted
+    (sub)space has a key of its own (random, 256 bits). The key encrypts the
+    page's text, title, versions, comments and attachments
+    (XChaCha20-Poly1305), and carries an id, so that keys can be rotated. A
+    page's key is wrapped by its encrypted (sub)space's key. The (sub)space's
+    key is sealed to each member's public key. Turning encryption on at a
+    (sub)space's home page encrypts the whole subspace.
+  - **Later, kept possible: sharing a single page.** The page's key is sealed
+    to the recipient's public key and kept by the server as a grant, so that
+    sharing is asynchronous (the recipient need not be online). Two things
+    are left for that package: verifying a public key (the server could
+    substitute one; fingerprints or safety numbers), and revocation (new
+    versions under a new key; old ones stay readable by whoever held them).
+  - **The browser.** The keys held in the browser are non-extractable
+    WebCrypto keys where the page is a secure context (HTTPS or the
+    machine's own address). WebCrypto (`crypto.subtle`) does not exist over
+    plain HTTP, and its non-extractability is the one property no polyfill
+    can give (a key in wasm memory is readable by any script on the page),
+    so encrypted spaces need HTTPS, as passkeys do. OPAQUE itself (a) runs on
+    libsodium in wasm and works over plain HTTP too.
+  - **Unchanged from the first version of this entry.** A password reset loses
+    the encrypted pages, and says so before it is done ("if you have
+    encrypted pages, they will be destroyed"); an export, decrypted in the
+    browser, is the way to keep them. What the server does with a page's
+    text does not work in an encrypted subspace, and says so: search on the
+    server, PDF and Word exports, feeds, link previews, notifications'
+    excerpts. Search runs in the browser over the decrypted pages. Slugs are
+    random there, since a title's slug would show the title. Not protected:
+    an administrator who changes the JavaScript the server sends, which then
+    reads what the user decrypts.
 
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
