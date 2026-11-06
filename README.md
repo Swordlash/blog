@@ -2351,18 +2351,16 @@ sh toolchain/maker.sh build wasm -j2              # what npm run build-wasm -- -
 sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
 ```
 
-The deploy is moving into the maker too, from its end. `toolchain/deploy-local.sh`
-still reads the options and the state, checks the machine, downloads the page when it
-is not built here and runs the bootstrap; then it writes a plan of what it found and
-runs `maker deploy apply --plan FILE`, which does the rest: the TeX step, the builds and
-the checks of what they made, the service's Node, HTTPS through Tailscale, the ports,
-PostgreSQL's container, and everything that changes the running deployment (the
-backup, the files, the unit, the restart, the checks that it answers, `tailscale
-serve`, the firewall and the report at the end). Every deploy goes through it: a demo whose page
-is not built on the machine (`--static --backend-only`, `--static --app-page`) runs
-`toolchain/bootstrap.sh static`, which installs GHC and cabal for the maker besides
-Node. `toolchain/undeploy-local.sh` and `--status` stay in shell, as does
-`toolchain/check-native.sh`: they need no GHC.
+The deploy is the maker's too: `toolchain/deploy-local.sh` checks its options and
+runs `maker deploy` with them, which reads them and the state again, checks the
+machine, runs the bootstrap the deploy needs, and does the rest: the page, the TeX
+step, the builds and the checks of what they made, the service's Node, HTTPS through
+Tailscale, the ports, PostgreSQL's container, and everything that changes the running
+deployment (the backup, the files, the unit, the restart, the checks that it answers,
+`tailscale serve`, the firewall and the report at the end), and `--rollback`. On a
+machine with no cabal yet, `toolchain/bootstrap.sh maker` first installs GHC and cabal
+and builds the maker. `toolchain/undeploy-local.sh`, `--status` and `--stop` stay in
+shell, as does `toolchain/check-native.sh`: they need no GHC.
 
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing

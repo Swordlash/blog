@@ -39,6 +39,9 @@ library
     Maker.Context
     Maker.Deploy.Apply
     Maker.Deploy.Firewall
+    Maker.Deploy.Front
+    Maker.Deploy.Layout
+    Maker.Deploy.Options
     Maker.Deploy.Page
     Maker.Deploy.Plan
     Maker.Deploy.Prepare
@@ -126,6 +129,7 @@ test-suite maker-test
     Maker.CheckSpec
     Maker.CliSpec
     Maker.DeploySpec
+    Maker.FrontSpec
     Maker.PinsSpec
     Maker.StoreSpec
     Maker.VersionSpec

@@ -33,3 +33,11 @@ title: Going back after a database switch, --fresh or an adoption
   ```sh
   sh toolchain/maker.sh tui deploy
   ```
+
+## Other changes
+
+- The deploy itself now runs in the maker, the toolchain's program in
+  Haskell: `sh toolchain/deploy-local.sh` takes the same options, prints
+  the same messages and runs the same commands as before. `--status` and
+  `--stop` still need no GHC. On a machine with no GHC yet, the first
+  deploy installs GHC and cabal first, for the maker.

@@ -9,10 +9,8 @@
 #                                                     wasm-sysroot, wasm-ghc, node, chromium,
 #                                                     fourmolu, store)
 #   sh toolchain/maker.sh check native [OPTION…]      what the native build of wiki-server needs
-#   sh toolchain/maker.sh deploy apply --plan FILE    the deploy after its bootstrap: the TeX step,
-#                                                     the builds and checks, then the changes to the
-#                                                     running deployment; toolchain/deploy-local.sh
-#                                                     runs it with its plan
+#   sh toolchain/maker.sh deploy [OPTION…]            the deploy, with toolchain/deploy-local.sh's
+#                                                     options; toolchain/deploy-local.sh runs it
 #   sh toolchain/maker.sh tui                         the terminal interface
 #   sh toolchain/maker.sh tui deploy [OPTION…]        the deploy's configuration wizard
 #                                                     (toolchain/configure.sh runs it)

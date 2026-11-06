@@ -2,10 +2,10 @@
 -- moment the old service stops to the report at the end: the database's
 -- backup, the files copied into place, the unit, the restart, the checks
 -- that the service answers, @tailscale serve@, the firewall rule and what to
--- do next. @toolchain/deploy-local.sh@ works out everything before it (the
--- options, the state, the builds, the database's container) and hands this
--- over with a plan ("Maker.Deploy.Plan"); its messages are the shell's,
--- word for word, since people and the deploy's tests read them.
+-- do next. The steps before it (the options, the state, the builds, the
+-- database's container; "Maker.Deploy.Front" and "Maker.Deploy.Prepare")
+-- hand this over with a plan ("Maker.Deploy.Plan"); its messages are the
+-- shell's, word for word, since people and the deploy's tests read them.
 --
 -- The steps run in order, as plain IO: they are not Shake rules, since each
 -- one acts on the running system and the order is the point (the backup

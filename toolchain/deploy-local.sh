@@ -2,6 +2,11 @@
 # Build the wiki and serve it from this machine, as a systemd user service:
 # the wiki's server, wiki-server, with its data on this machine, or with
 # --static the serverless demo as static files (whose home is GitHub Pages).
+# This script is the deploy's first stage, which needs no GHC: it checks the
+# options, and does --status and --stop itself. A deploy and --rollback are
+# the maker's (`maker deploy`, maker/src/Maker/Deploy/Front.hs), which it
+# runs with the same options, after toolchain/bootstrap.sh maker installs GHC
+# and cabal on a machine that has none yet.
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--port N]
 #                                [--https | --tls-cert FILE --tls-key FILE [--tls-ca FILE]
@@ -441,6 +446,13 @@ usage() {
   sed -n '2,/^set -eu/{/^set -eu/d;s/^# \{0,1\}//;p;}' "$0"
 }
 
+# The arguments as given, for the maker (see the end of this script): the
+# loop below consumes them.
+deploy_args=
+for arg do
+  deploy_args="$deploy_args '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+done
+
 name=wiki-demo
 opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 opt_backend_only='' refresh_page=''
@@ -702,7 +714,6 @@ prev_whats_new=$(state_get whats_new)
 # The commit the deployment was built from (unknown when its source was not a
 # git checkout): what a rollback names (docs/PLAN.md, WP5.73).
 prev_git_commit=$(state_get git_commit)
-git_commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || git_commit=unknown
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -741,8 +752,6 @@ else
   unset WIKI_TOOLCHAIN_HOME
 fi
 toolchain_base=${toolchain_home:-$HOME}
-# For the messages: what a later run must be given to find this deployment.
-prefix_arg=${prefix:+ --prefix $prefix}
 
 # Read JSON on standard input with python3, or with jq where there is no
 # python3: $1 is a Python program that finds the parsed document in d, $2
@@ -963,40 +972,13 @@ find_maker() {
   maker=${WIKI_MAKER:-}
   if [ -z "$maker" ]; then
     command -v cabal >/dev/null 2>&1 ||
-      die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh static)"
+      die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh maker)"
     built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
     [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
     (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
     maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker) || die "finding the maker's binary (cd maker && cabal list-bin exe:maker) failed"
   fi
 }
-
-# --rollback: the maker puts back the deployment kept in <dir>/previous
-# (maker/src/Maker/Deploy/Upgrade.hs), after saying what comes back and what
-# is lost, and asking (--yes answers without a terminal). Nothing is built.
-if [ "$action" = rollback ]; then
-  [ -n "$prev_dir" ] && [ "$prev_mode" = server ] ||
-    die "there is no server deployed under the name $name${prefix:+ under $prefix} to roll back"
-  # The toolchain the maker was built with, loaded as a deploy loads it:
-  # the toolchain directory's environment, or with --system-tools only its
-  # variables.
-  rollback_tools_flag=
-  [ -z "$(state_get system_tools)" ] || rollback_tools_flag=--system-tools
-  if [ -z "$rollback_tools_flag" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
-    # shellcheck source=/dev/null
-    . "$toolchain_base/.wiki-toolchain/env"
-  fi
-  bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env ${rollback_tools_flag:+"$rollback_tools_flag"})
-  eval "$bootstrap_env"
-  find_maker
-  plan=$(mktemp)
-  printf 'name=%s\ndir=%s\nstate_dir=%s\nunit_file=%s\nstate_file=%s\nyes=%s\nno_firewall=%s\n' \
-    "$name" "$prev_dir" "$STATE_DIR" "$unit_file" "$state_file" "${yes:-}" "${no_firewall:-}" >"$plan"
-  status=0
-  "$maker" deploy rollback --plan "$plan" || status=$?
-  rm -f "$plan"
-  exit "$status"
-fi
 
 if [ "$action" = status ]; then
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
@@ -1095,497 +1077,41 @@ if [ "$action" = status ]; then
   exit 0
 fi
 
-# Everything that can be checked is checked before the build, which takes
-# minutes (over an hour the first time), and the build before the running
-# service is touched.
-
-[ "$(id -u)" != 0 ] || die "run this as the user the wiki should run as, not root: it installs a systemd user service under that user"
-require_systemd_user
-
-port=${opt_port:-${prev_port:-8080}}
-case $port in
-  '' | 0* | *[!0-9]*) die "invalid --port '$port': a number from 1024 to 65535" ;;
-esac
-{ [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; } || die "invalid --port $port: a number from 1024 to 65535 (lower ports need root)"
-
-# The first run deploys the server: the demo's home is GitHub Pages, and a
-# machine of one's own is for a wiki that keeps what is written in it. A
-# later run keeps what the previous one deployed.
-mode=${opt_mode:-${prev_mode:-server}}
-admin_port=${opt_admin_port:-${prev_admin_port:-8081}}
-case $admin_port in
-  '' | 0* | *[!0-9]*) die "invalid --admin-port '$admin_port': a number from 1024 to 65535" ;;
-esac
-{ [ "$admin_port" -ge 1024 ] && [ "$admin_port" -le 65535 ]; } || die "invalid --admin-port $admin_port: a number from 1024 to 65535"
-if [ "$mode" = server ]; then
-  [ "$admin_port" != "$port" ] || die "--admin-port and --port are both $port: choose two ports"
-else
-  [ -z "$opt_admin_port" ] || die "--admin-port is for the wiki's server: add --server"
-  [ -z "$opt_db$opt_db_port$fresh" ] || die "--postgres, --sqlite, --db-port and --fresh are for the wiki's server: add --server"
-  [ -z "$opt_texlive$opt_texlive_mirror" ] || die "--texlive, --no-texlive and --texlive-mirror are for the wiki's server, which makes the PDFs: add --server"
-  [ -z "$opt_texlive_installer$opt_perl_source" ] || die "--texlive-installer and --perl-source are for the wiki's server, which makes the PDFs: add --server"
-  [ -z "$opt_whats_new" ] || die "--whats-new and --no-whats-new are for the wiki's server, which shows the page: add --server"
-fi
-# Whether the server shows the page "What's new?". The demo keeps what a
-# server before it chose.
-whats_new=${opt_whats_new:-$prev_whats_new}
-[ "$whats_new" = no ] || whats_new=''
-
-# The wiki's database: PostgreSQL in Docker unless --sqlite said otherwise,
-# now or on an earlier run. The demo keeps what a server before it chose,
-# for the server deployed after it.
-db=$prev_db db_port=$prev_db_port
-if [ "$mode" = server ]; then
-  db=${opt_db:-${prev_db:-postgres}}
-  if [ "$db" = postgres ]; then
-    db_port=${opt_db_port:-${prev_db_port:-5433}}
-    case $db_port in
-      '' | 0* | *[!0-9]*) die "invalid --db-port '$db_port': a number from 1024 to 65535" ;;
-    esac
-    { [ "$db_port" -ge 1024 ] && [ "$db_port" -le 65535 ]; } || die "invalid --db-port $db_port: a number from 1024 to 65535"
-    { [ "$db_port" != "$port" ] && [ "$db_port" != "$admin_port" ]; } || die "--db-port $db_port is the port of a listener: choose another"
-    docker_ready || die "the wiki's database is PostgreSQL, which runs in Docker (docker compose), and Docker is not installed here or does not answer (docker info): install Docker and its compose plugin, or deploy with --sqlite, which keeps the database a file in the data directory, with no container"
-  else
-    [ -z "$opt_db_port" ] || die "--db-port is for a database on PostgreSQL: drop --sqlite"
-  fi
-fi
-
-# The page cache: the zips of the pages CI built, downloaded or from a file,
-# under the toolchain directory, or in the user's cache directory when the
-# toolchain is in the home directory.
-page_cache_dir() {
-  if [ -n "$toolchain_home" ]; then
-    printf '%s\n' "$toolchain_home/.wiki-toolchain/pages"
-  else
-    printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/wiki-demo/pages"
-  fi
-}
-
-# The cache entries of the page from a file (--app-page) named by
-# page_meta (file=<its path>), one a line: the zips whose .meta file says
-# that path. See app_page_cache.
-app_page_entries() {
-  for meta in "$page_cache/app-$page_kind-file-"*.zip.meta; do
-    if [ -f "$meta" ] && [ -f "${meta%.meta}" ] && [ "$(cat "$meta")" = "$page_meta" ]; then
-      printf '%s\n' "${meta%.meta}"
-    fi
-  done
-}
-
-# The page from GitHub (--backend-only), now or on an earlier run, unless
-# --no-backend-only goes back to building it here. CI builds two pages of
-# each commit, the server's and the demo's (prerendered per route), so
-# page_kind says which one this deployment downloads.
-if [ "$mode" = server ]; then page_kind=server; else page_kind=demo; fi
-case $opt_backend_only in
-  '') backend_only=$prev_backend_only ;;
-  none) backend_only= ;;
-  *) backend_only=$opt_backend_only ;;
-esac
-# The page's zip from a file (--app-page), given now or remembered: a
-# --backend-only or --no-backend-only given now forgets it, as --app-page=
-# does. While it is in effect, backend_only is empty (nothing is
-# downloaded), and prebuilt says, for both, that the page is one CI built.
-if [ -n "$opt_app_page_given" ]; then
-  app_page=$opt_app_page
-elif [ -n "$opt_backend_only" ]; then
-  app_page=
-else
-  app_page=$prev_app_page
-fi
-[ -z "$app_page" ] || backend_only=
-# A file given now that is not there: taken only when the cache keeps its
-# copy, as a remembered file that is gone is (see app_page_cache).
-if [ -n "$app_page_missing" ]; then
-  page_cache=$(page_cache_dir)
-  page_meta="file=$app_page"
-  [ -n "$(app_page_entries)" ] ||
-    die "--app-page $app_page_missing: no such file here, or it cannot be read, and the page cache $page_cache keeps no copy of it from an earlier deploy"
-fi
-prebuilt=$backend_only$app_page
-if [ -n "$app_page" ]; then page_option=--app-page; else page_option=--backend-only; fi
-backend_only_commit=
-nodeless=
-if [ -n "$prebuilt" ]; then
-  backend_only_commit=$prev_backend_only_commit
-  # Nothing in the server's mode runs Node; the demo's runs it to serve
-  # the page, as when the page is built here.
-  [ "$mode" != server ] || nodeless=1
-  if [ -n "$backend_only" ]; then
-    command -v curl >/dev/null 2>&1 || die "--backend-only downloads the page with curl, which is not installed here"
-  elif [ -n "$nodeless" ]; then
-    command -v curl >/dev/null 2>&1 || die "--app-page with --server checks that the server answers with curl, which is not installed here"
-  fi
-  if ! command -v python3 >/dev/null 2>&1; then
-    # The maker reads GitHub's answers itself; the zip is unpacked with
-    # python3, or unzip.
-    if [ -n "$build" ] && ! command -v unzip >/dev/null 2>&1; then
-      die "$page_option unpacks the page with python3, which is not installed here (nor unzip, which would do instead)"
-    elif [ -n "$nodeless" ] && ! command -v jq >/dev/null 2>&1; then
-      die "$page_option reads JSON (tailscale status, the administration's settings) with python3, which is not installed here (nor jq, which would do instead)"
-    fi
-  fi
-fi
-
-# For a machine that installs nothing from the internet, given now or
-# remembered: the bundles of CI's page built here (--bundle-locally), the
-# machine's own toolchain (--system-tools), the npm registry and the
-# Hackage mirror.
-case $opt_bundle_locally in
-  yes) bundle_locally=yes ;;
-  no) bundle_locally= ;;
-  *) bundle_locally=$prev_bundle_locally ;;
-esac
-if [ -n "$bundle_locally" ] && [ -z "$prebuilt" ]; then
-  [ "$opt_bundle_locally" != yes ] ||
-    die "--bundle-locally builds here the bundles of the page CI built: it goes with --backend-only[=REF] or --app-page FILE (a page built here has its bundles built here anyway)"
-  bundle_locally=
-fi
-case $opt_system_tools in
-  yes) system_tools=yes ;;
-  no) system_tools= ;;
-  *) system_tools=$prev_system_tools ;;
-esac
-if [ -n "$system_tools" ] && [ -z "$prebuilt" ] && [ -n "$build" ]; then
-  die "--system-tools takes GHC, cabal and Node from this machine, and building the page here needs the wasm toolchain too, which only toolchain/bootstrap.sh installs: take the page CI built (--backend-only[=REF] or --app-page FILE), or let the bootstrap install the toolchain (--no-system-tools)"
-fi
-if [ -n "$opt_npm_registry_given" ]; then npm_registry=$opt_npm_registry; else npm_registry=$prev_npm_registry; fi
-# Every npm and npx of the deploy and of the bootstrap reads it from the
-# environment.
-if [ -n "$npm_registry" ]; then
-  NPM_CONFIG_REGISTRY=$npm_registry
-  export NPM_CONFIG_REGISTRY
-fi
-if [ -n "$opt_hackage_mirror_given" ]; then hackage_mirror=$opt_hackage_mirror; else hackage_mirror=$prev_hackage_mirror; fi
-if [ -n "$hackage_mirror" ] && [ -z "$toolchain_home" ]; then
-  die "--hackage-mirror $hackage_mirror is written into the toolchain's own cabal configuration, and this deployment's toolchain is in the home directory, whose cabal configuration (~/.cabal) is yours and is left alone: give the toolchain a directory of its own (--prefix DIR, which puts it under DIR/toolchain, or --toolchain DIR)"
-fi
-
-# The way it is served, one of four, remembered: tailscale (HTTPS through
-# tailscale serve, the first run's default), http (plain HTTP, --http),
-# cert (HTTPS by wiki-server itself, with a certificate of one's own,
-# --tls-cert and --tls-key) or proxy (plain HTTP on 127.0.0.1 behind a
-# reverse proxy that terminates TLS, --behind-proxy). A way given now
-# replaces the remembered one, and with it the remembered certificate.
-if [ "$opt_https" = yes ]; then
-  way=tailscale
-elif [ "$opt_https" = no ]; then
-  way=http
-elif [ -n "$opt_tls_cert$opt_tls_key" ]; then
-  way=cert
-elif [ -n "$opt_proxy" ]; then
-  way=proxy
-else
-  way=$prev_way
-fi
-case $prev_way in
-  cert) [ "$way" = cert ] || say "no longer serving with the certificate $prev_tls_cert: $(printf '%s' "${ways# }") replaces --tls-cert" ;;
-  proxy) [ "$way" = proxy ] || say "no longer behind a reverse proxy: $(printf '%s' "${ways# }") replaces --behind-proxy" ;;
-esac
-tls_cert='' tls_key='' tls_ca=''
-if [ "$way" = cert ]; then
-  [ "$mode" = server ] ||
-    die "the demo's static server speaks plain HTTP, so --tls-cert is for the wiki's server (--server); serve the demo through tailscale serve (--https) or a reverse proxy (--behind-proxy)"
-  # A file not given now is the previous run's, as with the other options:
-  # a renewed certificate in a new file is given alone.
-  if [ "$prev_way" = cert ]; then
-    tls_cert=${opt_tls_cert:-$prev_tls_cert} tls_key=${opt_tls_key:-$prev_tls_key} tls_ca=$prev_tls_ca
-  else
-    tls_cert=$opt_tls_cert tls_key=$opt_tls_key
-  fi
-  [ -n "$tls_cert" ] || die "--tls-key needs --tls-cert FILE, the certificate (PEM) it is the key of"
-  [ -n "$tls_key" ] || die "--tls-cert needs --tls-key FILE, the certificate's private key (PEM; the same file when one .pem holds both)"
-  [ -z "$opt_tls_ca_given" ] || tls_ca=$opt_tls_ca
-  # The unit reads the files from where they are, at every start of the
-  # service, as this user: they are named by absolute path and must stay
-  # readable there.
-  for option in tls-cert tls-key tls-ca; do
-    case $option in
-      tls-cert) file=$tls_cert ;;
-      tls-key) file=$tls_key ;;
-      tls-ca) file=$tls_ca ;;
-    esac
-    [ -n "$file" ] || continue
-    case $file in
-      *'
-'*) die "--$option $file holds a newline, which the unit file cannot hold" ;;
-    esac
-    { [ -f "$file" ] && [ -r "$file" ]; } ||
-      die "cannot read --$option $file: the service reads it from where it is, as $user, at every start"
-    file=$(realpath "$file")
-    case $option in
-      tls-cert) tls_cert=$file ;;
-      tls-key) tls_key=$file ;;
-      tls-ca) tls_ca=$file ;;
-    esac
-  done
-  command -v curl >/dev/null 2>&1 ||
-    die "--tls-cert: the deploy checks the HTTPS listener with curl, which is not installed here"
-elif [ -n "$opt_tls_ca" ]; then
-  die "--tls-ca is the authority the deploy checks the server's own certificate against: it goes with --tls-cert FILE --tls-key FILE"
-fi
-
-# The directory, absolute and with symbolic links resolved, so that the
-# safety checks compare what would really be deleted: the prefix, or for a
-# deployment in the home directory the previous run's or ~/<name>.
-dir=${prefix:-${prev_dir:-$HOME/$name}}
-case $dir in
-  /*) ;;
-  *) dir=$PWD/$dir ;;
-esac
-dir=$(realpath -m "$dir")
-case $dir$toolchain_home in
-  *[\"\\\$%\`\']* | *'
-'*) die "the target directory $dir or the toolchain's $toolchain_home contains a character the unit file or the toolchain's env file cannot hold (\" \\ \$ % \` ' or a newline)" ;;
-esac
-if unsafe_dir "$dir"; then
-  die "refusing to install into $dir: it is /, your home directory or above it"
-fi
-[ -n "$prefix" ] || [ -z "$force" ] || say "--force does nothing any more: --prefix allows any directory but /, the home directory and the ones above it"
-# The install empties the directory (but for data/, state/ and toolchain/),
-# so the checkout cannot be inside it.
-case $ROOT/ in
-  "$dir"/*) die "the checkout $ROOT is inside $dir, which installing empties: run this from a checkout elsewhere, or choose another --prefix" ;;
-esac
-# Nor can the toolchain be inside it anywhere but at toolchain/, which the
-# install leaves alone.
-case $toolchain_home in
-  '' | "$dir/toolchain") ;;
-  "$dir" | "$dir"/*) die "--toolchain $toolchain_home is inside $dir, which installing empties but for data/, state/ and toolchain/: put it at $dir/toolchain, or outside $dir" ;;
-esac
-if [ -e "$dir" ] && [ ! -d "$dir" ]; then
-  die "refusing to install into $dir: it is not a directory"
-fi
-if [ -d "$dir" ] && [ -n "$(ls -A "$dir")" ] && ! marked_for "$dir" "$name"; then
-  if [ -f "$dir/$MARKER" ]; then
-    die "refusing to install into $dir: it holds the deployment '$(state_get name "$dir/$MARKER")'; use --name $(state_get name "$dir/$MARKER") or another --dir"
-  fi
-  die "refusing to empty $dir: this script did not create it (it has no $MARKER). Choose another --dir, or empty or remove it yourself"
-fi
-
-# A server's data stays where it is: moving the deployment would leave it
-# behind and start an empty wiki in the new place.
-if [ "$mode" = server ] && [ -n "$prev_dir" ] && [ "$prev_dir" != "$dir" ] && [ -d "$prev_dir/data" ] && [ ! -d "$dir/data" ]; then
-  die "the wiki's data is in $prev_dir/data: move it to $dir/data yourself first (with the service stopped: sh toolchain/undeploy-local.sh --name $name), or deploy under another --name"
-fi
-# The certificate's files must survive the install, which empties the
-# directory but for data/, state/ and toolchain/: a file elsewhere in it
-# would be deleted, the key with it, and the service could not start. Both
-# paths are real ones (realpath above), so a link cannot hide where a file
-# is.
-for file in "$tls_cert" "$tls_key" "$tls_ca"; do
-  case $file in
-    "$dir"/data/* | "$dir"/state/* | "$dir"/toolchain/*) ;;
-    "$dir"/*)
-      die "the TLS file $file is inside $dir, which installing empties but for data/, state/ and toolchain/, so it would be deleted: keep it in $dir/data/tls/ or outside $dir" ;;
+# Stage 1 ends here (docs/PLAN.md, WP5.68): what needs no GHC (--status,
+# --stop, and the checks of the options above, which --status shares) is
+# this script's, and the deploy itself is the maker's, `maker deploy` with
+# the same arguments (maker/src/Maker/Deploy/Front.hs), which reads them
+# again and goes on from here: the checks of the options against the state,
+# the checks of the machine (toolchain/check-native.sh), the bootstrap
+# that installs what the deploy needs, the page, the TeX step, the builds
+# and the change of the running deployment; --rollback too. The maker is
+# WIKI_MAKER, as in the tests, or the one built with its own cabal project.
+# On a machine that has no cabal yet, toolchain/bootstrap.sh maker first
+# installs GHC and cabal under the toolchain's directory and builds it.
+if [ -z "${WIKI_MAKER:-}" ]; then
+  case $opt_system_tools in
+    yes) system_tools=yes ;;
+    no) system_tools= ;;
+    *) system_tools=$prev_system_tools ;;
   esac
-done
-# The directory is claimed now, before the build: under a prefix the
-# toolchain is installed under it first, and a directory that is not empty
-# is emptied only when it carries the marker.
-mkdir -p "$dir"
-[ -f "$dir/$MARKER" ] || printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$dir/$MARKER"
-
-# HTTPS through tailscale serve (https=yes) is the tailscale way alone;
-# the others leave tailscale serve off (https=no). A deployment of a
-# version before HTTPS was the default moves to it.
-if [ "$way" = tailscale ]; then https=yes; else https=no; fi
-# The previous run's address is kept when it was asked for (but not an
-# address --https or --behind-proxy, given now, cannot serve from); one
-# chosen automatically is chosen again, as Tailscale may have come up
-# since.
-if [ -n "$opt_bind" ]; then
-  bind=$opt_bind bind_choice=explicit
-elif [ "$prev_bind_choice" = explicit ] && [ -n "$prev_bind" ] &&
-  ! { { [ "$opt_https" = yes ] || [ -n "$opt_proxy" ]; } && [ "$prev_bind" != 127.0.0.1 ]; }; then
-  bind=$prev_bind bind_choice=explicit
-else
-  bind_choice=auto bind=
-fi
-case $bind in
-  *[!0-9A-Fa-f.:]*) die "invalid --bind '$bind': an IPv4 or IPv6 address" ;;
-esac
-# tailscale serve proxies to 127.0.0.1, so any other address is plain HTTP.
-if [ -n "$bind" ] && [ "$bind" != 127.0.0.1 ] && [ "$https" = yes ]; then
-  [ "$opt_https" != yes ] || die "--https serves from 127.0.0.1 behind tailscale serve: drop --bind $bind, or give --bind 127.0.0.1"
-  say "--bind $bind implies --http: tailscale serve proxies to 127.0.0.1 only"
-  https=no
-fi
-# A reverse proxy on this machine reaches the server on 127.0.0.1, and
-# nothing else should reach its plain HTTP.
-if [ "$way" = proxy ] && [ -n "$bind" ] && [ "$bind" != 127.0.0.1 ]; then
-  die "--behind-proxy serves plain HTTP on 127.0.0.1, for a reverse proxy on this machine: drop --bind $bind, or give --bind 127.0.0.1"
-fi
-if [ -z "$bind" ]; then
-  if [ "$https" = yes ] || [ "$way" = proxy ]; then
-    # Settled once Node is at hand, below: HTTPS may turn out not to be
-    # available, and then the Tailscale address serves plain HTTP.
-    bind=127.0.0.1
-  elif bind=$(tailscale_ip); then
-    say "listening on the Tailscale address $bind"
-  else
-    bind=127.0.0.1
-    warn "Tailscale does not answer (tailscale ip -4), so listening on 127.0.0.1 only; rerun when it is up, or choose with --bind (0.0.0.0 listens everywhere)"
-  fi
-fi
-
-out=$ROOT/dist-newstyle/wasm-opt/public/app
-
-# --- The page CI built (--backend-only, --app-page) -------------------------
-#
-# The maker takes it, from GitHub or from a file, through the page cache,
-# before the TeX step (maker/src/Maker/Deploy/Page.hs).
-
-
-# Only the wiki's server on SQLite opts out: the demo's build is left as
-# it was.
-check_postgres=
-if [ "$mode" = server ] && [ "$db" = sqlite ]; then check_postgres=--without-postgres; fi
-# A deploy with a TeX step (tex_step, run in server mode) checks xelatex
-# there, on the service's PATH, so toolchain/check-native.sh is told not to
-# typeset its own probe on this shell's PATH: an xelatex that hangs then
-# costs its timeout once. Keep the test in step with the one before
-# tex_step.
-check_tex_flag=
-if [ "$mode" = server ]; then check_tex_flag=--without-tex; fi
-
-# The check of what wiki-server's native build needs from the machine
-# (toolchain/check-native.sh): commands, GMP, libpq, zlib and libsodium,
-# without its xelatex probe (check_tex_flag). It runs before anything is
-# downloaded or built, so that a missing C library stops the deploy at once,
-# with the packages that provide it, and not after an hour of compiling. It
-# sees this script's environment, as the build does.
-# On Debian or Ubuntu (dpkg-query on PATH) the bootstrap installs the
-# missing packages, so a failed check there is a warning: the deploy goes
-# on, and recheck_native runs the check again after the bootstrap. Elsewhere
-# nothing installs them, and the deploy stops.
-check_native() {
-  say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-  if check_output=$(sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_tex_flag:+"$check_tex_flag"} 2>&1); then
-    printf '%s\n' "$check_output"
-    return 0
-  fi
-  printf '%s\n' "$check_output"
-  command -v dpkg-query >/dev/null 2>&1 ||
-    die "the native build of wiki-server needs what is missing above; nothing was changed"
-  check_missing=$(printf '%s\n' "$check_output" | sed -n 's/^Missing for the native build of wiki-server: \(.*\)[.]$/\1/p')
-  warn "missing for the native build of wiki-server: ${check_missing:-see above}; the bootstrap installs the Debian packages next, and the check runs again after it"
-  native_recheck=1
-}
-
-# The check again, after the bootstrap installed the Debian packages that
-# check_native found missing. This time a failure stops the deploy, before
-# anything is built.
-recheck_native() {
-  say "checking again what the native build of wiki-server needs, after the bootstrap"
-  sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_tex_flag:+"$check_tex_flag"} ||
-    die "the native build of wiki-server still needs what is missing above; nothing was changed"
-}
-
-# --system-tools: the machine's own GHC and cabal (for the server) and Node
-# (for the demo, or the bundles built here), checked by
-# toolchain/bootstrap.sh system-tools before anything else, which names
-# each and stops the deploy when one is missing or too old.
-system_tools_check() {
-  # GHC and cabal for every deploy: the maker does its last part.
-  needs=' native'
-  if [ "$mode" != server ] || [ -n "$bundle_locally" ]; then needs="$needs node"; fi
-  say "--system-tools: checking this machine's own toolchain (toolchain/bootstrap.sh system-tools$needs)"
-  # shellcheck disable=SC2086 # the words of what is needed.
-  sh "$ROOT/toolchain/bootstrap.sh" system-tools $needs ||
-    die "--system-tools: this machine's own toolchain will not do (see above), so nothing was changed; without --system-tools (--no-system-tools) toolchain/bootstrap.sh installs it"
-}
-# The options the bootstrap's modes take for those of the deploy: the
-# machine's own tools, and the Hackage mirror (which the bootstrap also
-# takes back out of cabal's configuration when none is given).
-system_tools_flag=${system_tools:+--system-tools}
-hackage_flag=${hackage_mirror:+--hackage-mirror=$hackage_mirror}
-
-if [ -n "$build" ]; then
-  [ -z "$system_tools" ] || system_tools_check
-  # wiki-server is built natively in server mode, whether the page is
-  # downloaded or built here: its check comes before anything else.
-  native_recheck=
-  [ "$mode" != server ] || check_native
-  if [ -n "$prebuilt" ] && [ "$mode" != server ]; then
-    # The demo's page from GitHub: nothing is built here. Node serves the
-    # page and writes its brotli copies; GHC and cabal build the maker,
-    # which takes the page and does the rest of the deploy.
-    say "installing or checking Node, which serves the demo, and GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh static)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" static ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
-  elif [ -n "$prebuilt" ]; then
-    # The maker takes the page after the toolchain, before the TeX step
-    # and the build: a REF with no page stops the deploy before anything
-    # is built.
-    say "installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" native ${check_postgres:+"$check_postgres"} ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
-    if [ -n "$bundle_locally" ]; then
-      say "installing or checking Node, which builds the page's bundles (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
-      sh "$ROOT/toolchain/bootstrap.sh" node ${system_tools_flag:+"$system_tools_flag"}
+  if [ -n "$opt_hackage_mirror_given" ]; then hackage_mirror=$opt_hackage_mirror; else hackage_mirror=$prev_hackage_mirror; fi
+  load_toolchain_env() {
+    if [ -z "$system_tools" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
+      # shellcheck source=/dev/null
+      . "$toolchain_base/.wiki-toolchain/env"
     fi
-  else
-    if [ ! -d "$ROOT/dist-newstyle/wasm-opt" ]; then
-      say "first -O2 build: every dependency is compiled again at -O2 for wasm, so this can take over an hour once; later runs rebuild only what changed."
-    fi
-    say "installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" build ${check_postgres:+"$check_postgres"} ${hackage_flag:+"$hackage_flag"}
+    bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env ${system_tools:+--system-tools})
+    eval "$bootstrap_env"
+  }
+  load_toolchain_env
+  if ! command -v cabal >/dev/null 2>&1 && [ -n "$build" ] && [ "$action" = deploy ]; then
+    say "installing GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh maker)${toolchain_home:+, under $toolchain_home}"
+    sh "$ROOT/toolchain/bootstrap.sh" maker ${system_tools:+--system-tools} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"}
+    load_toolchain_env
   fi
-  [ -z "$native_recheck" ] || recheck_native
 fi
-# The environment npm's own entry points load, for npm and Node here. With
-# --system-tools the tools are the machine's, as PATH finds them, and only
-# the variables of a toolchain directory are taken.
-if [ -z "$system_tools" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
-  # shellcheck source=/dev/null
-  . "$toolchain_base/.wiki-toolchain/env"
-fi
-bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env ${system_tools_flag:+"$system_tools_flag"})
-eval "$bootstrap_env"
-# The TeX of the PDF exports, which the maker's TeX step checks after the
-# toolchain and before the build (maker/src/Maker/Deploy/Tex.hs), so that an
-# install of TeX Live, when one is wanted, happens before the long wait.
-# The demo keeps what a server before it chose.
-texlive=${opt_texlive:-$prev_texlive}
-texlive_dir=$prev_texlive_dir
-perl_dir=$prev_perl_dir
-texlive_mirror=${opt_texlive_mirror:-$prev_texlive_mirror}
-# Where this run takes TeX Live's installer and Perl's source from, when
-# not from their GitHub mirrors; not remembered.
-texlive_installer=$opt_texlive_installer
-perl_source=$opt_perl_source
-# The plan of the rest of the deploy, for the maker: one key=value line for
-# each variable the rest reads, and for each the state file keeps (the
-# maker writes the state). A value cannot hold a newline: the plan has one
-# line per key.
-MAKER_PLAN_KEYS='git_commit prev_git_commit name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind refresh_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
-maker_plan() {
-  printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
-  printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"
-  for key in $MAKER_PLAN_KEYS; do
-    value=
-    eval "value=\${$key:-}"
-    case $value in
-      *'
-'*) die "the deploy's $key holds a newline, which the maker's plan cannot hold" ;;
-    esac
-    printf '%s=%s\n' "$key" "$value"
-  done
-}
-# Hand the rest of the deploy to the maker, and end with its status.
-maker_apply() {
-  find_maker
-  plan=$(mktemp)
-  maker_plan >"$plan"
-  status=0
-  "$maker" deploy apply --plan "$plan" || status=$?
-  rm -f "$plan"
-  exit "$status"
-}
-
-# From here on the maker does the deploy (maker deploy apply,
-# maker/src/Maker/Deploy/Tex.hs, Prepare.hs and Apply.hs), from a plan of
-# what was worked out above, while the deploy moves into it (docs/PLAN.md,
-# WP5.68 c2): the TeX step, the builds, the checks of what they made, the service's Node,
-# HTTPS through Tailscale, the ports, the adoption into a prefix and
-# PostgreSQL's container; then the change of the running deployment.
-maker_apply
+find_maker
+WIKI_DEPLOY_ROOT=$ROOT
+export WIKI_DEPLOY_ROOT
+eval "set -- $deploy_args"
+exec "$maker" deploy "$@"

@@ -46,8 +46,8 @@ if [ "${WIKI_TEST_WIZARD:-}" = 1 ]; then
   fi
 fi
 export NODE_REAL
-# The maker (maker/), which does the part of a deploy that changes the
-# running deployment (maker deploy apply), built here with the real cabal
+# The maker (maker/), which does the deploy after its first stage (maker
+# deploy, with deploy-local.sh's options), built here with the real cabal
 # before PATH is narrowed to the fakes; the deploy runs it through
 # WIKI_MAKER. A maker already built may be named there instead.
 if [ -z "${WIKI_MAKER:-}" ]; then
