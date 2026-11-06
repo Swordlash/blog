@@ -80,7 +80,9 @@ spec m = do
     eventually (find ui ".sidebar-user-spaces .user-spaces-link" >>= click)
     length <$> findAll ui ".sidebar-own-space" `shouldReturn` 0
     eventually (findAll ui ".user-spaces-results .user-space-name" >>= traverse textContent >>= (`shouldBe` ["Space of Rita Reader"]))
-    length <$> findAll ui ".user-spaces-starred" `shouldReturn` 0
+    -- The starred block is there, hidden, so that stars arriving later do
+    -- not move the search field.
+    find ui ".user-spaces-starred" >>= (`getAttribute` "hidden") >>= (`shouldSatisfy` isJust)
     unmount ui
 
   it "opens a personal space's settings, with its name read-only" $ runPage $ do

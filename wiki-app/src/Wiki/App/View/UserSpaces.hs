@@ -40,9 +40,10 @@ import Wiki.App.Backend (MonadLoad (..), Session (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.Core.Id (PageId)
+import Wiki.Core.Id (PageId, UserId)
 import Wiki.Core.Slug (slugText, slugify)
 import Wiki.Core.Space (Space (homePage, id, name, slug), containerName, personalName)
+import Wiki.Core.User (User (id))
 
 newtype Input = Input {context :: Context}
 
@@ -88,14 +89,12 @@ component =
           {% if null open %}
             <p class="user-spaces-none">No user has a space you may open yet.</p>
           {% else %}
-            {% if not (null pinned) %}
-              <section class="user-spaces-starred" aria-label="Starred user spaces">
-                <h2>Starred</h2>
-                <ul class="user-spaces-list">
-                  {% for s in pinned %}{{ entry s }}{% end %}
-                </ul>
-              </section>
-            {% end %}
+            <section class="user-spaces-starred" aria-label="Starred user spaces" {{ [attr "hidden" "" | null pinned] }}>
+              <h2>Starred</h2>
+              <ul class="user-spaces-list">
+                {% for s in pinned %}{{ entry s }}{% end %}
+              </ul>
+            </section>
             <section class="user-spaces-find" aria-label="Find another user space">
               <h2>Find another</h2>
               <input
@@ -147,21 +146,29 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
-        when (old.context.revision /= input.context.revision || isJust old.context.session.user /= isJust input.context.session.user) reload
+        when (old.context.revision /= input.context.revision || readerOf old /= readerOf input) reload
       Typed t -> modify (\st -> st {typed = t})
       Followed f -> do
         router <- gets (\st -> st.input.context.router)
         Router.follow router f
 
-    -- The reader's stars, for a signed-in reader.
+    -- The reader's stars, for a signed-in reader. An answer that arrives
+    -- after the reader has changed (signed out, or signed in as someone
+    -- else, while the stars were fetched) is dropped: the reload the
+    -- change started sets the stars of the reader now.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
-      signedIn <- gets (\st -> isJust st.input.context.session.user)
+      asking <- gets (\st -> readerOf st.input)
       homes <-
-        if signedIn
+        if isJust asking
           then starredPages <$> lift starred
           else pure []
-      modify (\st -> st {starredHomes = homes})
+      now <- gets (\st -> readerOf st.input)
+      when (now == asking) $ modify (\st -> st {starredHomes = homes})
+
+-- | The signed-in reader the finder is shown to, if any.
+readerOf :: Input -> Maybe UserId
+readerOf input = (\u -> u.id) <$> input.context.session.user
 
 -- | The pages of the reader's stars, or none when they could not be read:
 -- the rest of the page works without them, and the reader's own space is
