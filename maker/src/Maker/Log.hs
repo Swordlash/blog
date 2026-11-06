@@ -22,21 +22,20 @@ module Maker.Log
   )
 where
 
-import Control.Exception (bracket, finally)
+import Control.Exception (bracket)
 import Control.Monad (unless, when)
 import Data.Bits ((.|.))
 import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Foreign.C.Error (throwErrnoIfMinus1Retry)
 import Foreign.C.Types (CInt (..))
 import Maker.Context (Context (..), Mode (..), logFile)
-import Maker.Process (firstLine, output, succeeds)
+import Maker.Process (firstLine, output, relay, succeeds)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
 import System.Exit (exitWith)
 import System.FilePath (takeDirectory)
 import System.IO
 import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
 import System.Posix.User (getEffectiveUserID)
-import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
 -- | A step, on the terminal and in the log with the time.
@@ -105,21 +104,9 @@ runLong ctx step change args
 runLong _ _ _ [] = pure ()
 runLong ctx step change (program : args) = do
   logLine ctx ("+ " <> command (program : args))
-  (readEnd, writeEnd) <- Pipe.createPipe
-  code <- withFile (logFile ctx) AppendMode $ \h -> do
-    hSetBuffering h LineBuffering
-    -- Its output and its errors through one pipe, in the order they come.
-    p <- startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) (change (proc program args)))))
-    hClose writeEnd
-    let copy = do
-          end <- hIsEOF readEnd
-          unless end $ do
-            l <- hGetLine readEnd
-            putStrLn l
-            hPutStrLn h l
-            copy
-    copy `finally` hClose readEnd
-    waitExitCode p
+  -- Its output and its errors through one pipe, in the order they come,
+  -- copied byte for byte to the terminal and the log.
+  (code, _) <- withBinaryFile (logFile ctx) AppendMode $ \h -> relay (Just h) (change (proc program args))
   hFlush stdout
   unless (code == ExitSuccess) (failStep ctx step)
 

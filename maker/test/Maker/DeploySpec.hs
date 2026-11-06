@@ -1,8 +1,12 @@
 module Maker.DeploySpec (spec) where
 
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import GHC.Foreign qualified as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
-import Maker.Deploy.Plan (get, has, parsePlan, set)
+import Maker.Deploy.Plan (decodeFs, get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
@@ -16,6 +20,11 @@ spec = describe "the deploy's part in the maker" $ do
     it "takes each line's value after the first =, the last one for a key twice" $ do
       let plan = parsePlan "# a comment\nname=wiki\nout=/a=b\nport=1\nport=2\nnot a line\n"
       (get plan "name", get plan "out", get plan "port") `shouldBe` ("wiki", "/a=b", "2")
+    it "decodes a program's output so that every byte comes back when it is passed on" $ do
+      let bytes = BS.pack [0x2f, 0x6f, 0x70, 0x74, 0x2f, 0xc5, 0xbc, 0x2f, 0xff, 0x62, 0x69, 0x6e]
+      encoding <- getFileSystemEncoding
+      back <- GHC.withCStringLen encoding (decodeFs (LBS.fromStrict bytes)) BS.packCStringLen
+      back `shouldBe` bytes
     it "reads a missing or empty key as empty, as an unset variable" $ do
       let plan = parsePlan "nodeless=\n"
       (get plan "nodeless", has plan "nodeless", has plan "missing") `shouldBe` ("", False, False)

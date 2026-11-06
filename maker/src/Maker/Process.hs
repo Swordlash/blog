@@ -11,17 +11,21 @@ module Maker.Process
   , sha256Matches
   , sha256Text
   , removePath
+  , relay
   )
 where
 
 import Control.Exception (IOException, try)
 import Control.Monad (when)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isSpace)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
 import Data.Text.Encoding.Error (lenientDecode)
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, removeDirectoryRecursive, removeFile)
+import System.IO (Handle, hClose, hFlush, hSetBinaryMode, stdout)
+import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
 -- | What a command prints on its standard output when it succeeds, or
@@ -82,3 +86,32 @@ removePath path = do
   isFile <- doesFileExist path
   when isDir (removeDirectoryRecursive path)
   when isFile (removeFile path)
+
+-- | Run a command with its output and errors through one pipe, copied as
+-- they come, byte for byte, to the terminal and to a log when one is given,
+-- as the shell's @2>&1 | tee -a@ did: nothing is decoded, so no output can
+-- stop the copy, and nothing is added to it. Answers how the command ended
+-- and what it printed; a command that cannot be started ends as 127.
+relay :: Maybe Handle -> ProcessConfig () () () -> IO (ExitCode, LBS.ByteString)
+relay logHandle config = do
+  hFlush stdout
+  (readEnd, writeEnd) <- Pipe.createPipe
+  started <- try (startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) config))))
+  hClose writeEnd
+  case started of
+    Left (_ :: IOException) -> hClose readEnd >> pure (ExitFailure 127, "")
+    Right process -> do
+      hSetBinaryMode readEnd True
+      let copy kept = do
+            chunk <- BS.hGetSome readEnd 4096
+            if BS.null chunk
+              then pure (reverse kept)
+              else do
+                BS.hPut stdout chunk
+                hFlush stdout
+                mapM_ (\h -> BS.hPut h chunk >> hFlush h) logHandle
+                copy (chunk : kept)
+      kept <- copy []
+      hClose readEnd
+      code <- waitExitCode process
+      pure (code, LBS.fromChunks kept)

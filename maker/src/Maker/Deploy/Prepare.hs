@@ -22,6 +22,7 @@ where
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (toLower)
 import Data.IORef
@@ -29,6 +30,9 @@ import Data.List (isInfixOf, sort, sortOn, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Ord (Down (..))
 import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime, getCurrentTime)
 import Maker.Deploy.Plan
 import Maker.Deploy.Tailscale qualified as Tailscale
@@ -37,7 +41,6 @@ import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (exitWith)
 import System.FilePath (makeRelative, takeExtension, (</>))
 import System.IO
-import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
 -- | Do the deploy's preparing steps and answer the plan with what they
@@ -559,30 +562,13 @@ runIn dir program args vars = do
   hFlush stdout
   runProcess (setWorkingDir dir (setEnv environment (proc program args))) `orElse` ExitFailure 127
 
--- | A command whose output and errors are shown as they come and kept,
--- through one pipe, in the order they come, as the shell's @2>&1 | tee@.
+-- | A command whose output and errors are shown as they come, byte for
+-- byte, and kept, as the shell's @2>&1 | tee@; the kept output is read
+-- leniently, for the hints it may hold.
 teeProcess :: ProcessConfig () () () -> IO (ExitCode, String)
 teeProcess config = do
-  hFlush stdout
-  (readEnd, writeEnd) <- Pipe.createPipe
-  started <- try (startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) config))))
-  hClose writeEnd
-  case started of
-    Left (_ :: IOException) -> hClose readEnd >> pure (ExitFailure 127, "")
-    Right process -> do
-      kept <- newIORef []
-      let copy = do
-            end <- hIsEOF readEnd
-            unless end $ do
-              l <- hGetLine readEnd
-              putStrLn l
-              modifyIORef' kept (l :)
-              copy
-      copy
-      hClose readEnd
-      code <- waitExitCode process
-      text <- unlines . reverse <$> readIORef kept
-      pure (code, text)
+  (code, out) <- relay Nothing config
+  pure (code, T.unpack (decodeUtf8With lenientDecode (LBS.toStrict out)))
 
 -- | The environment with variables set, replacing any of the same name.
 withVars :: [(String, String)] -> IO [(String, String)]

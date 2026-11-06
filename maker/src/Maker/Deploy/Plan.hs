@@ -26,15 +26,22 @@ module Maker.Deploy.Plan
   , quietly
   , succeeds
   , outputOf
+  , decodeFs
+  , relay
   , runInherit
   )
 where
 
 import Control.Exception (IOException, try)
-import Data.ByteString.Lazy.Char8 qualified as LBS8
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import GHC.Foreign qualified as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
+import Maker.Process (relay)
 import System.Exit (exitWith)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed
 
 -- | The plan's values by key.
@@ -108,8 +115,19 @@ outputOf :: FilePath -> [String] -> IO (Bool, String)
 outputOf program args = do
   result <- try (readProcessStdout (setStdin nullStream (setStderr nullStream (proc program args))))
   pure $ case result of
-    Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+    Right (code, out) -> (code == ExitSuccess, decodeFs out)
     Left (_ :: IOException) -> (False, "")
+
+-- | A program's output as text in the filesystem encoding, as GHC decodes
+-- paths and arguments: every byte comes back unchanged when the text is
+-- passed to another process (a path that is not valid UTF-8 included),
+-- where a decoding by characters would change it.
+decodeFs :: LBS.ByteString -> String
+decodeFs bytes = unsafePerformIO $ do
+  encoding <- getFileSystemEncoding
+  let strict = LBS.toStrict bytes
+  BS.useAsCStringLen strict (GHC.peekCStringLen encoding)
+{-# NOINLINE decodeFs #-}
 
 -- | Run a command with the terminal's output and errors, and answer how it
 -- ended; a command that cannot be started ends as 127, as in the shell.

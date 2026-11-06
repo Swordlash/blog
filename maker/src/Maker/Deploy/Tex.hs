@@ -32,7 +32,6 @@ import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath ((</>))
 import System.IO
-import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
 -- | The PATH of a unit that uses the toolchain's TeX Live, after its bin
@@ -293,24 +292,7 @@ sourceWords source tag
 texliveStep :: FilePath -> String -> ProcessConfig () () () -> String -> IO Bool
 texliveStep logFile name config shown = do
   appendFile logFile ("+ " <> shown <> "\n")
-  hFlush stdout
-  (readEnd, writeEnd) <- Pipe.createPipe
-  started <- try (startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) config))))
-  hClose writeEnd
-  code <- case started of
-    Left (_ :: IOException) -> hClose readEnd >> pure (ExitFailure 127)
-    Right process -> do
-      withFile logFile AppendMode $ \h -> do
-        let copy = do
-              end <- hIsEOF readEnd
-              unless end $ do
-                l <- hGetLine readEnd
-                putStrLn l
-                hPutStrLn h l
-                copy
-        copy
-      hClose readEnd
-      waitExitCode process
+  (code, _) <- withBinaryFile logFile AppendMode $ \h -> relay (Just h) config
   case code of
     ExitSuccess -> pure True
     ExitFailure n -> do
