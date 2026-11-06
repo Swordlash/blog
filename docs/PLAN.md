@@ -1102,13 +1102,6 @@ In the order to do it, unless the owner says otherwise.
   says next to Save. Tests: hspec-halogen for both modes, the countdown and its stops,
   the setting kept across a reload; the mode and the timeout are part of the vault's
   settings (WP5.21) so they follow the user across devices.
-- **Going public** (WP5.1 and WP5.2, done on the repository's side; the steps are the
-  owner's). Confirm decision 24; make the repository public; in Settings, Actions, set
-  fork pull request workflows to require approval for all external contributors; turn on
-  secret scanning and push protection; set Pages to deploy from GitHub Actions
-  (Settings, Pages, Source); run the workflow once with `runner: hosted`. Before the
-  flip: the `maintainer` address in the `.cabal` files and the pull request texts (some
-  name the tailnet host) become public.
 
 ## Known gaps and notes
 
