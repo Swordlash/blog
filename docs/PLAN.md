@@ -922,6 +922,19 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.72 User subspaces as a place to go** (the owner, 2026-11-06). The
+  container "User subspaces" stays a space nobody may view (decision 37), but
+  stops being a dead end. In the spaces' sidebar it is a link, with the 👤 icon
+  (U+1F464) in place of its letter, whenever the reader may open some personal
+  space: their own, turned on, or another user's that is public; under it,
+  while the reader's own personal space is on, a fixed entry "Your personal
+  space" leads there. The link, and the container's card on the front page, go
+  to a page of its own, the finder of user spaces: first the starred user
+  spaces, the reader's own first (a star on a personal space's home page is
+  the space's star; the owner, the same day), then "Find another", a text field
+  that filters the personal spaces the reader may open by login or display
+  name, with the results under it.
+
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
   until the maker replaces them). The shell under `toolchain/` has grown to some
