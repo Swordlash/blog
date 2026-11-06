@@ -420,7 +420,7 @@ accounts m = describe "signing in and out" $ do
     -- This server answers OPAQUE as for an account from before it
     -- ('serveOpaque'): the old sign-in follows, naming the attempt.
     [signIn] <- filter (\r -> r.method == "POST" && r.url == "api/v1/session") <$> asked
-    (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\",\"attempt\":\"a1\"}")
+    (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"attempt\":\"a1\",\"login\":\"ada\",\"password\":\"correct horse\"}")
     Map.lookup "X-Wiki-Request" signIn.headers `shouldBe` Just "1"
     -- Everything read as nobody is read again as Ada: the spaces were.
     eventually $ (length . filter (\r -> r.url == "api/v1/spaces") <$> asked) >>= (`shouldSatisfy` (> spacesBefore))

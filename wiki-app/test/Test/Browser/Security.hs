@@ -132,7 +132,11 @@ panel m = describe "the account panel" $ do
     find ui ".totp-password-form input[name=password]" >>= (`typeText` "rita's password")
     find ui ".totp-password-form button[type=submit]" >>= click
     _ <- find ui ".totp-qr"
-    askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/totp", "{\"password\":\"rita's password\"}")]
+    -- The password is proved through OPAQUE first; this server answers the
+    -- proof as for an account from before OPAQUE ('serveOpaque'), so it is
+    -- sent with the request, as such an account's is.
+    map fst <$> askedWith "POST" `shouldReturn` ["api/v1/account/password/proof", "api/v1/account/second-factor/totp"]
+    filter ((== "api/v1/account/second-factor/totp") . fst) <$> askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/totp", "{\"password\":\"rita's password\"}")]
     -- A light square, and a rectangle for each run of dark modules.
     length <$> findAll ui ".totp-qr rect" `shouldReturn` 1 + length (qrRuns qr)
     find ui ".totp-secret code" >>= (`shouldHaveText` "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ")
@@ -193,7 +197,9 @@ signingIn m = describe "signing in with a second factor" $
       find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
       length <$> findAll ui ".sign-in-code-form" `shouldReturn` 0
       -- The login field's offer of passkeys asks for its own challenge.
-      map snd . filter ((/= "api/v1/session/passkey") . fst) <$> askedWith "POST" `shouldReturn` ["{\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
+      -- OPAQUE's first message, answered as for an account from before it
+      -- ('serveOpaque'), so the old sign-in follows, naming the attempt.
+      map snd . filter (flip notElem ["api/v1/session/passkey", "api/v1/session/password"] . fst) <$> askedWith "POST" `shouldReturn` ["{\"attempt\":\"a1\",\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
       unmount ui
       serverStops
 
@@ -241,7 +247,12 @@ resets m = describe "a password reset" $ do
     find ui ".reset-form input[name=repeat]" >>= (`typeText` "a brand new password")
     find ui ".reset-form button[type=submit]" >>= click
     find ui ".reset-done" >>= (`shouldContainText` "Your password is set")
-    askedWith "POST" `shouldReturn` [("api/v1/password-reset/s3cr3t", "{\"password\":\"a brand new password\"}")]
+    -- The new password's record, made with the server's registration
+    -- answer, never the password.
+    reset <- askedWith "POST"
+    map fst reset `shouldBe` ["api/v1/password-registration", "api/v1/password-reset/s3cr3t"]
+    map (("a brand new password" `T.isInfixOf`) . snd) reset `shouldBe` [False, False]
+    map (("\"record\":" `T.isInfixOf`) . snd) reset `shouldBe` [False, True]
     find ui ".reset-sign-in" >>= click
     find ui ".sign-in-notice" >>= (`shouldHaveText` "Sign in with your new password.")
     unmount ui
