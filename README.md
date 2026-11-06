@@ -2409,11 +2409,10 @@ hosted runners, and a fork's only once the owner has approved its run; the runne
 user of its own, without `sudo` (as set up below), so a job reaches what that
 user can and no more; and the workflow uses no secret but the run's own token,
 which may only read the repository (and its Actions runs, in `plan`), except
-that `native` and `wasm` may also delete the repository's Actions caches
-(`actions: write`), to prune the older copies of the caches they save (see
-below). The wasm job holds that token on the owner's machine too, where it
-prunes nothing: code that runs there can delete the caches, which costs a
-cold build at worst.
+that `prune-caches` may also delete the repository's Actions caches
+(`actions: write`), to prune the older copies of the caches `native` and
+`wasm` save (see below). It runs on a hosted runner after them, and deleting
+a cache costs a cold build at worst.
 
 What remains:
 
@@ -2471,8 +2470,8 @@ compares the groups' full spec paths, including duplicate descriptions, against
 the unsplit suite. Only PostgreSQL starts a container; unit installs the small
 system dependencies and xmllint, while the database jobs also install TeX.
 All three restore the same dependency and build caches; unit saves the Cabal
-store and complete build snapshot (and prunes their older copies, see below), and
-postgres saves the apt archives.
+store and complete build snapshot (`prune-caches` deletes their older copies,
+see below), and postgres saves the apt archives.
 
 The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
@@ -2495,9 +2494,12 @@ the wasm snapshot) works the same way:
 - **Saved by every hosted run, and one copy kept.** The stores are saved once
   their dependencies have built (before the build, so a failure in the wiki's own
   code still keeps them), the native snapshot once the build has passed, and the
-  wasm snapshot at the end of a job that passed. After each save,
-  `toolchain/ci-prune-caches.sh` deletes the older copies under the same prefix on
-  the same ref, so a ref holds one copy per cache. Before, every run added a copy
+  wasm snapshot at the end of a job that passed. Once every job of the run that
+  restores a cache has ended, the job `prune-caches` runs
+  `toolchain/ci-prune-caches.sh`, which deletes the older copies under each prefix
+  on the same ref, so a ref holds one copy per cache. It runs after the jobs, not
+  beside them: a copy deleted while another job was still looking it up left that
+  job with no store and every dependency to build again. Before, every run added a copy
   of each, and the repository's 10 GB limit evicted the older ones, `main`'s among
   them. The script deletes nothing when the copy just saved is not listed (its
   save failed), and never fails the job: a fork's pull request has a read-only

@@ -111,11 +111,9 @@ permissions:
 # tree, so a fork could change either, and approving a fork's run means
 # reading what it changes here and in toolchain/ci-pick-runner.sh first.
 # No job uses a secret but the run's own token. It may only read, except
-# in native and wasm, which may also delete the repository's Actions caches
-# (`actions: write`), to prune the older copies of the caches they save
-# (toolchain/ci-prune-caches.sh); the wasm job has that token on the
-# owner's machine too, where it prunes nothing. See the README's CI
-# section.
+# in prune-caches, which may also delete the repository's Actions caches
+# (`actions: write`), to prune the older copies of the caches native and
+# wasm save (toolchain/ci-prune-caches.sh). See the README's CI section.
 #
 # The two kinds of runner get the toolchain differently, and every step that
 # differs says which it is for with `runner.environment`. A hosted runner
@@ -245,10 +243,8 @@ jobs:
     if: needs.plan.outputs.tested != 'true'
     name: native (${{ matrix.group }})
     runs-on: ubuntu-latest
-    # actions: write to prune the older copies of the caches it saves.
     permissions:
       contents: read
-      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -328,8 +324,8 @@ jobs:
     # the three groups and native-floor never undo each other's copies. Bump
     # the tag (v1) by hand, or run the workflow "Delete a cabal store", to
     # start from an empty store. The key ends in the run's id because a key
-    # cannot be overwritten; after each save the older copies of the ref are
-    # deleted (see the save). The last restore key takes the copies saved
+    # cannot be overwritten; the ref's older copies are deleted by the job
+    # prune-caches, once every job has restored its copy. The last restore key takes the copies saved
     # under the key that named GHC's version, once: remove it at the next
     # bump.
     - name: Restore cached dependencies
@@ -352,7 +348,7 @@ jobs:
     # validate the rest. Only the compiler, the platform and the version tag
     # (v1, bumped by hand) bound the fallback: a new module or flag change
     # does not discard all existing objects. As for the store, the key ends
-    # in the run's id and the older copies are deleted after the save.
+    # in the run's id and prune-caches deletes the older copies.
     - name: Restore native build directories
       uses: actions/cache/restore@v5
       id: native-build
@@ -396,9 +392,8 @@ jobs:
 
     # Before the build, so a run that fails on our own code still banks the
     # dependencies it compiled; after them, so a store whose dependencies
-    # failed to build never replaces a good one. Then the ref's older copies
-    # are deleted, so the store takes one entry of the repository's 10 GB
-    # per ref rather than one per run (the limit evicted main's copy).
+    # failed to build never replaces a good one. prune-caches deletes the
+    # ref's older copies after the run's jobs.
     - name: Save cached dependencies
       if: matrix.group == 'unit'
       uses: actions/cache/save@v5
@@ -406,34 +401,19 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: Prune older copies of the dependencies
-      if: matrix.group == 'unit'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-native-store-cabal-${{ steps.setup.outputs.cabal-version }}-${{ runner.environment }}-v1-
-        SAVED: ${{ steps.cache.outputs.cache-primary-key }}
-      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
-
     - name: Build
       run: npm run build-native
 
     # Build all native components once per job; the unit job publishes the
     # complete snapshot once the build has passed, even if a later test
-    # fails, and deletes the ref's older copies. Database jobs only read it.
+    # fails; prune-caches deletes the older copies. Database jobs only read
+    # it.
     - name: Save native build directories
       if: matrix.group == 'unit'
       uses: actions/cache/save@v5
       with:
         path: dist-newstyle/native
         key: ${{ steps.native-build.outputs.cache-primary-key }}
-
-    - name: Prune older copies of the native build directories
-      if: matrix.group == 'unit'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}-
-        SAVED: ${{ steps.native-build.outputs.cache-primary-key }}
-      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
     # The bootstrap's second stage and the builds' runner: its own tests,
     # its terminal interface built (with -Werror, as the maker's project
@@ -586,11 +566,8 @@ jobs:
     if: needs.plan.outputs.tested != 'true'
     # The runner plan picked; see the top.
     runs-on: ${{ needs.plan.outputs.runner }}
-    # actions: write to prune the older copies of the caches it saves, on a
-    # hosted runner only (see the top).
     permissions:
       contents: read
-      actions: write
     # The page is built, tested and kept for GitHub Pages, which serves a
     # project's site under the repository's name: every run builds it so,
     # pull requests too, since main is fast-forwarded to a pull request's
@@ -735,8 +712,8 @@ jobs:
 
     # The wasm store (decision 54): one cache entry per cabal version for
     # both compilers this job uses (cabal partitions the store by compiler),
-    # saved by this job only, and its older copies pruned, as in the native
-    # job. server-page.yml restores it and saves nothing. The last restore
+    # saved by this job only, and its older copies pruned by prune-caches,
+    # as the native job's are. server-page.yml restores it and saves nothing. The last restore
     # key takes the copies saved under the key that named the compilers'
     # versions, once: remove it at the next bump of the tag.
     - name: Restore cached dependencies
@@ -761,7 +738,7 @@ jobs:
     # metadata and rebuild affected modules. Hosted and self-hosted stores
     # have different registration paths. Saved at the end of the job, once
     # everything has passed, as before (the step that both restored and
-    # saved did so then), and the ref's older copies deleted after it.
+    # saved did so then); prune-caches deletes the ref's older copies.
     - name: Restore wasm and native build directories
       if: runner.environment == 'github-hosted'
       uses: actions/cache/restore@v5
@@ -806,14 +783,6 @@ jobs:
       with:
         path: ${{ env.CABAL_DIR }}/store
         key: ${{ steps.cache.outputs.cache-primary-key }}
-
-    - name: Prune older copies of the dependencies
-      if: runner.environment == 'github-hosted'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1-
-        SAVED: ${{ steps.cache.outputs.cache-primary-key }}
-      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
 
     - name: Build
       run: npm run build-wasm
@@ -890,14 +859,6 @@ jobs:
           dist-newstyle/wasm/src
         key: ${{ steps.wasm-build.outputs.cache-primary-key }}
 
-    - name: Prune older copies of the wasm and native build directories
-      if: runner.environment == 'github-hosted'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PREFIX: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}-
-        SAVED: ${{ steps.wasm-build.outputs.cache-primary-key }}
-      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$SAVED"
-
     # The built page, kept with the run as the artifact `app`: the deploy job
     # publishes it, from this run or, on a push to main the plan job
     # skipped, from the pull request's run that built it. Three days is long
@@ -972,6 +933,53 @@ jobs:
   # tested, and only once the repository is public: Pages on a private
   # repository of a free account refuses to deploy, so until then the job
   # is skipped, as its name says, rather than making main red.
+  # The caches native and wasm save are saved under keys that end in the
+  # run's id, since a cache key cannot be overwritten; this job then deletes
+  # the ref's older copies, so that each ref keeps one copy of each cache
+  # (the repository's 10 GB limit otherwise evicted main's). It runs once
+  # every job that restores a cache has ended, never beside them: an older
+  # copy deleted while a job was still looking it up left that job with no
+  # store at all and every dependency to build again (native (sqlite) in
+  # run 42228528344). The keys are the ones the saves used; a cache that
+  # was not saved this run (the wasm job on the owner's machine, a job that
+  # failed before its save) is not listed, and the script then deletes
+  # nothing under its prefix. A cancelled run prunes nothing: the next run
+  # does.
+  prune-caches:
+    name: prune older cache copies
+    needs: [plan, native, native-floor, wasm]
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Prune the native store
+      env:
+        PREFIX: ${{ runner.os }}-native-store-cabal-${{ env.CABAL_VERSION }}-github-hosted-v1-
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$PREFIX$RUN"
+
+    - name: Prune the native build directories
+      env:
+        PREFIX: ${{ runner.os }}-${{ runner.arch }}-github-hosted-native-build-v1-ghc-${{ env.GHC_VERSION }}-
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "${PREFIX}cabal-$CABAL_VERSION-$RUN"
+
+    - name: Prune the wasm store
+      env:
+        PREFIX: ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-github-hosted-v1-
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$PREFIX$RUN"
+
+    - name: Prune the wasm and native build directories
+      env:
+        PREFIX: ${{ runner.os }}-${{ runner.arch }}-github-hosted-wasm-build-v2-ghc-${{ env.GHC_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}-
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "${PREFIX}cabal-$CABAL_VERSION-$RUN"
+
   deploy:
     name: deploy (to GitHub Pages, once the repository is public)
     needs: [plan, native, wasm, format]
