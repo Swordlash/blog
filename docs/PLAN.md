@@ -938,7 +938,20 @@ In the order to do it, unless the owner says otherwise.
   merged. Phases (a) and (b) are merged (#167, #168; decisions 51 and 52);
   `web/bundle.sh` stays a script the maker runs (decision 52). (c) is cut in two:
   (c1), #172, merged, the new split between the stages (decision 55); (c2) the
-  deploy, as above, which is next. The split (the owner, 2026-11-05): `bootstrap.sh`
+  deploy, as above, which is next. What strictly needs no GHC stays in shell (the
+  owner, 2026-11-06: "jak coś ściśle nie potrzebuje ghc to niech tak zostanie"):
+  `undeploy-local.sh`, the deploy's `--status`, and `check-native.sh`, which the
+  deploy and the wizard run before anything is downloaded, so the maker's copy of
+  that check stays beside it. `--static --backend-only` goes through the maker
+  like every other deploy (the owner, the same day), although it needs only Node:
+  it uses nearly all of the deploy's machinery (the state, the unit, Tailscale,
+  the firewall, the page's download and cache), which would otherwise live in two
+  languages; such a machine installs GHC and builds the maker once. (c2) goes in
+  several pull requests, each leaving the deploy working: the options, the state
+  and the read-only parts first, then the deploy of a page built on the machine,
+  then the TeX step, pages from GitHub or a file and the locked-down options,
+  then the wizard as the TUI's deploy flow, with `configure.sh` and `configure.hs`
+  retired. The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1375,10 +1388,7 @@ needs. Each was true when its package merged; check before relying on one.
   `test-bootstrap.sh` runs its check cases against both, and (c2) retires the
   shell's. A machine without libsodium or libpq learns it from `bootstrap
   native` only after GHC, cabal and the maker are built; the deploy's own check
-  still comes first. (c2) must decide what the paths that need no GHC today do
-  (`--static --backend-only`, which installs only Node; `undeploy-local.sh` and
-  `--status`; the check before the downloads): keep a shell path, or build the
-  maker first. The 9.10 job builds the maker but never runs `bootstrap native
+  still comes first; both copies stay (WP5.68's entry, 2026-11-06). The 9.10 job builds the maker but never runs `bootstrap native
   --system-tools` with that GHC.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
