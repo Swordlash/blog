@@ -180,33 +180,34 @@ spec = describe "the deploy's part in the maker" $ do
       newBackup listed0 listed1 `shouldBe` Just "/d/backups/20261106T101500Z.sqlite"
       newBackup listed0 listed0 `shouldBe` Nothing
       newBackup [] ["/d/backups/a.pgdump.json", "/d/backups/a.pgdump"] `shouldBe` Just "/d/backups/a.pgdump"
-    it "keeps a server deployment in previous/ with its commit and a copy of its backup, and only a server's" $ do
+    it "keeps a server deployment in previous/ with its commit, a copy of its backup, whether it ran and whether it had a unit, and only a server's" $ do
       tmp <- getTemporaryDirectory
       let dir = tmp </> "maker-upgrade-spec"
       removePathForcibly dir
       createDirectoryIfMissing True (dir </> "app")
       writeFile (dir </> "unit") "[Unit]\n"
       writeFile (dir </> "state") "git_commit=abc\n"
-      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing
+      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True
       demo `shouldBe` False
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "old"
       createDirectoryIfMissing True (dir </> "backups")
       writeFile (dir </> "backups" </> "b.pgdump") "dump"
       writeFile (dir </> "backups" </> "b.pgdump.json") "facts"
-      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump"))
+      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump")) True
       kept `shouldBe` True
       moved <- (,) <$> doesDirectoryExist (dir </> "bin") <*> doesDirectoryExist (dir </> "app")
       moved `shouldBe` (False, False)
       k <- readKept dir
-      fmap (\x -> (x.commit, x.backup)) k `shouldBe` Just ("unknown", dir </> "previous" </> "b.pgdump")
+      fmap (\x -> (x.commit, x.backup, x.running, x.unit)) k `shouldBe` Just ("unknown", dir </> "previous" </> "b.pgdump", True, True)
       readFile (dir </> "previous" </> "b.pgdump.json") >>= (`shouldBe` "facts")
       readFile (dir </> "previous" </> "state") >>= (`shouldBe` "git_commit=abc\n")
-      -- A server whose unit is gone (after --stop) is not kept, and the
-      -- deployment kept before goes.
+      -- A server taken down with --stop (no unit, not running) is kept as
+      -- such, in place of the one kept before.
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "stopped"
-      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing
-      stopped `shouldBe` False
-      doesDirectoryExist (dir </> "previous") >>= (`shouldBe` False)
+      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing False
+      stopped `shouldBe` True
+      k' <- readKept dir
+      fmap (\x -> (x.commit, x.backup, x.running, x.unit)) k' `shouldBe` Just ("abc", "", False, False)
       removePathForcibly dir

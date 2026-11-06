@@ -990,8 +990,8 @@ if [ "$action" = rollback ]; then
   eval "$bootstrap_env"
   find_maker
   plan=$(mktemp)
-  printf 'name=%s\ndir=%s\nstate_dir=%s\nunit_file=%s\nstate_file=%s\nyes=%s\n' \
-    "$name" "$prev_dir" "$STATE_DIR" "$unit_file" "$state_file" "${yes:-}" >"$plan"
+  printf 'name=%s\ndir=%s\nstate_dir=%s\nunit_file=%s\nstate_file=%s\nyes=%s\nno_firewall=%s\n' \
+    "$name" "$prev_dir" "$STATE_DIR" "$unit_file" "$state_file" "${yes:-}" "${no_firewall:-}" >"$plan"
   status=0
   "$maker" deploy rollback --plan "$plan" || status=$?
   rm -f "$plan"

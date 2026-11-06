@@ -6,12 +6,10 @@
 -- deploy made just before (a copy, because the server's own backups prune
 -- @data/backups@); after them it runs the new program's @wiki-server
 -- migrate@ and @wiki-server check@. When either fails, or the new server
--- does not answer, the deploy puts the previous deployment back
--- ('restorePrevious'): the database restored from that backup, the old
--- files, unit and state, the service restarted. A deployment is kept only
--- when the upgrade changes nothing outside these files (the database's
--- kind and port, the listening address, the way HTTPS is served), so that
--- putting the files back puts the whole deployment back. A successful upgrade keeps
+-- does not answer, the deploy puts the previous deployment back: the
+-- database restored from that backup ('restoreDatabase'), the old files,
+-- unit and state ('putBackFiles'), and the settings outside them
+-- reconciled (Maker.Deploy.Apply's 'rollBackDeployment'). A successful upgrade keeps
 -- @previous/@ too, since what broke may show only later; @deploy-local.sh
 -- --rollback@ goes back to it by hand. The next upgrade replaces it with
 -- the deployment it replaces, so one deployment back is kept.
@@ -22,11 +20,12 @@ module Maker.Deploy.Upgrade
   , readKept
   , newBackup
   , migrateAndCheck
-  , restorePrevious
+  , restoreDatabase
+  , putBackFiles
   )
 where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, unless, when)
 import Data.List (sort, (\\))
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
@@ -38,12 +37,18 @@ import System.FilePath (takeFileName, (</>))
 -- | 'Kept' is what @previous/info@ says of the deployment kept there: the
 -- commit it was built from (@unknown@ when the deploy did not know it),
 -- the copy of the backup of the database made before the deployment that
--- replaced it, in @previous/@ (empty when there was no database yet), and
--- when it was kept.
+-- replaced it, in @previous/@ (empty when there was no database yet), when
+-- it was kept, whether its service was running when the deploy began, and
+-- whether it had a unit (it has none after @--stop@). A rollback starts the
+-- service only if it was running, and removes the unit only if there was
+-- none. An @info@ written before these two were recorded counts as running
+-- with a unit, which is what such a deploy required.
 data Kept = Kept
   { commit :: String
   , backup :: FilePath
   , keptAt :: String
+  , running :: Bool
+  , unit :: Bool
   }
   deriving (Eq, Show)
 
@@ -52,23 +57,16 @@ previousDir :: FilePath -> FilePath
 previousDir dir = dir </> "previous"
 
 -- | Move a server deployment's binary and page into @previous/@ under it,
--- with copies of its unit and state file, of the backup (with the facts
--- file a PostgreSQL backup has beside it), and what 'Kept' records, in
--- place of an older one kept there. Nothing is kept when the directory
--- holds no server binary (a first deploy, or a demo before) or the unit is
--- gone (after --stop). The answer
--- is whether a deployment was kept.
-keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> IO Bool
-keepPrevious dir unitFile stateFile commit backup = do
-  -- A deployment whose unit is gone (taken down with --stop) is not kept:
-  -- the deploy writes a new unit, which a rollback could not undo.
+-- with copies of its unit (when it has one) and state file, of the backup
+-- (with the facts file a PostgreSQL backup has beside it), and what 'Kept'
+-- records, in place of an older one kept there. Nothing is kept when the
+-- directory holds no server binary (a first deploy, or a demo before). The
+-- answer is whether a deployment was kept.
+keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> Bool -> IO Bool
+keepPrevious dir unitFile stateFile commit backup running = do
   let previous = previousDir dir
   removePathForcibly previous
-  server <- doesFileExist (dir </> "bin" </> "wiki-server")
-  unit <- doesFileExist unitFile
-  when (server && not unit) $
-    say "the deployment it replaces is not kept for a rollback: its unit is gone (taken down with --stop), and the new one could not be undone"
-  let there = server && unit
+  there <- doesFileExist (dir </> "bin" </> "wiki-server")
   when there $ do
     createDirectoryIfMissing True previous
     -- The owner's only, as data/ is: it holds a copy of the database.
@@ -76,6 +74,7 @@ keepPrevious dir unitFile stateFile commit backup = do
     forM_ ["bin", "app"] $ \d -> do
       exists <- doesDirectoryExist (dir </> d)
       when exists (renameDirectory (dir </> d) (previous </> d))
+    hasUnit <- doesFileExist unitFile
     forM_ [(unitFile, "unit"), (stateFile, "state")] $ \(from, to) -> do
       exists <- doesFileExist from
       when exists (copyFile from (previous </> to))
@@ -88,12 +87,15 @@ keepPrevious dir unitFile stateFile commit backup = do
         when facts (copyFile (file <> ".json") (to <> ".json"))
         pure to
     now <- getCurrentTime
+    let yesNo b = if b then "yes" else "no"
     writeFile
       (previous </> "info")
       ( unlines
           [ "commit=" <> (if null commit then "unknown" else commit)
           , "backup=" <> copied
           , "kept=" <> formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now
+          , "running=" <> yesNo running
+          , "unit=" <> yesNo hasUnit
           ]
       )
     say ("kept the previous deployment (" <> (if null commit then "unknown" else commit) <> ") in " <> previous <> ", for a rollback")
@@ -115,7 +117,7 @@ readKept dir = do
             (k, '=' : rest) -> Just (k, rest)
             _ -> Nothing
           value k = maybe "" id (lookup k fields)
-      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept"})
+      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept", running = value "running" /= "no", unit = value "unit" /= "no"})
 
 -- | The backup a backup command made: the newest of the backups listed
 -- after it that were not listed before it. A backup's name starts with its
@@ -142,40 +144,43 @@ migrateAndCheck serverBin placeArgs = do
         ExitSuccess -> Nothing
         _ -> Just "the migrated database does not read back (wiki-server check, above)"
 
--- | Put the kept deployment back in place of the current one: the service
--- stopped, the database restored from the copy of the backup made before
--- the deployment that replaced it (by the kept binary, which reads it),
--- the binary and page moved back, the unit and state file copied back, the
--- service restarted. A restore that fails stops the rollback there, with
--- the service stopped and @previous/@ left as it is, since the old binary
--- must not run on the migrated database. The answer is whether the
--- rollback was made.
-restorePrevious :: FilePath -> FilePath -> FilePath -> String -> [String] -> Kept -> IO Bool
-restorePrevious dir unitFile stateFile service placeArgs kept = do
+-- | Restore the database of the kept deployment from the copy of the
+-- backup made before the deployment that replaced it, with the kept
+-- binary, which reads it. The service must be stopped. Nothing is done
+-- when no backup was made (there was no database yet). The answer is
+-- whether the database is back; a rollback that fails here stops, since
+-- the old binary must not run on the migrated database.
+restoreDatabase :: FilePath -> [String] -> Kept -> IO Bool
+restoreDatabase dir placeArgs kept
+  | null kept.backup = pure True
+  | otherwise = do
+      say ("restoring the database from " <> kept.backup)
+      restored <- runInherit (previousDir dir </> "bin" </> "wiki-server") (["restore", kept.backup] <> placeArgs)
+      unless (restored == ExitSuccess) $
+        warn ("the restore of " <> kept.backup <> " failed (see above), so the rollback stopped there: the service is stopped, and the previous deployment is still in " <> previousDir dir)
+      pure (restored == ExitSuccess)
+
+-- | Put the kept deployment's files back in place of the current one's:
+-- the binary and page moved back, the state file copied back, and the
+-- unit copied back, or, for a deployment that had none (after @--stop@),
+-- the new unit disabled and removed. @previous/@ goes, and systemd reloads
+-- its units. The service is left stopped: the caller starts it if it was
+-- running.
+putBackFiles :: FilePath -> FilePath -> FilePath -> String -> Kept -> IO ()
+putBackFiles dir unitFile stateFile service kept = do
   let previous = previousDir dir
-      oldBin = previous </> "bin" </> "wiki-server"
-  say ("rolling back to the previous deployment (" <> kept.commit <> "), kept in " <> previous)
-  _ <- runInherit "systemctl" ["--user", "stop", service]
-  restored <-
-    if null kept.backup
-      then pure ExitSuccess
-      else do
-        say ("restoring the database from " <> kept.backup)
-        runInherit oldBin (["restore", kept.backup] <> placeArgs)
-  if restored /= ExitSuccess
-    then do
-      warn ("the restore of " <> kept.backup <> " failed (see above), so the rollback stopped there: " <> service <> " is stopped, and the previous deployment is still in " <> previous)
-      pure False
+  forM_ ["bin", "app"] $ \d -> do
+    back <- doesDirectoryExist (previous </> d)
+    when back $ do
+      removePathForcibly (dir </> d)
+      renameDirectory (previous </> d) (dir </> d)
+  copyFile (previous </> "state") stateFile
+  if kept.unit
+    then copyFile (previous </> "unit") unitFile
     else do
-      forM_ ["bin", "app"] $ \d -> do
-        back <- doesDirectoryExist (previous </> d)
-        when back $ do
-          removePathForcibly (dir </> d)
-          renameDirectory (previous </> d) (dir </> d)
-      forM_ [("unit", unitFile), ("state", stateFile)] $ \(from, to) -> do
-        exists <- doesFileExist (previous </> from)
-        when exists (copyFile (previous </> from) to)
-      removePathForcibly previous
-      _ <- runInherit "systemctl" ["--user", "daemon-reload"]
-      _ <- runInherit "systemctl" ["--user", "restart", service]
-      pure True
+      say ("removing the unit the deploy wrote: " <> service <> " had none before it (taken down with --stop)")
+      _ <- runInherit "systemctl" ["--user", "disable", service]
+      removePathForcibly unitFile
+  removePathForcibly previous
+  _ <- runInherit "systemctl" ["--user", "daemon-reload"]
+  pure ()

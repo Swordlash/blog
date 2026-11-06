@@ -16,6 +16,7 @@ module Maker.Deploy.Prepare
   , pageBackend
   , localYml
   , pgWrapper
+  , pgCompose
   )
 where
 
