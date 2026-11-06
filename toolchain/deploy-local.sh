@@ -731,7 +731,6 @@ toolchain_base=${toolchain_home:-$HOME}
 # For the messages: what a later run must be given to find this deployment.
 prefix_arg=${prefix:+ --prefix $prefix}
 
-
 # Read JSON on standard input with python3, or with jq where there is no
 # python3: $1 is a Python program that finds the parsed document in d, $2
 # the jq filter that prints the same (jq -r). A deployment with
@@ -775,37 +774,6 @@ sys.stdout.write(n[:-1] if n.endswith(".") else n)' '(.Self.DNSName // "") | sub
 # name is among CertDomains, the names the coordination server helps get a
 # certificate for, which it lists only when the tailnet has "HTTPS
 # Certificates" on. Fails when Tailscale is not running.
-tailscale_https() {
-  command -v tailscale >/dev/null 2>&1 || return 1
-  ts_json=$(timeout 10 tailscale status --json 2>/dev/null) || return 1
-  if [ -n "${nodeless:-}" ]; then
-    # shellcheck disable=SC2016 # $state and $name are jq's variables.
-    printf '%s' "$ts_json" | json_read 'state = d.get("BackendState")
-if state and state != "Running":
-    sys.exit(1)
-name = (d.get("Self") or {}).get("DNSName") or ""
-name = name[:-1] if name.endswith(".") else name
-magic = "off" if (d.get("CurrentTailnet") or {}).get("MagicDNSEnabled") is False else "on"
-certs = "on" if name and name in (d.get("CertDomains") or []) else "off"
-print(name or "-", magic, certs)' '(.BackendState // "") as $state
-      | if $state != "" and $state != "Running" then error("not running") else . end
-      | ((.Self.DNSName // "") | sub("\\.$"; "")) as $name
-      | [ (if $name == "" then "-" else $name end),
-          (if .CurrentTailnet.MagicDNSEnabled == false then "off" else "on" end),
-          (if $name != "" and ((.CertDomains // []) | any(. == $name)) then "on" else "off" end) ]
-      | join(" ")'
-    return
-  fi
-  printf '%s' "$ts_json" | "$node" -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
-    let j;
-    try { j = JSON.parse(s); } catch { process.exit(1); }
-    if (j.BackendState && j.BackendState !== "Running") process.exit(1);
-    const name = (j.Self?.DNSName ?? "").replace(/\.$/, "");
-    const magic = j.CurrentTailnet?.MagicDNSEnabled === false ? "off" : "on";
-    const certs = name && (j.CertDomains ?? []).includes(name) ? "on" : "off";
-    console.log([name || "-", magic, certs].join(" "));
-  })'
-}
 # The first DNS name a certificate (a PEM file) is issued for, from its
 # subjectAltName, else its subject's CN; nothing when openssl is not here
 # or the certificate names none.
@@ -880,61 +848,6 @@ linger_report() {
     *) say "cannot tell whether lingering is on for $user (loginctl show-user $user -p Linger); without it the service stops when you log out" ;;
   esac
 }
-
-# The URL of the deployment's PostgreSQL database, without its password,
-# which is in the file pg_files writes.
-db_url() { printf 'postgres://wiki@127.0.0.1:%s/wiki\n' "$db_port"; }
-
-# The deployment's PostgreSQL files ('pg_dir'): a copy of
-# docker-compose.yml, whose postgres service runs the database; local.yml,
-# which publishes its port on this machine's loopback for the server; the
-# database's password, made once and kept; and pg_dump and pg_restore,
-# which run the container's own, of the server's major version (a pg_dump
-# older than the server refuses it), for the backups the server makes.
-pg_files() {
-  pd=$(pg_dir)
-  mkdir -p "$pd"
-  chmod 700 "$pd"
-  cp "$ROOT/docker-compose.yml" "$pd/docker-compose.yml"
-  cat >"$pd/local.yml" <<EOF
-# Written by toolchain/deploy-local.sh for the deployment $name: the
-# database's port, published on this machine's loopback for the wiki's
-# server, which runs as the systemd user service $name.service.
-services:
-  postgres:
-    ports:
-      - "127.0.0.1:\${WIKI_DB_PORT}:5432"
-EOF
-  if [ ! -s "$pd/db-password" ]; then
-    (umask 077 && od -An -tx1 -N24 /dev/urandom | tr -d ' \n' >"$pd/db-password")
-  fi
-  for program in pg_dump pg_restore; do
-    cat >"$pd/$program" <<EOF
-#!/bin/sh
-# $program of the PostgreSQL container of the deployment $name, written by
-# toolchain/deploy-local.sh: wiki-server runs it for a backup or a restore
-# with --dbname=<the URL it connects to>, which is this machine's address of
-# the container; inside the container the program connects to its own
-# socket instead, as the user wiki, to the database wiki.
-n=\$#
-named=
-while [ "\$n" -gt 0 ]; do
-  arg=\$1
-  shift
-  n=\$((n - 1))
-  case \$arg in
-    --dbname=*) named=1 ;;
-    *) set -- "\$@" "\$arg" ;;
-  esac
-done
-[ -z "\$named" ] || set -- --username=wiki --dbname=wiki "\$@"
-WIKI_DB_PASSWORD_FILE='$pd/db-password' WIKI_DB_PORT='$db_port' exec docker compose --project-name '$name' \\
-  --file '$pd/docker-compose.yml' --file '$pd/local.yml' exec -T postgres $program "\$@"
-EOF
-    chmod 700 "$pd/$program"
-  done
-}
-
 
 # --- PDF exports: the TeX the service finds ---------------------------------
 #
@@ -1837,18 +1750,6 @@ fi
 
 out=$ROOT/dist-newstyle/wasm-opt/public/app
 
-# The application a deployment serves: the -O2 build of wiki-app into $out.
-# This is the one place that says how it is built, for the demo and the server
-# alike. The binary is the same; the pages differ (toolchain/build-wasm.sh):
-# the demo's keep the wiki in the browser (MemWiki), one prerendered page per
-# route, and the server's ($mode = server) talk to wiki-server over HTTP
-# (HttpWiki), with one page, the application before it has loaded anything,
-# which the server serves at every address.
-build_app() {
-  if [ "$mode" = server ]; then backend=server; else backend=demo; fi
-  (cd "$ROOT" && HALOGEN_BASE_PATH=/ WIKI_BACKEND=$backend npm run build-wasm-opt)
-}
-
 # --- The page from GitHub (--backend-only) ---------------------------------
 #
 # CI (.github/workflows/server-page.yml) builds the server's page and the
@@ -2075,7 +1976,6 @@ file_sha256() {
   fi
 }
 
-
 # The page from a file (--app-page) and the page cache. The cache keeps
 # the file's zip under a name of its own, app-<kind>-file-<SHA-256>.zip,
 # with the file's path in its .meta file (file=<path>), apart from the zips
@@ -2250,125 +2150,6 @@ download_page() {
 BUNDLE_OUTPUTS='islands.js islands tikzjax islands.css fonts wasi-shim.js licenses.txt icon.svg icons sw.js'
 ci_page=$ROOT/dist-newstyle/wasm-opt/ci-page
 
-# The files of a directory, one relative path a line, sorted.
-page_files() { (cd "$1" && find . -type f | sed 's|^[.]/||' | LC_ALL=C sort); }
-
-# Compare the page built here ($out) with CI's (ci_page): says that they
-# are identical, or warns with every file whose bytes differ and every file
-# only one of them has.
-compare_bundles() {
-  lists=$(mktemp -d)
-  page_files "$ci_page" >"$lists/ci"
-  page_files "$out" >"$lists/here"
-  LC_ALL=C comm -12 "$lists/ci" "$lists/here" | while IFS= read -r file; do
-    cmp -s "$ci_page/$file" "$out/$file" || printf '%s\n' "$file"
-  done >"$lists/differ"
-  LC_ALL=C comm -23 "$lists/ci" "$lists/here" >"$lists/only-ci"
-  LC_ALL=C comm -13 "$lists/ci" "$lists/here" >"$lists/only-here"
-  total=$(wc -l <"$lists/ci" | tr -d ' ')
-  if [ ! -s "$lists/differ" ] && [ ! -s "$lists/only-ci" ] && [ ! -s "$lists/only-here" ]; then
-    say "the page with the bundles built here and the page CI built are identical: the same $total files, byte for byte"
-  else
-    warn "the page with the bundles built here differs from the page CI built ($total files): $(wc -l <"$lists/differ" | tr -d ' ') differ, $(wc -l <"$lists/only-ci" | tr -d ' ') are in CI's alone, $(wc -l <"$lists/only-here" | tr -d ' ') are here alone; the page built here is the one deployed"
-    sed 's/^/    differs:          /' "$lists/differ" >&2
-    sed "s/^/    only in CI's:     /" "$lists/only-ci" >&2
-    sed 's/^/    only built here:  /' "$lists/only-here" >&2
-  fi
-  rm -rf "$lists" "$ci_page"
-}
-
-# Build the page's bundles here: what web/bundle.sh writes is deleted from
-# the page CI built (in $out), npm ci installs the lockfile's packages
-# (from the registry --npm-registry names, if any), and web/bundle.sh
-# writes the bundles into the page. Then compare_bundles.
-bundle_locally_step() {
-  [ -d "$ci_page" ] || die "--bundle-locally: there is no copy of the page CI built to compare with (dist-newstyle/wasm-opt/ci-page)"
-  # Not $name, which is the deployment's.
-  for bundle_output in $BUNDLE_OUTPUTS; do
-    rm -rf "${out:?}/$bundle_output"
-  done
-  say "npm ci, for the page's bundles${npm_registry:+, from the npm registry $npm_registry}"
-  (cd "$ROOT" && npm ci --no-audit --no-fund) || die "npm ci failed (see above), so nothing was changed"
-  say "building the page's JavaScript and CSS bundles here (sh web/bundle.sh)"
-  (cd "$ROOT" && sh web/bundle.sh "$out") || die "web/bundle.sh failed (see above), so nothing was changed"
-  compare_bundles
-}
-
-# wiki-server, natively, with this repository's packages at -O2 and the
-# dependencies as the everyday build has them (cabal-native-opt.project), in a
-# build directory of its own so that neither build invalidates the other. The
-# arguments are cabal's command and its flags. A wiki in SQLite gets a
-# wiki-server built without PostgreSQL (the cabal flag postgres off), which
-# needs neither libpq nor pg_config; a wiki in PostgreSQL gets one with it.
-# Cabal rebuilds wiki-server when the flag changes, so a deployment that
-# switches database switches build too. The first argument is cabal's
-# command; the others are flags that follow the project's own.
-server_cabal() {
-  cabal_command=$1
-  shift
-  (cd "$ROOT" && version=$(build_version) && env WIKI_BUILD_VERSION="$version" sh toolchain/changelog-stamp.sh && env WIKI_BUILD_VERSION="$version" cabal "$cabal_command" --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server "--constraint=wiki-server $(postgres_flag)postgres" "$@")
-}
-
-# The version wiki-server's page "What's new?" shows: WIKI_BUILD_VERSION
-# when the environment sets it, else what git describe says of the
-# checkout (a tag, the commits since it and the commit, "-dirty" with
-# changes not committed), else "unknown". wiki-server runs the same git
-# describe itself when it is compiled; naming it here makes the deployed
-# version the checkout's whatever directory cabal compiles in, and puts it
-# in the stamp toolchain/changelog-stamp.sh writes, so that a new version
-# or a new changelog entry rebuilds the server.
-build_version() {
-  if [ -n "${WIKI_BUILD_VERSION:-}" ]; then
-    printf '%s' "$WIKI_BUILD_VERSION"
-  else
-    git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || printf 'unknown'
-  fi
-}
-
-# Whether wiki-server's build uses cabal's build semaphore: cabal's flag for
-# it, --semaphore or --no-semaphore. cabal-native-opt.project has the
-# semaphore off, because on some machines GHC cannot open the semaphore
-# cabal makes, and then every package's build fails. With the semaphore,
-# cabal and GHC share one budget of jobs, so the modules of a package compile
-# in parallel too. The option --semaphore or --no-semaphore decides when
-# given; otherwise toolchain/check-semaphore.sh tries the semaphore with the
-# ghc on PATH, the one cabal builds with, which the toolchain's environment
-# has put there by now. The flag is given either way, so that a project's
-# .local file does not decide. It is set once per run, before the build.
-semaphore_flag() {
-  case $opt_semaphore in
-    on)
-      say "build semaphore: on, as --semaphore asks (not probed)"
-      build_semaphore=--semaphore
-      return 0 ;;
-    off)
-      say "build semaphore: off, as --no-semaphore asks"
-      build_semaphore=--no-semaphore
-      return 0 ;;
-  esac
-  probe_status=0
-  probe_output=$(sh "$ROOT/toolchain/check-semaphore.sh" 2>&1) || probe_status=$?
-  if [ "$probe_status" -eq 0 ]; then
-    say "build semaphore: ok, cabal and GHC share one job budget"
-    build_semaphore=--semaphore
-    return 0
-  fi
-  # The first line of the probe's error, which names the failure (GHC's
-  # semOpen line), without the probe's own name and a closing colon.
-  probe_reason=$(printf '%s\n' "$probe_output" | sed -n '/./{s/^check-semaphore: //;s/:$//;p;q;}')
-  if [ "$probe_status" -eq 1 ]; then
-    say "build semaphore: not usable (${probe_reason:-see toolchain/check-semaphore.sh}), building without it"
-  else
-    say "build semaphore: not usable (the probe could not run: ${probe_reason:-see toolchain/check-semaphore.sh}), building without it"
-  fi
-  build_semaphore=--no-semaphore
-}
-
-# The sign of wiki-server's cabal flag postgres for this deployment's
-# database, and the argument that tells toolchain/check-native.sh about it.
-# toolchain/bootstrap.sh native and build take it too: then neither asks
-# Debian for libpq-dev, and native passes it to the same check.
-postgres_flag() { if [ "$db" = sqlite ]; then printf '%s' -; else printf '%s' +; fi; }
 # Only the wiki's server on SQLite opts out: the demo's build is left as
 # it was.
 check_postgres=
@@ -2412,67 +2193,6 @@ recheck_native() {
   say "checking again what the native build of wiki-server needs, after the bootstrap"
   sh "$ROOT/toolchain/check-native.sh" ${check_postgres:+"$check_postgres"} ${check_tex_flag:+"$check_tex_flag"} ||
     die "the native build of wiki-server still needs what is missing above; nothing was changed"
-}
-
-# The directory of cabal's build logs. cabal writes a log for each dependency
-# it builds, under <logs>/ghc-<version>/, and when such a build fails its
-# console says only "See the build log above for details": the error itself is
-# in that log. cabal path -z answers without reading the project (without -z
-# it would resolve the project and fetch its source repositories). When cabal
-# path gives no answer (an older cabal), the places cabal uses by default are
-# tried.
-cabal_logs_dir() {
-  logs=$(cd "$ROOT" && cabal path -z -v0 --logs-dir 2>/dev/null) || logs=
-  for dir in "$logs" ${CABAL_DIR:+"$CABAL_DIR/logs"} "$HOME/.cabal/logs" \
-    "${XDG_CACHE_HOME:-$HOME/.cache}/cabal/logs" "$HOME/.local/state/cabal/logs"; do
-    if [ -n "$dir" ] && [ -d "$dir" ]; then
-      printf '%s\n' "$dir"
-      return 0
-    fi
-  done
-}
-
-# wiki-server's build. cabal's output is shown as it comes, at cabal's
-# default verbosity, which names each package as it is built and GHC's
-# progress through its modules, so that a long -O2 build is not silent. A
-# copy goes to a file for the hints after a failure. check_native has run
-# before the build, but a build can still fail on a C library (one the check
-# found that does not link, say), so a failure that names one points at the
-# check again. A failed build also shows the newest of cabal's build logs
-# written during it, which holds the error when the package that failed is a
-# dependency. semaphore_flag decides first whether the build uses cabal's
-# build semaphore.
-server_build_native() {
-  semaphore_flag
-  build_log=$(mktemp)
-  build_status=$(mktemp)
-  build_start=$(mktemp)
-  # A pipeline's status is tee's, so cabal's own status goes to a file,
-  # which stays empty when cabal succeeds.
-  { server_cabal build "$build_semaphore" 2>&1 || printf '%s' "$?" >"$build_status"; } | tee "$build_log"
-  if [ ! -s "$build_status" ]; then
-    rm -f "$build_log" "$build_status" "$build_start"
-    return 0
-  fi
-  logs_dir=$(cabal_logs_dir)
-  if [ -n "$logs_dir" ]; then
-    # shellcheck disable=SC2012 # ls -t orders by mtime; the paths are cabal's own, without newlines.
-    newest_log=$(find "$logs_dir" -type f -name '*.log' -newer "$build_start" -exec ls -t {} + 2>/dev/null | head -n 1 || true)
-    if [ -n "$newest_log" ]; then
-      say "the newest build log, $newest_log, ends with:" >&2
-      tail -n 30 "$newest_log" | tee -a "$build_log" >&2
-    fi
-  fi
-  # Error messages only: cabal's output names packages such as zlib and
-  # postgresql-libpq as it builds them, failure or not.
-  if grep -Eqi "pkg-config|cannot find -l|foreign librar|missing [(]or bad[)] c librar|could not be found|[.]h: no such file" "$build_log"; then
-    warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
-  fi
-  if grep -q 'semOpen' "$build_log"; then
-    warn "GHC could not open cabal's build semaphore (semOpen, see above): deploy again with --no-semaphore, which builds without it"
-  fi
-  rm -f "$build_log" "$build_status" "$build_start"
-  die "the build of wiki-server failed (see above), so nothing was changed"
 }
 
 # --system-tools: the machine's own GHC and cabal (for the server) and Node
@@ -2553,129 +2273,11 @@ pdf=no
 # check_tex_flag is set by the same test: when this step runs,
 # toolchain/check-native.sh has not probed xelatex.
 [ "$mode" != server ] || tex_step
-if [ -n "$build" ] && [ -n "$prebuilt" ]; then
-  [ -z "$bundle_locally" ] || bundle_locally_step
-  if [ "$mode" = server ]; then
-    say "building wiki-server at -O2 (cabal-native-opt.project)"
-    server_build_native
-  fi
-elif [ -n "$build" ]; then
-  say "npm ci"
-  (cd "$ROOT" && npm ci --no-audit --no-fund)
-  say "building the application (npm run build-wasm-opt)"
-  # The wiki is served at the root of its own port.
-  build_app
-  if [ "$mode" = server ]; then
-    say "building wiki-server at -O2 (cabal-native-opt.project)"
-    server_build_native
-  fi
-fi
-for file in index.html 404.html app.wasm; do
-  [ -f "$out/$file" ] || die "the build in $out lacks $file; run without --no-build"
-done
-# The page in $out is the last one built or downloaded, for whichever mode
-# that run had. With --no-build nothing replaces it, so a page of the other
-# mode would be installed for the wrong server. The page's
-# <meta name="wiki-backend"> says which it is: build-wasm.sh writes it, and
-# CI's pages have it. A page without one is not checked.
-if [ -z "$build" ]; then
-  page_backend=$(sed -n 's/.*<meta name="wiki-backend" content="\([a-z]*\)".*/\1/p' "$out/index.html" | head -n 1)
-  if [ -n "$page_backend" ] && [ "$page_backend" != "$page_kind" ]; then
-    die "the page in $out is the $page_backend's, and this deploy is of the $page_kind (--$mode): run without --no-build, which builds or downloads the $page_kind's page"
-  fi
-fi
-if [ "$mode" = server ]; then
-  server_bin=$(server_cabal list-bin -v0) && [ -x "$server_bin" ] ||
-    die "there is no -O2 build of wiki-server (dist-newstyle/native-opt); run without --no-build"
-fi
-
-# The service's Node, by absolute path: the managed one if the bootstrap
-# installed it, otherwise the one it found on PATH. The managed one is named
-# through .wiki-toolchain/node, the link the bootstrap moves to a new
-# version, not the versioned directory behind it, which an upgrade leaves
-# behind to be cleaned up.
-# A deployment with --backend-only has none (nodeless): it serves with
-# wiki-server, and does the rest with curl, python3 and wiki-server.
-if [ -n "$nodeless" ]; then
-  node=
-elif [ -z "$system_tools" ] && [ -x "$toolchain_base/.wiki-toolchain/node/bin/node" ]; then
-  node=$toolchain_base/.wiki-toolchain/node/bin/node
-elif node=$(command -v node); then
-  node=$(realpath "$node")
-  warn "using $node for the service; it must stay where it is (the bootstrap's own Node, in $toolchain_base/.wiki-toolchain, would)"
-else
-  die "no Node to run the static server with; run sh toolchain/bootstrap.sh node, which installs it"
-fi
-
-# Whether HTTPS can be served: it needs Tailscale running, with MagicDNS
-# and certificates for this machine's name. Without them this deployment
-# serves plain HTTP as --http would, but stays HTTPS by choice, so that a
-# later run, once they are on, moves to it.
-https_host=
-if [ "$https" = yes ]; then
-  dns_off="in the tailnet's DNS settings (https://login.tailscale.com/admin/dns)"
-  if ! ts=$(tailscale_https); then
-    warn "Tailscale does not answer (tailscale status), so cannot serve HTTPS through tailscale serve; listening on 127.0.0.1 only. Rerun when it is up, or deploy with --http"
-  else
-    read -r ts_name ts_magic ts_certs <<EOF
-$ts
-EOF
-    if [ "$ts_name" = - ] || [ "$ts_magic" = off ]; then
-      warn "MagicDNS is off, so this machine has no name to serve HTTPS on: turn on MagicDNS and HTTPS Certificates $dns_off and run this again. Serving plain HTTP meanwhile, as --http does"
-    elif [ "$ts_certs" = off ]; then
-      warn "the tailnet does not issue HTTPS certificates for $ts_name: turn on HTTPS Certificates $dns_off and run this again. Serving plain HTTP meanwhile, as --http does"
-    else
-      https_host=$ts_name
-    fi
-    if [ -z "$https_host" ] && [ "$bind_choice" = auto ]; then
-      if bind=$(tailscale_ip); then
-        say "listening on the Tailscale address $bind"
-      else
-        bind=127.0.0.1
-      fi
-    fi
-  fi
-fi
-if [ -n "$https_host" ]; then
-  say "serving HTTPS at https://$https_host/ through tailscale serve, from 127.0.0.1:$port"
-  serve_port=$port
-else
-  serve_port=
-fi
-
-# A port another program holds would only show as a service failing to start
-# after the old one is gone, so find out first. The running deployment's own
-# port is not checked: it is about to be freed.
-service_active() { systemctl --user is-active --quiet "$name.service" 2>/dev/null; }
-can_listen() {
-  # Without Node: whether anything listens on the port at all, when ss is
-  # here to tell; the service failing to start is reported anyway.
-  if [ -n "$nodeless" ]; then
-    command -v ss >/dev/null 2>&1 || return 0
-    if [ -n "$(ss -Hltn "sport = :$1" 2>/dev/null)" ]; then
-      printf 'something already listens on port %s (ss -ltn)\n' "$1" >&2
-      return 1
-    fi
-    return 0
-  fi
-  "$node" -e '
-    const server = require("node:net").createServer();
-    server.once("error", (e) => { console.error(e.message); process.exit(1); });
-    server.listen(Number(process.argv[1]), process.argv[2], () => server.close());
-  ' "$1" "$2"
-}
-if ! { [ "$port" = "$prev_port" ] && [ "$bind" = "$prev_bind" ] && service_active; }; then
-  can_listen "$port" "$bind" || die "cannot listen on $bind:$port (see above): choose another --port or --bind"
-fi
-if [ "$mode" = server ] && ! { [ "$prev_mode" = server ] && [ "$admin_port" = "$prev_admin_port" ] && service_active; }; then
-  can_listen "$admin_port" 127.0.0.1 || die "cannot listen on 127.0.0.1:$admin_port (see above): choose another --admin-port"
-fi
-
 # The plan of the rest of the deploy, for the maker: one key=value line for
 # each variable the rest reads, and for each the state file keeps (the
 # maker writes the state). A value cannot hold a newline: the plan has one
 # line per key.
-MAKER_PLAN_KEYS='name dir out mode server_bin node nodeless db db_port prev_db prev_db_port incompatible prev_dir no_firewall prev_rule_port port bind admin_port https_host prev_serve_port prev_port way tls_cert tls_key tls_ca pdf whats_new tex_bin prefix user toolchain_home enable_linger state_file unit_file env_file adopted_pg_dir prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir'
+MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca pdf whats_new tex_bin prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind ci_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir'
 maker_plan() {
   printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
   printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"
@@ -2710,53 +2312,10 @@ maker_apply() {
   exit "$status"
 }
 
-# A deployment made before --prefix is adopted now that the build is done:
-# its state comes under the prefix, where what follows writes.
-adopt_into_prefix
-
-# The wiki's database. On PostgreSQL its files are written and its
-# container is made, or started, and waited for; this changes nothing the
-# running deployment uses. Then a data/wiki.sqlite this deployment cannot
-# use stops the deploy, unless --fresh (or a "yes") moves it aside below.
-if [ "$mode" = server ]; then
-  if [ "$db" = postgres ]; then
-    pg_files
-    say "starting PostgreSQL in Docker (the compose project $name, on 127.0.0.1:$db_port) and waiting for it"
-    pg_compose up --detach --wait postgres ||
-      die "PostgreSQL did not start (see above): if the port is taken, choose another with --db-port, or deploy with --sqlite"
-  fi
-  # On SQLite, a file of the earlier schema is found by the backup below
-  # (wiki-server backup exits with 3).
-  incompatible=
-  if [ -f "$dir/data/wiki.sqlite" ] && [ "$db" = postgres ]; then
-    if [ -z "$prev_db" ]; then
-      incompatible="$dir/data/wiki.sqlite holds a wiki of a wiki-server from before PostgreSQL (or one on SQLite), and this deployment keeps the wiki in PostgreSQL"
-    else
-      incompatible="$dir/data/wiki.sqlite holds the wiki in SQLite, and this deployment keeps it in PostgreSQL"
-    fi
-  fi
-  # From PostgreSQL to SQLite: the new wiki starts empty in a file, and the
-  # old one stays in the container's volume, which is stopped below.
-  if [ "$db" = sqlite ] && [ "$prev_db" = postgres ]; then
-    incompatible="this deployment kept the wiki in PostgreSQL (the volume ${name}_wiki-db), and --sqlite keeps it in $dir/data/wiki.sqlite, so the new wiki starts empty; the PostgreSQL container is stopped and its volume kept, and --postgres goes back to it"
-  fi
-  # --fresh moves a data/wiki.sqlite aside whatever it holds.
-  [ -z "$fresh" ] || [ ! -f "$dir/data/wiki.sqlite" ] || incompatible=${incompatible:-$dir/data/wiki.sqlite is set aside (--fresh)}
-  if [ -n "$incompatible" ] && [ -z "$fresh" ]; then
-    warn "the state is incompatible: $incompatible. Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves a data/wiki.sqlite aside into $dir/data/replaced/<time>/; nothing is deleted"
-    if [ -t 0 ] && [ -t 1 ]; then
-      printf '%s: type yes to start an empty wiki: ' "$PROG"
-      read -r answer || answer=
-      [ "$answer" = yes ] || die "nothing was changed"
-      fresh=1
-    else
-      die "nothing was changed: run this again with --fresh to start an empty wiki"
-    fi
-  fi
-fi
-
-# From here on the running deployment changes. The maker does that part
-# (maker deploy apply, maker/src/Maker/Deploy/Apply.hs), from a plan of what
-# was worked out above, while the deploy moves into it (docs/PLAN.md, WP5.68
-# c2).
+# From here on the maker does the deploy (maker deploy apply,
+# maker/src/Maker/Deploy/Prepare.hs and Apply.hs), from a plan of what was
+# worked out above, while the deploy moves into it (docs/PLAN.md, WP5.68
+# c2): the builds, the checks of what they made, the service's Node,
+# HTTPS through Tailscale, the ports, the adoption into a prefix and
+# PostgreSQL's container; then the change of the running deployment.
 maker_apply

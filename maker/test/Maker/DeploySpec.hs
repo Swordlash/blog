@@ -2,9 +2,10 @@ module Maker.DeploySpec (spec) where
 
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
-import Maker.Deploy.Plan (get, has, parsePlan)
+import Maker.Deploy.Plan (get, has, parsePlan, set)
+import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
-import Maker.Deploy.Tailscale (Serve (..), dnsNameOf, isOldVersion, serveRoot)
+import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
 import Maker.Deploy.Unit
 import Test.Hspec
 
@@ -83,6 +84,26 @@ spec = describe "the deploy's part in the maker" $ do
       sanName "X509v3 Subject Alternative Name: \n    DNS:wiki.example.org\n" `shouldBe` Just "wiki.example.org"
       sanName "X509v3 Subject Alternative Name: \n    IP Address:10.0.0.1, DNS:a.example.org, DNS:b.example.org\n" `shouldBe` Just "a.example.org"
       sanName "X509v3 Subject Alternative Name: \n    IP Address:10.0.0.1\n" `shouldBe` Nothing
+
+  describe "the preparing steps" $ do
+    it "lets a value the maker works out replace the shell's" $
+      get (set "node" "/n" (parsePlan "node=\n")) "node" `shouldBe` "/n"
+    it "reads the backend a page was built for from its meta tag" $ do
+      pageBackend "<head>\n<meta name=\"wiki-backend\" content=\"demo\">\n" `shouldBe` Just "demo"
+      pageBackend "<head><title>x</title></head>" `shouldBe` Nothing
+    it "tells whether HTTPS can be served on the machine's MagicDNS name" $ do
+      httpsOf "{\"BackendState\": \"Running\", \"Self\": {\"DNSName\": \"box.tail.ts.net.\"}, \"CertDomains\": [\"box.tail.ts.net\"]}"
+        `shouldBe` Just (Https "box.tail.ts.net" True True)
+      httpsOf "{\"Self\": {\"DNSName\": \"box.tail.ts.net.\"}, \"CurrentTailnet\": {\"MagicDNSEnabled\": false}}"
+        `shouldBe` Just (Https "box.tail.ts.net" False False)
+      httpsOf "{\"BackendState\": \"Stopped\"}" `shouldBe` Nothing
+      httpsOf "{\"Self\": {}}" `shouldBe` Just (Https "-" True False)
+    it "writes the PostgreSQL files the shell wrote" $ do
+      lines (localYml "wiki") `shouldContain` ["      - \"127.0.0.1:${WIKI_DB_PORT}:5432\""]
+      lines (pgWrapper "wiki" "/s/wiki.postgres" "5433" "pg_dump")
+        `shouldContain` [ "WIKI_DB_PASSWORD_FILE='/s/wiki.postgres/db-password' WIKI_DB_PORT='5433' exec docker compose --project-name 'wiki' \\"
+                        , "  --file '/s/wiki.postgres/docker-compose.yml' --file '/s/wiki.postgres/local.yml' exec -T postgres pg_dump \"$@\""
+                        ]
 
   describe "the firewall"
     $ it "quotes only the arguments that need it, as a shell would need them typed"

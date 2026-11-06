@@ -18,6 +18,9 @@ module Maker.Deploy.Tailscale
   , tailscaleIp
   , magicDnsName
   , dnsNameOf
+  , Https (..)
+  , httpsOf
+  , tailscaleHttps
   , timeout
   , outputOfBoth
   , indented
@@ -177,3 +180,48 @@ dnsNameOf json = case decode (LBS8.pack json) of
     , Just (String n) <- KeyMap.lookup "DNSName" self ->
         let s = T.unpack n in if "." `isSuffixOf` s then init s else s
   _ -> ""
+
+-- | Whether HTTPS can be served on the machine's MagicDNS name: the name
+-- ("-" for none), whether MagicDNS is on, and whether the tailnet issues
+-- certificates for the name (it lists it among @CertDomains@ only when its
+-- "HTTPS Certificates" are on).
+data Https = Https {name :: String, magicDns :: Bool, certificates :: Bool}
+  deriving (Eq, Show)
+
+-- | 'Https' from @tailscale status --json@, or 'Nothing' when Tailscale is
+-- not running or the JSON cannot be read.
+httpsOf :: String -> Maybe Https
+httpsOf json = case decode (LBS8.pack json) of
+  Just (Object o)
+    | running o ->
+        let n = T.unpack (T.dropWhileEnd (== '.') (textAt ["Self", "DNSName"] o))
+            magic = case lookupPath ["CurrentTailnet", "MagicDNSEnabled"] o of
+              Just (Bool False) -> False
+              _ -> True
+            certs = case KeyMap.lookup "CertDomains" o of
+              Just (Array domains) -> not (null n) && String (T.pack n) `elem` domains
+              _ -> False
+         in Just Https {name = if null n then "-" else n, magicDns = magic, certificates = certs}
+  _ -> Nothing
+  where
+    running o = case KeyMap.lookup "BackendState" o of
+      Just (String s) -> T.null s || s == "Running"
+      _ -> True
+    lookupPath [] _ = Nothing
+    lookupPath [k] o = KeyMap.lookup k o
+    lookupPath (k : ks) o = case KeyMap.lookup k o of
+      Just (Object inner) -> lookupPath ks inner
+      _ -> Nothing
+    textAt ks o = case lookupPath ks o of
+      Just (String s) -> s
+      _ -> ""
+
+-- | 'Https' as Tailscale answers now, or 'Nothing' when it does not.
+tailscaleHttps :: IO (Maybe Https)
+tailscaleHttps = do
+  present <- isJust <$> findExecutable "tailscale"
+  if not present
+    then pure Nothing
+    else do
+      (ok, out) <- timeout 10 "tailscale" ["status", "--json"]
+      pure (if ok then httpsOf out else Nothing)
