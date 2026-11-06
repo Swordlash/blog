@@ -61,6 +61,7 @@ module Wiki.Server.Opaque
   , Attempts
   , Attempt (..)
   , newAttempts
+  , newAttemptsOf
   , holdAttempt
   , takeAttempt
   , respondTo
@@ -197,11 +198,17 @@ data Attempt = Attempt
   -- (a login nobody has, an account from before OPAQUE) never finishes.
   }
 
--- | The sign-ins under way, by their ids.
-newtype Attempts = Attempts (IORef (Map Text Attempt))
+-- | The sign-ins under way, by their ids, and the most that are kept.
+data Attempts = Attempts Int (IORef (Map Text Attempt))
 
+-- | No sign-ins under way, with room for 'maxAttempts'.
 newAttempts :: IO Attempts
-newAttempts = Attempts <$> newIORef mempty
+newAttempts = newAttemptsOf maxAttempts
+
+-- | No sign-ins under way, with room for the number given. The tests use a
+-- small number to see the oldest go.
+newAttemptsOf :: Int -> IO Attempts
+newAttemptsOf most = Attempts (max 1 most) <$> newIORef mempty
 
 -- | How long the browser has for its last message: two minutes, ample for
 -- one Argon2id.
@@ -214,18 +221,18 @@ maxAttempts = 10000
 
 -- | Keep an attempt, and answer its id.
 holdAttempt :: Attempts -> UTCTime -> Attempt -> IO Text
-holdAttempt (Attempts ref) now a = do
+holdAttempt (Attempts most ref) now a = do
   key <- newToken
   atomicModifyIORef' ref $ \m ->
     let live = Map.filter (\x -> x.expires > now) m
-        bounded = if Map.size live >= maxAttempts then Map.fromList (drop (Map.size live - maxAttempts + 1) (sortOn (\(_, x) -> x.expires) (Map.toList live))) else live
+        bounded = if Map.size live >= most then Map.fromList (drop (Map.size live - most + 1) (sortOn (\(_, x) -> x.expires) (Map.toList live))) else live
      in (Map.insert key a bounded, ())
   pure key
 
 -- | Take an attempt by its id, if it has not expired: it is used up,
 -- whatever its last message turns out to be.
 takeAttempt :: Attempts -> UTCTime -> Text -> IO (Maybe Attempt)
-takeAttempt (Attempts ref) now key =
+takeAttempt (Attempts _ ref) now key =
   atomicModifyIORef' ref $ \m -> (Map.delete key m, mfilter (\a -> a.expires > now) (Map.lookup key m))
 
 -- | The server's answer to a first message, for a user's record or, with

@@ -336,6 +336,7 @@ test-suite wiki-server-test
         Test.Server.Notifications
         Test.Server.Observability
         Test.Server.Oidc
+        Test.Server.Opaque
         Test.Server.Options
         Test.Server.Presence
         Test.Server.Render

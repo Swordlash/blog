@@ -420,6 +420,19 @@ opaque backing = describe "passwords through OPAQUE" $ do
     _ <- signInAs r "editor" "editor's password"
     pass
 
+  it "refuses a last message sent again after it signed in" $ withPasswords backing identity $ \r -> do
+    (st, ke1) <- either (panic . show) pure =<< O.clientStart "editor's password"
+    challenge :: LoginChallenge <- sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "editor", ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+    ke3 <- maybe (panic "no last message") pure (clientLast st challenge)
+    let finish = sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3}
+    signedIn <- finish
+    signedIn.status `shouldBe` 200
+    isJust (setCookie signedIn) `shouldBe` True
+    -- The same message again, as someone who saw it would send it.
+    replayed <- finish
+    jsonAs 401 replayed `shouldReturn` Unauthenticated
+    setCookie replayed `shouldBe` Nothing
+
   it "stores a record and no hash for every way a password is set, and each signs in" $ withPasswords backing identity $ \r -> do
     -- The administrator's new user, and new password for a user.
     _ :: Account <- createUser r (onAdmin r) [] (newAccount "bea") >>= jsonAs 201
