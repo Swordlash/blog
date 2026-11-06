@@ -190,7 +190,9 @@ function wiki_test_passkeys_cancel_after(touches) {
   wikiTestPasskeys.cancelAt = wikiTestPasskeys.touches + touches + 1;
 }
 
-// The vault's server: one user's vault and passkeys.
+// The vault's server: one user's vault (its salt, its items by name and
+// the password's wrap of its key) and their passkeys with each one's
+// wrap.
 const wikiTestVault = { vault: null, revision: 0, passkeys: [] };
 
 function wikiTestJson(status, value, headers = {}) {
@@ -198,9 +200,10 @@ function wikiTestJson(status, value, headers = {}) {
 }
 
 function wikiTestStored() {
-  const wrapped = {};
-  for (const p of wikiTestVault.passkeys) if (p.wrapped) wrapped[p.id] = p.wrapped;
-  return { tag: `"${wikiTestVault.revision}"`, vault: { ...wikiTestVault.vault, wrapped } };
+  const wraps = {};
+  if (wikiTestVault.vault.password) wraps.password = wikiTestVault.vault.password;
+  for (const p of wikiTestVault.passkeys) if (p.wrapped) wraps[`passkey:${p.id}`] = p.wrapped;
+  return { tag: `"${wikiTestVault.revision}"`, vault: { format: 2, salt: wikiTestVault.vault.salt, items: wikiTestVault.vault.items, wraps } };
 }
 
 function wikiTestInfo(p) {
@@ -224,19 +227,32 @@ function wikiTestVaultServer(request) {
     if (wikiTestVault.vault === null ? base !== undefined : base !== `"${wikiTestVault.revision}"`) {
       return wikiTestJson(409, { error: "Conflict", text: "The vault was changed on another device meanwhile." });
     }
-    for (const [id, wrapped] of Object.entries(sent.wrapped ?? {})) {
-      const p = wikiTestVault.passkeys.find((k) => k.id === id);
-      if (!p) return wikiTestJson(400, { error: "Invalid", text: "The vault names a passkey that is not one of yours." });
-      p.wrapped = wrapped;
+    const wraps = Object.entries(sent.wraps ?? {});
+    for (const [unlock] of wraps) {
+      if (unlock.startsWith("passkey:") && !wikiTestVault.passkeys.some((k) => `passkey:${k.id}` === unlock)) {
+        return wikiTestJson(400, { error: "Invalid", text: "The vault names a passkey that is not one of yours." });
+      }
     }
-    wikiTestVault.vault = { format: sent.format, salt: sent.salt, nonce: sent.nonce, ciphertext: sent.ciphertext };
+    for (const [unlock, wrapped] of wraps) {
+      const p = wikiTestVault.passkeys.find((k) => `passkey:${k.id}` === unlock);
+      if (p) p.wrapped = wrapped;
+    }
+    wikiTestVault.vault = { salt: sent.salt, items: sent.items ?? {}, password: sent.wraps?.password ?? null };
     wikiTestVault.revision++;
     return wikiTestJson(200, wikiTestStored());
   }
   if (path === "vault" && request.method === "DELETE") {
-    // The passkeys stay, since they sign the user in; their wrapped keys go.
-    wikiTestVault.vault = null;
-    for (const p of wikiTestVault.passkeys) p.wrapped = null;
+    // The assistant's settings go; the vault goes only when it holds
+    // nothing else, and its passkeys' wraps with it. The passkeys stay,
+    // since they sign the user in.
+    if (wikiTestVault.vault !== null) {
+      delete wikiTestVault.vault.items.assistant;
+      if (Object.keys(wikiTestVault.vault.items).length > 0) wikiTestVault.revision++;
+      else {
+        wikiTestVault.vault = null;
+        for (const p of wikiTestVault.passkeys) p.wrapped = null;
+      }
+    }
     return { status: 204, body: "" };
   }
   if (path === "passkeys" && request.method === "GET") return wikiTestJson(200, wikiTestVault.passkeys.map(wikiTestInfo));
