@@ -14,6 +14,7 @@
 module Maker.Deploy.Apply
   ( apply
   , compressible
+  , sanName
   )
 where
 
@@ -593,20 +594,23 @@ certName cert = do
     then pure ""
     else do
       (_, san) <- outputOf "openssl" ["x509", "-in", cert, "-noout", "-ext", "subjectAltName"]
-      let fromSan = [n | part <- splitOn ',' san, Just n <- [stripPrefix "DNS:" (dropWhile (== ' ') part)]]
       names <-
-        case fromSan of
-          n : _ -> pure (takeWhile (/= '\n') n)
-          [] -> do
+        case sanName san of
+          Just n -> pure n
+          Nothing -> do
             (_, subject) <- outputOf "openssl" ["x509", "-in", cert, "-noout", "-subject", "-nameopt", "sep_multiline"]
             pure $ case [n | l <- lines subject, Just n <- [stripPrefix "CN=" (dropWhile (== ' ') l)]] of
               n : _ -> n
               [] -> ""
       pure (maybe names ("wiki." <>) (stripPrefix "*." names))
-  where
-    splitOn c s = case break (== c) s of
-      (a, _ : rest) -> a : splitOn c rest
-      (a, []) -> [a]
+
+-- | The first DNS name of @openssl x509 -ext subjectAltName@'s output: a
+-- heading line, then the names separated by commas, as the shell's
+-- @tr ',' '\n' | sed -n 's/^ *DNS://p'@ finds them.
+sanName :: String -> Maybe String
+sanName san = case [n | part <- lines (map (\c -> if c == ',' then '\n' else c) san), Just n <- [stripPrefix "DNS:" (dropWhile (== ' ') part)]] of
+  n : _ -> Just n
+  [] -> Nothing
 
 -- | Whether lingering is on, which keeps the user's services running at
 -- boot and after logging out; with @--enable-linger@ it is turned on.

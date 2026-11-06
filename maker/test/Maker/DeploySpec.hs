@@ -1,5 +1,6 @@
 module Maker.DeploySpec (spec) where
 
+import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
 import Maker.Deploy.Plan (get, has, parsePlan)
 import Maker.Deploy.State (renderState, stateKeys)
@@ -76,6 +77,12 @@ spec = describe "the deploy's part in the maker" $ do
       map isOldVersion ["1.50.1", "1.51", "1.9", "1.52.0", "1.80.2", "2.0"] `shouldBe` [True, True, True, False, False, False]
     it "reads the MagicDNS name without its final dot" $
       dnsNameOf "{\"Self\": {\"DNSName\": \"box.tail.ts.net.\"}}" `shouldBe` "box.tail.ts.net"
+
+  describe "the certificate's name" $
+    it "takes the first DNS name of openssl's subjectAltName, after its heading line" $ do
+      sanName "X509v3 Subject Alternative Name: \n    DNS:wiki.example.org\n" `shouldBe` Just "wiki.example.org"
+      sanName "X509v3 Subject Alternative Name: \n    IP Address:10.0.0.1, DNS:a.example.org, DNS:b.example.org\n" `shouldBe` Just "a.example.org"
+      sanName "X509v3 Subject Alternative Name: \n    IP Address:10.0.0.1\n" `shouldBe` Nothing
 
   describe "the firewall"
     $ it "quotes only the arguments that need it, as a shell would need them typed"
