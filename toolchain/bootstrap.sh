@@ -6,6 +6,7 @@
 #   sh toolchain/bootstrap.sh build       # what a build needs: no Chromium, no fourmolu
 #   sh toolchain/bootstrap.sh native      # the host GHC and cabal alone, for wiki-server
 #   sh toolchain/bootstrap.sh node        # Node alone, to serve the demo's page CI built
+#   sh toolchain/bootstrap.sh static      # GHC, cabal and Node: the deploy of the demo's page CI built
 #   sh toolchain/bootstrap.sh system-tools [native] [node]
 #                                        # read-only: whether this machine's own GHC and
 #                                        # cabal (native) and Node (node) will do
@@ -116,14 +117,20 @@
 # `node` installs Node alone: Node $NODE_VERSION into ~/.wiki-toolchain/node,
 # unless a Node 24 or later with npm is on PATH already, and the env file.
 # It installs no compilers, wasm sysroot, Chromium or fourmolu, and no
-# system packages, and leaves ~/.ghc-wasm alone.
-# toolchain/deploy-local.sh --static --backend-only runs it: that deployment
-# downloads the demo's page CI built, and needs Node only to serve the page
-# (server.mjs) and to write its brotli copies (compress.mjs). Before a
-# download it checks for curl, tar and xz, which fetch and unpack Node.
+# system packages, and leaves ~/.ghc-wasm alone. Before a download it
+# checks for curl, tar and xz, which fetch and unpack Node.
 #
-# `native --system-tools` and `node --system-tools` install no GHC, cabal,
-# ghcup or Node: they take the machine's own from PATH, for a machine whose
+# `static` installs what the deploy of a demo whose page is not built on the
+# machine needs (toolchain/deploy-local.sh --static --backend-only, or
+# --app-page): Node, which serves the page (server.mjs) and writes its
+# brotli copies (compress.mjs), and GHC and cabal, which build the maker
+# that does the rest of the deploy. It installs the system packages GHC
+# needs and none of the C libraries', no wasm sysroot, Chromium or
+# fourmolu, and leaves ~/.ghc-wasm alone. It takes --system-tools (GHC,
+# cabal and Node, the machine's own) and --hackage-mirror=URL.
+#
+# `native --system-tools`, `static --system-tools` and `node --system-tools`
+# install no GHC, cabal, ghcup or Node: they take the machine's own from PATH, for a machine whose
 # software must come from its administrators' sources
 # (toolchain/deploy-local.sh --system-tools passes it). Before anything
 # else they check them: GHC $GHC_MIN_VERSION or later and cabal
@@ -180,9 +187,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | build | native | node | warm | env | path | check | ready | system-tools) ;;
+  all | toolchain | build | native | static | node | warm | env | path | check | ready | system-tools) ;;
   *)
-    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|static [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -196,8 +203,8 @@ esac
 # `native` also takes --with-wizard, for the configuration wizard
 # (toolchain/configure.sh): libncurses-dev joins the Debian packages, and
 # the check checks terminfo. The deploy never gives it.
-# native and node also take --system-tools, and native and build
-# --hackage-mirror=URL (see above); env takes --system-tools, for the
+# native, static and node also take --system-tools, and native, static and
+# build --hackage-mirror=URL (see above); env takes --system-tools, for the
 # lines of an environment without the bootstrap's own tools.
 check_postgres=
 check_wizard=
@@ -206,20 +213,21 @@ hackage_mirror=
 case $mode in
   native) usage_options='[--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]' ;;
   build) usage_options='[--without-postgres] [--hackage-mirror=URL]' ;;
+  static) usage_options='[--system-tools] [--hackage-mirror=URL]' ;;
   *) usage_options='[--system-tools]' ;;
 esac
-if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = node ] || [ "$mode" = env ]; then
+if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = static ] || [ "$mode" = node ] || [ "$mode" = env ]; then
   shift
   for option do
     case $mode:$option in
       native:--without-postgres | build:--without-postgres) check_postgres=--without-postgres ;;
       native:--with-wizard) check_wizard=--with-wizard ;;
-      native:--system-tools | node:--system-tools | env:--system-tools) system_tools=1 ;;
+      native:--system-tools | static:--system-tools | node:--system-tools | env:--system-tools) system_tools=1 ;;
       build:--system-tools)
         printf 'bootstrap: build takes no --system-tools: the page'"'"'s build needs the wasm toolchain, which the bootstrap installs (--system-tools is for native and node)\n' >&2
         exit 2
         ;;
-      native:--hackage-mirror=* | build:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
+      native:--hackage-mirror=* | build:--hackage-mirror=* | static:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
       *)
         printf 'usage: %s %s %s\n' "$0" "$mode" "$usage_options" >&2
         exit 2
@@ -406,9 +414,11 @@ check_system_tools() {
   system_missing=
   for need do
     case $need in
-      native)
+      # static: GHC and cabal for the maker, and Node for the demo.
+      native | static)
         system_tool ghc GHC "$GHC_VERSION" "$GHC_MIN_VERSION" "haskell-halogen, which the wiki builds with, is tested with GHC $GHC_MIN_VERSION and later, and its th package asks for ghc $GHC_MIN_VERSION or later"
         system_tool cabal cabal "$CABAL_VERSION" "$CABAL_MIN_VERSION" "cabal.project sets semaphore:, a field cabal reads from $CABAL_MIN_VERSION"
+        [ "$need" != static ] || system_node
         ;;
       node) system_node ;;
     esac
@@ -662,9 +672,9 @@ if [ -n "$system_tools" ]; then
 fi
 
 # setup.sh deletes its prefix: refuse unsafe state before changing anything.
-# A native or node install never runs it, and leaves ~/.ghc-wasm alone.
+# A native, static or node install never runs it, and leaves ~/.ghc-wasm alone.
 case $mode in
-  native | node) ;;
+  native | static | node) ;;
   *) guard_wasm_sysroot || exit 1 ;;
 esac
 mkdir -p "$STATE"
@@ -695,7 +705,7 @@ run() {
 # modes, which the SessionStart hooks use, keep it in the log alone.
 run_long() {
   case $mode in
-    native | build) ;;
+    native | static | build) ;;
     *)
       run "$@"
       return 0 ;;

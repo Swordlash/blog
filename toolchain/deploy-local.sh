@@ -86,8 +86,9 @@
 #      only wiki-server is built, after toolchain/bootstrap.sh native (GHC
 #      and cabal alone: no wasm toolchain, no Node, no npm). With --static
 #      and --backend-only the demo's page is downloaded the same way and
-#      nothing is built: toolchain/bootstrap.sh node installs Node alone,
-#      which serves the page and writes its brotli copies.
+#      nothing of the wiki is built: toolchain/bootstrap.sh static installs
+#      Node, which serves the page and writes its brotli copies, and GHC and
+#      cabal, which build the maker that does the rest of the deploy.
 #      For a machine that installs nothing from the internet (see the README's
 #      "A machine that installs nothing from the internet"): --app-page FILE
 #      takes that page from a file instead of GitHub; --bundle-locally builds
@@ -286,8 +287,8 @@
 #                    by server.mjs under Node, as when it is built here, and
 #                    compress.mjs writes its brotli copies; Node is the managed one
 #                    under the toolchain directory, or a Node 24 or later on PATH,
-#                    or else toolchain/bootstrap.sh node installs the managed one,
-#                    and nothing else. Remembered for the next run
+#                    or else toolchain/bootstrap.sh static installs the managed one,
+#                    with GHC and cabal for the maker. Remembered for the next run
 #   --no-backend-only
 #                    build the page on this machine again, after a run with --backend-only
 #   --refresh-page   with --backend-only, download the page even when the cache has
@@ -730,12 +731,6 @@ toolchain_base=${toolchain_home:-$HOME}
 # For the messages: what a later run must be given to find this deployment.
 prefix_arg=${prefix:+ --prefix $prefix}
 
-# A word of a unit's ExecStart, quoted for systemd: in double quotes, with
-# its quotes and backslashes escaped, and its % and $ doubled, which systemd
-# would otherwise expand.
-unit_word() {
-  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g' -e 's/[$]/$$/g')"
-}
 
 # Read JSON on standard input with python3, or with jq where there is no
 # python3: $1 is a Python program that finds the parsed document in d, $2
@@ -940,26 +935,6 @@ EOF
   done
 }
 
-# The console of a deployment, <dir>/bin/wiki: wiki-server with the
-# deployment's database, for `users`, `backup`, `restore` and `oidc check`
-# with --data alone. The database is given in the environment, which
-# wiki-server reads when no option names one, and never on a command line.
-console_wrapper() {
-  printf '#!/bin/sh\n'
-  printf '# wiki-server with the database of the deployment %s, written by\n' "$name"
-  printf '# toolchain/deploy-local.sh. For example: %s/bin/wiki users list --data %s/data\n' "$dir" "$dir"
-  if [ "$db" = postgres ]; then
-    printf "WIKI_DATABASE_URL='%s'\n" "$(db_url)"
-    printf "WIKI_DATABASE_PASSWORD_FILE='%s'\n" "$(pg_dir)/db-password"
-    printf "WIKI_PG_DUMP='%s'\n" "$(pg_dir)/pg_dump"
-    printf "WIKI_PG_RESTORE='%s'\n" "$(pg_dir)/pg_restore"
-    printf 'export WIKI_DATABASE_URL WIKI_DATABASE_PASSWORD_FILE WIKI_PG_DUMP WIKI_PG_RESTORE\n'
-  else
-    printf '# The database is the SQLite file in the data directory.\n'
-    printf 'unset WIKI_DATABASE_URL WIKI_DATABASE_PASSWORD_FILE\n'
-  fi
-  printf "exec '%s/bin/wiki-server' \"\$@\"\n" "$dir"
-}
 
 # --- PDF exports: the TeX the service finds ---------------------------------
 #
@@ -2505,8 +2480,8 @@ server_build_native() {
 # toolchain/bootstrap.sh system-tools before anything else, which names
 # each and stops the deploy when one is missing or too old.
 system_tools_check() {
-  needs=
-  [ "$mode" != server ] || needs=' native'
+  # GHC and cabal for every deploy: the maker does its last part.
+  needs=' native'
   if [ "$mode" != server ] || [ -n "$bundle_locally" ]; then needs="$needs node"; fi
   say "--system-tools: checking this machine's own toolchain (toolchain/bootstrap.sh system-tools$needs)"
   # shellcheck disable=SC2086 # the words of what is needed.
@@ -2526,12 +2501,13 @@ if [ -n "$build" ]; then
   native_recheck=
   [ "$mode" != server ] || check_native
   if [ -n "$prebuilt" ] && [ "$mode" != server ]; then
-    # The demo's page from GitHub: nothing is built here. Node, which
-    # serves the page and writes its brotli copies, is all it installs.
+    # The demo's page from GitHub: nothing is built here. Node serves the
+    # page and writes its brotli copies; GHC and cabal build the maker,
+    # which does the rest of the deploy.
     page_source
     download_page
-    say "installing or checking Node, which serves the demo (toolchain/bootstrap.sh node)${toolchain_home:+, under $toolchain_home}"
-    sh "$ROOT/toolchain/bootstrap.sh" node ${system_tools_flag:+"$system_tools_flag"}
+    say "installing or checking Node, which serves the demo, and GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh static)${toolchain_home:+, under $toolchain_home}"
+    sh "$ROOT/toolchain/bootstrap.sh" static ${system_tools_flag:+"$system_tools_flag"} ${hackage_flag:+"$hackage_flag"}
   elif [ -n "$prebuilt" ]; then
     # The page first: a REF with no page stops the deploy before anything
     # is installed or built.
@@ -2719,6 +2695,8 @@ maker_plan() {
 maker_apply() {
   maker=${WIKI_MAKER:-}
   if [ -z "$maker" ]; then
+    command -v cabal >/dev/null 2>&1 ||
+      die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh static)"
     built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
     [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
     (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
@@ -2780,478 +2758,5 @@ fi
 # From here on the running deployment changes. The maker does that part
 # (maker deploy apply, maker/src/Maker/Deploy/Apply.hs), from a plan of what
 # was worked out above, while the deploy moves into it (docs/PLAN.md, WP5.68
-# c2). A demo whose page is not built here has no GHC to build the maker
-# with until the bootstrap gives it one, so it goes on below, in shell.
-if [ "$mode" = server ] || [ -z "$prebuilt" ]; then
-  maker_apply
-fi
-
-# From here on the running deployment changes.
-
-was_installed=
-if [ -f "$unit_file" ]; then
-  was_installed=1
-  say "stopping $name.service"
-  systemctl --user stop "$name.service" || true
-fi
-# The database is copied aside before the new server, which may migrate it,
-# first opens it, and with the old one stopped, so that the copy has every
-# write. If that fails, the old deployment goes on as it was.
-if [ "$mode" = server ] && [ -n "$incompatible" ]; then
-  if [ -f "$dir/data/wiki.sqlite" ]; then
-    aside=$dir/data/replaced/$(date -u +%Y%m%dT%H%M%SZ)
-    mkdir -p "$aside"
-    for file in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
-      [ ! -f "$dir/data/$file" ] || mv "$dir/data/$file" "$aside/"
-    done
-    say "moved $dir/data/wiki.sqlite aside into $aside: the new wiki starts empty"
-  fi
-  if [ "$db" = sqlite ] && [ "$prev_db" = postgres ]; then
-    (db_port=$prev_db_port && pg_down)
-  fi
-fi
-if [ "$mode" = server ]; then
-  say "backing the database up into $dir/data/backups"
-  status=0
-  if [ "$db" = postgres ]; then
-    "$server_bin" backup --data "$dir/data" --database "$(db_url)" --database-password-file "$(pg_dir)/db-password" \
-      --pg-dump "$(pg_dir)/pg_dump" --pg-restore "$(pg_dir)/pg_restore" || status=$?
-  else
-    "$server_bin" backup --data "$dir/data" --sqlite "$dir/data/wiki.sqlite" || status=$?
-  fi
-  if [ "$status" != 0 ]; then
-    if [ -n "$was_installed" ]; then
-      systemctl --user start "$name.service" || true
-    fi
-    [ "$status" != 3 ] || die "the state is incompatible: the database is an earlier wiki-server's (see above), so nothing was changed. Export the wiki with the running server, run this again with --fresh, and import the archive into the new wiki"
-    die "the backup of $dir/data failed (see above), so nothing was changed"
-  fi
-fi
-if [ -n "$prev_dir" ] && [ "$prev_dir" != "$dir" ] && [ -d "$prev_dir" ]; then
-  say "moving from $prev_dir to $dir: the old files stay in $prev_dir"
-fi
-
-if [ -z "$no_firewall" ]; then
-  firewall_probe
-  firewall_explain
-fi
-# The previous port's rule goes when the port changes, or when the new
-# address is local only and needs none.
-rule_port=$prev_rule_port
-# The fallback address needs no rule.
-case $bind in 127.0.0.1 | ::1) local_only=1 ;; *) local_only= ;; esac
-if [ -n "$rule_port" ] && { [ "$rule_port" != "$port" ] || [ -n "$local_only" ]; }; then
-  if [ -n "$no_firewall" ]; then
-    say "--no-firewall: leaving the rule for port $rule_port as it is"
-  else
-    firewall_close "$rule_port"
-    rule_port=
-  fi
-fi
-
-say "installing into $dir"
-mkdir -p "$dir"
-# Everything but the data, which outlives every deployment of it, and, under
-# a prefix, the state and the toolchain, which the next deploy needs.
-find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name state ! -name toolchain ! -name "$MARKER" -exec rm -rf {} +
-printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$dir/$MARKER"
-cp -R "$out" "$dir/app"
-if [ "$mode" = server ]; then
-  mkdir -p "$dir/bin" "$dir/data"
-  chmod 700 "$dir/data"
-  cp "$server_bin" "$dir/bin/wiki-server"
-  console_wrapper >"$dir/bin/wiki"
-  chmod 755 "$dir/bin/wiki"
-else
-  cp "$ROOT/toolchain/deploy-server.mjs" "$dir/server.mjs"
-  [ ! -d "$dir/data" ] || say "keeping the server's data in $dir/data"
-fi
-# Precompressed copies, which the server sends to browsers that accept
-# brotli: the build itself writes none, since GitHub Pages compresses on the
-# fly (toolchain/build-wasm.sh).
-# Without Node, wiki-server writes gzip copies of the same files instead.
-if [ -n "$nodeless" ]; then
-  if compressed=$("$dir/bin/wiki-server" compress "$dir/app"); then
-    say "copied the page; gzip copies by wiki-server compress, since there is no Node here for brotli ones: $compressed"
-  else
-    warn "wiki-server compress failed (see above): the server sends the page's files uncompressed"
-  fi
-else
-  find "$dir/app" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.css' \
-    -o -name '*.html' -o -name '*.svg' -o -name '*.json' \) -size +1k -print0 |
-    xargs -0 -r "$node" "$ROOT/toolchain/compress.mjs" >/dev/null
-  say "copied the page and $(find "$dir/app" -name '*.br' | wc -l | tr -d ' ') brotli'd files"
-fi
-
-case $bind in
-  *:*) listen="[$bind]:$port" ;;
-  *) listen=$bind:$port ;;
-esac
-if [ "$mode" = server ]; then
-  description="Wiki server ($name) from $dir on $bind:$port"
-  exec_start="\"$dir/bin/wiki-server\" serve --data \"$dir/data\" --static \"$dir/app\" --listen $listen --admin-listen 127.0.0.1:$admin_port"
-  # A Secure cookie is sent over HTTPS only, so over plain HTTP it would
-  # make signing in impossible: only behind tailscale serve or a reverse
-  # proxy that serves HTTPS. With its own certificate the server speaks
-  # TLS, which implies it. The admin listener uses no cookie.
-  if [ -n "$https_host" ] || [ "$way" = proxy ]; then
-    exec_start="$exec_start --secure-cookies"
-  elif [ "$way" = cert ]; then
-    exec_start="$exec_start --tls-cert $(unit_word "$tls_cert") --tls-key $(unit_word "$tls_key")"
-  fi
-  # The database: PostgreSQL by its URL, without the password, which is in
-  # a file of the owner's; or the SQLite file in the data directory.
-  if [ "$db" = postgres ]; then
-    exec_start="$exec_start --database $(db_url) --database-password-file $(unit_word "$(pg_dir)/db-password") --pg-dump $(unit_word "$(pg_dir)/pg_dump") --pg-restore $(unit_word "$(pg_dir)/pg_restore")"
-  else
-    exec_start="$exec_start --sqlite $(unit_word "$dir/data/wiki.sqlite")"
-  fi
-  # Without an xelatex that works at the end of the TeX step, the server
-  # makes no PDFs: it does not try its TeX at each start, and offers none.
-  [ "$pdf" = yes ] || exec_start="$exec_start --no-pdf"
-  # The page "What's new?", off by the owner's choice (--no-whats-new).
-  [ "$whats_new" != no ] || exec_start="$exec_start --no-whats-new"
-  # The data is the owner's alone, and a stop lets the requests under way
-  # finish (the server gives them ten seconds).
-  service_extra="UMask=0077
-TimeoutStopSec=30"
-  # A systemd user unit does not inherit the shell's environment, so a
-  # server linked against a library in a directory of one's own (named by
-  # LD_LIBRARY_PATH in the shell this runs in) is given that variable in
-  # its unit, or it would not start.
-  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-    case $LD_LIBRARY_PATH in
-      *'
-'*) die "LD_LIBRARY_PATH holds a newline, which a unit file cannot hold" ;;
-    esac
-    service_extra="$service_extra
-Environment=\"LD_LIBRARY_PATH=$(printf '%s' "$LD_LIBRARY_PATH" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g')\""
-    say "the unit runs wiki-server with LD_LIBRARY_PATH=$LD_LIBRARY_PATH, as this shell has it: a systemd unit does not inherit the shell's environment"
-  fi
-  # The toolchain's TeX Live, when the TeX step chose it, first on the
-  # unit's PATH, where the server looks for xelatex; the rest is the
-  # system's own directories. The path was checked for the characters a
-  # unit cannot hold with the toolchain's.
-  if [ -n "$tex_bin" ]; then
-    service_extra="$service_extra
-Environment=\"PATH=$(printf '%s' "$tex_bin:$UNIT_BASE_PATH" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g')\""
-  fi
-else
-  description="Wiki demo ($name) from $dir on $bind:$port"
-  exec_start="\"$node\" \"$dir/server.mjs\" --root \"$dir/app\" --port $port --bind $bind"
-  service_extra=
-fi
-
-# The secrets an earlier version kept for the unit's environment: the
-# server reads them from its database now, as the administration sets them.
-if [ -f "$env_file" ]; then
-  rm -f "$env_file"
-  say "deleted $env_file: the mail password and providers' secrets it held are set in the administration's Server section now"
-fi
-
-mkdir -p "$UNIT_DIR"
-cat >"$unit_file.tmp" <<EOF
-# Written by toolchain/deploy-local.sh from $ROOT;
-# run it again to change this deployment, or toolchain/undeploy-local.sh --name $name$prefix_arg
-# to take it down.
-${prefix:+# Prefix: $prefix
-}[Unit]
-Description=$description
-After=network-online.target
-# Restart for as long as it takes: at boot the Tailscale address may appear a
-# little after this starts, and listening on it fails until then.
-StartLimitIntervalSec=0
-
-[Service]
-ExecStart=$exec_start
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=yes
-$service_extra
-
-[Install]
-WantedBy=default.target
-EOF
-mv "$unit_file.tmp" "$unit_file"
-state_write
-systemctl --user daemon-reload
-systemctl --user enable "$name.service" >/dev/null 2>&1 || systemctl --user enable "$name.service"
-adoption_done
-say "starting $name.service"
-systemctl --user restart "$name.service"
-
-case $bind in
-  0.0.0.0) probe_host=127.0.0.1 ;;
-  ::) probe_host='[::1]' ;;
-  *:*) probe_host="[$bind]" ;;
-  *) probe_host=$bind ;;
-esac
-# Whether an address answers 200. The server's own HTTPS listener is asked
-# through curl without checking its certificate (--insecure, for this probe
-# alone): the probe asks whether the service is up, and the certificate is
-# checked below when --tls-ca says against what.
-answers() {
-  case $1 in
-    https://*)
-      [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' --insecure "$1" 2>/dev/null)" = 200 ]
-      return ;;
-  esac
-  if [ -n "$nodeless" ]; then
-    [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' "$1" 2>/dev/null)" = 200 ]
-    return
-  fi
-  "$node" -e '
-    fetch(process.argv[1]).then((r) => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1));
-  ' "$1" 2>/dev/null
-}
-if [ "$mode" = server ]; then probe_path=api/v1/info; else probe_path=; fi
-if [ "$way" = cert ]; then scheme=https; else scheme=http; fi
-waited=0
-until service_active && answers "$scheme://$probe_host:$port/$probe_path"; do
-  waited=$((waited + 1))
-  if [ "$waited" -ge "${WIKI_DEPLOY_WAIT:-20}" ]; then
-    systemctl --user status "$name.service" --no-pager >&2 || true
-    [ -n "$no_firewall" ] || firewall_report
-    die "$name.service does not answer on $scheme://$probe_host:$port/; see journalctl --user -u $name"
-  fi
-  sleep 1
-done
-say "$name.service answers on $scheme://$probe_host:$port/$probe_path"
-# With --tls-ca, the certificate is checked as a browser that trusts that
-# authority checks it: its chain, and its name. The name is the first one
-# the certificate is issued for (its subjectAltName, read with openssl),
-# reached at the listener's address (curl --connect-to); without openssl,
-# the listener's address itself. A certificate that does not verify is
-# warned of: the service runs, and the browsers say the same.
-if [ "$way" = cert ] && [ -n "$tls_ca" ]; then
-  tls_name=$(cert_name "$tls_cert")
-  if [ -n "$tls_name" ]; then
-    set -- --connect-to "$tls_name:$port:$probe_host:$port" "https://$tls_name:$port/$probe_path"
-  else
-    set -- "https://$probe_host:$port/$probe_path"
-  fi
-  if verified=$(curl -sS -o /dev/null --max-time 10 --noproxy '*' --cacert "$tls_ca" "$@" 2>&1); then
-    say "its certificate verifies against $tls_ca${tls_name:+ for $tls_name}"
-  else
-    warn "its certificate does not verify against --tls-ca $tls_ca${tls_name:+ for the name $tls_name} (${verified:-curl failed}): a browser that trusts that authority refuses it too. Check that $tls_cert has the chain after the certificate, and that the certificate is for the name people use"
-  fi
-fi
-if [ "$mode" = server ]; then
-  if answers "http://127.0.0.1:$admin_port/admin/api/v1/admin/status"; then
-    say "its admin listener answers on http://127.0.0.1:$admin_port/admin/"
-  else
-    warn "its admin listener does not answer on http://127.0.0.1:$admin_port/admin/; see journalctl --user -u $name"
-  fi
-  # The guide, the wiki's own documentation as the space Guide, follows the
-  # server's version: each of its pages whose text this version changed gets
-  # the new text as a new version (wiki-server guide update). The server is
-  # running: the console waits for its writes. A failure leaves the wiki as
-  # it was, and the deployment stands.
-  say "bringing the guide's pages up to this version"
-  if [ "$db" = postgres ]; then
-    "$dir/bin/wiki-server" guide update --data "$dir/data" --database "$(db_url)" --database-password-file "$(pg_dir)/db-password" ||
-      warn "the guide's pages could not be updated (see above); the wiki is served as it was"
-  else
-    "$dir/bin/wiki-server" guide update --data "$dir/data" --sqlite "$dir/data/wiki.sqlite" ||
-      warn "the guide's pages could not be updated (see above); the wiki is served as it was"
-  fi
-fi
-
-# The version of the tailscale command when it is older than 1.52, whose
-# `tailscale serve` took `https:443 / <target>` rather than --bg.
-tailscale_old_version() {
-  ts_version=$(timeout 10 tailscale version 2>/dev/null | head -n 1) || return 1
-  case $ts_version in
-    1.[0-9] | 1.[0-9].* | 1.[1-4][0-9] | 1.[1-4][0-9].* | 1.5[01] | 1.5[01].*) printf '%s\n' "$ts_version" ;;
-    *) return 1 ;;
-  esac
-}
-# Whether an HTTPS address answers 200, through curl when there is one, as
-# you would check it by hand. Proxies are skipped: the MagicDNS name is
-# resolved by tailscaled and reached over the tailnet.
-https_answers() {
-  if command -v curl >/dev/null 2>&1; then
-    curl -fs -o /dev/null --max-time 10 --noproxy '*' "$1" 2>/dev/null
-  else
-    "$node" -e '
-      fetch(process.argv[1], { signal: AbortSignal.timeout(10000) })
-        .then((r) => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1));
-    ' "$1" 2>/dev/null
-  fi
-}
-
-# tailscale serve. Over HTTPS: leave it when it already proxies to this
-# port (an earlier deploy's, or set by hand), set it when it serves nothing
-# at https://<name>/ or this deployment's previous port, and leave anything
-# else there alone, saying so. Over plain HTTP: turn off the serve an
-# earlier HTTPS deploy of this deployment set.
-serve_state='' serve_note=''
-if [ -n "$https_host" ]; then
-  serve_cmd="serve --bg http://127.0.0.1:$port"
-  if ! serve_read; then
-    warn "tailscale serve status does not answer, so cannot serve https://$https_host/"
-    serve_rights_hint "$serve_cmd"
-  elif serve_proxies_to "$port"; then
-    say "tailscale serve already proxies https://$https_host/ to 127.0.0.1:$port: leaving it as it is"
-    serve_state=ours
-  elif [ -n "$serve_type" ] && ! { [ -n "$prev_serve_port" ] && serve_proxies_to "$prev_serve_port"; } &&
-    ! { [ -n "$prev_port" ] && serve_proxies_to "$prev_port"; }; then
-    warn "https://$https_host/ already serves $serve_type $serve_target, which this deployment did not set, so it is left alone; to serve the wiki there instead, run: tailscale $serve_cmd (or deploy this one with --http)"
-  elif ts_old=$(tailscale_old_version); then
-    warn "this Tailscale ($ts_old) is older than 1.52, whose tailscale serve this script uses; upgrade it and run this again, or set the serve yourself with the older form:"
-    printf '    sudo tailscale serve https:443 / http://127.0.0.1:%s\n' "$port"
-  else
-    say "tailscale $serve_cmd"
-    if serve_out=$(timeout 60 tailscale serve --bg "http://127.0.0.1:$port" </dev/null 2>&1) && serve_read && serve_proxies_to "$port"; then
-      say "tailscale serve proxies https://$https_host/ to 127.0.0.1:$port (tailnet only)"
-      serve_state=ours
-    else
-      [ -z "$serve_out" ] || printf '%s\n' "$serve_out" | sed 's/^/    /' >&2
-      warn "could not set tailscale serve (see above); the deployment answers on 127.0.0.1:$port meanwhile"
-      serve_rights_hint "$serve_cmd"
-    fi
-  fi
-  if [ "$serve_state" = ours ]; then
-    [ "$serve_funnel" != funnel ] ||
-      warn "Funnel is on for https://$https_host/ (tailscale serve status): the wiki is public on the internet, not only on your tailnet. This script never turns it on"
-    # The first certificate is fetched as the first request arrives, which
-    # takes a moment; tailscaled may hold that request's handshake while it
-    # does, so the wait is counted by the clock rather than by attempts.
-    started=$(date +%s) https_ok=
-    while :; do
-      if https_answers "https://$https_host/$probe_path"; then
-        https_ok=1
-        break
-      fi
-      [ "$(($(date +%s) - started))" -lt "${WIKI_DEPLOY_HTTPS_WAIT:-60}" ] || break
-      sleep 2
-    done
-    if [ -n "$https_ok" ]; then
-      say "it answers on https://$https_host/$probe_path"
-    else
-      warn "https://$https_host/ does not answer yet: the first certificate can take a minute or two to arrive; try it shortly (curl https://$https_host/), and see tailscale serve status"
-    fi
-  else
-    serve_note='   (once tailscale serve is set: see above)'
-  fi
-elif [ -n "$prev_serve_port" ]; then
-  serve_off "$prev_serve_port"
-fi
-
-if [ -z "$no_firewall" ] && [ -z "$local_only" ]; then
-  firewall_open "$port"
-  case $fw in active | locked | unknown) rule_port=$port ;; esac
-  state_write
-fi
-[ -n "$no_firewall" ] || firewall_report
-linger_report
-
-# The public address the administration's Server section holds, read from
-# the admin listener (empty for none); fails when it cannot be read.
-panel_public_url() {
-  if [ -n "$nodeless" ]; then
-    settings=$(curl -fs --max-time 10 --noproxy '*' "http://127.0.0.1:$admin_port/admin/api/v1/admin/server" 2>/dev/null) || return 1
-    printf '%s' "$settings" | json_read 'sys.stdout.write(d.get("publicUrl") or "")' '.publicUrl // ""' 2>/dev/null
-    return
-  fi
-  "$node" -e '
-    fetch(process.argv[1])
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((j) => process.stdout.write(j.publicUrl ?? ""), () => process.exit(1));
-  ' "http://127.0.0.1:$admin_port/admin/api/v1/admin/server" 2>/dev/null
-}
-
-# What a reverse proxy in front of the deployment must do (--behind-proxy),
-# with the few lines of a Caddyfile that do it all: Caddy's reverse_proxy
-# passes WebSocket upgrades on and sends X-Forwarded-Proto and
-# X-Forwarded-Host, from which the server tells its public address and
-# passkeys' origin.
-proxy_needs() {
-  cat <<EOF
-It is behind a reverse proxy (--behind-proxy), which must:
-  - serve HTTPS and proxy to http://127.0.0.1:$port,
-  - pass WebSocket upgrades on (comments and notifications arrive live at api/v1/events),
-  - send X-Forwarded-Proto and X-Forwarded-Host (or keep the Host the browser asked for).
-Caddy does all of it, with a certificate it fetches and renews itself, from a Caddyfile of:
-  wiki.example.org {
-      reverse_proxy 127.0.0.1:$port
-  }
-EOF
-}
-
-if [ "$mode" = server ]; then
-  printf '\nThe wiki is served from %s, its data in %s/data. Open:\n' "$dir" "$dir"
-  print_urls "$bind" "$port" "$way" "$tls_cert"
-  if [ "$db" = postgres ]; then
-    printf 'Its database is PostgreSQL in Docker (docker compose --project-name %s ps), on\n' "$name"
-    printf '127.0.0.1:%s, its data in the volume %s_wiki-db; its password is in %s/db-password.\n' "$db_port" "$name" "$(pg_dir)"
-  else
-    printf 'Its database is SQLite, %s/data/wiki.sqlite.\n' "$dir"
-  fi
-  # The public address stays a setting of the panel (decision 11 of
-  # docs/PLAN.md): the script only says what to set it to.
-  if [ -n "$https_host" ]; then
-    if ! public_url=$(panel_public_url); then
-      printf 'If the administration'"'"'s Server section has no public address yet, set it to https://%s/\n' "$https_host"
-      printf '  (http://127.0.0.1:%s/admin/admin/): mailed links and sign-in providers start with it.\n' "$admin_port"
-    elif [ -z "$public_url" ]; then
-      printf 'The wiki has no public address yet: set it to https://%s/ in the administration'"'"'s\n' "$https_host"
-      printf 'Server section (http://127.0.0.1:%s/admin/admin/); mailed links and sign-in providers start with it.\n' "$admin_port"
-    elif [ "${public_url%/}" != "https://$https_host" ]; then
-      printf 'The public address in the administration'"'"'s Server section is %s, but the wiki\n' "$public_url"
-      printf 'is served at https://%s/: change it there (http://127.0.0.1:%s/admin/admin/) if people use that one.\n' "$https_host" "$admin_port"
-    fi
-  fi
-  if [ "$way" = cert ]; then
-    printf 'It serves HTTPS itself with %s and its key %s, which it reads\n' "$tls_cert" "$tls_key"
-    printf 'as it starts: a renewed certificate takes a restart, systemctl --user restart %s.service\n' "$name"
-  elif [ "$way" = proxy ]; then
-    proxy_needs
-  fi
-  if { [ "$way" = cert ] || [ "$way" = proxy ]; } && public_url=$(panel_public_url) && [ -z "$public_url" ]; then
-    printf 'The wiki has no public address yet: set it to the https:// address people use in the\n'
-    printf "administration's Server section (http://127.0.0.1:%s/admin/admin/); mailed links and sign-in providers start with it.\n" "$admin_port"
-  fi
-  cat <<EOF
-Administration, on this machine only: http://127.0.0.1:$admin_port/admin/
-  from another: ssh -L $admin_port:127.0.0.1:$admin_port $user@<this machine>, then the same address
-Backups: $dir/data/backups (one before every deploy; another: $dir/bin/wiki backup --data $dir/data)
-Users:   $dir/bin/wiki users list --data $dir/data
-  the first administrator: $dir/bin/wiki users add --data $dir/data LOGIN --admin (asks for the password)
-Logs:    journalctl --user -u $name -f
-Status:  sh toolchain/deploy-local.sh --status --name $name$prefix_arg
-Stop:    sh toolchain/undeploy-local.sh --name $name$prefix_arg   (--purge deletes the files but data/, --purge-data that too)
-EOF
-  [ -z "$toolchain_home" ] || printf 'The toolchain the build used is under %s (--toolchain names another; the home directory holds only the unit).\n' "$toolchain_home"
-  printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
-  printf 'reader, who sees the public spaces only; the operator is on the admin listener.\n'
-  printf 'Whether the wiki is open (anyone may make an account) or closed (by invitation\n'
-  printf 'only, nothing shown to anyone not signed in) is the administration'"'"'s "Who may come in".\n'
-  printf 'The wiki'"'"'s public address, the mail server invitations go through and the\n'
-  printf 'providers people sign in with are set in its "Server" section, at\n'
-  printf '  http://127.0.0.1:%s/admin/admin/\n' "$admin_port"
-  printf 'where they take effect at once (check the providers: %s/bin/wiki oidc check --data %s/data).\n' "$dir" "$dir"
-  if [ -n "$prev_smtp_host$prev_public_url$prev_oidc" ]; then
-    printf '%s: the previous deployment passed the server --smtp-host, --public-url or --oidc,\n' "$PROG"
-    printf '%s: which are gone; set them again in the Server section:\n' "$PROG"
-    [ -z "$prev_public_url" ] || printf '%s:   the public address %s\n' "$PROG" "$prev_public_url"
-    [ -z "$prev_smtp_host" ] || printf '%s:   mail through %s:%s, from %s (and its password)\n' "$PROG" "$prev_smtp_host" "${prev_smtp_port:-587}" "$prev_smtp_from"
-    for provider in $prev_oidc; do
-      printf '%s:   the provider %s (and its client secret)\n' "$PROG" "$provider"
-    done
-  fi
-  if [ "$prev_trust" = yes ]; then
-    printf '%s: the previous deployment took everyone at %s for the administrator\n' "$PROG" "$listen"
-    printf '%s: (--trust-network); that is gone. Sign in as an administrator there, made with\n' "$PROG"
-    printf '%s:   %s/bin/wiki users add --data %s/data LOGIN --admin\n' "$PROG" "$dir" "$dir"
-  fi
-else
-  printf '\nThe demo is served from %s. Open:\n' "$dir"
-  print_urls "$bind" "$port" "$way" "$tls_cert"
-  [ "$way" != proxy ] || proxy_needs
-  cat <<EOF
-Logs:    journalctl --user -u $name -f
-Status:  sh toolchain/deploy-local.sh --status --name $name$prefix_arg
-Stop:    sh toolchain/undeploy-local.sh --name $name$prefix_arg   (--purge also deletes $dir)
-EOF
-fi
+# c2).
+maker_apply

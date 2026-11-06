@@ -25,8 +25,10 @@ import System.FilePath ((</>))
 -- everything a developer needs; @build@ what a build needs (no Chromium, no
 -- fourmolu); @all@ and @warm@ also build the repository's dependencies into
 -- the cabal store; @native@ only what the native build of wiki-server needs
--- besides GHC and cabal (the C libraries' packages and their check).
-data Mode = Toolchain | Build | All | Warm | Native
+-- besides GHC and cabal (the C libraries' packages and their check);
+-- @static@ only Node, for the deploy of a demo whose page is not built on
+-- the machine, which needs GHC and cabal for the maker alone.
+data Mode = Toolchain | Build | All | Warm | Native | Static
   deriving (Eq, Show, Enum, Bounded)
 
 -- | The mode's name, as the bootstrap's command line has it.
@@ -37,6 +39,7 @@ modeName = \case
   All -> "all"
   Warm -> "warm"
   Native -> "native"
+  Static -> "static"
 
 -- | One run of the maker.
 data Context = Context
