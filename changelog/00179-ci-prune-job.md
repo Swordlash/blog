@@ -15,3 +15,7 @@ every other job has ended.
 The build of the pages for a release (main-latest and tags) keeps its
 own store of dependencies too, so it no longer compiles every one of
 them again on each run.
+
+A pull request whose page is built on GitHub's own runners, when the
+owner's machine is busy, now finds the wasm dependencies built for main
+there too: every push to main keeps them up to date on GitHub's runners.

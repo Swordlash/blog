@@ -2510,11 +2510,15 @@ the wasm snapshot) works the same way:
 - **Visible to pull requests from `main`.** A run restores the caches of its own
   ref, then those of `main`. So only copies on the same ref are pruned: a pull
   request that deleted `main`'s copy would leave every other pull request without
-  one. `main`'s hosted copies come from its hosted runs: the weekly scheduled run,
-  which always takes the hosted runners, a push to `main` that found the owner's
-  machine busy, and a run by hand with `runner: hosted` (the native caches also
-  from every push to `main` whose build jobs run). A push to `main` whose wasm job
-  takes the owner's machine saves no wasm cache to GitHub.
+  one. `main`'s hosted copies come from its hosted runs. Every push to `main` whose
+  page was not built on a hosted runner (it went to the owner's machine, or the plan
+  skipped it as tested by its pull request) runs the wasm job's second leg, `wasm
+  (hosted cache)`, on a hosted runner: it builds the page without testing it, only
+  to save the hosted wasm store and build directories, and its failure fails
+  nothing. Before, the owner's machine built `main`'s page and saved no cache to
+  GitHub, so a pull request whose page went to the hosted runners found nothing and
+  compiled every dependency. The native caches come from every push to `main` whose
+  build jobs run.
 
 On the owner's runner, checkout retains `dist-newstyle/native`, `dist-newstyle/native-fast` and
 `dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
