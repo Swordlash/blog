@@ -945,7 +945,12 @@ In the order to do it, unless the owner says otherwise.
   backs the database up (as now), runs the migration itself (`wiki-server
   migrate`), then reads every row of every table through the storage's
   decoders (`wiki-server check`: users, spaces, pages and their versions,
-  comments, settings, everything an export reads). If either fails, it says
+  comments, settings, everything an export reads). The two commands are in
+  (WP5.73a, #180): `migrate` applies only the pending steps; `check` refuses
+  a database not at the program's version (exit 4), reads every table's
+  rows as they come and every record an export builds, changes nothing, and
+  exits 5 when something does not read, 1 when it cannot open the
+  database. The maker's part is next (WP5.73b). If either fails, it says
   that the migration failed and why, rolls back (the database restored from
   that backup, the previous binary and page back, the service started and
   checked that it answers), and says which version it is back at (the
