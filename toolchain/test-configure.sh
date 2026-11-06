@@ -1,34 +1,37 @@
 #!/bin/sh
-# Check the command lines the configuration wizard (toolchain/configure.hs)
-# builds from its answers, without its screens: each case writes an answer
-# file, and sometimes a deployment's state file, runs the wizard with
-# --args-from and compares the command line it prints with the expected one.
+# Check the command lines the configuration wizard (maker-tui deploy, whose
+# answers are maker/src/Maker/Deploy/Wizard/) builds from its answers,
+# without its screens: each case writes an answer file, and sometimes a
+# deployment's state file, runs the wizard with --args-from and compares
+# the command line it prints with the expected one.
 #
 #   sh toolchain/test-configure.sh
 #
 # It needs GHC and cabal (. ~/.wiki-toolchain/env), and the first run
 # compiles brick and vty, which takes minutes. So `npm run test-native`
 # does not run it: toolchain/test-deploy-local.sh runs it at its end when
-# cabal is on PATH and WIKI_TEST_WIZARD=1 is set. The wizard is built and
-# run as a program, not through `cabal run`, because the cases run with a
-# HOME of their own, where cabal would find neither its package index nor
-# its store.
+# cabal is on PATH and WIKI_TEST_WIZARD=1 is set. The wizard is built with
+# the maker's own cabal project and run as a program, not through `cabal
+# run`, because the cases run with a HOME of their own, where cabal would
+# find neither its package index nor its store.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 command -v cabal >/dev/null 2>&1 ||
   { printf 'test-configure: cabal is not on PATH (. ~/.wiki-toolchain/env, or sh toolchain/bootstrap.sh native)\n' >&2; exit 1; }
 printf 'test-configure: building the wizard (the first time, brick and vty: minutes)\n'
-# cabal build has no --ignore-project (-z), which keeps the script out of
-# the repository's cabal.project, so the script is built by running it.
-cabal run -z -v0 "$ROOT/toolchain/configure.hs" -- --help >/dev/null
-WIZARD=$(cabal list-bin -z -v0 "$ROOT/toolchain/configure.hs")
-[ -x "$WIZARD" ] || { printf 'test-configure: no wizard at %s\n' "$WIZARD" >&2; exit 1; }
+(cd "$ROOT/maker" && cabal build -v0 exe:maker-tui)
+TUI=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker-tui)
+[ -x "$TUI" ] || { printf 'test-configure: no maker-tui at %s\n' "$TUI" >&2; exit 1; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 # The directory with its links resolved, as the wizard prints a prefix.
 TMP=$(cd "$TMP" && pwd -P)
+# The wizard is maker-tui's deploy command; the cases run it as one program.
+WIZARD=$TMP/wizard
+printf '#!/bin/sh\nexec "%s" deploy "$@"\n' "$TUI" >"$WIZARD"
+chmod +x "$WIZARD"
 HOME=$TMP/home
 mkdir -p "$HOME"
 export HOME

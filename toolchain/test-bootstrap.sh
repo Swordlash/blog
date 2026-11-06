@@ -642,6 +642,27 @@ assert_contains "$case_dir/static-download" 'downloading Node failed'
 assert_contains "$EVENTS" 'unexpected curl'
 pass 'static installs GHC, cabal and Node, for the maker and the demo, with no wasm toolchain, Chromium or fourmolu; with --system-tools it takes the machine'"'"'s own and refuses an old Node'
 
+# What toolchain/deploy-local.sh needs on a machine with no cabal yet,
+# before the maker runs the deploy: GHC and cabal, and the maker built
+# with them (here WIKI_MAKER, built already). `maker` installs neither Node
+# nor the wasm toolchain nor Chromium nor fourmolu, and hands nothing to
+# the maker: the deploy runs the mode it needs after. With --system-tools
+# it takes the machine's GHC and cabal.
+fixture maker-mode
+rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+mkdir -p "$HOME/.ghc-wasm"
+printf 'keep me\n' >"$HOME/.ghc-wasm/custom"
+bootstrap maker >"$case_dir/maker" 2>&1 || fail "maker failed: $(cat "$case_dir/maker")"
+[ ! -s "$EVENTS" ] || fail "maker installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/maker" 'GHC and cabal are ready, and the maker is built'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'maker did not write the environment file'
+[ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'maker installed Node'
+[ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'maker touched ~/.ghc-wasm'
+GHC_REPORT=9.10.3 bootstrap maker --system-tools >"$case_dir/maker-system" 2>&1 || fail "maker --system-tools failed: $(cat "$case_dir/maker-system")"
+assert_contains "$case_dir/maker-system" 'GHC and cabal are ready, and the maker is built'
+[ ! -s "$EVENTS" ] || fail "maker --system-tools installed something: $(cat "$EVENTS")"
+pass 'maker installs GHC and cabal and builds the maker, with no Node, wasm toolchain, Chromium or fourmolu; with --system-tools it takes the machine'"'"'s own'
+
 # A long step in toolchain mode, which the SessionStart hooks use: here cabal
 # updating a missing package index. Its output is kept in the log alone, and
 # the next run, with the index there, does not update it again.

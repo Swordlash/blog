@@ -9,11 +9,11 @@
 #                                                     wasm-sysroot, wasm-libsodium, wasm-ghc, node, chromium,
 #                                                     fourmolu, store)
 #   sh toolchain/maker.sh check native [OPTION…]      what the native build of wiki-server needs
-#   sh toolchain/maker.sh deploy apply --plan FILE    the deploy after its bootstrap: the TeX step,
-#                                                     the builds and checks, then the changes to the
-#                                                     running deployment; toolchain/deploy-local.sh
-#                                                     runs it with its plan
+#   sh toolchain/maker.sh deploy [OPTION…]            the deploy, with toolchain/deploy-local.sh's
+#                                                     options; toolchain/deploy-local.sh runs it
 #   sh toolchain/maker.sh tui                         the terminal interface
+#   sh toolchain/maker.sh tui deploy [OPTION…]        the deploy's configuration wizard
+#                                                     (toolchain/configure.sh runs it)
 #   sh toolchain/maker.sh build native|wasm|wasm-opt [CABAL-ARG…]
 #   sh toolchain/maker.sh test native|wasm|all [CABAL-ARG…]
 #   sh toolchain/maker.sh serve [CABAL-ARG…]
@@ -28,7 +28,10 @@
 # --with-wizard` installs on Debian.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-eval "$(sh "$ROOT/toolchain/bootstrap.sh" env)"
+# WIKI_SYSTEM_TOOLS (set by configure.sh --system-tools) keeps the
+# machine's own tools: the bootstrap's environment then gives only the
+# toolchain directory's variables, not the managed tools' PATH.
+eval "$(sh "$ROOT/toolchain/bootstrap.sh" env ${WIKI_SYSTEM_TOOLS:+--system-tools})"
 # The maker is a native program, and it computes the wasm build's
 # environment itself: a shell that loaded ~/.ghc-wasm/env (CI exports it to
 # every later step) must not hand it the cross compiler's CC and friends,
@@ -38,7 +41,7 @@ exe=maker
 if [ "${1:-}" = tui ]; then
   exe=maker-tui
   shift
-  set -- --root "$ROOT"
+  set -- --root "$ROOT" "$@"
 fi
 if [ "$exe" = maker ] && [ -n "${WIKI_MAKER:-}" ]; then
   cd "$ROOT"

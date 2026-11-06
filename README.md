@@ -830,13 +830,15 @@ to copy. The first screen also offers `--status` and `--stop` for a deployment.
 sh toolchain/configure.sh
 ```
 
-The wizard is a Haskell program with [brick](https://hackage.haskell.org/package/brick),
-compiled on your machine as a cabal script. So the wrapper first checks the C compiler
-and libraries (`toolchain/check-native.sh --with-wizard`, which adds terminfo, below),
-installs GHC and cabal (`toolchain/bootstrap.sh native --with-wizard`), and then runs
-it. The first run compiles brick and vty, which takes a few minutes; cabal keeps them,
-and later runs start at once. Everything the wizard does can be done with the options
-below, which it only writes out.
+The wizard is the deploy screen of the maker's terminal interface, `maker-tui deploy`,
+a Haskell program with [brick](https://hackage.haskell.org/package/brick), compiled on
+your machine with the maker's own cabal project. So the wrapper first checks the C
+compiler and libraries (`toolchain/check-native.sh --with-wizard`, which adds terminfo,
+below), installs GHC and cabal (`toolchain/bootstrap.sh native --with-wizard`), and then
+runs it, through `sh toolchain/maker.sh tui deploy`. The first run compiles brick and
+vty, which takes a few minutes; cabal keeps them, and later runs start at once.
+Everything the wizard does can be done with the options below, which it only writes
+out.
 
 On a machine that installs nothing from the internet (see
 [A machine that installs nothing from the internet](#a-machine-that-installs-nothing-from-the-internet)),
@@ -1708,11 +1710,23 @@ to the demo, keeping `data/`.
   answers. The server's clean-up of attachment files looks only at
   `data/backups`, not at the copy in `previous/`: a rollback long after the
   upgrade, once that backup has been pruned, may miss the files of
-  attachments deleted since, and the restore says how many. Nothing is kept
-  yet when the deploy switches between SQLite and PostgreSQL, starts an empty
-  wiki (`--fresh`), or adopts a deployment under `--prefix`; the deploy says
-  so. A deployment you change by hand is yours: the deploy keeps and restores
-  only what it installed itself.
+  attachments deleted since, and the restore says how many. An upgrade that
+  starts an empty wiki (a switch between SQLite and PostgreSQL, or `--fresh`)
+  is kept too, without a backup: the backup it makes is of the new, empty
+  wiki. The old wiki is set aside instead, a `data/wiki.sqlite` in
+  `data/replaced/<time>/` (`aside=` in `previous/info`) and a PostgreSQL
+  wiki in its container's volume, and a rollback brings it back: it stops
+  the new container, or moves the new `wiki.sqlite` into
+  `data/replaced/<time>/` and starts the old container on its port, and
+  moves the files set aside back into `data/`. After a switch from SQLite to
+  PostgreSQL and a rollback, the volume `<name>_wiki-db` keeps what the
+  failed upgrade wrote. An adoption under `--prefix` is kept too: the old
+  PostgreSQL directory goes into `previous/postgres` instead of being
+  deleted, and a rollback moves it and the state back to the home directory,
+  where the kept unit names them. A deploy into another directory than the
+  deployment's keeps nothing: the old deployment is intact where it was. A
+  deployment you change by hand is yours: the deploy keeps and restores only
+  what it installed itself.
 
   ```sh
   sh toolchain/deploy-local.sh --rollback          # add --prefix DIR or --name NAME as deployed
@@ -2335,6 +2349,7 @@ sh toolchain/maker.sh toolchain install node      # one component (system-packag
                                                   # with none named
 sh toolchain/maker.sh check native                # what the native build of wiki-server needs
 sh toolchain/maker.sh tui                         # the same in a terminal interface, as ghcup tui
+sh toolchain/maker.sh tui deploy                  # the deploy's wizard (toolchain/configure.sh runs it)
 ```
 
 The interface links libtinfo (`libncurses-dev` on Debian, which
@@ -2362,18 +2377,16 @@ sh toolchain/maker.sh build wasm -j2              # what npm run build-wasm -- -
 sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
 ```
 
-The deploy is moving into the maker too, from its end. `toolchain/deploy-local.sh`
-still reads the options and the state, checks the machine, downloads the page when it
-is not built here and runs the bootstrap; then it writes a plan of what it found and
-runs `maker deploy apply --plan FILE`, which does the rest: the TeX step, the builds and
-the checks of what they made, the service's Node, HTTPS through Tailscale, the ports,
-PostgreSQL's container, and everything that changes the running deployment (the
-backup, the files, the unit, the restart, the checks that it answers, `tailscale
-serve`, the firewall and the report at the end). Every deploy goes through it: a demo whose page
-is not built on the machine (`--static --backend-only`, `--static --app-page`) runs
-`toolchain/bootstrap.sh static`, which installs GHC and cabal for the maker besides
-Node. `toolchain/undeploy-local.sh` and `--status` stay in shell, as does
-`toolchain/check-native.sh`: they need no GHC.
+The deploy is the maker's too: `toolchain/deploy-local.sh` checks its options and
+runs `maker deploy` with them, which reads them and the state again, checks the
+machine, runs the bootstrap the deploy needs, and does the rest: the page, the TeX
+step, the builds and the checks of what they made, the service's Node, HTTPS through
+Tailscale, the ports, PostgreSQL's container, and everything that changes the running
+deployment (the backup, the files, the unit, the restart, the checks that it answers,
+`tailscale serve`, the firewall and the report at the end), and `--rollback`. On a
+machine with no cabal yet, `toolchain/bootstrap.sh maker` first installs GHC and cabal
+and builds the maker. `toolchain/undeploy-local.sh`, `--status` and `--stop` stay in
+shell, as does `toolchain/check-native.sh`: they need no GHC.
 
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing

@@ -1,20 +1,19 @@
--- | The plan of a deploy: what @toolchain/deploy-local.sh@ worked out
--- before the running deployment changes (its options, the remembered state,
--- what the build made), handed to the maker as a file of @key=value@ lines.
--- The maker does the rest of the deploy from it ("Maker.Deploy.Apply").
--- The plan file is the seam between the shell and the maker while the deploy
--- moves into the maker: each part that moves takes its keys out of the plan
--- (docs/PLAN.md, WP5.68 c2).
+-- | The plan of a deploy: what the deploy's front ("Maker.Deploy.Front")
+-- worked out from the options and the remembered state, by key, with the
+-- names of the shell variables it was once written from. Each step after
+-- the front reads it and adds what it works out ("Maker.Deploy.Page",
+-- "Maker.Deploy.Tex", "Maker.Deploy.Prepare"), and "Maker.Deploy.Apply"
+-- changes the running deployment from it. The state file is written from
+-- it ("Maker.Deploy.State").
 --
--- A key the shell left empty or did not write reads as the empty string, as
--- an unset variable does in the shell.
+-- A key that was never set reads as the empty string, as an unset variable
+-- does in the shell.
 --
 -- The module also holds the deploy's way of talking, which is the shell's:
 -- @deploy-local: …@ on standard output, @deploy-local: warning: …@ and the
 -- reason it stops on standard error.
 module Maker.Deploy.Plan
   ( Plan
-  , readPlan
   , parsePlan
   , get
   , has
@@ -35,7 +34,6 @@ module Maker.Deploy.Plan
 where
 
 import Control.Exception (IOException, try)
-import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Maker.Process (decodeFs, encodeFs, relay, tailLog)
 import System.Exit (exitWith)
@@ -45,11 +43,6 @@ import System.Process.Typed
 -- | The plan's values by key.
 newtype Plan = Plan (Map.Map String String)
   deriving (Eq, Show)
-
--- | Read a plan file. Its values are decoded as the maker's arguments are
--- (the filesystem's encoding), since most of them are paths it passes on.
-readPlan :: FilePath -> IO Plan
-readPlan file = parsePlan . decodeFs <$> LBS.readFile file
 
 -- | A plan's lines: @key=value@, the value the rest of the line. Lines
 -- without @=@ and comments are skipped. A key given twice keeps its last
