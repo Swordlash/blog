@@ -850,8 +850,11 @@ confirms it against reality and the plan is amended if it does not hold.
     word.
 
 56. **The deploy hands its last part to the maker with a plan (WP5.68 c2a,
-    #173; c2c, #175).** From the end of the TeX step to the report at the end, the
-    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`): the builds and
+    #173; c2c, #175; c2d, #176).** From the TeX step to the report at the end, the
+    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`): the TeX step
+    (`Tex`: whether the server can make PDFs, and the offer to install TeX Live,
+    with a Perl built first, under the toolchain directory; a TeX Live just
+    installed is checked again and kept only when it makes the probe's PDF), the builds and
     the checks of what they made, the service's Node, HTTPS through Tailscale,
     the ports, the adoption into a prefix and PostgreSQL's container
     (`Prepare`), then the change of the running deployment (`Apply`);
@@ -866,6 +869,12 @@ confirms it against reality and the plan is amended if it does not hold.
     maker and Node, without the C libraries' packages, the native check or the
     wasm toolchain (`--system-tools` and `--hackage-mirror` as for `native`); a
     `--no-build` deploy on a machine with no cabal stops before anything changes.
+    The maker reads and writes everything in one encoding, UTF-8 with ROUNDTRIP,
+    set in its `main` for paths, arguments, files and the terminal (c2d): nothing
+    a program prints can fail to decode, a byte that is not UTF-8 goes back out
+    unchanged, program output is copied to the terminal and the log as bytes
+    (`Maker.Process.relay`, `tailLog`), and output read as text is decoded the
+    same way (`decodeFs`, with `encodeFs` back to bytes for JSON).
 
 ## Repository layout
 
@@ -973,7 +982,9 @@ In the order to do it, unless the owner says otherwise.
   flow and `configure.sh` and `configure.hs` retired. (c2b), #174, merged: a demo
   whose page is not built on the machine goes through the maker too, with the
   bootstrap mode `static` (decision 56). (c2c), #175, merged: the builds and
-  checks, from the end of the TeX step (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
+  checks, from the end of the TeX step (decision 56). (c2d), #176, merged: the
+  TeX step, and one encoding for everything the maker reads and writes (decision
+  56). The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1412,11 +1423,11 @@ needs. Each was true when its package merged; check before relying on one.
   whose maker was never built builds it just before the old service stops, so a
   Hackage it cannot reach is found late (nothing has changed by then). The maker
   reads Tailscale's and the panel's JSON with aeson, where the shell used python3,
-  jq or Node. Since c2c the maker, when it is not built yet, is built right
-  after the TeX step, before anything of the wiki is built. The builds' output
-  is read line by line in the process's locale encoding (as the bootstrap's
-  long steps are), so a C locale and a non-ASCII byte in cabal's output would
-  stop the reading.
+  jq or Node. Since c2d the maker, when it is not built yet, is built
+  before the TeX step (c2c: right after it), still before anything of the wiki
+  is built. The maker's encoding is UTF-8 with ROUNDTRIP whatever the locale,
+  so its own messages print UTF-8 bytes on a terminal set to another encoding
+  (the shell printed them as written, also UTF-8).
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
