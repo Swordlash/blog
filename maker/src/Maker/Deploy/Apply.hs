@@ -141,13 +141,14 @@ apply p = do
   -- the backup just made. It is kept only when the upgrade changes nothing
   -- a rollback would not put back: the database's kind or port (the
   -- container), the listening port or address (the firewall rule, tailscale
-  -- serve), the way HTTPS is served, or the database itself (--fresh). An
-  -- older one kept before goes either way.
+  -- serve), the way HTTPS is served, the database itself (--fresh), or
+  -- the place of the state and the PostgreSQL files (an adoption under
+  -- --prefix). An older one kept before goes either way.
   backupMade <- readIORef madeBackup
   runningNow <- mapM (`stateGet` v "state_file") ["db", "db_port", "port", "bind", "way"]
   let changes = case runningNow of
         [oldDb, oldDbPort, oldPort, oldBind, oldWay] ->
-          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the database, with --fresh", has p "incompatible")], changed]
+          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
         _ -> []
   kept <-
     if server && null changes

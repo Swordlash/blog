@@ -64,6 +64,8 @@ keepPrevious dir unitFile stateFile commit backup = do
     let previous = previousDir dir
     removePathForcibly previous
     createDirectoryIfMissing True previous
+    -- The owner's only, as data/ is: it holds a copy of the database.
+    _ <- runInherit "chmod" ["700", previous]
     forM_ ["bin", "app"] $ \d -> do
       exists <- doesDirectoryExist (dir </> d)
       when exists (renameDirectory (dir </> d) (previous </> d))

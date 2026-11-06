@@ -1702,7 +1702,10 @@ to the demo, keeping `data/`.
   to it by hand: it says which commit comes back, and that the database goes
   back to the backup made before the upgrade, so that everything written since
   is lost (export first what must stay), and asks; without a terminal, `--yes`
-  answers. A deployment you change by hand is yours: the deploy keeps and
+  answers. The server's clean-up of attachment files looks only at
+  `data/backups`, not at the copy in `previous/`: a rollback long after the
+  upgrade, once that backup has been pruned, may miss the files of
+  attachments deleted since, and the restore says how many. A deployment you change by hand is yours: the deploy keeps and
   restores only what it installed itself.
 
   ```sh
