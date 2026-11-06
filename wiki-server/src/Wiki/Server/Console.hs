@@ -68,6 +68,12 @@ module Wiki.Server.Console
   , runRestore
   , runBackup
   , BackupOutcome (..)
+
+    -- * Migrating and checking by hand
+  , runMigrate
+  , MigrateOutcome (..)
+  , runCheck
+  , CheckOutcome (..)
   )
 where
 
@@ -88,10 +94,11 @@ import Wiki.Server.Guide (installGuide, updateGuide, updateLines)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Secret (Kept, revealed)
-import Wiki.Server.Storage (Place (..), Storage, Who (..), readServerSettings, runStoredWikiFrom, withStorageAside)
+import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress, operator)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 import Wiki.Server.Storage.Migrate (OldSchema)
+import Wiki.Server.Storage.Migrate qualified as Migrate
 
 -- | A @wiki-server users@ command, on a data directory.
 data Users = Users
@@ -403,6 +410,69 @@ runBackup options keep =
   where
     made = (`onPlace` options) $ \at ->
       fmap (maybe "There is no database to back up yet." (\file -> "Backed up into " <> toS file)) <$> backupNow at.programs at.database at.dataDir keep
+
+--------------------------------------------------------------------------------
+-- Migrating and checking by hand
+
+-- | What @wiki-server migrate@ did, and how the program ends: the deploy
+-- tells a database of an earlier wiki-server (exit code 3, as for a
+-- backup) apart from a migration that failed (1).
+data MigrateOutcome
+  = -- | The database is at this program's schema: the line says from which
+    -- version.
+    MigratedTo Text
+  | -- | It could not be migrated, for this reason; it is unchanged, since
+    -- the steps run in one transaction.
+    MigrateFailed Text
+  | -- | It is an earlier wiki-server's.
+    MigrateOfEarlierServer Text
+  deriving stock (Eq, Show)
+
+-- | Apply the pending steps of the schema ('Wiki.Server.Storage.migrateDatabase').
+runMigrate :: PlaceOptions -> IO MigrateOutcome
+runMigrate options =
+  outcome <$> try @SomeException ((`onPlace` options) (fmap Right . migrateDatabase))
+  where
+    outcome = \case
+      Right (Right m)
+        | m.from == m.to -> MigratedTo ("The database is at version " <> show m.to <> " of the schema already.")
+        | otherwise -> MigratedTo ("Migrated the database from version " <> show m.from <> " to " <> show m.to <> " of the schema.")
+      Right (Left why) -> MigrateFailed why
+      Left e
+        | Just old <- fromException @OldSchema e -> MigrateOfEarlierServer (toS (displayException old))
+        | Just new <- fromException @Migrate.SchemaTooNew e -> MigrateFailed (toS (displayException new))
+        | otherwise -> MigrateFailed ("The migration failed, and the database is as it was: " <> toS (displayException e))
+
+-- | What @wiki-server check@ found, and how the program ends: 0 when
+-- everything read, 4 for a database not at this program's version of the
+-- schema, 5 for one that does not read, 1 when it could not be opened.
+data CheckOutcome
+  = -- | Everything read: a line per table, with its rows.
+    CheckPassed [Text]
+  | -- | The database is at another version of the schema.
+    CheckNotMigrated Text
+  | -- | Something did not read: the lines that say what.
+    CheckUnreadable [Text]
+  | -- | The database could not be opened: why.
+    CheckFailed Text
+  deriving stock (Eq, Show)
+
+-- | Read the whole database as this program does ('Wiki.Server.Storage.checkDatabase').
+runCheck :: PlaceOptions -> IO CheckOutcome
+runCheck options =
+  outcome <$> try @SomeException ((`onPlace` options) (fmap Right . checkDatabase))
+  where
+    outcome = \case
+      Right (Right (Right tables)) -> CheckPassed (map line tables <> ["Every table and every record read."])
+      Right (Right (Left (NotMigrated at known))) ->
+        CheckNotMigrated ("The database is at version " <> show at <> " of the schema, and this program reads version " <> show known <> ": run wiki-server migrate first.")
+      Right (Right (Left (UnreadableTables tables))) -> CheckUnreadable (map line tables <> ["Some tables did not read (above): this program cannot read the database as it is."])
+      Right (Right (Left (UnreadableRecords why))) -> CheckUnreadable ["Every row read, but the wiki's records built from them did not: " <> why]
+      Right (Left why) -> CheckFailed why
+      Left e -> CheckFailed ("The database could not be read: " <> toS (displayException e))
+    line t = case t.rows of
+      Right n -> t.table <> ": " <> show n <> " rows"
+      Left why -> t.table <> ": does not read: " <> why
 
 -- | Run something where the options say the wiki is; why not, when they
 -- name a password file that cannot be read.

@@ -125,6 +125,7 @@ library
         Wiki.Server.Storage.Backend
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
+        Wiki.Server.Storage.Check
         Wiki.Server.Storage.Comments
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout

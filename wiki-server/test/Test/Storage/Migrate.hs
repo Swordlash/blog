@@ -10,10 +10,10 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningList, select)
 import Protolude
-import Test.Database (Backing, withConnectionTo)
+import Test.Database (Backing (..), withConnectionTo)
 import Test.Hspec
-import Test.Storage.Fixture (withPlaceIn)
-import Wiki.Server.Storage (Place, closeStorage, defaultConfig, openStorage, withStorage)
+import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
+import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place, TableRead (..), checkDatabase, closeStorage, defaultConfig, importArchive, migrateDatabase, openStorage, withStorage)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Rows (micro)
@@ -167,3 +167,60 @@ spec backing = describe "the schema's versions" $ do
       refused <- refusedWith @OldSchema at
       displayException refused `shouldSatisfy` List.isInfixOf "invoices"
       withConnectionTo at tablesOf `shouldReturn` ["invoices"]
+
+  -- wiki-server migrate and check, which the deploy runs with the new
+  -- program before it starts the new server (WP5.73 of docs/PLAN.md).
+  describe "by hand (wiki-server migrate, wiki-server check)" $ do
+    it "migrate an empty database to this program's version, then find nothing to do" $
+      withPlaceIn backing $ \at -> do
+        known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
+        migrateDatabase at `shouldReturn` Migrated {from = 0, to = known}
+        migrateDatabase at `shouldReturn` Migrated {from = known, to = known}
+
+    it "check a wiki with every table and record read, and change nothing" $
+      withPlaceIn backing $ \at -> do
+        withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
+        tables0 <- withConnectionTo at tablesOf
+        checked <- checkDatabase at
+        case checked of
+          Left problem -> panic ("the check failed: " <> show problem)
+          Right tables -> do
+            sort (map (\t -> t.table) tables) `shouldBe` filter (/= "wiki_schema") wikiTables
+            all (isRight . (\t -> t.rows)) tables `shouldBe` True
+            [n | TableRead "users" (Right n) <- tables] `shouldSatisfy` all (> 0)
+        withConnectionTo at tablesOf `shouldReturn` tables0
+
+    it "refuse to check a database not at this program's version, which it does not migrate" $
+      withPlaceIn backing $ \at -> do
+        known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
+        checkDatabase at `shouldReturn` Left (NotMigrated 0 known)
+        withConnectionTo at tablesOf `shouldReturn` []
+
+    it "name a record that does not read: a space whose slug is not one" $
+      withPlaceIn backing $ \at -> do
+        withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
+        withConnectionTo at $ \c -> do
+          begin True c
+          runScript c "UPDATE spaces SET slug = 'Not A Slug' WHERE slug = 'docs';"
+          commitTransaction c
+        checkDatabase at >>= \case
+          Left (UnreadableRecords why) -> why `shouldSatisfy` T.isInfixOf "Not A Slug"
+          other -> panic ("expected a record that does not read, got " <> show other)
+
+    -- SQLite keeps whatever a column is given, so a value the row decoder
+    -- cannot read can be written there; PostgreSQL's column types refuse it.
+    case backing of
+      OnSqlite ->
+        it "name a table whose rows do not read, and still read the others" $
+          withPlaceIn backing $ \at -> do
+            withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
+            withConnectionTo at $ \c -> do
+              begin True c
+              runScript c "UPDATE pages SET updated_at = 'no time at all';"
+              commitTransaction c
+            checkDatabase at >>= \case
+              Left (UnreadableTables tables) -> do
+                [t.table | t <- tables, isLeft t.rows] `shouldBe` ["pages"]
+                length [t | t <- tables, isRight t.rows] `shouldBe` length tables - 1
+              other -> panic ("expected a table that does not read, got " <> show other)
+      _ -> pass
