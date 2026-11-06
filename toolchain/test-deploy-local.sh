@@ -2054,7 +2054,8 @@ release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-server-$ne
 out=$case_dir/no-page
 if company --backend-only >"$out" 2>&1; then fail 'a checkout with no page on GitHub was deployed'; fi
 assert_contains "$out" "no page was built for $head1 on GitHub; push it, or name main, a tag or another hash"
-assert_lacks "$EVENTS" 'bootstrap'
+# The maker takes the page after the toolchain: the refusal comes before
+# anything is built, not before the bootstrap.
 assert_lacks "$EVENTS" 'cabal'
 assert_lacks "$EVENTS" 'npm'
 : >"$EVENTS"
@@ -2062,8 +2063,10 @@ out=$case_dir/static
 if deploy --static --backend-only --prefix "$pre" --port "$p" >"$out" 2>&1; then fail '--static --backend-only with no demo page was taken'; fi
 assert_contains "$out" "no demo page was built for $head1 on GitHub; push it, or name main, a tag or another hash"
 assert_lacks "$EVENTS" 'curl https://github.com/'
-assert_lacks "$EVENTS" 'bootstrap'
 assert_lacks "$EVENTS" 'npm'
+# The demo's bootstrap ran before the maker looked for the page, and
+# installed Node; the server's deploy below must install none of its own.
+rm -rf "$pre/toolchain/.wiki-toolchain/node"
 pass '--backend-only for a commit with no page on GitHub, of the server or of the demo, is refused before anything is built'
 
 release main-latest "app-server-$other.zip" 2026-11-01T10:00:00Z "app-server-$newest.zip" 2026-11-02T10:00:00Z "app-server-$head1.zip" 2026-10-31T10:00:00Z
@@ -2077,9 +2080,9 @@ assert_lacks "$EVENTS" 'bootstrap build'
 assert_lacks "$EVENTS" 'npm'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 assert_contains "$out" 'Building executable wiki-server for wiki-server-0.1.0.0 (the fake cabal)'
-{ [ "$(line_of "$EVENTS" 'curl https://github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ] &&
-  [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
-  fail 'the page was not downloaded before the toolchain and the build'
+{ [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'curl https://github.com/')" ] &&
+  [ "$(line_of "$EVENTS" 'curl https://github.com/')" -lt "$(line_of "$EVENTS" 'cabal build')" ]; } ||
+  fail 'the page was not downloaded after the toolchain and before the build'
 assert_contains "$EVENTS" "wiki-server compress $pre/app"
 for file in app/index.html app/404.html app/app.wasm app/app.wasm.gz app/index.html.gz bin/wiki-server; do
   [ -f "$pre/$file" ] || fail "missing $file"
@@ -3635,7 +3638,7 @@ refused() {
   out=$case_dir/refused
   if "$@" >"$out" 2>&1; then fail "the deploy took $*"; fi
   assert_contains "$out" "$expected"
-  assert_lacks "$EVENTS" 'bootstrap'
+  # The maker refuses a page after the toolchain, before the build.
   assert_lacks "$EVENTS" 'cabal build'
 }
 expected="--app-page $files/missing.zip: no such file here, or it cannot be read"
@@ -3724,9 +3727,9 @@ assert_contains "$out" "warning: the pinned GHC is 9.14.1; the build with 9.10.3
 assert_contains "$out" "--system-tools: cabal 3.16.1.0 ($case_dir/bin/cabal)"
 assert_lacks "$out" 'the pinned cabal'
 assert_contains "$out" "--system-tools: Node v24.3.0 ($sysbin/node), npm 11.0.0 ($case_dir/bin/npm)"
-{ [ "$(line_of "$EVENTS" 'bootstrap system-tools')" -lt "$(line_of "$EVENTS" 'curl https://api.github.com/')" ] &&
-  [ "$(line_of "$EVENTS" 'curl https://api.github.com/')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ]; } ||
-  fail 'the check of the machine'"'"'s tools did not come first, or the page was not looked up on GitHub'
+{ [ "$(line_of "$EVENTS" 'bootstrap system-tools')" -lt "$(line_of "$EVENTS" 'bootstrap native')" ] &&
+  [ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'curl https://api.github.com/')" ]; } ||
+  fail 'the check of the machine'"'"'s tools did not come first, or the page was not looked up on GitHub after the toolchain'
 assert_contains "$out" "the page of $head1 from the cache"
 assert_contains "$EVENTS" "bootstrap native --without-postgres --system-tools WIKI_TOOLCHAIN_HOME=$pre/toolchain"
 assert_contains "$EVENTS" "bootstrap node --system-tools WIKI_TOOLCHAIN_HOME=$pre/toolchain"
@@ -3743,10 +3746,10 @@ pass '--system-tools with every tool there: a GHC that is not the pinned one is 
 # them again are those web/bundle.sh's header lists as what it writes.
 sed -n '/^# It writes:/,/^# toolchain\/build-wasm.sh runs it/s/^#   \([^ ,][^ ,]*\(, [^ ,][^ ,]*\)*\) .*/\1/p' "$SOURCE_DIR/../web/bundle.sh" |
   sed 's/, /\n/g; s|/$||' | LC_ALL=C sort >"$TMP/bundle-header"
-sed -n "s/^BUNDLE_OUTPUTS='\(.*\)'\$/\1/p" "$SOURCE_DIR/deploy-local.sh" | tr ' ' '\n' | LC_ALL=C sort >"$TMP/bundle-deploy"
+sed -n 's/^bundleOutputs = \[\(.*\)\]$/\1/p' "$SOURCE_DIR/../maker/src/Maker/Deploy/Prepare.hs" | sed 's/, /\n/g; s/"//g' | LC_ALL=C sort >"$TMP/bundle-deploy"
 [ "$(wc -l <"$TMP/bundle-header")" -ge 8 ] || fail "web/bundle.sh's header lists too few files; did its format change? $(cat "$TMP/bundle-header")"
 cmp -s "$TMP/bundle-header" "$TMP/bundle-deploy" ||
-  fail "the deploy's BUNDLE_OUTPUTS and the files web/bundle.sh's header lists differ: $(diff "$TMP/bundle-header" "$TMP/bundle-deploy" | grep '^[<>]' | tr '\n' ' ')"
+  fail "the maker's bundleOutputs (maker/src/Maker/Deploy/Prepare.hs) and the files web/bundle.sh's header lists differ: $(diff "$TMP/bundle-header" "$TMP/bundle-deploy" | grep '^[<>]' | tr '\n' ' ')"
 pass 'the files --bundle-locally builds again are those web/bundle.sh says it writes'
 
 # The wizard, toolchain/configure.hs, knows the deploy's options: every

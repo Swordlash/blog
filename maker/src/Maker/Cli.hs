@@ -33,6 +33,7 @@ import Maker.Build.Wasm (buildWasm, hspecHalogen, serveWasm, testWasm, wasmBuild
 import Maker.Check.Native qualified as Check
 import Maker.Context
 import Maker.Deploy.Apply (apply)
+import Maker.Deploy.Page (pageStep)
 import Maker.Deploy.Plan (readPlan)
 import Maker.Deploy.Prepare (prepare)
 import Maker.Deploy.Tex (texStep)
@@ -264,7 +265,7 @@ main = do
       wb <- wasmBuild False
       serveWasm be wb args
     HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
-    DeployApply file -> readPlan file >>= texStep >>= prepare >>= apply
+    DeployApply file -> readPlan file >>= pageStep >>= texStep >>= prepare >>= apply
     CheckNative rootArg options -> do
       root' <- maybe getCurrentDirectory makeAbsolute rootArg
       (report, ok) <- Check.checkNative root' options
