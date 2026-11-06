@@ -836,6 +836,19 @@ confirms it against reality and the plan is amended if it does not hold.
     directories (`dist-newstyle/...`) stay cached per compiler. The first runs fell
     back on the old keys once; those restore keys go at the next bump of the tag.
 
+55. **The two stages split at GHC (WP5.68 c1, #172; the owner, 2026-11-05).**
+    `toolchain/bootstrap.sh` installs only what GHC needs before there is one
+    (Debian's `build-essential curl libgmp-dev xz-utils`; elsewhere it checks
+    `cc make curl tar xz`), then ghcup with GHC and cabal or checks the machine's
+    own, the Hackage mirror and the index, and hands every installing mode but
+    `node` to the maker, `native` included. The maker's first target in every
+    mode, `system-packages`, installs the builds' Debian packages (git,
+    pkg-config, zlib, libsodium, libpq unless `--without-postgres`, ncurses for
+    the wizard, and jq, unzip and zstd where the wasm sysroot is set up); in
+    `native` it then checks what wiki-server links (`Maker.Check.Native`, also
+    `maker check native`), the same check as `toolchain/check-native.sh` word for
+    word.
+
 ## Repository layout
 
 ```
@@ -924,8 +937,8 @@ In the order to do it, unless the owner says otherwise.
   maker. Each phase starts when the pull requests touching the same scripts are
   merged. Phases (a) and (b) are merged (#167, #168; decisions 51 and 52);
   `web/bundle.sh` stays a script the maker runs (decision 52). (c) is cut in two:
-  (c1), #172, the new split between the stages; (c2) the deploy, as above, after
-  it. The split (the owner, 2026-11-05): `bootstrap.sh`
+  (c1), #172, merged, the new split between the stages (decision 55); (c2) the
+  deploy, as above, which is next. The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1357,6 +1370,16 @@ needs. Each was true when its package merged; check before relying on one.
   which it does not; the unseen dot is per browser, not per account, and appears a
   moment after the page shows; raw HTML in an entry keeps its own ids and `[[toc]]`
   lists them unprefixed.
+- WP5.68c1 (decision 55): two copies of the native check, the shell's (which
+  the deploy and the wizard run before there is a GHC) and the maker's;
+  `test-bootstrap.sh` runs its check cases against both, and (c2) retires the
+  shell's. A machine without libsodium or libpq learns it from `bootstrap
+  native` only after GHC, cabal and the maker are built; the deploy's own check
+  still comes first. (c2) must decide what the paths that need no GHC today do
+  (`--static --backend-only`, which installs only Node; `undeploy-local.sh` and
+  `--status`; the check before the downloads): keep a shell path, or build the
+  maker first. The 9.10 job builds the maker but never runs `bootstrap native
+  --system-tools` with that GHC.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
