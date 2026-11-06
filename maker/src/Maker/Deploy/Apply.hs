@@ -164,12 +164,16 @@ apply p = do
   (description, execStart', extra) <-
     if server
       then do
-        let base =
-              unitWord (dir </> "bin" </> "wiki-server")
+        -- The deployment's own paths in plain double quotes, as the shell
+        -- writes them; only the paths given as options go through
+        -- 'unitWord'.
+        let quoted path = "\"" <> path <> "\""
+            base =
+              quoted (dir </> "bin" </> "wiki-server")
                 <> " serve --data "
-                <> unitWord (dir </> "data")
+                <> quoted (dir </> "data")
                 <> " --static "
-                <> unitWord (dir </> "app")
+                <> quoted (dir </> "app")
                 <> " --listen "
                 <> listen
                 <> " --admin-listen 127.0.0.1:"
