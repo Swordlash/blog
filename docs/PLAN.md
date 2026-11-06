@@ -857,9 +857,12 @@ confirms it against reality and the plan is amended if it does not hold.
     maker with them, through `WIKI_MAKER` or the maker built with its own cabal
     project. The messages, the unit, the state file, the console and the commands
     run are the shell's byte for byte, and `test-deploy-local.sh` runs every case
-    with the maker. The plan loses keys as more of the deploy moves. A demo whose
-    page is not built on the machine keeps the shell's copy of that part until it
-    has a GHC.
+    with the maker. The plan loses keys as more of the deploy moves. Every deploy
+    goes through it (c2b, #174): a demo whose page is not built on the machine
+    runs `toolchain/bootstrap.sh static`, which installs GHC and cabal for the
+    maker and Node, without the C libraries' packages, the native check or the
+    wasm toolchain (`--system-tools` and `--hackage-mirror` as for `native`); a
+    `--no-build` deploy on a machine with no cabal stops before anything changes.
 
 ## Repository layout
 
@@ -964,9 +967,9 @@ In the order to do it, unless the owner says otherwise.
   that changes the running deployment (`maker deploy apply --plan FILE`, decision
   56); then the builds and where the page comes from; then the TeX step and the
   locked-down options; then the shell's front, with the wizard as the TUI's deploy
-  flow and `configure.sh` and `configure.hs` retired. The pull request that moves a
-  demo whose page is not built on the machine needs a bootstrap mode that gives
-  GHC, cabal and Node without the native check (to decide then). The split (the owner, 2026-11-05): `bootstrap.sh`
+  flow and `configure.sh` and `configure.hs` retired. (c2b), #174, merged: a demo
+  whose page is not built on the machine goes through the maker too, with the
+  bootstrap mode `static` (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1400,8 +1403,8 @@ needs. Each was true when its package merged; check before relying on one.
   --system-tools` with that GHC.
 - WP5.68c2a (decision 56): `deploy-lib.sh`'s firewall, `tailscale serve` and
   state functions have a second copy in the maker while `undeploy-local.sh` and
-  `--status` stay in shell, and the shell's tail stays whole for `--static
-  --backend-only` and `--static --app-page`. A `--no-build` deploy on a machine
+  `--status` stay in shell. A demo from GitHub now installs GHC and cabal it did
+  not need before (c2b), a few minutes once. A `--no-build` deploy on a machine
   whose maker was never built builds it just before the old service stops, so a
   Hackage it cannot reach is found late (nothing has changed by then). The maker
   reads Tailscale's and the panel's JSON with aeson, where the shell used python3,
