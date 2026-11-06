@@ -21,7 +21,6 @@ where
 
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM_, unless, when)
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (isDigit)
 import Data.IORef
 import Data.List (isPrefixOf, isSuffixOf, sort, stripPrefix)
@@ -247,7 +246,7 @@ checkTex p path = do
   let environment = [("HOME", home), ("PATH", path)] <> [("WIKI_TEX_TIMEOUT", v) | Just v <- [timeoutVar], not (null v)]
   result <- try (readProcessInterleaved (setStdin nullStream (setEnv environment (proc "/bin/sh" [get p "root" </> "toolchain" </> "check-tex.sh"]))))
   let (code, out) = case result of
-        Right (c, o) -> (c, LBS8.unpack o)
+        Right (c, o) -> (c, decodeFs o)
         Left (_ :: IOException) -> (ExitFailure 127, "")
       text = reverse (dropWhile (== '\n') (reverse out))
   pure
@@ -297,11 +296,8 @@ texliveStep logFile name config shown = do
     ExitSuccess -> pure True
     ExitFailure n -> do
       warn (name <> " failed (exit " <> show n <> "); the end of " <> logFile <> ":")
-      text <- readFile logFile
-      length text `seq` hPutStr stderr (unlines (lastN 20 (lines text)))
+      tailLog 20 logFile
       pure False
-  where
-    lastN n xs = drop (length xs - n) xs
 
 -- | Build Perl from its source into the toolchain, for TeX Live's
 -- installer: a shallow clone of its tag (or a copy of a directory),
@@ -374,7 +370,7 @@ installTexlive p root' mirror source perlBin = do
   (reachCode, reached) <- withFile logFile AppendMode $ \h -> do
     result <- try (readProcessStdout (setStdin nullStream (setStderr (useHandleOpen h) (proc "curl" ["--fail", "--location", "--silent", "--show-error", "--max-time", "30", "--output", "/dev/null", "--write-out", "%{url_effective}", probeUrl]))))
     pure $ case result of
-      Right (c, o) -> (c, LBS8.unpack o)
+      Right (c, o) -> (c, decodeFs o)
       Left (_ :: IOException) -> (ExitFailure 127, "")
   let tail' = "/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512"
   case reachCode of
@@ -415,7 +411,7 @@ installTexlive p root' mirror source perlBin = do
               appendFile logFile ("+ " <> dir </> "install-tl" <> " --no-interaction --version\n")
               versionOut <- withFile logFile AppendMode $ \h -> do
                 result <- try (readProcessStdout (setStdin nullStream (setStderr (useHandleOpen h) (run (dir </> "install-tl") ["--no-interaction", "--version"]))))
-                pure $ either (\(_ :: IOException) -> "") (LBS8.unpack . snd) result
+                pure $ either (\(_ :: IOException) -> "") (decodeFs . snd) result
               case texYear versionOut of
                 Nothing -> do
                   warn ("TeX Live's installer in " <> dir <> " does not say its year (install-tl --version; see " <> logFile <> ")")

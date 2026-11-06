@@ -43,12 +43,11 @@ module Maker.Check.Native
 where
 
 import Control.Monad (filterM)
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (isSpace)
 import Data.List (intercalate, sort, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Development.Shake (getDirectoryFilesIO)
-import Maker.Process (firstLine, found, output, succeeds)
+import Maker.Process (decodeFs, firstLine, found, output, succeeds)
 import System.Directory (doesFileExist, executable, getPermissions)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
@@ -217,7 +216,7 @@ xelatex root options
   | not options.tex = pure (Uncounted "--" "xelatex" "checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)", Nothing)
   | otherwise = do
       (code, out) <- readProcessInterleaved (setStdin nullStream (proc "sh" [root </> "toolchain" </> "check-tex.sh"]))
-      let reportLines = Prelude.lines (LBS8.unpack out)
+      let reportLines = Prelude.lines (decodeFs out)
           first = fromMaybe "" (listToMaybe reportLines)
           second = case drop 1 reportLines of
             r : _ | not (null r) -> r

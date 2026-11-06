@@ -29,12 +29,11 @@ where
 
 import Data.Aeson (Value (..), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (isDigit)
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
-import Maker.Deploy.Plan (outputOf, prog, say, warn)
+import Maker.Deploy.Plan (encodeFs, outputOf, prog, say, warn)
 import System.Directory (findExecutable)
 import System.IO (hPutStr, stderr)
 
@@ -174,7 +173,7 @@ magicDnsName = do
 
 -- | @Self.DNSName@ of @tailscale status --json@, without its final dot.
 dnsNameOf :: String -> String
-dnsNameOf json = case decode (LBS8.pack json) of
+dnsNameOf json = case decode (encodeFs json) of
   Just (Object o)
     | Just (Object self) <- KeyMap.lookup "Self" o
     , Just (String n) <- KeyMap.lookup "DNSName" self ->
@@ -191,7 +190,7 @@ data Https = Https {name :: String, magicDns :: Bool, certificates :: Bool}
 -- | 'Https' from @tailscale status --json@, or 'Nothing' when Tailscale is
 -- not running or the JSON cannot be read.
 httpsOf :: String -> Maybe Https
-httpsOf json = case decode (LBS8.pack json) of
+httpsOf json = case decode (encodeFs json) of
   Just (Object o)
     | running o ->
         let n = T.unpack (T.dropWhileEnd (== '.') (textAt ["Self", "DNSName"] o))

@@ -29,7 +29,7 @@ import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Foreign.C.Error (throwErrnoIfMinus1Retry)
 import Foreign.C.Types (CInt (..))
 import Maker.Context (Context (..), Mode (..), logFile)
-import Maker.Process (firstLine, output, relay, succeeds)
+import Maker.Process (firstLine, output, relay, succeeds, tailLog)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
 import System.Exit (exitWith)
 import System.FilePath (takeDirectory)
@@ -61,11 +61,8 @@ failStep ctx step = do
   sayErr (step <> " failed; the end of " <> logFile ctx <> ":")
   exists <- doesFileExist (logFile ctx)
   when exists $ do
-    text <- readFile (logFile ctx)
-    length text `seq` hPutStr stderr (unlines (lastLines 40 (lines text)))
+    tailLog 40 (logFile ctx)
   exitWith (ExitFailure 1)
-  where
-    lastLines n xs = drop (length xs - n) xs
 
 -- | A command and its arguments as the log writes them.
 command :: [String] -> String

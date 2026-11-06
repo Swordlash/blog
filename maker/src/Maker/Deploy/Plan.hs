@@ -27,30 +27,29 @@ module Maker.Deploy.Plan
   , succeeds
   , outputOf
   , decodeFs
+  , encodeFs
   , relay
+  , tailLog
   , runInherit
   )
 where
 
 import Control.Exception (IOException, try)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
-import GHC.Foreign qualified as GHC
-import GHC.IO.Encoding (getFileSystemEncoding)
-import Maker.Process (relay)
+import Maker.Process (decodeFs, encodeFs, relay, tailLog)
 import System.Exit (exitWith)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
-import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed
 
 -- | The plan's values by key.
 newtype Plan = Plan (Map.Map String String)
   deriving (Eq, Show)
 
--- | Read a plan file.
+-- | Read a plan file. Its values are decoded as the maker's arguments are
+-- (the filesystem's encoding), since most of them are paths it passes on.
 readPlan :: FilePath -> IO Plan
-readPlan file = parsePlan <$> readFile file
+readPlan file = parsePlan . decodeFs <$> LBS.readFile file
 
 -- | A plan's lines: @key=value@, the value the rest of the line. Lines
 -- without @=@ and comments are skipped. A key given twice keeps its last
@@ -117,17 +116,6 @@ outputOf program args = do
   pure $ case result of
     Right (code, out) -> (code == ExitSuccess, decodeFs out)
     Left (_ :: IOException) -> (False, "")
-
--- | A program's output as text in the filesystem encoding, as GHC decodes
--- paths and arguments: every byte comes back unchanged when the text is
--- passed to another process (a path that is not valid UTF-8 included),
--- where a decoding by characters would change it.
-decodeFs :: LBS.ByteString -> String
-decodeFs bytes = unsafePerformIO $ do
-  encoding <- getFileSystemEncoding
-  let strict = LBS.toStrict bytes
-  BS.useAsCStringLen strict (GHC.peekCStringLen encoding)
-{-# NOINLINE decodeFs #-}
 
 -- | Run a command with the terminal's output and errors, and answer how it
 -- ended; a command that cannot be started ends as 127, as in the shell.

@@ -23,7 +23,6 @@ import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM_, unless, when)
 import Data.Aeson (Value (..), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (toLower)
 import Data.IORef
 import Data.List (isPrefixOf, isSuffixOf, stripPrefix)
@@ -485,7 +484,7 @@ nodePublicUrl =
 -- | The public address in the administration's settings, from their JSON;
 -- empty for none, 'Nothing' when the JSON cannot be read.
 publicUrlOf :: String -> Maybe String
-publicUrlOf json = case decode (LBS8.pack json) of
+publicUrlOf json = case decode (encodeFs json) of
   Just (Object o) -> Just $ case KeyMap.lookup "publicUrl" o of
     Just (String s) -> T.unpack s
     _ -> ""
@@ -669,7 +668,7 @@ outputWithErrors :: FilePath -> [String] -> IO (Bool, String)
 outputWithErrors program args = do
   result <- try (readProcessInterleaved (setStdin nullStream (proc program args)))
   pure $ case result of
-    Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+    Right (code, out) -> (code == ExitSuccess, decodeFs out)
     Left (_ :: IOException) -> (False, "")
 
 -- | What a command prints on standard output, its errors left on the
@@ -678,7 +677,7 @@ outputKeepingErrors :: FilePath -> [String] -> IO (Bool, String)
 outputKeepingErrors program args = do
   result <- try (readProcessStdout (setStdin nullStream (proc program args)))
   pure $ case result of
-    Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+    Right (code, out) -> (code == ExitSuccess, decodeFs out)
     Left (_ :: IOException) -> (False, "")
 
 -- | A text without its final newlines, as @$(…)@ gives it.

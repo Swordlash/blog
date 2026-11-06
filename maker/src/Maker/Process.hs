@@ -12,6 +12,9 @@ module Maker.Process
   , sha256Text
   , removePath
   , relay
+  , decodeFs
+  , encodeFs
+  , tailLog
   )
 where
 
@@ -21,10 +24,12 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isSpace)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
-import Data.Text.Encoding.Error (lenientDecode)
+import Data.Text.Encoding (encodeUtf8)
+import GHC.Foreign qualified as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, removeDirectoryRecursive, removeFile)
-import System.IO (Handle, hClose, hFlush, hSetBinaryMode, stdout)
+import System.IO (Handle, hClose, hFlush, hSetBinaryMode, stderr, stdout)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
@@ -74,10 +79,45 @@ sha256Matches file expected = (== Just expected) <$> sha256Of file
 sha256Text :: String -> IO String
 sha256Text input = takeWhile (not . isSpace) . text <$> readProcessStdout_ (setStdin (byteStringInput (LBS.fromStrict (encodeUtf8 (T.pack input)))) (proc "sha256sum" []))
 
--- | What a program printed, as text. A program's output is UTF-8 here; a
--- byte that is not is replaced rather than stopping the run.
+-- | What a program printed, as text.
 text :: LBS.ByteString -> String
-text = T.unpack . decodeUtf8With lenientDecode . LBS.toStrict
+text = decodeFs
+
+-- | A program's output as text in the filesystem encoding, as GHC decodes
+-- paths and arguments: every byte comes back unchanged when the text is
+-- passed to another process or printed (a byte that is not valid UTF-8
+-- included), where a decoding by characters would change it. The maker
+-- sets that encoding, and the terminal's, to UTF-8 with ROUNDTRIP
+-- (app/Main.hs), so nothing it reads can fail to decode.
+decodeFs :: LBS.ByteString -> String
+decodeFs bytes = unsafePerformIO $ do
+  encoding <- getFileSystemEncoding
+  let strict = LBS.toStrict bytes
+  BS.useAsCStringLen strict (GHC.peekCStringLen encoding)
+{-# NOINLINE decodeFs #-}
+
+-- | A text as the bytes 'decodeFs' read it from: the program's own bytes,
+-- for a parser of them (JSON).
+encodeFs :: String -> LBS.ByteString
+encodeFs str = unsafePerformIO $ do
+  encoding <- getFileSystemEncoding
+  LBS.fromStrict <$> GHC.withCStringLen encoding str BS.packCStringLen
+{-# NOINLINE encodeFs #-}
+
+-- | The last lines of a log on standard error, byte for byte: a log holds
+-- what programs printed, which need not be text in any encoding. Nothing
+-- is shown when the log cannot be read.
+tailLog :: Int -> FilePath -> IO ()
+tailLog n file = do
+  result <- try (BS.readFile file)
+  case result of
+    Left (_ :: IOException) -> pure ()
+    Right bytes -> do
+      let ls = BS.split 10 bytes
+          ls' = if not (null ls) && BS.null (last ls) then init ls else ls
+      hFlush stdout
+      mapM_ (\l -> BS.hPut stderr l >> BS.hPut stderr "\n") (drop (length ls' - n) ls')
+      hFlush stderr
 
 -- | Remove a file or a directory with everything in it, if it is there.
 removePath :: FilePath -> IO ()

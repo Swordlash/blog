@@ -23,7 +23,6 @@ import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.ByteString.Lazy.Char8 qualified as LBS8
 import Data.Char (toLower)
 import Data.IORef
 import Data.List (isInfixOf, sort, sortOn, stripPrefix)
@@ -336,7 +335,7 @@ serverCabalOutput p command extra =
       environment <- withVars [("WIKI_BUILD_VERSION", version)]
       result <- try (readProcessStdout (setWorkingDir (get p "root") (setEnv environment (setStdin nullStream (proc "cabal" (serverCabalArgs p command extra))))))
       pure $ case result of
-        Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+        Right (code, out) -> (code == ExitSuccess, decodeFs out)
         Left (_ :: IOException) -> (False, "")
 
 -- | Whether the build semaphore is used, by --semaphore or --no-semaphore,
@@ -349,7 +348,7 @@ semaphoreFlag p = case get p "opt_semaphore" of
     (code, out) <- readProcessInterleaved (setStdin nullStream (proc "sh" [get p "root" </> "toolchain" </> "check-semaphore.sh"])) `orElse` (ExitFailure 127, "")
     -- The first line of the probe's error, which names the failure,
     -- without the probe's own name and a closing colon.
-    let reason = case filter (not . null) (lines (LBS8.unpack out)) of
+    let reason = case filter (not . null) (lines (decodeFs out)) of
           l : _ ->
             let l' = fromMaybe l (stripPrefix "check-semaphore: " l)
              in if not (null l') && last l' == ':' then init l' else l'
@@ -402,7 +401,7 @@ cabalLogsDir :: FilePath -> IO (Maybe FilePath)
 cabalLogsDir root = do
   result <- try (readProcessStdout (setWorkingDir root (setStdin nullStream (setStderr nullStream (proc "cabal" ["path", "-z", "-v0", "--logs-dir"])))))
   let said = case result of
-        Right (ExitSuccess, out) -> takeWhile (`notElem` ['\n', '\0']) (LBS8.unpack out)
+        Right (ExitSuccess, out) -> takeWhile (`notElem` ['\n', '\0']) (decodeFs out)
         Right _ -> ""
         Left (_ :: IOException) -> ""
   home <- getHomeDirectory

@@ -6,7 +6,7 @@ import GHC.Foreign qualified as GHC
 import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
-import Maker.Deploy.Plan (decodeFs, get, has, parsePlan, set)
+import Maker.Deploy.Plan (decodeFs, encodeFs, get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
@@ -25,6 +25,9 @@ spec = describe "the deploy's part in the maker" $ do
       encoding <- getFileSystemEncoding
       back <- GHC.withCStringLen encoding (decodeFs (LBS.fromStrict bytes)) BS.packCStringLen
       back `shouldBe` bytes
+    it "encodes the decoded text back to the same bytes, for a parser of them" $ do
+      let bytes = LBS.pack [0x7b, 0x22, 0xc5, 0xbc, 0x22, 0x3a, 0xff, 0x7d]
+      encodeFs (decodeFs bytes) `shouldBe` bytes
     it "reads a missing or empty key as empty, as an unset variable" $ do
       let plan = parsePlan "nodeless=\n"
       (get plan "nodeless", has plan "nodeless", has plan "missing") `shouldBe` ("", False, False)
