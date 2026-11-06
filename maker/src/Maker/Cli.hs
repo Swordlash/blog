@@ -128,7 +128,7 @@ parser =
               "deploy"
               ( info
                   (Deploy <$> many (strArgument (metavar "OPTION…")))
-                  (forwardOptions <> progDesc "Deploy the wiki on this machine, with toolchain/deploy-local.sh's options (--help lists them)")
+                  (forwardOptions <> progDesc "Deploy the wiki on this machine, with toolchain/deploy-local.sh's options (sh toolchain/deploy-local.sh --help lists them)")
               )
             <> command
               "check"

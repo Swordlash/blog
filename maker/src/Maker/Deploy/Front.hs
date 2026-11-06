@@ -26,7 +26,7 @@ where
 
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM_, unless, when)
-import Data.Char (isSpace)
+import Data.Char (isAlphaNum, isDigit, isSpace)
 import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isJust)
 import Maker.Deploy.Apply (apply, rollbackByHand)
@@ -708,11 +708,17 @@ loadEnvironment root systemTools base = do
   unless (code == ExitSuccess) (exitWith code)
   let entries = [(k, drop 1 v) | e <- splitNul (decodeFs bytes), not (null e), let (k, v) = break (== '=') e, k `notElem` shellOwn]
   current <- getEnvironment
-  forM_ [k | (k, _) <- current, k `notElem` map fst entries, k `notElem` shellOwn] unsetEnv
+  -- Only a name the shell could hold goes when the shell no longer has it:
+  -- the shell drops a name that is not an identifier from its environment.
+  forM_ [k | (k, _) <- current, k `notElem` map fst entries, k `notElem` shellOwn, identifier k] unsetEnv
   forM_ entries $ \(k, v) -> when (lookup k current /= Just v) (setEnv k v)
   where
     -- What the shell sets for itself, which this process keeps as it is.
     shellOwn = ["_", "SHLVL", "PWD", "OLDPWD"]
+    identifier k = not (null k) && all (\c -> isAlphaNum c || c == '_') k && not (isDigit (head' k))
+    head' k = case k of
+      c : _ -> c
+      [] -> ' '
     splitNul s = case break (== '\0') s of
       (a, []) -> [a]
       (a, _ : rest) -> a : splitNul rest
