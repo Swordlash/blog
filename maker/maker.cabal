@@ -58,6 +58,7 @@ library
     Maker.Toolchain.Fourmolu
     Maker.Toolchain.Ghcup
     Maker.Toolchain.Node
+    Maker.Toolchain.Sodium
     Maker.Toolchain.Wasm
     Maker.Version
 

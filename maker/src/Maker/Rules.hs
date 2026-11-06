@@ -29,6 +29,7 @@ import Maker.Toolchain.Chromium (installChromium)
 import Maker.Toolchain.Debian (systemPackages)
 import Maker.Toolchain.Fourmolu (installFourmolu)
 import Maker.Toolchain.Node (installNode, nodeVersionNow)
+import Maker.Toolchain.Sodium (installSodiumWasm)
 import Maker.Toolchain.Wasm (guardSysroot, installSysroot, installWasmGhc)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>))
@@ -40,6 +41,7 @@ import System.Posix.Types (Fd (..))
 data Target
   = SystemPackages
   | WasmSysroot
+  | WasmSodium
   | WasmGhc
   | Node
   | Chromium
@@ -52,6 +54,7 @@ targetName :: Target -> String
 targetName = \case
   SystemPackages -> "system-packages"
   WasmSysroot -> "wasm-sysroot"
+  WasmSodium -> "wasm-libsodium"
   WasmGhc -> "wasm-ghc"
   Node -> "node"
   Chromium -> "chromium"
@@ -65,10 +68,10 @@ targetName = \case
 -- the check of what its build links ('bootstrap').
 targetsFor :: Mode -> [Target]
 targetsFor = \case
-  Toolchain -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
-  Build -> [SystemPackages, WasmSysroot, WasmGhc, Node]
-  All -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
-  Warm -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
+  Toolchain -> [SystemPackages, WasmSysroot, WasmSodium, WasmGhc, Node, Chromium, Fourmolu]
+  Build -> [SystemPackages, WasmSysroot, WasmSodium, WasmGhc, Node]
+  All -> [SystemPackages, WasmSysroot, WasmSodium, WasmGhc, Node, Chromium, Fourmolu]
+  Warm -> [SystemPackages, WasmSysroot, WasmSodium, WasmGhc, Node, Chromium, Fourmolu]
   Native -> [SystemPackages]
   Static -> [Node]
 
@@ -84,6 +87,9 @@ rules ctx found' = do
     phony (targetName target) $ case target of
       SystemPackages -> liftIO (systemPackages ctx)
       WasmSysroot -> liftIO (installSysroot ctx)
+      WasmSodium -> do
+        need [targetName WasmSysroot]
+        liftIO (installSodiumWasm ctx)
       WasmGhc -> do
         need [targetName WasmSysroot]
         liftIO (installWasmGhc ctx)

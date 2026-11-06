@@ -217,6 +217,12 @@ jobs:
             --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
         )
 
+    # libsodium for wasm32-wasi, which the opaque package links: the maker's
+    # rule clones its pinned commit and builds it into ~/.ghc-wasm's sysroot,
+    # unless the sysroot from the cache has it already.
+    - name: Build libsodium for wasm32-wasi
+      run: sh toolchain/maker.sh toolchain install wasm-libsodium
+
     # Once the dependencies have built, before the page: a failure in the
     # wiki's own code still keeps them.
     - name: Save cached dependencies

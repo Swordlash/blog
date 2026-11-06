@@ -24,6 +24,11 @@ unset GHCUP_INSTALL_BASE_PREFIX
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 REV=358ea50b8496a69da6ce375c0c58bc049dbcb92d
+# The libsodium the maker builds into the wasm sysroot, pinned by tag and
+# commit in toolchain/pins.env.
+SODIUM_TAG=$(sed -n 's/^LIBSODIUM_TAG=//p' "$SOURCE_DIR/pins.env")
+SODIUM_COMMIT=$(sed -n 's/^LIBSODIUM_COMMIT=//p' "$SOURCE_DIR/pins.env")
+export SODIUM_COMMIT
 passed=0
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -92,6 +97,13 @@ case $name in
       *' checkout -q FETCH_HEAD')
         printf 'ghcupURL: fake\n' >"$dir/ghcup-wasm-0.0.9.yaml"
         cp "$FAKE_SETUP" "$dir/setup.sh" ;;
+      # libsodium's clone: a configure that writes a Makefile whose install
+      # puts the archive and the header where configure was told.
+      *' clone --quiet --depth 1 --branch '*' https://github.com/jedisct1/libsodium '*)
+        for last in "$@"; do :; done
+        mkdir -p "$last"
+        cp "$FAKE_SODIUM_CONFIGURE" "$last/configure" ;;
+      *' rev-parse HEAD') printf '%s\n' "${FAKE_SODIUM_HEAD:-$SODIUM_COMMIT}" ;;
       *) printf 'unexpected git %s\n' "$*" >>"$EVENTS"; exit 91 ;;
     esac ;;
   *) exit 91 ;;
@@ -106,7 +118,20 @@ EOF
   # finds, and the host's would take seconds, or fail, at every check.
   fake_xelatex working
   FAKE_SETUP=$case_dir/fake-setup.sh
-  export FAKE_SETUP
+  FAKE_SODIUM_CONFIGURE=$case_dir/fake-sodium-configure
+  export FAKE_SETUP FAKE_SODIUM_CONFIGURE
+  cat >"$FAKE_SODIUM_CONFIGURE" <<'EOF'
+#!/bin/sh
+printf 'libsodium configure %s\n' "$*" >>"$EVENTS"
+for arg in "$@"; do
+  case $arg in
+    --libdir=*) libdir=${arg#*=} ;;
+    --includedir=*) includedir=${arg#*=} ;;
+  esac
+done
+printf 'all:\n\t@true\ninstall:\n\tmkdir -p %s %s\n\ttouch %s/libsodium.a %s/sodium.h\n' "$libdir" "$includedir" "$libdir" "$includedir" >Makefile
+EOF
+  chmod +x "$FAKE_SODIUM_CONFIGURE"
   cat >"$FAKE_SETUP" <<'EOF'
 #!/bin/sh
 printf 'setup.sh PREFIX=%s SKIP_GHC=%s FLAVOUR=%s\n' "$PREFIX" "$SKIP_GHC" "$FLAVOUR" >>"$EVENTS"
@@ -177,6 +202,10 @@ sysroot() {
   mkdir -p "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi"
   touch "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libc.a" "$prefix/env"
   printf '%s\n' "$REV" >"$prefix/.paladyn-rev"
+  # libsodium as the maker installs it into the sysroot.
+  mkdir -p "$prefix/wasi-sdk/share/wasi-sysroot/include/wasm32-wasi"
+  touch "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libsodium.a" \
+    "$prefix/wasi-sdk/share/wasi-sysroot/include/wasm32-wasi/sodium.h" "$prefix/.libsodium-$SODIUM_COMMIT"
   for binary in add_to_github_path.sh wasi-sdk/bin/wasm32-wasi-clang binaryen/bin/wasm-opt wasmtime/bin/wasmtime nodejs/bin/node; do
     mkdir -p "$(dirname "$prefix/$binary")"
     printf '#!/bin/sh\nexit 0\n' >"$prefix/$binary"
@@ -222,6 +251,33 @@ rm "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
 bootstrap toolchain >"$case_dir/repair"
 [ "$(cat "$EVENTS")" = "$(printf 'chromium install\nchromium launch')" ] || fail 'broken Chromium cache was not repaired'
 pass 'a stale browser marker does not hide a missing executable'
+
+# A sysroot without libsodium gets it: cloned at the pinned tag, checked
+# against the pinned commit, configured for wasm32-wasi and installed into
+# the sysroot, the clone deleted. A clone at another commit, or a source
+# that is neither a URL nor a directory, stops the run before anything is
+# built.
+sodium_sysroot=$HOME/.ghc-wasm/wasi-sdk/share/wasi-sysroot
+rm "$sodium_sysroot/lib/wasm32-wasi/libsodium.a" "$HOME/.ghc-wasm/.libsodium-$SODIUM_COMMIT"
+: >"$EVENTS"
+FAKE_SODIUM_HEAD=0000000000000000000000000000000000000000 bootstrap toolchain >"$case_dir/sodium-wrong" 2>&1 &&
+  fail 'a libsodium clone at another commit was accepted'
+assert_contains "$case_dir/sodium-wrong" "is commit 0000000000000000000000000000000000000000, not the pinned $SODIUM_COMMIT"
+if grep -F 'libsodium configure' "$EVENTS" >/dev/null; then fail 'libsodium of another commit was built'; fi
+WIKI_LIBSODIUM_SOURCE=ftp://git.example/libsodium bootstrap toolchain >"$case_dir/sodium-ftp" 2>&1 &&
+  fail 'an ftp source of libsodium was accepted'
+assert_contains "$case_dir/sodium-ftp" 'WIKI_LIBSODIUM_SOURCE ftp://git.example/libsodium: a git repository'
+: >"$EVENTS"
+bootstrap toolchain >"$case_dir/sodium" 2>&1 || fail "libsodium was not built: $(cat "$case_dir/sodium")"
+assert_contains "$EVENTS" "git -c advice.detachedHead=false clone --quiet --depth 1 --branch $SODIUM_TAG https://github.com/jedisct1/libsodium $HOME/.wiki-toolchain/libsodium-src"
+assert_contains "$EVENTS" "libsodium configure --host=wasm32-wasi --prefix=$sodium_sysroot --libdir=$sodium_sysroot/lib/wasm32-wasi"
+[ -f "$sodium_sysroot/lib/wasm32-wasi/libsodium.a" ] || fail 'libsodium was not installed into the sysroot'
+[ -f "$HOME/.ghc-wasm/.libsodium-$SODIUM_COMMIT" ] || fail 'libsodium was installed without its marker'
+[ ! -e "$HOME/.wiki-toolchain/libsodium-src" ] || fail 'the libsodium clone was kept'
+: >"$EVENTS"
+bootstrap toolchain >"$case_dir/sodium-again" 2>&1
+if grep -F 'libsodium' "$EVENTS" >/dev/null; then fail 'an installed libsodium was built again'; fi
+pass 'libsodium is built into the wasm sysroot from a clone of the pinned commit, and only then'
 
 # A Debian machine without libpq-dev (or the package given), and without
 # root or a sudo that needs no password: dpkg-query reports every package
