@@ -408,19 +408,26 @@ handlers env caller =
         now <- liftIO getCurrentTime
         legacy <- liftIO (reading env.storage legacyPasswordCount)
         when (legacy == 0) (refuse ApiError.Unauthenticated)
-        liftIO (Limiter.verdict env.limiter now credentials.login s.address) >>= \case
+        -- An attempt the OPAQUE exchange already admitted and counted is
+        -- taken first: the limit was applied when it started, so it is
+        -- not applied again here (with four failures behind it, the right
+        -- password of an account from before OPAQUE would otherwise be
+        -- refused on the fifth try). Only a sign-in naming no such attempt
+        -- passes the limit now.
+        counted <- case credentials.attempt of
+          Just key ->
+            liftIO (takeAttempt env.attempts now key) <&> \case
+              Just a -> T.toCaseFold (T.strip a.login) == T.toCaseFold (T.strip credentials.login)
+              Nothing -> False
+          Nothing -> pure False
+        verdict <- if counted then pure Allowed else liftIO (Limiter.verdict env.limiter now credentials.login s.address)
+        case verdict of
           Refused seconds ->
             throwError
               (apiError (ApiError.TooManyRequests ("Too many failed attempts to sign in as " <> T.strip credentials.login <> ": try again in " <> waitText seconds <> ".")))
                 { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
                 }
           Allowed -> do
-            counted <- case credentials.attempt of
-              Just key ->
-                liftIO (takeAttempt env.attempts now key) <&> \case
-                  Just a -> T.toCaseFold (T.strip a.login) == T.toCaseFold (T.strip credentials.login)
-                  Nothing -> False
-              Nothing -> pure False
             liftIO (Accounts.signIn env.storage now s.address credentials.login credentials.password) >>= \case
               Left (Accounts.SecondFactorWanted user) -> do
                 -- The password was right, but the user is not signed in
@@ -449,7 +456,10 @@ handlers env caller =
                 Just (a, WithRecord r) -> (Just a.user.id, recordFromStored r, encodeUtf8 a.user.id.text)
                 Just (a, _) -> (Just a.user.id, Nothing, encodeUtf8 a.user.id.text)
                 Nothing -> (Nothing, Nothing, "unknown:" <> encodeUtf8 (T.toCaseFold (T.strip body.login)))
-          let attempt st = Attempt {state = st, user, login = body.login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record}
+          let against = case found of
+                Just (_, WithRecord r) | isJust record -> Just r
+                _ -> Nothing
+              attempt st = Attempt {state = st, user, login = body.login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record, against}
           legacy <- liftIO (reading env.storage legacyPasswordCount)
           opaqueChallenge attempt (legacy > 0) s now record credential ke1
     , finishPasswordSignIn = \body -> do
@@ -616,7 +626,10 @@ handlers env caller =
                 let record = case stored of
                       Just (WithRecord r) -> recordFromStored r
                       _ -> Nothing
-                let attempt st = Attempt {state = st, user = Just u, login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record}
+                let against = case stored of
+                      Just (WithRecord r) | isJust record -> Just r
+                      _ -> Nothing
+                    attempt st = Attempt {state = st, user = Just u, login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record, against}
                 let legacy = case stored of
                       Just (LegacyHash _) -> True
                       _ -> False
@@ -987,6 +1000,16 @@ handlers env caller =
           O.scrub a.state
           pure (a.hasRecord && isRight finish)
       unless ok (refuse ApiError.Unauthenticated)
+      -- The record must still be the one the exchange ran against: a
+      -- reset or a change of password in the meantime ends the exchange,
+      -- as it ends the user's sessions.
+      current <- case a.user of
+        Just u ->
+          liftIO (reading env.storage (passwordOf u)) <&> \case
+            Just (WithRecord r) -> Just r
+            _ -> Nothing
+        Nothing -> pure Nothing
+      unless (isJust a.against && current == a.against) (refuse ApiError.Unauthenticated)
       pure a
     -- Use up the session's proof of its user's password, if it has one.
     proofOf :: Signing -> UTCTime -> UserId -> IO (Maybe Proof)

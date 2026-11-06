@@ -435,6 +435,28 @@ opaque backing = describe "passwords through OPAQUE" $ do
     jsonAs 401 replayed `shouldReturn` Unauthenticated
     setCookie replayed `shouldBe` Nothing
 
+  it "refuses a last message whose exchange started before the password changed" $ withPasswords backing identity $ \r -> do
+    -- Someone who knows the old password starts a sign-in and keeps its
+    -- last message while the password is reset.
+    (st, ke1) <- either (panic . show) pure =<< O.clientStart "editor's password"
+    challenge :: LoginChallenge <- sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "editor", ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+    ke3 <- maybe (panic "no last message") pure (clientLast st challenge)
+    givePassword r "user-editor" "editor's new password"
+    late <- sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3}
+    jsonAs 401 late `shouldReturn` Unauthenticated
+    setCookie late `shouldBe` Nothing
+    _ <- signInAs r "editor" "editor's new password"
+    pass
+
+  it "lets an account from before OPAQUE in with its right password after four wrong ones" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    let tryOldWay password = do
+          c <- challengeFor r "editor" password
+          sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password password, attempt = Just c.attempt}
+    replicateM_ 4 (tryOldWay "a wrong password" >>= jsonAs 401 >>= (`shouldBe` Unauthenticated))
+    -- The fifth start was admitted and counted; the old way finishes it.
+    (.status) <$> tryOldWay "editor's old password" `shouldReturn` 200
+
   it "stores a record and no hash for every way a password is set, and each signs in" $ withPasswords backing identity $ \r -> do
     -- The administrator's new user, and new password for a user.
     _ :: Account <- createUser r (onAdmin r) [] (newAccount "bea") >>= jsonAs 201

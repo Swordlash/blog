@@ -19,7 +19,7 @@ attemptAt now = do
   setup <- either (panic . show) pure =<< O.generateServerSetup
   (_, ke1) <- either (panic . show) pure =<< O.clientStart "a password"
   (st, _, _) <- either panic pure =<< respondTo setup defaultStretch Nothing "nobody" ke1
-  pure Attempt {state = st, user = Nothing, login = "nobody", startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = False}
+  pure Attempt {state = st, user = Nothing, login = "nobody", startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = False, against = Nothing}
 
 unitSpec :: Spec
 unitSpec = describe "OPAQUE sign-ins under way" $ do

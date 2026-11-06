@@ -227,6 +227,10 @@ data Attempt = Attempt
   , hasRecord :: Bool
   -- ^ Whether the user has a record: a sign-in for a user without one
   -- (a login nobody has, an account from before OPAQUE) never finishes.
+  , against :: Maybe StoredRecord
+  -- ^ The stored record the exchange ran against. Its last message is
+  -- taken only while the user's stored record is still this one, so that
+  -- a password reset or change ends every exchange started before it.
   }
 
 -- | The sign-ins under way, by their ids, and the most that are kept.
