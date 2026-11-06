@@ -42,7 +42,7 @@ import Sel (secureMain)
 import System.Directory (doesDirectoryExist)
 import Wiki.Server (ServerError (..), serve)
 import Wiki.Server.Compress (compressDirectory)
-import Wiki.Server.Console (BackupOutcome (..), GuideCommand, OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runGuide, runOidcCheck, runRestore, runUsers, usersParser)
+import Wiki.Server.Console (BackupOutcome (..), CheckOutcome (..), GuideCommand, MigrateOutcome (..), OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runCheck, runGuide, runMigrate, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (defaultKeep)
 import Wiki.Server.Version (serverVersion, versionReport)
@@ -63,6 +63,10 @@ data Command
     Guide GuideCommand
   | -- | Write the gzip copies of the application's files in a directory.
     Compress FilePath
+  | -- | Apply the schema's pending steps to a database, and nothing else.
+    Migrate PlaceOptions
+  | -- | Read the whole database, as the deploy does after a migration.
+    Check PlaceOptions
 
 commands :: ParserInfo Command
 commands =
@@ -71,6 +75,8 @@ commands =
           ( command "serve" (info (Serve <$> serveOptions) (progDesc "Serve the wiki (the default command)"))
               <> command "backup" (info backupCommand (progDesc "Copy the database aside into DIR/backups, keeping the last few copies"))
               <> command "restore" (info (Restore <$> restoreParser) (progDesc "Restore a backup into a data directory no server is running on"))
+              <> command "migrate" (info (Migrate <$> placeOptions) (progDesc "Bring the database to this program's version of the schema, and do nothing else"))
+              <> command "check" (info (Check <$> placeOptions) (progDesc "Read every row of every table as this program does, and change nothing"))
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
               <> command "guide" (info (Guide <$> guideParser) (progDesc "Install the guide, the wiki's documentation, or give its pages this version's text"))
@@ -125,6 +131,27 @@ main =
         runGuide g >>= \case
           Right lines' -> traverse_ putText lines'
           Left why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      Migrate place ->
+        runMigrate place >>= \case
+          MigratedTo line -> putText line
+          MigrateFailed why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+          MigrateOfEarlierServer why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 3)
+      Check place ->
+        runCheck place >>= \case
+          CheckPassed lines' -> traverse_ putText lines'
+          CheckNotMigrated why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 4)
+          CheckUnreadable lines' -> do
+            traverse_ (putErrText . ("wiki-server: " <>)) lines'
+            exitWith (ExitFailure 5)
+          CheckFailed why -> do
             putErrText ("wiki-server: " <> why)
             exitWith (ExitFailure 1)
       Compress dir -> do

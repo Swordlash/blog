@@ -112,6 +112,13 @@ module Wiki.Server.Storage
   , databaseBytes
   , DataDirInUse (..)
 
+    -- * Migrating and checking the database by hand
+  , Migrated (..)
+  , migrateDatabase
+  , CheckProblem (..)
+  , TableRead (..)
+  , checkDatabase
+
     -- * The wiki's settings
   , readSettings
   , readServerSettings
@@ -252,7 +259,8 @@ import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFil
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
-import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
+import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
+import Wiki.Server.Storage.Migrate (databaseVersion, migrate, migrationsFor, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
@@ -463,6 +471,102 @@ newtype DataDirInUse = DataDirInUse Text
 
 instance Exception DataDirInUse where
   displayException (DataDirInUse why) = toS why
+
+-- | The database of a place and nothing else of the storage: the data
+-- directory's lock held (and on PostgreSQL the database's shared lock), one
+-- connection to the database for the action, all released afterwards. It
+-- neither migrates nor deletes an attachment's file, as 'openStorage'
+-- does: @wiki-server migrate@ and @wiki-server check@ run on it, the deploy
+-- with the service stopped.
+withDatabase :: Place -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
+withDatabase place act = do
+  createDirectoryIfMissing True place.dataDir
+  lock <- lockDataDir place.dataDir >>= either (throwIO . DataDirInUse) pure
+  flip finally (unlockDataDir lock) $ do
+    release <- case place.database of
+      SqliteFile _ -> pure pass
+      PostgresAt pg -> holdPostgres pg
+    flip finally release $ do
+      engine <- case place.database of
+        SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
+        PostgresAt pg -> openPostgresEngine pg
+      flip finally (closeEngine engine) $ case engine of
+        Engine p -> withResource p.writer act
+
+-- | 'Migrated' is what @wiki-server migrate@ did: the version of the schema
+-- the database was at, and the one it is at now (the same when no step was
+-- pending).
+data Migrated = Migrated
+  { from :: Int
+  , to :: Int
+  }
+  deriving stock (Eq, Show)
+
+-- | Apply the steps of the schema the database has not had, as the server
+-- does when it starts ("Wiki.Server.Storage.Migrate"), and nothing else.
+-- The deploy runs it with the new program before it starts the new server,
+-- then 'checkDatabase', so that a migration that fails, or leaves a row the
+-- program cannot read, is found while the backup taken before it can still
+-- be restored. A database of an earlier wiki-server ('OldSchema') or of a
+-- newer one ('Wiki.Server.Storage.Migrate.SchemaTooNew') is refused, as the
+-- server refuses it.
+migrateDatabase :: Place -> IO Migrated
+migrateDatabase place = withDatabase place $ \c -> do
+  before <- databaseVersion c
+  applied <- migrate c
+  pure Migrated {from = before, to = fromMaybe before (lastMay applied)}
+
+-- | 'CheckProblem' is why @wiki-server check@ failed.
+data CheckProblem
+  = -- | The database is not at this program's version of the schema: at
+    -- the first, this program knows the second. Migrate it first.
+    NotMigrated Int Int
+  | -- | Some tables did not read: every table as the check read it.
+    UnreadableTables [TableRead]
+  | -- | Every row read, but the wiki's records built from them did not:
+    -- why.
+    UnreadableRecords Text
+  deriving stock (Eq, Show)
+
+-- | Read the whole database as this program reads it, and change nothing:
+-- every row of every table through the storage's row decoders
+-- ('readEveryTable'), then the wiki's records an export builds from them
+-- (users, groups, grants, spaces, pages and their versions, comments, the
+-- audit log, the settings). The result is every table with the rows it
+-- read; a database not at this program's version of the schema is not
+-- read at all. What the deploy runs after 'migrateDatabase': a row the
+-- migration left that the new program cannot read is found then, not by
+-- the first reader to open the page that holds it.
+checkDatabase :: Place -> IO (Either CheckProblem [TableRead])
+checkDatabase place = withDatabase place $ \c -> do
+  at <- databaseVersion c
+  let known = maybe 0 (\m -> m.version) (lastMay (migrationsFor (schemaSuffix c)))
+  if at /= known
+    then pure (Left (NotMigrated at known))
+    else do
+      tables <- readEveryTable c
+      if any (isLeft . (\t -> t.rows)) tables
+        then pure (Left (UnreadableTables tables))
+        else
+          first (UnreadableRecords . toS . displayException) . ($> tables)
+            <$> try @SomeException (runDb c records)
+  where
+    -- Each record forced whole (through its Show), so that a value the
+    -- conversion from a row cannot make fails here and not later.
+    records :: (Backend be) => Db be ()
+    records = do
+      forced =<< loadUsers
+      forced =<< loadGroups
+      forced =<< loadMembership
+      forced =<< loadGrants
+      forced =<< loadSpaces
+      forced =<< loadAllPages
+      forced =<< Comments.loadAllThreads commentAuthor
+      forced =<< loadAuditLog
+      forced =<< loadSettings
+      forced . (\s -> s.homePage) =<< loadServerSettings
+    forced :: (Show a, MonadIO m) => a -> m ()
+    forced a = liftIO (void (evaluate (T.length (show a))))
 
 -- | Close the storage's database, and release its directory's lock.
 closeStorage :: Storage -> IO ()
