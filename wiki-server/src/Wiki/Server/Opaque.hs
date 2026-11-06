@@ -292,8 +292,14 @@ data Proof
     -- (@account\/password\/proof@).
     ByOpaque
   | -- | By signing in with the password from before OPAQUE, which only an
-    -- account without a record can do.
+    -- account without a record can do. A change of password that follows
+    -- it moves that same password to OPAQUE, and keeps the other sessions.
     ByOldPassword
+  | -- | By giving the password from before OPAQUE again, in a session that
+    -- was already signed in (@account\/password\/proof\/old@). It proves
+    -- the password as 'ByOldPassword' does, but a change of password that
+    -- follows it is a real change, which ends the other sessions.
+    ByOldPasswordAgain
   deriving stock (Eq, Show)
 
 -- | The sessions that have proved their password, by a key (the hash of

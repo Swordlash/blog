@@ -540,9 +540,16 @@ changePassword st u keep proved current new = runExceptT $ do
     throwError (PasswordRefused (Invalid "You sign in with a provider, and have no password to set: sign in there."))
   -- An account from before OPAQUE that proves its password by the proof
   -- its sign-in left, rather than by giving it, is moving its password to
-  -- OPAQUE: the password stays the same, and so do its other sessions.
+  -- OPAQUE: the password stays the same, and so do its other sessions. A
+  -- proof given again in a session already signed in is a real change of
+  -- password, which ends them.
   (right, moving) <- liftIO $ case before of
-    LegacyHash phc | not (maybe False (verifyPassword phc) current) -> (\p -> (p, p)) . isJust <$> proved
+    LegacyHash phc
+      | not (maybe False (verifyPassword phc) current) ->
+          proved <&> \case
+            Just ByOldPassword -> (True, True)
+            Just _ -> (True, False)
+            Nothing -> (False, False)
     _ -> (,False) <$> passwordProved before proved current
   unless right (throwError WrongCurrent)
   ExceptT $ writingEither st $ do

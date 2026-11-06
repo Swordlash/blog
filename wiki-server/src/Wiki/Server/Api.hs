@@ -663,7 +663,7 @@ handlers env caller =
                         liftIO $ case taken of
                           Just a | counted -> Limiter.succeededAfter env.limiter a.startedAt a.login s.address
                           _ -> Limiter.succeeded env.limiter login s.address
-                        liftIO (prove env.proofs now (tokenHash token.text) u ByOldPassword)
+                        liftIO (prove env.proofs now (tokenHash token.text) u ByOldPasswordAgain)
                         pure NoContent
                       else do
                         unless counted $ liftIO (Limiter.failed env.limiter now login s.address)
