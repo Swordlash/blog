@@ -159,9 +159,13 @@ confirms it against reality and the plan is amended if it does not hold.
     deployment it replaces in `previous/` with a copy of that backup and its commit,
     runs the new program's `migrate` and `check` before starting it, and rolls back by
     itself when either fails or the new server does not answer; `deploy-local.sh
-    --rollback` goes back by hand. A deployment is kept only when putting its files
-    back undoes the whole upgrade (the database's kind and port, the listener, the
-    HTTPS way and serve, and the place stay as they were). A `Dockerfile`
+    --rollback` goes back by hand. A deployment is kept only when a rollback puts
+    the whole upgrade back. The rollback reconciles what the upgrade changed
+    outside the files (WP5.73c1, #182): the firewall rule and tailscale serve go
+    back to the old port, PostgreSQL to its old port, the unit is put back or
+    removed. The service is started again only if it was running before the
+    deploy, and its PostgreSQL container is stopped only if it was stopped. A
+    `Dockerfile`
     and `docker-compose.yml` for a VPS are a package of their own (WP2.9), after the local
     variant works.
 16. **The server searches with the pure matcher, not FTS5.** After WP1.23 `searchPlain`
@@ -951,14 +955,6 @@ In the order to do it, unless the owner says otherwise.
   cannot undo, which the deploy names. The rollback puts back the data, the
   binary, the page and the unit, and starts the service only if it was
   running before the deploy. In two parts:
-  - **c1, the settings.** `previous/info` records whether the service was
-    running and whether a unit existed. The rollback reconciles the old state
-    with the current one: the ufw rule (close the new port's, open the old
-    one's), tailscale serve (point it back at the old port, or off, only where
-    it serves this deployment), PostgreSQL's published port (the container up
-    on the old port, the `pg_dump`/`pg_restore` wrappers rewritten), and the
-    unit (put back, or removed and disabled when the deploy followed
-    `--stop`).
   - **c2, the data**, in one pull request with the rest of WP5.68 (c2) and
     (d) (the owner, 2026-11-06: "the rollback and the rest of the move in one
     pull request, by a subagent, with a plan written with Fable's
@@ -1541,13 +1537,14 @@ needs. Each was true when its package merged; check before relying on one.
   are not in CI's cache, so CI runs wasm-opt and the bundle every time; Shake runs
   one job at a time (wasm-opt and esbuild together would compete for a small
   machine's memory).
-- Upgrades and rollback (WP5.73, #180 and #181): the server's attachment clean-up
+- Upgrades and rollback (WP5.73, #180, #181, #182): the server's attachment clean-up
   looks only at `data/backups`, not at the backup copy in `previous/`, so a rollback
   made after that backup was pruned may lack the files of attachments deleted since
-  (`wiki-server restore` says how many). One deployment back is kept. A deploy that
-  changes the database's kind or port, the port, the address, the HTTPS way, host or
-  serve, uses `--fresh`, adopts under `--prefix` or follows `--stop` keeps nothing
-  for a rollback, and says so. The commit recorded is the last build's
+  (`wiki-server restore` says how many). One deployment back is kept. Until WP5.73c2,
+  a deploy that changes the database's kind, uses `--fresh` or adopts under
+  `--prefix` keeps nothing for a rollback, and says so. The firewall step of a
+  rollback is tested only through its bookkeeping (the test deployments bind to
+  127.0.0.1, which has no rule). The commit recorded is the last build's
   (`dist-newstyle/deployed-commit.<mode>`); a page downloaded from CI is not of it.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
