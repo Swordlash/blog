@@ -250,7 +250,8 @@ async function signInThroughTheForm(login, password) {
 const adminIn = await signInThroughTheForm(adminLogin, adminPassword);
 assert.equal(adminIn.outcome, "signed in", "the administrator signing in");
 assert.ok(adminIn.token, "no session cookie");
-const sessionCookie = `wiki_session=${adminIn.token}`;
+const sessionToken = adminIn.token;
+const sessionCookie = `wiki_session=${sessionToken}`;
 
 async function eventually(check, what) {
   let last;
