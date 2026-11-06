@@ -2453,8 +2453,11 @@ on the machine, `plan` sends wasm to the hosted runners too (see above).
 
 Two cabal stores are cached, one per cabal version whatever the compilers (cabal keeps
 each compiler's packages apart inside it): the native one, saved only by the `unit` job,
-and the wasm one, saved only by the wasm job; `server-page.yml` restores the wasm one
-and saves nothing. The build directories are cached apart, per compiler. When a store
+and the wasm one, saved only by the wasm job. `server-page.yml` keeps a third, its
+own, since it compiles every dependency at `-O2` and those have unit ids of their
+own: it starts from the wasm one the first time, and its job `prune-caches` deletes
+its older copies as build.yml's does. The build directories are cached apart, per
+compiler. When a store
 has grown too large, the workflow "Delete a cabal store" (Actions, Run workflow) deletes
 it, and the next run builds it again.
 

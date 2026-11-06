@@ -713,7 +713,8 @@ jobs:
     # The wasm store (decision 54): one cache entry per cabal version for
     # both compilers this job uses (cabal partitions the store by compiler),
     # saved by this job only, and its older copies pruned by prune-caches,
-    # as the native job's are. server-page.yml restores it and saves nothing. The last restore
+    # as the native job's are. server-page.yml starts its own -O2 store from
+    # it the first time, and saves only that one. The last restore
     # key takes the copies saved under the key that named the compilers'
     # versions, once: remove it at the next bump of the tag.
     - name: Restore cached dependencies
