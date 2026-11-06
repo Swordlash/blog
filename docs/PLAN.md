@@ -850,8 +850,11 @@ confirms it against reality and the plan is amended if it does not hold.
     word.
 
 56. **The deploy hands its last part to the maker with a plan (WP5.68 c2a,
-    #173; c2c, #175; c2d, #176).** From the TeX step to the report at the end, the
-    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`): the TeX step
+    #173; c2c, #175; c2d, #176; c2e, #177).** From the page CI built to the report
+    at the end, the deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`):
+    the page CI built (`Page`: from GitHub with `--backend-only` or from a file
+    with `--app-page`, through the page cache, and `--bundle-locally`'s copy of
+    it; GitHub's answers read with aeson), the TeX step
     (`Tex`: whether the server can make PDFs, and the offer to install TeX Live,
     with a Perl built first, under the toolchain directory; a TeX Live just
     installed is checked again and kept only when it makes the probe's PDF), the builds and
@@ -997,7 +1000,8 @@ In the order to do it, unless the owner says otherwise.
   bootstrap mode `static` (decision 56). (c2c), #175, merged: the builds and
   checks, from the end of the TeX step (decision 56). (c2d), #176, merged: the
   TeX step, and one encoding for everything the maker reads and writes (decision
-  56). The split (the owner, 2026-11-05): `bootstrap.sh`
+  56). (c2e), #177, merged: the page CI built, its download, cache and unpacking
+  (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1440,7 +1444,13 @@ needs. Each was true when its package merged; check before relying on one.
   before the TeX step (c2c: right after it), still before anything of the wiki
   is built. The maker's encoding is UTF-8 with ROUNDTRIP whatever the locale,
   so its own messages print UTF-8 bytes on a terminal set to another encoding
-  (the shell printed them as written, also UTF-8).
+  (the shell printed them as written, also UTF-8). Since c2e the page CI built
+  is looked up after the bootstrap, since the maker exists only once GHC and
+  cabal do: a REF with no page still stops the deploy before anything is built
+  or changed, but after the toolchain is installed or checked, and a refused
+  `--static --backend-only` leaves the Node the bootstrap installed. The shell's
+  front moving into the maker can bring the lookup back before most of the
+  toolchain.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
