@@ -925,27 +925,47 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.73 A backup before every migration, a check that everything loads
-  after it, and a rollback** (the owner, 2026-11-06). Today a deploy backs the
-  database up before the new server opens it (decision 15), and the migrations
-  run in one transaction, so a step whose SQL fails changes nothing; but a
-  server started on a newer binary any other way (a restart by hand, an image)
-  migrates with no backup, nothing checks that the migrated data still reads,
-  and a deploy whose new server does not come up leaves it down. Three parts.
-  (1) The server, when it opens a database with steps pending, backs it up
-  first (`backups/<time>-before-v<N>.sqlite` or `.pgdump`), kept apart from
-  the scheduled backups' pruning, the last few of them. (2) After the steps,
-  in the same transaction, it reads every row of every table through the
-  storage's decoders (users, spaces, pages, their versions, comments,
-  settings, everything `exportWiki` reads); a row that does not read rolls
-  the transaction back, so the database stays at the version it was, and the
-  server stops with the table, the row and why. The same check is
-  `wiki-server check` by hand. (3) The deploy keeps the previous deployment's
-  binary and page; when the new server does not answer, it shows why (the
-  journal's last lines) and asks whether to roll back to the previous version
-  (on a terminal; without one it rolls back and says so): the previous files
-  back, the database restored from the backup the deploy made when the new
-  server had migrated it, the service restarted, and checked that it answers.
+- **WP5.73 The maker checks an upgrade's migration and rolls it back**
+  (the owner, 2026-11-06). The maker is the oracle: a server started by hand
+  on a newer binary is the operator's business ("if they deploy by hand, they
+  know what they are doing"), so the server itself takes no backup of its own.
+  A deploy records the commit it deployed in the state (`git_commit`, or
+  `unknown` when the source is not a git checkout) and keeps the previous
+  deployment's binary and page beside the new ones. On an upgrade the maker
+  backs the database up (as now), runs the migration itself (`wiki-server
+  migrate`), then reads every row of every table through the storage's
+  decoders (`wiki-server check`: users, spaces, pages and their versions,
+  comments, settings, everything an export reads). If either fails, it says
+  that the migration failed and why, rolls back (the database restored from
+  that backup, the previous binary and page back, the service started and
+  checked that it answers), and says which version it is back at (the
+  previous deployment's commit), the one to deploy again until the cause is
+  fixed.
+
+- **WP5.74 End-to-end encrypted private user spaces** (the owner,
+  2026-11-06). A user's personal space, or a subspace in it, can be made
+  encrypted: turning it on at a (sub)space's home page makes the whole
+  subspace encrypted. Its pages' text, titles, history, comments and
+  attachments are encrypted in the browser (WebCrypto, AES-GCM) with a key
+  of the subspace; the server and its administrator see ciphertext only,
+  in the database and in backups. The subspace's key is wrapped with the
+  user's account key, which the browser derives from the password with a
+  KDF and never sends: the login protocol changes so that the password is
+  hashed on the client into a login key (which the server checks, as it
+  checks a password's hash now) and an encryption key that stays in the
+  browser, so a change of password wraps the account key again and
+  re-encrypts nothing. A passkey's PRF output can wrap the account key too
+  (the vault of WP5.21), for a user without a password. Keys are kept in
+  the browser as non-extractable WebCrypto keys. A password reset loses the
+  encrypted pages, and says so before it is done ("if you have encrypted
+  pages, they will be destroyed"); an export, decrypted in the browser, is
+  the way to keep them. What the server does with a page's text does not
+  work in an encrypted subspace and says so (search on the server, PDF and
+  Word exports, feeds, link previews, notifications' excerpts): search runs
+  in the browser over the decrypted pages; slugs there are random, since a
+  title's slug would show the title. Not protected: an administrator who
+  changes the JavaScript the server sends, which then reads what the user
+  decrypts; no browser API closes that today.
 
 - **WP5.72 User subspaces as a place to go** (the owner, 2026-11-06). The
   container "User subspaces" stays a space nobody may view (decision 37), but
