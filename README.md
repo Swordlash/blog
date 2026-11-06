@@ -2278,8 +2278,8 @@ sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
 
 The deploy is moving into the maker too, from its end. `toolchain/deploy-local.sh`
 still reads the options and the state, checks the machine, downloads the page when it
-is not built here, runs the bootstrap and the TeX step; then it writes a plan of what
-it found and runs `maker deploy apply --plan FILE`, which does the rest: the builds and
+is not built here and runs the bootstrap; then it writes a plan of what it found and
+runs `maker deploy apply --plan FILE`, which does the rest: the TeX step, the builds and
 the checks of what they made, the service's Node, HTTPS through Tailscale, the ports,
 PostgreSQL's container, and everything that changes the running deployment (the
 backup, the files, the unit, the restart, the checks that it answers, `tailscale

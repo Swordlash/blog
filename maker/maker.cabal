@@ -43,6 +43,7 @@ library
     Maker.Deploy.Prepare
     Maker.Deploy.State
     Maker.Deploy.Tailscale
+    Maker.Deploy.Tex
     Maker.Deploy.Unit
     Maker.Log
     Maker.Pins
@@ -119,6 +120,7 @@ test-suite maker-test
 
   build-depends:
     , base
+    , bytestring
     , directory
     , filepath
     , hspec       >=2.10 && <2.12

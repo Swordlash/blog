@@ -190,7 +190,7 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
+    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -2830,7 +2830,7 @@ fake_xelatex() {
 # with which perl, then installs a TeX Live with a tlmgr (and no bin
 # directory with FAKE_INSTALL_TL_NO_BIN). The fake tlmgr says how
 # it was called, fails with FAKE_TLMGR_FAIL, and makes the working xelatex
-# beside itself when it is asked for the package xetex, as the real one
+# (one that fails, with FAKE_XELATEX_BROKEN) beside itself when it is asked for the package xetex, as the real one
 # installs XeTeX. So a deploy that looked for xelatex before running tlmgr
 # would fail here as it fails with the real installer.
 fake_texlive() {
@@ -2874,7 +2874,11 @@ printf 'tlmgr ran with perl=%s\n' "$(command -v perl || printf none)" >>"$EVENTS
 for package do
   [ "$package" = xetex ] || continue
   bin=$(cd "$(dirname "$0")" && pwd)
-  printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$bin/xelatex"
+  if [ -n "${FAKE_XELATEX_BROKEN:-}" ]; then
+    printf '#!/bin/sh\nprintf "! Fatal fontspec error: cannot find the font\\n" >&2\nexit 1\n' >"$bin/xelatex"
+  else
+    printf '#!/bin/sh\nprintf "Output written on probe.pdf\\n" >probe.log\nprintf "%%%%PDF fake\\n" >probe.pdf\n' >"$bin/xelatex"
+  fi
   chmod +x "$bin/xelatex"
 done
 TLMGR
@@ -3130,8 +3134,9 @@ assert_contains "$out" "the TeX Live the deploy installed stays in $texlive_root
 [ "$(state texlive)" = yes ] || fail 'the undeploy forgot the answer'
 pass '--texlive installs TeX Live under the toolchain once, the unit puts its bin first on PATH, and a second run reuses it'
 
-# An install that fails (tlmgr cannot reach its repository, or the
-# installer leaves no bin directory with tlmgr) leaves the PDFs off, with
+# An install that fails (tlmgr cannot reach its repository, the
+# installer leaves no bin directory with tlmgr, or the xelatex it installs
+# fails the check run again after the install) leaves the PDFs off, with
 # --no-pdf in the unit, and records no installation, and the deploy goes
 # on; the next run tries again, as texlive=yes says. A Perl without its
 # standard modules (RHEL's perl-interpreter alone) is built from source
@@ -3162,6 +3167,15 @@ assert_lacks "$EVENTS" 'tlmgr'
 assert_contains "$out" "TeX Live's installer left no bin/<platform>/tlmgr under $HOME/.wiki-toolchain/texlive/2026"
 assert_contains "$out" 'TeX Live was not installed (see above)'
 [ -z "$(state texlive_dir)" ] || fail 'an installation without bin was remembered'
+assert_lacks "$HOME/$unit" 'Environment="PATH='
+assert_contains "$HOME/$unit" ' --no-pdf'
+: >"$EVENTS"
+out=$case_dir/broken-xelatex
+FAKE_XELATEX_BROKEN=1 deploy --no-build >"$out" 2>&1 || fail 'the deploy whose new xelatex fails stopped'
+assert_contains "$EVENTS" 'tlmgr install'
+assert_contains "$out" "the TeX Live just installed in $HOME/.wiki-toolchain/texlive/2026 does not make the probe's PDF:"
+assert_contains "$out" 'the next deploy installs it again (--no-texlive stops it)'
+[ -z "$(state texlive_dir)" ] || fail 'an installation whose xelatex fails was remembered'
 assert_lacks "$HOME/$unit" 'Environment="PATH='
 assert_contains "$HOME/$unit" ' --no-pdf'
 : >"$EVENTS"

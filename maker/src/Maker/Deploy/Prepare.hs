@@ -22,13 +22,16 @@ where
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy.Char8 qualified as LBS8
+import Data.ByteString.Lazy qualified as LBS
 import Data.Char (toLower)
 import Data.IORef
 import Data.List (isInfixOf, sort, sortOn, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Ord (Down (..))
 import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (UTCTime, getCurrentTime)
 import Maker.Deploy.Plan
 import Maker.Deploy.Tailscale qualified as Tailscale
@@ -37,7 +40,6 @@ import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (exitWith)
 import System.FilePath (makeRelative, takeExtension, (</>))
 import System.IO
-import System.Process qualified as Pipe (createPipe)
 import System.Process.Typed
 
 -- | Do the deploy's preparing steps and answer the plan with what they
@@ -333,7 +335,7 @@ serverCabalOutput p command extra =
       environment <- withVars [("WIKI_BUILD_VERSION", version)]
       result <- try (readProcessStdout (setWorkingDir (get p "root") (setEnv environment (setStdin nullStream (proc "cabal" (serverCabalArgs p command extra))))))
       pure $ case result of
-        Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+        Right (code, out) -> (code == ExitSuccess, decodeFs out)
         Left (_ :: IOException) -> (False, "")
 
 -- | Whether the build semaphore is used, by --semaphore or --no-semaphore,
@@ -346,7 +348,7 @@ semaphoreFlag p = case get p "opt_semaphore" of
     (code, out) <- readProcessInterleaved (setStdin nullStream (proc "sh" [get p "root" </> "toolchain" </> "check-semaphore.sh"])) `orElse` (ExitFailure 127, "")
     -- The first line of the probe's error, which names the failure,
     -- without the probe's own name and a closing colon.
-    let reason = case filter (not . null) (lines (LBS8.unpack out)) of
+    let reason = case filter (not . null) (lines (decodeFs out)) of
           l : _ ->
             let l' = fromMaybe l (stripPrefix "check-semaphore: " l)
              in if not (null l') && last l' == ':' then init l' else l'
@@ -399,7 +401,7 @@ cabalLogsDir :: FilePath -> IO (Maybe FilePath)
 cabalLogsDir root = do
   result <- try (readProcessStdout (setWorkingDir root (setStdin nullStream (setStderr nullStream (proc "cabal" ["path", "-z", "-v0", "--logs-dir"])))))
   let said = case result of
-        Right (ExitSuccess, out) -> takeWhile (`notElem` ['\n', '\0']) (LBS8.unpack out)
+        Right (ExitSuccess, out) -> takeWhile (`notElem` ['\n', '\0']) (decodeFs out)
         Right _ -> ""
         Left (_ :: IOException) -> ""
   home <- getHomeDirectory
@@ -559,30 +561,13 @@ runIn dir program args vars = do
   hFlush stdout
   runProcess (setWorkingDir dir (setEnv environment (proc program args))) `orElse` ExitFailure 127
 
--- | A command whose output and errors are shown as they come and kept,
--- through one pipe, in the order they come, as the shell's @2>&1 | tee@.
+-- | A command whose output and errors are shown as they come, byte for
+-- byte, and kept, as the shell's @2>&1 | tee@; the kept output is read
+-- leniently, for the hints it may hold.
 teeProcess :: ProcessConfig () () () -> IO (ExitCode, String)
 teeProcess config = do
-  hFlush stdout
-  (readEnd, writeEnd) <- Pipe.createPipe
-  started <- try (startProcess (setStdin nullStream (setStdout (useHandleOpen writeEnd) (setStderr (useHandleOpen writeEnd) config))))
-  hClose writeEnd
-  case started of
-    Left (_ :: IOException) -> hClose readEnd >> pure (ExitFailure 127, "")
-    Right process -> do
-      kept <- newIORef []
-      let copy = do
-            end <- hIsEOF readEnd
-            unless end $ do
-              l <- hGetLine readEnd
-              putStrLn l
-              modifyIORef' kept (l :)
-              copy
-      copy
-      hClose readEnd
-      code <- waitExitCode process
-      text <- unlines . reverse <$> readIORef kept
-      pure (code, text)
+  (code, out) <- relay Nothing config
+  pure (code, T.unpack (decodeUtf8With lenientDecode (LBS.toStrict out)))
 
 -- | The environment with variables set, replacing any of the same name.
 withVars :: [(String, String)] -> IO [(String, String)]

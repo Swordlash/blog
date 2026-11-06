@@ -26,13 +26,18 @@ module Maker.Deploy.Plan
   , quietly
   , succeeds
   , outputOf
+  , decodeFs
+  , encodeFs
+  , relay
+  , tailLog
   , runInherit
   )
 where
 
 import Control.Exception (IOException, try)
-import Data.ByteString.Lazy.Char8 qualified as LBS8
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
+import Maker.Process (decodeFs, encodeFs, relay, tailLog)
 import System.Exit (exitWith)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Process.Typed
@@ -41,9 +46,10 @@ import System.Process.Typed
 newtype Plan = Plan (Map.Map String String)
   deriving (Eq, Show)
 
--- | Read a plan file.
+-- | Read a plan file. Its values are decoded as the maker's arguments are
+-- (the filesystem's encoding), since most of them are paths it passes on.
 readPlan :: FilePath -> IO Plan
-readPlan file = parsePlan <$> readFile file
+readPlan file = parsePlan . decodeFs <$> LBS.readFile file
 
 -- | A plan's lines: @key=value@, the value the rest of the line. Lines
 -- without @=@ and comments are skipped. A key given twice keeps its last
@@ -108,7 +114,7 @@ outputOf :: FilePath -> [String] -> IO (Bool, String)
 outputOf program args = do
   result <- try (readProcessStdout (setStdin nullStream (setStderr nullStream (proc program args))))
   pure $ case result of
-    Right (code, out) -> (code == ExitSuccess, LBS8.unpack out)
+    Right (code, out) -> (code == ExitSuccess, decodeFs out)
     Left (_ :: IOException) -> (False, "")
 
 -- | Run a command with the terminal's output and errors, and answer how it

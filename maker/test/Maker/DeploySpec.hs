@@ -1,11 +1,16 @@
 module Maker.DeploySpec (spec) where
 
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import GHC.Foreign qualified as GHC
+import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
-import Maker.Deploy.Plan (get, has, parsePlan, set)
+import Maker.Deploy.Plan (decodeFs, encodeFs, get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
+import Maker.Deploy.Tex (sourceWords, texYear, texlivePackages)
 import Maker.Deploy.Unit
 import Test.Hspec
 
@@ -15,6 +20,14 @@ spec = describe "the deploy's part in the maker" $ do
     it "takes each line's value after the first =, the last one for a key twice" $ do
       let plan = parsePlan "# a comment\nname=wiki\nout=/a=b\nport=1\nport=2\nnot a line\n"
       (get plan "name", get plan "out", get plan "port") `shouldBe` ("wiki", "/a=b", "2")
+    it "decodes a program's output so that every byte comes back when it is passed on" $ do
+      let bytes = BS.pack [0x2f, 0x6f, 0x70, 0x74, 0x2f, 0xc5, 0xbc, 0x2f, 0xff, 0x62, 0x69, 0x6e]
+      encoding <- getFileSystemEncoding
+      back <- GHC.withCStringLen encoding (decodeFs (LBS.fromStrict bytes)) BS.packCStringLen
+      back `shouldBe` bytes
+    it "encodes the decoded text back to the same bytes, for a parser of them" $ do
+      let bytes = LBS.pack [0x7b, 0x22, 0xc5, 0xbc, 0x22, 0x3a, 0xff, 0x7d]
+      encodeFs (decodeFs bytes) `shouldBe` bytes
     it "reads a missing or empty key as empty, as an unset variable" $ do
       let plan = parsePlan "nodeless=\n"
       (get plan "nodeless", has plan "nodeless", has plan "missing") `shouldBe` ("", False, False)
@@ -105,6 +118,17 @@ spec = describe "the deploy's part in the maker" $ do
         `shouldContain` [ "WIKI_DB_PASSWORD_FILE='/s/wiki.postgres/db-password' WIKI_DB_PORT='5433' exec docker compose --project-name 'wiki' \\"
                         , "  --file '/s/wiki.postgres/docker-compose.yml' --file '/s/wiki.postgres/local.yml' exec -T postgres pg_dump \"$@\""
                         ]
+
+  describe "the TeX step" $ do
+    it "says where a source comes from: a repository cloned at a tag, or a directory" $ do
+      sourceWords "https://github.com/Perl/perl5" "v5.44.0" `shouldBe` "cloned from https://github.com/Perl/perl5 at v5.44.0"
+      sourceWords "https://github.com/TeX-Live/installer" "" `shouldBe` "cloned from https://github.com/TeX-Live/installer"
+      sourceWords "/srv/install-tl" "" `shouldBe` "from the directory /srv/install-tl"
+    it "reads the year of TeX Live an installer installs" $ do
+      texYear "TeX Live (https://tug.org/texlive) version 2026\n" `shouldBe` Just "2026"
+      texYear "install-tl: unknown option\n" `shouldBe` Nothing
+    it "takes the package list's words without its comments" $
+      texlivePackages "# what the exports need\nxetex fontspec # fonts\n\nunicode-math\n" `shouldBe` ["xetex", "fontspec", "unicode-math"]
 
   describe "the firewall"
     $ it "quotes only the arguments that need it, as a shell would need them typed"
