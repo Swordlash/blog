@@ -174,6 +174,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , VerifyEmail (VerificationToken "secret")
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
+      , UserSpaces
       ]
         <> map Admin adminSections
 
@@ -221,6 +222,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
       , ("the administrator, the wiki closed", closed savedOnce {current = Just (UserId "user-admin")}, [])
       , ("someone not signed in, the wiki closed, with providers", closed savedOnce {current = Nothing}, withProviders)
       , ("the administrator, with providers", savedOnce {current = Just (UserId "user-admin")}, withProviders)
+      , ("the editor, with personal spaces and one of them starred", withUserSpaces savedOnce, [])
       ]
     withProviders = [SignInProvider {name = "google", label = "Google"}, SignInProvider {name = "hub", label = "GitHub"}]
     closed st = st {M.grants = Grants {global = st.grants.global, spaces = st.grants.spaces, access = Closed}}
@@ -250,6 +252,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
            , WhatsNewPage
+           , UserSpaces
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections
@@ -293,6 +296,19 @@ savedOnce =
   where
     demo = demoState demoNow
     hello = fromMaybe (panic "the demo has no first post") (find (\p -> p.updatedAt == helloMade) (Map.elems demo.pages))
+
+-- | The state with the editor's and the reader's personal spaces turned
+-- on, and the reader's home page starred by the editor, as the editor sees
+-- it: the finder of user spaces then lists a starred space of another
+-- user, which the page the server renders must carry.
+withUserSpaces :: MemState -> MemState
+withUserSpaces st0 = withStar {current = Just (UserId "user-editor")}
+  where
+    turnOn st u = either (panic . show) fst (M.setPersonalSpaceIn demoNow True st {current = Just (UserId u)})
+    turned = foldl' turnOn st0 ["user-editor", "user-reader"]
+    withStar = case [h | x <- Map.elems turned.spaces, x.owner == Just (UserId "user-reader"), Just h <- [x.homePage]] of
+      h : _ -> turned {M.stars = Map.insert (UserId "user-editor") [h] turned.stars}
+      [] -> panic "the reader has no personal space"
 
 -- | When the demo's first post was made: the time of its first version.
 helloMade :: UTCTime

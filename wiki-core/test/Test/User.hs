@@ -21,6 +21,13 @@ spec = describe "Wiki.Core.User" $ do
     it "refuses white space or a control character inside a login" $ do
       parseLogin "ada lovelace" `shouldBe` Left "A login cannot have a blank in it."
       parseLogin "ada\tlovelace" `shouldBe` Left "A login cannot have a blank in it."
+    it "refuses a login with a letter that is not ASCII" $ do
+      parseLogin "rita@example.org" `shouldBe` Right (Login "rita@example.org")
+      parseLogin "иван" `shouldBe` Left "A login has only ASCII letters, digits and punctuation."
+      parseLogin "zażółć" `shouldBe` Left "A login has only ASCII letters, digits and punctuation."
+    it "refuses a login of punctuation alone, which no slug spells" $ do
+      parseLogin "___" `shouldBe` Left "A login has at least one letter or digit."
+      parseLogin "_a_" `shouldBe` Right (Login "_a_")
     it "refuses a login that starts with ~, which marks the server's own principals" $
       parseLogin "~administrator" `shouldBe` Left "A login cannot start with ~."
     it "is the bare text in JSON, which decoding does not check" $ do

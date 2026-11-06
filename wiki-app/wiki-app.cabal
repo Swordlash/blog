@@ -161,6 +161,7 @@ library
       Wiki.App.View.Status
       Wiki.App.View.Unsubscribe
       Wiki.App.View.UserDialog
+      Wiki.App.View.UserSpaces
       Wiki.App.View.Users
       Wiki.App.View.VerifyEmail
       Wiki.App.View.WhatsNew

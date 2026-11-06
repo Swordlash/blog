@@ -40,6 +40,7 @@
 -- > /unsubscribe/<secret>/         Unsubscribe (UnsubscribeToken <secret>)
 -- > /assistant/                    AssistantSettings
 -- > /whats-new/                    WhatsNewPage
+-- > /user-spaces/                  UserSpaces
 --
 -- Every address except the home's ends in a slash. On a static host each
 -- route is a directory with an @index.html@ in it (the prerender writes
@@ -176,6 +177,11 @@ data Route
   | -- | The page "What's new?" (WP5.66 of docs/PLAN.md): the server's
     -- version and build date, and the newest changelog entries.
     WhatsNewPage
+  | -- | The finder of user spaces (WP5.72 of docs/PLAN.md): the personal
+    -- spaces the reader may open, the starred ones first, and a field that
+    -- finds the others by login or name. It is where the container "User
+    -- subspaces" leads, since nobody may view the container itself.
+    UserSpaces
   deriving stock (Eq, Show)
 
 -- | 'AdminSection' is a section of the administration: one page of it, with
@@ -319,6 +325,7 @@ route =
       , alternative (\case Admin s -> Just s; _ -> Nothing) Admin (prefix "admin" adminSection)
       , alternative (\case AssistantSettings -> Just (); _ -> Nothing) (const AssistantSettings) (prefix "assistant" (directory noArgs))
       , alternative (\case WhatsNewPage -> Just (); _ -> Nothing) (const WhatsNewPage) (prefix "whats-new" (directory noArgs))
+      , alternative (\case UserSpaces -> Just (); _ -> Nothing) (const UserSpaces) (prefix "user-spaces" (directory noArgs))
       , alternative
           (\case PageHistory s p v a -> Just ((s, p), (v, a)); _ -> Nothing)
           (\((s, p), (v, a)) -> PageHistory s p v a)

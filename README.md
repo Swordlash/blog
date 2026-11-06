@@ -621,7 +621,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   permissions), when only its own grants count. Each user may turn on a
   **personal space** from the account menu: "Space of" and their name,
   public, administered by them, listed under "User subspaces"; turned off,
-  it is hidden from everyone and kept. Over
+  it is hidden from everyone and kept. "User subspaces" opens a finder of
+  the personal spaces: the starred ones first, then any by login or name. Over
   `wiki-server`, accounts with passwords, a second factor, passkeys
   ([below](#passkeys)), sign-in with Google, GitHub, Apple or any OpenID
   Connect provider, and invitations.

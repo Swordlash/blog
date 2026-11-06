@@ -29,14 +29,12 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Stars (StarredPage (..))
-import Wiki.App.Backend (Session (..), WikiError)
+import Wiki.App.Backend (WikiError)
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Notification (PageLocation (..))
-import Wiki.Core.Space (Space (active, id, name, owner))
-import Wiki.Core.Space qualified as S
-import Wiki.Core.User (User (..))
+import Wiki.Core.Space (Space (id, name))
 
 newtype Input = Input {context :: Context}
 
@@ -150,9 +148,3 @@ component =
     reload = do
       stars <- lift starred
       modify (\st -> st {stars = Just stars})
-
--- | The signed-in user's personal space, if it is on and listed.
-ownSpace :: Context -> Maybe S.Space
-ownSpace ctx = do
-  u <- ctx.session.user
-  find (\s -> s.owner == Just u.id && s.active) ctx.spaces
