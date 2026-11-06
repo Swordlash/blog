@@ -567,7 +567,9 @@ jobs:
   wasm:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
-    name: wasm
+    # A name that reads the matrix, so that GitHub does not add the leg to
+    # it: the check stays `wasm`.
+    name: ${{ matrix.leg && 'wasm' }}
     strategy:
       matrix:
         leg: [test]
@@ -900,7 +902,7 @@ jobs:
     if: >-
       ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       (needs.plan.outputs.tested == 'true' || needs.plan.outputs.runner != 'ubuntu-latest') }}
-    name: wasm (hosted cache)
+    name: ${{ matrix.leg && 'wasm (hosted cache)' }}
     strategy:
       matrix:
         leg: [warm]
