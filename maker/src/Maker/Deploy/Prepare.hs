@@ -71,6 +71,21 @@ prepare p0 = do
   forM_ ["index.html", "404.html", "app.wasm"] $ \file -> do
     there <- doesFileExist (out </> file)
     unless there (die ("the build in " <> out <> " lacks " <> file <> "; run without --no-build"))
+  -- The commit the deployed files were built from, which a rollback names
+  -- (WP5.73): this checkout's when this deploy builds, written beside the
+  -- builds for a later --no-build; with --no-build, the one the last build
+  -- wrote, since the checkout may have moved on since; unknown without one.
+  let commitFile = root </> "dist-newstyle" </> ("deployed-commit." <> v "mode")
+  commit <-
+    if build
+      then do
+        createDirectoryIfMissing True (root </> "dist-newstyle")
+        writeFile commitFile (v "git_commit" <> "\n")
+        pure (v "git_commit")
+      else do
+        there <- doesFileExist commitFile
+        recorded <- if there then takeWhile (/= '\n') <$> readFileStrict commitFile else pure ""
+        pure (if null recorded then "unknown" else recorded)
   -- The page in out is the last one built or downloaded, for whichever
   -- mode that run had: with --no-build nothing replaces it, so a page of
   -- the other mode would be installed for the wrong server. The page's
@@ -217,6 +232,7 @@ prepare p0 = do
             else die "nothing was changed: run this again with --fresh to start an empty wiki"
         pure found
   pure
+    . set "git_commit" commit
     . set "node" node
     . set "bind" bind
     . set "https_host" httpsHost

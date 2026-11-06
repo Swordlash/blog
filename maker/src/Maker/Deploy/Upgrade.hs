@@ -55,14 +55,21 @@ previousDir dir = dir </> "previous"
 -- with copies of its unit and state file, of the backup (with the facts
 -- file a PostgreSQL backup has beside it), and what 'Kept' records, in
 -- place of an older one kept there. Nothing is kept when the directory
--- holds no server binary (a first deploy, or a demo before). The answer
+-- holds no server binary (a first deploy, or a demo before) or the unit is
+-- gone (after --stop). The answer
 -- is whether a deployment was kept.
 keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> IO Bool
 keepPrevious dir unitFile stateFile commit backup = do
-  there <- doesFileExist (dir </> "bin" </> "wiki-server")
+  -- A deployment whose unit is gone (taken down with --stop) is not kept:
+  -- the deploy writes a new unit, which a rollback could not undo.
+  let previous = previousDir dir
+  removePathForcibly previous
+  server <- doesFileExist (dir </> "bin" </> "wiki-server")
+  unit <- doesFileExist unitFile
+  when (server && not unit) $
+    say "the deployment it replaces is not kept for a rollback: its unit is gone (taken down with --stop), and the new one could not be undone"
+  let there = server && unit
   when there $ do
-    let previous = previousDir dir
-    removePathForcibly previous
     createDirectoryIfMissing True previous
     -- The owner's only, as data/ is: it holds a copy of the database.
     _ <- runInherit "chmod" ["700", previous]
