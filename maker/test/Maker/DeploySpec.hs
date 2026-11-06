@@ -91,6 +91,7 @@ spec = describe "the deploy's part in the maker" $ do
     it "reads the backend a page was built for from its meta tag" $ do
       pageBackend "<head>\n<meta name=\"wiki-backend\" content=\"demo\">\n" `shouldBe` Just "demo"
       pageBackend "<head><title>x</title></head>" `shouldBe` Nothing
+      pageBackend "<meta name=\"wiki-backend\" content=\"demo2\">" `shouldBe` Nothing
     it "tells whether HTTPS can be served on the machine's MagicDNS name" $ do
       httpsOf "{\"BackendState\": \"Running\", \"Self\": {\"DNSName\": \"box.tail.ts.net.\"}, \"CertDomains\": [\"box.tail.ts.net\"]}"
         `shouldBe` Just (Https "box.tail.ts.net" True True)

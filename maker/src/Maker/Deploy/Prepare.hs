@@ -14,10 +14,8 @@
 module Maker.Deploy.Prepare
   ( prepare
   , pageBackend
-  , bundleOutputs
   , localYml
   , pgWrapper
-  , buildLogNames
   )
 where
 
@@ -231,15 +229,16 @@ prepare p0 = do
 -- | The backend a page was built for, from its
 -- @<meta name="wiki-backend" content="…">@, as the build writes it.
 pageBackend :: String -> Maybe String
-pageBackend html = listToMaybe [takeWhile (`elem` ['a' .. 'z']) rest | l <- lines html, Just rest <- [afterMeta l]]
+pageBackend html = listToMaybe [b | l <- lines html, Just b <- [lineBackend l]]
   where
-    afterMeta l = go l
-      where
-        marker = "<meta name=\"wiki-backend\" content=\""
-        go [] = Nothing
-        go s@(_ : t) = case stripPrefix marker s of
-          Just rest -> Just rest
-          Nothing -> go t
+    marker = "<meta name=\"wiki-backend\" content=\""
+    -- The shell's sed takes the last tag on a line (its leading .* is
+    -- greedy) whose value is lower-case letters closed by a quote.
+    lineBackend l = case [b | rest <- tails' l, Just after <- [stripPrefix marker rest], let (b, close) = span (`elem` ['a' .. 'z']) after, take 1 close == "\""] of
+      [] -> Nothing
+      found -> Just (last found)
+    tails' [] = []
+    tails' t@(_ : more) = t : tails' more
 
 -- | What web/bundle.sh writes into the page, which --bundle-locally
 -- removes first.
@@ -252,6 +251,9 @@ bundleLocally p = do
   let ciPage = get p "ci_page"
       out = get p "out"
       root = get p "root"
+  -- The page's directory, whose bundles are removed below, is never empty:
+  -- with an empty one they would be removed from the working directory.
+  when (null out) (die "--bundle-locally: the page's directory is not known")
   there <- doesDirectoryExist ciPage
   unless there (die "--bundle-locally: there is no copy of the page CI built to compare with (dist-newstyle/wasm-opt/ci-page)")
   forM_ bundleOutputs $ \o -> removePathForcibly (out </> o)
@@ -383,7 +385,7 @@ serverBuildNative p = do
             hPutStr stderr end
             pure end
     let lowered = map toLower (output <> tailed)
-    when (any (`isInfixOf` lowered) ["pkg-config", "cannot find -l", "foreign librar", "missing (or bad) c librar", "could not be found", ".h: no such file"]) $
+    when (any (`isInfixOf` lowered) missingLibraryHints) $
       warn "the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing and which packages provide it, on Debian and on RHEL"
     when ("semOpen" `isInfixOf` (output <> tailed)) $
       warn "GHC could not open cabal's build semaphore (semOpen, see above): deploy again with --no-semaphore, which builds without it"
@@ -424,9 +426,12 @@ newestLog dir since = do
               if isDir then everyFile path else pure [path]
           )
 
--- | The names a build log's lines are matched against, for the tests.
-buildLogNames :: [String]
-buildLogNames = ["pkg-config", "cannot find -l", "foreign librar", "missing (or bad) c librar", "could not be found", ".h: no such file"]
+-- | What a failed build's output says when it lacks a C library or
+-- pkg-config, in lower case: error messages only, since cabal's output
+-- names packages such as zlib and postgresql-libpq as it builds them,
+-- failure or not.
+missingLibraryHints :: [String]
+missingLibraryHints = ["pkg-config", "cannot find -l", "foreign librar", "missing (or bad) c librar", "could not be found", ".h: no such file"]
 
 -- | Whether a port can be listened on at an address: with Node, by
 -- listening; without, whether ss sees anything listening there (when ss

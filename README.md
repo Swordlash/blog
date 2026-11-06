@@ -2277,11 +2277,13 @@ sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
 ```
 
 The deploy is moving into the maker too, from its end. `toolchain/deploy-local.sh`
-still reads the options and the state, builds or downloads what it needs and starts
-the database; then it writes a plan of what it found and runs `maker deploy apply
---plan FILE`, which does everything that changes the running deployment: the backup,
-the files, the unit, the restart, the checks that it answers, `tailscale serve`, the
-firewall and the report at the end. Every deploy goes through it: a demo whose page
+still reads the options and the state, checks the machine, downloads the page when it
+is not built here, runs the bootstrap and the TeX step; then it writes a plan of what
+it found and runs `maker deploy apply --plan FILE`, which does the rest: the builds and
+the checks of what they made, the service's Node, HTTPS through Tailscale, the ports,
+PostgreSQL's container, and everything that changes the running deployment (the
+backup, the files, the unit, the restart, the checks that it answers, `tailscale
+serve`, the firewall and the report at the end). Every deploy goes through it: a demo whose page
 is not built on the machine (`--static --backend-only`, `--static --app-page`) runs
 `toolchain/bootstrap.sh static`, which installs GHC and cabal for the maker besides
 Node. `toolchain/undeploy-local.sh` and `--status` stay in shell, as does
