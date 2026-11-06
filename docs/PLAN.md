@@ -164,7 +164,17 @@ confirms it against reality and the plan is amended if it does not hold.
     outside the files (WP5.73c1, #182): the firewall rule and tailscale serve go
     back to the old port, PostgreSQL to its old port, the unit is put back or
     removed. The service is started again only if it was running before the
-    deploy, and its PostgreSQL container is stopped only if it was stopped. A
+    deploy, and its PostgreSQL container is stopped only if it was stopped.
+    The data comes back too (WP5.73c2, #183): an upgrade that starts an empty
+    wiki (a switch between SQLite and PostgreSQL, or `--fresh` on SQLite) sets
+    the old one aside (the file into `data/replaced/<time>/`, PostgreSQL in its
+    stopped container's volume) and records it in `previous/info` (`aside=`,
+    with no backup to restore); the rollback moves the new wiki aside and the
+    old one back, or starts the old container on its port. An adoption under
+    `--prefix` keeps the old PostgreSQL directory in `previous/` and the
+    rollback moves it and the state file back. Before setting a wiki aside, the
+    old binary backs it up into `data/backups`. Only a deploy into another
+    directory keeps nothing: the old deployment is intact where it was. A
     `Dockerfile`
     and `docker-compose.yml` for a VPS are a package of their own (WP2.9), after the local
     variant works.
@@ -898,7 +908,33 @@ confirms it against reality and the plan is amended if it does not hold.
     a program prints can fail to decode, a byte that is not UTF-8 goes back out
     unchanged, program output is copied to the terminal and the log as bytes
     (`Maker.Process.relay`, `tailLog`), and output read as text is decoded the
-    same way (`decodeFs`, with `encodeFs` back to bytes for JSON).
+    same way (`decodeFs`, with `encodeFs` back to bytes for JSON). Since #183
+    the plan file is gone: the Plan is built in memory by the maker's front
+    (decision 57).
+
+57. **The deploy's front in the maker; the shell keeps what needs no GHC
+    (WP5.68 c2 and d, #183).** `maker deploy [OPTION…]` reads the deploy's
+    options (`Maker.Deploy.Options`: a table read in order, with the shell's
+    messages; optparse-applicative only for the subcommand), resolves the
+    layout (`Maker.Deploy.Layout`) and does the rest of the old front
+    (`Maker.Deploy.Front`), the native check and the bootstrap included, then
+    the page, the TeX step, the preparation and the change in process;
+    `--rollback` too. `toolchain/deploy-local.sh` is stage 1: its option loop,
+    the layout, the state reads and the toolchain directory stay in shell for
+    `--status`, `--stop` and `--help`, which need no GHC; for everything else
+    it finds the maker (through `WIKI_MAKER`, or built with its own cabal
+    project, after `toolchain/bootstrap.sh maker` on a machine with no cabal)
+    and execs `maker deploy` with its arguments. Stage 1 refuses root and
+    claims the prefix directory before the bootstrap. The wizard is the TUI's
+    deploy flow (`maker-tui deploy`, `maker/tui/Maker/Tui/Deploy.hs`, its pure
+    parts in `Maker.Deploy.Wizard.*`); brick stays in `maker-tui` alone;
+    `configure.sh` keeps its check and options and execs it; `configure.hs` is
+    gone. `test-deploy-local.sh` stays the black-box oracle of every deploy
+    behaviour, unported. Phase (d) moved no script: by the owner's rule
+    (2026-11-06, what needs no GHC stays in shell) `check-tex.sh`,
+    `changelog-stamp.sh`, `npm-command.sh`, `check-semaphore.sh`,
+    `dev-test.sh` and `smoke-test.sh` stay scripts, and "the CI scripts as
+    rules" is superseded.
 
 ## Repository layout
 
@@ -945,27 +981,6 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
-
-- **WP5.73c A rollback puts back everything the upgrade changed** (the owner,
-  2026-11-06: "when we know how to roll back, we do not leave the user to do it
-  by hand"). WP5.73b keeps a deployment only when putting its files back undoes
-  the whole upgrade, and refuses otherwise. The rule stays; what it covers
-  grows: each setting the upgrade changes outside the files becomes a step of
-  the rollback, and a deployment is refused only for what a rollback still
-  cannot undo, which the deploy names. The rollback puts back the data, the
-  binary, the page and the unit, and starts the service only if it was
-  running before the deploy. In two parts:
-  - **c2, the data**, in one pull request with the rest of WP5.68 (c2) and
-    (d) (the owner, 2026-11-06: "the rollback and the rest of the move in one
-    pull request, by a subagent, with a plan written with Fable's
-    advice"). A switch between SQLite and PostgreSQL, and `--fresh`,
-    start an empty wiki and set the old one aside (the file into
-    `data/replaced/<time>/`, or the stopped container's volume): the rollback
-    brings it back instead of restoring a backup. An adoption under
-    `--prefix` keeps the old PostgreSQL directory in `previous/` instead of
-    deleting it, and the rollback moves it and the state back. A deploy into
-    another directory than the deployment's keeps refusing: the old one is
-    intact where it was.
 
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
@@ -1025,79 +1040,6 @@ In the order to do it, unless the owner says otherwise.
     random there, since a title's slug would show the title. Not protected:
     an administrator who changes the JavaScript the server sends, which then
     reads what the user decrypts.
-
-- **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
-  2026-11-05; four pull requests, a to d, each leaving the old scripts in place
-  until the maker replaces them). The shell under `toolchain/` has grown to some
-  twelve thousand lines (the deploy and its tests six thousand) and the owner does
-  not want to maintain it in shell. Two stages. *Stage 1*, `toolchain/bootstrap.sh`,
-  stays POSIX sh and shrinks to the minimum a Haskell program cannot do for itself:
-  ghcup, GHC and cabal at the pinned versions, unless `--system-tools` (then only
-  the check, with the floors), then `exec cabal run maker -- "$@"`. *Stage 2*,
-  `maker`, a package of the repository under `maker/` (the owner, 2026-11-05: a
-  package, not a script, so that it has a test suite, the warning flags, fourmolu
-  and HLS, and is split into modules of a reasonable size, one per area, never one
-  file) with a `cabal.project` of its own (so that running it resolves and fetches
-  nothing of the wiki's project; `cabal run maker` builds it once and keeps it), on
-  Shake: rules for the toolchain's
-  components (Node, the wasm GHC from ghc-wasm-meta, Playwright's Chromium, TeX
-  Live with its Perl), the builds (native, wasm, wasm-opt, the bundle, the page,
-  the prerender), the tests and checks (the native dependencies, TeX, the
-  semaphore), the deploy (the state, the units, the TeX step, `--backend-only`
-  pages, the locked-down options) and the CI helpers (`ci-*`), with oracles for
-  tool versions and the environment, file rules for artefacts, and the same
-  messages as today where the owner relies on them. Two front ends over one set of
-  rules: a CLI with optparse-applicative whose subcommands mirror today's `npm run
-  …` and the deploy's options (`maker build native`, `maker test wasm`, `maker
-  deploy --server …`, `maker toolchain install node`, `maker check`), and a TUI on
-  brick as `ghcup tui`: a list of components with their status (installed,
-  version, missing) and actions, and the deploy's screens as the wizard has them
-  today. The Playwright tests (`smoke-test*.mjs`, `test-deploy-server.mjs`,
-  `test-assistant.mjs`, `screenshots.mjs`) stay JavaScript, run by the maker.
-  Tests: hspec in `maker/` for the pure parts (options, the state, the plans) and
-  integration tests with fake binaries on PATH, ported from the shell tests as each
-  area moves; `-Wall -Wextra` and `-Werror` as the other packages; fourmolu.
-  Phases: (a) the skeleton (the package, Shake, the CLI, the TUI's shell), stage 1,
-  the toolchain's components, the checks, the TUI's status screen; CI and the
-  `npm` scripts switched for those parts. (b) The builds and the tests as rules,
-  `web/bundle.sh` included; `npm run` delegates. (c) The deploy: everything
-  `deploy-local.sh`, `deploy-lib.sh`, `undeploy-local.sh` and the wizard do, the
-  TeX step included, `test-deploy-local.sh` ported, the wizard's screens as the
-  TUI's deploy flow, `configure.sh` and `configure.hs` retired. (d) The remaining
-  shell removed, the CI scripts as rules, README and AGENTS.md rewritten for the
-  maker. Each phase starts when the pull requests touching the same scripts are
-  merged. Phases (a) and (b) are merged (#167, #168; decisions 51 and 52);
-  `web/bundle.sh` stays a script the maker runs (decision 52). (c) is cut in two:
-  (c1), #172, merged, the new split between the stages (decision 55); (c2) the
-  deploy, as above, which is next. What strictly needs no GHC stays in shell (the
-  owner, 2026-11-06: "jak coś ściśle nie potrzebuje ghc to niech tak zostanie"):
-  `undeploy-local.sh`, the deploy's `--status`, and `check-native.sh`, which the
-  deploy and the wizard run before anything is downloaded, so the maker's copy of
-  that check stays beside it. `--static --backend-only` goes through the maker
-  like every other deploy (the owner, the same day), although it needs only Node:
-  it uses nearly all of the deploy's machinery (the state, the unit, Tailscale,
-  the firewall, the page's download and cache), which would otherwise live in two
-  languages; such a machine installs GHC and builds the maker once. (c2) goes in
-  several pull requests, cut by the deploy's order from its end so that each
-  leaves the deploy working and its tests passing: (c2a), #173, merged, the part
-  that changes the running deployment (`maker deploy apply --plan FILE`, decision
-  56); then the builds and where the page comes from; then the TeX step and the
-  locked-down options; then the shell's front, with the wizard as the TUI's deploy
-  flow and `configure.sh` and `configure.hs` retired. (c2b), #174, merged: a demo
-  whose page is not built on the machine goes through the maker too, with the
-  bootstrap mode `static` (decision 56). (c2c), #175, merged: the builds and
-  checks, from the end of the TeX step (decision 56). (c2d), #176, merged: the
-  TeX step, and one encoding for everything the maker reads and writes (decision
-  56). (c2e), #177, merged: the page CI built, its download, cache and unpacking
-  (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
-  only installs ghcup, GHC and cabal (or checks the machine's own, with
-  `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
-  libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
-  to the maker, `native` included; the libraries' packages (libsodium, libpq,
-  ncurses) and `check-native.sh`'s checks move into the maker. The maker's own
-  dependencies must then build on GHC 9.10 (decision 53) and come from the Hackage
-  mirror on a machine that has no internet (decision 48). `node` stays in shell:
-  there is no GHC there.
 
 - **WP5.75 Presence updates checked only when permissions change** (the owner,
   2026-11-06, on the question WP5.69 left). The live channel checks
@@ -1534,10 +1476,9 @@ needs. Each was true when its package merged; check before relying on one.
   lists them unprefixed.
 - WP5.68c1 (decision 55): two copies of the native check, the shell's (which
   the deploy and the wizard run before there is a GHC) and the maker's;
-  `test-bootstrap.sh` runs its check cases against both, and (c2) retires the
-  shell's. A machine without libsodium or libpq learns it from `bootstrap
+  `test-bootstrap.sh` runs its check cases against both. A machine without libsodium or libpq learns it from `bootstrap
   native` only after GHC, cabal and the maker are built; the deploy's own check
-  still comes first; both copies stay (WP5.68's entry, 2026-11-06). The 9.10 job builds the maker but never runs `bootstrap native
+  still comes first; both copies stay (the owner, 2026-11-06). The 9.10 job builds the maker but never runs `bootstrap native
   --system-tools` with that GHC.
 - WP5.68c2a (decision 56): `deploy-lib.sh`'s firewall, `tailscale serve` and
   state functions have a second copy in the maker while `undeploy-local.sh` and
@@ -1554,9 +1495,19 @@ needs. Each was true when its package merged; check before relying on one.
   is looked up after the bootstrap, since the maker exists only once GHC and
   cabal do: a REF with no page still stops the deploy before anything is built
   or changed, but after the toolchain is installed or checked, and a refused
-  `--static --backend-only` leaves the Node the bootstrap installed. The shell's
-  front moving into the maker can bring the lookup back before most of the
-  toolchain.
+  `--static --backend-only` leaves the Node the bootstrap installed.
+- WP5.68c2 and d (decision 57, #183): the option reader, the layout and the
+  state reads exist in both languages, the shell's for `--status`, `--stop`,
+  `--help` and stage 1; `Maker.FrontSpec` and the oracle's wizard check hold
+  both to `deploy-local.sh`'s header. No deploy test reaches stage 1 without
+  `WIKI_MAKER` (the oracle always sets it); `bootstrap.sh maker` has only its
+  `test-bootstrap.sh` case. On a machine with no cabal the first deploy runs
+  the bootstrap twice (`maker`, then the deploy's mode). With
+  `--system-tools` and no cabal, stage 1 stops at the bootstrap's own
+  system-tools message, not the deploy's. `maker deploy --help` prints
+  optparse's usage and points at `deploy-local.sh --help` for the options.
+  The defaults resolved from the state are inline in `Front.front`, without
+  unit tests of their own.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
@@ -1574,9 +1525,8 @@ needs. Each was true when its package merged; check before relying on one.
 - Upgrades and rollback (WP5.73, #180, #181, #182): the server's attachment clean-up
   looks only at `data/backups`, not at the backup copy in `previous/`, so a rollback
   made after that backup was pruned may lack the files of attachments deleted since
-  (`wiki-server restore` says how many). One deployment back is kept. Until WP5.73c2,
-  a deploy that changes the database's kind, uses `--fresh` or adopts under
-  `--prefix` keeps nothing for a rollback, and says so. The firewall step of a
+  (`wiki-server restore` says how many). One deployment back is kept; a deploy
+  into another directory keeps nothing. The firewall step of a
   rollback is tested only through its bookkeeping (the test deployments bind to
   127.0.0.1, which has no rule). The commit recorded is the last build's
   (`dist-newstyle/deployed-commit.<mode>`); a page downloaded from CI is not of it.
