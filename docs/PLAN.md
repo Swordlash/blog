@@ -940,7 +940,15 @@ In the order to do it, unless the owner says otherwise.
   that backup, the previous binary and page back, the service started and
   checked that it answers), and says which version it is back at (the
   previous deployment's commit), the one to deploy again until the cause is
-  fixed.
+  fixed. A successful upgrade keeps them too (the owner, the same day): the
+  previous deployment's binary, page and the database backed up before the
+  migration stay for later, since what broke may show only after a while
+  (passwords that no longer sign in). `deploy-local.sh --rollback` goes back
+  to them by hand: it says what it brings back (the commit, the backup's
+  time) and that everything written since the upgrade is lost unless it is
+  exported first, asks, and then does what the failed upgrade's rollback
+  does. The next upgrade replaces the kept deployment with the one it
+  replaces.
 
 - **WP5.74 End-to-end encrypted private user spaces** (the owner,
   2026-11-06). A user's personal space, or a subspace in it, can be made
