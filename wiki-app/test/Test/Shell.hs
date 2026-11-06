@@ -17,6 +17,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections, allUsers, sectionName, sectionTitle)
 import Wiki.App.Static (Rendered (..), renderRoute)
 import Wiki.App.View.Common (whoIs)
+import Wiki.App.View.UserSpaces qualified as UserSpaces
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
@@ -203,6 +204,15 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html = visitor} <- render ((withPersonal ["user-reader"] (as Nothing)) {current = Nothing}) Home
     visitor `contains` "href=\"/user-spaces/\""
     visitor `lacks` "Your personal space"
+
+  it "finds a user space by its owner's name, or login as typed or as it reads in the address" $ do
+    let spaces = Map.elems (withPersonal ["user-reader"] (as Nothing)).spaces
+        rita = fromMaybe (panic "no space of the reader") (find (\x -> x.owner == Just (UserId "user-reader")) spaces)
+        -- A login with punctuation, which its slug spells with dashes.
+        mail = rita {S.slug = either (panic . show) identity (mkSlug "rita-example-org")}
+    map (`UserSpaces.matches` rita) ["", "rita", "RITA", " reader ", "Rita Reader"] `shouldBe` [True, True, True, True, True]
+    map (`UserSpaces.matches` rita) ["space of", "ritaa", "editor"] `shouldBe` [False, False, False]
+    map (`UserSpaces.matches` mail) ["rita@example.org", "rita-example", "example.org"] `shouldBe` [True, True, True]
 
   it "offers no actions on a space to someone who may only read it" $ do
     Rendered {html} <- render (as Nothing) (SpacePages (slugs ["docs"]))

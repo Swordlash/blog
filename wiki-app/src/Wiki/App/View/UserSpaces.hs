@@ -17,8 +17,10 @@
 --   nothing. With nothing typed, the field lists every personal space, the
 --   first 'shown' of them.
 --
--- The stars are fetched when the page opens, and again when the wiki
--- changes, only for a signed-in reader: a visitor has none.
+-- The stars are read for a signed-in reader only: a visitor has none. They
+-- are read at once where the backend has them (the page the server
+-- rendered carries them), so that the first render is the page's, and
+-- fetched again when the wiki changes.
 module Wiki.App.View.UserSpaces
   ( Input (..)
   , component
@@ -34,12 +36,12 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Stars (StarredPage (..))
-import Wiki.App.Backend (Session (..))
+import Wiki.App.Backend (MonadLoad (..), Session (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (PageId)
-import Wiki.Core.Slug (slugText)
+import Wiki.Core.Slug (slugText, slugify)
 import Wiki.Core.Space (Space (homePage, id, name, slug), containerName, personalName)
 
 newtype Input = Input {context :: Context}
@@ -58,11 +60,16 @@ data Action
   | Typed Text
   | Followed (Follow Route)
 
-component :: forall query output m. (MonadStars m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadStars m, MonadLoad m, MonadIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, typed = "", starredHomes = []}
+      { initialState = \input -> do
+          homes <-
+            if isJust input.context.session.user
+              then maybe [] starredPages <$> atOnce starred
+              else pure []
+          pure State {input, typed = "", starredHomes = homes}
       , render
       , eval =
           H.mkEval
@@ -146,17 +153,21 @@ component =
         router <- gets (\st -> st.input.context.router)
         Router.follow router f
 
-    -- The reader's stars, for a signed-in reader. A failure leaves the
-    -- list without the starred spaces of others: the rest of the page
-    -- still works, and the reader's own space is there regardless.
+    -- The reader's stars, for a signed-in reader.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
       signedIn <- gets (\st -> isJust st.input.context.session.user)
       homes <-
         if signedIn
-          then either (const []) (map (\p -> p.page)) <$> lift starred
+          then starredPages <$> lift starred
           else pure []
       modify (\st -> st {starredHomes = homes})
+
+-- | The pages of the reader's stars, or none when they could not be read:
+-- the rest of the page works without them, and the reader's own space is
+-- listed regardless.
+starredPages :: Either e [StarredPage] -> [PageId]
+starredPages = either (const []) (map (\p -> p.page))
 
 -- | The number of personal spaces "Find another" lists at most: enough
 -- for a small wiki to list them all, while a larger one asks for a few
@@ -165,10 +176,17 @@ shown :: Int
 shown = 50
 
 -- | Whether a personal space is one the text finds: its owner's display
--- name or login (its slug) contains the text, ignoring case and the spaces
--- around it. An empty text finds every space.
+-- name contains the text, ignoring case and the spaces around it, or its
+-- slug contains the text made a slug the same way. The slug is the owner's
+-- login made a slug ('Wiki.Core.Slug.slugify'), which turns punctuation
+-- into dashes and spells letters in ASCII, so a login is found whether it
+-- is typed as it is (@rita\@example.org@) or as it reads in the space's
+-- address (@rita-example-org@). An empty text finds every space.
 matches :: Text -> Space -> Bool
-matches typed s = T.null needle || any (T.isInfixOf needle . T.toCaseFold) [ownerName, slugText s.slug]
+matches typed s =
+  T.null needle
+    || needle `T.isInfixOf` T.toCaseFold ownerName
+    || any (\n -> slugText n `T.isInfixOf` slugText s.slug) (slugify typed)
   where
     needle = T.toCaseFold (T.strip typed)
     ownerName = fromMaybe s.name (T.stripPrefix (personalName "") s.name)
