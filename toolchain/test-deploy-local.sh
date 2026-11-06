@@ -1423,6 +1423,125 @@ assert_lacks "$HOME/wiki-demo/data/wiki.sqlite" 'earlier schema'
 undeploy --purge-data >/dev/null 2>&1
 pass 'a backup that finds the earlier schema stops the deploy, and the old service goes on; --fresh sets the file aside'
 
+# An upgrade that starts an empty wiki (WP5.73c2) is kept for a rollback
+# too, with no backup to restore: the backup is of the new, empty wiki.
+# From SQLite to PostgreSQL, the rollback stops the new container and moves
+# the wiki.sqlite the upgrade set aside back, byte for byte.
+fixture data-rollback
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+data=$HOME/wiki-demo/data
+info=$HOME/wiki-demo/previous/info
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the first deploy on SQLite failed'
+printf 'written on SQLite\n' >>"$data/wiki.sqlite"
+cp "$data/wiki.sqlite" "$case_dir/sqlite-before"
+out=$case_dir/to-postgres
+deploy --no-build --postgres --fresh --db-port 5436 >"$out" 2>&1 || fail 'the switch from SQLite to PostgreSQL failed'
+assert_contains "$out" "kept the previous deployment (unknown) in $HOME/wiki-demo/previous"
+[ -z "$(sed -n 's/^backup=//p' "$info")" ] || fail 'the backup of the new, empty wiki was kept for a rollback'
+aside=$(sed -n 's/^aside=//p' "$info")
+[ -n "$aside" ] || fail 'previous/info does not name the wiki set aside'
+cmp -s "$aside/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the wiki set aside is not the SQLite wiki'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5436'
+: >"$EVENTS"
+out=$case_dir/to-postgres-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback from PostgreSQL to SQLite failed'
+assert_contains "$out" "its wiki comes back from $aside"
+assert_lacks "$EVENTS" 'wiki-server restore'
+cmp -s "$data/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the rollback did not give the SQLite wiki back byte for byte'
+[ ! -e "$aside" ] || fail 'the emptied directory of the wiki set aside is left'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+[ "$(state db)" = sqlite ] || fail 'the rollback did not put SQLite back in the state'
+assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+pass 'a rollback of a switch from SQLite to PostgreSQL stops the new container and gives the SQLite wiki back byte for byte'
+
+# From PostgreSQL to SQLite: the rollback sets the new wiki.sqlite aside
+# and starts the old container again, on its port.
+deploy --no-build --postgres --fresh --db-port 5436 >"$case_dir/to-postgres-again" 2>&1 || fail 'the second switch to PostgreSQL failed'
+out=$case_dir/to-sqlite
+deploy --no-build --sqlite --fresh >"$out" 2>&1 || fail 'the switch from PostgreSQL to SQLite failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+[ -z "$(sed -n 's/^backup=//p' "$info")" ] || fail 'the backup of the new, empty wiki was kept for a rollback'
+assert_contains "$info" 'db_running=yes'
+assert_contains "$data/wiki.sqlite" 'a database'
+ls "$data/replaced" >"$case_dir/replaced-before"
+: >"$EVENTS"
+out=$case_dir/to-sqlite-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback from SQLite to PostgreSQL failed'
+assert_contains "$out" 'its wiki is the one in PostgreSQL (the volume wiki-demo_wiki-db)'
+assert_lacks "$EVENTS" 'wiki-server restore'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5436'
+assert_contains "$HOME/.config/wiki-demo/wiki-demo.postgres/pg_dump" "WIKI_DB_PORT='5436'"
+[ ! -e "$data/wiki.sqlite" ] || fail 'the wiki.sqlite the upgrade started is still in data/'
+new_aside=$(ls "$data/replaced" | grep -v -x -F -f "$case_dir/replaced-before" || true)
+[ -n "$new_aside" ] && [ -f "$data/replaced/$new_aside/wiki.sqlite" ] || fail 'the wiki.sqlite the upgrade started was not set aside'
+assert_lacks "$data/replaced/$new_aside/wiki.sqlite" 'written on SQLite'
+{ [ "$(state db)" = postgres ] && [ "$(state db_port)" = 5436 ]; } || fail 'the rollback did not put PostgreSQL and its port back in the state'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+pass 'a rollback of a switch from PostgreSQL to SQLite sets the new file aside and starts the old container on its port'
+
+# On PostgreSQL, --fresh only sets a stray data/wiki.sqlite aside: the
+# database stays, so the backup is of the real wiki and is kept, and a
+# failed upgrade restores it as any other.
+printf 'a stray file\n' >"$data/wiki.sqlite"
+: >"$EVENTS"
+out=$case_dir/pg-fresh-fails
+if FAKE_CHECK_FAIL=1 deploy --no-build --fresh >"$out" 2>&1; then fail 'an upgrade on PostgreSQL with --fresh whose check failed succeeded'; fi
+assert_contains "$out" 'its database restored from the backup made before the upgrade'
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/"
+assert_contains "$data/wiki.sqlite" 'a stray file'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback on PostgreSQL'
+pass 'an upgrade on PostgreSQL with --fresh keeps the backup of its database, and a failed one restores it'
+
+# --fresh on the same kind: an upgrade that fails rolls back by itself,
+# setting the new wiki aside and putting the old one back.
+deploy --no-build --sqlite --fresh >"$case_dir/to-sqlite-again" 2>&1 || fail 'the second switch to SQLite failed'
+printf 'written before --fresh\n' >>"$data/wiki.sqlite"
+cp "$data/wiki.sqlite" "$case_dir/fresh-before"
+: >"$EVENTS"
+out=$case_dir/fresh-fails
+if FAKE_CHECK_FAIL=1 deploy --no-build --fresh >"$out" 2>&1; then fail 'an upgrade with --fresh whose check failed succeeded'; fi
+assert_contains "$out" "moved $data/wiki.sqlite aside into"
+assert_contains "$out" 'rolled back to the previous deployment, of commit unknown, its wiki put back from'
+assert_lacks "$EVENTS" 'wiki-server restore'
+cmp -s "$data/wiki.sqlite" "$case_dir/fresh-before" || fail 'the rollback of --fresh did not give the wiki back byte for byte'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'previous/ is left after the rollback'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback of --fresh'
+undeploy --purge-data >/dev/null 2>&1
+pass 'an upgrade with --fresh that fails rolls back by itself and puts the wiki it set aside back'
+
+# An adoption under --prefix is kept too: the old PostgreSQL directory goes
+# into previous/postgres, and the rollback moves it and the state back to
+# the home directory, where the kept unit names them.
+fixture adoption-rollback
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment on PostgreSQL failed'
+old_pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+new_pgd=$HOME/wiki-demo/state/wiki-demo.postgres
+password=$(cat "$old_pgd/db-password")
+out=$case_dir/adopted
+deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting on PostgreSQL failed'
+[ ! -e "$old_pgd" ] || fail 'the old PostgreSQL files stayed'
+[ "$(cat "$HOME/wiki-demo/previous/postgres/db-password")" = "$password" ] || fail 'the old PostgreSQL files were not kept in previous/postgres'
+assert_contains "$HOME/wiki-demo/previous/info" "adopted_from=$HOME/.config/wiki-demo/wiki-demo.state"
+: >"$EVENTS"
+out=$case_dir/adoption-rollback
+deploy --rollback --yes --prefix "$HOME/wiki-demo" >"$out" 2>&1 || fail '--rollback of an adoption failed'
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/1.pgdump --data $HOME/wiki-demo/data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $old_pgd/db-password"
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the state did not go back to the home directory'
+[ ! -e "$HOME/wiki-demo/state" ] || fail 'the state under the prefix is left'
+[ "$(cat "$old_pgd/db-password")" = "$password" ] || fail 'the PostgreSQL files did not go back to the home directory'
+assert_contains "$old_pgd/pg_dump" "$old_pgd/docker-compose.yml"
+assert_lacks "$HOME/$unit" '# Prefix:'
+assert_contains "$HOME/$unit" "--database-password-file \"$old_pgd/db-password\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback of the adoption'
+deploy --prefix "$HOME/wiki-demo" --no-build >"$case_dir/adopted-again" 2>&1 || fail 'adopting again after the rollback failed'
+assert_contains "$case_dir/adopted-again" 'adopting wiki-demo'
+undeploy --prefix "$HOME/wiki-demo" --purge-data >/dev/null 2>&1
+pass 'a rollback of an adoption under --prefix moves the state and the PostgreSQL files back where the kept unit names them'
+
 # The wiki's server.
 fixture server
 p1=$(free_port 127.0.0.1)

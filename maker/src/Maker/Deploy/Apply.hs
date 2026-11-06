@@ -29,7 +29,6 @@ import Data.IORef
 import Data.List (isPrefixOf, isSuffixOf, stripPrefix)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
@@ -41,7 +40,7 @@ import Maker.Deploy.Upgrade
 import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (exitWith)
-import System.FilePath (takeExtension, takeFileName, (</>))
+import System.FilePath (takeDirectory, takeExtension, takeFileName, (</>))
 import System.IO (hFlush, hIsTerminalDevice, hPutStr, stderr, stdin, stdout)
 import System.Process.Typed
 import Text.Read (readMaybe)
@@ -83,18 +82,17 @@ apply p = do
   -- The database is copied aside before the new server, which may migrate
   -- it, first opens it, and with the old one stopped, so that the copy has
   -- every write. If that fails, the old deployment goes on as it was.
-  when (server && has p "incompatible") $ do
-    let sqlite = dir </> "data" </> "wiki.sqlite"
-    present <- doesFileExist sqlite
-    when present $ do
-      now <- getCurrentTime
-      let aside = dir </> "data" </> "replaced" </> formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now
-      createDirectoryIfMissing True aside
-      forM_ ["wiki.sqlite", "wiki.sqlite-wal", "wiki.sqlite-shm"] $ \file -> do
-        exists <- doesFileExist (dir </> "data" </> file)
-        when exists (renameFile (dir </> "data" </> file) (aside </> file))
-      say ("moved " <> sqlite <> " aside into " <> aside <> ": the new wiki starts empty")
-    when (db == "sqlite" && v "prev_db" == "postgres") (pgDown name pgDir (v "prev_db_port"))
+  -- An empty wiki starts here when the database changes kind or --fresh is
+  -- given: a data/wiki.sqlite is moved aside, where a rollback finds it
+  -- ('setAside'), and a PostgreSQL wiki stays in its container's volume.
+  movedAside <-
+    if server && has p "incompatible"
+      then do
+        moved <- setAside dir
+        forM_ moved $ \aside -> say ("moved " <> dir </> "data" </> "wiki.sqlite" <> " aside into " <> aside <> ": the new wiki starts empty")
+        when (db == "sqlite" && v "prev_db" == "postgres") (pgDown name pgDir (v "prev_db_port"))
+        pure moved
+      else pure Nothing
   when server $ do
     say ("backing the database up into " <> dir </> "data" </> "backups")
     let backup
@@ -144,22 +142,29 @@ apply p = do
   -- a server's only: its binary, page, unit and state, with its commit, the
   -- backup just made and whether it was running. A rollback puts back what
   -- the files say and reconciles the settings outside them (the firewall
-  -- rule, tailscale serve, PostgreSQL's port; 'rollBackDeployment'). It
-  -- cannot yet bring back a wiki an upgrade set aside, so nothing is kept
-  -- when the database changes kind, is started anew (--fresh), or moves
-  -- with an adoption under --prefix (WP5.73c2). An older one kept before
-  -- goes either way.
+  -- rule, tailscale serve, PostgreSQL's port and container, a wiki set
+  -- aside, an adoption under --prefix; 'rollBackDeployment'). When the
+  -- database changes kind or starts anew (--fresh), the backup just made
+  -- is of the new, empty wiki and is not kept: the rollback brings back the
+  -- wiki set aside instead. A deploy into another directory than the
+  -- deployment's keeps nothing: the old deployment is intact where it was.
+  -- An older one kept before goes either way.
   backupMade <- readIORef madeBackup
   oldDb <- stateGet "db" (v "state_file")
-  let changes =
-        [what | (what, changed) <- [("the database", oldDb /= db), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
+  -- The backup is of a new, empty wiki when the kind changes, or when
+  -- --fresh set a SQLite wiki aside. A wiki.sqlite set aside beside a
+  -- PostgreSQL wiki that stays was never that deployment's database: the
+  -- backup is then the real one, and kept.
+  let emptyWiki = kindOf oldDb /= kindOf db || (kindOf db == "sqlite" && has p "incompatible")
+      elsewhere = has p "prev_dir" && v "prev_dir" /= dir
+      adoptedFrom = if has p "adoptable" then v "adopted_state_file" else ""
   kept <-
-    if server && null changes
-      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade wasRunning (has p "db_was_running")
+    if server && not elsewhere
+      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") (if emptyWiki then Nothing else backupMade) wasRunning (has p "db_was_running") (fromMaybe "" movedAside) adoptedFrom
       else do
         replaced <- doesFileExist (dir </> "bin" </> "wiki-server")
         when (server && replaced) $
-          say ("the deployment it replaces is not kept for a rollback: this deploy changes " <> T.unpack (T.intercalate ", " (map T.pack changes)) <> ", which a rollback would not put back")
+          say ("the deployment it replaces is not kept for a rollback: it is in " <> v "prev_dir" <> ", which this deploy leaves as it is")
         removePathForcibly (previousDir dir)
         pure False
   entries <- listDirectory dir
@@ -220,19 +225,21 @@ apply p = do
               -- closed now: --rollback then sees the difference and opens it.
               stateSet "rule_port" ruleNow (v "state_file")
               die (why <> "; the rollback to commit " <> k.commit <> " stopped at the restore of its database (see above). Restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run deploy-local.sh --rollback")
+            let back = rollbackPlace place k
             if k.running
               then do
-                url <- deploymentUrl (v "state_file")
+                url <- deploymentUrl back.stateFile
                 started <- startAgain service answers url
                 if started
                   then say ("the previous deployment runs again (" <> service <> " answers on " <> url <> ")")
                   else warn ("the previous deployment does not answer on " <> url <> " either; see journalctl --user -u " <> name)
-              else leaveStopped place k >> say (service <> " is left stopped, as it was before the deploy")
+              else leaveStopped back k >> say (service <> " is left stopped, as it was before the deploy")
             die
               ( why
                   <> ": rolled back to the previous deployment, of commit "
                   <> k.commit
                   <> (if null k.backup then "" else ", its database restored from the backup made before the upgrade (" <> takeFileName k.backup <> ")")
+                  <> (if null k.aside then "" else ", its wiki put back from " <> k.aside)
                   <> ". Deploy that commit again (git checkout "
                   <> k.commit
                   <> ") until the cause is fixed"
@@ -313,8 +320,13 @@ apply p = do
   quietEnable <- succeeds "systemctl" ["--user", "enable", service]
   unless quietEnable (orDie =<< runInherit "systemctl" ["--user", "enable", service])
   -- The end of an adoption: the old PostgreSQL files go, now that the unit,
-  -- the console and the wrappers name the copies under the prefix.
-  when (has p "adopted_pg_dir") (removePathForcibly (v "adopted_pg_dir"))
+  -- the console and the wrappers name the copies under the prefix. When the
+  -- deployment before is kept, they go into previous/postgres, from where
+  -- a rollback moves them back ('unadopt').
+  when (has p "adopted_pg_dir") $
+    if kept
+      then orDie =<< runInherit "mv" [v "adopted_pg_dir", previousDir dir </> "postgres"]
+      else removePathForcibly (v "adopted_pg_dir")
   say ("starting " <> service)
   restarted <- runInherit "systemctl" ["--user", "restart", service]
   unless (restarted == ExitSuccess) $ do
@@ -814,9 +826,20 @@ rollbackByHand p = do
   mk <- readKept dir
   k <- maybe (die ("there is no previous deployment kept in " <> previousDir dir <> " to roll back to: a deploy keeps one when it replaces a server")) pure mk
   say ("the deployment kept in " <> previousDir dir <> " is of commit " <> k.commit <> ", kept " <> k.keptAt)
-  if null k.backup
-    then say "its database is left as it is: there was none when it was kept"
-    else say ("its database goes back to the backup " <> k.backup <> ": everything written since is lost, unless exported first (Export in the administration)")
+  oldDb <- stateGet "db" (previousDir dir </> "state")
+  nowDb <- stateGet "db" (v "state_file")
+  case () of
+    _
+      | not (null k.backup) -> do
+          say ("its database goes back to the backup " <> k.backup <> ": everything written since is lost, unless exported first (Export in the administration)")
+          unless (null k.aside) (say ("and the file the upgrade set aside in " <> k.aside <> " goes back into " <> dir </> "data"))
+      | not (null k.aside) ->
+          say ("its wiki comes back from " <> k.aside <> ", where the upgrade set it aside; the wiki written since is set aside in its place, in " <> dir </> "data" </> "replaced")
+      | kindOf oldDb /= kindOf nowDb && kindOf oldDb == "postgres" ->
+          say ("its wiki is the one in PostgreSQL (the volume " <> name <> "_wiki-db), which the upgrade left as it was; the SQLite wiki written since is set aside in " <> dir </> "data" </> "replaced")
+      | kindOf oldDb /= kindOf nowDb ->
+          say ("its wiki is SQLite's, which the upgrade did not change; the PostgreSQL container stops, and its volume " <> name <> "_wiki-db keeps what was written since")
+      | otherwise -> say "its database is left as it is: there was none when it was kept"
   terminal <- hIsTerminalDevice stdin
   answer <-
     if has p "yes"
@@ -835,16 +858,17 @@ rollbackByHand p = do
   restored <- rollBackDeployment place Nothing now k
   unless restored $
     die ("the database is not back: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
+  let back = rollbackPlace place k
   if k.running
     then do
-      url <- deploymentUrl (v "state_file")
+      url <- deploymentUrl back.stateFile
       node <- findExecutable "node"
       running <- startAgain service (urlAnswers node) url
       if running
         then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
         else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
     else do
-      leaveStopped place k
+      leaveStopped back k
       say ("rolled back to commit " <> k.commit <> "; " <> service <> " is left stopped, as it was before the upgrade")
 
 -- | The database options of the deployment kept in @previous/@, read from
@@ -893,33 +917,59 @@ data Place = Place
 
 -- | Put the kept deployment back (WP5.73c of docs/PLAN.md), given the
 -- settings the deployment being replaced has now. In order: the service
--- stops; PostgreSQL goes back to its old port, since the restore connects
--- there; the database is restored from the kept backup; the files and
--- unit go back; the firewall rule and tailscale serve go back to the old
--- ports. The service is left stopped for the caller, which starts it if it
--- was running. The answer is whether the rollback was made: a restore that
+-- stops; the database the upgrade started goes (a new PostgreSQL
+-- container stopped, a new @wiki.sqlite@ set aside) and the one it set
+-- aside comes back; an adoption under @--prefix@ is undone; PostgreSQL goes
+-- back to its old port, since the restore connects there; the database is
+-- restored from the kept backup, when there is one; the files and unit go
+-- back; the firewall rule and tailscale serve go back to the old ports.
+-- The service is left stopped for the caller, which starts it if it was
+-- running. The answer is whether the rollback was made: a restore that
 -- fails stops it before the files move.
 rollBackDeployment :: Place -> Maybe Firewall.Firewall -> Settings -> Kept -> IO Bool
 rollBackDeployment place firewall now k = do
   let service = place.name <> ".service"
+      back = rollbackPlace place k
   say ("rolling back to the previous deployment (" <> k.commit <> "), kept in " <> previousDir place.dir)
   _ <- runInherit "systemctl" ["--user", "stop", service]
   old <- settingsOf (previousDir place.dir </> "state")
+  -- From SQLite to PostgreSQL: the new container stops, and its volume
+  -- keeps what the upgrade wrote.
+  when (kindOf now.db == "postgres" && kindOf old.db /= "postgres") $
+    pgDown place.name place.pgDir now.dbPort
+  -- The wiki.sqlite the upgrade started is set aside, as the upgrade set
+  -- the old one aside, when the old wiki is elsewhere: in PostgreSQL, or in
+  -- the files the upgrade set aside, which come back in its place.
+  when (kindOf now.db == "sqlite" && (kindOf old.db /= "sqlite" || not (null k.aside))) $ do
+    moved <- setAside place.dir
+    forM_ moved $ \aside -> say ("moved the wiki the upgrade started aside into " <> aside)
+  unless (null k.aside) (putAsideBack place.dir k.aside)
+  unless (null k.adoptedFrom) (unadopt place.dir place.name place.pgDir k)
   -- PostgreSQL runs on the kept port before the restore, which connects
-  -- there: moved back when the upgrade changed the port, and started in
-  -- any case, so that a --rollback retried after a move that failed finds
-  -- it up even though the two states name the same port.
-  when (old.db == "postgres" && now.db == "postgres") $ do
-    when (old.dbPort /= now.dbPort) (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
-    forM_ ["pg_dump", "pg_restore"] $ \program ->
-      writeFile (place.pgDir </> program) (pgWrapper place.name place.pgDir old.dbPort program)
-    code <- pgCompose place.name place.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
-    unless (code == ExitSuccess) $
-      warn ("PostgreSQL did not start on 127.0.0.1:" <> old.dbPort <> " (see above)")
-  args <- keptPlaceArgs place.dir place.pgDir
+  -- there: moved back when the upgrade changed the port or the kind, and
+  -- started in any case, so that a --rollback retried after a move that
+  -- failed finds it up even though the two states name the same port.
+  when (kindOf old.db == "postgres") $ do
+    files <- doesFileExist (back.pgDir </> "docker-compose.yml")
+    if not files
+      then warn ("PostgreSQL's files are not in " <> back.pgDir <> ", so its container was not started")
+      else do
+        when (old.dbPort /= now.dbPort || kindOf now.db /= "postgres") (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
+        forM_ ["pg_dump", "pg_restore"] $ \program ->
+          writeFile (back.pgDir </> program) (pgWrapper place.name back.pgDir old.dbPort program)
+        code <- pgCompose place.name back.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
+        unless (code == ExitSuccess) $
+          warn ("PostgreSQL did not start on 127.0.0.1:" <> old.dbPort <> " (see above)")
+  args <- keptPlaceArgs place.dir back.pgDir
   restored <- restoreDatabase place.dir args k
   when restored $ do
-    putBackFiles place.dir place.unitFile place.stateFile service k
+    putBackFiles place.dir place.unitFile back.stateFile service k
+    -- After an adoption the state goes back where it was, and the one
+    -- under the prefix goes, with its directory when nothing else is in it.
+    when (back.stateFile /= place.stateFile) $ do
+      removePathForcibly place.stateFile
+      left <- listDirectory place.stateDir
+      when (null left) (removeDirectory place.stateDir)
     when (now.rulePort /= old.rulePort) $ do
       found <- case firewall of
         Just f -> pure (Just f)
@@ -930,13 +980,37 @@ rollBackDeployment place firewall now k = do
           say ("--no-firewall: the firewall rule stays as it is; the previous deployment had " <> (if null old.rulePort then "none" else "one for port " <> old.rulePort))
           -- The state put back keeps naming the rule that is open, so
           -- that a later deploy or --stop closes that one.
-          stateSet "rule_port" now.rulePort place.stateFile
+          stateSet "rule_port" now.rulePort back.stateFile
         Just f -> do
-          unless (null now.rulePort) (Firewall.close f place.stateDir place.stateFile now.rulePort)
+          unless (null now.rulePort) (Firewall.close f back.stateDir back.stateFile now.rulePort)
           unless (null old.rulePort) (Firewall.open f place.name old.rulePort)
           Firewall.report f
     serveBack now.servePort old.servePort
   pure restored
+
+-- | Where the pieces of the deployment a rollback goes back to are: those
+-- of the deployment being replaced, but after an adoption under
+-- @--prefix@ the state and PostgreSQL's files are where they were before
+-- it, beside the state file 'adoptedFrom' names.
+rollbackPlace :: Place -> Kept -> Place
+rollbackPlace place k
+  | null k.adoptedFrom = place
+  | otherwise =
+      let stateDir = takeDirectory k.adoptedFrom
+       in Place
+            { name = place.name
+            , dir = place.dir
+            , unitFile = place.unitFile
+            , stateFile = k.adoptedFrom
+            , stateDir = stateDir
+            , pgDir = stateDir </> (place.name <> ".postgres")
+            , noFirewall = place.noFirewall
+            }
+
+-- | The kind of a database a state file names: @postgres@, or @sqlite@,
+-- which a state written before PostgreSQL leaves out.
+kindOf :: String -> String
+kindOf db = if db == "postgres" then "postgres" else "sqlite"
 
 -- | Point tailscale serve back at the previous deployment's port, or turn
 -- it off when the previous deployment had no serve. As the deploy does, a

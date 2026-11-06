@@ -15,7 +15,7 @@ import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
 import Maker.Deploy.Tex (sourceWords, texYear, texlivePackages)
 import Maker.Deploy.Unit
-import Maker.Deploy.Upgrade (Kept (..), keepPrevious, newBackup, readKept)
+import Maker.Deploy.Upgrade (Kept (..), asideName, keepPrevious, newBackup, readKept)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -180,6 +180,10 @@ spec = describe "the deploy's part in the maker" $ do
       newBackup listed0 listed1 `shouldBe` Just "/d/backups/20261106T101500Z.sqlite"
       newBackup listed0 listed0 `shouldBe` Nothing
       newBackup [] ["/d/backups/a.pgdump.json", "/d/backups/a.pgdump"] `shouldBe` Just "/d/backups/a.pgdump"
+    it "names a directory for a wiki set aside by the time, with a number when the time is taken" $ do
+      asideName [] "20261106T101500Z" `shouldBe` "20261106T101500Z"
+      asideName ["20261106T101500Z"] "20261106T101500Z" `shouldBe` "20261106T101500Z-2"
+      asideName ["20261106T101500Z", "20261106T101500Z-2", "fake"] "20261106T101500Z" `shouldBe` "20261106T101500Z-3"
     it "keeps a server deployment in previous/ with its commit, a copy of its backup, whether it ran and whether it had a unit, and only a server's" $ do
       tmp <- getTemporaryDirectory
       let dir = tmp </> "maker-upgrade-spec"
@@ -187,14 +191,14 @@ spec = describe "the deploy's part in the maker" $ do
       createDirectoryIfMissing True (dir </> "app")
       writeFile (dir </> "unit") "[Unit]\n"
       writeFile (dir </> "state") "git_commit=abc\n"
-      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True True
+      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True True "" ""
       demo `shouldBe` False
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "old"
       createDirectoryIfMissing True (dir </> "backups")
       writeFile (dir </> "backups" </> "b.pgdump") "dump"
       writeFile (dir </> "backups" </> "b.pgdump.json") "facts"
-      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump")) True True
+      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump")) True True "" ""
       kept `shouldBe` True
       moved <- (,) <$> doesDirectoryExist (dir </> "bin") <*> doesDirectoryExist (dir </> "app")
       moved `shouldBe` (False, False)
@@ -206,8 +210,16 @@ spec = describe "the deploy's part in the maker" $ do
       -- such, in place of the one kept before.
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "stopped"
-      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing False False
+      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing False False "" ""
       stopped `shouldBe` True
       k' <- readKept dir
       fmap (\x -> (x.commit, x.backup, x.running, x.unit)) k' `shouldBe` Just ("abc", "", False, False)
+      -- An upgrade that started an empty wiki, or adopted the deployment
+      -- under --prefix, records where the old wiki and state were.
+      createDirectoryIfMissing True (dir </> "bin")
+      writeFile (dir </> "bin" </> "wiki-server") "fresh"
+      fresh <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True False "/d/data/replaced/t" "/h/.config/w/w.state"
+      fresh `shouldBe` True
+      k'' <- readKept dir
+      fmap (\x -> (x.backup, x.aside, x.adoptedFrom)) k'' `shouldBe` Just ("", "/d/data/replaced/t", "/h/.config/w/w.state")
       removePathForcibly dir

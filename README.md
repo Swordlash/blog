@@ -1708,11 +1708,23 @@ to the demo, keeping `data/`.
   answers. The server's clean-up of attachment files looks only at
   `data/backups`, not at the copy in `previous/`: a rollback long after the
   upgrade, once that backup has been pruned, may miss the files of
-  attachments deleted since, and the restore says how many. Nothing is kept
-  yet when the deploy switches between SQLite and PostgreSQL, starts an empty
-  wiki (`--fresh`), or adopts a deployment under `--prefix`; the deploy says
-  so. A deployment you change by hand is yours: the deploy keeps and restores
-  only what it installed itself.
+  attachments deleted since, and the restore says how many. An upgrade that
+  starts an empty wiki (a switch between SQLite and PostgreSQL, or `--fresh`)
+  is kept too, without a backup: the backup it makes is of the new, empty
+  wiki. The old wiki is set aside instead, a `data/wiki.sqlite` in
+  `data/replaced/<time>/` (`aside=` in `previous/info`) and a PostgreSQL
+  wiki in its container's volume, and a rollback brings it back: it stops
+  the new container, or moves the new `wiki.sqlite` into
+  `data/replaced/<time>/` and starts the old container on its port, and
+  moves the files set aside back into `data/`. After a switch from SQLite to
+  PostgreSQL and a rollback, the volume `<name>_wiki-db` keeps what the
+  failed upgrade wrote. An adoption under `--prefix` is kept too: the old
+  PostgreSQL directory goes into `previous/postgres` instead of being
+  deleted, and a rollback moves it and the state back to the home directory,
+  where the kept unit names them. A deploy into another directory than the
+  deployment's keeps nothing: the old deployment is intact where it was. A
+  deployment you change by hand is yours: the deploy keeps and restores only
+  what it installed itself.
 
   ```sh
   sh toolchain/deploy-local.sh --rollback          # add --prefix DIR or --name NAME as deployed

@@ -22,6 +22,10 @@ module Maker.Deploy.Upgrade
   , migrateAndCheck
   , restoreDatabase
   , putBackFiles
+  , setAside
+  , asideName
+  , putAsideBack
+  , unadopt
   )
 where
 
@@ -32,7 +36,7 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Maker.Deploy.Plan
 import System.Directory
 import System.Exit (ExitCode (..))
-import System.FilePath (takeFileName, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 
 -- | 'Kept' is what @previous/info@ says of the deployment kept there: the
 -- commit it was built from (@unknown@ when the deploy did not know it),
@@ -44,6 +48,16 @@ import System.FilePath (takeFileName, (</>))
 -- it was running, removes the unit only if there was none, and stops the
 -- container only if it was stopped. An @info@ written before these two were recorded counts as running
 -- with a unit, which is what such a deploy required.
+--
+-- Two more fields are for an upgrade that started an empty wiki (a switch
+-- between SQLite and PostgreSQL, or @--fresh@), and for an adoption under
+-- @--prefix@. 'aside' is the directory under @data/replaced/@ the upgrade
+-- moved the old @wiki.sqlite@ into (empty when it moved none): the
+-- rollback moves it back, and there is no backup to restore then, since
+-- the backup was taken of the new, empty wiki. 'adoptedFrom' is the state
+-- file the deployment had before the adoption (empty when there was
+-- none): the rollback moves the state, and the PostgreSQL directory kept
+-- in @previous/postgres@, back beside it.
 data Kept = Kept
   { commit :: String
   , backup :: FilePath
@@ -51,6 +65,8 @@ data Kept = Kept
   , running :: Bool
   , unit :: Bool
   , dbRunning :: Bool
+  , aside :: FilePath
+  , adoptedFrom :: FilePath
   }
   deriving (Eq, Show)
 
@@ -63,9 +79,10 @@ previousDir dir = dir </> "previous"
 -- (with the facts file a PostgreSQL backup has beside it), and what 'Kept'
 -- records, in place of an older one kept there. Nothing is kept when the
 -- directory holds no server binary (a first deploy, or a demo before). The
--- answer is whether a deployment was kept.
-keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> Bool -> Bool -> IO Bool
-keepPrevious dir unitFile stateFile commit backup running dbRunning = do
+-- answer is whether a deployment was kept. The last two arguments are
+-- 'aside' and 'adoptedFrom' of 'Kept'.
+keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> Bool -> Bool -> FilePath -> FilePath -> IO Bool
+keepPrevious dir unitFile stateFile commit backup running dbRunning aside adoptedFrom = do
   let previous = previousDir dir
   removePathForcibly previous
   there <- doesFileExist (dir </> "bin" </> "wiki-server")
@@ -99,6 +116,8 @@ keepPrevious dir unitFile stateFile commit backup running dbRunning = do
           , "running=" <> yesNo running
           , "unit=" <> yesNo hasUnit
           , "db_running=" <> yesNo dbRunning
+          , "aside=" <> aside
+          , "adopted_from=" <> adoptedFrom
           ]
       )
     say ("kept the previous deployment (" <> (if null commit then "unknown" else commit) <> ") in " <> previous <> ", for a rollback")
@@ -120,7 +139,7 @@ readKept dir = do
             (k, '=' : rest) -> Just (k, rest)
             _ -> Nothing
           value k = maybe "" id (lookup k fields)
-      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept", running = value "running" /= "no", unit = value "unit" /= "no", dbRunning = value "db_running" /= "no"})
+      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept", running = value "running" /= "no", unit = value "unit" /= "no", dbRunning = value "db_running" /= "no", aside = value "aside", adoptedFrom = value "adopted_from"})
 
 -- | The backup a backup command made: the newest of the backups listed
 -- after it that were not listed before it. A backup's name starts with its
@@ -187,3 +206,76 @@ putBackFiles dir unitFile stateFile service kept = do
   removePathForcibly previous
   _ <- runInherit "systemctl" ["--user", "daemon-reload"]
   pure ()
+
+-- | The SQLite files of a wiki: the database and the two files SQLite
+-- keeps beside it while it runs in WAL mode.
+sqliteFiles :: [FilePath]
+sqliteFiles = ["wiki.sqlite", "wiki.sqlite-wal", "wiki.sqlite-shm"]
+
+-- | Move a deployment's @data/wiki.sqlite@ (with its @-wal@ and @-shm@)
+-- into a new directory under @data/replaced/@, named by the time. The
+-- answer is that directory, or 'Nothing' when there was no
+-- @wiki.sqlite@ to move. Nothing is deleted: the files are kept there for
+-- whoever wants them back.
+setAside :: FilePath -> IO (Maybe FilePath)
+setAside dir = do
+  let dataDir = dir </> "data"
+  present <- doesFileExist (dataDir </> "wiki.sqlite")
+  if not present
+    then pure Nothing
+    else do
+      now <- getCurrentTime
+      let replaced = dataDir </> "replaced"
+      there <- doesDirectoryExist replaced
+      taken <- if there then listDirectory replaced else pure []
+      let aside = replaced </> asideName taken (formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now)
+      createDirectoryIfMissing True aside
+      forM_ sqliteFiles $ \file -> do
+        exists <- doesFileExist (dataDir </> file)
+        when exists (renameFile (dataDir </> file) (aside </> file))
+      pure (Just aside)
+
+-- | The name of a new directory under @data/replaced/@: the time, or the
+-- time with @-2@, @-3@ and so on when a directory of that name is there
+-- already. An upgrade and its rollback can set a wiki aside within the
+-- same second, and the second must not land on the first.
+asideName :: [FilePath] -> String -> FilePath
+asideName taken stamp = case [n | n <- stamp : [stamp <> "-" <> show i | i <- [2 :: Int ..]], n `notElem` taken] of
+  n : _ -> n
+  [] -> stamp
+
+-- | Move the SQLite files an upgrade set aside back into the deployment's
+-- @data/@, and remove their directory under @data/replaced/@ when nothing
+-- else is in it. The caller has set aside what was in their place.
+putAsideBack :: FilePath -> FilePath -> IO ()
+putAsideBack dir aside = do
+  there <- doesDirectoryExist aside
+  when there $ do
+    forM_ sqliteFiles $ \file -> do
+      exists <- doesFileExist (aside </> file)
+      when exists (renameFile (aside </> file) (dir </> "data" </> file))
+    left <- listDirectory aside
+    when (null left) (removeDirectory aside)
+    say ("put the wiki set aside in " <> aside <> " back into " <> dir </> "data")
+
+-- | Undo an adoption under @--prefix@ before the rollback puts the files
+-- back: the PostgreSQL directory kept in @previous/postgres@ moves back
+-- beside the state file the deployment had before ('adoptedFrom'), and
+-- the copy the adoption made under the prefix goes. The state file itself
+-- is moved by the caller, with the other files.
+unadopt :: FilePath -> String -> FilePath -> Kept -> IO ()
+unadopt dir name newPgDir kept = do
+  let oldStateDir = takeDirectory kept.adoptedFrom
+      oldPgDir = oldStateDir </> (name <> ".postgres")
+      keptPg = previousDir dir </> "postgres"
+  createDirectoryIfMissing True oldStateDir
+  moved <- doesDirectoryExist keptPg
+  when moved $ do
+    removePathForcibly oldPgDir
+    -- mv, not rename(2): the prefix may be on another filesystem than the
+    -- home directory, as when the adoption copied it.
+    _ <- runInherit "mv" [keptPg, oldPgDir]
+    pure ()
+  oldThere <- doesDirectoryExist oldPgDir
+  when (oldThere && newPgDir /= oldPgDir) (removePathForcibly newPgDir)
+  say ("moving " <> name <> "'s state back to " <> oldStateDir <> ", where it was before the adoption under the prefix")
