@@ -925,6 +925,28 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.73 A backup before every migration, a check that everything loads
+  after it, and a rollback** (the owner, 2026-11-06). Today a deploy backs the
+  database up before the new server opens it (decision 15), and the migrations
+  run in one transaction, so a step whose SQL fails changes nothing; but a
+  server started on a newer binary any other way (a restart by hand, an image)
+  migrates with no backup, nothing checks that the migrated data still reads,
+  and a deploy whose new server does not come up leaves it down. Three parts.
+  (1) The server, when it opens a database with steps pending, backs it up
+  first (`backups/<time>-before-v<N>.sqlite` or `.pgdump`), kept apart from
+  the scheduled backups' pruning, the last few of them. (2) After the steps,
+  in the same transaction, it reads every row of every table through the
+  storage's decoders (users, spaces, pages, their versions, comments,
+  settings, everything `exportWiki` reads); a row that does not read rolls
+  the transaction back, so the database stays at the version it was, and the
+  server stops with the table, the row and why. The same check is
+  `wiki-server check` by hand. (3) The deploy keeps the previous deployment's
+  binary and page; when the new server does not answer, it shows why (the
+  journal's last lines) and asks whether to roll back to the previous version
+  (on a terminal; without one it rolls back and says so): the previous files
+  back, the database restored from the backup the deploy made when the new
+  server had migrated it, the service restarted, and checked that it answers.
+
 - **WP5.72 User subspaces as a place to go** (the owner, 2026-11-06). The
   container "User subspaces" stays a space nobody may view (decision 37), but
   stops being a dead end. In the spaces' sidebar it is a link, with the 👤 icon
