@@ -29,7 +29,7 @@ import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Foreign.C.Error (throwErrnoIfMinus1Retry)
 import Foreign.C.Types (CInt (..))
 import Maker.Context (Context (..), Mode (..), logFile)
-import Maker.Process (succeeds)
+import Maker.Process (firstLine, output, succeeds)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize)
 import System.Exit (exitWith)
 import System.FilePath (takeDirectory)
@@ -96,12 +96,12 @@ runQuiet ctx (program : args) =
   withFile (logFile ctx) AppendMode $ \h -> runProcess (intoLog h (proc program args))
 
 -- | Run a long step (a compiler's install, the wasm sysroot's setup, the
--- index's update) as 'run' does. In the build mode, which the deploy uses,
--- its output is also shown as it comes, so that a deploy does not sit
--- silent for minutes; the other modes keep it in the log alone.
+-- index's update) as 'run' does. In the build and native modes, which the
+-- deploy uses, its output is also shown as it comes, so that a deploy does
+-- not sit silent for minutes; the other modes keep it in the log alone.
 runLong :: Context -> String -> (ProcessConfig () () () -> ProcessConfig () () ()) -> [String] -> IO ()
 runLong ctx step change args
-  | ctx.mode /= Build = runWith ctx step change args
+  | ctx.mode `notElem` [Build, Native] = runWith ctx step change args
 runLong _ _ _ [] = pure ()
 runLong ctx step change (program : args) = do
   logLine ctx ("+ " <> command (program : args))
@@ -140,10 +140,16 @@ logSize ctx = do
 -- | What runs a command as root: nothing when this already is root, @sudo@
 -- when it needs no password, and 'Nothing' otherwise: the bootstrap never
 -- asks for a password.
+--
+-- The user is the one @id -u@ names, as the shell's bootstrap asks, so that
+-- the bootstrap's tests, which run as root in CI, can pretend to be another
+-- user with an @id@ of their own on PATH; without an @id@ the process's own
+-- effective user counts.
 asRoot :: IO (Maybe [String])
 asRoot = do
-  uid <- getEffectiveUserID
-  if uid == 0
+  named <- output "id" ["-u"]
+  uid <- maybe (show <$> getEffectiveUserID) (pure . firstLine) named
+  if uid == "0"
     then pure (Just [])
     else do
       sudo <- succeeds "sudo" ["-n", "true"]

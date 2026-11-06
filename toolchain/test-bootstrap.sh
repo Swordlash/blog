@@ -344,7 +344,7 @@ assert_contains "$case_dir/native-no-sodium" 'the native build of wiki-server ne
 # which reports the host's own packages (GitHub's runner has no
 # build-essential). So these runs get a PATH of the fake tools and a
 # directory of links to the commands in /usr/bin and /bin, without
-# dpkg-query, cc and make. env sets that PATH for the one command, so sh is
+# dpkg-query, cc, make and git. env sets that PATH for the one command, so sh is
 # found among the links. Of the commands the check looks up (cc, make, curl,
 # git and pkg-config), all are fakes, so the result does not depend on what
 # the host has installed.
@@ -353,7 +353,7 @@ no_dpkg=$case_dir/no-dpkg
 mkdir "$no_dpkg"
 for cmd in /usr/bin/* /bin/*; do
   name=${cmd##*/}
-  case $name in dpkg-query | cc | make | xelatex) continue ;; esac
+  case $name in dpkg-query | cc | make | git | xelatex) continue ;; esac
   if [ ! -f "$cmd" ] || [ ! -x "$cmd" ]; then continue; fi
   [ -e "$no_dpkg/$name" ] || [ -L "$no_dpkg/$name" ] || ln -s "$cmd" "$no_dpkg/$name"
 done
@@ -361,15 +361,23 @@ env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" nat
   fail "native without dpkg-query failed: $(cat "$case_dir/native-rhel")"
 [ ! -s "$EVENTS" ] || fail "native without dpkg-query installed something: $(cat "$EVENTS")"
 if grep -F 'Debian packages' "$case_dir/native-rhel" >/dev/null; then fail 'native without dpkg-query checked Debian packages'; fi
-# The check is silent when everything is there, so take the fake make away
-# too: the check names it, with its packages.
+# The check is silent when everything is there, so take the fake git away
+# too: the maker's check names it, with its packages. Without make, which
+# GHC itself needs, the bootstrap stops before the maker, naming it.
+rm "$case_dir/bin/git"
+if env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel-no-git" 2>&1; then
+  fail 'native without dpkg-query or git succeeded'
+fi
+assert_contains "$case_dir/native-rhel-no-git" 'missing  git'
+assert_contains "$case_dir/native-rhel-no-git" 'RHEL, Fedora:   sudo dnf install git'
+assert_contains "$case_dir/native-rhel-no-git" 'the native build of wiki-server needs what is missing above'
+ln -s tool "$case_dir/bin/git"
 rm "$case_dir/bin/make"
 if env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-rhel-no-make" 2>&1; then
   fail 'native without dpkg-query or make succeeded'
 fi
-assert_contains "$case_dir/native-rhel-no-make" 'missing  make'
-assert_contains "$case_dir/native-rhel-no-make" 'RHEL, Fedora:   sudo dnf install make'
-[ ! -s "$EVENTS" ] || fail "native without make installed something: $(cat "$EVENTS")"
+assert_contains "$case_dir/native-rhel-no-make" "bootstrap: missing commands: make (and GHC needs GMP's development files); install them and run this again"
+[ ! -s "$EVENTS" ] || fail "native without git or make installed something: $(cat "$EVENTS")"
 # pkg-config knows libpq, but pg_config is not on PATH, as on RHEL with
 # PGDG's packages: the build runs pg_config, so the check names libpq and
 # says to put pg_config's directory on PATH, naming the one it finds off
@@ -462,55 +470,64 @@ assert_contains "$case_dir/build-wizard" 'build [--without-postgres]'
 [ ! -s "$EVENTS" ] || fail "native --with-wizard installed something: $(cat "$EVENTS")"
 pass 'native --with-wizard asks Debian for libncurses-dev and checks terminfo; native alone does neither'
 
-# toolchain/check-native.sh by itself: terminfo is skipped and not counted
-# without --with-wizard, and checked and counted with it.
-out=$case_dir/check-plain
-env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check failed: $(cat "$out")"
-assert_contains "$out" 'skipped  terminfo    not needed (for the configuration wizard only: --with-wizard)'
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
-out=$case_dir/check-wizard
-env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --with-wizard >"$out" 2>&1 || fail "the check --with-wizard failed: $(cat "$out")"
-assert_contains "$out" 'ok       terminfo    -ltinfo, through cc (for the configuration wizard)'
-assert_contains "$out" 'All 10 items the native build of wiki-server and the configuration wizard need are there.'
-out=$case_dir/check-wizard-no-tinfo
-status=0
-TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres --with-wizard >"$out" 2>&1 || status=$?
-[ "$status" = 1 ] || fail "the check --with-wizard without -ltinfo exited $status, not 1"
-assert_contains "$out" 'missing  terminfo    cc cannot link a program with -ltinfo (the configuration wizard needs it) (Debian: libncurses-dev; RHEL: ncurses-devel)'
-assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
-pass 'toolchain/check-native.sh checks terminfo with --with-wizard only'
+# The same check twice: toolchain/check-native.sh, which the deploy runs
+# before there is a GHC, and the maker's `check native`, which `bootstrap
+# native` runs; the two must say the same.
+for name in toolchain/check-native.sh 'maker check native'; do
+  case $name in
+    toolchain/*) check="sh $case_dir/repo/toolchain/check-native.sh" ;;
+    *) check="$WIKI_MAKER check native --root $case_dir/repo" ;;
+  esac
+  # toolchain/check-native.sh by itself: terminfo is skipped and not counted
+  # without --with-wizard, and checked and counted with it.
+  out=$case_dir/check-plain
+  env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check failed: $(cat "$out")"
+  assert_contains "$out" 'skipped  terminfo    not needed (for the configuration wizard only: --with-wizard)'
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  out=$case_dir/check-wizard
+  env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --with-wizard >"$out" 2>&1 || fail "the check --with-wizard failed: $(cat "$out")"
+  assert_contains "$out" 'ok       terminfo    -ltinfo, through cc (for the configuration wizard)'
+  assert_contains "$out" 'All 10 items the native build of wiki-server and the configuration wizard need are there.'
+  out=$case_dir/check-wizard-no-tinfo
+  status=0
+  TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-postgres --with-wizard >"$out" 2>&1 || status=$?
+  [ "$status" = 1 ] || fail "the check --with-wizard without -ltinfo exited $status, not 1"
+  assert_contains "$out" 'missing  terminfo    cc cannot link a program with -ltinfo (the configuration wizard needs it) (Debian: libncurses-dev; RHEL: ncurses-devel)'
+  assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
+  pass "$name checks terminfo with --with-wizard only"
 
-# The xelatex of the PDF exports, through toolchain/check-tex.sh: a line
-# of its own after the commands, ok when the fake typesets the probe, no
-# with the reason's first line when it fails, no when PATH has none (the
-# links leave the host's out). It is never counted and never makes the
-# check fail, and the summary says what the PDF exports need, also after
-# a missing item.
-out=$case_dir/check-tex-working
-env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check with a working xelatex failed: $(cat "$out")"
-assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
-if grep -F 'PDF exports need' "$out" >/dev/null; then fail 'the check with a working xelatex spoke of the PDF exports'; fi
-if [ "$(line_of "$out" 'pkg-config')" -gt "$(line_of "$out" 'xelatex')" ] || [ "$(line_of "$out" 'xelatex')" -gt "$(line_of "$out" 'GMP')" ]; then
-  fail 'the xelatex line is not after the commands'
-fi
-fake_xelatex failing
-out=$case_dir/check-tex-failing
-env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail "the check with a failing xelatex failed: $(cat "$out")"
-assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex: It exited 1. (for the PDF exports; not counted)"
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
-assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails (sh toolchain/check-tex.sh says why), so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive)."
-rm "$case_dir/bin/xelatex"
-out=$case_dir/check-tex-none
-status=0
-TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/check-native.sh" --with-wizard >"$out" 2>&1 || status=$?
-[ "$status" = 1 ] || fail "the check without -ltinfo and xelatex exited $status, not 1"
-assert_contains "$out" 'no       xelatex     not-found: no xelatex on PATH (for the PDF exports; not counted)'
-assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
-if grep -F 'Missing for the native build of wiki-server and the configuration wizard: terminfo, xelatex' "$out" >/dev/null; then fail 'xelatex was counted as missing'; fi
-assert_contains "$out" 'PDF exports need xelatex: none is on PATH, so the server would offer no PDFs'
-fake_xelatex working
-pass 'toolchain/check-native.sh says whether xelatex typesets the PDF exports, and never fails for it'
+  # The xelatex of the PDF exports, through toolchain/check-tex.sh: a line
+  # of its own after the commands, ok when the fake typesets the probe, no
+  # with the reason's first line when it fails, no when PATH has none (the
+  # links leave the host's out). It is never counted and never makes the
+  # check fail, and the summary says what the PDF exports need, also after
+  # a missing item.
+  out=$case_dir/check-tex-working
+  env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a working xelatex failed: $(cat "$out")"
+  assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  if grep -F 'PDF exports need' "$out" >/dev/null; then fail 'the check with a working xelatex spoke of the PDF exports'; fi
+  if [ "$(line_of "$out" 'pkg-config')" -gt "$(line_of "$out" 'xelatex')" ] || [ "$(line_of "$out" 'xelatex')" -gt "$(line_of "$out" 'GMP')" ]; then
+    fail 'the xelatex line is not after the commands'
+  fi
+  fake_xelatex failing
+  out=$case_dir/check-tex-failing
+  env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a failing xelatex failed: $(cat "$out")"
+  assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex: It exited 1. (for the PDF exports; not counted)"
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails (sh toolchain/check-tex.sh says why), so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive)."
+  rm "$case_dir/bin/xelatex"
+  out=$case_dir/check-tex-none
+  status=0
+  TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --with-wizard >"$out" 2>&1 || status=$?
+  [ "$status" = 1 ] || fail "the check without -ltinfo and xelatex exited $status, not 1"
+  assert_contains "$out" 'no       xelatex     not-found: no xelatex on PATH (for the PDF exports; not counted)'
+  assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
+  if grep -F 'Missing for the native build of wiki-server and the configuration wizard: terminfo, xelatex' "$out" >/dev/null; then fail 'xelatex was counted as missing'; fi
+  assert_contains "$out" 'PDF exports need xelatex: none is on PATH, so the server would offer no PDFs'
+  fake_xelatex working
+  pass "$name says whether xelatex typesets the PDF exports, and never fails for it"
+done
 
 # What toolchain/deploy-local.sh --static --backend-only needs: Node alone.
 # With no GHC, cabal, wasm compiler or fourmolu on PATH, `node`

@@ -8,6 +8,7 @@
 -- > maker test native|wasm|all [CABAL-ARG…]         the tests (npm run test-native, test-wasm, test)
 -- > maker serve [CABAL-ARG…]                        build the application and serve it (npm run serve)
 -- > maker hspec-halogen                              build the browser tests' runner and print its path
+-- > maker check native [--without-postgres] [--with-wizard] [--without-tex]   what the native build needs
 --
 -- @toolchain/maker.sh@ builds the maker with its own cabal project and runs
 -- it, and also starts the terminal interface (@toolchain/maker.sh tui@).
@@ -28,6 +29,7 @@ import Data.Maybe (fromMaybe)
 import Maker.Build.Env (buildEnv)
 import Maker.Build.Native (buildNative, testNative)
 import Maker.Build.Wasm (buildWasm, hspecHalogen, serveWasm, testWasm, wasmBuildFrom)
+import Maker.Check.Native qualified as Check
 import Maker.Context
 import Maker.Log (say, withLock)
 import Maker.Pins (readPins)
@@ -51,6 +53,9 @@ data Bootstrap = Bootstrap
   , logSizeBefore :: Integer
   , started :: Integer
   , lockFd :: Maybe Int
+  , withoutPostgres :: Bool
+  , withWizard :: Bool
+  , systemTools :: Bool
   }
   deriving (Eq, Show)
 
@@ -72,6 +77,7 @@ data Command
   | RunTest TestTarget [String]
   | Serve [String]
   | HspecHalogen
+  | CheckNative (Maybe FilePath) Check.Options
   deriving (Eq, Show)
 
 -- | The command line's parser.
@@ -115,6 +121,12 @@ parser =
               )
             <> passing "serve" Serve "Build the application and serve it on PORT, default 8080 (npm run serve)"
             <> command "hspec-halogen" (info (pure HspecHalogen) (progDesc "Build the browser tests' runner and print its path"))
+            <> command
+              "check"
+              ( info
+                  (hsubparser (command "native" (info checkNativeOptions (progDesc "What the native build of wiki-server needs from the machine; installs nothing"))))
+                  (progDesc "The machine's checks")
+              )
         )
     -- A command whose remaining arguments, options included, go to cabal.
     passing name make what =
@@ -133,6 +145,15 @@ parser =
         <*> option auto (long "log-size" <> metavar "BYTES")
         <*> option auto (long "started" <> metavar "SECONDS")
         <*> optional (option auto (long "lock-fd" <> metavar "FD"))
+        <*> switch (long "without-postgres" <> help "wiki-server is built without PostgreSQL: no libpq")
+        <*> switch (long "with-wizard" <> help "The configuration wizard is built too: terminfo")
+        <*> switch (long "system-tools" <> help "GHC and cabal are the machine's own")
+    checkNativeOptions =
+      (\r p w t -> CheckNative r Check.Options {postgres = not p, wizard = w, tex = not t})
+        <$> rootOption
+        <*> switch (long "without-postgres" <> help "For a build without PostgreSQL, which needs no libpq")
+        <*> switch (long "with-wizard" <> help "Also terminfo, which the configuration wizard links")
+        <*> switch (long "without-tex" <> help "Do not try xelatex (the deploy's TeX step tries it)")
     modeReader = maybeReader (\s -> lookup s [(modeName m, m) | m <- [minBound .. maxBound]])
 
 -- | Parse arguments as the maker does, for the tests.
@@ -161,7 +182,18 @@ contextFromEnvironment rootArg mode' = do
             prefix <- lookupEnv "GHCUP_INSTALL_BASE_PREFIX"
             pure (fromMaybe home (nonEmpty prefix) </> ".ghcup" </> "bin")
   pins' <- readPins root'
-  pure Context {root = root', base = base', namedBase = isNamed, ghcupBin = ghcupBin', pins = pins', mode = mode'}
+  pure
+    Context
+      { root = root'
+      , base = base'
+      , namedBase = isNamed
+      , ghcupBin = ghcupBin'
+      , pins = pins'
+      , mode = mode'
+      , postgres = True
+      , wizard = False
+      , systemTools = False
+      }
   where
     nonEmpty = \case
       Just "" -> Nothing
@@ -175,7 +207,18 @@ main = do
   case cmd of
     RunBootstrap b -> do
       pins' <- readPins b.root
-      let ctx = Context {root = b.root, base = b.base, namedBase = b.namedBase, ghcupBin = b.ghcupBin, pins = pins', mode = b.mode}
+      let ctx =
+            Context
+              { root = b.root
+              , base = b.base
+              , namedBase = b.namedBase
+              , ghcupBin = b.ghcupBin
+              , pins = pins'
+              , mode = b.mode
+              , postgres = not b.withoutPostgres
+              , wizard = b.withWizard
+              , systemTools = b.systemTools
+              }
       bootstrap ctx b.lockFd b.logSizeBefore b.started
     Status rootArg -> do
       ctx <- contextFromEnvironment rootArg Toolchain
@@ -209,6 +252,11 @@ main = do
       wb <- wasmBuild False
       serveWasm be wb args
     HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
+    CheckNative rootArg options -> do
+      root' <- maybe getCurrentDirectory makeAbsolute rootArg
+      (report, ok) <- Check.checkNative root' options
+      putStr (unlines report)
+      unless ok exitFailure
   where
     -- The build the environment describes, or the maker stops with status 2
     -- and the reason, as the build script did.

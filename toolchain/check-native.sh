@@ -15,8 +15,12 @@
 # and changes nothing.
 #
 # toolchain/deploy-local.sh runs it first whenever it builds wiki-server, and
-# toolchain/bootstrap.sh native runs it after installing the Debian packages.
-# toolchain/configure.sh runs it with --with-wizard, before the bootstrap.
+# toolchain/configure.sh with --with-wizard, before the bootstrap: before
+# there is a GHC. After the Debian packages, toolchain/bootstrap.sh native
+# runs the same check in Haskell (the maker's `check native`,
+# maker/src/Maker/Check/Native.hs, which must say what this script says;
+# toolchain/test-bootstrap.sh runs both). The deploy's move into the maker
+# (docs/PLAN.md, WP5.68) retires this script.
 # Without it, a missing C library shows up only as a link error deep in a
 # cabal build, after the downloads and the compilers.
 #

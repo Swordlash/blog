@@ -5,8 +5,10 @@
 # scripts load it:
 #
 #   sh toolchain/maker.sh status                      the toolchain, component by component
-#   sh toolchain/maker.sh toolchain install [TARGET…]  install components (wasm-sysroot,
-#                                                     wasm-ghc, node, chromium, fourmolu, store)
+#   sh toolchain/maker.sh toolchain install [TARGET…]  install components (system-packages,
+#                                                     wasm-sysroot, wasm-ghc, node, chromium,
+#                                                     fourmolu, store)
+#   sh toolchain/maker.sh check native [OPTION…]      what the native build of wiki-server needs
 #   sh toolchain/maker.sh tui                         the terminal interface
 #   sh toolchain/maker.sh build native|wasm|wasm-opt [CABAL-ARG…]
 #   sh toolchain/maker.sh test native|wasm|all [CABAL-ARG…]
