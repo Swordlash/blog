@@ -6,6 +6,7 @@ import Maker.Deploy.Plan (get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
 import Maker.Deploy.State (renderState, stateKeys)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
+import Maker.Deploy.Tex (sourceWords, texYear, texlivePackages)
 import Maker.Deploy.Unit
 import Test.Hspec
 
@@ -105,6 +106,17 @@ spec = describe "the deploy's part in the maker" $ do
         `shouldContain` [ "WIKI_DB_PASSWORD_FILE='/s/wiki.postgres/db-password' WIKI_DB_PORT='5433' exec docker compose --project-name 'wiki' \\"
                         , "  --file '/s/wiki.postgres/docker-compose.yml' --file '/s/wiki.postgres/local.yml' exec -T postgres pg_dump \"$@\""
                         ]
+
+  describe "the TeX step" $ do
+    it "says where a source comes from: a repository cloned at a tag, or a directory" $ do
+      sourceWords "https://github.com/Perl/perl5" "v5.44.0" `shouldBe` "cloned from https://github.com/Perl/perl5 at v5.44.0"
+      sourceWords "https://github.com/TeX-Live/installer" "" `shouldBe` "cloned from https://github.com/TeX-Live/installer"
+      sourceWords "/srv/install-tl" "" `shouldBe` "from the directory /srv/install-tl"
+    it "reads the year of TeX Live an installer installs" $ do
+      texYear "TeX Live (https://tug.org/texlive) version 2026\n" `shouldBe` Just "2026"
+      texYear "install-tl: unknown option\n" `shouldBe` Nothing
+    it "takes the package list's words without its comments" $
+      texlivePackages "# what the exports need\nxetex fontspec # fonts\n\nunicode-math\n" `shouldBe` ["xetex", "fontspec", "unicode-math"]
 
   describe "the firewall"
     $ it "quotes only the arguments that need it, as a shell would need them typed"

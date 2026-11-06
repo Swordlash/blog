@@ -43,6 +43,7 @@ library
     Maker.Deploy.Prepare
     Maker.Deploy.State
     Maker.Deploy.Tailscale
+    Maker.Deploy.Tex
     Maker.Deploy.Unit
     Maker.Log
     Maker.Pins

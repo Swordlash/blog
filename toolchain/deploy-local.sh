@@ -861,32 +861,11 @@ linger_report() {
 # TeX Live under the toolchain directory and put its bin directory first on
 # the unit's PATH.
 
-# The CTAN mirror TeX Live is installed from when --texlive-mirror names
-# none. It redirects to a mirror near the machine.
-TEXLIVE_DEFAULT_MIRROR=https://mirror.ctan.org
-# The directory of the toolchain's TeX Live: one installation per TeX Live
-# year (<year>/), the TEXMFHOME and caches it keeps for its user (user/),
-# and the install's log. It is under .wiki-toolchain, as the managed Node
-# is, so that it can never be a TeX Live of one's own in ~/texlive.
-texlive_root=$toolchain_base/.wiki-toolchain/texlive
 # The PATH of the unit that uses the toolchain's TeX Live, after its bin
-# directory: the directories of the system's own programs.
+# directory: the directories of the system's own programs. The TeX step
+# itself, which may install TeX Live and a Perl for it, is the maker's
+# (maker/src/Maker/Deploy/Tex.hs); --status keeps the check below.
 UNIT_BASE_PATH=/usr/local/bin:/usr/bin:/bin
-# The Perl the deploy builds from source when the machine has no Perl with
-# the standard modules TeX Live's installer needs (a machine without perl,
-# or RHEL's perl-interpreter alone): its version, and the directory it is
-# installed into (bin/perl, lib/), with its source under src/ while it is
-# built. That Perl runs install-tl and tlmgr only: it is put first on their
-# PATH, and never on the unit's, since the server and xelatex need no Perl.
-PERL_VERSION=5.44.0
-perl_root=$toolchain_base/.wiki-toolchain/perl
-# The git repositories TeX Live's installer and Perl's source are cloned
-# from unless --texlive-installer and --perl-source name others: their
-# official mirrors on GitHub. Cloning takes neither CTAN's
-# install-tl-unx.tar.gz nor CPAN's perl-5.44.0.tar.gz, which a proxy may
-# refuse. The source is used as git gives it, with no checksum of its own.
-TEXLIVE_INSTALLER_REPO=https://github.com/TeX-Live/installer
-PERL_SOURCE_REPO=https://github.com/Perl/perl5
 
 # The PATH the user's systemd manager gives a unit that sets none, which is
 # the PATH the service sees. When systemctl says nothing, systemd's usual
@@ -894,22 +873,6 @@ PERL_SOURCE_REPO=https://github.com/Perl/perl5
 manager_path() {
   path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p' | tail -n 1)
   printf '%s\n' "${path:-$UNIT_BASE_PATH}"
-}
-
-# The bin directory of a TeX Live installation (bin/<platform>, such as
-# bin/x86_64-linux) that holds the program $2 (xelatex unless given); fails
-# when there is none. The scheme basic has no XeTeX: a fresh installation's
-# bin directory is found by its tlmgr, and holds xelatex only once tlmgr
-# has installed the package xetex.
-texlive_bin() {
-  [ -n "$1" ] || return 1
-  for candidate in "$1"/bin/*/; do
-    if [ -x "${candidate}${2:-xelatex}" ]; then
-      printf '%s\n' "${candidate%/}"
-      return 0
-    fi
-  done
-  return 1
 }
 
 # Run toolchain/check-tex.sh as the service would run xelatex: with an empty
@@ -926,350 +889,6 @@ check_tex() {
 }
 # The report's lines after the first (the reason a check failed), indented.
 tex_reason() { printf '%s\n' "$tex_report" | sed '1d;s/^/    /'; }
-
-# The commands TeX Live's install needs from the machine that are
-# missing, empty when none is: git clones the installer and Perl's source,
-# and the installer downloads and unpacks its packages with curl, tar and
-# gzip. Perl, which it is written in, is perl_plan's business.
-texlive_missing() {
-  missing=
-  for cmd in git curl tar gzip; do
-    command -v "$cmd" >/dev/null 2>&1 || missing="${missing:+$missing, }$cmd"
-  done
-  printf '%s\n' "$missing"
-}
-
-# Whether the perl given (a path or a command name) runs and has the
-# modules of Perl's standard library that install-tl and tlmgr use. RHEL's
-# perl-interpreter alone lacks some of them.
-perl_usable() {
-  "$1" -MDigest::MD5 -MDigest::SHA -MFile::Temp -MGetopt::Long -MPod::Usage -MData::Dumper -MTime::HiRes -e 1 >/dev/null 2>&1
-}
-
-# The Perl TeX Live's installer runs with. Sets perl_bin to the bin
-# directory put first on the PATH of install-tl and tlmgr: the toolchain's
-# Perl, when one was built (perl_dir) and still works; empty when the
-# machine's own perl will do. When neither does, perl_bin is empty and
-# perl_build is yes: the Perl must be built from source first.
-perl_plan() {
-  perl_bin='' perl_build=''
-  if [ -n "$perl_dir" ] && perl_usable "$perl_dir/bin/perl"; then
-    perl_bin=$perl_dir/bin
-  elif ! perl_usable perl; then
-    perl_build=yes
-  fi
-}
-
-# Where the TeX step takes a source from, said for its messages: a URL is
-# a git repository, cloned (at the tag $2 when one is given), anything else
-# a directory of this machine.
-source_words() {
-  case $1 in
-    http://* | https://*) printf 'cloned from %s%s\n' "$1" "${2:+ at $2}" ;;
-    *) printf 'from the directory %s\n' "$1" ;;
-  esac
-}
-
-# Build Perl PERL_VERSION from its source into perl_root, for TeX Live's
-# installer, logging to the TeX install's log as the install does. The
-# source is a shallow clone of the tag vPERL_VERSION of PERL_SOURCE_REPO,
-# or of the repository perl_source names (--perl-source), or a copy of the
-# directory it names, under perl_root/src/perl5. A clone has its .git, from
-# which make_patchnum.pl reads the commit as in Perl's own checkouts.
-# Configure -des takes every default without asking; -Duserelocatableinc
-# lets the Perl find its modules relative to itself. make runs as many jobs
-# as the machine has processors, as the wiki's build does. make test is
-# left out: it takes longer than the build, and install-tl, which runs
-# next, uses the modules it needs at once. Sets perl_dir and perl_bin when
-# the Perl works; fails, saying why, otherwise, leaving no half-built Perl
-# behind.
-build_perl() {
-  mkdir -p "$texlive_root"
-  texlive_log=$texlive_root/install.log
-  printf '\n%s building Perl %s\n' "$(date '+%F %T')" "$PERL_VERSION" >>"$texlive_log"
-  # Whatever Perl was there goes first, and is forgotten until the new one
-  # works.
-  perl_dir=
-  rm -rf "$perl_root"
-  mkdir -p "$perl_root/src"
-  source=${perl_source:-$PERL_SOURCE_REPO}
-  source_dir=$perl_root/src/perl5
-  say "building Perl $PERL_VERSION under $perl_root for TeX Live's installer, its source $(source_words "$source" "v$PERL_VERSION") (its output also goes to $texlive_log)"
-  case $source in
-    http://* | https://*)
-      texlive_step "cloning Perl's source" git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$PERL_VERSION" "$source" "$source_dir" ;;
-    *)
-      texlive_step "copying Perl's source" cp -R "$source" "$source_dir" ;;
-  esac || {
-    rm -rf "$perl_root"
-    return 1
-  }
-  if [ ! -f "$source_dir/Configure" ]; then
-    warn "Perl's source $(source_words "$source" "v$PERL_VERSION") has no Configure at its top"
-    rm -rf "$perl_root"
-    return 1
-  fi
-  jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
-  # shellcheck disable=SC2016 # the inner shell expands its own arguments.
-  if ! texlive_step "Perl's Configure" sh -c 'cd "$1" && exec sh Configure -des -Dprefix="$2" -Duserelocatableinc' configure "$source_dir" "$perl_root" ||
-    ! texlive_step "building Perl (make -j$jobs)" make -C "$source_dir" "-j$jobs" ||
-    ! texlive_step "installing Perl (make install)" make -C "$source_dir" install; then
-    rm -rf "$perl_root"
-    return 1
-  fi
-  rm -rf "$perl_root/src"
-  if ! perl_usable "$perl_root/bin/perl"; then
-    warn "the Perl built in $perl_root does not run with the modules TeX Live's installer needs (see $texlive_log)"
-    rm -rf "$perl_root"
-    return 1
-  fi
-  perl_dir=$perl_root perl_bin=$perl_root/bin
-  say "built Perl $PERL_VERSION in $perl_root, for TeX Live's installer only"
-}
-
-# One step of the install: the command's output is shown as it comes and
-# appended to the install's log, as the bootstrap's long steps are. A
-# failure shows the end of the log and fails.
-texlive_step() {
-  step=$1
-  shift
-  printf '+ %s\n' "$*" >>"$texlive_log"
-  # A pipeline's status is tee's, so the command's own status goes to a
-  # file, which stays empty when the command succeeds.
-  step_status=$(mktemp)
-  { "$@" 2>&1 || printf '%s' "$?" >"$step_status"; } | tee -a "$texlive_log"
-  step_failed=$(cat "$step_status")
-  rm -f "$step_status"
-  [ -n "$step_failed" ] || return 0
-  warn "$step failed (exit $step_failed); the end of $texlive_log:"
-  tail -n 20 "$texlive_log" >&2
-  return 1
-}
-
-# Run TeX Live's install-tl or tlmgr so that it never waits on a terminal.
-# install-tl looks for an installation.profile in its working directory
-# before it reads its options, --no-interaction included, and when it
-# finds one, left there by an install that failed, it asks on its standard
-# input whether to resume. Under $(...) that question is not seen, and the
-# deploy would wait for ever. So the command runs with
-# TEXLIVE_INSTALL_NO_RESUME=1, which turns the question off, with its
-# standard input from /dev/null, and in texlive_root, so that a profile in
-# the directory the deploy was run from is never seen, and one an aborted
-# install writes lands under the toolchain. tl_path is put first on PATH.
-texlive_run() {
-  (cd "$texlive_root" && exec env TEXLIVE_INSTALL_NO_RESUME=1 PATH="$tl_path" "$@" </dev/null)
-}
-
-# Whether the TeX Live repository answers, before anything is cloned or
-# installed. curl follows redirects, as install-tl does: mirror.ctan.org
-# sends each request to another mirror, and a proxy may block some of
-# them. Sets texlive_reached to the URL curl ended at (empty when it did
-# not say); fails when the repository's checksum file cannot be fetched.
-texlive_reach() {
-  texlive_reached=
-  probe_url=$repository/tlpkg/texlive.tlpdb.sha512
-  printf '+ curl %s\n' "$probe_url" >>"$texlive_log"
-  reach_status=0
-  texlive_reached=$(curl --fail --location --silent --show-error --max-time 30 --output /dev/null \
-    --write-out '%{url_effective}' "$probe_url" 2>>"$texlive_log") || reach_status=$?
-  return "$reach_status"
-}
-
-# Install TeX Live under texlive_root from the mirror texlive_mirror names:
-# the installer from a shallow clone of TEXLIVE_INSTALLER_REPO (or of the
-# repository texlive_installer names, --texlive-installer, or from the
-# directory it names, used as it is), the packages from
-# <mirror>/systems/texlive/tlnet/, the scheme basic
-# (plain TeX and LaTeX) without documentation and sources, then the
-# packages of toolchain/texlive-packages.txt with tlmgr. The installation
-# goes into <year>/, the year of the installer's TeX Live; an installation
-# of that year already there (one that failed its check) is replaced, and
-# those of other years are deleted once the new one works (texlive_step).
-# The repository is checked first (texlive_reach), and every run of
-# install-tl and tlmgr goes through texlive_run. Sets texlive_new to the
-# installation; fails, saying why, when a step fails.
-install_texlive() {
-  mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
-  repository=${mirror%/}/systems/texlive/tlnet
-  mkdir -p "$texlive_root"
-  texlive_log=$texlive_root/install.log
-  printf '\n%s installing TeX Live from %s\n' "$(date '+%F %T')" "$repository" >>"$texlive_log"
-  if ! texlive_reach; then
-    landed=
-    [ -z "$texlive_reached" ] || [ "$texlive_reached" = "$probe_url" ] ||
-      landed=" (curl ended at $texlive_reached)"
-    warn "TeX Live's repository $repository does not answer from this machine$landed: curl exited $reach_status (see $texlive_log). mirror.ctan.org sends each request to another mirror, and a proxy may block some of them: name a mirror this machine can reach with --texlive-mirror URL (https://ctan.org/mirrors lists them)"
-    return 1
-  fi
-  reached=
-  case $texlive_reached in
-    "$probe_url" | '') ;;
-    */systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512)
-      reached=", which answered from the mirror ${texlive_reached%/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512}" ;;
-    *) reached=", which answered from $texlive_reached" ;;
-  esac
-  installer_dir=$texlive_root/installer.tmp
-  rm -rf "$installer_dir"
-  mkdir -p "$installer_dir"
-  source=${texlive_installer:-$TEXLIVE_INSTALLER_REPO}
-  say "TeX Live's installer $(source_words "$source"), its packages from $repository$reached (its output also goes to $texlive_log)"
-  # A clone goes into installer.tmp, deleted once TeX Live works; a
-  # directory is used where it is. Either way install-tl runs from its
-  # directory, which holds the tlpkg/ it loads its modules from.
-  case $source in
-    http://* | https://*)
-      installer=$installer_dir/install-tl
-      texlive_step "cloning TeX Live's installer" git clone --quiet --depth 1 "$source" "$installer" || return 1 ;;
-    *) installer=$source ;;
-  esac
-  [ -f "$installer/install-tl" ] || { warn "TeX Live's installer $(source_words "$source") holds no install-tl"; return 1; }
-  # The Perl perl_plan chose, first on the PATH of install-tl and tlmgr,
-  # which find perl through it (#!/usr/bin/env perl).
-  tl_path=${perl_bin:+$perl_bin:}$PATH
-  # The year of the TeX Live the installer installs, as it reports it:
-  # install-tl --version says "TeX Live (https://tug.org/texlive) version
-  # 2026".
-  printf '+ %s\n' "$installer/install-tl --no-interaction --version" >>"$texlive_log"
-  year=$(texlive_run "$installer/install-tl" --no-interaction --version 2>>"$texlive_log" |
-    sed -n 's/.*version \([0-9][0-9][0-9][0-9]\).*/\1/p' | head -n 1)
-  [ -n "$year" ] || { warn "TeX Live's installer in $installer does not say its year (install-tl --version; see $texlive_log)"; return 1; }
-  texlive_new=$texlive_root/$year
-  rm -rf "$texlive_new"
-  say "installing TeX Live $year into $texlive_new (the scheme basic, no documentation or sources)"
-  texlive_step "TeX Live's installer" texlive_run "$installer/install-tl" --no-interaction --scheme=basic \
-    --texdir="$texlive_new" --texuserdir="$texlive_root/user" --no-doc-install --no-src-install \
-    --repository "$repository" || return 1
-  # The scheme basic installs tlmgr but not XeTeX, which the list's xetex
-  # brings: the bin directory is found by tlmgr here, and by xelatex after
-  # the packages.
-  tlmgr_bin=$(texlive_bin "$texlive_new" tlmgr) ||
-    { warn "TeX Live's installer left no bin/<platform>/tlmgr under $texlive_new (see $texlive_log)"; return 1; }
-  # The list's words, without its comments.
-  packages=$(sed 's/#.*//' "$ROOT/toolchain/texlive-packages.txt" | tr -s ' \t\n' ' ')
-  say "installing the packages the PDF exports need (toolchain/texlive-packages.txt) with tlmgr"
-  # shellcheck disable=SC2086 # the packages are words.
-  texlive_step "tlmgr install" texlive_run "$tlmgr_bin/tlmgr" install $packages || return 1
-  new_bin=$(texlive_bin "$texlive_new") ||
-    { warn "tlmgr installed the packages, but there is no xelatex under $texlive_new/bin (see $texlive_log)"; return 1; }
-  rm -rf "$installer_dir"
-}
-
-# The TeX step of a server's deploy. It decides texlive, texlive_dir and
-# texlive_mirror, which the state keeps; tex_bin, the toolchain's
-# TeX Live bin directory the unit puts first on its PATH (empty when the
-# service uses the TeX it finds on its own, or none); and pdf, yes when the
-# step ends with an xelatex that works and no otherwise. With pdf=no the
-# unit runs wiki-server with --no-pdf: the server then neither tries its
-# TeX at each start nor offers PDFs, and its administration's Server
-# section says that the option is set and what sets it. It never stops the
-# deploy: without a TeX that works, the server offers no PDFs.
-tex_step() {
-  tex_bin=
-  pdf=no
-  service_path=$(manager_path)
-  # The toolchain's TeX Live, when one is installed and not declined.
-  if [ "$texlive" != no ] && toolchain_bin=$(texlive_bin "$texlive_dir"); then
-    if check_tex "$toolchain_bin:$UNIT_BASE_PATH"; then
-      say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $toolchain_bin first on its PATH"
-      tex_bin=$toolchain_bin pdf=yes
-      return 0
-    fi
-    warn "PDF exports: the toolchain's TeX Live in $texlive_dir does not work:"
-    tex_reason >&2
-  elif [ "$texlive" = no ] && [ -n "$(texlive_bin "$texlive_dir" || true)" ]; then
-    say "--no-texlive: not using the toolchain's TeX Live in $texlive_dir, which stays there (--texlive uses it again)"
-  fi
-  # The TeX the service finds on its own PATH.
-  if check_tex "$service_path"; then
-    say "PDF exports: ${tex_line#working } works, the TeX on this machine, found on the service's PATH ($service_path)"
-    pdf=yes
-    return 0
-  fi
-  if [ "$tex_status" = 2 ]; then
-    say "PDF exports: no xelatex on the service's PATH ($service_path): the systemd user manager's PATH, not this shell's"
-  else
-    warn "PDF exports: ${tex_line#failing } does not make the probe's PDF under the export's limits, on the service's PATH ($service_path):"
-    tex_reason >&2
-  fi
-  # The trap: a TeX this shell finds and the service does not.
-  if shell_tex=$(command -v xelatex 2>/dev/null) && [ "$tex_status" = 2 ]; then
-    say "this shell finds $shell_tex, but the service does not: a unit does not inherit the shell's PATH"
-  fi
-  mirror=${texlive_mirror:-$TEXLIVE_DEFAULT_MIRROR}
-  offer_off="the server runs with --no-pdf and offers no PDFs, and its administration's Server section says why"
-  case $texlive in
-    no)
-      say "PDF exports: $offer_off (--no-texlive; --texlive installs TeX Live under $texlive_root)"
-      return 0 ;;
-  esac
-  # Whether TeX Live's installer has a Perl, or one must be built first:
-  # the question names the build, so that one answer covers both.
-  perl_plan
-  perl_clause=
-  [ -z "$perl_build" ] ||
-    perl_clause=", building Perl $PERL_VERSION under $perl_root first, its source $(source_words "${perl_source:-$PERL_SOURCE_REPO}" "v$PERL_VERSION"), since this machine has no Perl with its standard modules (a few minutes with cc)"
-  # The installer comes from elsewhere than the mirror, which serves the
-  # packages.
-  installer_clause=", its installer $(source_words "${texlive_installer:-$TEXLIVE_INSTALLER_REPO}")"
-  case $texlive in
-    yes) ;;
-    *)
-      if [ -t 0 ] && [ -t 1 ]; then
-        printf '%s: PDF exports need a TeX that works and none was found. Install TeX Live under %s from %s%s (about 250 MB, a few minutes)%s? [y/N] ' "$PROG" "$texlive_root" "$mirror" "$installer_clause" "$perl_clause"
-        read -r answer || answer=
-        case $answer in
-          y | Y | yes | Yes | YES) texlive=yes ;;
-          *)
-            texlive=no
-            say "PDF exports: $offer_off (remembered; --texlive installs TeX Live under $texlive_root later)"
-            return 0 ;;
-        esac
-      else
-        say "PDF exports: $offer_off. --texlive installs TeX Live under $texlive_root from $mirror$installer_clause (about 250 MB and a few minutes$perl_clause); --no-texlive says no and stops this note"
-        return 0
-      fi ;;
-  esac
-  missing=$(texlive_missing)
-  if [ -n "$missing" ]; then
-    warn "TeX Live's install needs $missing, missing here: install them (Debian and Ubuntu: sudo apt-get install git curl tar gzip; RHEL and Fedora: sudo dnf install git curl tar gzip) and deploy again. Meanwhile $offer_off"
-    return 0
-  fi
-  if [ -z "$perl_build" ] && [ -n "$perl_source" ]; then
-    say "--perl-source: not used, since TeX Live's installer has a Perl that works"
-  fi
-  if [ -n "$perl_build" ]; then
-    if ! command -v cc >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
-      warn "TeX Live's installer needs Perl with its standard modules, which this machine lacks, and building Perl needs cc and make, missing here: install them, or perl itself (Debian and Ubuntu: sudo apt-get install perl; RHEL and Fedora: sudo dnf install perl, the whole perl, not perl-interpreter alone), and deploy again. Meanwhile $offer_off"
-      return 0
-    fi
-    if ! build_perl; then
-      warn "Perl $PERL_VERSION was not built (see above), so TeX Live was not installed and $offer_off; the next deploy tries again (--no-texlive stops it)"
-      return 0
-    fi
-  fi
-  if ! install_texlive; then
-    # An install of the remembered installation's year removed it first:
-    # then nothing is remembered, rather than a directory that is gone.
-    [ -n "$(texlive_bin "$texlive_dir" || true)" ] || texlive_dir=
-    warn "TeX Live was not installed (see above), so $offer_off; the next deploy tries again (--no-texlive stops it)"
-    return 0
-  fi
-  if ! check_tex "$new_bin:$UNIT_BASE_PATH"; then
-    warn "the TeX Live just installed in $texlive_new does not make the probe's PDF:"
-    tex_reason >&2
-    warn "so $offer_off; the next deploy installs it again (--no-texlive stops it)"
-    return 0
-  fi
-  # One installation is kept: those of other years go.
-  for old in "$texlive_root"/[0-9][0-9][0-9][0-9]; do
-    if [ -d "$old" ] && [ "$old" != "$texlive_new" ]; then
-      rm -rf "$old"
-      say "deleted the older TeX Live in $old"
-    fi
-  done
-  texlive_dir=$texlive_new tex_bin=$new_bin pdf=yes
-  say "PDF exports: ${tex_line#working } works, the toolchain's TeX Live; the unit puts $tex_bin first on its PATH"
-}
 
 # A pin or a floor of the toolchain (GHC_VERSION, GHC_MIN_VERSION,
 # CABAL_VERSION, CABAL_MIN_VERSION, NODE_MIN_MAJOR), read from
@@ -2257,9 +1876,10 @@ if [ -z "$system_tools" ] && [ -r "$toolchain_base/.wiki-toolchain/env" ]; then
 fi
 bootstrap_env=$(sh "$ROOT/toolchain/bootstrap.sh" env ${system_tools_flag:+"$system_tools_flag"})
 eval "$bootstrap_env"
-# The TeX of the PDF exports, checked after the toolchain and before the
-# build, so that an install of TeX Live, when one is wanted, happens before
-# the long wait. The demo keeps what a server before it chose.
+# The TeX of the PDF exports, which the maker's TeX step checks after the
+# toolchain and before the build (maker/src/Maker/Deploy/Tex.hs), so that an
+# install of TeX Live, when one is wanted, happens before the long wait.
+# The demo keeps what a server before it chose.
 texlive=${opt_texlive:-$prev_texlive}
 texlive_dir=$prev_texlive_dir
 perl_dir=$prev_perl_dir
@@ -2268,16 +1888,11 @@ texlive_mirror=${opt_texlive_mirror:-$prev_texlive_mirror}
 # not from their GitHub mirrors; not remembered.
 texlive_installer=$opt_texlive_installer
 perl_source=$opt_perl_source
-tex_bin=
-pdf=no
-# check_tex_flag is set by the same test: when this step runs,
-# toolchain/check-native.sh has not probed xelatex.
-[ "$mode" != server ] || tex_step
 # The plan of the rest of the deploy, for the maker: one key=value line for
 # each variable the rest reads, and for each the state file keeps (the
 # maker writes the state). A value cannot hold a newline: the plan has one
 # line per key.
-MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca pdf whats_new tex_bin prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind ci_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir'
+MAKER_PLAN_KEYS='name dir out mode nodeless db db_port prev_db prev_db_port prev_dir no_firewall prev_rule_port port bind admin_port prev_serve_port prev_port prev_bind prev_mode prev_admin_port way tls_cert tls_key tls_ca whats_new prefix user toolchain_home toolchain_base enable_linger state_file unit_file env_file adoptable fresh build prebuilt opt_semaphore page_kind ci_page prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir texlive_installer perl_source'
 maker_plan() {
   printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
   printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"
@@ -2313,9 +1928,9 @@ maker_apply() {
 }
 
 # From here on the maker does the deploy (maker deploy apply,
-# maker/src/Maker/Deploy/Prepare.hs and Apply.hs), from a plan of what was
-# worked out above, while the deploy moves into it (docs/PLAN.md, WP5.68
-# c2): the builds, the checks of what they made, the service's Node,
+# maker/src/Maker/Deploy/Tex.hs, Prepare.hs and Apply.hs), from a plan of
+# what was worked out above, while the deploy moves into it (docs/PLAN.md,
+# WP5.68 c2): the TeX step, the builds, the checks of what they made, the service's Node,
 # HTTPS through Tailscale, the ports, the adoption into a prefix and
 # PostgreSQL's container; then the change of the running deployment.
 maker_apply
