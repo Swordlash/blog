@@ -1314,15 +1314,20 @@ needs. Each was true when its package merged; check before relying on one.
   and wasm cabal stores, the native and wasm `dist-newstyle` snapshots) are keyed by
   the compiler pins, the runner kind, a hand-bumped tag and the run id, never by a hash
   of the sources: a run restores the newest copy under the prefix and cabal and GHC
-  decide what to rebuild; after each save `toolchain/ci-prune-caches.sh` deletes the
-  ref's older copies, so each ref holds one copy per cache and the repository's 10 GB
-  limit no longer evicts `main`'s. The hosted `native` and `wasm` jobs hold
-  `actions: write` for it (the wasm job on the owner's machine too, since permissions
-  are per job). A pull request's run sees only its own ref's copies and `main`'s;
-  `main`'s hosted wasm copy comes from the weekly scheduled run, from pushes that find
-  the owner's machine busy, and from runs by hand with `runner: hosted`, so a first
-  hosted wasm run on a fresh ref is cold (about 35 minutes) until one of those has
-  saved a copy. The stores keep a transitional restore key for the copies saved before
+  decide what to rebuild; `toolchain/ci-prune-caches.sh` deletes the ref's older
+  copies, so each ref holds one copy per cache and the repository's 10 GB limit no
+  longer evicts `main`'s. Since #179 (the owner, 2026-11-06) it runs in a job of its
+  own, `prune-caches`, after every job that restores a cache (`native`,
+  `native-floor`, `wasm`, `wasm-warm`), never beside them: deleted right after the
+  save, the older copy vanished while another group was still looking it up, which
+  then built every dependency. Only `prune-caches` holds `actions: write`. A pull
+  request's run sees only its own ref's copies and `main`'s; `main`'s hosted wasm
+  copies come from `wasm-warm` ("wasm (hosted cache)"), the wasm job's steps through
+  a YAML anchor on a hosted runner, untested, on every push to `main` whose page was
+  not built on one; deploy does not wait for it. `server-page.yml` keeps a store of
+  its own for its `-O2` dependencies (`Linux-wasm-opt-store-…`, started from the wasm
+  store, pruned by its own `prune-caches` job), since they have unit ids of their
+  own. The stores keep a transitional restore key for the copies saved before
   the tag; drop it at the next tag bump. The self-hosted runner's store and build
   directories live on its disk and are untouched.
 - Without PostgreSQL (WP5.52): `toolchain/test-native-groups.mjs` expects a binary
