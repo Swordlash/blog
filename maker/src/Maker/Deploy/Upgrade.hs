@@ -39,9 +39,10 @@ import System.FilePath (takeFileName, (</>))
 -- the copy of the backup of the database made before the deployment that
 -- replaced it, in @previous/@ (empty when there was no database yet), when
 -- it was kept, whether its service was running when the deploy began, and
--- whether it had a unit (it has none after @--stop@). A rollback starts the
--- service only if it was running, and removes the unit only if there was
--- none. An @info@ written before these two were recorded counts as running
+-- whether it had a unit (it has none after @--stop@), and whether its
+-- PostgreSQL container was running. A rollback starts the service only if
+-- it was running, removes the unit only if there was none, and stops the
+-- container only if it was stopped. An @info@ written before these two were recorded counts as running
 -- with a unit, which is what such a deploy required.
 data Kept = Kept
   { commit :: String
@@ -49,6 +50,7 @@ data Kept = Kept
   , keptAt :: String
   , running :: Bool
   , unit :: Bool
+  , dbRunning :: Bool
   }
   deriving (Eq, Show)
 
@@ -62,8 +64,8 @@ previousDir dir = dir </> "previous"
 -- records, in place of an older one kept there. Nothing is kept when the
 -- directory holds no server binary (a first deploy, or a demo before). The
 -- answer is whether a deployment was kept.
-keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> Bool -> IO Bool
-keepPrevious dir unitFile stateFile commit backup running = do
+keepPrevious :: FilePath -> FilePath -> FilePath -> String -> Maybe FilePath -> Bool -> Bool -> IO Bool
+keepPrevious dir unitFile stateFile commit backup running dbRunning = do
   let previous = previousDir dir
   removePathForcibly previous
   there <- doesFileExist (dir </> "bin" </> "wiki-server")
@@ -96,6 +98,7 @@ keepPrevious dir unitFile stateFile commit backup running = do
           , "kept=" <> formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now
           , "running=" <> yesNo running
           , "unit=" <> yesNo hasUnit
+          , "db_running=" <> yesNo dbRunning
           ]
       )
     say ("kept the previous deployment (" <> (if null commit then "unknown" else commit) <> ") in " <> previous <> ", for a rollback")
@@ -117,7 +120,7 @@ readKept dir = do
             (k, '=' : rest) -> Just (k, rest)
             _ -> Nothing
           value k = maybe "" id (lookup k fields)
-      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept", running = value "running" /= "no", unit = value "unit" /= "no"})
+      length text `seq` pure (Just Kept {commit = value "commit", backup = value "backup", keptAt = value "kept", running = value "running" /= "no", unit = value "unit" /= "no", dbRunning = value "db_running" /= "no"})
 
 -- | The backup a backup command made: the newest of the backups listed
 -- after it that were not listed before it. A backup's name starts with its

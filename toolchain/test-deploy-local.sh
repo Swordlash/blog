@@ -662,6 +662,7 @@ case $name in
       'stop postgres') [ ! -f "$container" ] || printf 'stopped\n' >"$container" ;;
       'down --volumes') rm -f "$container" ;;
       'ps postgres') cat "$container" 2>/dev/null || true ;;
+      'ps --status running --quiet postgres') ! grep -q '^started' "$container" 2>/dev/null || printf 'c0ffee\n' ;;
       'exec -T postgres pg_dump '* | 'exec -T postgres pg_restore '*)
         grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
         shift 3
@@ -1293,6 +1294,18 @@ deploy --rollback --yes >"$case_dir/pg-stopped-rollback" 2>&1 || fail '--rollbac
 assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
 deploy --no-build >"$case_dir/pg-started-again" 2>&1 || fail 'a deploy after the rollback failed'
 pass 'a rollback to a PostgreSQL deployment taken down with --stop stops its container again'
+
+# A wiki whose service had stopped while its database ran comes back
+# stopped, with the database still running, as it was.
+systemctl --user stop wiki-demo.service
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --no-build >"$case_dir/pg-service-stopped" 2>&1 || fail 'a deploy over a stopped service failed'
+assert_contains "$HOME/wiki-demo/previous/info" 'running=no'
+assert_contains "$HOME/wiki-demo/previous/info" 'db_running=yes'
+deploy --rollback --yes >"$case_dir/pg-service-stopped-rollback" 2>&1 || fail '--rollback to a stopped service failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --no-build >"$case_dir/pg-service-again" 2>&1 || fail 'a deploy after the rollback failed'
+pass 'a rollback to a stopped service whose PostgreSQL ran leaves the database running'
 
 : >"$EVENTS"
 out=$case_dir/guide-fails

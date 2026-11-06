@@ -187,14 +187,14 @@ spec = describe "the deploy's part in the maker" $ do
       createDirectoryIfMissing True (dir </> "app")
       writeFile (dir </> "unit") "[Unit]\n"
       writeFile (dir </> "state") "git_commit=abc\n"
-      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True
+      demo <- keepPrevious dir (dir </> "unit") (dir </> "state") "abc" Nothing True True
       demo `shouldBe` False
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "old"
       createDirectoryIfMissing True (dir </> "backups")
       writeFile (dir </> "backups" </> "b.pgdump") "dump"
       writeFile (dir </> "backups" </> "b.pgdump.json") "facts"
-      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump")) True
+      kept <- keepPrevious dir (dir </> "unit") (dir </> "state") "" (Just (dir </> "backups" </> "b.pgdump")) True True
       kept `shouldBe` True
       moved <- (,) <$> doesDirectoryExist (dir </> "bin") <*> doesDirectoryExist (dir </> "app")
       moved `shouldBe` (False, False)
@@ -206,7 +206,7 @@ spec = describe "the deploy's part in the maker" $ do
       -- such, in place of the one kept before.
       createDirectoryIfMissing True (dir </> "bin")
       writeFile (dir </> "bin" </> "wiki-server") "stopped"
-      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing False
+      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing False False
       stopped `shouldBe` True
       k' <- readKept dir
       fmap (\x -> (x.commit, x.backup, x.running, x.unit)) k' `shouldBe` Just ("abc", "", False, False)

@@ -155,7 +155,7 @@ apply p = do
         [what | (what, changed) <- [("the database", oldDb /= db), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
   kept <-
     if server && null changes
-      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade wasRunning
+      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade wasRunning (has p "db_was_running")
       else do
         replaced <- doesFileExist (dir </> "bin" </> "wiki-server")
         when (server && replaced) $
@@ -227,7 +227,7 @@ apply p = do
                 if started
                   then say ("the previous deployment runs again (" <> service <> " answers on " <> url <> ")")
                   else warn ("the previous deployment does not answer on " <> url <> " either; see journalctl --user -u " <> name)
-              else leaveStopped place >> say (service <> " is left stopped, as it was before the deploy")
+              else leaveStopped place k >> say (service <> " is left stopped, as it was before the deploy")
             die
               ( why
                   <> ": rolled back to the previous deployment, of commit "
@@ -844,7 +844,7 @@ rollbackByHand p = do
         then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
         else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
     else do
-      leaveStopped place
+      leaveStopped place k
       say ("rolled back to commit " <> k.commit <> "; " <> service <> " is left stopped, as it was before the upgrade")
 
 -- | The database options of the deployment kept in @previous/@, read from
@@ -905,8 +905,12 @@ rollBackDeployment place firewall now k = do
   say ("rolling back to the previous deployment (" <> k.commit <> "), kept in " <> previousDir place.dir)
   _ <- runInherit "systemctl" ["--user", "stop", service]
   old <- settingsOf (previousDir place.dir </> "state")
-  when (old.db == "postgres" && now.db == "postgres" && old.dbPort /= now.dbPort) $ do
-    say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort)
+  -- PostgreSQL runs on the kept port before the restore, which connects
+  -- there: moved back when the upgrade changed the port, and started in
+  -- any case, so that a --rollback retried after a move that failed finds
+  -- it up even though the two states name the same port.
+  when (old.db == "postgres" && now.db == "postgres") $ do
+    when (old.dbPort /= now.dbPort) (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
     forM_ ["pg_dump", "pg_restore"] $ \program ->
       writeFile (place.pgDir </> program) (pgWrapper place.name place.pgDir old.dbPort program)
     code <- pgCompose place.name place.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
@@ -974,9 +978,11 @@ deploymentUrl stateFile = do
   pure (serverUrl True bind port way)
 
 -- | Leave a rolled-back deployment stopped, as it was before the upgrade:
--- its PostgreSQL container too, which the deploy started.
-leaveStopped :: Place -> IO ()
-leaveStopped place = do
+-- its PostgreSQL container too, which the deploy started, unless the
+-- container was running before the deploy (the wiki's service can be
+-- stopped or failed while its database runs).
+leaveStopped :: Place -> Kept -> IO ()
+leaveStopped place k = do
   kind <- stateGet "db" place.stateFile
   port <- stateGet "db_port" place.stateFile
-  when (kind == "postgres") (pgDown place.name place.pgDir port)
+  when (kind == "postgres" && not k.dbRunning) (pgDown place.name place.pgDir port)
