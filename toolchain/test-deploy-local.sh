@@ -243,7 +243,9 @@ case \$command in
     if [ -n "\$database" ]; then
       # As wiki-server does: pg_dump with the URL, the password elsewhere.
       mkdir -p "\$data/backups"
-      "\$dump" --format=custom "--dbname=\$database" >"\$data/backups/\$(ls "\$data/backups" | wc -l | tr -d ' ').pgdump" || exit 1
+      n=\$(ls "\$data/backups" | grep -c 'pgdump\$' || true)
+      "\$dump" --format=custom "--dbname=\$database" >"\$data/backups/\$n.pgdump" || exit 1
+      printf '{"facts": %s}\n' "\$n" >"\$data/backups/\$n.pgdump.json"
       printf 'Backed up\n'
     elif grep -q 'an earlier schema' "\$data/wiki.sqlite" 2>/dev/null; then
       printf 'wiki-server: The database holds a wiki of an earlier wiki-server\n' >&2
@@ -1246,7 +1248,8 @@ assert_contains "$EVENTS" "wiki-server backup --data $data --database postgres:/
 for step in migrate check; do
   assert_contains "$EVENTS" "wiki-server $step --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore"
 done
-assert_contains "$HOME/wiki-demo/previous/info" "backup=$data/backups/1.pgdump"
+assert_contains "$HOME/wiki-demo/previous/info" "backup=$HOME/wiki-demo/previous/1.pgdump"
+cmp -s "$data/backups/1.pgdump.json" "$HOME/wiki-demo/previous/1.pgdump.json" || fail "the backup's facts were not copied into previous/"
 # The fake server makes a dump on the first deploy too, where wiki-server
 # finds no wiki yet: this one is the second.
 assert_contains "$data/backups/1.pgdump" 'pg_dump of wiki-demo: --username=wiki --dbname=wiki --format=custom'
