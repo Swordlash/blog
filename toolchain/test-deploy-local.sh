@@ -46,6 +46,21 @@ if [ "${WIKI_TEST_WIZARD:-}" = 1 ]; then
   fi
 fi
 export NODE_REAL
+# The maker (maker/), which does the part of a deploy that changes the
+# running deployment (maker deploy apply), built here with the real cabal
+# before PATH is narrowed to the fakes; the deploy runs it through
+# WIKI_MAKER. A maker already built may be named there instead.
+if [ -z "${WIKI_MAKER:-}" ]; then
+  WIKI_MAKER=$(
+    toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+    if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
+      # shellcheck source=/dev/null
+      . "$toolchain_home/.wiki-toolchain/env"
+    fi
+    cd "$SOURCE_DIR/../maker" && cabal build -v0 exe:maker >&2 && cabal list-bin -v0 exe:maker
+  ) || { printf 'FAIL: building the maker\n' >&2; exit 1; }
+fi
+export WIKI_MAKER
 # Found before the fixtures put a fake cabal first on PATH, with the cabal
 # the bootstrap installed, as the npm entry points find it.
 if [ -z "${WIKI_SERVER:-}" ]; then

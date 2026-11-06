@@ -1,5 +1,5 @@
 -- | The maker's tests: the pure parts (versions, pins, the command line, the
--- store's fingerprint, the builds' settings, the native check's report). The parts that run the toolchain's tools are tested
+-- store's fingerprint, the builds' settings, the native check's report, the deploy's plan, state, unit and Tailscale's answers). The parts that run the toolchain's tools are tested
 -- through toolchain/test-bootstrap.sh, which runs the bootstrap, and this
 -- maker, against fake tools on PATH.
 module Main (main) where
@@ -7,6 +7,7 @@ module Main (main) where
 import Maker.BuildSpec qualified
 import Maker.CheckSpec qualified
 import Maker.CliSpec qualified
+import Maker.DeploySpec qualified
 import Maker.PinsSpec qualified
 import Maker.StoreSpec qualified
 import Maker.VersionSpec qualified
@@ -20,3 +21,4 @@ main = hspec $ do
   Maker.StoreSpec.spec
   Maker.BuildSpec.spec
   Maker.CheckSpec.spec
+  Maker.DeploySpec.spec

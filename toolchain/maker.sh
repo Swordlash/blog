@@ -9,6 +9,8 @@
 #                                                     wasm-sysroot, wasm-ghc, node, chromium,
 #                                                     fourmolu, store)
 #   sh toolchain/maker.sh check native [OPTION…]      what the native build of wiki-server needs
+#   sh toolchain/maker.sh deploy apply --plan FILE    the deploy's changes to the running deployment;
+#                                                     toolchain/deploy-local.sh runs it with its plan
 #   sh toolchain/maker.sh tui                         the terminal interface
 #   sh toolchain/maker.sh build native|wasm|wasm-opt [CABAL-ARG…]
 #   sh toolchain/maker.sh test native|wasm|all [CABAL-ARG…]

@@ -2695,6 +2695,43 @@ if [ "$mode" = server ] && ! { [ "$prev_mode" = server ] && [ "$admin_port" = "$
   can_listen "$admin_port" 127.0.0.1 || die "cannot listen on 127.0.0.1:$admin_port (see above): choose another --admin-port"
 fi
 
+# The plan of the rest of the deploy, for the maker: one key=value line for
+# each variable the rest reads, and for each the state file keeps (the
+# maker writes the state). A value cannot hold a newline: the plan has one
+# line per key.
+MAKER_PLAN_KEYS='name dir out mode server_bin node nodeless db db_port prev_db prev_db_port incompatible prev_dir no_firewall prev_rule_port port bind admin_port https_host prev_serve_port prev_port way tls_cert tls_key tls_ca pdf whats_new tex_bin prefix user toolchain_home enable_linger state_file unit_file env_file adopted_pg_dir prev_smtp_host prev_smtp_port prev_smtp_from prev_public_url prev_oidc prev_trust toolchain_dir bind_choice https serve_port backend_only backend_only_commit app_page bundle_locally system_tools npm_registry hackage_mirror texlive texlive_dir texlive_mirror perl_dir'
+maker_plan() {
+  printf '# The plan of a deploy, written by toolchain/deploy-local.sh for maker deploy apply.\n'
+  printf 'root=%s\nstate_dir=%s\nunit_dir=%s\nmarker=%s\n' "$ROOT" "$STATE_DIR" "$UNIT_DIR" "$MARKER"
+  for key in $MAKER_PLAN_KEYS; do
+    value=
+    eval "value=\${$key:-}"
+    case $value in
+      *'
+'*) die "the deploy's $key holds a newline, which the maker's plan cannot hold" ;;
+    esac
+    printf '%s=%s\n' "$key" "$value"
+  done
+}
+# Hand the rest of the deploy to the maker, built with its own cabal
+# project as the bootstrap builds it (WIKI_MAKER names one built elsewhere,
+# as in the tests), and end with its status.
+maker_apply() {
+  maker=${WIKI_MAKER:-}
+  if [ -z "$maker" ]; then
+    built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
+    [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
+    (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
+    maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker) || die "finding the maker's binary (cd maker && cabal list-bin exe:maker) failed"
+  fi
+  plan=$(mktemp)
+  maker_plan >"$plan"
+  status=0
+  "$maker" deploy apply --plan "$plan" || status=$?
+  rm -f "$plan"
+  exit "$status"
+}
+
 # A deployment made before --prefix is adopted now that the build is done:
 # its state comes under the prefix, where what follows writes.
 adopt_into_prefix
@@ -2738,6 +2775,15 @@ if [ "$mode" = server ]; then
       die "nothing was changed: run this again with --fresh to start an empty wiki"
     fi
   fi
+fi
+
+# From here on the running deployment changes. The maker does that part
+# (maker deploy apply, maker/src/Maker/Deploy/Apply.hs), from a plan of what
+# was worked out above, while the deploy moves into it (docs/PLAN.md, WP5.68
+# c2). A demo whose page is not built here has no GHC to build the maker
+# with until the bootstrap gives it one, so it goes on below, in shell.
+if [ "$mode" = server ] || [ -z "$prebuilt" ]; then
+  maker_apply
 fi
 
 # From here on the running deployment changes.
