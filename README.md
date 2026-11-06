@@ -2512,10 +2512,11 @@ the wasm snapshot) works the same way:
   request that deleted `main`'s copy would leave every other pull request without
   one. `main`'s hosted copies come from its hosted runs. Every push to `main` whose
   page was not built on a hosted runner (it went to the owner's machine, or the plan
-  skipped it as tested by its pull request) runs the wasm job's second leg, `wasm
-  (hosted cache)`, on a hosted runner: it builds the page without testing it, only
-  to save the hosted wasm store and build directories, and its failure fails
-  nothing. Before, the owner's machine built `main`'s page and saved no cache to
+  skipped it as tested by its pull request) runs the job `wasm-warm` ("wasm (hosted
+  cache)"), the wasm job's steps through a YAML anchor, on a hosted runner: it
+  builds the page without testing it, only to save the hosted wasm store and build
+  directories; its failure fails nothing, and the Pages deploy does not wait for
+  it. Before, the owner's machine built `main`'s page and saved no cache to
   GitHub, so a pull request whose page went to the hosted runners found nothing and
   compiled every dependency. The native caches come from every push to `main` whose
   build jobs run.

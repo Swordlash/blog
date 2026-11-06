@@ -561,25 +561,18 @@ jobs:
     - name: Build the maker
       run: cd maker && cabal build all --enable-tests --builddir=dist-newstyle/floor
 
-  # Two legs at most. `test` builds and tests the page on the runner plan
-  # picked (see the top). `warm`, on a push to main whenever the page was not
-  # built on a hosted runner (it ran on the owner's machine, or the plan
-  # skipped it as tested by the pull request), builds it on a hosted runner
-  # only to save the hosted caches on main: the owner's machine saves none,
-  # so main had no hosted copy, and a pull request whose page went to the
-  # hosted runners (the machine busy, a fork) restored nothing and compiled
-  # every dependency (run 42232724715). It runs no test, and its failure
-  # fails nothing (continue-on-error); prune-caches waits for it.
+  # The page, built and tested on the runner plan picked (see the top). Its
+  # steps are shared with wasm-warm below (the anchor wasm-steps); the leg
+  # in the matrix tells the two apart: `test` here, `warm` there.
   wasm:
     needs: plan
-    if: needs.plan.outputs.tested != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    name: ${{ matrix.leg == 'warm' && 'wasm (hosted cache)' || 'wasm' }}
+    if: needs.plan.outputs.tested != 'true'
+    name: wasm
     strategy:
-      fail-fast: false
       matrix:
-        leg: ${{ fromJSON(needs.plan.outputs.tested == 'true' && '["warm"]' || ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.runner != 'ubuntu-latest') && '["test","warm"]' || '["test"]')) }}
-    continue-on-error: ${{ matrix.leg == 'warm' }}
-    runs-on: ${{ matrix.leg == 'warm' && 'ubuntu-latest' || needs.plan.outputs.runner }}
+        leg: [test]
+    # The runner plan picked; see the top.
+    runs-on: ${{ needs.plan.outputs.runner }}
     permissions:
       contents: read
     # The page is built, tested and kept for GitHub Pages, which serves a
@@ -592,7 +585,7 @@ jobs:
     env:
       HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
 
-    steps:
+    steps: &wasm-steps
     - name: Checkout code
       uses: actions/checkout@v5
       with:
@@ -894,6 +887,31 @@ jobs:
         if-no-files-found: error
         retention-days: 3
 
+  # The wasm job's steps on a hosted runner, on a push to main whose page was
+  # not built on one (the owner's machine took it, or the plan skipped it as
+  # tested by its pull request), only to save the hosted wasm store and build
+  # directories on main: the owner's machine saves none to GitHub, so main had
+  # no hosted copy, and a pull request whose page went to the hosted runners
+  # restored nothing and compiled every dependency (run 42232724715). It runs
+  # no test (its leg is `warm`), its failure fails nothing, and deploy does
+  # not wait for it; prune-caches does.
+  wasm-warm:
+    needs: plan
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      (needs.plan.outputs.tested == 'true' || needs.plan.outputs.runner != 'ubuntu-latest') }}
+    name: wasm (hosted cache)
+    strategy:
+      matrix:
+        leg: [warm]
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
+    steps: *wasm-steps
+
   format:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
@@ -961,12 +979,12 @@ jobs:
   # run 42228528344). The keys are the ones the saves used; a cache that
   # was not saved this run (the wasm job on the owner's machine, a job that
   # failed before its save or was skipped) is not listed, and the script then
-  # deletes nothing under its prefix. On a push to main it runs after the
-  # wasm job's warm leg even when the plan skipped the other jobs. A cancelled run prunes nothing: the next run
+  # deletes nothing under its prefix. On a push to main it runs after
+  # wasm-warm even when the plan skipped the other jobs. A cancelled run prunes nothing: the next run
   # does.
   prune-caches:
     name: prune older cache copies
-    needs: [plan, native, native-floor, wasm]
+    needs: [plan, native, native-floor, wasm, wasm-warm]
     if: ${{ !cancelled() && (needs.plan.outputs.tested != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     permissions:
