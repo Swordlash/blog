@@ -562,17 +562,11 @@ jobs:
       run: cd maker && cabal build all --enable-tests --builddir=dist-newstyle/floor
 
   # The page, built and tested on the runner plan picked (see the top). Its
-  # steps are shared with wasm-warm below (the anchor wasm-steps); the leg
-  # in the matrix tells the two apart: `test` here, `warm` there.
+  # steps are shared with wasm-warm below (the anchor wasm-steps); the steps
+  # that test the page, or keep it, run only here (github.job is wasm).
   wasm:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
-    # A name that reads the matrix, so that GitHub does not add the leg to
-    # it: the check stays `wasm`.
-    name: ${{ matrix.leg && 'wasm' }}
-    strategy:
-      matrix:
-        leg: [test]
     # The runner plan picked; see the top.
     runs-on: ${{ needs.plan.outputs.runner }}
     permissions:
@@ -811,14 +805,14 @@ jobs:
     # them), and the bootstrap has already installed this Chromium and checked
     # that it starts, so there the install only confirms it.
     - name: Cache Chromium
-      if: runner.environment == 'github-hosted' && matrix.leg == 'test'
+      if: runner.environment == 'github-hosted' && github.job == 'wasm'
       uses: actions/cache@v5
       with:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
 
     - name: Install Chromium
-      if: runner.environment == 'github-hosted' && matrix.leg == 'test'
+      if: runner.environment == 'github-hosted' && github.job == 'wasm'
       run: npx playwright install --only-shell chromium
 
     - name: Install Chromium (self-hosted)
@@ -826,7 +820,7 @@ jobs:
       run: npx playwright install --only-shell chromium
 
     - name: Test
-      if: matrix.leg == 'test'
+      if: github.job == 'wasm'
       env:
         HSPEC_HALOGEN_JOBS: '2'
       run: npm run test-wasm
@@ -836,7 +830,7 @@ jobs:
     # tests do; without Docker (a self-hosted runner) only on SQLite, and
     # it says so.
     - name: Start PostgreSQL for the smoke test
-      if: matrix.leg == 'test'
+      if: github.job == 'wasm'
       run: |
         if vars=$(sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin"); then
           printf '%s\n' "$vars" >> "$GITHUB_ENV"
@@ -847,11 +841,11 @@ jobs:
         fi
 
     - name: Smoke-test the page in a browser
-      if: matrix.leg == 'test'
+      if: github.job == 'wasm'
       run: npm run smoke-test
 
     - name: Stop PostgreSQL
-      if: always() && matrix.leg == 'test'
+      if: always() && github.job == 'wasm'
       run: sh toolchain/ci-postgres.sh stop
 
     - name: Report incremental build sizes
@@ -881,7 +875,7 @@ jobs:
     # private, only on a hosted runner: the account's artifact storage quota
     # refused uploads then, and nothing is deployed anyway.
     - name: Upload the built page
-      if: matrix.leg == 'test' && (runner.environment == 'github-hosted' || github.event.repository.private == false)
+      if: github.job == 'wasm' && (runner.environment == 'github-hosted' || github.event.repository.private == false)
       uses: actions/upload-artifact@v5
       with:
         name: app
@@ -895,17 +889,14 @@ jobs:
   # directories on main: the owner's machine saves none to GitHub, so main had
   # no hosted copy, and a pull request whose page went to the hosted runners
   # restored nothing and compiled every dependency (run 42232724715). It runs
-  # no test (its leg is `warm`), its failure fails nothing, and deploy does
+  # no test (github.job is wasm-warm), its failure fails nothing, and deploy does
   # not wait for it; prune-caches does.
   wasm-warm:
     needs: plan
     if: >-
       ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       (needs.plan.outputs.tested == 'true' || needs.plan.outputs.runner != 'ubuntu-latest') }}
-    name: ${{ matrix.leg && 'wasm (hosted cache)' }}
-    strategy:
-      matrix:
-        leg: [warm]
+    name: wasm (hosted cache)
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
