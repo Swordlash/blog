@@ -533,6 +533,20 @@ opaque backing = describe "passwords through OPAQUE" $ do
     _ <- signInAs r "editor" "a password set elsewhere"
     (.status) <$> passwordSignIn r (onPublic r) [] "editor" "the session's own choice" `shouldReturn` 401
 
+  it "counts a wrong old password once when a session of an account from before OPAQUE proves it again" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    -- Two wrong tries, each counted once, at its start.
+    replicateM_ 2 ((.status) <$> provePassword r (onPublic r) [cookie token] "not the old password" `shouldReturn` 401)
+    -- The right one is the third count, far from the limit; the change
+    -- that needs it then takes the session's proof.
+    (.status) <$> provePassword r (onPublic r) [cookie token] "editor's old password" `shouldReturn` 204
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's new password"
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    _ <- signInAs r "editor" "editor's new password"
+    pass
+
   it "lets a session prove its password again, once, for a change that needs it" $ withPasswords backing identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     (.status) <$> provePassword r (onPublic r) [cookie here] "not the password" `shouldReturn` 401

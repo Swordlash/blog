@@ -101,7 +101,7 @@ import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Notifications (NotificationsApi (..))
-import Wiki.Api.Opaque (LoginChallenge, LoginFinish, LoginStart, NewAccountRecord, PasswordRecord, PasswordRecordChange, ProofStart, RegistrationChallenge, RegistrationStart)
+import Wiki.Api.Opaque (LoginChallenge, LoginFinish, LoginStart, NewAccountRecord, OldPasswordProof, PasswordRecord, PasswordRecordChange, ProofStart, RegistrationChallenge, RegistrationStart)
 import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
 import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Stars (StarsApi (..))
@@ -614,6 +614,12 @@ data AccountApi form mode = AccountApi
   -- ^ Finish it: the session has proved its password, for five minutes
   -- and one change that needs it. A wrong last message is
   -- 'Wiki.Api.Error.Unauthenticated'.
+  , proveOldPassword :: mode :- "password" :> "proof" :> "old" :> ReqBody '[JSON] OldPasswordProof :> PutNoContent
+  -- ^ Prove the password of an account from before OPAQUE instead, after
+  -- its 'startPasswordProof' fell back, naming that attempt. The session
+  -- then holds the proof as after 'finishPasswordProof', so that every
+  -- change that needs the password takes it the same way and the try is
+  -- counted once. A wrong password is 'Wiki.Api.Error.Unauthenticated'.
   , changePassword :: mode :- "password" :> ReqBody '[JSON] PasswordRecordChange :> Put '[JSON] SignInMethods
   -- ^ Change the user's password, or set one if they have none. The
   -- response is their sign-in methods after the change. Where they have a

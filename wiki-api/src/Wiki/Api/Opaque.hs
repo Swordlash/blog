@@ -74,6 +74,7 @@ module Wiki.Api.Opaque
   , LoginChallenge (..)
   , LoginFinish (..)
   , ProofStart (..)
+  , OldPasswordProof (..)
 
     -- * Setting a password
   , RegistrationFor (..)
@@ -157,6 +158,18 @@ data LoginFinish = LoginFinish
 -- | 'ProofStart': the first message of the signed-in user's proof of their
 -- password, @POST \/api\/v1\/account\/password\/proof@.
 newtype ProofStart = ProofStart {ke1 :: Message}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'OldPasswordProof': the password of an account from before OPAQUE,
+-- @PUT \/api\/v1\/account\/password\/proof\/old@, sent after its
+-- 'ProofStart' fell back ('LoginChallenge''s @fallback@). It names that
+-- attempt, which was counted as a failure when it started, so that the
+-- one try is not counted twice.
+data OldPasswordProof = OldPasswordProof
+  { attempt :: Text
+  , password :: Password
+  }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

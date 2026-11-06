@@ -113,6 +113,7 @@ module Wiki.Server.Accounts
   , PasswordRefusal (..)
   , changePassword
   , currentPasswordIs
+  , oldPasswordIs
 
     -- * Sessions
   , signIn
@@ -573,6 +574,15 @@ passwordProved stored proved given = case stored of
 currentPasswordIs :: Storage -> UserId -> IO (Maybe Proof) -> Maybe Password -> IO (Maybe Bool)
 currentPasswordIs st u proved given =
   reading st (passwordOf u) >>= traverse (\stored -> passwordProved stored proved given)
+
+-- | Whether the password is the user's from before OPAQUE: true only for
+-- an account that still has that hash and when the password matches it.
+-- An account with a record, or with no password, is never proved this way.
+oldPasswordIs :: Storage -> UserId -> Password -> IO Bool
+oldPasswordIs st u given =
+  reading st (passwordOf u) <&> \case
+    Just (LegacyHash phc) -> verifyPassword phc given
+    _ -> False
 
 --------------------------------------------------------------------------------
 -- Sessions

@@ -113,7 +113,7 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (Starring (..), StarsApi (..))
@@ -983,8 +983,10 @@ recordFor purpose password =
 
 -- | The current password for a change that needs it, as the request is to
 -- carry it: proved through OPAQUE, which leaves a proof on the session and
--- sends nothing ('Nothing'); or, for an account from before OPAQUE, whose
--- proof fails as a wrong password's does, the password itself.
+-- sends nothing ('Nothing'). An account from before OPAQUE, whose proof
+-- fails as a wrong password's does, proves the password itself once,
+-- naming the attempt that was counted ('proveOldPassword'), which leaves
+-- the same proof; the change then sends nothing either.
 proven :: (MonadIO m) => Maybe Password -> HttpWiki m (Either SignInError (Maybe Password))
 proven = \case
   Nothing -> pure (Right Nothing)
@@ -997,7 +999,10 @@ proven = \case
           Right challenge ->
             finished st password challenge >>= \case
               Nothing
-                | challenge.fallback -> pure (Right (Just password))
+                | challenge.fallback ->
+                    withPassword (endpoints.account.proveOldPassword OldPasswordProof {attempt = challenge.attempt, password}) <&> \case
+                      Right _ -> Right Nothing
+                      Left e -> Left e
                 | otherwise -> pure (Left WrongCredentials)
               Just ke3 ->
                 withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) <&> \case

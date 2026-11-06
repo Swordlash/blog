@@ -102,7 +102,7 @@ import Wiki.Api.Export (documentDisposition, formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationFor (..), RegistrationStart (..), Stretch)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecordChange (..), ProofStart (..), RegistrationFor (..), RegistrationStart (..), Stretch)
 import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
 import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState, serviceOrigin)
@@ -644,6 +644,31 @@ handlers env caller =
               liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
               liftIO (prove env.proofs now (tokenHash token.text) u ByOpaque)
               pure NoContent
+          , -- The attempt the fallen-back proof started was admitted and
+            -- counted then, so it is taken first and the limit is not
+            -- applied again; a proof naming no such attempt passes the
+            -- limit now, and its wrong password is counted here.
+            proveOldPassword = \body -> do
+              u <- signedInUser
+              s <- signingHere
+              now <- liftIO getCurrentTime
+              token <- maybe (refuse ApiError.Unauthenticated) pure s.token
+              login <- loginOf u
+              taken <- liftIO (takeAttempt env.attempts now body.attempt)
+              let counted = (\a -> a.user == Just u) <$> taken == Just True
+                  check = do
+                    ok <- liftIO (Accounts.oldPasswordIs env.storage u body.password)
+                    if ok
+                      then do
+                        liftIO $ case taken of
+                          Just a | counted -> Limiter.succeededAfter env.limiter a.startedAt a.login s.address
+                          _ -> Limiter.succeeded env.limiter login s.address
+                        liftIO (prove env.proofs now (tokenHash token.text) u ByOldPassword)
+                        pure NoContent
+                      else do
+                        unless counted $ liftIO (Limiter.failed env.limiter now login s.address)
+                        refuse ApiError.Unauthenticated
+              if counted then check else limitedFor login s check
           , changePassword = ownPassword
           , sessions = do
               u <- signedInUser

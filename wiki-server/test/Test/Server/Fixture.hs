@@ -79,7 +79,7 @@ import Wiki.Api.Account (Account (..), Credentials (..), NewAccount (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (links)
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), Stretch (..), bytesOf, messageOf)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), Stretch (..), bytesOf, messageOf)
 import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
@@ -520,7 +520,11 @@ provePassword r at hs password = do
       challenge :: LoginChallenge <- json start
       case clientLast st challenge of
         Just ke3 -> send r "PUT" (at links.account.finishPasswordProof) (jsonType : hs) (encode LoginFinish {attempt = challenge.attempt, ke3})
-        Nothing -> pure Reply {status = 401, headers = [], body = encode Unauthenticated}
+        -- An account from before OPAQUE proves the password itself, as
+        -- the application does, naming the attempt that was counted.
+        Nothing
+          | challenge.fallback -> send r "PUT" (at links.account.proveOldPassword) (jsonType : hs) (encode OldPasswordProof {attempt = challenge.attempt, password = Password password})
+          | otherwise -> pure Reply {status = 401, headers = [], body = encode Unauthenticated}
 
 -- | The JSON body's header.
 jsonType :: Header

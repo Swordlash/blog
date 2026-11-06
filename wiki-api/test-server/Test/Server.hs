@@ -146,6 +146,7 @@ stubs =
                 else refuse (Conflict "This is the only way you have to sign in.")
           , startPasswordProof = \p -> pure LoginChallenge {attempt = "p1", ke2 = p.ke1, stretch, fallback = False}
           , finishPasswordProof = \f -> if f.attempt == "p1" then pure NoContent else refuse Unauthenticated
+          , proveOldPassword = \p -> if p.attempt == "p1" then pure NoContent else refuse Unauthenticated
           , changePassword = \change ->
               if change.current == Just (Password "the current one") || change.password.credential == "proved"
                 then pure SignInMethods {password = True, identities = Sample.signInMethods.identities}
