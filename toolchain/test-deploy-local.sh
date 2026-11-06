@@ -1239,6 +1239,12 @@ assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
 assert_lacks "$EVENTS" 'docker: created'
 [ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the redeploy made another password'
 assert_contains "$EVENTS" "wiki-server backup --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore"
+# The upgrade's migration and check run on the same database, with the
+# same programs.
+for step in migrate check; do
+  assert_contains "$EVENTS" "wiki-server $step --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore"
+done
+assert_contains "$HOME/wiki-demo/previous/info" "backup=$data/backups/1.pgdump"
 # The fake server makes a dump on the first deploy too, where wiki-server
 # finds no wiki yet: this one is the second.
 assert_contains "$data/backups/1.pgdump" 'pg_dump of wiki-demo: --username=wiki --dbname=wiki --format=custom'
