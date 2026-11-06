@@ -959,7 +959,10 @@ In the order to do it, unless the owner says otherwise.
     on the old port, the `pg_dump`/`pg_restore` wrappers rewritten), and the
     unit (put back, or removed and disabled when the deploy followed
     `--stop`).
-  - **c2, the data.** A switch between SQLite and PostgreSQL, and `--fresh`,
+  - **c2, the data**, in one pull request with the rest of WP5.68 (c2) and
+    (d) (the owner, 2026-11-06: "the rollback and the rest of the move in one
+    pull request, by a subagent, with a plan written with Fable's
+    advice"). A switch between SQLite and PostgreSQL, and `--fresh`,
     start an empty wiki and set the old one aside (the file into
     `data/replaced/<time>/`, or the stopped container's volume): the rollback
     brings it back instead of restoring a backup. An adoption under
@@ -1065,6 +1068,19 @@ In the order to do it, unless the owner says otherwise.
   dependencies must then build on GHC 9.10 (decision 53) and come from the Hackage
   mirror on a machine that has no internet (decision 48). `node` stays in shell:
   there is no GHC there.
+
+- **WP5.75 Presence updates checked only when permissions change** (the owner,
+  2026-11-06, on the question WP5.69 left). The live channel checks
+  `mayReadPage` for every subscriber on each `Reading` and `Editing` update,
+  which carry no page content and are frequent on a busy page. A subscriber's
+  last passed check is remembered by the channel; presence updates go to
+  subscribers who passed without a new check. A change of a space's
+  permissions (a grant, a revocation, a group's membership) marks every
+  subscriber of that space's pages for a check again, and one who fails it is
+  dropped from the page's channel. Content updates (`PageChanged`) keep their
+  check on every event. Tests: the counting test of `Test.Storage.Scale` sees
+  no check for presence updates; a revocation drops the subscriber before the
+  next presence update reaches them.
 
 ### Later, or waiting for the owner
 
