@@ -849,6 +849,18 @@ confirms it against reality and the plan is amended if it does not hold.
     `maker check native`), the same check as `toolchain/check-native.sh` word for
     word.
 
+56. **The deploy hands its last part to the maker with a plan (WP5.68 c2a,
+    #173).** From the moment the old service stops to the report at the end, the
+    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`):
+    `toolchain/deploy-local.sh` writes every variable that part reads, and every
+    key the state file keeps, as `key=value` lines (`MAKER_PLAN_KEYS`) and runs the
+    maker with them, through `WIKI_MAKER` or the maker built with its own cabal
+    project. The messages, the unit, the state file, the console and the commands
+    run are the shell's byte for byte, and `test-deploy-local.sh` runs every case
+    with the maker. The plan loses keys as more of the deploy moves. A demo whose
+    page is not built on the machine keeps the shell's copy of that part until it
+    has a GHC.
+
 ## Repository layout
 
 ```
@@ -947,11 +959,14 @@ In the order to do it, unless the owner says otherwise.
   it uses nearly all of the deploy's machinery (the state, the unit, Tailscale,
   the firewall, the page's download and cache), which would otherwise live in two
   languages; such a machine installs GHC and builds the maker once. (c2) goes in
-  several pull requests, each leaving the deploy working: the options, the state
-  and the read-only parts first, then the deploy of a page built on the machine,
-  then the TeX step, pages from GitHub or a file and the locked-down options,
-  then the wizard as the TUI's deploy flow, with `configure.sh` and `configure.hs`
-  retired. The split (the owner, 2026-11-05): `bootstrap.sh`
+  several pull requests, cut by the deploy's order from its end so that each
+  leaves the deploy working and its tests passing: (c2a), #173, merged, the part
+  that changes the running deployment (`maker deploy apply --plan FILE`, decision
+  56); then the builds and where the page comes from; then the TeX step and the
+  locked-down options; then the shell's front, with the wizard as the TUI's deploy
+  flow and `configure.sh` and `configure.hs` retired. The pull request that moves a
+  demo whose page is not built on the machine needs a bootstrap mode that gives
+  GHC, cabal and Node without the native check (to decide then). The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1390,6 +1405,14 @@ needs. Each was true when its package merged; check before relying on one.
   native` only after GHC, cabal and the maker are built; the deploy's own check
   still comes first; both copies stay (WP5.68's entry, 2026-11-06). The 9.10 job builds the maker but never runs `bootstrap native
   --system-tools` with that GHC.
+- WP5.68c2a (decision 56): `deploy-lib.sh`'s firewall, `tailscale serve` and
+  state functions have a second copy in the maker while `undeploy-local.sh` and
+  `--status` stay in shell, and the shell's tail stays whole for `--static
+  --backend-only` and `--static --app-page`. A `--no-build` deploy on a machine
+  whose maker was never built builds it just before the old service stops, so a
+  Hackage it cannot reach is found late (nothing has changed by then). The maker
+  reads Tailscale's and the panel's JSON with aeson, where the shell used python3,
+  jq or Node.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
