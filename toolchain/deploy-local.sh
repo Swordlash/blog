@@ -1109,6 +1109,26 @@ if [ -z "${WIKI_MAKER:-}" ]; then
   # or with no package index yet, and the bootstrap installs or checks the
   # pinned ones (with --system-tools, checks the machine's against the
   # floors). It changes nothing when they are there.
+  # Under a prefix the toolchain is installed inside the deployment's
+  # directory (<prefix>/toolchain), so the directory is checked and claimed
+  # before the bootstrap writes there, with the maker's own check
+  # (maker/src/Maker/Deploy/Front.hs): a directory that is not empty is
+  # used only when it carries this deployment's marker. Otherwise the
+  # bootstrap would leave a toolchain in a directory the maker then
+  # refuses to empty.
+  if [ -n "$prefix" ] && [ "$toolchain_home" = "$prefix/toolchain" ] && [ -n "$build" ] && [ "$action" = deploy ]; then
+    if [ -e "$prefix" ] && [ ! -d "$prefix" ]; then
+      die "refusing to install into $prefix: it is not a directory"
+    fi
+    if [ -d "$prefix" ] && [ -n "$(ls -A "$prefix")" ] && ! marked_for "$prefix" "$name"; then
+      if [ -f "$prefix/$MARKER" ]; then
+        die "refusing to install into $prefix: it holds the deployment '$(state_get name "$prefix/$MARKER")'; use --name $(state_get name "$prefix/$MARKER") or another --dir"
+      fi
+      die "refusing to empty $prefix: this script did not create it (it has no $MARKER). Choose another --dir, or empty or remove it yourself"
+    fi
+    mkdir -p "$prefix"
+    [ -f "$prefix/$MARKER" ] || printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$prefix/$MARKER"
+  fi
   if [ -n "$build" ] && [ "$action" = deploy ]; then
     say "installing or checking GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh maker)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" maker ${system_tools:+--system-tools} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"}
