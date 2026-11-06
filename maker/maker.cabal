@@ -40,6 +40,7 @@ library
     Maker.Deploy.Apply
     Maker.Deploy.Firewall
     Maker.Deploy.Plan
+    Maker.Deploy.Prepare
     Maker.Deploy.State
     Maker.Deploy.Tailscale
     Maker.Deploy.Unit

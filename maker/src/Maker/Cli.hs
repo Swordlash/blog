@@ -34,6 +34,7 @@ import Maker.Check.Native qualified as Check
 import Maker.Context
 import Maker.Deploy.Apply (apply)
 import Maker.Deploy.Plan (readPlan)
+import Maker.Deploy.Prepare (prepare)
 import Maker.Log (say, withLock)
 import Maker.Pins (readPins)
 import Maker.Process (firstLine, found, output)
@@ -262,7 +263,7 @@ main = do
       wb <- wasmBuild False
       serveWasm be wb args
     HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
-    DeployApply file -> readPlan file >>= apply
+    DeployApply file -> readPlan file >>= prepare >>= apply
     CheckNative rootArg options -> do
       root' <- maybe getCurrentDirectory makeAbsolute rootArg
       (report, ok) <- Check.checkNative root' options

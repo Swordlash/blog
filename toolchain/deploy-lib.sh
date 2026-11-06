@@ -132,39 +132,6 @@ layout() {
   fi
 }
 
-# Adopt a deployment made before --prefix: its state file moves under the
-# prefix, and its PostgreSQL files (the database's password, the compose
-# files, the pg_dump and pg_restore wrappers) are copied there, not moved,
-# since the running service's unit, its console and the wrappers still name
-# the old files until the deploy writes them anew: a deploy that stops
-# short after this leaves the service able to start as it was. A deploy
-# calls this once the build has succeeded, before it writes anything for
-# the deployment, and 'adoption_done' once the new unit is in place.
-adopt_into_prefix() {
-  [ -n "${adoptable:-}" ] || return 0
-  old_state_dir=$STATE_DIR
-  STATE_DIR=$prefix/state
-  state_file=$STATE_DIR/$name.state
-  mkdir -p "$STATE_DIR"
-  mv "$old_state_dir/$name.state" "$state_file"
-  rm -f "$old_state_dir/$name.env"
-  adopted_pg_dir=
-  if [ -d "$old_state_dir/$name.postgres" ]; then
-    rm -rf "$STATE_DIR/$name.postgres"
-    cp -Rp "$old_state_dir/$name.postgres" "$STATE_DIR/$name.postgres"
-    adopted_pg_dir=$old_state_dir/$name.postgres
-  fi
-  adoptable=
-  say "adopting $name: its state moves from $old_state_dir to $STATE_DIR; the toolchain it builds with stays under $HOME unless --toolchain says otherwise"
-}
-
-# The end of an adoption: the old PostgreSQL files go, now that the unit,
-# the console and the wrappers name the copies under the prefix.
-adoption_done() {
-  [ -z "${adopted_pg_dir:-}" ] || rm -rf "$adopted_pg_dir"
-  adopted_pg_dir=
-}
-
 # The unit in the home directory names the prefix of the deployment it
 # belongs to (deploy-local.sh writes "# Prefix: DIR" into it; a deployment
 # in the home directory writes none). A run named for another place, with
@@ -358,7 +325,6 @@ port_rule_shared() {
   done
   return 1
 }
-
 
 firewall_close() {
   if port_rule_shared "$1"; then

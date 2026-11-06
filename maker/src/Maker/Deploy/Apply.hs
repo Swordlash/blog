@@ -330,8 +330,8 @@ apply p = do
                     pure Nothing
                   Nothing -> do
                     say ("tailscale " <> serveCmd)
-                    (set, out) <- Tailscale.outputOfBoth 60 ["serve", "--bg", "http://127.0.0.1:" <> port]
-                    after <- if set then Tailscale.serveRead else pure Nothing
+                    (setOk, out) <- Tailscale.outputOfBoth 60 ["serve", "--bg", "http://127.0.0.1:" <> port]
+                    after <- if setOk then Tailscale.serveRead else pure Nothing
                     case after of
                       Just s' | Tailscale.proxiesTo s' port -> do
                         say ("tailscale serve proxies https://" <> httpsHost <> "/ to 127.0.0.1:" <> port <> " (tailnet only)")

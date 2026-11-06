@@ -18,6 +18,7 @@ module Maker.Deploy.Plan
   , parsePlan
   , get
   , has
+  , set
   , say
   , warn
   , die
@@ -58,6 +59,11 @@ parsePlan = Plan . Map.fromList . concatMap entry . lines
 -- | A value, empty when the plan has none.
 get :: Plan -> String -> String
 get (Plan m) k = Map.findWithDefault "" k m
+
+-- | A plan with a value replaced: what the maker works out itself, which
+-- the shell used to put into the plan.
+set :: String -> String -> Plan -> Plan
+set k v (Plan m) = Plan (Map.insert k v m)
 
 -- | Whether a value is not empty.
 has :: Plan -> String -> Bool
