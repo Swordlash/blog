@@ -655,7 +655,7 @@ handlers env caller =
               token <- maybe (refuse ApiError.Unauthenticated) pure s.token
               login <- loginOf u
               taken <- liftIO (takeAttempt env.attempts now body.attempt)
-              let counted = (\a -> a.user == Just u) <$> taken == Just True
+              let counted = maybe False (\a -> a.user == Just u) taken
                   check = do
                     ok <- liftIO (Accounts.oldPasswordIs env.storage u body.password)
                     if ok
