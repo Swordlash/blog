@@ -119,6 +119,7 @@ import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Vault (VaultChange (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (MonadAssistant)
@@ -812,7 +813,12 @@ instance (MonadIO m) => MonadVault (HttpWiki m) where
       Just 304 -> Right Unchanged
       Just 404 -> Right NoVault
       _ -> Fetched <$> answer answered
-  storeVault base v = send (endpoints.assistant.storeVault base v)
+  storeVault base v = send (endpoints.assistant.storeVault base VaultChange {vault = v, publicKey = Nothing})
+  storeVaultChange base change = send (endpoints.assistant.storeVault base change)
+  publicKeyOf u =
+    call (endpoints.account.publicKey u) <&> \answered -> case statusCode . (\r -> r.responseStatusCode) <$> refusal answered of
+      Just 404 -> Right Nothing
+      _ -> Just <$> answer answered
   deleteVault = send_ endpoints.assistant.deleteVault
   listPasskeys = send endpoints.account.passkeys
   beginRegistration password = proven password >>= either (pure . Left) (\p -> withPassword (endpoints.account.beginRegistration CurrentPassword {password = p}))

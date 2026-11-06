@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The directory of public keys (WP5.74b1). `PUT assistant/vault` takes a
+`VaultChange`: the vault's own object, with `publicKey`
+(`NewPublicKey {keyId, publicKey}`) when its `identity` item is new; a bare
+vault still reads. `AccountApi` gains `publicKey`, `GET
+account/public-keys/<user>`, answering a `PublicKeyEntry {user, keyId,
+publicKey, createdAt}`.
+
 The user's vault (WP5.74b1). `StoredVault`'s vault is a
 `Wiki.Core.Vault.Vault` of format 2: `{format, salt, items, wraps}`, the
 items by name and the wraps by `passkey:<id>` or `password`. A `PUT

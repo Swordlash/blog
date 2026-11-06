@@ -20,11 +20,12 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
 import Protolude
-import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, PublicKeyEntry, RegistrationOptions, RegistrationResponse, StoredVault, VaultChange)
 import Wiki.App.Account (SignInError (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Mem (MemWiki)
 import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
+import Wiki.Core.Id (UserId)
 import Wiki.Core.User (Password)
 
 -- | 'Fetched': the server's answer to a device that asks for the vault.
@@ -56,7 +57,21 @@ class (Monad m) => MonadVault m where
   default storeVault :: (MonadTrans t, m ~ t n, MonadVault n) => Maybe VaultTag -> Vault -> m (Either WikiError StoredVault)
   storeVault tag = lift . storeVault tag
 
-  -- | Turn synchronisation off: the vault and every passkey go.
+  -- | Store a new version of the vault as 'storeVault' does, with the
+  -- public half of the key pair its @identity@ item holds when that item
+  -- is new.
+  storeVaultChange :: Maybe VaultTag -> VaultChange -> m (Either WikiError StoredVault)
+  default storeVaultChange :: (MonadTrans t, m ~ t n, MonadVault n) => Maybe VaultTag -> VaultChange -> m (Either WikiError StoredVault)
+  storeVaultChange tag = lift . storeVaultChange tag
+
+  -- | A user's current public key in the server's directory, if they have
+  -- one.
+  publicKeyOf :: UserId -> m (Either WikiError (Maybe PublicKeyEntry))
+  default publicKeyOf :: (MonadTrans t, m ~ t n, MonadVault n) => UserId -> m (Either WikiError (Maybe PublicKeyEntry))
+  publicKeyOf = lift . publicKeyOf
+
+  -- | Turn the assistant's synchronisation off: the vault's settings go,
+  -- and the vault with them when it holds nothing else.
   deleteVault :: m (Either WikiError ())
   default deleteVault :: (MonadTrans t, m ~ t n, MonadVault n) => m (Either WikiError ())
   deleteVault = lift deleteVault
@@ -105,6 +120,8 @@ instance (Monad m) => MonadVault (MemWiki m) where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))
@@ -120,6 +137,8 @@ instance MonadVault BrowserDOM where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))
@@ -133,6 +152,8 @@ instance MonadVault MemDOM where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))

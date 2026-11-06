@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+The directory of public keys (WP5.74b1). Migration `0010-user-vault` also
+makes `public_keys`: each user's X25519 public key by its id (the first 16
+bytes of its SHA-256), one current per user, a key replaced kept with when
+and why (`retired_at`, `retired_because`). `PUT assistant/vault` takes the
+public half of a new key pair beside the vault (`VaultChange`) and stores
+both in one transaction; a vault's `identity` item and the directory's
+current key always name the same key pair, a new key pair is refused while
+a current one exists, and the item cannot be dropped. The vault's parts
+are checked for their exact lengths (a 32-byte salt, 12-byte nonces,
+48-byte wrapped keys, 16-byte key ids, a 64-byte key pair), and nothing
+more. `GET account/public-keys/<user>` answers a user's current key to
+anyone signed in. `Wiki.Server.Vault` gains `vaultProblem`, `publicKeyOf`,
+`currentKeyIn` and `keyIdOf`.
+
 The user's vault (WP5.74b1). Migration `0010-user-vault` replaces
 `assistant_vaults` with `vaults` (the salt, the password's wrap of the
 vault key when there is one, and the revision, kept) and `vault_items`

@@ -45,6 +45,7 @@ module Wiki.Server.Storage.Schema
   , Passkeys (..)
   , Vaults (..)
   , VaultItems (..)
+  , PublicKeys (..)
 
     -- * The wiki
   , Spaces (..)
@@ -359,6 +360,26 @@ instance Table VaultItems where
     deriving stock (Generic)
     deriving anyclass (Beamable)
   primaryKey r = VaultItemKey r.user_id r.name
+
+-- | A user's public key in the directory (@public_keys@): the public half
+-- of their key pair, by its id. The current one has no @retired_at@; one
+-- replaced keeps its row, with when and why.
+data PublicKeys f = PublicKeyRow
+  { key_id :: Columnar f Text
+  , user_id :: Columnar f Text
+  , public_key :: Columnar f Text
+  , created_at :: Columnar f UTCTime
+  , retired_at :: Columnar f (Maybe UTCTime)
+  , retired_because :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table PublicKeys where
+  newtype PrimaryKey PublicKeys f = PublicKeyKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = PublicKeyKey r.key_id
 
 --------------------------------------------------------------------------------
 -- The wiki
@@ -749,6 +770,10 @@ deriving stock instance Eq (VaultItems Identity)
 
 deriving stock instance Show (VaultItems Identity)
 
+deriving stock instance Eq (PublicKeys Identity)
+
+deriving stock instance Show (PublicKeys Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -829,6 +854,7 @@ data WikiDb f = WikiDb
   , passkeys :: f (TableEntity Passkeys)
   , vaults :: f (TableEntity Vaults)
   , vault_items :: f (TableEntity VaultItems)
+  , public_keys :: f (TableEntity PublicKeys)
   , spaces :: f (TableEntity Spaces)
   , pages :: f (TableEntity Pages)
   , page_versions :: f (TableEntity PageVersions)

@@ -191,9 +191,9 @@ function wiki_test_passkeys_cancel_after(touches) {
 }
 
 // The vault's server: one user's vault (its salt, its items by name and
-// the password's wrap of its key) and their passkeys with each one's
-// wrap.
-const wikiTestVault = { vault: null, revision: 0, passkeys: [] };
+// the password's wrap of its key), their passkeys with each one's wrap,
+// and their current public key in the directory.
+const wikiTestVault = { vault: null, revision: 0, passkeys: [], publicKey: null };
 
 function wikiTestJson(status, value, headers = {}) {
   return { status, body: JSON.stringify(value), headers };
@@ -233,6 +233,16 @@ function wikiTestVaultServer(request) {
         return wikiTestJson(400, { error: "Invalid", text: "The vault names a passkey that is not one of yours." });
       }
     }
+    const identity = sent.items?.identity;
+    if (sent.publicKey) {
+      if (identity?.keyId !== sent.publicKey.keyId) return wikiTestJson(400, { error: "Invalid", text: "The public key sent is not the key pair the vault holds." });
+      if (wikiTestVault.publicKey && wikiTestVault.publicKey.keyId !== sent.publicKey.keyId) {
+        return wikiTestJson(409, { error: "Conflict", text: "You have a key pair already: it is replaced only after a password reset." });
+      }
+      wikiTestVault.publicKey = { user: "user-editor", keyId: sent.publicKey.keyId, publicKey: sent.publicKey.publicKey, createdAt: "2026-11-06T09:30:00Z" };
+    } else if (identity && identity.keyId !== wikiTestVault.publicKey?.keyId) {
+      return wikiTestJson(400, { error: "Invalid", text: "The vault holds a key pair the directory does not have: send its public key with it." });
+    }
     for (const [unlock, wrapped] of wraps) {
       const p = wikiTestVault.passkeys.find((k) => `passkey:${k.id}` === unlock);
       if (p) p.wrapped = wrapped;
@@ -254,6 +264,9 @@ function wikiTestVaultServer(request) {
       }
     }
     return { status: 204, body: "" };
+  }
+  if (path.startsWith("public-keys/") && request.method === "GET") {
+    return wikiTestVault.publicKey ? wikiTestJson(200, wikiTestVault.publicKey) : wikiTestJson(404, { error: "NotFound" });
   }
   if (path === "passkeys" && request.method === "GET") return wikiTestJson(200, wikiTestVault.passkeys.map(wikiTestInfo));
   if (path === "passkeys/registration" && request.method === "POST") {
@@ -294,11 +307,12 @@ function wikiTestVaultServer(request) {
 // Start the vault's server, empty, in fetch's place (after the test's
 // server has started: Test.Browser.Http's serverStarts).
 function wiki_test_vault_server_start() {
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [] });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
   globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestVaultServer];
 }
 
-// What the vault's server keeps, as JSON: {vault, revision, passkeys}.
+// What the vault's server keeps, as JSON: {vault, revision, passkeys,
+// publicKey}.
 function wiki_test_vault_server_state() {
   return JSON.stringify(wikiTestVault);
 }
@@ -423,7 +437,7 @@ let wikiTestStashed = null;
 
 function wiki_test_vault_server_stash() {
   wikiTestStashed = JSON.parse(JSON.stringify(wikiTestVault));
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [] });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
 }
 
 function wiki_test_vault_server_unstash() {

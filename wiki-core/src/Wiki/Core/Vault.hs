@@ -60,6 +60,13 @@ module Wiki.Core.Vault
   , withWrap
   , withoutWrap
   , passkeyWraps
+
+    -- * The user's key pair
+  , PublicKey (..)
+  , identityItem
+  , identityData
+  , identityDataPrefix
+  , fingerprintGroups
   )
 where
 
@@ -125,6 +132,12 @@ newtype VaultTag = VaultTag {text :: Text}
 newtype KeyId = KeyId {text :: Text}
   deriving stock (Eq, Ord, Show)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+-- | 'PublicKey': the public half of a user's key pair, X25519's raw 32
+-- bytes in base64url.
+newtype PublicKey = PublicKey {text :: Text}
+  deriving stock (Eq, Ord, Show)
+  deriving newtype (FromJSON, ToJSON, IsString)
 
 -- | 'Sealed': text encrypted with AES-GCM: the nonce and the ciphertext.
 data Sealed = Sealed
@@ -296,3 +309,33 @@ withoutWrap u v = v {wraps = Map.delete u v.wraps}
 -- | The wraps of the vault key for passkeys, by credential id.
 passkeyWraps :: Vault -> Map CredentialId WrappedKey
 passkeyWraps v = Map.fromList [(c, w) | (ByPasskey c, w) <- Map.toList v.wraps]
+
+--------------------------------------------------------------------------------
+-- The user's key pair
+
+-- | The name the user's private key is kept under in the vault: their
+-- X25519 key, as PKCS #8, sealed under the vault key, with the id of its
+-- key pair. The public half is in the server's directory under the same
+-- id. A user has one key pair at a time; a new one replaces it only when
+-- the old one is lost (a password reset with nothing else to unlock the
+-- vault).
+identityItem :: ItemName
+identityItem = ItemName "identity"
+
+-- | The start of the additional data AES-GCM authenticates with the
+-- user's private key: the format's name and version, and what the item
+-- is. The key pair's id follows it ('identityData'). A ciphertext moved to
+-- another item, or under another key id, then fails to open.
+identityDataPrefix :: Text
+identityDataPrefix = "wiki-vault/2 identity "
+
+-- | The additional data the private key of the key pair with this id is
+-- sealed with.
+identityData :: KeyId -> Text
+identityData k = identityDataPrefix <> k.text
+
+-- | A public key's fingerprint, as the browser computes it (SHA-256 of the
+-- raw key, in hexadecimal), cut into groups of four digits for a person
+-- to read and compare.
+fingerprintGroups :: Text -> [Text]
+fingerprintGroups = T.chunksOf 4 . T.toUpper

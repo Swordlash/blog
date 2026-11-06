@@ -36,6 +36,12 @@ module Wiki.Server.Vault
   , storeVault
   , storeVaultIn
   , deleteVault
+  , vaultProblem
+
+    -- * The directory of public keys
+  , publicKeyOf
+  , currentKeyIn
+  , keyIdOf
 
     -- * Passkeys
   , passkeysOf
@@ -58,6 +64,7 @@ module Wiki.Server.Vault
   )
 where
 
+import Crypto.Hash.SHA256 qualified as SHA256
 import Crypto.Random (getRandomBytes)
 import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower)
@@ -65,21 +72,21 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime)
-import Database.Beam (all_, asc_, current_, delete, filter_, insert, insertValues, isJust_, orderBy_, runDelete, runInsert, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
+import Database.Beam (all_, asc_, current_, delete, filter_, insert, insertValues, isJust_, isNothing_, orderBy_, runDelete, runInsert, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Network.Wai (Request)
 import Protolude
 import Wiki.Api.ContentPolicy (originOf)
-import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
+import Wiki.Api.Vault (NewPublicKey (..), PasskeyInfo (..), PublicKeyEntry (..), StoredVault (..), VaultChange (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (assistantItem)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.Vault (Ciphertext (..), CredentialId (..), Item (..), ItemName (..), KeyId (..), Nonce (..), Salt (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), passkeyWraps, vaultFormat, wrapFor)
+import Wiki.Core.Vault (Ciphertext (..), CredentialId (..), Item (..), ItemName (..), KeyId (..), Nonce (..), PublicKey (..), Salt (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), identityItem, itemOf, passkeyWraps, vaultFormat, wrapFor)
 import Wiki.Server.Address (requestOrigin)
 import Wiki.Server.Storage (Storage, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (micro)
-import Wiki.Server.Storage.Schema (Passkeys (..), VaultItems (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Passkeys (..), PublicKeys (..), VaultItems (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.WebAuthn (AssertionRefusal (..), NewCredential (..), StoredKey (..), fromBase64Url, toBase64Url)
 
 --------------------------------------------------------------------------------
@@ -167,21 +174,75 @@ maxVaultItems = 16
 itemNameOk :: ItemName -> Bool
 itemNameOk n = not (T.null n.text) && T.length n.text <= 32 && T.all (\c -> isAsciiLower c || isDigit c || c == '-') n.text
 
+-- | The number of bytes base64url text holds, if it is base64url.
+bytesIn :: Text -> Maybe Int
+bytesIn t = BS.length <$> fromBase64Url t
+
+-- | Whether base64url text holds exactly so many bytes.
+holds :: Int -> Text -> Bool
+holds n t = bytesIn t == Just n
+
 -- | Why a vault cannot be stored as it is, if it cannot: a format this
--- wiki does not take, a part empty or too long, too many items or a name
--- that is not one.
+-- wiki does not take, a part of the wrong length, too many items or a
+-- name that is not one. The server checks lengths, and never reads what
+-- the parts hold: the salt is 32 bytes, each nonce 12, each wrapped key 48
+-- (an AES-256 key and AES-GCM's tag), a key id 16, and the @identity@
+-- item an X25519 private key in PKCS #8 (48 bytes) and its tag, 64 bytes.
+-- Other items are any length up to 'maxVaultText'.
 vaultProblem :: Vault -> Maybe WikiError
 vaultProblem v
   | v.format /= 1 && v.format /= vaultFormat = Just (Invalid ("A vault of format " <> show v.format <> ": this wiki writes format " <> show vaultFormat <> "."))
   | any (\t -> T.null t || T.length t > maxVaultText) texts = Just (Invalid "This is not a vault this wiki keeps: a part of it is empty or too long.")
   | Map.null v.items = Just (Invalid "A vault holds at least one item.")
   | Map.size v.items > maxVaultItems || not (all itemNameOk (Map.keys v.items)) = Just (Invalid ("A vault holds at most " <> show maxVaultItems <> " items, named in lower-case letters, digits and hyphens."))
+  | not (holds 32 v.salt.text) = Just (wrongLength "Its salt")
+  | not (all (\i -> holds 12 i.sealed.nonce.text) (Map.elems v.items) && all (\w -> holds 12 w.nonce.text) (Map.elems v.wraps)) = Just (wrongLength "A nonce")
+  | not (all (\w -> holds 48 w.key.text) (Map.elems v.wraps)) = Just (wrongLength "A wrapped key")
+  | not (all (\i -> maybe True (\k -> holds 16 k.text) i.keyId) (Map.elems v.items)) = Just (wrongLength "A key id")
+  | Just i <- itemOf identityItem v, isNothing i.keyId || not (holds 64 i.sealed.ciphertext.text) = Just (wrongLength "Its key pair")
   | otherwise = Nothing
   where
     texts =
       [v.salt.text]
         <> concat [[i.sealed.nonce.text, i.sealed.ciphertext.text] <> maybe [] (\k -> [k.text]) i.keyId | i <- Map.elems v.items]
         <> concat [[w.nonce.text, w.key.text] | w <- Map.elems v.wraps]
+    wrongLength what = Invalid ("This is not a vault this wiki keeps: " <> T.toLower (T.take 1 what) <> T.drop 1 what <> " is not of its length.")
+
+-- | The id of a public key: the first 16 bytes of its SHA-256, in
+-- base64url, as the browser computes it; 'Nothing' for a key that is not
+-- X25519's 32 bytes.
+keyIdOf :: PublicKey -> Maybe KeyId
+keyIdOf k = case fromBase64Url k.text of
+  Just raw | BS.length raw == 32 -> Just (KeyId (toBase64Url (BS.take 16 (SHA256.hash raw))))
+  _ -> Nothing
+
+-- | A user's current public key, if they have one.
+publicKeyOf :: Storage -> UserId -> IO (Maybe PublicKeyEntry)
+publicKeyOf st u = reading st (currentKeyIn u)
+
+currentKeyIn :: (Backend be) => UserId -> Db be (Maybe PublicKeyEntry)
+currentKeyIn u =
+  runSelectReturningList (select (filter_ (\k -> k.user_id ==. val_ u.text &&. isNothing_ k.retired_at) (all_ wikiDb.public_keys))) <&> \case
+    [k] -> Just PublicKeyEntry {user = u, keyId = KeyId k.key_id, publicKey = PublicKey k.public_key, createdAt = k.created_at}
+    _ -> Nothing
+
+-- | Why the key pair a vault holds cannot be stored with the public key
+-- sent beside it, if it cannot. The vault's @identity@ item and the
+-- directory's current key name the same key pair once stored: a new key
+-- pair comes with its public key, which must be the one its id names, and
+-- only for a user who has no current key (a key pair is replaced only
+-- after a password reset retired the last); an item already there needs
+-- none; and the item cannot be removed, except by a reset.
+identityProblem :: Maybe Item -> Maybe NewPublicKey -> Maybe PublicKeyEntry -> Maybe WikiError
+identityProblem pair new current = case (pair, new) of
+  (_, Just k)
+    | Just k.keyId /= (pair >>= \i -> i.keyId) -> Just (Invalid "The public key sent is not the key pair the vault holds.")
+    | keyIdOf k.publicKey /= Just k.keyId -> Just (Invalid "A public key is X25519's 32 bytes, and its id the first 16 bytes of its SHA-256.")
+    | Just c <- current, c.keyId /= k.keyId -> Just (Conflict "You have a key pair already: it is replaced only after a password reset.")
+    | otherwise -> Nothing
+  (Nothing, Nothing) | isJust current -> Just (Invalid "The vault's key pair cannot be removed.")
+  (Just i, Nothing) | i.keyId /= ((\c -> c.keyId) <$> current) -> Just (Invalid "The vault holds a key pair the directory does not have: send its public key with it.")
+  _ -> Nothing
 
 -- | Store a user's vault, over the version the given tag names, or, with
 -- none, only if they have no vault yet; 'Conflict' otherwise. The result
@@ -195,19 +256,23 @@ vaultProblem v
 -- stored for the passkeys they name, which must be the user's ('Invalid'
 -- otherwise), and those of the passkeys it does not name are kept: a
 -- passkey's wrap goes with the passkey.
-storeVault :: Storage -> UTCTime -> UserId -> Maybe VaultTag -> Vault -> IO (Either WikiError StoredVault)
-storeVault st now u base v = case vaultProblem v of
+storeVault :: Storage -> UTCTime -> UserId -> Maybe VaultTag -> VaultChange -> IO (Either WikiError StoredVault)
+storeVault st now u base change = case vaultProblem change.vault of
   Just problem -> pure (Left problem)
-  Nothing -> writingEither st (storeVaultIn now u base v)
+  Nothing -> writingEither st (storeVaultIn now u base change)
 
 -- | 'storeVault' in a transaction of the caller's, for a change that must
 -- be stored together with the vault (a new password and its wrap).
-storeVaultIn :: (Backend be) => UTCTime -> UserId -> Maybe VaultTag -> Vault -> Db be (Either WikiError StoredVault)
-storeVaultIn now u base v
+storeVaultIn :: (Backend be) => UTCTime -> UserId -> Maybe VaultTag -> VaultChange -> Db be (Either WikiError StoredVault)
+storeVaultIn now u base change
   | Just problem <- vaultProblem v = pure (Left problem)
   | otherwise = do
       mine <- map (\p -> p.credential_id) <$> passkeysWhere u
       before <- vaultIn u
+      current <- currentKeyIn u
+      taken <- case change.publicKey of
+        Just k | Just k.keyId /= ((\c -> c.keyId) <$> current) -> not . null <$> runSelectReturningList (select (filter_ (\x -> x.key_id ==. val_ k.keyId.text) (all_ wikiDb.public_keys)))
+        _ -> pure False
       let named = Map.keys (passkeyWraps v)
           -- What the vault holds once stored: format 1's settings over the
           -- items and the password's wrap stored, else the vault as sent.
@@ -216,10 +281,12 @@ storeVaultIn now u base v
             _ -> (v.items, wrapFor ByPassword v)
       case (before, base) of
         _ | any (\i -> i.text `notElem` mine) named -> pure (Left (Invalid "The vault names a passkey that is not one of yours."))
+        _ | Just problem <- identityProblem (Map.lookup identityItem (fst whole)) change.publicKey current -> pure (Left problem)
+        _ | taken -> pure (Left (Conflict "This public key is in the directory already."))
         (Nothing, Nothing) -> do
           runInsert . insert wikiDb.vaults $
             insertValues [VaultRow {user_id = u.text, salt = v.salt.text, password_nonce = Nothing, password_key = Nothing, revision = 1, updated_at = micro now}]
-          stored whole
+          stored current whole
         (Just old, Just t)
           | old.tag == t -> do
               runUpdate $
@@ -227,13 +294,18 @@ storeVaultIn now u base v
                   wikiDb.vaults
                   (\x -> (x.salt <-. val_ v.salt.text) <> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now)))
                   (\x -> x.user_id ==. val_ u.text)
-              stored whole
+              stored current whole
         (Nothing, Just _) -> pure (Left (Conflict "There is no vault any more: synchronisation was turned off on another device."))
         (Just _, Nothing) -> pure (Left (Conflict "There is a vault already: unlock it with a passkey instead."))
         _ -> pure (Left (Conflict "The vault was changed on another device meanwhile."))
   where
-    stored :: (Backend be) => (Map ItemName Item, Maybe WrappedKey) -> Db be (Either WikiError StoredVault)
-    stored (items, password) = do
+    v = change.vault
+    stored :: (Backend be) => Maybe PublicKeyEntry -> (Map ItemName Item, Maybe WrappedKey) -> Db be (Either WikiError StoredVault)
+    stored current (items, password) = do
+      for_ change.publicKey $ \k ->
+        unless (Just k.keyId == ((\c -> c.keyId) <$> current))
+          $ runInsert . insert wikiDb.public_keys
+          $ insertValues [PublicKeyRow {key_id = k.keyId.text, user_id = u.text, public_key = k.publicKey.text, created_at = micro now, retired_at = Nothing, retired_because = Nothing}]
       runUpdate (update wikiDb.vaults (\x -> (x.password_nonce <-. val_ ((\w -> w.nonce.text) <$> password)) <> (x.password_key <-. val_ ((\w -> w.key.text) <$> password))) (\x -> x.user_id ==. val_ u.text))
       runDelete (delete wikiDb.vault_items (\i -> i.user_id ==. val_ u.text))
       runInsert . insert wikiDb.vault_items $

@@ -107,10 +107,10 @@ import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChan
 import Wiki.Api.Stars (StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
-import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, PublicKeyEntry, RegistrationOptions, RegistrationResponse, StoredVault, VaultChange)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.WhatsNew (WhatsNew)
-import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
+import Wiki.Core.Assistant.Vault (CredentialId, VaultTag)
 import Wiki.Core.Attachment (Attachment, FileName)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
@@ -269,13 +269,17 @@ data AssistantApi mode = AssistantApi
   -- ^ The vault and its tag (also its @ETag@); 304 with no body when
   -- @If-None-Match@ names the version the server has, and
   -- 'Wiki.Api.Error.NotFound' when the user has no vault.
-  , storeVault :: mode :- "vault" :> Header "If-Match" VaultTag :> ReqBody '[JSON] Vault :> Put '[JSON] StoredVault
+  , storeVault :: mode :- "vault" :> Header "If-Match" VaultTag :> ReqBody '[JSON] VaultChange :> Put '[JSON] StoredVault
   -- ^ Store a version of the vault over the one @If-Match@ names, or,
-  -- without it, a first one. Another version on the server, or a vault
+  -- without it, a first one, with the public half of a new key pair when
+  -- its @identity@ item is new. Another version on the server, or a vault
   -- already there for a first one, is 'Wiki.Api.Error.Conflict'; a wrapped
-  -- key for a passkey that is not the user's is 'Wiki.Api.Error.Invalid'.
+  -- key for a passkey that is not the user's, a part of the wrong length,
+  -- or an @identity@ item that does not match the directory's key is
+  -- 'Wiki.Api.Error.Invalid'.
   , deleteVault :: mode :- "vault" :> DeleteNoContent
-  -- ^ Turn synchronisation off: the vault and every passkey of the user go.
+  -- ^ Turn the assistant's synchronisation off: the vault's @assistant@
+  -- item goes, and the vault with it when nothing else is left in it.
   , beginAssertion :: mode :- "passkeys" :> "assertion" :> Post '[JSON] AssertionOptions
   -- ^ The options of a use of one of the user's passkeys, with a challenge
   -- kept for this session.
@@ -641,6 +645,13 @@ data AccountApi form mode = AccountApi
   -- ^ End every session of the user except the current one: "Sign out
   -- everywhere". The response is their remaining sessions, the current one
   -- only.
+  , publicKey :: mode :- "public-keys" :> Capture "user" UserId :> Get '[JSON] PublicKeyEntry
+  -- ^ A user's current public key (WP5.74 of docs/PLAN.md, "Wiki.Api.Vault"),
+  -- which any signed-in user may read, to seal a key to them;
+  -- 'Wiki.Api.Error.NotFound' for a user who has none (who has not signed
+  -- in since keys were made). Nothing else of another user's keys is
+  -- readable. The key is only what the server says it is: a client checks
+  -- its fingerprint with its owner to be sure.
   , passkeys :: mode :- "passkeys" :> Get '[JSON] [PasskeyInfo]
   -- ^ The user's passkeys, the oldest first (WP5.30 of docs/PLAN.md): each
   -- signs them in, and those the vault has a wrapped key for unlock the

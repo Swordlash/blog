@@ -61,6 +61,7 @@ import Wiki.App.Account (passwordErrorText)
 import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), PasskeyRefusal (..), Used (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
+import Wiki.App.Vault (VaultDevice (..), readDevice, vaultSlot)
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
@@ -203,6 +204,14 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
       Opened _ s -> pure s
       Fresh -> pure defaultSettings
       Locked _ _ -> throwError "Unlock your keys first."
+  lift (fetchVault Nothing) >>= \case
+    Right (Fetched s) -> joinVault user record secrets s
+    _ -> newVault user password record secrets
+
+-- | Sync the settings in a vault of their own, made for them: the vault
+-- key new, wrapped for a passkey.
+newVault :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> DeviceRecord -> Settings -> Step m Keys
+newVault user password record secrets = do
   salt <- Salt <$> lift newSalt
   existing <- server listPasskeys
   -- The new vault key can be exported, to be wrapped: the page forgets it
@@ -228,8 +237,33 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
         )
         `recover` \why -> lift (when made (void (dropPasskey credential))) >> throwError why
     keep user vaultKey (not record.askEachTime)
+    keepForVault user vaultKey
     pure stored'
   let synced' = serverTo (Just (ServerCopy stored'.tag stored'.vault)) (sealedTo (sealedOf stored'.vault) record)
+  write user synced'
+  keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
+
+-- | Sync the settings in the vault the user has already, made for their
+-- other secrets (their key pair): its key, which one of the passkeys it
+-- knows unwraps (one touch), seals the settings, and they are added to
+-- it. A vault that no passkey unlocks yet (one the password alone
+-- unlocks) needs a passkey added to it first, under Keys in the account's
+-- security, since syncing the settings needs one.
+joinVault :: (MonadAssistant m, MonadVault m) => UserId -> DeviceRecord -> Settings -> StoredVault -> Step m Keys
+joinVault user record secrets s = do
+  let unlocking = Map.keys (passkeyWraps s.vault)
+  when (null unlocking) (throwError "Your vault opens with your password only. Add a passkey to it under Keys in your account's security, then turn syncing on.")
+  (credential, wrapping) <- usedPasskey s.vault.salt (Just unlocking)
+  let vaultKeyOf = forgetting wrapping $ do
+        wrapped <- maybe (throwError "This passkey has no copy of the vault's key: use another one.") pure (wrappedFor credential s.vault)
+        unwrap wrapping wrapped False
+  fresh <- withKey vaultKeyOf $ \vaultKey -> do
+    sealed <- seal vaultKey secrets
+    fresh <- server (storeVault (Just s.tag) (withSealed sealed s.vault))
+    keep user vaultKey (not record.askEachTime)
+    keepForVault user vaultKey
+    pure fresh
+  let synced' = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (sealedOf fresh.vault) record)
   write user synced'
   keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
 
@@ -262,6 +296,7 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
           fresh <- server (storeVault (Just copy.tag) (withSealed sealed copy.vault))
           pure (ServerCopy fresh.tag fresh.vault)
     keep user vaultKey (not record.askEachTime)
+    keepForVault user vaultKey
     pure (merged, copy')
   let unlocked = serverTo (Just copy') (sealedTo (sealedOf copy'.vault) record)
   write user unlocked
@@ -563,6 +598,14 @@ unwrap wrapping w exportable = ExceptT (unwrapWith wrapping w wrappingData expor
 
 keep :: (MonadAssistant m) => UserId -> KeyRef -> Bool -> Step m ()
 keep user k onDisk = ExceptT (keepDeviceKey user k onDisk)
+
+-- | Keep the vault key as the user's vault's on this device too
+-- ("Wiki.App.Vault"), as that vault's device record says: on disk unless
+-- it asks each time.
+keepForVault :: (MonadAssistant m) => UserId -> KeyRef -> Step m ()
+keepForVault user k = do
+  device <- lift (readDevice user)
+  ExceptT (keepDeviceKey (vaultSlot user) k (not device.askEachTime))
 
 deviceKeyOrFail :: (MonadAssistant m) => UserId -> Step m KeyRef
 deviceKeyOrFail user = lift (deviceKey user) >>= maybe (throwError "This browser kept no key for your settings.") pure

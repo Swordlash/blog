@@ -92,6 +92,7 @@ tableRows st = reading st rows
         , dump "passkeys" wikiDb.passkeys
         , dump "vaults" wikiDb.vaults
         , dump "vault_items" wikiDb.vault_items
+        , dump "public_keys" wikiDb.public_keys
         , dump "spaces" wikiDb.spaces
         , dump "pages" wikiDb.pages
         , dump "page_versions" wikiDb.page_versions

@@ -41,6 +41,7 @@ wikiTables =
   , "pages"
   , "passkeys"
   , "permissions_generation"
+  , "public_keys"
   , "recovery_codes"
   , "reset_tokens"
   , "sessions"

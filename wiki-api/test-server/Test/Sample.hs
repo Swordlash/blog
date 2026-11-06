@@ -55,6 +55,7 @@ module Test.Sample
   , vault
   , storedVault
   , passkeyInfo
+  , publicKeyEntry
   , registrationOptions
   , registrationResponse
   , assertionOptions
@@ -77,7 +78,7 @@ import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState 
 import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..), Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), PublicKeyEntry (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
@@ -98,7 +99,7 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
-import Wiki.Core.Vault (CredentialId (..), Item (..), ItemName (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), vaultFormat)
+import Wiki.Core.Vault (CredentialId (..), Item (..), ItemName (..), KeyId (..), PublicKey (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), vaultFormat)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -687,6 +688,11 @@ vault =
 
 storedVault :: StoredVault
 storedVault = StoredVault {tag = VaultTag "\"3\"", vault}
+
+-- | A user's public key in the directory: made-up bytes of the right
+-- lengths, and the id the server would compute for them.
+publicKeyEntry :: PublicKeyEntry
+publicKeyEntry = PublicKeyEntry {user = UserId "user-ada", keyId = KeyId "Y2-9-YWJjZGVmZ2hpams", publicKey = PublicKey "YW4gWDI1NTE5IHB1YmxpYyBrZXksIDMyIGJ5dGVzISE", createdAt = time}
 
 passkeyInfo :: PasskeyInfo
 passkeyInfo = PasskeyInfo {id = CredentialId "Y3JlZGVudGlhbC0x", name = "Added on 2026-10-28 at 09:30 UTC", createdAt = time, lastUsedAt = Just later, unlocks = True}

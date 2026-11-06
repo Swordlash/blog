@@ -110,6 +110,7 @@ library
       Wiki.App.Shell
       Wiki.App.Editor.Browser
       Wiki.App.Editor.Problems
+      Wiki.App.Vault
       Wiki.App.View.Access
       Wiki.App.View.Activity
       Wiki.App.View.Assistant

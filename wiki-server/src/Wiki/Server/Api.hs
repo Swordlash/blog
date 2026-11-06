@@ -687,6 +687,9 @@ handlers env caller =
               u <- signedInUser
               now <- liftIO getCurrentTime
               liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
+          , publicKey = \owner -> do
+              _ <- signedInUser
+              liftIO (Vault.publicKeyOf env.storage owner) >>= maybe (refuse ApiError.NotFound) pure
           , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
           , beginRegistration = \body -> do
               (u, s, key) <- ceremonyCaller

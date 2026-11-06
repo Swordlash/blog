@@ -59,6 +59,7 @@ module Wiki.App.Assistant
     -- * The vault in the browser
   , KeyRef
   , Made (..)
+  , NewIdentity (..)
   , PasskeyTicket
   , Used (..)
   , PasskeyRefusal (..)
@@ -95,7 +96,7 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, RegistrationOptions, RegistrationResponse)
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), providerKey)
-import Wiki.Core.Assistant.Vault (Ciphertext (..), CredentialId (..), Nonce (..), Sealed (..), WrappedKey (..))
+import Wiki.Core.Assistant.Vault (Ciphertext (..), CredentialId (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..), identityData, identityDataPrefix)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 
@@ -132,6 +133,9 @@ $( browserJS
      , ("js_wrapPromise", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO (Promise JSText)|])
      , ("js_unwrapPromise", "wiki_vault_unwrap", Safe, [t|Int -> JSText -> JSText -> JSText -> Bool -> IO (Promise JSText)|])
      , ("js_discardPromise", "wiki_vault_discard", Safe, [t|JSText -> JSText -> IO (Promise ())|])
+     , ("js_keys_generatePromise", "wiki_keys_generate", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
+     , ("js_keys_openPromise", "wiki_keys_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_keys_fingerprintPromise", "wiki_keys_fingerprint", Safe, [t|JSText -> IO (Promise JSText)|])
      , ("js_conditional_herePromise", "wiki_passkey_conditional_here", Safe, [t|IO (Promise Bool)|])
      , ("js_passkey_sign_inPromise", "wiki_passkey_sign_in", Safe, [t|JSText -> Bool -> Int -> IO (Promise JSText)|])
      , ("js_passkey_offer_ticket", "wiki_passkey_offer_ticket", Safe, [t|IO Int|])
@@ -196,6 +200,15 @@ js_create a1 a2 a3 = if inBrowser then wait =<< js_createPromise a1 a2 a3 else p
 js_get :: JSText -> JSText -> JSText -> IO JSText
 js_get a1 a2 a3 = if inBrowser then wait =<< js_getPromise a1 a2 a3 else pure inert
 
+js_keys_generate :: Int -> JSText -> IO JSText
+js_keys_generate a1 a2 = if inBrowser then wait =<< js_keys_generatePromise a1 a2 else pure inert
+
+js_keys_open :: Int -> JSText -> JSText -> JSText -> IO JSText
+js_keys_open a1 a2 a3 a4 = if inBrowser then wait =<< js_keys_openPromise a1 a2 a3 a4 else pure inert
+
+js_keys_fingerprint :: JSText -> IO JSText
+js_keys_fingerprint a1 = if inBrowser then wait =<< js_keys_fingerprintPromise a1 else pure inert
+
 js_wrap :: Int -> Int -> JSText -> IO JSText
 js_wrap a1 a2 a3 = if inBrowser then wait =<< js_wrapPromise a1 a2 a3 else pure inert
 
@@ -225,6 +238,17 @@ data Made = Made
   { response :: RegistrationResponse
   , prf :: Bool
   , wrapping :: Maybe KeyRef
+  }
+  deriving stock (Show)
+
+-- | 'NewIdentity': a key pair just made for the user: its private key,
+-- which the page holds and cannot export; its id; its public key; and its
+-- private key sealed with the vault key, the vault's @identity@ item.
+data NewIdentity = NewIdentity
+  { key :: KeyRef
+  , keyId :: KeyId
+  , publicKey :: PublicKey
+  , sealed :: Sealed
   }
   deriving stock (Show)
 
@@ -476,6 +500,26 @@ class (Monad m) => MonadAssistant m where
   default unwrapWith :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> WrappedKey -> Text -> Bool -> m (Either Text KeyRef)
   unwrapWith wrapping wrapped info = lift . unwrapWith wrapping wrapped info
 
+  -- | A new key pair for the user (X25519), its private key sealed with
+  -- the vault key under 'Wiki.Core.Vault.identityData' of its id. The
+  -- private key the result holds cannot be exported; the PKCS #8 bytes
+  -- exist in the page only while they are sealed.
+  newIdentity :: KeyRef -> m (Either Text NewIdentity)
+  default newIdentity :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> m (Either Text NewIdentity)
+  newIdentity = lift . newIdentity
+
+  -- | Open the user's sealed private key with the vault key: a key that
+  -- cannot be exported.
+  openIdentity :: KeyRef -> KeyId -> Sealed -> m (Either Text KeyRef)
+  default openIdentity :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> KeyId -> Sealed -> m (Either Text KeyRef)
+  openIdentity k i = lift . openIdentity k i
+
+  -- | A public key's fingerprint: SHA-256 of its bytes, in hexadecimal;
+  -- empty where the browser cannot compute it.
+  fingerprintOf :: PublicKey -> m Text
+  default fingerprintOf :: (MonadTrans t, MonadAssistant n, m ~ t n) => PublicKey -> m Text
+  fingerprintOf = lift . fingerprintOf
+
   -- | Tell the person's password manager that a passkey of this relying
   -- party is not the wiki's any more, where the browser can.
   discardPasskey :: Text -> CredentialId -> m ()
@@ -581,6 +625,18 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_unwrap wrapping (toJSText wrapped.nonce.text) (toJSText wrapped.key.text) (toJSText info) exportable
     pure (answered (\o -> KeyRef <$> o .: "handle") answer)
   discardPasskey rpId credential = liftIO (evaluate =<< js_discard (toJSText rpId) (toJSText credential.text))
+  newIdentity (KeyRef v) = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_keys_generate v (toJSText identityDataPrefix)
+    pure . flip answered answer $ \o ->
+      NewIdentity
+        <$> (KeyRef <$> o .: "handle")
+        <*> o .: "keyId"
+        <*> o .: "publicKey"
+        <*> (Sealed <$> o .: "nonce" <*> o .: "ciphertext")
+  openIdentity (KeyRef v) keyId sealed = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_keys_open v (toJSText sealed.nonce.text) (toJSText sealed.ciphertext.text) (toJSText (identityData keyId))
+    pure (answered (\o -> KeyRef <$> o .: "handle") answer)
+  fingerprintOf k = liftIO (fromJSText <$> (evaluate =<< js_keys_fingerprint (toJSText k.text)))
   conditionalHere = liftIO (evaluate =<< js_conditional_here)
   passkeyTicket = liftIO (PasskeyTicket <$> js_passkey_offer_ticket)
   signInPasskey options conditional (PasskeyTicket ticket) = liftIO $ do
@@ -645,6 +701,9 @@ instance MonadAssistant MemDOM where
   wrapWith _ _ _ = pure (Left noBrowser)
   unwrapWith _ _ _ _ = pure (Left noBrowser)
   discardPasskey _ _ = pass
+  newIdentity _ = pure (Left noBrowser)
+  openIdentity _ _ _ = pure (Left noBrowser)
+  fingerprintOf _ = pure ""
   conditionalHere = pure False
   passkeyTicket = pure (PasskeyTicket 0)
   signInPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))

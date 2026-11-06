@@ -49,6 +49,7 @@ readEveryTable c =
     , counted "passkeys" wikiDb.passkeys
     , counted "vaults" wikiDb.vaults
     , counted "vault_items" wikiDb.vault_items
+    , counted "public_keys" wikiDb.public_keys
     , counted "spaces" wikiDb.spaces
     , counted "pages" wikiDb.pages
     , counted "page_versions" wikiDb.page_versions

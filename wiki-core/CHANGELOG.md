@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The user's key pair (WP5.74b1). `Wiki.Core.Vault` gains `PublicKey`,
+`identityItem` (the item `identity`: the user's X25519 private key, sealed
+as PKCS #8 under the vault key with its `KeyId`), `identityData` (the
+additional data it is sealed with, `wiki-vault/2 identity ` and the key
+id) and `fingerprintGroups`.
+
 The user's vault (WP5.74b1). `Wiki.Core.Vault`, new, is the vault of
 WP5.21 made general: a `Vault` is `{format, salt, items, wraps}`, its
 sealed `Item`s kept by `ItemName` (`assistant` for the writing assistant's

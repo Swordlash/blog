@@ -17,7 +17,7 @@ import Test.Hspec
 import Test.Storage.Fixture (countWhere, ok, path, tableRows, withDemo, withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Notifications (Notifications (..))
-import Wiki.Api.Vault (PasskeyInfo (..))
+import Wiki.Api.Vault (PasskeyInfo (..), VaultChange (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeUser, setCreateSpaces))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -61,8 +61,8 @@ spec backing = describe "removing an account" $ do
     signInUser st now "127.0.0.1" u >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
     void (ok =<< enrol st now u)
     passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
-    let vault = withSealed Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdA", items = mempty, wraps = Map.singleton (ByPasskey passkey.id) (WrappedKey "bm9uY2U" "a2V5")}
-    void (ok =<< storeVault st now u Nothing vault)
+    let vault = withSealed Sealed {nonce = "bm9uY2UtMTJieXRl", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY", items = mempty, wraps = Map.singleton (ByPasskey passkey.id) (WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")}
+    void (ok =<< storeVault st now u Nothing VaultChange {vault, publicKey = Nothing})
     blog <- ok =<< asEditor (getSpace (path "blog"))
     void (ok =<< asAdmin (setWatching (WatchSpace blog.id) True))
     made <- ok =<< asEditor (createPage blog.id Nothing "Field notes" "First words.")

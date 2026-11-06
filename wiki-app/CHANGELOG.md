@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+The user's key pair on this device (WP5.74b1). `Wiki.App.Vault`, new, is
+the user's vault as this browser keeps it: the vault key and the private
+half of the user's X25519 key pair, each a WebCrypto key that cannot be
+exported, in IndexedDB slots of their own (`vaultSlot`, `identitySlot`),
+and a `VaultDevice` record; `settleKeys` finds the vault key on the device,
+unseals the private key, or makes the key pair and stores it with its
+public key; `loadUserKeys` reads what the security panel shows.
+`MonadAssistant` gains `newIdentity`, `openIdentity` and `fingerprintOf`
+(`jsbits/vault.js`), and `MonadVault` `storeVaultChange` and
+`publicKeyOf`. Turning the assistant's syncing on when a vault exists
+already adds the settings to it, with a passkey it knows.
+
 What's new (WP5.66). On a server, the page "What's new?" at
 `/whats-new/` (the route `WhatsNewPage`, `Wiki.App.View.WhatsNew`) shows
 the server's version and build date, then its newest changelog entries,

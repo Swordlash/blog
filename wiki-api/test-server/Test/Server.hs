@@ -43,7 +43,7 @@ import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChan
 import Wiki.Api.Stars (StarredPage (..), Starring (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
-import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), StoredVault (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), NewPublicKey (..), PasskeyInfo (..), PublicKeyEntry (..), StoredVault (..), VaultChange (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..))
@@ -154,6 +154,7 @@ stubs =
           , sessions = pure Sample.sessions
           , endSession = \ref -> if ref == SessionRef "4e5f6a7b" then pure (take 1 Sample.sessions) else refuse NotFound
           , endOtherSessions = pure (take 1 Sample.sessions)
+          , publicKey = \u -> if u == Sample.publicKeyEntry.user then pure Sample.publicKeyEntry else refuse NotFound
           , passkeys = pure [Sample.passkeyInfo]
           , beginRegistration = \body -> if body.password == Just (Password "secret") then pure Sample.registrationOptions else refuse Unauthenticated
           , finishRegistration = \_ -> pure Sample.passkeyInfo
@@ -584,6 +585,13 @@ spec = describe "a server of the API's type" $ do
       answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"3\"")] (encode Sample.vault)) 200 Sample.storedVault
       answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"2\"")] (encode Sample.vault)) 409 (Conflict "The vault was changed on another device meanwhile.")
       (status <$> request methodDelete a.deleteVault [] "") `shouldReturn` 204
+    it "gives a user's public key, and stores the vault with a new key pair's public key" $ do
+      let k = links.account
+      k.publicKey Sample.publicKeyEntry.user `shouldBe` "api/v1/account/public-keys/user-ada"
+      answers (getAt (k.publicKey Sample.publicKeyEntry.user)) 200 Sample.publicKeyEntry
+      answers (getAt (k.publicKey (UserId "user-nobody"))) 404 NotFound
+      let change = VaultChange {vault = Sample.vault, publicKey = Just NewPublicKey {keyId = Sample.publicKeyEntry.keyId, publicKey = Sample.publicKeyEntry.publicKey}}
+      answers (request methodPut links.assistant.storeVault [(hContentType, "application/json"), ("If-Match", "\"3\"")] (encode change)) 200 Sample.storedVault
     it "makes a passkey for the account and uses it for the vault in two steps each, and removes one" $ do
       let a = links.assistant
           k = links.account
