@@ -154,7 +154,14 @@ confirms it against reality and the plan is amended if it does not hold.
     in a directory of its own under the deployment. Migrations run when the server starts;
     before a deploy starts the new server, the database is copied aside with SQLite's own
     backup (`VACUUM INTO` or the online backup API, never `cp` of a live file) into
-    `data/backups/<timestamp>.sqlite`, and the last few backups are kept. A `Dockerfile`
+    `data/backups/<timestamp>.sqlite`, and the last few backups are kept. An upgrade
+    is checked and can be undone (WP5.73, the owner, 2026-11-06): the maker keeps the
+    deployment it replaces in `previous/` with a copy of that backup and its commit,
+    runs the new program's `migrate` and `check` before starting it, and rolls back by
+    itself when either fails or the new server does not answer; `deploy-local.sh
+    --rollback` goes back by hand. A deployment is kept only when putting its files
+    back undoes the whole upgrade (the database's kind and port, the listener, the
+    HTTPS way and serve, and the place stay as they were). A `Dockerfile`
     and `docker-compose.yml` for a VPS are a package of their own (WP2.9), after the local
     variant works.
 16. **The server searches with the pure matcher, not FTS5.** After WP1.23 `searchPlain`
@@ -935,36 +942,6 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-- **WP5.73 The maker checks an upgrade's migration and rolls it back**
-  (the owner, 2026-11-06). The maker is the oracle: a server started by hand
-  on a newer binary is the operator's business ("if they deploy by hand, they
-  know what they are doing"), so the server itself takes no backup of its own.
-  A deploy records the commit it deployed in the state (`git_commit`, or
-  `unknown` when the source is not a git checkout) and keeps the previous
-  deployment's binary and page beside the new ones. On an upgrade the maker
-  backs the database up (as now), runs the migration itself (`wiki-server
-  migrate`), then reads every row of every table through the storage's
-  decoders (`wiki-server check`: users, spaces, pages and their versions,
-  comments, settings, everything an export reads). The two commands are in
-  (WP5.73a, #180): `migrate` applies only the pending steps; `check` refuses
-  a database not at the program's version (exit 4), reads every table's
-  rows as they come and every record an export builds, changes nothing, and
-  exits 5 when something does not read, 1 when it cannot open the
-  database. The maker's part is next (WP5.73b). If either fails, it says
-  that the migration failed and why, rolls back (the database restored from
-  that backup, the previous binary and page back, the service started and
-  checked that it answers), and says which version it is back at (the
-  previous deployment's commit), the one to deploy again until the cause is
-  fixed. A successful upgrade keeps them too (the owner, the same day): the
-  previous deployment's binary, page and the database backed up before the
-  migration stay for later, since what broke may show only after a while
-  (passwords that no longer sign in). `deploy-local.sh --rollback` goes back
-  to them by hand: it says what it brings back (the commit, the backup's
-  time) and that everything written since the upgrade is lost unless it is
-  exported first, asks, and then does what the failed upgrade's rollback
-  does. The next upgrade replaces the kept deployment with the one it
-  replaces.
-
 - **WP5.74 End-to-end encrypted private user spaces** (the owner,
   2026-11-06). A user's personal space, or a subspace in it, can be made
   encrypted: turning it on at a (sub)space's home page makes the whole
@@ -1522,6 +1499,14 @@ needs. Each was true when its package merged; check before relying on one.
   are not in CI's cache, so CI runs wasm-opt and the bundle every time; Shake runs
   one job at a time (wasm-opt and esbuild together would compete for a small
   machine's memory).
+- Upgrades and rollback (WP5.73, #180 and #181): the server's attachment clean-up
+  looks only at `data/backups`, not at the backup copy in `previous/`, so a rollback
+  made after that backup was pruned may lack the files of attachments deleted since
+  (`wiki-server restore` says how many). One deployment back is kept. A deploy that
+  changes the database's kind or port, the port, the address, the HTTPS way, host or
+  serve, uses `--fresh`, adopts under `--prefix` or follows `--stop` keeps nothing
+  for a rollback, and says so. The commit recorded is the last build's
+  (`dist-newstyle/deployed-commit.<mode>`); a page downloaded from CI is not of it.
 - `hh` wherever the element names are known when the code is written; combinators where
   data chooses the element (the Markdown renderer) and for helpers that make their own
   element (`Router.link`, `HH.slot`). A row named by a synonym and used at many sites is
