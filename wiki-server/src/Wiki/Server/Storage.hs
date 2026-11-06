@@ -257,10 +257,10 @@ import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, load
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
+import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
-import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
-import Wiki.Server.Storage.Migrate (databaseVersion, migrate, migrationsFor, schemaVersion)
+import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrate, migrationsFor, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
@@ -548,7 +548,8 @@ checkDatabase place = withDatabase place $ \c -> do
       if any (isLeft . (\t -> t.rows)) tables
         then pure (Left (UnreadableTables tables))
         else
-          first (UnreadableRecords . toS . displayException) . ($> tables)
+          first (UnreadableRecords . toS . displayException)
+            . ($> tables)
             <$> try @SomeException (runDb c records)
   where
     -- Each record forced whole (through its Show), so that a value the

@@ -13,8 +13,7 @@ module Wiki.Server.Storage.Check
   )
 where
 
-import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, Identity, TableEntity, all_, runSelectReturningList, select)
-import Database.Beam.Schema.Tables (Table)
+import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, TableEntity, all_, runSelectReturningList, select)
 import Protolude
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Schema (WikiDb (..), wikiDb)
@@ -65,7 +64,7 @@ readEveryTable c =
     ]
   where
     counted
-      :: (Beamable t, Table t, FromBackendRow be (t Identity))
+      :: (Beamable t, FromBackendRow be (t Identity))
       => Text
       -> DatabaseEntity be WikiDb (TableEntity t)
       -> IO TableRead

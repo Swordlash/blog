@@ -1658,6 +1658,23 @@ to the demo, keeping `data/`.
 
   (For an rclone remote, `rclone copy <remote>/backups/<time>.sqlite .` and
   `rclone copy <remote>/attachments ./attachments` first.)
+- **Migrating and checking by hand.** The server migrates its database to its
+  own version of the schema when it starts. `wiki-server migrate --data DIR`
+  (or `bin/wiki migrate …`) does only that, and says from which version; and
+  `wiki-server check --data DIR` reads every row of every table, and the wiki's
+  records built from them, as the program does, changes nothing, and lists the
+  tables with their rows. Both run on a directory no server is running on. The
+  check ends with 4 when the database is not at the program's version of the
+  schema (migrate it first), 5 when something does not read (it says what), and
+  1 when the database cannot be opened. Run them with a new `wiki-server` before
+  starting it on an old database:
+
+  ```sh
+  systemctl --user stop wiki-demo
+  ~/wiki-demo/bin/wiki backup --data ~/wiki-demo/data
+  ~/wiki-demo/bin/wiki migrate --data ~/wiki-demo/data
+  ~/wiki-demo/bin/wiki check --data ~/wiki-demo/data
+  ```
 - **Who is asking.** The public address serves whoever has signed in ("Sign in"
   at the top right, with a login and a password), and anyone else as an anonymous
   reader, who sees the public spaces and changes nothing. (Before there were
