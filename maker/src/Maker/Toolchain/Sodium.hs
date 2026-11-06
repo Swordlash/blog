@@ -12,9 +12,12 @@
 -- of this machine holding a clone, for a machine that cannot reach GitHub.
 -- Either must hold the pinned commit.
 --
--- The library is built as position-independent code: the wasm build makes
--- a shared object of every Haskell package as well (Template Haskell loads
--- them), and opaque's links libsodium in.
+-- The library is built as position-independent code, and installed as a
+-- shared object too (@libsodium.so@, linked from the archive): the wasm
+-- build makes a shared object of every Haskell package as well, which
+-- Template Haskell's interpreter loads, and it loads a package's
+-- @extra-libraries@ only as shared objects. The program itself links the
+-- archive.
 module Maker.Toolchain.Sodium
   ( sodiumWasmReady
   , installSodiumWasm
@@ -57,6 +60,7 @@ sodiumWasmReady ctx =
       doesFileExist
       [ marker ctx
       , sysroot ctx </> "lib" </> "wasm32-wasi" </> "libsodium.a"
+      , sysroot ctx </> "lib" </> "wasm32-wasi" </> "libsodium.so"
       , sysroot ctx </> "include" </> "wasm32-wasi" </> "sodium.h"
       ]
 
@@ -110,6 +114,11 @@ installSodiumWasm ctx = do
     runLong ctx "configuring libsodium for wasm32-wasi" inSrc configure
     runLong ctx "building libsodium for wasm32-wasi" inSrc ["make", "-j" <> jobs]
     runLong ctx "installing libsodium into the wasm sysroot" inSrc ["make", "install"]
+    let lib = root' </> "lib" </> "wasm32-wasi"
+    run
+      ctx
+      "linking libsodium's shared object for the wasm sysroot"
+      [sdk </> "wasm32-wasi-clang", "-shared", "-Wl,--whole-archive", lib </> "libsodium.a", "-Wl,--no-whole-archive", "-o", lib </> "libsodium.so"]
     removePath src
     writeFile (marker ctx) ""
     installed <- sodiumWasmReady ctx

@@ -210,20 +210,25 @@ const url = (path) => `${origin}${path}`;
 const here = (page) => new URL(page.url()).pathname;
 console.log(`note: wiki-server at ${origin}, data in ${data}, administrator ${adminLogin}`);
 
-// The administrator's session, for what the walk asks the API itself and for
-// the browsers that start signed in: signed in as the application does,
-// with the header its requests carry.
-const signedIn = await fetch(url("/api/v1/session"), {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-  body: JSON.stringify({ login: adminLogin, password: adminPassword }),
-});
-assert.equal(signedIn.status, 200, "signing in through the API");
-const sessionToken = /wiki_session=([^;]+)/.exec(signedIn.headers.get("set-cookie") ?? "")?.[1];
-assert.ok(sessionToken, "no session cookie");
-const sessionCookie = `wiki_session=${sessionToken}`;
-
 const browser = await chromium.launch();
+
+// The administrator's session, for what the walk asks the API itself and for
+// the browsers that start signed in: signed in through the header's form in
+// a browser of its own, since a password signs in through OPAQUE (WP5.74a),
+// which the application runs and which never sends the password, and the
+// cookie taken from that browser.
+const signInContext = await browser.newContext({ serviceWorkers: "block" });
+const signInPage = await signInContext.newPage();
+await signInPage.goto(url("/"));
+await signInPage.locator("#app .sign-in-toggle").click();
+await signInPage.locator("#app .sign-in-form input[name=login]").fill(adminLogin);
+await signInPage.locator("#app .sign-in-form input[name=password]").fill(adminPassword);
+await signInPage.locator("#app .sign-in-form button[type=submit]").click();
+await signInPage.locator("#app .sign-out").waitFor({ timeout });
+const sessionToken = (await signInContext.cookies()).find((c) => c.name === "wiki_session")?.value;
+assert.ok(sessionToken, "no session cookie");
+await signInContext.close();
+const sessionCookie = `wiki_session=${sessionToken}`;
 
 async function eventually(check, what) {
   let last;

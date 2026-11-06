@@ -41,6 +41,7 @@ module Wiki.Server.Reset
   , requestReset
   , forgetReset
   , resetPassword
+  , resetUser
   , resetsPerHour
   )
 where
@@ -50,14 +51,16 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Database.Beam (all_, delete, filter_, insert, insertValues, isJust_, isNothing_, join_, lower_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (<=.), (==.), (>.), (||.))
 import Database.Beam qualified as Beam
 import Protolude
+import Wiki.Api.Opaque (PasswordRecord)
 import Wiki.Api.Security (ResetToken (..), VerificationToken (..), resetLifetime, verificationLifetime)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Email (..), Password, parseEmail)
-import Wiki.Server.Password (checkNewPassword, hashPassword, newToken, tokenHash)
+import Wiki.Core.User (Email (..), parseEmail)
+import Wiki.Server.Opaque (storedRecordOf)
+import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (deleteSessionsOf, insertResetToken, micro, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
+import Wiki.Server.Storage.Rows (deleteSessionsOf, insertResetToken, micro, noPasswordToSet, providerNames, resetsSince, storeRecord)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 
@@ -207,43 +210,54 @@ forgetReset :: Storage -> ResetToken -> IO ()
 forgetReset st token = writing st (runDelete (delete wikiDb.reset_tokens (\r -> r.token_hash ==. val_ (tokenHash token.text))))
 
 -- | Set a new password with a reset link: once, before it expires, and for
--- a user who is not disabled. Every session of the user ends, and every
--- other link mailed to them stops working. 'NotFound' for a link that does
--- not work; 'Invalid' for an invalid password (checked first, which uses
--- nothing up), and for a user who has no password to set because they sign
--- in with one of the server's providers (the link stays unused).
-resetPassword :: Storage -> UTCTime -> ResetToken -> Password -> IO (Either WikiError ())
-resetPassword st now token new = case checkNewPassword new of
-  Left why -> pure (Left (Invalid why))
-  Right password -> do
-    configured <- providerNames <$> readServerSettings st
-    let key = tokenHash token.text
-    found <- reading st (usable key)
-    case found of
-      Just _ -> do
-        -- Hashed before the writer is taken, as every password is.
-        phc <- hashPassword password
-        writingEither st $
-          usable key >>= \case
-            Just uid -> do
-              let u = UserId uid
-              noPasswordToSet configured u >>= \case
-                True -> pure (Left (Invalid noPasswordHere))
-                False -> do
-                  updatePasswordHash u phc
-                  deleteSessionsOf u
-                  runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
-                  pure (Right ())
-            Nothing -> pure (Left NotFound)
+-- a user who is not disabled. The password is the OPAQUE record the
+-- browser made for the link's user ("Wiki.Api.Opaque"). Every session of
+-- the user ends, and every other link mailed to them stops working.
+-- 'NotFound' for a link that does not work; 'Invalid' for a record that is
+-- not one, or not the link's user's (checked first, which uses nothing
+-- up), and for a user who has no password to set because they sign in
+-- with one of the server's providers (the link stays unused).
+resetPassword :: Storage -> UTCTime -> ResetToken -> PasswordRecord -> IO (Either WikiError ())
+resetPassword st now token new = do
+  configured <- providerNames <$> readServerSettings st
+  let key = tokenHash token.text
+  writingEither st $
+    usableReset now key >>= \case
+      Just uid -> do
+        let u = UserId uid
+        case storedRecordOf u new of
+          Left why -> pure (Left (Invalid why))
+          Right stored ->
+            noPasswordToSet configured u >>= \case
+              True -> pure (Left (Invalid noPasswordHere))
+              False -> do
+                storeRecord u stored
+                deleteSessionsOf u
+                runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
+                pure (Right ())
       Nothing -> pure (Left NotFound)
-  where
-    -- The user of a reset link that works now.
-    usable :: (Backend be) => Text -> Db be (Maybe Text)
-    usable key =
-      runSelectReturningOne . select $ do
-        r <- filter_ (\r -> r.token_hash ==. val_ key &&. isNothing_ r.used_at &&. r.expires_at >. val_ (micro now)) (all_ wikiDb.reset_tokens)
-        _ <- join_ wikiDb.users (\u -> u.id ==. r.user_id &&. u.disabled ==. val_ False)
-        pure r.user_id
+
+-- | The user a reset link sets a password for, if the link works now:
+-- whom a registration for it is made for. 'Invalid' for a user who has no
+-- password to set.
+resetUser :: Storage -> UTCTime -> ResetToken -> IO (Either WikiError UserId)
+resetUser st now token = do
+  configured <- providerNames <$> readServerSettings st
+  reading st $
+    usableReset now (tokenHash token.text) >>= \case
+      Nothing -> pure (Left NotFound)
+      Just uid ->
+        noPasswordToSet configured (UserId uid) <&> \case
+          True -> Left (Invalid noPasswordHere)
+          False -> Right (UserId uid)
+
+-- | The user of a reset link that works now, by the hash of its secret.
+usableReset :: (Backend be) => UTCTime -> Text -> Db be (Maybe Text)
+usableReset now key =
+  runSelectReturningOne . select $ do
+    r <- filter_ (\r -> r.token_hash ==. val_ key &&. isNothing_ r.used_at &&. r.expires_at >. val_ (micro now)) (all_ wikiDb.reset_tokens)
+    _ <- join_ wikiDb.users (\u -> u.id ==. r.user_id &&. u.disabled ==. val_ False)
+    pure r.user_id
 
 -- | Why a reset link sets no password for a user who signs in with a
 -- provider.

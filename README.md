@@ -1723,6 +1723,32 @@ to the demo, keeping `data/`.
   accounts, `--trust-network` took everyone at that address for the
   administrator. It is gone: a deployment that had it loses it on its next run,
   and the script refuses it, pointing at the console below.)
+- **Passwords never leave the browser.** Signing in with a password, and setting
+  one, goes through OPAQUE (RFC 9807, the `opaque` package of this repository):
+  the browser proves that it knows the password, and the server keeps a
+  registration record made from it, never the password nor a hash of it. Neither
+  the server nor anyone who reads the traffic learns the password, or anything
+  that lets them test a guess of it without the server's secret. A thief of the
+  database and that secret together still pays an Argon2id (128 MiB, four passes,
+  about half a second in a browser) for every guess. The browser runs Argon2id
+  when you sign in or set a password, so those take a moment longer than other
+  clicks. The rules for a new password (eight characters or more) are checked by
+  the browser, since the server never sees it. The session key OPAQUE agrees on
+  does not encrypt the traffic: HTTPS (or Tailscale's WireGuard) does.
+
+  An account made before this has an argon2id hash and no record. Its sign-in
+  through OPAQUE fails as a wrong password's does, and the browser then sends
+  the password once the old way; the server checks it against the hash, signs
+  the user in, and the browser registers the record at once, after which the
+  hash is deleted. So while accounts from before remain, two things cross the
+  wire: such an account's correct password, once, at its first sign-in; and a
+  wrong password typed at any login, since the browser cannot tell a wrong
+  password from an old account (the old form sent every password it was given,
+  so this is less, not more). The administration's Overview counts the accounts
+  left ("Old passwords"); at none the old way is off, and the browser sends no
+  password anywhere. A change that needs the current password (a second factor,
+  a passkey, the e-mail address, the password itself) proves it the same way,
+  through OPAQUE, before the request is sent.
 - **The first administrator.** There is no administrator account in the
   configuration: make one on the machine itself, with the server running or not.
   The password is asked for (twice, not shown), or read as the first line of

@@ -1,0 +1,9 @@
+{
+  "attempt": "Zm9yIHRoZSBvbGQgd2F5",
+  "fallback": false,
+  "ke2": "a2Uy",
+  "stretch": {
+    "memLimit": 67108864,
+    "opsLimit": 2
+  }
+}

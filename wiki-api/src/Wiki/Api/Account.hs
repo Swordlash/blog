@@ -68,9 +68,17 @@ import Wiki.Core.User (Email, Password, User)
 -- | 'Credentials': what a user signs in with, @POST \/api\/v1\/session@.
 -- The login is the text typed: sign-in looks it up, trimmed and in any
 -- case, and applies no rule to it.
+--
+-- Since OPAQUE (WP5.74a, "Wiki.Api.Opaque") this is the sign-in of an
+-- account from before it alone, which still has a password hash: the
+-- browser sends it only after the OPAQUE sign-in with the same password
+-- failed, with that attempt's id ('attempt'), so that the one try is
+-- counted once against the limit on failed sign-ins. For every other
+-- login the answer is the one a wrong password gets.
 data Credentials = Credentials
   { login :: Text
   , password :: Password
+  , attempt :: Maybe Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

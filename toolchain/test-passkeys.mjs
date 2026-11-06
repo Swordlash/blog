@@ -71,17 +71,24 @@ await new Promise((ready, fail) => {
 });
 const origin = `http://localhost:${port}`;
 
-const signedIn = await fetch(`${origin}/api/v1/session`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-  body: JSON.stringify({ login: "ada", password }),
-});
-assert.equal(signedIn.status, 200, "signing in through the API");
-const token = /wiki_session=([^;]+)/.exec(signedIn.headers.get("set-cookie") ?? "")?.[1];
-const api = (path) => fetch(`${origin}/api/v1/${path}`, { headers: { Cookie: `wiki_session=${token}`, "X-Wiki-Request": "1" } });
-
 const failures = [];
 const browser = await chromium.launch();
+// Ada's session, signed in through the header's form in a browser of its
+// own: a password signs in through OPAQUE (WP5.74a), which the application
+// runs and which never sends the password, and the cookie is taken from it.
+const signInContext = await browser.newContext({ serviceWorkers: "block" });
+const signInPage = await signInContext.newPage();
+await signInPage.goto(`${origin}/`);
+await signInPage.locator("#app .sign-in-toggle").click();
+await signInPage.locator("#app .sign-in-form input[name=login]").fill("ada");
+await signInPage.locator("#app .sign-in-form input[name=password]").fill(password);
+await signInPage.locator("#app .sign-in-form button[type=submit]").click();
+await signInPage.locator("#app .sign-out").waitFor({ timeout });
+const token = (await signInContext.cookies()).find((c) => c.name === "wiki_session")?.value;
+assert.ok(token, "no session cookie");
+await signInContext.close();
+const api = (path) => fetch(`${origin}/api/v1/${path}`, { headers: { Cookie: `wiki_session=${token}`, "X-Wiki-Request": "1" } });
+
 try {
   const context = await browser.newContext({ serviceWorkers: "block" });
   await context.addCookies([{ name: "wiki_session", value: token, url: origin }]);

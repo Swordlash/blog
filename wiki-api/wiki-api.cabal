@@ -73,6 +73,7 @@ library
       Wiki.Api.Info
       Wiki.Api.Links
       Wiki.Api.Notifications
+      Wiki.Api.Opaque
       Wiki.Api.Security
       Wiki.Api.ServerSettings
       Wiki.Api.Stars
@@ -86,12 +87,14 @@ library
   build-depends:
       aeson,
       base,
+      base64-bytestring,
       bytestring,
       containers,
       directory,
       file-embed,
       filepath,
       http-api-data,
+      opaque,
       protolude,
       servant >= 0.20.3 && < 0.21,
       servant-multipart-api >= 0.13 && < 0.14,

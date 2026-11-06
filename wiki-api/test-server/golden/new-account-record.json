@@ -1,0 +1,13 @@
+{
+  "displayName": "Ada",
+  "email": "ada@example.org",
+  "login": "ada",
+  "password": {
+    "credential": "6f1c1f2e-3b5a-4c4e-9a8e-2d6b0f6a7c11",
+    "record": "cmVjb3Jk",
+    "stretch": {
+      "memLimit": 67108864,
+      "opsLimit": 2
+    }
+  }
+}

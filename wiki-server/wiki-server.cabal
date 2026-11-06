@@ -109,6 +109,7 @@ library
         Wiki.Server.Metrics
         Wiki.Server.Notifier
         Wiki.Server.Oidc
+        Wiki.Server.Opaque
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Presence
@@ -171,6 +172,7 @@ library
         mime-mail,
         network,
         one-time-password ==3.0.1.0,
+        opaque,
         optparse-applicative,
         pandoc,
         pandoc-types,
@@ -376,6 +378,7 @@ test-suite wiki-server-test
         http-types,
         ki,
         network,
+        opaque,
         optparse-applicative,
         pandoc-types,
         process,

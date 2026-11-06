@@ -228,7 +228,7 @@ personalSpaces backing = describe "a personal space" $ do
     void (pageAt r ["users", "alice", "notes"] ["n1"])
     -- Neither someone not signed in nor a user with no grant reads them,
     -- while a public space of the same archive is read.
-    _ <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= \x -> jsonAs @Account 201 x
+    _ <- createUserVia r (admin r) [] NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= \x -> jsonAs @Account 201 x
     token <- signInAs r "bea" "bea's long password"
     notesSpace <- spaceAt r ["users", "alice", "notes"]
     let status headers address = (\x -> x.status) <$> getUrlWith r (r.public <> "/" <> address) headers
@@ -257,7 +257,7 @@ personalSpaces backing = describe "a personal space" $ do
     notesSpace <- spaceAt r ["users", "alice", "notes"]
     (notesSpace.sealed, notesSpace.public) `shouldBe` (True, False)
     void (pageAt r ["users", "alice", "notes"] ["n1"])
-    _ <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= jsonAs @Account 201
+    _ <- createUserVia r (admin r) [] NewAccount {login = "bea", displayName = "Bea", password = Password "bea's long password", email = Nothing} >>= jsonAs @Account 201
     token <- signInAs r "bea" "bea's long password"
     let status headers address = (\x -> x.status) <$> getUrlWith r (r.public <> "/" <> address) headers
     for_ [[], [cookie token]] $ \headers -> do
@@ -472,7 +472,7 @@ discussions backing = describe "a page's comments" $ do
         , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
         ]
       makeAlice r = do
-        made :: Account <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "alice", displayName = "Alice Here", password = Password "alice's password", email = Nothing} >>= jsonAs 201
+        made :: Account <- createUserVia r (admin r) [] NewAccount {login = "alice", displayName = "Alice Here", password = Password "alice's password", email = Nothing} >>= jsonAs 201
         pure made.user.id
 
   it "come with a page the import makes: authors matched by login, anyone else kept by name, ids and times kept" $ withRunning backing $ \r -> do

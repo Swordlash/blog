@@ -11,6 +11,11 @@
 -- otherwise reset). Nothing is kept across a restart, nor shared between
 -- servers: whoever restarts a server to guess faster already owns it.
 --
+-- A sign-in through OPAQUE counts as a failure when it starts, and the
+-- failure is taken back when it finishes ('succeededAfter'): the server
+-- only learns at the last message whether the password was right, and a
+-- guesser who sees a wrong answer need not send it.
+--
 -- A sign-in with a passkey alone names no login until the passkey is
 -- found ('addressVerdict', 'failedAt'): a failure before that counts
 -- against the address only.
@@ -29,6 +34,7 @@ module Wiki.Server.Limiter
   , failed
   , failedAt
   , succeeded
+  , succeededAfter
   )
 where
 
@@ -120,6 +126,21 @@ failed l now login address = atomicModifyIORef' l.failures $ \m ->
 -- | Clear a login's failures from an address, once it has signed in.
 succeeded :: Limiter -> Text -> Text -> IO ()
 succeeded l login address = atomicModifyIORef' l.failures (\m -> (Map.delete (LoginAt (normal login) address) m, ()))
+
+-- | Clear a login's failures from an address once it has signed in, and
+-- take back the address's failure counted at this time: a sign-in through
+-- OPAQUE ("Wiki.Server.Opaque") is counted as a failure when it starts,
+-- because the server cannot tell a wrong password until the last message,
+-- which a guesser need not send. A sign-in that finishes was no failure.
+succeededAfter :: Limiter -> UTCTime -> Text -> Text -> IO ()
+succeededAfter l at login address = atomicModifyIORef' l.failures $ \m ->
+  let refund = \case
+        [] -> Nothing
+        ts -> case break (== at) ts of
+          (before, _ : after) -> nonEmpty' (before <> after)
+          _ -> Just ts
+      nonEmpty' ts = if null ts then Nothing else Just ts
+   in (Map.update refund (Address address) (Map.delete (LoginAt (normal login) address) m), ())
 
 -- | Keep only the failures still in the window, and drop the keys left
 -- with none.

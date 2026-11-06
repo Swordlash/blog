@@ -1,0 +1,8 @@
+{
+  "credential": "6f1c1f2e-3b5a-4c4e-9a8e-2d6b0f6a7c11",
+  "response": "cmVzcG9uc2U",
+  "stretch": {
+    "memLimit": 67108864,
+    "opsLimit": 2
+  }
+}

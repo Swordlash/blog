@@ -22,10 +22,11 @@ import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), InvitationsApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..), NewAccount (..))
+import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Admin (Invitation (..), Invitations (..), Invited (..), NewInvitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.Opaque (NewAccountRecord (..), RegistrationFor (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
@@ -33,7 +34,7 @@ import Wiki.Core.Id (InvitationId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Storage (withStorageAside, writing)
 import Wiki.Server.Storage.Rows (micro)
@@ -74,9 +75,10 @@ spaceNames r hs = map (\s -> s.name) <$> (getUrlWith r (onPublic r links.spaces.
 -- | Make oneself an account: the reply.
 register :: Running -> [Header] -> Text -> Text -> IO Reply
 register r hs login password =
-  send r methodPost (onPublic r links.register) ((hContentType, "application/json") : hs) (jsonBody NewAccount {login, displayName = "", password = Password password, email = Nothing})
+  withRecord r (onPublic r) hs ForSignUp password $ \record ->
+    send r methodPost (onPublic r links.register) ((hContentType, "application/json") : hs) (jsonBody NewAccountRecord {login, displayName = "", password = record, email = Nothing})
 
-jsonBody :: NewAccount -> LByteString
+jsonBody :: NewAccountRecord -> LByteString
 jsonBody = encode
 
 -- | The session cookie a reply sets.
@@ -89,7 +91,8 @@ inviteAs r email = sendJson r methodPost (onAdmin r links.admin.invite) NewInvit
 
 accept :: Running -> Text -> Text -> Text -> IO Reply
 accept r token login password =
-  send r methodPost (onPublic r (links.invitations.accept (InvitationToken token))) [(hContentType, "application/json")] (jsonBody NewAccount {login, displayName = "Invited", password = Password password, email = Nothing})
+  withRecord r (onPublic r) [] (ForInvitation (InvitationToken token)) password $ \record ->
+    send r methodPost (onPublic r (links.invitations.accept (InvitationToken token))) [(hContentType, "application/json")] (jsonBody NewAccountRecord {login, displayName = "Invited", password = record, email = Nothing})
 
 details :: Running -> Text -> IO Reply
 details r token = getUrl r (onPublic r (links.invitations.details (InvitationToken token)))
@@ -124,12 +127,14 @@ open backing = describe "an open wiki" $ do
     made <- send r methodPost (onPublic r links.spaces.create) [(hContentType, "application/json"), c] "{\"parent\":null,\"name\":\"Mine\"}"
     made.status `shouldBe` 201
 
-  it "refuses a login that is taken, whatever its case, and a password too short" $ withDemoRunning backing identity $ \r -> do
+  -- A password too short is refused by the application: the server never
+  -- sees the password (Wiki.Api.Opaque), and Test.Backend.Http checks the
+  -- application's refusal.
+  it "refuses a login that is taken, whatever its case" $ withDemoRunning backing identity $ \r -> do
     (register r [] "EDITOR" "a long password" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
-    (register r [] "someone" "short" >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
 
   it "refuses an account made from another site's page, without the application's header" $ withDemoRunning backing identity $ \r -> do
-    reply <- sendBare r methodPost (onPublic r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "csrf", displayName = "", password = Password "a long password", email = Nothing})
+    reply <- sendBare r methodPost (onPublic r links.register) [(hContentType, "application/json")] (jsonBody NewAccountRecord {login = "csrf", displayName = "", password = noRecord, email = Nothing})
     reply.status `shouldBe` 403
 
   it "limits how many accounts are tried from one address" $ withDemoRunning backing identity $ \r -> do
@@ -139,7 +144,7 @@ open backing = describe "an open wiki" $ do
     header "Retry-After" reply `shouldSatisfy` isJust
 
   it "is refused to the admin listener, where nobody signs in" $ withDemoRunning backing identity $ \r -> do
-    reply <- send r methodPost (onAdmin r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "x", displayName = "", password = Password "a long password", email = Nothing})
+    reply <- send r methodPost (onAdmin r links.register) [(hContentType, "application/json")] (jsonBody NewAccountRecord {login = "x", displayName = "", password = noRecord, email = Nothing})
     reply.status `shouldBe` 400
 
 closed :: Backing -> Spec

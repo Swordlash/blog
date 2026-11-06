@@ -266,6 +266,7 @@ quietServer =
     , connections = 1
     , errors = []
     , guideInstallable = False
+    , legacyPasswords = 0
     }
 
 -- | The shell over the backend over HTTP, through the page's fetch, at a

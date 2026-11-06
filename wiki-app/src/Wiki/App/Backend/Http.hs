@@ -86,6 +86,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
+import Crypto.OPAQUE qualified as O
 import Data.Aeson (eitherDecode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -101,7 +102,7 @@ import Servant.Client.Generic (AsClientT)
 import Servant.Multipart.API (Mem)
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AssistantApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
@@ -113,7 +114,8 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), bytesOf, messageOf, opaqueConfig)
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Types
@@ -139,7 +141,7 @@ import Wiki.App.Security (MonadSecurity (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.User (Standing (..), User)
+import Wiki.Core.User (Password (..), Standing (..), User, checkNewPassword)
 import Wiki.Core.Version (VersionsQuery (..), versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
@@ -163,6 +165,11 @@ data HttpEnv = HttpEnv
   -- ^ Whether page content is still cached: true until the reader first
   -- goes to another route ('endPreload'). Shared by every copy of the
   -- environment, such as the one 'atOnce' makes.
+  , moving :: IORef (Maybe Password)
+  -- ^ The password of an account from before OPAQUE that has just signed
+  -- in the old way and waits for its second factor: once the second
+  -- factor is given, its OPAQUE record is registered with it (see
+  -- "Passwords through OPAQUE"), and it is forgotten.
   }
 
 -- | A backend over this transport, with an empty cache.
@@ -178,7 +185,8 @@ newHttpEnvWith transport start = liftIO $ do
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
   feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
   preloading <- newIORef True
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading}
+  moving <- newIORef Nothing
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, moving}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -528,8 +536,14 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
       (withUserPage q)
   setAdministrator u administrator = write_ (endpoints.admin.setAdministrator u AdministratorFlag {administrator})
   setCreateSpaces u createSpaces = write_ (endpoints.admin.setCreateSpaces u CreateSpacesFlag {createSpaces})
-  createUser new = write (endpoints.admin.createUser new)
-  setPassword u password = write (endpoints.admin.setPassword u NewPassword {password})
+  createUser new =
+    recordFor ForNewUser new.password >>= \case
+      Left e -> pure (Left (signInWikiError e))
+      Right record -> write (endpoints.admin.createUser (accountWith record new))
+  setPassword u password =
+    recordFor (ForUser u) password >>= \case
+      Left e -> pure (Left (signInWikiError e))
+      Right record -> write (endpoints.admin.setPassword u record)
 
   -- Sending a mail changes nothing in the cache.
   sendPasswordLink u = send_ (endpoints.admin.sendPasswordLink u)
@@ -709,7 +723,7 @@ instance (MonadIO m) => MonadLive (HttpWiki m) where
 -- pages and responses the service worker stored for reading offline
 -- ("Wiki.App.Offline"), which were read as the user who signed out.
 instance (MonadIO m) => MonadAccount (HttpWiki m) where
-  signIn login password = signingIn (getResponse <$> endpoints.signIn Credentials {login, password})
+  signIn login password = passwordSignIn login password >>= started
   signOut =
     send (getResponse <$> endpoints.signOut) >>= \case
       Left e -> pure (Left e)
@@ -719,12 +733,18 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
         forgetReads
         pure (Right s)
   sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
-  register new = signingIn (getResponse <$> endpoints.register new)
+  register new =
+    recordFor ForSignUp new.password >>= \case
+      Left e -> pure (Left e)
+      Right record -> signingIn (getResponse <$> endpoints.register (accountWith record new))
 
   -- Cached, so that the page of an invitation's link that the server
   -- prerendered is also the program's first render.
   invitationFor token = cached (\c -> Map.lookup token c.invitationAt) (endpoints.invitations.details token) (withInvitationAt token)
-  acceptInvitation token new = signingIn (getResponse <$> endpoints.invitations.accept token (new :: NewAccount))
+  acceptInvitation token new =
+    recordFor (ForInvitation token) new.password >>= \case
+      Left e -> pure (Left e)
+      Right record -> signingIn (getResponse <$> endpoints.invitations.accept token (accountWith record new))
 
   -- Fetched afresh each time they are shown: they change through a round
   -- trip to a provider's pages, which this program does not see.
@@ -733,26 +753,35 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
 
   -- The user stays the same, and so does what they may read: nothing
   -- cached is removed.
-  changePassword change = withPassword (endpoints.account.changePassword change)
+  changePassword change =
+    proven change.current >>= \case
+      Left e -> pure (Left e)
+      Right current ->
+        recordFor ForOwnPassword change.new >>= \case
+          Left e -> pure (Left e)
+          Right password -> withPassword (endpoints.account.changePassword PasswordRecordChange {current, password})
 
   -- The end of a sign-in, like signing in. The cookie of the sign-in
   -- waiting for its code is sent with it, since the browser sends every
   -- cookie of the wiki's.
-  confirmSecondFactor code = signingIn (getResponse <$> endpoints.secondFactor OneTimeCode {code})
+  confirmSecondFactor code = signingIn (getResponse <$> endpoints.secondFactor OneTimeCode {code}) >>= movedAfter
 
   -- A passkey's sign-in, alone or as the second step, in two requests:
   -- the challenge, and the browser's answer, which signs in.
   beginPasskeySignIn = withPassword endpoints.beginPasskeySignIn
   finishPasskeySignIn used = signingIn (getResponse <$> endpoints.finishPasskeySignIn used)
   beginSecondFactorPasskey = withPassword endpoints.beginSecondFactorPasskey
-  finishSecondFactorPasskey used = signingIn (getResponse <$> endpoints.finishSecondFactorPasskey used)
+  finishSecondFactorPasskey used = signingIn (getResponse <$> endpoints.finishSecondFactorPasskey used) >>= movedAfter
 
   -- None of these change who is asking, or anything cached.
   requestPasswordReset login =
     call (endpoints.passwordReset.request ResetRequest {login}) <&> \answered -> case refusal answered of
       Just r | statusCode r.responseStatusCode == 429 -> Left (TooManyAttempts (tooMany r))
       _ -> first SignInFailed (void (answer answered))
-  resetPassword token password = send_ (endpoints.passwordReset.reset token NewPasswordByMail {password})
+  resetPassword token password =
+    recordFor (ForReset token) password >>= \case
+      Left e -> pure (Left (signInWikiError e))
+      Right record -> send_ (endpoints.passwordReset.reset token record)
   verifyEmail token = send_ (endpoints.emailVerification token)
 
 -- | Account security, over the API's @account\/…@ endpoints. Nothing is
@@ -764,11 +793,11 @@ instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   endOwnSession ref = send (endpoints.account.endSession ref)
   endOtherSessions = send endpoints.account.endOtherSessions
   secondFactorState = send endpoints.account.secondFactorState
-  enrolTotp password = withPassword (endpoints.account.enrolTotp CurrentPassword {password})
+  enrolTotp password = proven password >>= either (pure . Left) (\p -> withPassword (endpoints.account.enrolTotp CurrentPassword {password = p}))
   confirmTotp code = withPassword (endpoints.account.confirmTotp OneTimeCode {code})
   removeOwnSecondFactor code = withPassword (endpoints.account.removeSecondFactor OneTimeCode {code})
   ownEmail = send endpoints.account.email
-  setOwnEmail email password = withPassword (endpoints.account.setEmail EmailChange {email, password})
+  setOwnEmail email password = proven password >>= either (pure . Left) (\p -> withPassword (endpoints.account.setEmail EmailChange {email, password = p}))
 
 -- | The assistant's vault, over the API's @assistant\/…@ endpoints, and
 -- the account's passkeys, over @account\/passkeys\/…@ ("Wiki.Api.Vault"). Nothing is cached: the vault is fetched
@@ -786,7 +815,7 @@ instance (MonadIO m) => MonadVault (HttpWiki m) where
   storeVault base v = send (endpoints.assistant.storeVault base v)
   deleteVault = send_ endpoints.assistant.deleteVault
   listPasskeys = send endpoints.account.passkeys
-  beginRegistration password = withPassword (endpoints.account.beginRegistration CurrentPassword {password})
+  beginRegistration password = proven password >>= either (pure . Left) (\p -> withPassword (endpoints.account.beginRegistration CurrentPassword {password = p}))
   finishRegistration r = send (endpoints.account.finishRegistration r)
   beginAssertion = send endpoints.assistant.beginAssertion
   finishAssertion r = send (endpoints.assistant.finishAssertion r)
@@ -851,3 +880,148 @@ previewImport zipped = send (withBoundary endpoints.archive.importPreview Archiv
 -- result is what to show. It is a write, so it empties the cache.
 applyImport :: (MonadIO m) => ByteString -> ImportChoices -> HttpWiki m (Either WikiError ImportSummary)
 applyImport zipped choices = write (withBoundary endpoints.archive.importApply ImportApply {archive = toS zipped, choices})
+
+--------------------------------------------------------------------------------
+-- Passwords through OPAQUE
+
+-- $opaque
+-- = Passwords through OPAQUE
+--
+-- The backend speaks OPAQUE ("Wiki.Api.Opaque", WP5.74a of docs/PLAN.md)
+-- for every password: the application gives it a password, as it gives the
+-- demo's backend one, and the password never leaves this program. Signing
+-- in runs the client's side of a login ('passwordSignIn'); setting a
+-- password registers a record ('recordFor'); a change that needs the
+-- current password proves it first ('proven').
+--
+-- An account from before OPAQUE has no record, and its OPAQUE sign-in fails
+-- exactly as a wrong password's does. So when the OPAQUE sign-in fails, the
+-- backend tries the old sign-in with the same password, once; the server
+-- answers it only for such an account. When that signs in, the backend
+-- registers the account's record at once (after the second factor, if
+-- there is one: 'moving'), and from then on the account signs in through
+-- OPAQUE alone.
+
+-- | Sign in with a password through OPAQUE, and, when that fails, the old
+-- way, which moves an account from before OPAQUE to OPAQUE.
+passwordSignIn :: (MonadIO m) => Text -> Password -> HttpWiki m (Either SignInError SessionInfo)
+passwordSignIn login password =
+  liftIO (O.clientStart (passwordBytes password)) >>= \case
+    Left _ -> oldWay Nothing
+    Right (st, ke1) ->
+      withPassword (endpoints.startPasswordSignIn LoginStart {login, ke1 = messageOf (O.encode ke1)}) >>= \case
+        Left e -> pure (Left e)
+        Right challenge -> case finished st challenge of
+          Just ke3 -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3})
+          Nothing
+            | challenge.fallback -> oldWay (Just challenge.attempt)
+            | otherwise -> pure (Left WrongCredentials)
+  where
+    oldWay tried =
+      withPassword (getResponse <$> endpoints.signIn Credentials {login, password, attempt = tried}) >>= \case
+        Right info -> do
+          -- Signed in the old way: the record is registered now, with the
+          -- proof of the password the sign-in left on the session. A
+          -- failure leaves the account as it was, to move at its next
+          -- sign-in.
+          void (moveToOpaque password)
+          pure (Right info)
+        Left SecondFactorNeeded -> do
+          HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (const (Just password, ()))))
+          pure (Left SecondFactorNeeded)
+        Left e -> pure (Left e)
+
+-- | The end of a sign-in that started the old way and needed a second
+-- factor: the account's record is registered now that it is signed in.
+movedAfter :: (MonadIO m) => Either SignInError Session -> HttpWiki m (Either SignInError Session)
+movedAfter result = do
+  waiting <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (\p -> (Nothing, p))))
+  for_ (rightToMaybe result) (const (for_ waiting moveToOpaque))
+  pure result
+
+-- | Register the signed-in user's OPAQUE record, in place of their password
+-- from before OPAQUE, which the server then deletes.
+moveToOpaque :: (MonadIO m) => Password -> HttpWiki m (Either SignInError SignInMethods)
+moveToOpaque password =
+  recordFor ForOwnPassword password >>= \case
+    Left e -> pure (Left e)
+    Right record -> withPassword (endpoints.account.changePassword PasswordRecordChange {current = Nothing, password = record})
+
+-- | A signed-in session as the backend keeps it, started over.
+started :: (MonadIO m) => Either SignInError SessionInfo -> HttpWiki m (Either SignInError Session)
+started = \case
+  Left e -> pure (Left e)
+  Right info -> do
+    let s = fromSessionInfo info
+    startOver s
+    pure (Right s)
+
+-- | The client's last message, if the password is right: 'Nothing' for a
+-- wrong password, and for an account without a record.
+finished :: O.ClientLoginState -> LoginChallenge -> Maybe Message
+finished st challenge = do
+  bytes <- bytesOf challenge.ke2
+  ke2 <- rightToMaybe (O.decode bytes)
+  (ke3, _, _) <- rightToMaybe (O.clientFinish (opaqueConfig challenge.stretch) st ke2 O.defaultIdentities)
+  pure (messageOf (O.encode ke3))
+
+-- | A record of a new password, for what the server's challenge is asked
+-- for. The password is checked by the rules here, since the server cannot
+-- check what it never sees; after the server has answered, so that a
+-- request the server refuses (someone who may not set it) is refused as
+-- the server says, whatever the password.
+recordFor :: (MonadIO m) => RegistrationFor -> Password -> HttpWiki m (Either SignInError PasswordRecord)
+recordFor purpose password =
+  liftIO (O.registrationRequest (passwordBytes password)) >>= \case
+    Left _ -> pure (Left (SignInFailed (Invalid "This password cannot be used: choose another.")))
+    Right (st, request) ->
+      withPassword (endpoints.passwordRegistration RegistrationStart {for = purpose, request = messageOf (O.encode request)}) >>= \case
+        Left e -> pure (Left e)
+        Right challenge -> case checkNewPassword password of
+          Left why -> pure (Left (SignInFailed (Invalid why)))
+          Right _ -> do
+            made <- liftIO $ case bytesOf challenge.response >>= rightToMaybe . O.decode of
+              Nothing -> pure Nothing
+              Just response -> rightToMaybe <$> O.finalizeRegistration (opaqueConfig challenge.stretch) st response O.defaultIdentities
+            pure $ case made of
+              Nothing -> Left (SignInFailed (Invalid "The server's answer to the new password was not valid: try again."))
+              Just (record, _) -> Right PasswordRecord {credential = challenge.credential, record = messageOf (O.encode record), stretch = challenge.stretch}
+
+-- | The current password for a change that needs it, as the request is to
+-- carry it: proved through OPAQUE, which leaves a proof on the session and
+-- sends nothing ('Nothing'); or, for an account from before OPAQUE, whose
+-- proof fails as a wrong password's does, the password itself.
+proven :: (MonadIO m) => Maybe Password -> HttpWiki m (Either SignInError (Maybe Password))
+proven = \case
+  Nothing -> pure (Right Nothing)
+  Just password ->
+    liftIO (O.clientStart (passwordBytes password)) >>= \case
+      Left _ -> pure (Right (Just password))
+      Right (st, ke1) ->
+        withPassword (endpoints.account.startPasswordProof ProofStart {ke1 = messageOf (O.encode ke1)}) >>= \case
+          Left e -> pure (Left e)
+          Right challenge -> case finished st challenge of
+            Nothing
+              | challenge.fallback -> pure (Right (Just password))
+              | otherwise -> pure (Left WrongCredentials)
+            Just ke3 ->
+              withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) <&> \case
+                Right _ -> Right Nothing
+                Left e -> Left e
+
+-- | An account to create, as it travels: its record instead of its
+-- password.
+accountWith :: PasswordRecord -> NewAccount -> NewAccountRecord
+accountWith record new = NewAccountRecord {login = new.login, displayName = new.displayName, password = record, email = new.email}
+
+-- | A password's bytes, as OPAQUE takes them: its UTF-8.
+passwordBytes :: Password -> ByteString
+passwordBytes (Password p) = encodeUtf8 p
+
+-- | A 'SignInError' where only a 'WikiError' can be returned.
+signInWikiError :: SignInError -> WikiError
+signInWikiError = \case
+  SignInFailed e -> e
+  WrongCredentials -> Forbidden
+  TooManyAttempts why -> Invalid why
+  SecondFactorNeeded -> Forbidden

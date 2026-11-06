@@ -406,6 +406,7 @@ apiOver providers seed = do
         , connections = 0
         , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
         , guideInstallable = False
+        , legacyPasswords = 0
         }
     -- What the server says is new: two entries, the first with a listing
     -- (an island) and a spoiler.

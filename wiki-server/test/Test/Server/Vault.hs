@@ -25,7 +25,7 @@ import Test.Hspec
 import Test.Server.Fixture
 import Test.Server.WebAuthn (Authenticator (..), assertion, assertionFlagged, authenticator, registration)
 import Wiki.Api (AccountApi (..), AdminApi (..), AssistantApi (..), WikiApi (..))
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
@@ -52,7 +52,7 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     (\x -> x.status) <$> send r methodPost (r.public <> "/" <> links.account.beginRegistration) jsonHeader (encode CurrentPassword {password = Just (Password "editor's password")}) `shouldReturn` 401
 
   it "makes a passkey for the signed-in user, and checks its use" $ withSignedIn backing $ \r editor _ -> do
-    options :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    options :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     (options.rpId, options.userName, options.rpName) `shouldBe` ("127.0.0.1", "editor", "Wiki")
     info :: PasskeyInfo <- register r editor options passkey r.public >>= jsonAs 200
     (info.id, info.unlocks) `shouldBe` (CredentialId (toBase64Url passkey.credentialId), False)
@@ -60,18 +60,18 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     used :: PasskeyInfo <- use r editor passkey 1 r.public >>= jsonAs 200
     used.lastUsedAt `shouldSatisfy` isJust
     -- The same passkey again is no new one.
-    again :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    again :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     again.exclude `shouldBe` [info.id]
     (register r editor again passkey r.public >>= jsonAs 409) `shouldReturn` Conflict "This passkey is registered already."
 
   it "refuses a passkey made on another site, or for another challenge, and a challenge used twice" $ withSignedIn backing $ \r editor _ -> do
-    options :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    options :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     refused :: ApiError <- register r editor options passkey "https://evil.example" >>= jsonAs 400
     refused `shouldSatisfy` says "made on another site"
     -- Its challenge was used up by that answer.
     stale :: ApiError <- register r editor options passkey r.public >>= jsonAs 400
     stale `shouldSatisfy` says "No passkey is being made"
-    fresh :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    fresh :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     other :: ApiError <- register r editor (withChallenge (toBase64Url "not the challenge the server gave") fresh) passkey r.public >>= jsonAs 400
     other `shouldSatisfy` says "another challenge"
     (call r editor methodGet links.account.passkeys none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
@@ -137,14 +137,14 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     let tooLong = T.replicate (256 * 1024 + 1) "a"
     wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" tooLong)])) >>= jsonAs 400
     wrapped `shouldSatisfy` says "too long"
-    _ :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    _ :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     let other = authenticator "another passkey"
         answer = RegistrationResponse {id = CredentialId (toBase64Url other.credentialId), clientDataJSON = "e30", attestationObject = T.replicate (64 * 1024 + 1) "a", name = Nothing}
     long :: ApiError <- call r editor methodPut links.account.finishRegistration (Just answer) >>= jsonAs 400
     long `shouldSatisfy` says "longer than a passkey's answer"
     -- A credential id longer than WebAuthn allows, which the server would
     -- otherwise store.
-    fresh :: RegistrationOptions <- call r editor methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
+    fresh :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     longId :: ApiError <- register r editor fresh (authenticator (BS.replicate 1024 7)) r.public >>= jsonAs 400
     longId `shouldSatisfy` says "longer than a passkey's"
     map (\p -> p.id) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [info.id]
@@ -183,6 +183,13 @@ withChallenge challenge o = RegistrationOptions {challenge, rpId = o.rpId, rpNam
 editorsPassword :: CurrentPassword
 editorsPassword = CurrentPassword {password = Just (Password "editor's password")}
 
+-- | Prove the session's password (the editor's) again, as the
+-- application does before a change that needs it (Wiki.Api.Opaque).
+proved :: (HasCallStack) => Running -> [Header] -> IO ()
+proved r session = do
+  reply <- provePassword r (\l -> r.public <> "/" <> l) session "editor's password"
+  reply.status `shouldBe` 204
+
 -- | No body.
 none :: Maybe ()
 none = Nothing
@@ -208,6 +215,7 @@ register r session options a origin = do
 -- | Make a passkey, which the server takes.
 registerNew :: (HasCallStack) => Running -> [Header] -> Authenticator -> IO PasskeyInfo
 registerNew r session a = do
+  proved r session
   options <- call r session methodPost links.account.beginRegistration (Just editorsPassword) >>= jsonAs 200
   register r session options a r.public >>= jsonAs 200
 
@@ -285,6 +293,7 @@ signing backing = describe "signing in with a passkey" $ do
 
   it "completes a password's sign-in in place of the second factor's code" $ withSignedIn backing $ \r editor _ -> do
     _ <- registerNew r editor passkey
+    proved r editor
     enrolment :: TotpEnrolment <- call r editor methodPost links.account.enrolTotp (Just CurrentPassword {password = Just (Password "editor's password")}) >>= jsonAs 200
     secret <- maybe (panic "not base32") pure (secretFromText enrolment.secret)
     now <- getCurrentTime
@@ -292,7 +301,7 @@ signing backing = describe "signing in with a passkey" $ do
     -- A passkey alone needs no code.
     (\x -> x.status) <$> signInWith r passkey 0x05 1 r.public (Just "user-editor") `shouldReturn` 200
     -- The password wants the code, or a passkey.
-    half <- sendJson r methodPost (r.public <> "/" <> links.signIn) Credentials {login = "editor", password = Password "editor's password"}
+    half <- passwordSignIn r (\l -> r.public <> "/" <> l) [] "editor" "editor's password"
     jsonAs 401 half `shouldReturn` SecondFactorRequired
     held <- maybe (panic "no pending cookie") pure (pendingOf half)
     let halfway = [("Cookie", "wiki_pending=" <> encodeUtf8 held)]

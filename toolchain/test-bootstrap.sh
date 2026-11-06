@@ -129,7 +129,7 @@ for arg in "$@"; do
     --includedir=*) includedir=${arg#*=} ;;
   esac
 done
-printf 'all:\n\t@true\ninstall:\n\tmkdir -p %s %s\n\ttouch %s/libsodium.a %s/sodium.h\n' "$libdir" "$includedir" "$libdir" "$includedir" >Makefile
+printf 'all:\n\t@true\ninstall:\n\tmkdir -p %s %s\n\ttouch %s/libsodium.a %s/libsodium.so %s/sodium.h\n' "$libdir" "$includedir" "$libdir" "$libdir" "$includedir" >Makefile
 EOF
   chmod +x "$FAKE_SODIUM_CONFIGURE"
   cat >"$FAKE_SETUP" <<'EOF'
@@ -204,7 +204,7 @@ sysroot() {
   printf '%s\n' "$REV" >"$prefix/.paladyn-rev"
   # libsodium as the maker installs it into the sysroot.
   mkdir -p "$prefix/wasi-sdk/share/wasi-sysroot/include/wasm32-wasi"
-  touch "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libsodium.a" \
+  touch "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libsodium.a" "$prefix/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libsodium.so" \
     "$prefix/wasi-sdk/share/wasi-sysroot/include/wasm32-wasi/sodium.h" "$prefix/.libsodium-$SODIUM_COMMIT"
   for binary in add_to_github_path.sh wasi-sdk/bin/wasm32-wasi-clang binaryen/bin/wasm-opt wasmtime/bin/wasmtime nodejs/bin/node; do
     mkdir -p "$(dirname "$prefix/$binary")"

@@ -29,6 +29,11 @@ spec = describe "JSON" $ do
   roundTrips "NewAccount" genNewAccount
   roundTrips "NewPassword" genNewPassword
   roundTrips "PasswordChange" genPasswordChange
+  roundTrips "PasswordRecord" genPasswordRecord
+  roundTrips "LoginChallenge" genLoginChallenge
+  roundTrips "RegistrationStart" genRegistrationStart
+  roundTrips "NewAccountRecord" genNewAccountRecord
+  roundTrips "PasswordRecordChange" genPasswordRecordChange
   roundTrips "AccountDisabled" genAccountDisabled
   roundTrips "Account" genAccount
   roundTrips "NewSpace" genNewSpace
@@ -60,7 +65,7 @@ spec = describe "JSON" $ do
   it "never shows a password, so that none ends up in a log" $ do
     let shown :: Text
         shown =
-          show (Credentials "ada" (Password "hunter2"))
+          show (Credentials "ada" (Password "hunter2") Nothing)
             <> show (NewAccount "ada" "Ada" (Password "hunter2") Nothing)
             <> show (NewPassword (Password "hunter2"))
             <> show (PasswordChange (Just (Password "hunter2")) (Password "hunter2"))

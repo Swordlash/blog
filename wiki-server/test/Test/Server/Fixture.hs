@@ -34,6 +34,17 @@ module Test.Server.Fixture
   , setCookie
   , givePassword
   , signInAs
+  , passwordSignIn
+  , passwordRecord
+  , clientLast
+  , accountRecord
+  , createUserVia
+  , setPasswordVia
+  , changeOwnPassword
+  , recordOrReply
+  , withRecord
+  , noRecord
+  , provePassword
   , withAdminSession
 
     -- * The server's settings
@@ -42,6 +53,7 @@ module Test.Server.Fixture
   )
 where
 
+import Crypto.OPAQUE qualified as O
 import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
@@ -62,10 +74,13 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing (..), choiceOf, withPlace)
 import Test.HUnit (assertFailure)
 import Test.Storage.Fixture (demoArchive)
-import Wiki.Api (AdminApi (..), WikiApi (..), requestMarker)
-import Wiki.Api.Account (Account (..), Credentials (..), NewPassword (..))
+import Wiki.Api (AccountApi (..), AdminApi (..), WikiApi (..), requestMarker)
+import Wiki.Api.Account (Account (..), Credentials (..), NewAccount (..))
+import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), Stretch (..), bytesOf, messageOf, opaqueConfig)
+import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
@@ -234,6 +249,8 @@ serveInUsing change sending at staticDir test = do
             , -- Most tests start from a wiki with nothing in it; those of
               -- the guide turn it on ("Test.Server.Guide").
               guide = False
+            , -- libsodium's least Argon2id: the tests sign in very often.
+              passwordStretch = Stretch {opsLimit = 1, memLimit = 8192}
             }
       -- A server whose public listener speaks TLS is reached over HTTPS,
       -- with the test's own certificate ('trustingTls').
@@ -382,20 +399,131 @@ setCookie reply = case T.splitOn "; " . decodeUtf8 <$> header "Set-Cookie" reply
   Just (first' : attributes) | Just value <- T.stripPrefix "wiki_session=" first' -> Just (value, attributes)
   _ -> Nothing
 
--- | Give a user a password, as the operator on the admin listener.
+-- | Give a user a password, as the operator on the admin listener: the
+-- record the operator's browser would make for it ("Wiki.Api.Opaque").
 givePassword :: (HasCallStack) => Running -> Text -> Text -> IO ()
 givePassword r uid password = do
-  reply <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setPassword (UserId uid)) NewPassword {password = Password password}
+  record <- passwordRecord r (\l -> r.admin <> "/admin/" <> l) [] (ForUser (UserId uid)) password
+  reply <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setPassword (UserId uid)) record
   account :: Account <- jsonAs 200 reply
   unless account.hasPassword $ assertFailure ("no password for " <> toS uid)
 
 -- | Sign in on the public listener: the session id its cookie carries.
 signInAs :: (HasCallStack) => Running -> Text -> Text -> IO Text
 signInAs r login password = do
-  reply <- sendJson r "POST" (r.public <> "/" <> links.signIn) Credentials {login, password = Password password}
+  reply <- passwordSignIn r (\l -> r.public <> "/" <> l) [] login password
   info :: SessionInfo <- jsonAs 200 reply
   unless (info.standing == SignedIn) $ assertFailure ("not signed in: " <> show info)
   maybe (assertFailure ("no session cookie: " <> show reply)) (pure . fst) (setCookie reply)
+
+-- | Sign in with a password as the application does ("Wiki.Api.Opaque"),
+-- to the API at the addresses the function gives for its links, with these
+-- headers on every request: through OPAQUE, and when that fails, the old
+-- way, once, naming the failed attempt. The reply is the last request's:
+-- the start's when it was refused, the finish's or the old sign-in's
+-- otherwise.
+passwordSignIn :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> Text -> Text -> IO Reply
+passwordSignIn r at hs login password = do
+  (st, ke1) <- either (\e -> assertFailure ("no first message: " <> show e)) pure =<< O.clientStart (encodeUtf8 password)
+  start <- send r "POST" (at links.startPasswordSignIn) (jsonType : hs) (encode LoginStart {login, ke1 = messageOf (O.encode ke1)})
+  if start.status /= 200
+    then pure start
+    else do
+      challenge :: LoginChallenge <- json start
+      case clientLast st challenge of
+        Just ke3 -> send r "PUT" (at links.finishPasswordSignIn) (jsonType : hs) (encode LoginFinish {attempt = challenge.attempt, ke3})
+        Nothing
+          | challenge.fallback -> send r "POST" (at links.signIn) (jsonType : hs) (encode Credentials {login, password = Password password, attempt = Just challenge.attempt})
+          | otherwise -> pure Reply {status = 401, headers = [], body = encode Unauthenticated}
+
+-- | The client's last message of a sign-in, if the password is right.
+clientLast :: O.ClientLoginState -> LoginChallenge -> Maybe Opaque.Message
+clientLast st challenge = do
+  ke2 <- bytesOf challenge.ke2 >>= rightToMaybe . O.decode
+  (ke3, _, _) <- rightToMaybe (O.clientFinish (opaqueConfig challenge.stretch) st ke2 O.defaultIdentities)
+  pure (messageOf (O.encode ke3))
+
+-- | The record of a password as the application makes it, for a purpose,
+-- through the API at the addresses the function gives for its links.
+passwordRecord :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> RegistrationFor -> Text -> IO PasswordRecord
+passwordRecord r at hs purpose password =
+  recordOrReply r at hs purpose password >>= either (\reply -> assertFailure ("no registration: " <> show reply)) pure
+
+-- | 'passwordRecord', or the reply that refused the registration.
+recordOrReply :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> RegistrationFor -> Text -> IO (Either Reply PasswordRecord)
+recordOrReply r at hs purpose password = do
+  (st, request) <- either (\e -> assertFailure ("no request: " <> show e)) pure =<< O.registrationRequest (encodeUtf8 password)
+  reply <- send r "POST" (at links.passwordRegistration) (jsonType : hs) (encode RegistrationStart {for = purpose, request = messageOf (O.encode request)})
+  if reply.status /= 200
+    then pure (Left reply)
+    else do
+      challenge :: RegistrationChallenge <- json reply
+      response <- maybe (assertFailure "no response") pure (bytesOf challenge.response >>= rightToMaybe . O.decode)
+      (record, _) <- either (\e -> assertFailure ("no record: " <> show e)) pure =<< O.finalizeRegistration (opaqueConfig challenge.stretch) st response O.defaultIdentities
+      pure (Right PasswordRecord {credential = challenge.credential, record = messageOf (O.encode record), stretch = challenge.stretch})
+
+-- | Send what a record is made for, as the application does: the
+-- registration, then the request the function makes with the record; or
+-- the reply that refused the registration.
+withRecord :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> RegistrationFor -> Text -> (PasswordRecord -> IO Reply) -> IO Reply
+withRecord r at hs purpose password k = recordOrReply r at hs purpose password >>= either pure k
+
+-- | An account to create as the application sends it: with the record of
+-- its password, registered for the purpose given.
+accountRecord :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> RegistrationFor -> NewAccount -> IO NewAccountRecord
+accountRecord r at hs purpose new = do
+  record <- passwordRecord r at hs purpose new.password.text
+  pure NewAccountRecord {login = new.login, displayName = new.displayName, password = record, email = new.email}
+
+-- | Create a user as the administration does, through the API at the
+-- addresses the function gives, with these headers: the registration of
+-- the password, then the user with its record. A registration that is
+-- refused is the reply.
+createUserVia :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> NewAccount -> IO Reply
+createUserVia r at hs new =
+  withRecord r at hs ForNewUser new.password.text $ \record ->
+    send r "POST" (at links.admin.createUser) (jsonType : hs) (encode NewAccountRecord {login = new.login, displayName = new.displayName, password = record, email = new.email})
+
+-- | Give a user a password as the administration does: the reply.
+setPasswordVia :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> UserId -> Text -> IO Reply
+setPasswordVia r at hs u password =
+  withRecord r at hs (ForUser u) password $ \record ->
+    send r "PUT" (at (links.admin.setPassword u)) (jsonType : hs) (encode record)
+
+-- | Change the password of the session's user as the application does:
+-- the current password, when given, proved through OPAQUE first and sent
+-- only when that fails; the new one registered; then the change.
+changeOwnPassword :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> Maybe Text -> Text -> IO Reply
+changeOwnPassword r at hs current new = do
+  proved <- case current of
+    Nothing -> pure False
+    Just c -> (\x -> x.status == 204) <$> provePassword r at hs c
+  withRecord r at hs ForOwnPassword new $ \record ->
+    send r "PUT" (at links.account.changePassword) (jsonType : hs) (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record})
+
+-- | A record that is none: for a request refused before its record is
+-- looked at.
+noRecord :: PasswordRecord
+noRecord = PasswordRecord {credential = "00000000-0000-0000-0000-000000000000", record = Opaque.Message "", stretch = Stretch {opsLimit = 2, memLimit = 67108864}}
+
+-- | Prove a session's password again, as the application does before a
+-- change that needs it (@account\/password\/proof@): the reply to the last
+-- request, 204 when the password was right.
+provePassword :: (HasCallStack) => Running -> (Text -> Text) -> [Header] -> Text -> IO Reply
+provePassword r at hs password = do
+  (st, ke1) <- either (\e -> assertFailure ("no first message: " <> show e)) pure =<< O.clientStart (encodeUtf8 password)
+  start <- send r "POST" (at links.account.startPasswordProof) (jsonType : hs) (encode ProofStart {ke1 = messageOf (O.encode ke1)})
+  if start.status /= 200
+    then pure start
+    else do
+      challenge :: LoginChallenge <- json start
+      case clientLast st challenge of
+        Just ke3 -> send r "PUT" (at links.account.finishPasswordProof) (jsonType : hs) (encode LoginFinish {attempt = challenge.attempt, ke3})
+        Nothing -> pure Reply {status = 401, headers = [], body = encode Unauthenticated}
+
+-- | The JSON body's header.
+jsonType :: Header
+jsonType = (hContentType, "application/json")
 
 -- | A server over the demo's wiki with its options changed as given, and
 -- the cookie of a session of the demo's administrator (@admin@, who holds

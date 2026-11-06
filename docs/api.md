@@ -105,7 +105,10 @@ of the server, not a refusal.
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion", "capabilities"}`: `capabilities` is `Capabilities` `{"database", "search"}`, the database the server keeps the wiki in (`"postgres"` or `"sqlite"`) and how its search finds pages (`"FullText"` or `"FoldedText"`, see [Search](#search)) | | |
 | GET | `api/v1/whats-new` | | `WhatsNew` `{"version", "built", "entries"}`: the server's version (`git describe --tags --always --dirty` where it was compiled, or the `WIKI_BUILD_VERSION` its build was given, or `"unknown"`), when it was compiled (ISO 8601), and the newest twelve changelog entries it was compiled with, newest first, each `{"pr", "url", "title", "markdown"}`: the pull request's number and address on GitHub, the entry's title, and its sections in the wiki's Markdown, each under a heading of level three (the same to everyone, signed in or not) | 404 (the server runs with `--no-whats-new`) | (`whatsNew`, `MonadWhatsNew`) |
 | GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports", "boxes", "homePage", "mathMacros", "assistantServices", "whatsNew"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), the formats pages and spaces export as (see [Documents](#documents)), the kinds of box the administration defined, as in the server's settings below, which every page is rendered with, the front page's configuration, the built-in math macros as the administration keeps them (`null` for the ones the wiki ships with), and the assistant's services, as in the server's settings below, which the assistant's settings offer (the same to everyone, signed in or not), and whether the page "What's new?" is on: the number of the server's newest changelog entry (0 for none), or `null` when it runs with `--no-whats-new` (a session without the field reads as `null`) | | `session` |
-| POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
+| POST | `api/v1/session/password` | `LoginStart` `{"login", "ke1"}`: OPAQUE's first message (see [Passwords through OPAQUE](#passwords-through-opaque)) | `LoginChallenge` `{"attempt", "ke2", "stretch", "fallback"}`, the same shape for a login nobody has or one without a password (a fake record's) | 429, 400 | (`signIn`) |
+| PUT | `api/v1/session/password` | `LoginFinish` `{"attempt", "ke3"}` | as `POST session` | 401 (a wrong last message, an attempt unknown, used or older than two minutes, a login without a record), 400 | (`signIn`) |
+| POST | `api/v1/session` | `Credentials` `{"login", "password", "attempt"}`: the sign-in of an account from before OPAQUE, sent only after `session/password` failed with `fallback` true, naming that attempt | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401 (also every login with a record or none, and every login at once when no account from before OPAQUE is left), 429, 400 | (`signIn`) |
+| POST | `api/v1/password-registration` | `RegistrationStart` `{"for", "request"}`: what the record is for (`ForSignUp`, `ForInvitation` with the invitation's secret, `ForOwnPassword`, `ForReset` with the link's secret, `ForNewUser`, `ForUser` with a user's id) and OPAQUE's blinded password | `RegistrationChallenge` `{"credential", "response", "stretch"}`: the user's id the record is for (a new one for an account still to be made) | 403 (a closed wiki's sign-up, a user who is not an administrator), 404 (an invitation or a reset link that does not work), 401, 429, 400 | (`register`, `acceptInvitation`, `changePassword`, `resetPassword`, `createUser`, `setPassword`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 | POST | `api/v1/session/second-factor` | `OneTimeCode` `{"code"}`, with the `wiki_pending` cookie | as `POST session` | 401 (a wrong code, counted as a failed sign-in), 429, 400 (no sign-in waiting in this browser, or it expired) | (`confirmSecondFactor`) |
 | POST | `api/v1/session/second-factor/passkey` | with the `wiki_pending` cookie | `AssertionOptions` naming the waiting user's passkeys | 400 (no sign-in waiting, or it expired), 409 (the user has no passkey) | (`beginSecondFactorPasskey`) |
@@ -121,6 +124,32 @@ without regard to the case of its letters or the blanks around it. Signing
 in or out where everyone is the operator is refused with 400; signing in
 again replaces the browser's session. `signIn` and `signOut` are methods of
 `MonadAccount` (`Wiki.App.Account`), which only the backend over HTTP has.
+
+### Passwords through OPAQUE
+
+A password never travels (WP5.74a, `Wiki.Api.Opaque`, the `opaque`
+package): the browser and the server run OPAQUE (RFC 9807, ristretto255,
+SHA-512, 3DH), and the server keeps a registration record per user. The
+messages (`ke1`, `ke2`, `ke3`, a registration's `request` and `response`, a
+`record`) are their RFC encodings in unpadded base64url. `stretch`
+`{"opsLimit", "memLimit"}` is the Argon2id the browser stretches the OPRF's
+output with (passes, and memory in bytes; 4 and 128 MiB for new records),
+stored beside each record so that the server can ask for more later. The
+shared context is `wiki OPAQUE v1`, and the identities are the RFC's default,
+the parties' public keys; a record's credential id is its user's id.
+
+A sign-in is a start (`POST session/password`) and a finish (`PUT`): every
+start counts as a failed sign-in until it finishes, and a login nobody has,
+or one without a record, is answered by a fake record in the same shape, so
+that the answer does not tell whether it exists. `fallback` says whether the
+browser, when its last message cannot be made (a wrong password, or an
+account from before OPAQUE, which has a hash and no record), is to try `POST
+session` once with the password: true while any account from before OPAQUE is
+left. That sign-in leaves the session a proof of the password, with which the
+browser registers the account's record at once (`password-registration`
+`ForOwnPassword`, then `PUT account/password` with no `current`); the hash is
+then deleted, and the account's other sessions stay. The administration's
+`ServerStatus` counts the accounts left (`legacyPasswords`).
 
 ### Sessions and the cookie
 
@@ -681,9 +710,9 @@ users, groups and grants are not imported) is the plan's WP2.8.
 
 | Method | Path | Body | Response | Errors | |
 | ------ | ---- | ---- | -------- | ------ | - |
-| POST | `api/v1/accounts` | `NewAccount` `{"login", "displayName", "password"}` | `SessionInfo` of the account made, and `Set-Cookie` with its session | 403 (a closed wiki), 400, 409, 429 | (`register`) |
+| POST | `api/v1/accounts` | `NewAccountRecord` `{"login", "displayName", "password"}`, `password` the `PasswordRecord` `{"credential", "record", "stretch"}` registered `ForSignUp`; the account's id is the record's credential | `SessionInfo` of the account made, and `Set-Cookie` with its session | 403 (a closed wiki), 400, 409, 429 | (`register`) |
 | GET | `api/v1/invitations/<secret>` | | `InvitationInfo` `{"email", "expiresAt"}` | 404 (used, revoked, expired or none) | (`invitationFor`) |
-| POST | `api/v1/invitations/<secret>` | `NewAccount` | `SessionInfo` of the account made, and `Set-Cookie`; the invitation is used up | 404, 400, 409, 429 | (`acceptInvitation`) |
+| POST | `api/v1/invitations/<secret>` | `NewAccountRecord`, its record registered `ForInvitation` | `SessionInfo` of the account made, and `Set-Cookie`; the invitation is used up | 404, 400, 409, 429 | (`acceptInvitation`) |
 | GET | `api/v1/admin/settings` | | `WikiSettings` `{"access", "newAccountsCreateSpaces", "adminCreatesPasswordAccounts"}`, `access` `"Open"` or `"Closed"` | 403 | `wikiSettings` |
 | PUT | `api/v1/admin/settings` | `WikiSettings` | `WikiSettings` as they now are | 403, 400 | `setWikiSettings` |
 | GET | `api/v1/admin/invitations` | | `Invitations` `{"mailing", "invitations"}`: whether the server mails them, and every `Invitation` `{"id", "email", "createdAt", "expiresAt", "expired"}` not used, the latest first | 403 | `invitations` |
@@ -833,7 +862,9 @@ icon chosen in its settings wins.
 
 | Method | Path | Body | Response | Errors | |
 | ------ | ---- | ---- | -------- | ------ | - |
-| PUT | `api/v1/account/password` | `PasswordChange` `{"current", "new"}` | `SignInMethods` as they are then; the user's other sessions end | 401 (nobody signed in, or `current` missing or wrong), 429, 400 (the operator, a `new` that cannot be a password, or a user who has no password to set) | (`changePassword`) |
+| POST | `api/v1/account/password/proof` | `ProofStart` `{"ke1"}`: the signed-in user's OPAQUE first message | `LoginChallenge`, `fallback` true for an account from before OPAQUE | 401, 429 | (`changePassword`, `enrolTotp`, `setOwnEmail`, `beginRegistration`) |
+| PUT | `api/v1/account/password/proof` | `LoginFinish` | 204: the session has proved its password, for five minutes and one change that needs it | 401 (a wrong last message) | |
+| PUT | `api/v1/account/password` | `PasswordRecordChange` `{"current", "password"}`: the new password's `PasswordRecord`, registered `ForOwnPassword`; `current` only for an account from before OPAQUE, which proves its password by it (the session's proof otherwise) | `SignInMethods` as they are then; the user's other sessions end, except when an account from before OPAQUE registers its first record with the proof its sign-in left | 401 (nobody signed in, or no proof and no right `current`), 429, 400 (the operator, a record that is not one or not the user's, or a user who has no password to set) | (`changePassword`) |
 
 A user signed in changes their password, or sets one if they have none
 and no provider to sign in with (WP3.7 of the plan). A user who has no
@@ -863,11 +894,11 @@ password included.
 | DELETE | `api/v1/account/sessions/<session>` | | the sessions then | 401, 404 (not one of theirs), 400 (the one asking: sign out instead) | (`endOwnSession`) |
 | DELETE | `api/v1/account/sessions` | | the sessions then: the one asking alone | 401 | (`endOtherSessions`) |
 | GET | `api/v1/account/second-factor` | | `SecondFactorState` `{"enabled", "recoveryCodesLeft", "asksPassword"}` | 401 | (`secondFactorState`) |
-| POST | `api/v1/account/second-factor/totp` | `CurrentPassword` `{"password"}` (where the user has one) | `TotpEnrolment` `{"secret", "uri", "qr"}`: the secret in base32, the `otpauth://` address, and that address as a QR code's modules, row by row (`"1"` dark, `"0"` light, no quiet zone) | 401 (nobody signed in, or a wrong password, counted), 429, 409 (one is on already) | (`enrolTotp`) |
+| POST | `api/v1/account/second-factor/totp` | `CurrentPassword` `{"password"}`: `null` once the session has proved its password (`account/password/proof`); the password itself only for an account from before OPAQUE | `TotpEnrolment` `{"secret", "uri", "qr"}`: the secret in base32, the `otpauth://` address, and that address as a QR code's modules, row by row (`"1"` dark, `"0"` light, no quiet zone) | 401 (nobody signed in, or a wrong password, counted), 429, 409 (one is on already) | (`enrolTotp`) |
 | PUT | `api/v1/account/second-factor/totp` | `OneTimeCode` `{"code"}` | `RecoveryCodes` `{"codes"}`, shown this once | 401 (a wrong code, counted), 429, 404 (none begun), 409 | (`confirmTotp`) |
 | POST | `api/v1/account/second-factor/remove` | `OneTimeCode` (a code or a recovery code) | `SecondFactorState` | 401 (a wrong code, counted), 429, 404 (none on) | (`removeOwnSecondFactor`) |
 | GET | `api/v1/account/email` | | `EmailState` `{"email", "verified", "mailing", "mailError", "asksPassword"}` | 401 | (`ownEmail`) |
-| PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password where the user has one, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
+| PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password proved as for `second-factor/totp`, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
 | GET | `api/v1/account/personal-space` | | `Space` or `null`: the user's personal space, on or off (its `active`) | 401, 400 (the operator) | `personalSpace` |
 | PUT | `api/v1/account/personal-space` | `PersonalSpaceSwitch` `{"enabled": bool}` | `Space`: turned on, and made the first time (with the container "User subspaces" if no user has had one), or turned off, its content kept | 401, 400 (the operator), 404 (turning off a space the user does not have) | `setPersonalSpace` |
 | PUT | `api/v1/account/avatar` | multipart form, one file part named `file`, as a space's icon is uploaded: its `Content-Type` the image's media type, its file name not looked at | `User`, with its `avatar`: the picture replaces the one the user had | 401, 400 (the operator; not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `setAvatar` |
@@ -875,7 +906,7 @@ password included.
 | GET, HEAD | `api/v1/users/<user>/avatar/<blob>` | | the avatar's bytes, with its media type, served as a space's icon is | 404 (not that user's avatar), 401 (a closed wiki, to someone not signed in) | `avatarUrl` gives this address |
 | POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
 | POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
-| POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 (a password that cannot be one, or a user who has no password to set) | (`resetPassword`) |
+| POST | `api/v1/password-reset/<secret>` | `PasswordRecord`, registered `ForReset` with the link's secret | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 (a password that cannot be one, or a user who has no password to set) | (`resetPassword`) |
 
 WP4.11 of the plan. A session alone does not give an account away: giving
 another address (or none) and beginning a second factor take the current
@@ -935,7 +966,7 @@ shows to anyone, as an invitation's.
 | PUT | `api/v1/assistant/vault` | `Vault` `{"format", "salt", "nonce", "ciphertext", "wrapped"}`, over the version `If-Match` names, or without `If-Match` a first one | `StoredVault` as it now is | 401, 409 (another version, or a first one where there is a vault), 400 (a wrapped key for a passkey not the user's, another format, a part empty or longer than 256 KiB) | `storeVault` |
 | DELETE | `api/v1/assistant/vault` | | 204: the vault and the vault key's wrapped copies gone; the passkeys stay, to sign in with | 401 | `deleteVault` |
 | GET | `api/v1/account/passkeys` | | `[PasskeyInfo]` `{"id", "name", "createdAt", "lastUsedAt", "unlocks"}`, the oldest first | 401 | `listPasskeys` |
-| POST | `api/v1/account/passkeys/registration` | `CurrentPassword` `{"password"}`, `null` for a user who has none: a passkey signs the user in | `RegistrationOptions` `{"challenge", "rpId", "rpName", "userId", "userName", "displayName", "exclude"}` | 401 (also a wrong password, counted as a failed sign-in), 429 | `beginRegistration` |
+| POST | `api/v1/account/passkeys/registration` | `CurrentPassword` `{"password"}`, proved as for `second-factor/totp` (`null` for a user who has none): a passkey signs the user in | `RegistrationOptions` `{"challenge", "rpId", "rpName", "userId", "userName", "displayName", "exclude"}` | 401 (also a wrong password, counted as a failed sign-in), 429 | `beginRegistration` |
 | PUT | `api/v1/account/passkeys/registration` | `RegistrationResponse` `{"id", "clientDataJSON", "attestationObject", "name"}`, the name optional (the day it was added otherwise) | `PasskeyInfo` | 401, 400 (no challenge waiting, or an answer that does not check), 409 (registered already), 400 (twenty passkeys already, a name over 100 characters) | `finishRegistration` |
 | POST | `api/v1/assistant/passkeys/assertion` | | `AssertionOptions` `{"challenge", "rpId", "allow"}` | 401 | `beginAssertion` |
 | PUT | `api/v1/assistant/passkeys/assertion` | `AssertionResponse` `{"id", "clientDataJSON", "authenticatorData", "signature", "userHandle"}`, the user handle optional | `PasskeyInfo`, used now | 401, 404 (not one of the user's passkeys), 400 (no challenge waiting, or an answer that does not check), 409 (its counter went back) | `finishAssertion` |
@@ -1004,10 +1035,10 @@ wrong code.
 | DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
 | PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
-| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403 (also to an administrator while the wiki's `adminCreatesPasswordAccounts` is false: such accounts are then made on the console), 400, 409 (the login is taken, in any case) | `createUser` |
+| POST | `api/v1/admin/users` | `NewAccountRecord` `{"login", "displayName", "password", "email"}`, the record registered `ForNewUser` by the administrator's browser (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403 (also to an administrator while the wiki's `adminCreatesPasswordAccounts` is false: such accounts are then made on the console), 400, 409 (the login is taken, in any case) | `createUser` |
 | DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
 | DELETE | `api/v1/admin/users/<user>` | | 204: the account is removed with its sessions, memberships, grants, second factor, passkeys, vault, drafts, watches and notifications; the page versions and comments the user wrote, and others' notifications of what they did, stay under the id `~former:<login>` (shown as the login, "not a user here"), and the login may be taken again; the activity log records `user.remove` | 403, 404, 409 (the login is not disabled), 400 (one's own account) | `removeUser` |
-| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 (a password that cannot be one, or a user who has no password to set) | `setPassword` |
+| PUT | `api/v1/admin/users/<user>/password` | `PasswordRecord`, registered `ForUser` with the user's id by the administrator's browser, which runs the client's side with the password typed | `Account`; the user's sessions end | 403, 404, 400 (a password that cannot be one, or a user who has no password to set) | `setPassword` |
 | POST | `api/v1/admin/users/<user>/password-link` | | 204: the link "Forgot your password?" mails is mailed to the user's verified address | 403, 404, 400 with the reason (the server sends no mail, the user has no password to set, their login is disabled, they have no verified address, or the mail could not be sent), 429 (a link was mailed to them less than a minute ago) | `sendPasswordLink` |
 | PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
 

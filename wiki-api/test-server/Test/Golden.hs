@@ -17,7 +17,7 @@ import Protolude
 import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), InvitationToken (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), TexEngine (..), TexStatus (..))
 import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
@@ -25,7 +25,8 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers (..), ServerMessage (..))
 import Wiki.Api.Info (Capabilities (..), Health (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Notifications (NotificationSettingsChange (..), ReadMark (..), Watching (..))
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), Stretch (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
@@ -42,6 +43,10 @@ import Wiki.Core.User (Avatar (..), Password (..), User (..))
 import Wiki.Core.Version (VersionInfo (..))
 
 -- | A golden file: its name, and the value it holds.
+-- | A record as the browser sends it.
+passwordRecord :: PasswordRecord
+passwordRecord = PasswordRecord {credential = "6f1c1f2e-3b5a-4c4e-9a8e-2d6b0f6a7c11", record = Message "cmVjb3Jk", stretch = Stretch {opsLimit = 2, memLimit = 67108864}}
+
 golden :: forall a. (Eq a, Show a, ToJSON a, FromJSON a) => FilePath -> a -> Spec
 golden name value = it name $ do
   let path = "test-server/golden/" <> name <> ".json"
@@ -57,6 +62,8 @@ spec :: Spec
 spec = describe "golden JSON" $ do
   describe "responses" $ do
     golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
+    golden "login-challenge" LoginChallenge {attempt = "Zm9yIHRoZSBvbGQgd2F5", ke2 = Message "a2Uy", stretch = Stretch {opsLimit = 2, memLimit = 67108864}, fallback = False}
+    golden "registration-challenge" RegistrationChallenge {credential = "6f1c1f2e-3b5a-4c4e-9a8e-2d6b0f6a7c11", response = Message "cmVzcG9uc2U", stretch = Stretch {opsLimit = 2, memLimit = 67108864}}
     golden "stored-vault" Sample.storedVault
     golden "passkeys" [Sample.passkeyInfo]
     golden "registration-options" Sample.registrationOptions
@@ -167,15 +174,18 @@ spec = describe "golden JSON" $ do
     golden "create-spaces-flag" CreateSpacesFlag {createSpaces = False}
     golden "space-grant-change" SpaceGrantChange {subject = SubjectGroup (GroupId "g1"), permission = View, granted = True}
     golden "group-name" GroupName {name = "writers"}
-    golden "credentials" Credentials {login = "ada", password = Password "correct horse battery staple"}
-    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = Password "correct horse battery staple", email = Just "ada@example.org"}
+    golden "credentials" Credentials {login = "ada", password = Password "correct horse battery staple", attempt = Just "Zm9yIHRoZSBvbGQgd2F5"}
+    golden "new-account-record" NewAccountRecord {login = "ada", displayName = "Ada", password = passwordRecord, email = Just "ada@example.org"}
+    golden "login-start" LoginStart {login = "ada", ke1 = Message "a2Ux"}
+    golden "login-finish" LoginFinish {attempt = "Zm9yIHRoZSBvbGQgd2F5", ke3 = Message "a2Uz"}
+    golden "proof-start" ProofStart {ke1 = Message "a2Ux"}
+    golden "registration-start" RegistrationStart {for = ForInvitation (InvitationToken "secret"), request = Message "cmVxdWVzdA"}
+    golden "password-record" passwordRecord
     golden "one-time-code" OneTimeCode {code = "287082"}
     golden "email-change" EmailChange {email = "ada@example.org", password = Just (Password "correct horse battery staple")}
     golden "current-password" CurrentPassword {password = Just (Password "correct horse battery staple")}
     golden "reset-request" ResetRequest {login = "ada"}
-    golden "new-password-by-mail" NewPasswordByMail {password = Password "correct horse battery staple"}
-    golden "new-password" NewPassword {password = Password "correct horse battery staple"}
-    golden "password-change" PasswordChange {current = Just (Password "correct horse battery staple"), new = Password "a longer passphrase than that"}
+    golden "password-record-change" PasswordRecordChange {current = Just (Password "correct horse battery staple"), password = passwordRecord}
     golden "account-disabled" AccountDisabled {disabled = True}
     golden "vault" Sample.vault
     golden "registration-response" Sample.registrationResponse

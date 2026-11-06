@@ -188,6 +188,7 @@ library
       free,
       http-media,
       http-types,
+      opaque,
       primitive,
       protolude,
       row-types,
@@ -308,6 +309,7 @@ test-suite wiki-app-test
     other-modules:
         Test.Assistant
         Test.Backend.Http
+        Test.Backend.Opaque
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Blog
@@ -347,6 +349,7 @@ test-suite wiki-app-test
         hspec >= 2,
         http-media,
         http-types,
+        opaque,
         protolude,
         servant-client-core,
         text,
