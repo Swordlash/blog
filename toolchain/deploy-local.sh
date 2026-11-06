@@ -1104,8 +1104,13 @@ if [ -z "${WIKI_MAKER:-}" ]; then
     eval "$bootstrap_env"
   }
   load_toolchain_env
-  if ! command -v cabal >/dev/null 2>&1 && [ -n "$build" ] && [ "$action" = deploy ]; then
-    say "installing GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh maker)${toolchain_home:+, under $toolchain_home}"
+  # The bootstrap runs whenever the deploy builds, not only when cabal is
+  # missing: a cabal on PATH may come with a GHC older than the maker needs,
+  # or with no package index yet, and the bootstrap installs or checks the
+  # pinned ones (with --system-tools, checks the machine's against the
+  # floors). It changes nothing when they are there.
+  if [ -n "$build" ] && [ "$action" = deploy ]; then
+    say "installing or checking GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh maker)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" maker ${system_tools:+--system-tools} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"}
     load_toolchain_env
   fi

@@ -105,8 +105,11 @@ fi
 sh "$ROOT/toolchain/bootstrap.sh" native --without-postgres --with-wizard ${system_tools:+"$system_tools"} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"} ||
   die "the bootstrap could not install GHC and cabal (see above), or did not take the options given, which the wizard is compiled with"
 
+# With --system-tools the tools are the machine's, as PATH finds them: the
+# toolchain directory's environment, which puts the managed GHC, cabal and
+# Node first, is not loaded, here or by maker.sh (WIKI_SYSTEM_TOOLS).
 env_file=${WIKI_TOOLCHAIN_HOME:-$HOME}/.wiki-toolchain/env
-if [ -r "$env_file" ]; then
+if [ -z "$system_tools" ] && [ -r "$env_file" ]; then
   # shellcheck source=/dev/null
   . "$env_file"
 fi
@@ -119,5 +122,6 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
 fi
 
 WIKI_CONFIGURE_DIR=$PWD
-export WIKI_CONFIGURE_DIR
+WIKI_SYSTEM_TOOLS=${system_tools:+1}
+export WIKI_CONFIGURE_DIR WIKI_SYSTEM_TOOLS
 exec sh "$ROOT/toolchain/maker.sh" tui deploy "$@"

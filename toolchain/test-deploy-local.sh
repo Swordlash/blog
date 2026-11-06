@@ -1695,7 +1695,7 @@ pass 'a database that does not read back after the migration rolls the upgrade b
 out=$case_dir/migrate-fails
 if FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose migration failed succeeded'; fi
 assert_contains "$out" 'the migration of the database (wiki-server migrate, above) failed'
-assert_contains "$out" 'stopped at the restore of its database'
+assert_contains "$out" 'stopped before the files went back'
 assert_lacks "$EVENTS" 'wiki-server check'
 assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from the first commit'
 [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = unreachable ] || fail 'a server runs on the database the restore did not put back'

@@ -28,7 +28,10 @@
 # --with-wizard` installs on Debian.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-eval "$(sh "$ROOT/toolchain/bootstrap.sh" env)"
+# WIKI_SYSTEM_TOOLS (set by configure.sh --system-tools) keeps the
+# machine's own tools: the bootstrap's environment then gives only the
+# toolchain directory's variables, not the managed tools' PATH.
+eval "$(sh "$ROOT/toolchain/bootstrap.sh" env ${WIKI_SYSTEM_TOOLS:+--system-tools})"
 # The maker is a native program, and it computes the wasm build's
 # environment itself: a shell that loaded ~/.ghc-wasm/env (CI exports it to
 # every later step) must not hand it the cross compiler's CC and friends,
