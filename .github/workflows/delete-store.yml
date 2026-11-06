@@ -3,14 +3,16 @@
 # versions of libraries or of compilers, or when it is suspected of holding
 # something broken. Every copy of it goes, on every branch; the next run of
 # build.yml's native job (for "native") or wasm job (for "wasm") builds it
-# again from nothing and saves it.
+# again from nothing and saves it. "wasm" deletes server-page.yml's -O2
+# store too (Linux-wasm-opt-store-...), which starts again from the wasm
+# job's.
 name: Delete a cabal store
 
 on:
   workflow_dispatch:
     inputs:
       store:
-        description: "Which store: native (the native job's, with GHC's floor), wasm (the wasm job's, which server-page.yml also reads) or both"
+        description: "Which store: native (the native job's, with GHC's floor), wasm (the wasm job's and server-page.yml's -O2 one) or both"
         type: choice
         options:
           - native

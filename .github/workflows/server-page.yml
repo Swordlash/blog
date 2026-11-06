@@ -161,22 +161,30 @@ jobs:
     - name: Update Cabal package index
       run: cabal update
 
-    # build.yml's wasm store, which holds the prerender's native
-    # dependencies and the wasm ones at the everyday optimisation, restored
-    # and never saved here (decision 54 of docs/PLAN.md): this build's -O2
-    # dependencies have unit ids of their own and are built on top of it in
-    # each run. It runs on main and on tags, not on pull requests. The last
-    # restore key takes build.yml's copies saved under the key that named the
+    # This build's own store (decision 54 of docs/PLAN.md): its -O2
+    # dependencies have unit ids of their own, so build.yml's wasm store,
+    # at the everyday optimisation, does not hold them, and a run that
+    # restored only that one compiled every -O2 dependency again (an hour).
+    # One cache entry per cabal version, written by this job only, carried
+    # forward from run to run as build.yml's are: the newest copy of this
+    # ref (or of main), or, the first time, build.yml's wasm store, which
+    # holds the prerender's native dependencies and the everyday wasm ones.
+    # The key ends in the run's id, since a key cannot be overwritten; the
+    # job prune-caches deletes the older copies once this job has ended. It
+    # runs on main and on tags, not on pull requests. The last restore key
+    # takes build.yml's copies saved under the key that named the
     # compilers' versions, once: remove it with build.yml's.
     - name: Restore cached dependencies
       uses: actions/cache/restore@v5
+      id: cache
       env:
-        key: ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1
+        key: ${{ runner.os }}-wasm-opt-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1
       with:
         path: ${{ env.CABAL_DIR }}/store
         key: ${{ env.key }}-${{ github.run_id }}
         restore-keys: |
           ${{ env.key }}-
+          ${{ runner.os }}-wasm-store-cabal-${{ env.CABAL_VERSION }}-${{ runner.environment }}-v1-
           ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-
 
     - name: Cache the build directories
@@ -208,6 +216,14 @@ jobs:
             --with-hc-pkg="$(command -v wasm32-wasi-ghc-pkg)" \
             --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
         )
+
+    # Once the dependencies have built, before the page: a failure in the
+    # wiki's own code still keeps them.
+    - name: Save cached dependencies
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ env.CABAL_DIR }}/store
+        key: ${{ steps.cache.outputs.cache-primary-key }}
 
     - name: Build the server's page
       env:
@@ -311,3 +327,24 @@ jobs:
             --notes "Two pages are attached. $SERVER_ASSET is the page wiki-server serves: sh toolchain/deploy-local.sh --backend-only=$GITHUB_REF_NAME deploys it with the server. $DEMO_ASSET is the serverless demo: sh toolchain/deploy-local.sh --static --backend-only=$GITHUB_REF_NAME deploys it."
         fi
         gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/$SERVER_ASSET" "$RUNNER_TEMP/$DEMO_ASSET" --clobber
+
+  # The older copies of the store the page job saved, deleted once that job
+  # has ended, as build.yml's prune-caches does for its caches: never beside
+  # a job that may still be restoring one.
+  prune-caches:
+    name: prune older cache copies
+    needs: page
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Prune the -O2 wasm store
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PREFIX: ${{ runner.os }}-wasm-opt-store-cabal-${{ env.CABAL_VERSION }}-github-hosted-v1-
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$PREFIX${{ github.run_id }}"

@@ -2410,11 +2410,10 @@ hosted runners, and a fork's only once the owner has approved its run; the runne
 user of its own, without `sudo` (as set up below), so a job reaches what that
 user can and no more; and the workflow uses no secret but the run's own token,
 which may only read the repository (and its Actions runs, in `plan`), except
-that `native` and `wasm` may also delete the repository's Actions caches
-(`actions: write`), to prune the older copies of the caches they save (see
-below). The wasm job holds that token on the owner's machine too, where it
-prunes nothing: code that runs there can delete the caches, which costs a
-cold build at worst.
+that `prune-caches` may also delete the repository's Actions caches
+(`actions: write`), to prune the older copies of the caches `native` and
+`wasm` save (see below). It runs on a hosted runner after them, and deleting
+a cache costs a cold build at worst.
 
 What remains:
 
@@ -2455,8 +2454,11 @@ on the machine, `plan` sends wasm to the hosted runners too (see above).
 
 Two cabal stores are cached, one per cabal version whatever the compilers (cabal keeps
 each compiler's packages apart inside it): the native one, saved only by the `unit` job,
-and the wasm one, saved only by the wasm job; `server-page.yml` restores the wasm one
-and saves nothing. The build directories are cached apart, per compiler. When a store
+and the wasm one, saved only by the wasm job. `server-page.yml` keeps a third, its
+own, since it compiles every dependency at `-O2` and those have unit ids of their
+own: it starts from the wasm one the first time, and its job `prune-caches` deletes
+its older copies as build.yml's does. The build directories are cached apart, per
+compiler. When a store
 has grown too large, the workflow "Delete a cabal store" (Actions, Run workflow) deletes
 it, and the next run builds it again.
 
@@ -2472,8 +2474,8 @@ compares the groups' full spec paths, including duplicate descriptions, against
 the unsplit suite. Only PostgreSQL starts a container; unit installs the small
 system dependencies and xmllint, while the database jobs also install TeX.
 All three restore the same dependency and build caches; unit saves the Cabal
-store and complete build snapshot (and prunes their older copies, see below), and
-postgres saves the apt archives.
+store and complete build snapshot (`prune-caches` deletes their older copies,
+see below), and postgres saves the apt archives.
 
 The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
@@ -2496,9 +2498,12 @@ the wasm snapshot) works the same way:
 - **Saved by every hosted run, and one copy kept.** The stores are saved once
   their dependencies have built (before the build, so a failure in the wiki's own
   code still keeps them), the native snapshot once the build has passed, and the
-  wasm snapshot at the end of a job that passed. After each save,
-  `toolchain/ci-prune-caches.sh` deletes the older copies under the same prefix on
-  the same ref, so a ref holds one copy per cache. Before, every run added a copy
+  wasm snapshot at the end of a job that passed. Once every job of the run that
+  restores a cache has ended, the job `prune-caches` runs
+  `toolchain/ci-prune-caches.sh`, which deletes the older copies under each prefix
+  on the same ref, so a ref holds one copy per cache. It runs after the jobs, not
+  beside them: a copy deleted while another job was still looking it up left that
+  job with no store and every dependency to build again. Before, every run added a copy
   of each, and the repository's 10 GB limit evicted the older ones, `main`'s among
   them. The script deletes nothing when the copy just saved is not listed (its
   save failed), and never fails the job: a fork's pull request has a read-only
@@ -2506,11 +2511,16 @@ the wasm snapshot) works the same way:
 - **Visible to pull requests from `main`.** A run restores the caches of its own
   ref, then those of `main`. So only copies on the same ref are pruned: a pull
   request that deleted `main`'s copy would leave every other pull request without
-  one. `main`'s hosted copies come from its hosted runs: the weekly scheduled run,
-  which always takes the hosted runners, a push to `main` that found the owner's
-  machine busy, and a run by hand with `runner: hosted` (the native caches also
-  from every push to `main` whose build jobs run). A push to `main` whose wasm job
-  takes the owner's machine saves no wasm cache to GitHub.
+  one. `main`'s hosted copies come from its hosted runs. Every push to `main` whose
+  page was not built on a hosted runner (it went to the owner's machine, or the plan
+  skipped it as tested by its pull request) runs the job `wasm-warm` ("wasm (hosted
+  cache)"), the wasm job's steps through a YAML anchor, on a hosted runner: it
+  builds the page without testing it, only to save the hosted wasm store and build
+  directories; its failure fails nothing, and the Pages deploy does not wait for
+  it. Before, the owner's machine built `main`'s page and saved no cache to
+  GitHub, so a pull request whose page went to the hosted runners found nothing and
+  compiled every dependency. The native caches come from every push to `main` whose
+  build jobs run.
 
 On the owner's runner, checkout retains `dist-newstyle/native`, `dist-newstyle/native-fast` and
 `dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
