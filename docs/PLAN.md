@@ -850,8 +850,11 @@ confirms it against reality and the plan is amended if it does not hold.
     word.
 
 56. **The deploy hands its last part to the maker with a plan (WP5.68 c2a,
-    #173).** From the moment the old service stops to the report at the end, the
-    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`):
+    #173; c2c, #175).** From the end of the TeX step to the report at the end, the
+    deploy is `maker deploy apply --plan FILE` (`Maker.Deploy.*`): the builds and
+    the checks of what they made, the service's Node, HTTPS through Tailscale,
+    the ports, the adoption into a prefix and PostgreSQL's container
+    (`Prepare`), then the change of the running deployment (`Apply`);
     `toolchain/deploy-local.sh` writes every variable that part reads, and every
     key the state file keeps, as `key=value` lines (`MAKER_PLAN_KEYS`) and runs the
     maker with them, through `WIKI_MAKER` or the maker built with its own cabal
@@ -969,7 +972,8 @@ In the order to do it, unless the owner says otherwise.
   locked-down options; then the shell's front, with the wizard as the TUI's deploy
   flow and `configure.sh` and `configure.hs` retired. (c2b), #174, merged: a demo
   whose page is not built on the machine goes through the maker too, with the
-  bootstrap mode `static` (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
+  bootstrap mode `static` (decision 56). (c2c), #175, merged: the builds and
+  checks, from the end of the TeX step (decision 56). The split (the owner, 2026-11-05): `bootstrap.sh`
   only installs ghcup, GHC and cabal (or checks the machine's own, with
   `--system-tools`) and the system packages GHC itself needs (gcc, libc's headers,
   libgmp, make, curl, tar, xz), updates the index, and hands every mode but `node`
@@ -1408,7 +1412,11 @@ needs. Each was true when its package merged; check before relying on one.
   whose maker was never built builds it just before the old service stops, so a
   Hackage it cannot reach is found late (nothing has changed by then). The maker
   reads Tailscale's and the panel's JSON with aeson, where the shell used python3,
-  jq or Node.
+  jq or Node. Since c2c the maker, when it is not built yet, is built right
+  after the TeX step, before anything of the wiki is built. The builds' output
+  is read line by line in the process's locale encoding (as the bootstrap's
+  long steps are), so a C locale and a non-ASCII byte in cabal's output would
+  stop the reading.
 - WP5.71 (decision 50): the demo's version is `unknown` when its build has no
   `WIKI_BUILD_VERSION` and no git (the stamp records what
   `toolchain/changelog-stamp.sh` found), and a plain `cabal build` of
