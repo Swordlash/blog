@@ -134,9 +134,10 @@ panel m = describe "the account panel" $ do
     _ <- find ui ".totp-qr"
     -- The password is proved through OPAQUE first; this server answers the
     -- proof as for an account from before OPAQUE ('serveOpaque'), so it is
-    -- sent with the request, as such an account's is.
+    -- proved once at proof/old, and the request carries none.
     map fst <$> askedWith "POST" `shouldReturn` ["api/v1/account/password/proof", "api/v1/account/second-factor/totp"]
-    filter ((== "api/v1/account/second-factor/totp") . fst) <$> askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/totp", "{\"password\":\"rita's password\"}")]
+    filter ((== "api/v1/account/second-factor/totp") . fst) <$> askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/totp", "{\"password\":null}")]
+    map (\(url, body) -> (url, "rita's password" `T.isInfixOf` body)) <$> askedWith "PUT" `shouldReturn` [("api/v1/account/password/proof/old", True)]
     -- A light square, and a rectangle for each run of dark modules.
     length <$> findAll ui ".totp-qr rect" `shouldReturn` 1 + length (qrRuns qr)
     find ui ".totp-secret code" >>= (`shouldHaveText` "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ")
@@ -147,7 +148,7 @@ panel m = describe "the account panel" $ do
     answerWith "GET" "api/v1/account/second-factor" 200 SecondFactorState {enabled = True, recoveryCodesLeft = 2, asksPassword = True}
     find ui ".totp-confirm button[type=submit]" >>= click
     eventually (length <$> findAll ui ".recovery-code-list li" `shouldReturn` 2)
-    askedWith "PUT" `shouldReturn` replicate 2 ("api/v1/account/second-factor/totp", "{\"code\":\"123456\"}")
+    filter ((== "api/v1/account/second-factor/totp") . fst) <$> askedWith "PUT" `shouldReturn` replicate 2 ("api/v1/account/second-factor/totp", "{\"code\":\"123456\"}")
     find ui ".recovery-kept" >>= click
     find ui ".second-factor-on" >>= (`shouldContainText` "You have 2 recovery codes left.")
     length <$> findAll ui ".recovery-code-list" `shouldReturn` 0
@@ -167,7 +168,9 @@ panel m = describe "the account panel" $ do
     find ui ".email-told" >>= (`shouldHaveText` "A link to verify it has been mailed to rita@example.org.")
     find ui ".email-current" >>= (`shouldContainText` "not verified yet")
     _ <- find ui ".email-resend"
-    askedWith "PUT" `shouldReturn` [("api/v1/account/email", "{\"email\":\"rita@example.org\",\"password\":\"rita's password\"}")]
+    -- The password proved once at proof/old ('serveOpaque'), and not sent
+    -- with the address.
+    map (\(url, body) -> (url, "rita's password" `T.isInfixOf` body, "rita@example.org" `T.isInfixOf` body)) <$> askedWith "PUT" `shouldReturn` [("api/v1/account/password/proof/old", True, False), ("api/v1/account/email", False, True)]
     unmount ui
     serverStops
 

@@ -163,7 +163,8 @@ serverStarts = do
 -- address with one fixed answer, so a sign-in, or a proof of the current
 -- password, is answered as for an account from before OPAQUE, and the
 -- application goes on the old way with the password (to @POST session@, or
--- in the request that needs it); a registration makes a record of whatever
+-- to @PUT account\/password\/proof\/old@, which proves it for the request
+-- that needs it); a registration makes a record of whatever
 -- it is sent; and the record an old sign-in registers at once is taken. A
 -- test answers these addresses otherwise after this. The OPAQUE exchange
 -- itself is tested against the real server's functions in
@@ -172,6 +173,7 @@ serveOpaque :: PageM s ()
 serveOpaque = do
   answerWith "POST" "api/v1/session/password" 200 fakeChallenge
   answerWith "POST" "api/v1/account/password/proof" 200 fakeChallenge
+  answerRaw "PUT" "api/v1/account/password/proof/old" 204 ""
   answerWith "POST" "api/v1/password-registration" 200 fakeRegistration
   answerWith "PUT" "api/v1/account/password" 200 SignInMethods {password = True, identities = []}
 
@@ -504,9 +506,10 @@ ownPassword m = describe "one's own password" $ do
     find ui ".password-change button[type=submit]" >>= (`shouldHaveText` "Change password")
     find ui ".password-change button[type=submit]" >>= click
     find ui ".account-told" >>= (`shouldContainText` "Your password is changed.")
-    -- The current password as an account from before OPAQUE gives it
-    -- ('serveOpaque'), the new one as its record.
-    map (\r -> (r.url, "\"current\":\"rita's password\"" `T.isInfixOf` r.body, "a longer new password" `T.isInfixOf` r.body)) <$> puts `shouldReturn` [("api/v1/account/password", True, False)]
+    -- The current password proved as an account from before OPAQUE proves
+    -- it ('serveOpaque'), once; then the change, which carries neither it
+    -- nor the new one, only the new one's record.
+    map (\r -> (r.url, "rita's password" `T.isInfixOf` r.body, "a longer new password" `T.isInfixOf` r.body)) <$> puts `shouldReturn` [("api/v1/account/password/proof/old", True, False), ("api/v1/account/password", False, False)]
     -- The form is gone, with what was typed in it; Rita is still signed in.
     length <$> findAll ui ".password-change" `shouldReturn` 0
     _ <- find ui ".password-change-toggle"
@@ -520,7 +523,7 @@ ownPassword m = describe "one's own password" $ do
     rita <- unsafeIOToPageM (signedInAs "user-reader")
     answerWith "GET" "api/v1/session" 200 rita
     answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
-    answerRaw "PUT" "api/v1/account/password" 401 "{\"error\":\"Unauthenticated\"}"
+    answerRaw "PUT" "api/v1/account/password/proof/old" 401 "{\"error\":\"Unauthenticated\"}"
     ui <- startServer m Home
     find ui ".account-toggle" >>= click
     find ui ".password-change-toggle" >>= click

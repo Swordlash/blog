@@ -414,12 +414,13 @@ handlers env caller =
         -- password of an account from before OPAQUE would otherwise be
         -- refused on the fifth try). Only a sign-in naming no such attempt
         -- passes the limit now.
-        counted <- case credentials.attempt of
+        admitted <- case credentials.attempt of
           Just key ->
             liftIO (takeAttempt env.attempts now key) <&> \case
-              Just a -> T.toCaseFold (T.strip a.login) == T.toCaseFold (T.strip credentials.login)
-              Nothing -> False
-          Nothing -> pure False
+              Just a | T.toCaseFold (T.strip a.login) == T.toCaseFold (T.strip credentials.login) -> Just a
+              _ -> Nothing
+          Nothing -> pure Nothing
+        let counted = isJust admitted
         verdict <- if counted then pure Allowed else liftIO (Limiter.verdict env.limiter now credentials.login s.address)
         case verdict of
           Refused seconds ->
@@ -432,7 +433,11 @@ handlers env caller =
               Left (Accounts.SecondFactorWanted user) -> do
                 -- The password was right, but the user is not signed in
                 -- yet: the second factor's code comes next, with the
-                -- cookie that names this sign-in.
+                -- cookie that names this sign-in. The attempt counted when
+                -- it started is given back, as a sign-in through OPAQUE
+                -- gives its own back before its second factor, so that the
+                -- code is not refused by the password's count.
+                for_ admitted $ \a -> liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
                 held <- liftIO (holdSignIn env.pending now user.id user.login "")
                 liftIO (prove env.proofs now (pendingKey held) user.id ByOldPassword)
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}

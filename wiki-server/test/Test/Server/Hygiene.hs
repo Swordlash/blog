@@ -18,7 +18,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
-import Database.Beam (all_, filter_, runSelectReturningList, select, val_, (==.))
+import Database.Beam (all_, filter_, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Protolude
 import System.Timeout (timeout)
@@ -47,10 +47,11 @@ import Wiki.Core.User (Email (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signInUser)
 import Wiki.Server.Mail (Message (..), SendMail)
 import Wiki.Server.Opaque (defaultStretch)
+import Wiki.Server.Password (hashWith, parameters)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
-import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, reading, recordHere, runStoredWiki, withStorage, writing)
+import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, reading, recordHere, runStoredWiki, withStorage, withStorageAside, writing)
 import Wiki.Server.Storage.Rows (StoredRecord (..), insertIdentity, micro)
-import Wiki.Server.Storage.Schema (Sessions (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Sessions (..), Users (..), WikiDb (..), wikiDb)
 import Wiki.Server.Totp (codeAt, secretFromText)
 
 spec :: Backing -> Spec
@@ -240,6 +241,25 @@ secondFactor backing = describe "a second factor" $ do
     third <- halfSignedIn r
     (withCode r third recoveryCode >>= jsonAs 401) `shouldReturn` Unauthenticated
     (as r token methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = True, recoveryCodesLeft = 9, asksPassword = True}
+
+  it "lets an account from before OPAQUE with a second factor in, by the right password and its code, after four wrong passwords" $ withEditor backing $ \r t -> do
+    (secretText, _, _) <- setUp r t
+    secret <- maybe (panic "not base32") pure (secretFromText secretText)
+    -- The editor's password goes back to a hash from before OPAQUE.
+    withStorageAside r.place $ \st ->
+      writing st $
+        runUpdate
+          ( update
+              wikiDb.users
+              (\x -> mconcat [x.password_hash <-. val_ (Just (hashWith parameters "a salt of mine" (Password "editor's password"))), x.opaque_record <-. val_ Nothing, x.opaque_stretch <-. val_ Nothing])
+              (\x -> x.id ==. val_ "user-editor")
+          )
+    replicateM_ 4 ((.status) <$> passwordSignIn r (onPublic r) [] "editor" "a wrong password" `shouldReturn` 401)
+    -- The fifth start is counted; the right password gives it back, so
+    -- the code that follows is not refused for the password's count.
+    held <- halfSignedIn r
+    now <- getCurrentTime
+    (.status) <$> withCode r held (codeAt secret (addUTCTime 30 now)) `shouldReturn` 200
 
   it "counts wrong codes as failed sign-ins: after five, not even the password is taken" $ withEditor backing $ \r t -> do
     _ <- setUp r t
