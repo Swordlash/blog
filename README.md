@@ -830,13 +830,15 @@ to copy. The first screen also offers `--status` and `--stop` for a deployment.
 sh toolchain/configure.sh
 ```
 
-The wizard is a Haskell program with [brick](https://hackage.haskell.org/package/brick),
-compiled on your machine as a cabal script. So the wrapper first checks the C compiler
-and libraries (`toolchain/check-native.sh --with-wizard`, which adds terminfo, below),
-installs GHC and cabal (`toolchain/bootstrap.sh native --with-wizard`), and then runs
-it. The first run compiles brick and vty, which takes a few minutes; cabal keeps them,
-and later runs start at once. Everything the wizard does can be done with the options
-below, which it only writes out.
+The wizard is the deploy screen of the maker's terminal interface, `maker-tui deploy`,
+a Haskell program with [brick](https://hackage.haskell.org/package/brick), compiled on
+your machine with the maker's own cabal project. So the wrapper first checks the C
+compiler and libraries (`toolchain/check-native.sh --with-wizard`, which adds terminfo,
+below), installs GHC and cabal (`toolchain/bootstrap.sh native --with-wizard`), and then
+runs it, through `sh toolchain/maker.sh tui deploy`. The first run compiles brick and
+vty, which takes a few minutes; cabal keeps them, and later runs start at once.
+Everything the wizard does can be done with the options below, which it only writes
+out.
 
 On a machine that installs nothing from the internet (see
 [A machine that installs nothing from the internet](#a-machine-that-installs-nothing-from-the-internet)),
@@ -2321,6 +2323,7 @@ sh toolchain/maker.sh toolchain install node      # one component (system-packag
                                                   # with none named
 sh toolchain/maker.sh check native                # what the native build of wiki-server needs
 sh toolchain/maker.sh tui                         # the same in a terminal interface, as ghcup tui
+sh toolchain/maker.sh tui deploy                  # the deploy's wizard (toolchain/configure.sh runs it)
 ```
 
 The interface links libtinfo (`libncurses-dev` on Debian, which

@@ -47,6 +47,9 @@ library
     Maker.Deploy.Tailscale
     Maker.Deploy.Tex
     Maker.Deploy.Unit
+    Maker.Deploy.Wizard.Answers
+    Maker.Deploy.Wizard.Command
+    Maker.Deploy.Wizard.Load
     Maker.Log
     Maker.Pins
     Maker.Process
@@ -95,14 +98,21 @@ executable maker-tui
   import:         shared
   hs-source-dirs: tui
   main-is:        Main.hs
-  other-modules:  Maker.Tui
+  other-modules:
+    Maker.Tui
+    Maker.Tui.Deploy
+
   build-depends:
     , base
-    , brick               >=2.4  && <3.1
+    , brick               >=2.4   && <3.1
+    , directory
     , filepath
     , maker
+    , microlens           >=0.4   && <0.6
+    , text
     , typed-process
-    , vty                 >=6.2  && <6.7
+    , unix
+    , vty                 >=6.2   && <6.7
 
   ghc-options:    -threaded
 

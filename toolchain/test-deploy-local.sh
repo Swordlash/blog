@@ -166,7 +166,7 @@ fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/sbin" "$case_dir/repo/toolchain" "$case_dir/systemd"
   for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh \
-    check-tex.sh texlive-packages.txt changelog-stamp.sh; do
+    maker.sh check-tex.sh texlive-packages.txt changelog-stamp.sh; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
   cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"
@@ -4077,15 +4077,16 @@ cmp -s "$TMP/bundle-header" "$TMP/bundle-deploy" ||
   fail "the maker's bundleOutputs (maker/src/Maker/Deploy/Prepare.hs) and the files web/bundle.sh's header lists differ: $(diff "$TMP/bundle-header" "$TMP/bundle-deploy" | grep '^[<>]' | tr '\n' ' ')"
 pass 'the files --bundle-locally builds again are those web/bundle.sh says it writes'
 
-# The wizard, toolchain/configure.hs, knows the deploy's options: every
-# option the header of deploy-local.sh describes is a string literal of the
-# wizard, and every option literal of the wizard is in the header, so that
-# a new option of the deploy cannot be missing from the wizard, nor a gone
-# one stay in it. Left out on purpose: --force, which does nothing any more
-# and which the wizard does not offer; --yes, which answers --rollback's
-# question where there is no terminal, and the wizard runs on one; and the
-# wizard's own --args-from and --help. --dir, the old name of --prefix, is mentioned in the header's
-# prose only.
+# The wizard (maker-tui deploy) knows the deploy's options: every option
+# the header of deploy-local.sh describes is a string literal of the
+# wizard's modules (its answers, its command line, its loading of a
+# deployment, and its screens), and every option literal of those modules
+# is in the header, so that a new option of the deploy cannot be missing
+# from the wizard, nor a gone one stay in it. Left out on purpose: --force,
+# which does nothing any more and which the wizard does not offer; --yes,
+# which answers --rollback's question where there is no terminal, and the
+# wizard runs on one; and the wizard's own --args-from and --help. --dir,
+# the old name of --prefix, is mentioned in the header's prose only.
 wizard_options_differ() {
   sed -n '2,/^set -eu/p' "$SOURCE_DIR/deploy-local.sh" |
     sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' -e '--yes' | sort -u >"$TMP/header-options"
@@ -4095,12 +4096,13 @@ wizard_options_differ() {
   comm -13 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-header"
   [ -s "$TMP/not-in-wizard" ] || [ -s "$TMP/not-in-header" ]
 }
-if wizard_options_differ "$SOURCE_DIR/configure.hs"; then
-  fail "the wizard and the deploy's header differ: not in toolchain/configure.hs: $(cat "$TMP/not-in-wizard"); not in the header of deploy-local.sh: $(cat "$TMP/not-in-header")"
+cat "$SOURCE_DIR"/../maker/src/Maker/Deploy/Wizard/*.hs "$SOURCE_DIR/../maker/tui/Maker/Tui/Deploy.hs" >"$TMP/wizard.hs"
+if wizard_options_differ "$TMP/wizard.hs"; then
+  fail "the wizard and the deploy's header differ: not in the wizard's modules (maker/src/Maker/Deploy/Wizard/, maker/tui/Maker/Tui/Deploy.hs): $(cat "$TMP/not-in-wizard"); not in the header of deploy-local.sh: $(cat "$TMP/not-in-header")"
 fi
 # The comparison itself: an option taken out of a copy of the wizard, and
 # one added to it, are both noticed.
-sed 's/"--enable-linger/"--enable-lingering/g' "$SOURCE_DIR/configure.hs" >"$TMP/configure-changed.hs"
+sed 's/"--enable-linger/"--enable-lingering/g' "$TMP/wizard.hs" >"$TMP/configure-changed.hs"
 wizard_options_differ "$TMP/configure-changed.hs" || fail 'an option renamed in the wizard went unnoticed'
 grep -x -e '--enable-linger' "$TMP/not-in-wizard" >/dev/null || fail 'the missing --enable-linger was not named'
 grep -x -e '--enable-lingering' "$TMP/not-in-header" >/dev/null || fail 'the unknown --enable-lingering was not named'
@@ -4108,17 +4110,21 @@ pass 'the wizard offers every option of the deploy'"'"'s header but --force, and
 
 # The wizard's wrapper: toolchain/configure.sh checks the machine with the
 # wizard's item (terminfo) and without libpq, runs the bootstrap's native
-# mode for GHC and cabal with the same options, and then runs the wizard as
-# a cabal script outside the project (-z), from the checkout's root, with
-# its own arguments. The fake cabal records the call, and the first run is
-# announced (the fake's list-bin names no program).
+# mode for GHC and cabal with the same options, and then runs the wizard,
+# maker-tui deploy, through toolchain/maker.sh, from the checkout's root,
+# with its own arguments. The fake cabal records the build, and its
+# list-bin names the fake wiki-server, which stands in for maker-tui and
+# records how it was run; the first run is announced (that program is not
+# built yet when the wrapper looks).
 fixture configure
+mkdir -p "$case_dir/repo/maker"
 out=$case_dir/out
 (cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --args-from answers) >"$out" 2>&1 ||
   fail "the wrapper failed: $(cat "$out")"
 assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard WIKI_TOOLCHAIN_HOME='
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --args-from answers"
-[ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal run')" ] || fail 'the wizard ran before the bootstrap'
+assert_contains "$EVENTS" 'cabal build -v0 exe:maker-tui'
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --args-from answers"
+[ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ] || fail 'the wizard ran before the bootstrap'
 assert_contains "$out" 'configure: compiling the wizard: the first time, brick and vty as well'
 assert_lacks "$out" 'warning'
 # Without terminfo on a machine that is not Debian, the wrapper stops at
@@ -4140,10 +4146,10 @@ ln -s tool "$case_dir/bin/dpkg-query"
 FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed sh "$case_dir/repo/toolchain/configure.sh" >"$out" 2>&1 ||
   fail "the wrapper on Debian without zlib failed: $(cat "$out")"
 assert_contains "$out" 'configure: warning: the bootstrap installs the Debian packages missing above next'
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs --"
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy"
 sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
 assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
-pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through cabal run -z'
+pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through toolchain/maker.sh tui deploy'
 
 # On a machine that installs nothing from the internet: --system-tools and
 # --hackage-mirror reach the bootstrap that installs the wizard's compiler,
@@ -4153,7 +4159,7 @@ pass 'toolchain/configure.sh checks the machine with terminfo and without libpq,
   --npm-registry=https://npm.example.org/ --args-from answers) >"$out" 2>&1 ||
   fail "the wrapper with the options of a locked-down machine failed: $(cat "$out")"
 assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME='
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
 status=0
 sh "$case_dir/repo/toolchain/configure.sh" --hackage-mirror >"$out" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "the wrapper with --hackage-mirror and no URL exited $status, not 1"

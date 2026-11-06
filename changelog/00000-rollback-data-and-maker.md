@@ -24,3 +24,12 @@ title: Going back after a database switch, --fresh or an adoption
   sh toolchain/deploy-local.sh --prefix ~/wiki-demo   # adopts the deployment
   sh toolchain/deploy-local.sh --rollback --prefix ~/wiki-demo
   ```
+
+- The configuration wizard is now the deploy screen of the maker's
+  terminal interface, built with the maker instead of as a script of its
+  own. `sh toolchain/configure.sh` runs it as before, with the same
+  options; the maker runs it too:
+
+  ```sh
+  sh toolchain/maker.sh tui deploy
+  ```

@@ -14,6 +14,8 @@
 #                                                     running deployment; toolchain/deploy-local.sh
 #                                                     runs it with its plan
 #   sh toolchain/maker.sh tui                         the terminal interface
+#   sh toolchain/maker.sh tui deploy [OPTION…]        the deploy's configuration wizard
+#                                                     (toolchain/configure.sh runs it)
 #   sh toolchain/maker.sh build native|wasm|wasm-opt [CABAL-ARG…]
 #   sh toolchain/maker.sh test native|wasm|all [CABAL-ARG…]
 #   sh toolchain/maker.sh serve [CABAL-ARG…]
@@ -38,7 +40,7 @@ exe=maker
 if [ "${1:-}" = tui ]; then
   exe=maker-tui
   shift
-  set -- --root "$ROOT"
+  set -- --root "$ROOT" "$@"
 fi
 if [ "$exe" = maker ] && [ -n "${WIKI_MAKER:-}" ]; then
   cd "$ROOT"

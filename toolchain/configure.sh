@@ -1,7 +1,7 @@
 #!/bin/sh
-# Configure a deployment of the wiki in a terminal wizard, and run it:
-# toolchain/configure.hs asks for toolchain/deploy-local.sh's options in a
-# few screens, starting from the deployment's last run, shows the command
+# Configure a deployment of the wiki in a terminal wizard, and run it: the
+# wizard (maker-tui deploy) asks for toolchain/deploy-local.sh's options in
+# a few screens, starting from the deployment's last run, shows the command
 # line, and on Enter runs the deploy with it.
 #
 #   sh toolchain/configure.sh                   # the wizard
@@ -27,8 +27,10 @@
 # Each is also given to the wizard, whose screens then start with it as the
 # answer, so that the deploy it runs takes it too.
 #
-# The wizard is a Haskell program with brick, compiled on this machine as a
-# cabal script, so this first gets what compiling it needs:
+# The wizard is maker-tui's deploy command, a Haskell program with brick
+# (maker/tui/Maker/Tui/Deploy.hs, its answers and command line in
+# maker/src/Maker/Deploy/Wizard/), compiled on this machine with the
+# maker's own cabal project, so this first gets what compiling it needs:
 #
 #   1. toolchain/check-native.sh --without-postgres --with-wizard checks the
 #      C compiler and libraries, terminfo included (vty, under brick, links
@@ -43,11 +45,10 @@
 #      --system-tools and --hackage-mirror, as above.
 #   3. The toolchain's env file (~/.wiki-toolchain/env, or under
 #      WIKI_TOOLCHAIN_HOME) puts them on PATH, and
-#      `cabal run -z toolchain/configure.hs` runs the wizard from the
-#      checkout's root. The first run compiles brick and vty, which takes a
-#      few minutes; cabal keeps them for the runs after. -z keeps the script
-#      out of the repository's cabal.project, which would otherwise make
-#      cabal resolve every package of the wiki first.
+#      `sh toolchain/maker.sh tui deploy` builds maker-tui and runs the
+#      wizard from the checkout's root, with this script's arguments. The
+#      first run compiles brick and vty, which takes a few minutes; cabal
+#      keeps them for the runs after.
 #
 # The deploy's output reaches the terminal, and its exit status is this
 # script's. Relative paths given in the wizard are taken from the directory
@@ -112,12 +113,11 @@ fi
 command -v cabal >/dev/null 2>&1 ||
   die "cabal is not on PATH after the bootstrap: load $env_file (. $env_file) and run this again"
 
-bin=$(cabal list-bin -z -v0 "$ROOT/toolchain/configure.hs" 2>/dev/null || true)
+bin=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker-tui 2>/dev/null || true)
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   say "compiling the wizard: the first time, brick and vty as well, which takes a few minutes; cabal keeps them for the next runs"
 fi
 
 WIKI_CONFIGURE_DIR=$PWD
 export WIKI_CONFIGURE_DIR
-cd "$ROOT"
-exec cabal run -z -v0 "$ROOT/toolchain/configure.hs" -- "$@"
+exec sh "$ROOT/toolchain/maker.sh" tui deploy "$@"
