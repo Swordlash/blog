@@ -202,4 +202,11 @@ spec = describe "the deploy's part in the maker" $ do
       fmap (\x -> (x.commit, x.backup)) k `shouldBe` Just ("unknown", dir </> "previous" </> "b.pgdump")
       readFile (dir </> "previous" </> "b.pgdump.json") >>= (`shouldBe` "facts")
       readFile (dir </> "previous" </> "state") >>= (`shouldBe` "git_commit=abc\n")
+      -- A server whose unit is gone (after --stop) is not kept, and the
+      -- deployment kept before goes.
+      createDirectoryIfMissing True (dir </> "bin")
+      writeFile (dir </> "bin" </> "wiki-server") "stopped"
+      stopped <- keepPrevious dir (dir </> "no-unit") (dir </> "state") "abc" Nothing
+      stopped `shouldBe` False
+      doesDirectoryExist (dir </> "previous") >>= (`shouldBe` False)
       removePathForcibly dir

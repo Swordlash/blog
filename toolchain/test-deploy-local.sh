@@ -1581,12 +1581,12 @@ assert_contains "$out" 'is not kept for a rollback: this deploy changes the port
 deploy --no-build --port "$p1" >"$case_dir/port-back" 2>&1 || fail 'a redeploy on the first port failed'
 pass 'an upgrade that changes the port keeps no deployment for a rollback'
 
-# Nor does a deploy after --stop, which removed the unit: the deploy writes
-# a new one, which a rollback could not undo.
+# Nor does a deploy after --stop, which removed the unit (and turned the
+# serve off): the deploy writes a new unit, which a rollback could not undo.
 deploy --stop >"$case_dir/stop-before" 2>&1 || fail '--stop failed'
 out=$case_dir/after-stop
 deploy --no-build >"$out" 2>&1 || fail 'a deploy after --stop failed'
-assert_contains "$out" 'is not kept for a rollback: its unit is gone'
+assert_contains "$out" 'is not kept for a rollback'
 [ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment without its unit was kept'
 pass 'a deploy after --stop keeps no deployment for a rollback'
 
