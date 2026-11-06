@@ -8,6 +8,7 @@ import Maker.BuildSpec qualified
 import Maker.CheckSpec qualified
 import Maker.CliSpec qualified
 import Maker.DeploySpec qualified
+import Maker.FrontSpec qualified
 import Maker.PinsSpec qualified
 import Maker.StoreSpec qualified
 import Maker.VersionSpec qualified
@@ -22,3 +23,4 @@ main = hspec $ do
   Maker.BuildSpec.spec
   Maker.CheckSpec.spec
   Maker.DeploySpec.spec
+  Maker.FrontSpec.spec

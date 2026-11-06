@@ -9,7 +9,7 @@
 -- > maker serve [CABAL-ARG…]                        build the application and serve it (npm run serve)
 -- > maker hspec-halogen                              build the browser tests' runner and print its path
 -- > maker check native [--without-postgres] [--with-wizard] [--without-tex]   what the native build needs
--- > maker deploy apply --plan FILE      the deploy's changes to the running deployment (toolchain/deploy-local.sh runs it)
+-- > maker deploy [OPTION…]            the deploy, with toolchain/deploy-local.sh's options (it runs this)
 --
 -- @toolchain/maker.sh@ builds the maker with its own cabal project and runs
 -- it, and also starts the terminal interface (@toolchain/maker.sh tui@).
@@ -32,11 +32,7 @@ import Maker.Build.Native (buildNative, testNative)
 import Maker.Build.Wasm (buildWasm, hspecHalogen, serveWasm, testWasm, wasmBuildFrom)
 import Maker.Check.Native qualified as Check
 import Maker.Context
-import Maker.Deploy.Apply (apply, rollbackByHand)
-import Maker.Deploy.Page (pageStep)
-import Maker.Deploy.Plan (readPlan)
-import Maker.Deploy.Prepare (prepare)
-import Maker.Deploy.Tex (texStep)
+import Maker.Deploy.Front qualified as Front
 import Maker.Log (say, withLock)
 import Maker.Pins (readPins)
 import Maker.Process (firstLine, found, output)
@@ -84,8 +80,7 @@ data Command
   | Serve [String]
   | HspecHalogen
   | CheckNative (Maybe FilePath) Check.Options
-  | DeployApply FilePath
-  | DeployRollback FilePath
+  | Deploy [String]
   deriving (Eq, Show)
 
 -- | The command line's parser.
@@ -132,8 +127,8 @@ parser =
             <> command
               "deploy"
               ( info
-                  (hsubparser (command "apply" (info (DeployApply <$> strOption (long "plan" <> metavar "FILE" <> help "The plan toolchain/deploy-local.sh wrote")) (progDesc "Change the running deployment as the plan says")) <> command "rollback" (info (DeployRollback <$> strOption (long "plan" <> metavar "FILE" <> help "The plan toolchain/deploy-local.sh wrote")) (progDesc "Put back the deployment kept before the last upgrade"))))
-                  (progDesc "The deploy's parts that have moved into the maker (docs/PLAN.md, WP5.68 c2)")
+                  (Deploy <$> many (strArgument (metavar "OPTION…")))
+                  (forwardOptions <> progDesc "Deploy the wiki on this machine, with toolchain/deploy-local.sh's options (sh toolchain/deploy-local.sh --help lists them)")
               )
             <> command
               "check"
@@ -266,8 +261,12 @@ main = do
       wb <- wasmBuild False
       serveWasm be wb args
     HspecHalogen -> buildEnv >>= hspecHalogen >>= putStrLn
-    DeployApply file -> readPlan file >>= pageStep >>= texStep >>= prepare >>= apply
-    DeployRollback file -> readPlan file >>= rollbackByHand
+    Deploy args -> do
+      -- The checkout the deploy runs from: toolchain/deploy-local.sh names
+      -- it, since the deploy runs in the directory it was started in, from
+      -- which relative paths are taken.
+      root' <- maybe getCurrentDirectory pure =<< lookupEnv "WIKI_DEPLOY_ROOT"
+      Front.deploy root' args
     CheckNative rootArg options -> do
       root' <- maybe getCurrentDirectory makeAbsolute rootArg
       (report, ok) <- Check.checkNative root' options

@@ -7,6 +7,8 @@
 #   sh toolchain/bootstrap.sh native      # the host GHC and cabal alone, for wiki-server
 #   sh toolchain/bootstrap.sh node        # Node alone, to serve the demo's page CI built
 #   sh toolchain/bootstrap.sh static      # GHC, cabal and Node: the deploy of the demo's page CI built
+#   sh toolchain/bootstrap.sh maker       # GHC and cabal, and the maker built with them: what
+#                                        # toolchain/deploy-local.sh needs before the maker runs it
 #   sh toolchain/bootstrap.sh system-tools [native] [node]
 #                                        # read-only: whether this machine's own GHC and
 #                                        # cabal (native) and Node (node) will do
@@ -187,9 +189,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | build | native | static | node | warm | env | path | check | ready | system-tools) ;;
+  all | toolchain | build | native | static | maker | node | warm | env | path | check | ready | system-tools) ;;
   *)
-    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|static [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|static [--system-tools] [--hackage-mirror=URL]|maker [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -213,21 +215,21 @@ hackage_mirror=
 case $mode in
   native) usage_options='[--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]' ;;
   build) usage_options='[--without-postgres] [--hackage-mirror=URL]' ;;
-  static) usage_options='[--system-tools] [--hackage-mirror=URL]' ;;
+  static | maker) usage_options='[--system-tools] [--hackage-mirror=URL]' ;;
   *) usage_options='[--system-tools]' ;;
 esac
-if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = static ] || [ "$mode" = node ] || [ "$mode" = env ]; then
+if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = static ] || [ "$mode" = maker ] || [ "$mode" = node ] || [ "$mode" = env ]; then
   shift
   for option do
     case $mode:$option in
       native:--without-postgres | build:--without-postgres) check_postgres=--without-postgres ;;
       native:--with-wizard) check_wizard=--with-wizard ;;
-      native:--system-tools | static:--system-tools | node:--system-tools | env:--system-tools) system_tools=1 ;;
+      native:--system-tools | static:--system-tools | maker:--system-tools | node:--system-tools | env:--system-tools) system_tools=1 ;;
       build:--system-tools)
         printf 'bootstrap: build takes no --system-tools: the page'"'"'s build needs the wasm toolchain, which the bootstrap installs (--system-tools is for native and node)\n' >&2
         exit 2
         ;;
-      native:--hackage-mirror=* | build:--hackage-mirror=* | static:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
+      native:--hackage-mirror=* | build:--hackage-mirror=* | static:--hackage-mirror=* | maker:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
       *)
         printf 'usage: %s %s %s\n' "$0" "$mode" "$usage_options" >&2
         exit 2
@@ -414,8 +416,9 @@ check_system_tools() {
   system_missing=
   for need do
     case $need in
-      # static: GHC and cabal for the maker, and Node for the demo.
-      native | static)
+      # static: GHC and cabal for the maker, and Node for the demo; maker:
+      # GHC and cabal alone.
+      native | static | maker)
         system_tool ghc GHC "$GHC_VERSION" "$GHC_MIN_VERSION" "haskell-halogen, which the wiki builds with, is tested with GHC $GHC_MIN_VERSION and later, and its th package asks for ghc $GHC_MIN_VERSION or later"
         system_tool cabal cabal "$CABAL_VERSION" "$CABAL_MIN_VERSION" "cabal.project sets semaphore:, a field cabal reads from $CABAL_MIN_VERSION"
         [ "$need" != static ] || system_node
@@ -674,7 +677,7 @@ fi
 # setup.sh deletes its prefix: refuse unsafe state before changing anything.
 # A native, static or node install never runs it, and leaves ~/.ghc-wasm alone.
 case $mode in
-  native | static | node) ;;
+  native | static | maker | node) ;;
   *) guard_wasm_sysroot || exit 1 ;;
 esac
 mkdir -p "$STATE"
@@ -705,7 +708,7 @@ run() {
 # modes, which the SessionStart hooks use, keep it in the log alone.
 run_long() {
   case $mode in
-    native | static | build) ;;
+    native | static | maker | build) ;;
     *)
       run "$@"
       return 0 ;;
@@ -1003,6 +1006,13 @@ toolchain() {
   # mirror's.
   update_cabal_index
   write_env
+  # maker: the maker is built, for toolchain/deploy-local.sh to run, and
+  # nothing more is installed; the deploy runs the mode it needs after.
+  if [ "$mode" = maker ]; then
+    build_maker
+    say "GHC and cabal are ready, and the maker is built"
+    return 0
+  fi
   hand_over
 }
 
@@ -1016,7 +1026,7 @@ toolchain() {
 # and kept, and takes over this process, which still holds the toolchain's
 # lock on descriptor 9. WIKI_MAKER names a maker built elsewhere: the
 # bootstrap's tests run it against a fake cabal, which builds nothing.
-hand_over() {
+build_maker() {
   maker=${WIKI_MAKER:-}
   if [ -z "$maker" ]; then
     maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>>"$LOG") || fail "finding the maker's binary (maker/)"
@@ -1029,6 +1039,9 @@ hand_over() {
     fi
     rm -f "$built"
   fi
+}
+hand_over() {
+  build_maker
   exec "$maker" bootstrap "$mode" --root "$ROOT" --base "$BASE" ${NAMED_BASE:+--named-base} \
     --ghcup-bin "$GHCUP_BIN" --log-size "$quiet_before" --started "$started" --lock-fd 9 \
     ${check_postgres:+--without-postgres} ${check_wizard:+--with-wizard} ${system_tools:+--system-tools}

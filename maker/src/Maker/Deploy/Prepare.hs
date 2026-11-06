@@ -196,7 +196,9 @@ prepare p0 = do
   -- Whether the deployment's PostgreSQL container runs before this deploy
   -- starts it: a rollback to a deployment that was not running leaves the
   -- container as it found it (Maker.Deploy.Apply's leaveStopped).
-  dbWasRunning <- if server && v "db" == "postgres" then pgRunning name pgDir else pure False
+  -- From PostgreSQL to SQLite, the container asked about is the old one,
+  -- which a rollback starts again.
+  dbWasRunning <- if server && (v "db" == "postgres" || v "prev_db" == "postgres") then pgRunning name pgDir else pure False
   incompatible <-
     if not server
       then pure ""
@@ -246,6 +248,7 @@ prepare p0 = do
     . set "state_dir" stateDir
     . set "state_file" stateFile
     . set "adopted_pg_dir" adoptedPgDir
+    . set "adopted_state_file" (if has p0 "adoptable" then v "state_file" else "")
     . set "incompatible" incompatible
     . set "db_was_running" (if dbWasRunning then "yes" else "")
     $ p0

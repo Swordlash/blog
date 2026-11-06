@@ -46,8 +46,8 @@ if [ "${WIKI_TEST_WIZARD:-}" = 1 ]; then
   fi
 fi
 export NODE_REAL
-# The maker (maker/), which does the part of a deploy that changes the
-# running deployment (maker deploy apply), built here with the real cabal
+# The maker (maker/), which does the deploy after its first stage (maker
+# deploy, with deploy-local.sh's options), built here with the real cabal
 # before PATH is narrowed to the fakes; the deploy runs it through
 # WIKI_MAKER. A maker already built may be named there instead.
 if [ -z "${WIKI_MAKER:-}" ]; then
@@ -166,7 +166,7 @@ fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/sbin" "$case_dir/repo/toolchain" "$case_dir/systemd"
   for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs check-native.sh configure.sh \
-    check-tex.sh texlive-packages.txt changelog-stamp.sh; do
+    maker.sh check-tex.sh texlive-packages.txt changelog-stamp.sh; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
   cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"
@@ -1423,6 +1423,125 @@ assert_lacks "$HOME/wiki-demo/data/wiki.sqlite" 'earlier schema'
 undeploy --purge-data >/dev/null 2>&1
 pass 'a backup that finds the earlier schema stops the deploy, and the old service goes on; --fresh sets the file aside'
 
+# An upgrade that starts an empty wiki (WP5.73c2) is kept for a rollback
+# too, with no backup to restore: the backup is of the new, empty wiki.
+# From SQLite to PostgreSQL, the rollback stops the new container and moves
+# the wiki.sqlite the upgrade set aside back, byte for byte.
+fixture data-rollback
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+data=$HOME/wiki-demo/data
+info=$HOME/wiki-demo/previous/info
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the first deploy on SQLite failed'
+printf 'written on SQLite\n' >>"$data/wiki.sqlite"
+cp "$data/wiki.sqlite" "$case_dir/sqlite-before"
+out=$case_dir/to-postgres
+deploy --no-build --postgres --fresh --db-port 5436 >"$out" 2>&1 || fail 'the switch from SQLite to PostgreSQL failed'
+assert_contains "$out" "kept the previous deployment (unknown) in $HOME/wiki-demo/previous"
+[ -z "$(sed -n 's/^backup=//p' "$info")" ] || fail 'the backup of the new, empty wiki was kept for a rollback'
+aside=$(sed -n 's/^aside=//p' "$info")
+[ -n "$aside" ] || fail 'previous/info does not name the wiki set aside'
+cmp -s "$aside/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the wiki set aside is not the SQLite wiki'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5436'
+: >"$EVENTS"
+out=$case_dir/to-postgres-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback from PostgreSQL to SQLite failed'
+assert_contains "$out" "its wiki comes back from $aside"
+assert_lacks "$EVENTS" 'wiki-server restore'
+cmp -s "$data/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the rollback did not give the SQLite wiki back byte for byte'
+[ ! -e "$aside" ] || fail 'the emptied directory of the wiki set aside is left'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+[ "$(state db)" = sqlite ] || fail 'the rollback did not put SQLite back in the state'
+assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+pass 'a rollback of a switch from SQLite to PostgreSQL stops the new container and gives the SQLite wiki back byte for byte'
+
+# From PostgreSQL to SQLite: the rollback sets the new wiki.sqlite aside
+# and starts the old container again, on its port.
+deploy --no-build --postgres --fresh --db-port 5436 >"$case_dir/to-postgres-again" 2>&1 || fail 'the second switch to PostgreSQL failed'
+out=$case_dir/to-sqlite
+deploy --no-build --sqlite --fresh >"$out" 2>&1 || fail 'the switch from PostgreSQL to SQLite failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+[ -z "$(sed -n 's/^backup=//p' "$info")" ] || fail 'the backup of the new, empty wiki was kept for a rollback'
+assert_contains "$info" 'db_running=yes'
+assert_contains "$data/wiki.sqlite" 'a database'
+ls "$data/replaced" >"$case_dir/replaced-before"
+: >"$EVENTS"
+out=$case_dir/to-sqlite-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback from SQLite to PostgreSQL failed'
+assert_contains "$out" 'its wiki is the one in PostgreSQL (the volume wiki-demo_wiki-db)'
+assert_lacks "$EVENTS" 'wiki-server restore'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5436'
+assert_contains "$HOME/.config/wiki-demo/wiki-demo.postgres/pg_dump" "WIKI_DB_PORT='5436'"
+[ ! -e "$data/wiki.sqlite" ] || fail 'the wiki.sqlite the upgrade started is still in data/'
+new_aside=$(ls "$data/replaced" | grep -v -x -F -f "$case_dir/replaced-before" || true)
+[ -n "$new_aside" ] && [ -f "$data/replaced/$new_aside/wiki.sqlite" ] || fail 'the wiki.sqlite the upgrade started was not set aside'
+assert_lacks "$data/replaced/$new_aside/wiki.sqlite" 'written on SQLite'
+{ [ "$(state db)" = postgres ] && [ "$(state db_port)" = 5436 ]; } || fail 'the rollback did not put PostgreSQL and its port back in the state'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+pass 'a rollback of a switch from PostgreSQL to SQLite sets the new file aside and starts the old container on its port'
+
+# On PostgreSQL, --fresh only sets a stray data/wiki.sqlite aside: the
+# database stays, so the backup is of the real wiki and is kept, and a
+# failed upgrade restores it as any other.
+printf 'a stray file\n' >"$data/wiki.sqlite"
+: >"$EVENTS"
+out=$case_dir/pg-fresh-fails
+if FAKE_CHECK_FAIL=1 deploy --no-build --fresh >"$out" 2>&1; then fail 'an upgrade on PostgreSQL with --fresh whose check failed succeeded'; fi
+assert_contains "$out" 'its database restored from the backup made before the upgrade'
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/"
+assert_contains "$data/wiki.sqlite" 'a stray file'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback on PostgreSQL'
+pass 'an upgrade on PostgreSQL with --fresh keeps the backup of its database, and a failed one restores it'
+
+# --fresh on the same kind: an upgrade that fails rolls back by itself,
+# setting the new wiki aside and putting the old one back.
+deploy --no-build --sqlite --fresh >"$case_dir/to-sqlite-again" 2>&1 || fail 'the second switch to SQLite failed'
+printf 'written before --fresh\n' >>"$data/wiki.sqlite"
+cp "$data/wiki.sqlite" "$case_dir/fresh-before"
+: >"$EVENTS"
+out=$case_dir/fresh-fails
+if FAKE_CHECK_FAIL=1 deploy --no-build --fresh >"$out" 2>&1; then fail 'an upgrade with --fresh whose check failed succeeded'; fi
+assert_contains "$out" "moved $data/wiki.sqlite aside into"
+assert_contains "$out" 'rolled back to the previous deployment, of commit unknown, its wiki put back from'
+assert_lacks "$EVENTS" 'wiki-server restore'
+cmp -s "$data/wiki.sqlite" "$case_dir/fresh-before" || fail 'the rollback of --fresh did not give the wiki back byte for byte'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'previous/ is left after the rollback'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback of --fresh'
+undeploy --purge-data >/dev/null 2>&1
+pass 'an upgrade with --fresh that fails rolls back by itself and puts the wiki it set aside back'
+
+# An adoption under --prefix is kept too: the old PostgreSQL directory goes
+# into previous/postgres, and the rollback moves it and the state back to
+# the home directory, where the kept unit names them.
+fixture adoption-rollback
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the home deployment on PostgreSQL failed'
+old_pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+new_pgd=$HOME/wiki-demo/state/wiki-demo.postgres
+password=$(cat "$old_pgd/db-password")
+out=$case_dir/adopted
+deploy --prefix "$HOME/wiki-demo" --no-build >"$out" 2>&1 || fail 'adopting on PostgreSQL failed'
+[ ! -e "$old_pgd" ] || fail 'the old PostgreSQL files stayed'
+[ "$(cat "$HOME/wiki-demo/previous/postgres/db-password")" = "$password" ] || fail 'the old PostgreSQL files were not kept in previous/postgres'
+assert_contains "$HOME/wiki-demo/previous/info" "adopted_from=$HOME/.config/wiki-demo/wiki-demo.state"
+: >"$EVENTS"
+out=$case_dir/adoption-rollback
+deploy --rollback --yes --prefix "$HOME/wiki-demo" >"$out" 2>&1 || fail '--rollback of an adoption failed'
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/1.pgdump --data $HOME/wiki-demo/data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $old_pgd/db-password"
+[ -f "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail 'the state did not go back to the home directory'
+[ ! -e "$HOME/wiki-demo/state" ] || fail 'the state under the prefix is left'
+[ "$(cat "$old_pgd/db-password")" = "$password" ] || fail 'the PostgreSQL files did not go back to the home directory'
+assert_contains "$old_pgd/pg_dump" "$old_pgd/docker-compose.yml"
+assert_lacks "$HOME/$unit" '# Prefix:'
+assert_contains "$HOME/$unit" "--database-password-file \"$old_pgd/db-password\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback of the adoption'
+deploy --prefix "$HOME/wiki-demo" --no-build >"$case_dir/adopted-again" 2>&1 || fail 'adopting again after the rollback failed'
+assert_contains "$case_dir/adopted-again" 'adopting wiki-demo'
+undeploy --prefix "$HOME/wiki-demo" --purge-data >/dev/null 2>&1
+pass 'a rollback of an adoption under --prefix moves the state and the PostgreSQL files back where the kept unit names them'
+
 # The wiki's server.
 fixture server
 p1=$(free_port 127.0.0.1)
@@ -1576,7 +1695,7 @@ pass 'a database that does not read back after the migration rolls the upgrade b
 out=$case_dir/migrate-fails
 if FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose migration failed succeeded'; fi
 assert_contains "$out" 'the migration of the database (wiki-server migrate, above) failed'
-assert_contains "$out" 'stopped at the restore of its database'
+assert_contains "$out" 'stopped before the files went back'
 assert_lacks "$EVENTS" 'wiki-server check'
 assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from the first commit'
 [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = unreachable ] || fail 'a server runs on the database the restore did not put back'
@@ -3958,15 +4077,16 @@ cmp -s "$TMP/bundle-header" "$TMP/bundle-deploy" ||
   fail "the maker's bundleOutputs (maker/src/Maker/Deploy/Prepare.hs) and the files web/bundle.sh's header lists differ: $(diff "$TMP/bundle-header" "$TMP/bundle-deploy" | grep '^[<>]' | tr '\n' ' ')"
 pass 'the files --bundle-locally builds again are those web/bundle.sh says it writes'
 
-# The wizard, toolchain/configure.hs, knows the deploy's options: every
-# option the header of deploy-local.sh describes is a string literal of the
-# wizard, and every option literal of the wizard is in the header, so that
-# a new option of the deploy cannot be missing from the wizard, nor a gone
-# one stay in it. Left out on purpose: --force, which does nothing any more
-# and which the wizard does not offer; --yes, which answers --rollback's
-# question where there is no terminal, and the wizard runs on one; and the
-# wizard's own --args-from and --help. --dir, the old name of --prefix, is mentioned in the header's
-# prose only.
+# The wizard (maker-tui deploy) knows the deploy's options: every option
+# the header of deploy-local.sh describes is a string literal of the
+# wizard's modules (its answers, its command line, its loading of a
+# deployment, and its screens), and every option literal of those modules
+# is in the header, so that a new option of the deploy cannot be missing
+# from the wizard, nor a gone one stay in it. Left out on purpose: --force,
+# which does nothing any more and which the wizard does not offer; --yes,
+# which answers --rollback's question where there is no terminal, and the
+# wizard runs on one; and the wizard's own --args-from and --help. --dir,
+# the old name of --prefix, is mentioned in the header's prose only.
 wizard_options_differ() {
   sed -n '2,/^set -eu/p' "$SOURCE_DIR/deploy-local.sh" |
     sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' -e '--yes' | sort -u >"$TMP/header-options"
@@ -3976,12 +4096,13 @@ wizard_options_differ() {
   comm -13 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-header"
   [ -s "$TMP/not-in-wizard" ] || [ -s "$TMP/not-in-header" ]
 }
-if wizard_options_differ "$SOURCE_DIR/configure.hs"; then
-  fail "the wizard and the deploy's header differ: not in toolchain/configure.hs: $(cat "$TMP/not-in-wizard"); not in the header of deploy-local.sh: $(cat "$TMP/not-in-header")"
+cat "$SOURCE_DIR"/../maker/src/Maker/Deploy/Wizard/*.hs "$SOURCE_DIR/../maker/tui/Maker/Tui/Deploy.hs" >"$TMP/wizard.hs"
+if wizard_options_differ "$TMP/wizard.hs"; then
+  fail "the wizard and the deploy's header differ: not in the wizard's modules (maker/src/Maker/Deploy/Wizard/, maker/tui/Maker/Tui/Deploy.hs): $(cat "$TMP/not-in-wizard"); not in the header of deploy-local.sh: $(cat "$TMP/not-in-header")"
 fi
 # The comparison itself: an option taken out of a copy of the wizard, and
 # one added to it, are both noticed.
-sed 's/"--enable-linger/"--enable-lingering/g' "$SOURCE_DIR/configure.hs" >"$TMP/configure-changed.hs"
+sed 's/"--enable-linger/"--enable-lingering/g' "$TMP/wizard.hs" >"$TMP/configure-changed.hs"
 wizard_options_differ "$TMP/configure-changed.hs" || fail 'an option renamed in the wizard went unnoticed'
 grep -x -e '--enable-linger' "$TMP/not-in-wizard" >/dev/null || fail 'the missing --enable-linger was not named'
 grep -x -e '--enable-lingering' "$TMP/not-in-header" >/dev/null || fail 'the unknown --enable-lingering was not named'
@@ -3989,17 +4110,21 @@ pass 'the wizard offers every option of the deploy'"'"'s header but --force, and
 
 # The wizard's wrapper: toolchain/configure.sh checks the machine with the
 # wizard's item (terminfo) and without libpq, runs the bootstrap's native
-# mode for GHC and cabal with the same options, and then runs the wizard as
-# a cabal script outside the project (-z), from the checkout's root, with
-# its own arguments. The fake cabal records the call, and the first run is
-# announced (the fake's list-bin names no program).
+# mode for GHC and cabal with the same options, and then runs the wizard,
+# maker-tui deploy, through toolchain/maker.sh, from the checkout's root,
+# with its own arguments. The fake cabal records the build, and its
+# list-bin names the fake wiki-server, which stands in for maker-tui and
+# records how it was run; the first run is announced (that program is not
+# built yet when the wrapper looks).
 fixture configure
+mkdir -p "$case_dir/repo/maker"
 out=$case_dir/out
 (cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --args-from answers) >"$out" 2>&1 ||
   fail "the wrapper failed: $(cat "$out")"
 assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard WIKI_TOOLCHAIN_HOME='
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --args-from answers"
-[ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal run')" ] || fail 'the wizard ran before the bootstrap'
+assert_contains "$EVENTS" 'cabal build -v0 exe:maker-tui'
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --args-from answers"
+[ "$(line_of "$EVENTS" 'bootstrap native')" -lt "$(line_of "$EVENTS" 'cabal build')" ] || fail 'the wizard ran before the bootstrap'
 assert_contains "$out" 'configure: compiling the wizard: the first time, brick and vty as well'
 assert_lacks "$out" 'warning'
 # Without terminfo on a machine that is not Debian, the wrapper stops at
@@ -4021,10 +4146,10 @@ ln -s tool "$case_dir/bin/dpkg-query"
 FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed sh "$case_dir/repo/toolchain/configure.sh" >"$out" 2>&1 ||
   fail "the wrapper on Debian without zlib failed: $(cat "$out")"
 assert_contains "$out" 'configure: warning: the bootstrap installs the Debian packages missing above next'
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs --"
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy"
 sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
 assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
-pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through cabal run -z'
+pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through toolchain/maker.sh tui deploy'
 
 # On a machine that installs nothing from the internet: --system-tools and
 # --hackage-mirror reach the bootstrap that installs the wizard's compiler,
@@ -4034,7 +4159,7 @@ pass 'toolchain/configure.sh checks the machine with terminfo and without libpq,
   --npm-registry=https://npm.example.org/ --args-from answers) >"$out" 2>&1 ||
   fail "the wrapper with the options of a locked-down machine failed: $(cat "$out")"
 assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME='
-assert_contains "$EVENTS" "cabal run -z -v0 $case_dir/repo/toolchain/configure.hs -- --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
 status=0
 sh "$case_dir/repo/toolchain/configure.sh" --hackage-mirror >"$out" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "the wrapper with --hackage-mirror and no URL exited $status, not 1"
