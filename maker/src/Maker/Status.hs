@@ -18,7 +18,6 @@ import Maker.Toolchain.Chromium
 import Maker.Toolchain.Fourmolu (fourmoluVersionNow)
 import Maker.Toolchain.Ghcup (managedToolReady)
 import Maker.Toolchain.Node (compatibleNode, nodeVersionNow)
-import Maker.Toolchain.Sodium (sodiumWasmReady)
 import Maker.Toolchain.Wasm (sysrootReady)
 import System.Directory (doesPathExist)
 
@@ -60,10 +59,6 @@ status ctx = do
           if there
             then Blocked (wasmPrefix ctx <> " is there but unrecognised or incomplete")
             else Missing (wasmPrefix ctx)
-  sodium <- do
-    ok <- sodiumWasmReady ctx
-    pure . Component "libsodium (wasm)" $
-      if ok then Ready ctx.pins.libsodiumVersion else Missing ("wants " <> ctx.pins.libsodiumVersion <> ", built from source into the wasm sysroot")
   wasmGhc <- do
     let version = ctx.pins.wasmGhcVersion
     onPath <- numericVersion "wasm32-wasi-ghc"
@@ -89,7 +84,7 @@ status ctx = do
     said <- fourmoluVersionNow
     let wanted = "fourmolu " <> ctx.pins.fourmoluVersion
     pure . Component "fourmolu" $ if said == wanted then Ready ctx.pins.fourmoluVersion else Missing ("wants " <> ctx.pins.fourmoluVersion <> describe said)
-  pure [ghc, cabal, sysroot, sodium, wasmGhc, node, chromium, fourmolu]
+  pure [ghc, cabal, sysroot, wasmGhc, node, chromium, fourmolu]
   where
     pinned label tool version = do
       said <- numericVersion tool

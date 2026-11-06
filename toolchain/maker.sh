@@ -6,7 +6,7 @@
 #
 #   sh toolchain/maker.sh status                      the toolchain, component by component
 #   sh toolchain/maker.sh toolchain install [TARGET…]  install components (system-packages,
-#                                                     wasm-sysroot, wasm-libsodium, wasm-ghc, node, chromium,
+#                                                     wasm-sysroot, wasm-ghc, node, chromium,
 #                                                     fourmolu, store)
 #   sh toolchain/maker.sh check native [OPTION…]      what the native build of wiki-server needs
 #   sh toolchain/maker.sh deploy [OPTION…]            the deploy, with toolchain/deploy-local.sh's

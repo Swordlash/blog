@@ -20,9 +20,3 @@ shared: True
 semaphore: False
 program-options
   ghc-options: -j
-
--- The wasm build's libsodium is the pinned 1.0.22 the toolchain builds from
--- source, which has crypto_kdf_hkdf_sha512: opaque uses it, and its tests
--- compare it with the polyfill cabal.project's native build uses.
-package opaque
-  flags: -older-libsodium

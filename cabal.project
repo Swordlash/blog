@@ -125,9 +125,10 @@ program-options
 package pandoc
   flags: +embed_data_files -http
 
--- The native build links the system's libsodium, which is 1.0.18 on Debian
--- 12 and Ubuntu 24.04 (and on CI's runners): too old for libsodium's own
--- HKDF, so opaque uses its Haskell polyfill. cabal-wasm.project turns the
--- flag off again: its libsodium is the pinned 1.0.22.
+-- The opaque package is built natively only (the browser's OPAQUE client is
+-- @serenity-kit/opaque, from npm). The native build links the system's
+-- libsodium, which is 1.0.18 on Debian 12 and Ubuntu 24.04 (and on CI's
+-- runners): too old for libsodium's own HKDF, so opaque uses its Haskell
+-- polyfill until the toolchain builds a newer libsodium (WP5.74a2).
 package opaque
   flags: +older-libsodium
