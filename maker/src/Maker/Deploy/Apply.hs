@@ -145,10 +145,10 @@ apply p = do
   -- the place of the state and the PostgreSQL files (an adoption under
   -- --prefix). An older one kept before goes either way.
   backupMade <- readIORef madeBackup
-  runningNow <- mapM (`stateGet` v "state_file") ["db", "db_port", "port", "bind", "way"]
+  runningNow <- mapM (`stateGet` v "state_file") ["db", "db_port", "port", "bind", "way", "https_host", "serve_port"]
   let changes = case runningNow of
-        [oldDb, oldDbPort, oldPort, oldBind, oldWay] ->
-          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
+        [oldDb, oldDbPort, oldPort, oldBind, oldWay, oldHttpsHost, oldServePort] ->
+          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the HTTPS address or tailscale serve", oldHttpsHost /= httpsHost || oldServePort /= v "serve_port"), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
         _ -> []
   kept <-
     if server && null changes
@@ -300,7 +300,10 @@ apply p = do
   -- the console and the wrappers name the copies under the prefix.
   when (has p "adopted_pg_dir") (removePathForcibly (v "adopted_pg_dir"))
   say ("starting " <> service)
-  orDie =<< runInherit "systemctl" ["--user", "restart", service]
+  restarted <- runInherit "systemctl" ["--user", "restart", service]
+  unless (restarted == ExitSuccess) $ do
+    let why = "systemctl --user restart " <> service <> " failed (see above)"
+    if server && kept then rollBack why else die why
 
   let probeHost = hostOf bind
       probePath = if server then "api/v1/info" else ""

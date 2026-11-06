@@ -1479,8 +1479,9 @@ first=$(git -C "$case_dir/repo" rev-parse HEAD)
 printf '# built from outside git\n' >>"$HOME/wiki-demo/bin/wiki-server"
 : >"$EVENTS"
 out=$case_dir/upgrade
-deploy --no-build >"$out" 2>&1 || fail 'an upgrade failed'
+deploy >"$out" 2>&1 || fail 'an upgrade failed'
 [ "$(state git_commit)" = "$first" ] || fail 'the state does not record the commit deployed'
+assert_contains "$case_dir/repo/dist-newstyle/deployed-commit.server" "$first"
 assert_contains "$HOME/wiki-demo/previous/bin/wiki-server" '# built from outside git'
 assert_lacks "$HOME/wiki-demo/bin/wiki-server" '# built from outside git'
 assert_contains "$HOME/wiki-demo/previous/info" 'commit=unknown'
@@ -1544,11 +1545,12 @@ assert_contains "$HOME/wiki-demo/bin/wiki-server" '# built from the first commit
 pass 'a failed migration rolls the upgrade back, and a failed restore stops the rollback for --rollback to finish'
 
 # --rollback goes back by hand, after a successful upgrade: it asks first,
-# or --yes answers.
+# or --yes answers. The upgrade is made with --no-build from a checkout
+# that has moved on to another commit: the files are still the first
+# commit's build, and the state says so.
 : >"$EVENTS"
 deploy --no-build >"$case_dir/upgrade-again" 2>&1 || fail 'an upgrade failed'
-second=$(git -C "$case_dir/repo" rev-parse HEAD)
-[ "$(state git_commit)" = "$second" ] || fail 'the state does not record the second commit'
+[ "$(state git_commit)" = "$first" ] || fail '--no-build recorded the checkout'"'"'s commit, not the one the files were built from'
 out=$case_dir/rollback-asks
 if deploy --rollback </dev/null >"$out" 2>&1; then fail '--rollback without a terminal or --yes rolled back'; fi
 assert_contains "$out" 'add --yes'
@@ -1578,6 +1580,15 @@ assert_contains "$out" 'is not kept for a rollback: this deploy changes the port
 [ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment was kept across a port change'
 deploy --no-build --port "$p1" >"$case_dir/port-back" 2>&1 || fail 'a redeploy on the first port failed'
 pass 'an upgrade that changes the port keeps no deployment for a rollback'
+
+# Nor does a deploy after --stop, which removed the unit: the deploy writes
+# a new one, which a rollback could not undo.
+deploy --stop >"$case_dir/stop-before" 2>&1 || fail '--stop failed'
+out=$case_dir/after-stop
+deploy --no-build >"$out" 2>&1 || fail 'a deploy after --stop failed'
+assert_contains "$out" 'is not kept for a rollback: its unit is gone'
+[ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment without its unit was kept'
+pass 'a deploy after --stop keeps no deployment for a rollback'
 
 # The public address is the panel's: the deploy reminds of it, and says so
 # when it is another than the one served.
