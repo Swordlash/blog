@@ -224,7 +224,7 @@ apply p = do
               -- The state still names the old port's rule, which may be
               -- closed now: --rollback then sees the difference and opens it.
               stateSet "rule_port" ruleNow (v "state_file")
-              die (why <> "; the rollback to commit " <> k.commit <> " stopped at the restore of its database (see above). Restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run deploy-local.sh --rollback")
+              die (why <> "; the rollback to commit " <> k.commit <> " stopped before the files went back (see above). " <> (if null k.backup then "" else "If the restore failed, restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore; ") <> "fix the cause and run deploy-local.sh --rollback")
             let back = rollbackPlace place k
             if k.running
               then do
@@ -857,7 +857,7 @@ rollbackByHand p = do
   let place = Place {name = name, dir = dir, unitFile = v "unit_file", stateFile = v "state_file", stateDir = v "state_dir", pgDir = pgDir, noFirewall = has p "no_firewall"}
   restored <- rollBackDeployment place Nothing now k
   unless restored $
-    die ("the database is not back: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
+    die ("the rollback stopped before the files went back (see above). " <> (if null k.backup then "" else "If the restore failed, restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore; ") <> "fix the cause and run --rollback again")
   let back = rollbackPlace place k
   if k.running
     then do
@@ -949,19 +949,28 @@ rollBackDeployment place firewall now k = do
   -- there: moved back when the upgrade changed the port or the kind, and
   -- started in any case, so that a --rollback retried after a move that
   -- failed finds it up even though the two states name the same port.
-  when (kindOf old.db == "postgres") $ do
-    files <- doesFileExist (back.pgDir </> "docker-compose.yml")
-    if not files
-      then warn ("PostgreSQL's files are not in " <> back.pgDir <> ", so its container was not started")
+  -- A PostgreSQL that does not start stops the rollback here, before the
+  -- files move: the old server could not run without it, and previous/
+  -- must stay for a --rollback once the cause is fixed.
+  pgUp <-
+    if kindOf old.db /= "postgres"
+      then pure True
       else do
-        when (old.dbPort /= now.dbPort || kindOf now.db /= "postgres") (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
-        forM_ ["pg_dump", "pg_restore"] $ \program ->
-          writeFile (back.pgDir </> program) (pgWrapper place.name back.pgDir old.dbPort program)
-        code <- pgCompose place.name back.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
-        unless (code == ExitSuccess) $
-          warn ("PostgreSQL did not start on 127.0.0.1:" <> old.dbPort <> " (see above)")
+        files <- doesFileExist (back.pgDir </> "docker-compose.yml")
+        if not files
+          then do
+            warn ("PostgreSQL's files are not in " <> back.pgDir <> ", so its container cannot start: the rollback stopped there, and the previous deployment is still in " <> previousDir place.dir)
+            pure False
+          else do
+            when (old.dbPort /= now.dbPort || kindOf now.db /= "postgres") (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
+            forM_ ["pg_dump", "pg_restore"] $ \program ->
+              writeFile (back.pgDir </> program) (pgWrapper place.name back.pgDir old.dbPort program)
+            code <- pgCompose place.name back.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
+            unless (code == ExitSuccess) $
+              warn ("PostgreSQL did not start on 127.0.0.1:" <> old.dbPort <> " (see above), so the rollback stopped there: the previous deployment is still in " <> previousDir place.dir)
+            pure (code == ExitSuccess)
   args <- keptPlaceArgs place.dir back.pgDir
-  restored <- restoreDatabase place.dir args k
+  restored <- if pgUp then restoreDatabase place.dir args k else pure False
   when restored $ do
     putBackFiles place.dir place.unitFile back.stateFile service k
     -- After an adoption the state goes back where it was, and the one
