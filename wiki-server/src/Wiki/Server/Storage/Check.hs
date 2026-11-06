@@ -13,7 +13,8 @@ module Wiki.Server.Storage.Check
   )
 where
 
-import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, TableEntity, all_, runSelectReturningList, select)
+import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, SqlSelect (..), TableEntity, all_, select)
+import Database.Beam.Backend.SQL (MonadBeam (..), selectCmd)
 import Protolude
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Schema (WikiDb (..), wikiDb)
@@ -63,10 +64,17 @@ readEveryTable c =
     , counted "permissions_generation" wikiDb.permissions_generation
     ]
   where
+    -- The rows are decoded one at a time and counted as they come, never
+    -- kept: a table of every version of every page would not fit in
+    -- memory as a list. The count is forced before it is returned.
     counted
-      :: (Beamable t, FromBackendRow be (t Identity))
+      :: forall t
+       . (Beamable t, FromBackendRow be (t Identity))
       => Text
       -> DatabaseEntity be WikiDb (TableEntity t)
       -> IO TableRead
-    counted name entity =
-      TableRead name . first (toS . displayException) <$> try @SomeException (runDb c (length <$> runSelectReturningList (select (all_ entity))))
+    counted name entity = do
+      result <- try @SomeException (runDb c (case select (all_ entity) of SqlSelect s -> runReturningMany (selectCmd s) (tally @(t Identity) 0)) >>= evaluate)
+      pure (TableRead name (first (toS . displayException) result))
+    tally :: forall x. Int -> Db be (Maybe x) -> Db be Int
+    tally !n next = next >>= maybe (pure n) (const (tally (n + 1) next))

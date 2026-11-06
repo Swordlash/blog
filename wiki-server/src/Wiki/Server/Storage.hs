@@ -553,7 +553,9 @@ checkDatabase place = withDatabase place $ \c -> do
             <$> try @SomeException (runDb c records)
   where
     -- Each record forced whole (through its Show), so that a value the
-    -- conversion from a row cannot make fails here and not later.
+    -- conversion from a row cannot make fails here and not later. The
+    -- shown text is consumed as it is made, never held: the records are in
+    -- memory as an export holds them, and no more.
     records :: (Backend be) => Db be ()
     records = do
       forced =<< loadUsers
@@ -567,7 +569,7 @@ checkDatabase place = withDatabase place $ \c -> do
       forced =<< loadSettings
       forced . (\s -> s.homePage) =<< loadServerSettings
     forced :: (Show a, MonadIO m) => a -> m ()
-    forced a = liftIO (void (evaluate (T.length (show a))))
+    forced a = liftIO (void (evaluate (length (show a :: [Char]))))
 
 -- | Close the storage's database, and release its directory's lock.
 closeStorage :: Storage -> IO ()
