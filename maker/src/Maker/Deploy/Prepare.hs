@@ -16,6 +16,7 @@ module Maker.Deploy.Prepare
   , pageBackend
   , localYml
   , pgWrapper
+  , pgCompose
   )
 where
 
@@ -192,6 +193,10 @@ prepare p0 = do
   -- container is made, or started, and waited for; this changes nothing
   -- the running deployment uses. Then a data/wiki.sqlite this deployment
   -- cannot use stops the deploy, unless --fresh (or a "yes") moves it aside.
+  -- Whether the deployment's PostgreSQL container runs before this deploy
+  -- starts it: a rollback to a deployment that was not running leaves the
+  -- container as it found it (Maker.Deploy.Apply's leaveStopped).
+  dbWasRunning <- if server && v "db" == "postgres" then pgRunning name pgDir else pure False
   incompatible <-
     if not server
       then pure ""
@@ -242,6 +247,7 @@ prepare p0 = do
     . set "state_file" stateFile
     . set "adopted_pg_dir" adoptedPgDir
     . set "incompatible" incompatible
+    . set "db_was_running" (if dbWasRunning then "yes" else "")
     $ p0
 
 -- | The backend a page was built for, from its
@@ -618,3 +624,20 @@ readFileStrict :: FilePath -> IO String
 readFileStrict file = do
   text <- readFile file
   length text `seq` pure text
+
+-- | Whether a deployment's PostgreSQL container runs now, by
+-- @docker compose ps@. False when the deployment has no compose file yet,
+-- or Docker does not answer.
+pgRunning :: String -> FilePath -> IO Bool
+pgRunning name pd = do
+  there <- doesFileExist (pd </> "docker-compose.yml")
+  if not there
+    then pure False
+    else do
+      environment <- withVars [("WIKI_DB_PASSWORD_FILE", pd </> "db-password")]
+      let ps = proc "docker" ["compose", "--project-name", name, "--file", pd </> "docker-compose.yml", "--file", pd </> "local.yml", "ps", "--status", "running", "--quiet", "postgres"]
+      result <- try (readProcessStdout (setEnv environment (setStdin nullStream (setStderr nullStream ps))))
+      pure $ case result of
+        Right (ExitSuccess, out) -> not (null (words (decodeFs out)))
+        Right _ -> False
+        Left (_ :: IOException) -> False

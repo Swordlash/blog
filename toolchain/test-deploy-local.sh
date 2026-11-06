@@ -662,6 +662,7 @@ case $name in
       'stop postgres') [ ! -f "$container" ] || printf 'stopped\n' >"$container" ;;
       'down --volumes') rm -f "$container" ;;
       'ps postgres') cat "$container" 2>/dev/null || true ;;
+      'ps --status running --quiet postgres') ! grep -q '^started' "$container" 2>/dev/null || printf 'c0ffee\n' ;;
       'exec -T postgres pg_dump '* | 'exec -T postgres pg_restore '*)
         grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
         shift 3
@@ -1266,6 +1267,46 @@ assert_contains "$out" 'its database: PostgreSQL in Docker, the compose project 
 assert_contains "$out" 'backups: 2 in'
 pass 'a redeploy finds the container, backs the database up with its pg_dump between the old server and the new, keeps the password, and updates the guide on the new server'
 
+# An upgrade that moves PostgreSQL to another port is kept, and the
+# rollback moves the container and the pg_dump and pg_restore wrappers back
+# to the old port before it restores the database there.
+out=$case_dir/db-port
+deploy --no-build --db-port 5435 >"$out" 2>&1 || fail 'a redeploy on another database port failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5435'
+[ -e "$HOME/wiki-demo/previous" ] || fail 'a deployment was not kept across a database port change'
+: >"$EVENTS"
+out=$case_dir/db-port-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback across a database port change failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started on 5433'
+assert_contains "$pgd/pg_dump" '5433'
+assert_lacks "$pgd/pg_dump" '5435'
+assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/2.pgdump --data $data --database postgres://wiki@127.0.0.1:5433/wiki"
+[ "$(state db_port)" = 5433 ] || fail 'the rollback did not put the old database port back in the state'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+pass 'a rollback across a database port change moves PostgreSQL back to its old port before the restore'
+
+# A rollback to a deployment taken down with --stop leaves its PostgreSQL
+# container stopped too, as --stop left it; the deploy had started it.
+deploy --stop >"$case_dir/pg-stop" 2>&1 || fail '--stop failed'
+deploy --no-build >"$case_dir/pg-after-stop" 2>&1 || fail 'a deploy after --stop failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --rollback --yes >"$case_dir/pg-stopped-rollback" 2>&1 || fail '--rollback to a stopped deployment failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+deploy --no-build >"$case_dir/pg-started-again" 2>&1 || fail 'a deploy after the rollback failed'
+pass 'a rollback to a PostgreSQL deployment taken down with --stop stops its container again'
+
+# A wiki whose service had stopped while its database ran comes back
+# stopped, with the database still running, as it was.
+systemctl --user stop wiki-demo.service
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --no-build >"$case_dir/pg-service-stopped" 2>&1 || fail 'a deploy over a stopped service failed'
+assert_contains "$HOME/wiki-demo/previous/info" 'running=no'
+assert_contains "$HOME/wiki-demo/previous/info" 'db_running=yes'
+deploy --rollback --yes >"$case_dir/pg-service-stopped-rollback" 2>&1 || fail '--rollback to a stopped service failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --no-build >"$case_dir/pg-service-again" 2>&1 || fail 'a deploy after the rollback failed'
+pass 'a rollback to a stopped service whose PostgreSQL ran leaves the database running'
+
 : >"$EVENTS"
 out=$case_dir/guide-fails
 FAKE_GUIDE_FAIL=1 deploy --no-build >"$out" 2>&1 || fail 'a failed update of the guide failed the deploy'
@@ -1569,26 +1610,39 @@ if deploy --rollback --yes >"$out" 2>&1; then fail '--rollback with nothing kept
 assert_contains "$out" 'there is no previous deployment kept'
 pass '--rollback asks, or takes --yes, and puts the kept deployment back with its database'
 
-# An upgrade that changes what a rollback would not put back (here the
-# port, and so the firewall rule and the serve) keeps nothing, and says so.
-deploy --no-build >"$case_dir/keep-again" 2>&1 || fail 'a redeploy failed'
-[ -e "$HOME/wiki-demo/previous" ] || fail 'a redeploy kept nothing'
+# An upgrade that moves the deployment to another port is kept too: the
+# rollback puts tailscale serve back on the old port (and the firewall
+# rule, where there is one), and the old port answers again.
 p_other=$(other_port "$p1")
 out=$case_dir/port-change
 deploy --no-build --port "$p_other" >"$out" 2>&1 || fail 'a redeploy on another port failed'
-assert_contains "$out" 'is not kept for a rollback: this deploy changes the port'
-[ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment was kept across a port change'
-deploy --no-build --port "$p1" >"$case_dir/port-back" 2>&1 || fail 'a redeploy on the first port failed'
-pass 'an upgrade that changes the port keeps no deployment for a rollback'
+[ -e "$HOME/wiki-demo/previous" ] || fail 'a deployment was not kept across a port change'
+[ "$(cat "$FAKE_TS_SERVE")" = "http://127.0.0.1:$p_other" ] || fail 'the serve does not proxy to the new port'
+: >"$EVENTS"
+out=$case_dir/port-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback across a port change failed'
+assert_contains "$EVENTS" "tailscale serve --bg http://127.0.0.1:$p1"
+[ "$(cat "$FAKE_TS_SERVE")" = "http://127.0.0.1:$p1" ] || fail 'the rollback did not point the serve back at the old port'
+[ "$(state port)" = "$p1" ] || fail 'the rollback did not put the old port back in the state'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the old port does not answer after the rollback'
+[ "$(http_get "http://127.0.0.1:$p_other/api/v1/info")" = unreachable ] || fail 'the new port still answers after the rollback'
+pass 'a rollback across a port change points tailscale serve back and serves on the old port'
 
-# Nor does a deploy after --stop, which removed the unit (and turned the
-# serve off): the deploy writes a new unit, which a rollback could not undo.
+# A deploy after --stop, which removed the unit and stopped the service, is
+# kept as such: the rollback removes the unit the deploy wrote and leaves
+# the service stopped, as it was.
 deploy --stop >"$case_dir/stop-before" 2>&1 || fail '--stop failed'
 out=$case_dir/after-stop
 deploy --no-build >"$out" 2>&1 || fail 'a deploy after --stop failed'
-assert_contains "$out" 'is not kept for a rollback'
-[ ! -e "$HOME/wiki-demo/previous" ] || fail 'a deployment without its unit was kept'
-pass 'a deploy after --stop keeps no deployment for a rollback'
+assert_contains "$HOME/wiki-demo/previous/info" 'running=no'
+assert_contains "$HOME/wiki-demo/previous/info" 'unit=no'
+out=$case_dir/stopped-rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback to a stopped deployment failed'
+assert_contains "$out" 'is left stopped, as it was before the upgrade'
+[ ! -e "$HOME/$unit" ] || fail 'the rollback left the unit the deploy wrote'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = unreachable ] || fail 'the rollback started a deployment that was stopped'
+deploy --no-build >"$case_dir/started-again" 2>&1 || fail 'a deploy after the rollback failed'
+pass 'a rollback to a deployment taken down with --stop removes the new unit and leaves it stopped'
 
 # The public address is the panel's: the deploy reminds of it, and says so
 # when it is another than the one served.

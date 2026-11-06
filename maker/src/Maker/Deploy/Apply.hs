@@ -33,7 +33,8 @@ import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
-import Maker.Deploy.State (renderState, stateGet, writeState)
+import Maker.Deploy.Prepare (pgCompose, pgWrapper)
+import Maker.Deploy.State (renderState, stateGet, stateSet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
 import Maker.Deploy.Upgrade
@@ -72,6 +73,9 @@ apply p = do
   -- From here on the running deployment changes.
   madeBackup <- newIORef Nothing
   wasInstalled <- doesFileExist (v "unit_file")
+  -- Whether the deployment ran when the deploy began: a rollback starts it
+  -- again only then.
+  wasRunning <- succeeds "systemctl" ["--user", "is-active", "--quiet", service]
   when wasInstalled $ do
     say ("stopping " <> service)
     _ <- runInherit "systemctl" ["--user", "stop", service]
@@ -137,22 +141,21 @@ apply p = do
   -- under a prefix, the state and the toolchain, which the next deploy
   -- needs.
   -- The deployment it replaces is kept for a rollback (Maker.Deploy.Upgrade),
-  -- a server's only: its binary, page, unit and state, with its commit and
-  -- the backup just made. It is kept only when the upgrade changes nothing
-  -- a rollback would not put back: the database's kind or port (the
-  -- container), the listening port or address (the firewall rule, tailscale
-  -- serve), the way HTTPS is served, the database itself (--fresh), or
-  -- the place of the state and the PostgreSQL files (an adoption under
-  -- --prefix). An older one kept before goes either way.
+  -- a server's only: its binary, page, unit and state, with its commit, the
+  -- backup just made and whether it was running. A rollback puts back what
+  -- the files say and reconciles the settings outside them (the firewall
+  -- rule, tailscale serve, PostgreSQL's port; 'rollBackDeployment'). It
+  -- cannot yet bring back a wiki an upgrade set aside, so nothing is kept
+  -- when the database changes kind, is started anew (--fresh), or moves
+  -- with an adoption under --prefix (WP5.73c2). An older one kept before
+  -- goes either way.
   backupMade <- readIORef madeBackup
-  runningNow <- mapM (`stateGet` v "state_file") ["db", "db_port", "port", "bind", "way", "https_host", "serve_port"]
-  let changes = case runningNow of
-        [oldDb, oldDbPort, oldPort, oldBind, oldWay, oldHttpsHost, oldServePort] ->
-          [what | (what, changed) <- [("the database", oldDb /= db), ("the database's port", db == "postgres" && oldDbPort /= dbPort), ("the port", oldPort /= port), ("the address", oldBind /= bind), ("the way HTTPS is served", oldWay /= way), ("the HTTPS address or tailscale serve", oldHttpsHost /= httpsHost || oldServePort /= v "serve_port"), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
-        _ -> []
+  oldDb <- stateGet "db" (v "state_file")
+  let changes =
+        [what | (what, changed) <- [("the database", oldDb /= db), ("the database, with --fresh", has p "incompatible"), ("the deployment's place, adopting it under --prefix", has p "adoptable")], changed]
   kept <-
     if server && null changes
-      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade
+      then keepPrevious dir (v "unit_file") (v "state_file") (v "prev_git_commit") backupMade wasRunning (has p "db_was_running")
       else do
         replaced <- doesFileExist (dir </> "bin" </> "wiki-server")
         when (server && replaced) $
@@ -205,14 +208,26 @@ apply p = do
           Nothing -> die (why <> ", and no previous deployment is kept to go back to")
           Just k -> do
             warn why
-            keptArgs <- keptPlaceArgs dir pgDir
-            restored <- restorePrevious dir (v "unit_file") (v "state_file") service keptArgs k
-            unless restored $
+            -- What this deploy has changed outside the files so far: the
+            -- old port's firewall rule may be closed already, and
+            -- PostgreSQL may listen on a new port. tailscale serve is set
+            -- only after the new server answers, so it is still the old.
+            ruleNow <- readIORef rulePort
+            let now = Settings {rulePort = ruleNow, servePort = v "prev_serve_port", db = db, dbPort = dbPort}
+            restored <- rollBackDeployment place firewall now k
+            unless restored $ do
+              -- The state still names the old port's rule, which may be
+              -- closed now: --rollback then sees the difference and opens it.
+              stateSet "rule_port" ruleNow (v "state_file")
               die (why <> "; the rollback to commit " <> k.commit <> " stopped at the restore of its database (see above). Restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run deploy-local.sh --rollback")
-            running <- answersWithin service answers probeUrl
-            if running
-              then say ("the previous deployment runs again (" <> service <> " answers on " <> probeUrl <> ")")
-              else warn ("the previous deployment does not answer on " <> probeUrl <> " either; see journalctl --user -u " <> name)
+            if k.running
+              then do
+                url <- deploymentUrl (v "state_file")
+                started <- startAgain service answers url
+                if started
+                  then say ("the previous deployment runs again (" <> service <> " answers on " <> url <> ")")
+                  else warn ("the previous deployment does not answer on " <> url <> " either; see journalctl --user -u " <> name)
+              else leaveStopped place k >> say (service <> " is left stopped, as it was before the deploy")
             die
               ( why
                   <> ": rolled back to the previous deployment, of commit "
@@ -222,6 +237,7 @@ apply p = do
                   <> k.commit
                   <> ") until the cause is fixed"
               )
+      place = Place {name = name, dir = dir, unitFile = v "unit_file", stateFile = v "state_file", stateDir = v "state_dir", pgDir = pgDir, noFirewall = noFirewall}
   when server $
     migrateAndCheck (dir </> "bin" </> "wiki-server") placeArgs >>= mapM_ rollBack
 
@@ -797,7 +813,6 @@ rollbackByHand p = do
       pgDir = v "state_dir" </> (name <> ".postgres")
   mk <- readKept dir
   k <- maybe (die ("there is no previous deployment kept in " <> previousDir dir <> " to roll back to: a deploy keeps one when it replaces a server")) pure mk
-  placeArgs <- keptPlaceArgs dir pgDir
   say ("the deployment kept in " <> previousDir dir <> " is of commit " <> k.commit <> ", kept " <> k.keptAt)
   if null k.backup
     then say "its database is left as it is: there was none when it was kept"
@@ -814,19 +829,23 @@ rollbackByHand p = do
             pure (map toLower reply `elem` ["y", "yes"])
           else die "--rollback asks first, and there is no terminal to ask on: run it on one, or add --yes"
   unless answer (die "nothing was changed")
-  restored <- restorePrevious dir (v "unit_file") (v "state_file") service placeArgs k
+  -- The settings as the deployment being replaced has them, from its state.
+  now <- settingsOf (v "state_file")
+  let place = Place {name = name, dir = dir, unitFile = v "unit_file", stateFile = v "state_file", stateDir = v "state_dir", pgDir = pgDir, noFirewall = has p "no_firewall"}
+  restored <- rollBackDeployment place Nothing now k
   unless restored $
-    die ("nothing else was changed: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
-  -- The deployment as the restored state describes it.
-  restoredState <- mapM (`stateGet` v "state_file") ["bind", "port", "way"]
-  node <- findExecutable "node"
-  let url = case restoredState of
-        [bind, port, way] -> serverUrl True bind port way
-        _ -> ""
-  running <- answersWithin service (urlAnswers node) url
-  if running
-    then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
-    else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
+    die ("the database is not back: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
+  if k.running
+    then do
+      url <- deploymentUrl (v "state_file")
+      node <- findExecutable "node"
+      running <- startAgain service (urlAnswers node) url
+      if running
+        then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
+        else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
+    else do
+      leaveStopped place k
+      say ("rolled back to commit " <> k.commit <> "; " <> service <> " is left stopped, as it was before the upgrade")
 
 -- | The database options of the deployment kept in @previous/@, read from
 -- the state file kept with it. The backup a rollback restores is of that
@@ -840,3 +859,130 @@ keptPlaceArgs dir pgDir = do
     if db == "postgres"
       then ["--data", dir </> "data", "--database", dbUrl dbPort, "--database-password-file", pgDir </> "db-password", "--pg-dump", pgDir </> "pg_dump", "--pg-restore", pgDir </> "pg_restore"]
       else ["--data", dir </> "data", "--sqlite", dir </> "data" </> "wiki.sqlite"]
+
+-- | The settings outside a deployment's files that an upgrade can change
+-- and a rollback puts back: the port of the ufw rule the deploy opened, the
+-- port tailscale serve proxies to, and the database's kind and published
+-- port. Empty means none.
+data Settings = Settings
+  { rulePort :: String
+  , servePort :: String
+  , db :: String
+  , dbPort :: String
+  }
+
+-- | A deployment's settings as its state file records them.
+settingsOf :: FilePath -> IO Settings
+settingsOf file = do
+  rule <- stateGet "rule_port" file
+  serve <- stateGet "serve_port" file
+  kind <- stateGet "db" file
+  port <- stateGet "db_port" file
+  pure Settings {rulePort = rule, servePort = serve, db = kind, dbPort = port}
+
+-- | Where a deployment's pieces are, for a rollback.
+data Place = Place
+  { name :: String
+  , dir :: FilePath
+  , unitFile :: FilePath
+  , stateFile :: FilePath
+  , stateDir :: FilePath
+  , pgDir :: FilePath
+  , noFirewall :: Bool
+  }
+
+-- | Put the kept deployment back (WP5.73c of docs/PLAN.md), given the
+-- settings the deployment being replaced has now. In order: the service
+-- stops; PostgreSQL goes back to its old port, since the restore connects
+-- there; the database is restored from the kept backup; the files and
+-- unit go back; the firewall rule and tailscale serve go back to the old
+-- ports. The service is left stopped for the caller, which starts it if it
+-- was running. The answer is whether the rollback was made: a restore that
+-- fails stops it before the files move.
+rollBackDeployment :: Place -> Maybe Firewall.Firewall -> Settings -> Kept -> IO Bool
+rollBackDeployment place firewall now k = do
+  let service = place.name <> ".service"
+  say ("rolling back to the previous deployment (" <> k.commit <> "), kept in " <> previousDir place.dir)
+  _ <- runInherit "systemctl" ["--user", "stop", service]
+  old <- settingsOf (previousDir place.dir </> "state")
+  -- PostgreSQL runs on the kept port before the restore, which connects
+  -- there: moved back when the upgrade changed the port, and started in
+  -- any case, so that a --rollback retried after a move that failed finds
+  -- it up even though the two states name the same port.
+  when (old.db == "postgres" && now.db == "postgres") $ do
+    when (old.dbPort /= now.dbPort) (say ("moving PostgreSQL back to 127.0.0.1:" <> old.dbPort))
+    forM_ ["pg_dump", "pg_restore"] $ \program ->
+      writeFile (place.pgDir </> program) (pgWrapper place.name place.pgDir old.dbPort program)
+    code <- pgCompose place.name place.pgDir old.dbPort ["up", "--detach", "--wait", "postgres"]
+    unless (code == ExitSuccess) $
+      warn ("PostgreSQL did not start on 127.0.0.1:" <> old.dbPort <> " (see above)")
+  args <- keptPlaceArgs place.dir place.pgDir
+  restored <- restoreDatabase place.dir args k
+  when restored $ do
+    putBackFiles place.dir place.unitFile place.stateFile service k
+    when (now.rulePort /= old.rulePort) $ do
+      found <- case firewall of
+        Just f -> pure (Just f)
+        Nothing | place.noFirewall -> pure Nothing
+        Nothing -> Just <$> Firewall.probe
+      case found of
+        Nothing -> do
+          say ("--no-firewall: the firewall rule stays as it is; the previous deployment had " <> (if null old.rulePort then "none" else "one for port " <> old.rulePort))
+          -- The state put back keeps naming the rule that is open, so
+          -- that a later deploy or --stop closes that one.
+          stateSet "rule_port" now.rulePort place.stateFile
+        Just f -> do
+          unless (null now.rulePort) (Firewall.close f place.stateDir place.stateFile now.rulePort)
+          unless (null old.rulePort) (Firewall.open f place.name old.rulePort)
+          Firewall.report f
+    serveBack now.servePort old.servePort
+  pure restored
+
+-- | Point tailscale serve back at the previous deployment's port, or turn
+-- it off when the previous deployment had no serve. As the deploy does, a
+-- serve that proxies to neither deployment's port is someone else's and is
+-- left alone.
+serveBack :: String -> String -> IO ()
+serveBack now old
+  | now == old = pure ()
+  | null old = Tailscale.serveOff now
+  | otherwise = do
+      current <- Tailscale.serveRead
+      case current of
+        Nothing -> warn ("tailscale serve status does not answer, so tailscale serve was not pointed back at 127.0.0.1:" <> old <> "; run: tailscale serve --bg http://127.0.0.1:" <> old)
+        Just s
+          | Tailscale.proxiesTo s old -> pure ()
+          | null s.kind || (not (null now) && Tailscale.proxiesTo s now) -> do
+              say ("tailscale serve --bg http://127.0.0.1:" <> old)
+              (ok, out) <- Tailscale.outputOfBoth 60 ["serve", "--bg", "http://127.0.0.1:" <> old]
+              unless ok $ do
+                hPutStr stderr (Tailscale.indented out)
+                warn "could not point tailscale serve back (see above)"
+                Tailscale.rightsHint ("serve --bg http://127.0.0.1:" <> old)
+          | otherwise -> warn ("tailscale serve serves " <> s.kind <> " " <> s.target <> ", which this deployment did not set, so it is left alone")
+
+-- | Start a service again after a rollback, and wait for it to answer.
+startAgain :: String -> (String -> IO Bool) -> String -> IO Bool
+startAgain service answers url = do
+  _ <- runInherit "systemctl" ["--user", "restart", service]
+  answersWithin service answers url
+
+-- | The URL a server deployment answers at, as its state file describes
+-- it. After a rollback the state is the restored deployment's, whose port,
+-- address or HTTPS way may differ from the deployment rolled back.
+deploymentUrl :: FilePath -> IO String
+deploymentUrl stateFile = do
+  bind <- stateGet "bind" stateFile
+  port <- stateGet "port" stateFile
+  way <- stateGet "way" stateFile
+  pure (serverUrl True bind port way)
+
+-- | Leave a rolled-back deployment stopped, as it was before the upgrade:
+-- its PostgreSQL container too, which the deploy started, unless the
+-- container was running before the deploy (the wiki's service can be
+-- stopped or failed while its database runs).
+leaveStopped :: Place -> Kept -> IO ()
+leaveStopped place k = do
+  kind <- stateGet "db" place.stateFile
+  port <- stateGet "db_port" place.stateFile
+  when (kind == "postgres" && not k.dbRunning) (pgDown place.name place.pgDir port)
