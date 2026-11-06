@@ -34,7 +34,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
 import Maker.Deploy.Prepare (pgCompose, pgWrapper)
-import Maker.Deploy.State (renderState, stateGet, writeState)
+import Maker.Deploy.State (renderState, stateGet, stateSet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
 import Maker.Deploy.Upgrade
@@ -215,15 +215,19 @@ apply p = do
             ruleNow <- readIORef rulePort
             let now = Settings {rulePort = ruleNow, servePort = v "prev_serve_port", db = db, dbPort = dbPort}
             restored <- rollBackDeployment place firewall now k
-            unless restored $
+            unless restored $ do
+              -- The state still names the old port's rule, which may be
+              -- closed now: --rollback then sees the difference and opens it.
+              stateSet "rule_port" ruleNow (v "state_file")
               die (why <> "; the rollback to commit " <> k.commit <> " stopped at the restore of its database (see above). Restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run deploy-local.sh --rollback")
             if k.running
               then do
-                started <- startAgain service answers probeUrl
+                url <- deploymentUrl (v "state_file")
+                started <- startAgain service answers url
                 if started
-                  then say ("the previous deployment runs again (" <> service <> " answers on " <> probeUrl <> ")")
-                  else warn ("the previous deployment does not answer on " <> probeUrl <> " either; see journalctl --user -u " <> name)
-              else say (service <> " is left stopped, as it was before the deploy")
+                  then say ("the previous deployment runs again (" <> service <> " answers on " <> url <> ")")
+                  else warn ("the previous deployment does not answer on " <> url <> " either; see journalctl --user -u " <> name)
+              else leaveStopped place >> say (service <> " is left stopped, as it was before the deploy")
             die
               ( why
                   <> ": rolled back to the previous deployment, of commit "
@@ -833,17 +837,15 @@ rollbackByHand p = do
     die ("the database is not back: restore " <> k.backup <> " by hand with " <> previousDir dir </> "bin" </> "wiki-server restore, then run --rollback again")
   if k.running
     then do
-      -- The deployment as the restored state describes it.
-      restoredState <- mapM (`stateGet` v "state_file") ["bind", "port", "way"]
+      url <- deploymentUrl (v "state_file")
       node <- findExecutable "node"
-      let url = case restoredState of
-            [bind, port, way] -> serverUrl True bind port way
-            _ -> ""
       running <- startAgain service (urlAnswers node) url
       if running
         then say ("rolled back to commit " <> k.commit <> "; " <> service <> " answers on " <> url)
         else die ("rolled back to commit " <> k.commit <> ", but " <> service <> " does not answer on " <> url <> "; see journalctl --user -u " <> name)
-    else say ("rolled back to commit " <> k.commit <> "; " <> service <> " is left stopped, as it was before the upgrade")
+    else do
+      leaveStopped place
+      say ("rolled back to commit " <> k.commit <> "; " <> service <> " is left stopped, as it was before the upgrade")
 
 -- | The database options of the deployment kept in @previous/@, read from
 -- the state file kept with it. The backup a rollback restores is of that
@@ -920,7 +922,11 @@ rollBackDeployment place firewall now k = do
         Nothing | place.noFirewall -> pure Nothing
         Nothing -> Just <$> Firewall.probe
       case found of
-        Nothing -> say ("--no-firewall: the firewall rule stays as it is; the previous deployment had " <> (if null old.rulePort then "none" else "one for port " <> old.rulePort))
+        Nothing -> do
+          say ("--no-firewall: the firewall rule stays as it is; the previous deployment had " <> (if null old.rulePort then "none" else "one for port " <> old.rulePort))
+          -- The state put back keeps naming the rule that is open, so
+          -- that a later deploy or --stop closes that one.
+          stateSet "rule_port" now.rulePort place.stateFile
         Just f -> do
           unless (null now.rulePort) (Firewall.close f place.stateDir place.stateFile now.rulePort)
           unless (null old.rulePort) (Firewall.open f place.name old.rulePort)
@@ -956,3 +962,21 @@ startAgain :: String -> (String -> IO Bool) -> String -> IO Bool
 startAgain service answers url = do
   _ <- runInherit "systemctl" ["--user", "restart", service]
   answersWithin service answers url
+
+-- | The URL a server deployment answers at, as its state file describes
+-- it. After a rollback the state is the restored deployment's, whose port,
+-- address or HTTPS way may differ from the deployment rolled back.
+deploymentUrl :: FilePath -> IO String
+deploymentUrl stateFile = do
+  bind <- stateGet "bind" stateFile
+  port <- stateGet "port" stateFile
+  way <- stateGet "way" stateFile
+  pure (serverUrl True bind port way)
+
+-- | Leave a rolled-back deployment stopped, as it was before the upgrade:
+-- its PostgreSQL container too, which the deploy started.
+leaveStopped :: Place -> IO ()
+leaveStopped place = do
+  kind <- stateGet "db" place.stateFile
+  port <- stateGet "db_port" place.stateFile
+  when (kind == "postgres") (pgDown place.name place.pgDir port)

@@ -7,6 +7,7 @@ module Maker.Deploy.State
   , renderState
   , writeState
   , stateGet
+  , stateSet
   )
 where
 
@@ -82,3 +83,13 @@ stateGet key file = do
     Right t ->
       let values = [drop (length key + 1) l | l <- lines t, (key <> "=") == take (length key + 1) l]
        in if null values then "" else length t `seq` last values
+
+-- | Set one value of a state file, keeping its other lines: the lines of
+-- the key are replaced by one, or it is added at the end. A rollback uses
+-- it when the state it puts back would otherwise name a firewall rule that
+-- is not the one open.
+stateSet :: String -> String -> FilePath -> IO ()
+stateSet key value file = do
+  text <- either (\(_ :: IOException) -> "") id <$> try (readFile file)
+  let others = [l | l <- lines text, (key <> "=") /= take (length key + 1) l]
+  length text `seq` writeState file (unlines (others <> [key <> "=" <> value]))

@@ -1284,6 +1284,16 @@ assert_contains "$EVENTS" "wiki-server restore $HOME/wiki-demo/previous/2.pgdump
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
 pass 'a rollback across a database port change moves PostgreSQL back to its old port before the restore'
 
+# A rollback to a deployment taken down with --stop leaves its PostgreSQL
+# container stopped too, as --stop left it; the deploy had started it.
+deploy --stop >"$case_dir/pg-stop" 2>&1 || fail '--stop failed'
+deploy --no-build >"$case_dir/pg-after-stop" 2>&1 || fail 'a deploy after --stop failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+deploy --rollback --yes >"$case_dir/pg-stopped-rollback" 2>&1 || fail '--rollback to a stopped deployment failed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+deploy --no-build >"$case_dir/pg-started-again" 2>&1 || fail 'a deploy after the rollback failed'
+pass 'a rollback to a PostgreSQL deployment taken down with --stop stops its container again'
+
 : >"$EVENTS"
 out=$case_dir/guide-fails
 FAKE_GUIDE_FAIL=1 deploy --no-build >"$out" 2>&1 || fail 'a failed update of the guide failed the deploy'
