@@ -656,7 +656,7 @@ handlers env caller =
               login <- loginOf u
               taken <- liftIO (takeAttempt env.attempts now body.attempt)
               let counted = maybe False (\a -> a.user == Just u) taken
-                  check = do
+                  proving = do
                     ok <- liftIO (Accounts.oldPasswordIs env.storage u body.password)
                     if ok
                       then do
@@ -668,7 +668,7 @@ handlers env caller =
                       else do
                         unless counted $ liftIO (Limiter.failed env.limiter now login s.address)
                         refuse ApiError.Unauthenticated
-              if counted then check else limitedFor login s check
+              if counted then proving else limitedFor login s proving
           , changePassword = ownPassword
           , sessions = do
               u <- signedInUser
