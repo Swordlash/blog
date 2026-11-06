@@ -70,8 +70,9 @@ registering m = describe "making an account" $ do
     find ui ".register-form button[type=submit]" >>= click
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
     length <$> findAll ui ".register-form" `shouldReturn` 0
-    made <- filter (\r -> r.method == "POST") <$> asked
-    map (\r -> (r.url, r.body)) made `shouldBe` [("api/v1/accounts", "{\"displayName\":\"Rita Reader\",\"login\":\"rita\",\"password\":\"a long password\"}")]
+    -- The account with the record of its password, never the password.
+    made <- filter (\r -> r.method == "POST" && r.url == "api/v1/accounts") <$> asked
+    map (\r -> ("\"login\":\"rita\"" `T.isInfixOf` r.body, "\"displayName\":\"Rita Reader\"" `T.isInfixOf` r.body, "a long password" `T.isInfixOf` r.body)) made `shouldBe` [(True, True, False)]
     unmount ui
     serverStops
 
@@ -131,7 +132,7 @@ invited m = describe "an invitation's page" $ do
     find ui ".invitation-form button[type=submit]" >>= click
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
     _ <- find ui ".directory"
-    accepted <- filter (\r -> r.method == "POST") <$> asked
+    accepted <- filter (\r -> r.method == "POST" && r.url /= "api/v1/password-registration") <$> asked
     map (\r -> r.url) accepted `shouldBe` ["api/v1/invitations/s3cr3t"]
     unmount ui
     serverStops

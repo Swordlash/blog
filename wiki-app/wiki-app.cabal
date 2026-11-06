@@ -310,6 +310,7 @@ test-suite wiki-app-test
         Test.Assistant
         Test.Backend.Http
         Test.Backend.Opaque
+        Test.Opaque
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Blog
@@ -374,6 +375,7 @@ test-suite wiki-app-browser-test
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
   other-modules:
+      Test.Opaque
       Test.Browser.Access
       Test.Browser.Activity
       Test.Browser.Admin
@@ -423,6 +425,7 @@ test-suite wiki-app-browser-test
       aeson,
       base,
       base64-bytestring,
+      opaque,
       bytestring,
       containers,
       protolude,

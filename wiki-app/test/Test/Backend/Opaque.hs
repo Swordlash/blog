@@ -11,59 +11,20 @@
 -- @correct horse@. Every other login gets the fake record's answer.
 module Test.Backend.Opaque
   ( opaqueServer
-  , adminPassword
-  , cheap
   )
 where
 
 import Crypto.OPAQUE.Internal qualified as O
 import Data.Aeson (FromJSON, ToJSON, decodeStrict, encode)
-import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Protolude
 import Servant.Client.Core (Response)
+import Test.Opaque (cheap, credential, respond, setup)
 import Test.Scripted (bodyOf, jsonResponse, methodOf)
 import Wiki.Api.Account (SignInMethods (..))
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), ProofStart (..), RegistrationChallenge (..), RegistrationStart (..), Stretch (..), bytesOf, messageOf, opaqueConfig)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), ProofStart (..), RegistrationChallenge (..), RegistrationStart (..), bytesOf, messageOf)
 import Wiki.Api.Types (SessionInfo)
 import Wiki.App.Backend.Http (HttpRequest, requestUrl)
-
--- | The stretching of the fake server's records: libsodium's least, so
--- that the tests are quick.
-cheap :: Stretch
-cheap = Stretch {opsLimit = 1, memLimit = 8192}
-
--- | admin's password.
-adminPassword :: ByteString
-adminPassword = "correct horse"
-
--- | A scalar of the group made of one repeated byte (the top byte zero,
--- so that it is below the group's order).
-scalar :: Word8 -> ByteString
-scalar b = BS.replicate 31 b <> BS.singleton 0
-
-setup :: O.ServerSetup
-setup = either (panic . show) identity $ do
-  fake <- maybe (Left O.DeriveKeyPairError) Right (O.fakeRecordWith (scalar 1) (BS.replicate 64 2))
-  O.serverSetupWith (BS.replicate 64 3) (BS.replicate 32 4) fake
-
-credential :: O.CredentialId
-credential = O.CredentialId "user-admin"
-
-adminRecord :: O.RegistrationRecord
-adminRecord = either (panic . show) fst $ do
-  (st, request) <- O.registrationRequestWith (scalar 7) adminPassword
-  response <- O.registrationResponse setup credential request
-  O.finalizeRegistrationWith (opaqueConfig cheap) (BS.replicate 32 5) st response O.defaultIdentities
-
--- | The server's state and message for a login's first message.
-respond :: Text -> O.KE1 -> (O.ServerLoginState, O.KE2)
-respond login ke1 =
-  either (panic . show) identity $
-    O.serverRespondWith (opaqueConfig cheap) setup record credential random ke1 O.defaultIdentities
-  where
-    record = if login == "admin" then adminRecord else setup.fakeRecord
-    random = O.ServerRandom {maskingNonce = BS.replicate 32 8, serverNonce = BS.replicate 32 9, keyshareSeed = BS.replicate 32 10}
 
 -- | A request's JSON body.
 body :: (FromJSON a) => HttpRequest -> Maybe a

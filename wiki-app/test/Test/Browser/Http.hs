@@ -51,6 +51,7 @@ import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
+import Test.Opaque (fakeChallenge, fakeRegistration)
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
@@ -153,7 +154,26 @@ release = unsafeIOToPageM js_server_release
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.
 serverStarts :: PageM s ()
-serverStarts = unsafeIOToPageM js_server_start
+serverStarts = do
+  unsafeIOToPageM js_server_start
+  serveOpaque
+
+-- | The answers to OPAQUE's first messages and registrations
+-- ("Wiki.Api.Opaque"), which every test has: this server answers each
+-- address with one fixed answer, so a sign-in, or a proof of the current
+-- password, is answered as for an account from before OPAQUE, and the
+-- application goes on the old way with the password (to @POST session@, or
+-- in the request that needs it); a registration makes a record of whatever
+-- it is sent; and the record an old sign-in registers at once is taken. A
+-- test answers these addresses otherwise after this. The OPAQUE exchange
+-- itself is tested against the real server's functions in
+-- "Test.Backend.Http" and "Test.Server.Accounts".
+serveOpaque :: PageM s ()
+serveOpaque = do
+  answerWith "POST" "api/v1/session/password" 200 fakeChallenge
+  answerWith "POST" "api/v1/account/password/proof" 200 fakeChallenge
+  answerWith "POST" "api/v1/password-registration" 200 fakeRegistration
+  answerWith "PUT" "api/v1/account/password" 200 SignInMethods {password = True, identities = []}
 
 serverStops :: PageM s ()
 serverStops = unsafeIOToPageM js_server_stop
@@ -397,8 +417,10 @@ accounts m = describe "signing in and out" $ do
     _ <- find ui ".account .sign-out"
     length <$> findAll ui ".sign-in-form" `shouldReturn` 0
     -- The login field's offer of passkeys asks for a challenge of its own.
-    [signIn] <- filter (\r -> r.method == "POST" && r.url /= "api/v1/session/passkey") <$> asked
-    (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\"}")
+    -- This server answers OPAQUE as for an account from before it
+    -- ('serveOpaque'): the old sign-in follows, naming the attempt.
+    [signIn] <- filter (\r -> r.method == "POST" && r.url == "api/v1/session") <$> asked
+    (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\",\"attempt\":\"a1\"}")
     Map.lookup "X-Wiki-Request" signIn.headers `shouldBe` Just "1"
     -- Everything read as nobody is read again as Ada: the spaces were.
     eventually $ (length . filter (\r -> r.url == "api/v1/spaces") <$> asked) >>= (`shouldSatisfy` (> spacesBefore))
@@ -482,7 +504,9 @@ ownPassword m = describe "one's own password" $ do
     find ui ".password-change button[type=submit]" >>= (`shouldHaveText` "Change password")
     find ui ".password-change button[type=submit]" >>= click
     find ui ".account-told" >>= (`shouldContainText` "Your password is changed.")
-    map (\r -> (r.url, r.body)) <$> puts `shouldReturn` [("api/v1/account/password", "{\"current\":\"rita's password\",\"new\":\"a longer new password\"}")]
+    -- The current password as an account from before OPAQUE gives it
+    -- ('serveOpaque'), the new one as its record.
+    map (\r -> (r.url, "\"current\":\"rita's password\"" `T.isInfixOf` r.body, "a longer new password" `T.isInfixOf` r.body)) <$> puts `shouldReturn` [("api/v1/account/password", True, False)]
     -- The form is gone, with what was typed in it; Rita is still signed in.
     length <$> findAll ui ".password-change" `shouldReturn` 0
     _ <- find ui ".password-change-toggle"
@@ -535,7 +559,7 @@ ownPassword m = describe "one's own password" $ do
     find ui ".password-change button[type=submit]" >>= (`shouldHaveText` "Set password")
     find ui ".password-change button[type=submit]" >>= click
     find ui ".account-told" >>= (`shouldContainText` "Your password is set")
-    map (\r -> r.body) <$> puts `shouldReturn` ["{\"current\":null,\"new\":\"a longer new password\"}"]
+    map (\r -> ("\"current\":null" `T.isInfixOf` r.body, "a longer new password" `T.isInfixOf` r.body)) <$> puts `shouldReturn` [(True, False)]
     find ui ".account-password" >>= (`shouldHaveText` "With your password")
     find ui ".password-change-toggle" >>= (`shouldHaveText` "Change password…")
     unmount ui
