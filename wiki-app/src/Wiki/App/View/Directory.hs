@@ -29,7 +29,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Path (childrenOf)
 import Wiki.Core.Permission (mayCreateSpace)
-import Wiki.Core.Space (Space (description, id, name, public, slug), subspacesOf)
+import Wiki.Core.Space (Space (description, id, name, personalContainer, public, slug), subspacesOf)
 
 -- | The directory's input: the shell's context, and a route a newcomer is
 -- invited to (the demo's tour), if there is one.
@@ -114,6 +114,19 @@ component =
 
     card :: State -> Space -> H.ComponentHTML Action Slots m
     card st s
+      -- The container of personal spaces, which nobody may view, leads to
+      -- the finder of user spaces while the reader may open one of them.
+      | s.personalContainer
+      , let n = length (openPersonalSpaces ctx)
+      , n > 0 =
+          [hh|
+            <li class="space-card space-card-users" data-space={{ s.id.text }}>
+              <a class="space-card-link" {{ Router.linkProps ctx.router Followed UserSpaces }}>
+                {{ spaceIcon ctx.icons s }}<span class="space-card-name">{{ s.name }}</span>
+              </a>
+              <p class="space-card-description">The spaces of the wiki's users: {{ counted n "space" "spaces" }} you may open.</p>
+            </li>
+          |]
       | mayView ctx s.id =
           [hh|
             <li class="space-card" data-space={{ s.id.text }}>

@@ -33,6 +33,8 @@ module Wiki.App.View.Common
   , errorMessage
   , pageTree
   , spaceIcon
+  , ownSpace
+  , openPersonalSpaces
   , AvatarSize (..)
   , avatar
   , avatarOf
@@ -73,8 +75,8 @@ import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canView, hasGlobalPermission, spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourFor, colourOf, iconLetter)
-import Wiki.Core.User (Avatar, Standing (..))
+import Wiki.Core.Space (Icon (..), Space (active, homePage, icon, id, name, owner, personalContainer, slug), colourFor, colourOf, iconLetter, isPersonal)
+import Wiki.Core.User (Avatar, Standing (..), User (id))
 import Wiki.Core.Version (Author (..))
 
 -- | 'Context': what the shell knows that every view needs. That is the
@@ -250,16 +252,36 @@ pageTree router onFollow spacePath order pages current controls = level Nothing
 
 -- | A space's icon beside its name ('Wiki.Core.Space.Icon'): its emoji,
 -- its image (from the URL the context gives), or the first letter of its
--- name on its colour. Decoration only: the name is always beside it, so a
--- screen reader does not read it twice.
+-- name on its colour. The container "User subspaces" has no icon of its
+-- own, since nobody may change its settings, and shows a person (👤)
+-- rather than its letter. Decoration only: the name is always beside it, so
+-- a screen reader does not read it twice.
 spaceIcon :: Map SpaceId Text -> Space -> HH.HTML w i
 spaceIcon urls s = case s.icon of
-  Just (IconEmoji e) -> [hh|<span class="space-icon space-icon-emoji" aria-hidden="true">{{ e }}</span>|]
+  Just (IconEmoji e) -> emoji e
   Just (IconImage _ _)
     | Just url <- Map.lookup s.id urls
     , not (T.null url) ->
         [hh|<img class="space-icon space-icon-image" src={{ url }} alt="" aria-hidden="true">|]
-  _ -> [hh|<span class="space-icon space-icon-{{ colourOf s }}" aria-hidden="true">{{ iconLetter s.name }}</span>|]
+  _
+    | s.personalContainer -> emoji "\x1F464"
+    | otherwise -> [hh|<span class="space-icon space-icon-{{ colourOf s }}" aria-hidden="true">{{ iconLetter s.name }}</span>|]
+  where
+    emoji :: Text -> HH.HTML w i
+    emoji e = [hh|<span class="space-icon space-icon-emoji" aria-hidden="true">{{ e }}</span>|]
+
+-- | The signed-in user's personal space, if it is turned on and listed.
+ownSpace :: Context -> Maybe Space
+ownSpace ctx = do
+  u <- ctx.session.user
+  find (\s -> s.owner == Just u.id && s.active) ctx.spaces
+
+-- | The personal spaces the reader may open, their own among them, in the
+-- order of the listed spaces. The container "User subspaces" leads
+-- somewhere only while there is one: the reader's own, turned on, or
+-- another user's that is public or shared with them.
+openPersonalSpaces :: Context -> [Space]
+openPersonalSpaces ctx = filter (\s -> isPersonal s && s.active && mayView ctx s.id) ctx.spaces
 
 -- | How big a user's avatar is drawn: 'SmallAvatar' beside a name in a
 -- line of text (the header, a comment, a byline, the readers of a page),

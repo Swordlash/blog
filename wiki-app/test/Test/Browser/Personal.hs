@@ -34,9 +34,12 @@ spec m = do
     eventually (find ui ".user-menu .personal-space-enable" >>= click)
     eventually (void (find ui ".user-menu .personal-space-disable"))
     find ui ".user-switcher-toggle" >>= click
-    -- The container is a space the editor sees only a subspace of.
-    eventually (find ui ".space-card-unviewable .space-card-name" >>= (`shouldHaveText` "User subspaces"))
-    find ui ".space-card-unviewable .space-card-description" >>= (`shouldContainText` "Space of Edgar Editor")
+    -- The container, which nobody may view, leads to the finder of user
+    -- spaces, and the sidebar has the editor's own space under it.
+    eventually (find ui ".space-card-users .space-card-name" >>= (`shouldHaveText` "User subspaces"))
+    find ui ".space-card-users .space-card-description" >>= (`shouldContainText` "1 space you may open")
+    find ui ".sidebar-user-spaces .space-icon" >>= (`shouldHaveText` "\x1F464")
+    find ui ".sidebar-own-space .own-space-link" >>= (`shouldHaveText` "Your personal space")
     find ui ".starred-toggle" >>= click
     own <- find ui ".starred-panel .starred-own-link"
     find ui ".starred-own .starred-title" >>= (`shouldHaveText` "Your space")
@@ -48,13 +51,36 @@ spec m = do
 
   it "turns it off after asking, and hides it" $ runPage $ do
     ui <- startChanged m (personalFor "user-editor") (Just "user-editor") Home
-    _ <- find ui ".space-card-unviewable"
+    _ <- find ui ".space-card-users"
     find ui ".user-switcher-toggle" >>= click
     eventually (find ui ".user-menu .personal-space-disable" >>= click)
     find ui ".personal-space-confirm" >>= (`shouldContainText` "Nothing in it is deleted")
     find ui ".personal-space-confirm-disable" >>= click
     eventually (void (find ui ".user-menu .personal-space-enable"))
-    eventually (length <$> findAll ui ".space-card-unviewable" `shouldReturn` 0)
+    eventually (length <$> findAll ui ".space-card-users" `shouldReturn` 0)
+    length <$> findAll ui ".user-spaces-link" `shouldReturn` 0
+    unmount ui
+
+  it "finds user spaces: the reader's own and the starred first, then by login or name" $ runPage $ do
+    ui <- startChanged m (starHomeOf "user-reader" "user-editor" . personalFor "user-admin" . personalFor "user-reader" . personalFor "user-editor") (Just "user-editor") Home
+    eventually (find ui ".sidebar-user-spaces .user-spaces-link" >>= click)
+    eventually (findAll ui ".user-spaces-starred .user-space-name" >>= traverse textContent >>= (`shouldBe` ["Space of Edgar Editor", "Space of Rita Reader"]))
+    find ui ".user-spaces-starred .user-space-own" >>= (`shouldHaveText` "Your space")
+    findAll ui ".user-spaces-results .user-space-name" >>= traverse textContent >>= (`shouldBe` ["Space of Ada Admin", "Space of Rita Reader"])
+    find ui ".user-spaces-search" >>= (`typeText` "rita")
+    eventually (findAll ui ".user-spaces-results .user-space-name" >>= traverse textContent >>= (`shouldBe` ["Space of Rita Reader"]))
+    find ui ".user-spaces-search" >>= (`typeText` "x")
+    eventually (find ui ".user-spaces-nothing" >>= (`shouldContainText` "No user space matches"))
+    find ui ".sidebar-own-space .own-space-link" >>= click
+    eventually (find ui ".wiki-content" >>= (`shouldContainText` "Welcome to Space of Edgar Editor"))
+    unmount ui
+
+  it "leads a visitor to the public user spaces, without a space of their own" $ runPage $ do
+    ui <- startChanged m (personalFor "user-reader") Nothing Home
+    eventually (find ui ".sidebar-user-spaces .user-spaces-link" >>= click)
+    length <$> findAll ui ".sidebar-own-space" `shouldReturn` 0
+    eventually (findAll ui ".user-spaces-results .user-space-name" >>= traverse textContent >>= (`shouldBe` ["Space of Rita Reader"]))
+    length <$> findAll ui ".user-spaces-starred" `shouldReturn` 0
     unmount ui
 
   it "opens a personal space's settings, with its name read-only" $ runPage $ do
@@ -87,6 +113,12 @@ spec m = do
     -- application starts.
     personalFor user st =
       either (panic . show) (\(made, _) -> made {current = st.current}) (setPersonalSpaceIn (UTCTime (fromGregorian 2026 1 1) 0) True st {current = Just (UserId user)})
+
+    -- A star by the second user on the home page of the first user's
+    -- personal space, made before the application starts.
+    starHomeOf owner user st = case [h | x <- Map.elems st.spaces, x.owner == Just (UserId owner), Just h <- [x.homePage]] of
+      h : _ -> st {stars = Map.insertWith (<>) (UserId user) [h] st.stars}
+      [] -> panic ("no personal space of " <> owner)
 
     -- A grant on the top-level space with this slug, made before the
     -- application starts.

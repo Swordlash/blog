@@ -12,7 +12,7 @@ import Protolude
 import Test.Hspec
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.State (MemState (..), setPersonalSpaceIn)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections, allUsers, sectionName, sectionTitle)
 import Wiki.App.Static (Rendered (..), renderRoute)
@@ -30,6 +30,13 @@ slugs = map (either (panic . show) identity . mkSlug)
 -- | The demo as someone sees it: nobody, or one of its users.
 as :: Maybe Text -> MemState
 as who = (demoState demoNow) {current = UserId <$> who}
+
+-- | The state with these users' personal spaces turned on, as each would
+-- turn theirs on from the account menu.
+withPersonal :: [Text] -> MemState -> MemState
+withPersonal users st0 = (foldl' turnOn st0 users) {current = st0.current}
+  where
+    turnOn st u = either (panic . show) fst (setPersonalSpaceIn demoNow True st {current = Just (UserId u)})
 
 render :: MemState -> Route -> IO Rendered
 render st = renderRoute st "/"
@@ -179,6 +186,23 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- render (as (Just "user-reader")) Home
     html `contains` "<span class=\"space-card-link unviewable\""
     html `contains` "You may open <a href=\"/s/team/projects/\">Team / Projects</a>."
+
+  it "leads from User subspaces to the finder of user spaces, with the reader's own space under it" $ do
+    let personal = withPersonal ["user-reader", "user-editor"] (as (Just "user-editor"))
+    Rendered {html} <- render personal Home
+    html `contains` "<a class=\"space-link user-spaces-link\" href=\"/user-spaces/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">\x1F464</span><span>User subspaces</span></a>"
+    html `contains` "<a class=\"space-link own-space-link\" href=\"/s/users/editor/\">Your personal space</a>"
+    html `contains` "<a class=\"space-card-link\" href=\"/user-spaces/\">"
+    Rendered {html = finder, title} <- render personal UserSpaces
+    title `shouldBe` "User subspaces · Wiki"
+    finder `contains` "<h2>Find another</h2>"
+    finder `contains` "<span class=\"user-space-name\">Space of Rita Reader</span>"
+    finder `contains` "<span class=\"user-space-own\">Your space</span>"
+    -- A visitor may open the reader's space, which is public, and has none
+    -- of their own.
+    Rendered {html = visitor} <- render ((withPersonal ["user-reader"] (as Nothing)) {current = Nothing}) Home
+    visitor `contains` "href=\"/user-spaces/\""
+    visitor `lacks` "Your personal space"
 
   it "offers no actions on a space to someone who may only read it" $ do
     Rendered {html} <- render (as Nothing) (SpacePages (slugs ["docs"]))

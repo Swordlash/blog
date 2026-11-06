@@ -189,6 +189,7 @@ import Wiki.App.View.Space qualified as SpaceView
 import Wiki.App.View.Starred qualified as StarredView
 import Wiki.App.View.Status qualified as StatusView
 import Wiki.App.View.Unsubscribe qualified as UnsubscribeView
+import Wiki.App.View.UserSpaces qualified as UserSpacesView
 import Wiki.App.View.Users qualified as UsersView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.App.View.WhatsNew qualified as WhatsNewView
@@ -202,7 +203,7 @@ import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, tit
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent), subspacesOf)
+import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent, personalContainer), containerName, subspacesOf)
 import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a
@@ -296,6 +297,7 @@ data PartSlot
   | UnsubscribeSlot
   | AssistantSettingsSlot
   | WhatsNewSlot
+  | UserSpacesSlot
   deriving stock (Eq, Ord)
 
 -- | The space the route is in, as far as it has been loaded.
@@ -962,9 +964,31 @@ component =
         |]
 
     -- A space in a list of spaces, with its icon: a link to it, unless the
-    -- user may not view it.
+    -- user may not view it. The container "User subspaces" is a link to the
+    -- finder of user spaces while the reader may open a personal space,
+    -- with the reader's own under it while it is on.
     spaceEntry :: State m -> Space -> H.ComponentHTML Action Slots m
     spaceEntry st x
+      | x.personalContainer
+      , not (null (openPersonalSpaces (context st))) =
+          [hh|
+            <div class="sidebar-user-spaces">
+            <a
+              class="space-link user-spaces-link"
+              {{ [attr "aria-current" "page" | st.route == UserSpaces] }}
+              {{ Router.linkProps st.router Followed UserSpaces }}
+            >
+              {{ spaceIcon st.icons x }}<span>{{ x.name }}</span>
+            </a>
+            {% for own in toList (ownSpace (context st)) %}
+              <ul class="sidebar-own-space">
+                <li>
+                  <a class="space-link own-space-link" {{ Router.linkProps st.router Followed (Space (spacePathOf st.spaces own.id)) }}>Your personal space</a>
+                </li>
+              </ul>
+            {% end %}
+            </div>
+          |]
       | mayView (context st) x.id =
           [hh|<a class="space-link" {{ Router.linkProps st.router Followed (Space (spacePathOf st.spaces x.id)) }}>{{ spaceIcon st.icons x }}<span>{{ x.name }}</span></a>|]
       | otherwise =
@@ -1088,6 +1112,7 @@ component =
       Unsubscribe token -> HH.slot_ "part" UnsubscribeSlot UnsubscribeView.component UnsubscribeView.Input {token}
       AssistantSettings -> HH.slot_ "part" AssistantSettingsSlot AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
       WhatsNewPage -> HH.slot_ "part" WhatsNewSlot WhatsNewView.component WhatsNewView.Input {context = context st}
+      UserSpaces -> HH.slot_ "part" UserSpacesSlot UserSpacesView.component UserSpacesView.Input {context = context st}
       Home -> homeContent st
       _ -> case st.here of
         NoSpace -> notFound st
@@ -1737,11 +1762,18 @@ crumbs st = case st.route of
   Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]
   WhatsNewPage -> [("What's new?", Nothing)]
+  UserSpaces -> [(containerName, Nothing)]
   where
+    -- A crumb links to its space, or for the container of personal spaces,
+    -- which nobody may view, to the finder of user spaces.
     spaceCrumbs path =
-      [ (s.name, if mayView (context st) s.id then Just (Space (spacePathOf st.spaces s.id)) else Nothing)
+      [ (s.name, crumbRoute s)
       | s <- either (\e -> e.resolved) identity (resolvePath (findChild st.spaces) path)
       ]
+    crumbRoute s
+      | mayView (context st) s.id = Just (Space (spacePathOf st.spaces s.id))
+      | s.personalContainer = Just UserSpaces
+      | otherwise = Nothing
     pageCrumbs path pagePath = case st.here of
       InSpace _ _ pages ->
         [ (p.title, Just (Page path (pagePathOf pages p.id)))

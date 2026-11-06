@@ -620,6 +620,15 @@ select {
   gap: 0.45rem;
 }
 
+/* The reader's own personal space, under "User subspaces" in the sidebar:
+   indented below the container, as a subspace is in a tree. */
+.sidebar-own-space {
+  margin: 0.15rem 0 0;
+  padding: 0 0 0 1.9rem;
+  list-style: none;
+  font-size: 0.92rem;
+}
+
 /* Inside a space: the way back to every space and to another, the space
    itself, the way up from a subspace, its home page and its pages. */
 .space-switcher {
@@ -1003,6 +1012,48 @@ select {
 }
 
 .space-card-unviewable .space-card-description {
+  color: var(--muted);
+}
+
+/* ---- The finder of user spaces -------------------------------------------- */
+
+.user-spaces section {
+  margin-top: 1.4rem;
+}
+
+.user-spaces-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-space {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.user-space-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.user-space-own {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.user-spaces-search {
+  width: 100%;
+  max-width: 28rem;
+}
+
+.user-spaces-none,
+.user-spaces-nothing,
+.user-spaces-more {
   color: var(--muted);
 }
 

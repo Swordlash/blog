@@ -174,6 +174,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , VerifyEmail (VerificationToken "secret")
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
+      , UserSpaces
       ]
         <> map Admin adminSections
 
@@ -250,6 +251,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
            , WhatsNewPage
+           , UserSpaces
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections
