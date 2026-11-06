@@ -2275,6 +2275,16 @@ sh toolchain/maker.sh build wasm -j2              # what npm run build-wasm -- -
 sh toolchain/maker.sh test native --test-options='--match "/Slug/"'
 ```
 
+The deploy is moving into the maker too, from its end. `toolchain/deploy-local.sh`
+still reads the options and the state, builds or downloads what it needs and starts
+the database; then it writes a plan of what it found and runs `maker deploy apply
+--plan FILE`, which does everything that changes the running deployment: the backup,
+the files, the unit, the restart, the checks that it answers, `tailscale serve`, the
+firewall and the report at the end. A demo whose page is not built on the machine
+(`--static --backend-only`, `--static --app-page`) still does that part in shell,
+since it has no GHC to build the maker with yet. `toolchain/undeploy-local.sh` and
+`--status` stay in shell, as does `toolchain/check-native.sh`: they need no GHC.
+
 Install modes also check system packages and the cabal index. Each step checks whether
 its tool is already there and working, so running it again is quick and repairs missing
 tools. Commands' output goes to
