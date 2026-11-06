@@ -2,28 +2,33 @@
 -- docs/PLAN.md, "Wiki.Api.Opaque"), with the @opaque@ package's own server
 -- functions and fixed random values: a server setup, one user with a record
 -- (admin, whose password is @correct horse@), the server's answer to a
--- first message, and two answers made once for the browser tests, whose
--- server answers each address with one fixed answer.
+-- first message, and the two answers the browser tests carry as fixed bytes
+-- ("Test.Browser.Opaque"), made the same way, to check those against.
 module Test.Opaque
   ( cheap
   , adminPassword
   , setup
   , credential
   , respond
-  , fakeChallenge
-  , fakeRegistration
+  , fakeChallengeMade
+  , fakeRegistrationMade
   )
 where
 
 import Crypto.OPAQUE.Internal qualified as O
 import Data.ByteString qualified as BS
 import Protolude
-import Wiki.Api.Opaque (LoginChallenge (..), RegistrationChallenge (..), Stretch (..), messageOf, opaqueConfig)
+import Wiki.Api.Opaque (LoginChallenge (..), RegistrationChallenge (..), Stretch (..), messageOf)
 
 -- | The stretching of the fake server's records: libsodium's least, so
 -- that the tests are quick.
 cheap :: Stretch
 cheap = Stretch {opsLimit = 1, memLimit = 8192}
+
+-- | The wiki's OPAQUE configuration for the fake server's records: no
+-- context and their Argon2id, as wiki-server's "Wiki.Server.Opaque" has it.
+opaqueConfig :: Stretch -> O.Config
+opaqueConfig s = O.Config {context = "", ksf = O.Argon2id {opsLimit = fromIntegral s.opsLimit, memLimit = fromIntegral s.memLimit}}
 
 -- | admin's password.
 adminPassword :: ByteString
@@ -58,21 +63,20 @@ respond login ke1 =
     random = O.ServerRandom {maskingNonce = BS.replicate 32 8, serverNonce = BS.replicate 32 9, keyshareSeed = BS.replicate 32 10}
 
 -- | A server's answer to a sign-in's (or a proof's) first message that no
--- password finishes, made once, with the old sign-in on: what a server
--- answers an account from before OPAQUE. The browser tests answer every
--- sign-in with it, since their server answers each address with one fixed
--- answer, so the application then signs in the old way.
-fakeChallenge :: LoginChallenge
-fakeChallenge =
+-- password finishes, with the old sign-in on: what a server answers an
+-- account from before OPAQUE ("Test.Browser.Opaque"'s 'fakeChallenge').
+fakeChallengeMade :: LoginChallenge
+fakeChallengeMade =
   either (panic . show) identity $ do
     (_, ke1) <- O.clientStartWith (scalar 11) (BS.replicate 32 12) (BS.replicate 32 13) "anything"
     let (_, ke2) = respond "nobody" ke1
     pure LoginChallenge {attempt = "a1", ke2 = messageOf (O.encode ke2), stretch = cheap, fallback = True}
 
--- | A server's answer to a registration, made once: any blinded password
--- the browser sends makes a record of it, for the user @user-new@.
-fakeRegistration :: RegistrationChallenge
-fakeRegistration =
+-- | A server's answer to a registration: any blinded password the browser
+-- sends makes a record of it, for the user @user-new@
+-- ("Test.Browser.Opaque"'s 'fakeRegistration').
+fakeRegistrationMade :: RegistrationChallenge
+fakeRegistrationMade =
   either (panic . show) identity $ do
     (_, request) <- O.registrationRequestWith (scalar 7) "anything"
     response <- O.registrationResponse setup credential request

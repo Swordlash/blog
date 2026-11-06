@@ -127,16 +127,20 @@ again replaces the browser's session. `signIn` and `signOut` are methods of
 
 ### Passwords through OPAQUE
 
-A password never travels (WP5.74a, `Wiki.Api.Opaque`, the `opaque`
-package): the browser and the server run OPAQUE (RFC 9807, ristretto255,
-SHA-512, 3DH), and the server keeps a registration record per user. The
+A password never travels (WP5.74a, `Wiki.Api.Opaque`): the browser and the
+server run OPAQUE (RFC 9807, ristretto255, SHA-512, 3DH), the browser with
+`@serenity-kit/opaque` and the server with the `opaque` package, and the
+server keeps a registration record per user. The
 messages (`ke1`, `ke2`, `ke3`, a registration's `request` and `response`, a
 `record`) are their RFC encodings in unpadded base64url. `stretch`
 `{"opsLimit", "memLimit"}` is the Argon2id the browser stretches the OPRF's
-output with (passes, and memory in bytes; 4 and 128 MiB for new records),
-stored beside each record so that the server can ask for more later. The
-shared context is `wiki OPAQUE v1`, and the identities are the RFC's default,
-the parties' public keys; a record's credential id is its user's id.
+output with (passes, and memory in bytes, a whole number of KiB; parallelism
+1; 4 and 128 MiB for new records), stored beside each record and sent with
+every challenge, so that the server can ask for more later without breaking
+older records (a login nobody has gets the current one). The shared context
+is empty (serenity-kit passes none), and the identities are the RFC's
+default, the parties' public keys; a record's credential id is its user's
+id.
 
 A sign-in is a start (`POST session/password`) and a finish (`PUT`): every
 start counts as a failed sign-in until it finishes, and a login nobody has,

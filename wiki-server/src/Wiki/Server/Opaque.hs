@@ -18,11 +18,20 @@
 -- The browser stretches the OPRF's output with Argon2id before it derives
 -- anything from it ('Stretch'). The parameters are stored beside each
 -- record, so that a later server can ask for more for new records without
--- breaking the old ones. 'defaultStretch' is what new records get: 64 MiB
--- and two passes, libsodium's interactive limits, which take about half a
--- second in a browser tab (the RFC's own recommendation, 2 GiB, is too
--- much for one). The salt is the RFC's sixteen zero bytes: the OPRF's
--- output is already unique to the user and the server.
+-- breaking the old ones, and sent with every challenge; a login nobody has
+-- gets the current one. 'defaultStretch' is what new records get. The RFC's
+-- own recommendation, 2 GiB, is too much for a browser tab. The salt is the
+-- RFC's sixteen zero bytes: the OPRF's output is already unique to the user
+-- and the server. Parallelism is 1: libsodium's @crypto_pwhash@, which the
+-- server's side of the tests and the console use, computes no other, and
+-- the browser's serenity-kit is told the same.
+--
+-- = The configuration
+--
+-- 'opaqueConfig' is the wiki's: no context, since the browser's
+-- serenity-kit passes none and cannot be told one, and the record's
+-- Argon2id. wiki-app's native client ("Wiki.App.Backend.Opaque") states the
+-- same; the server's tests sign in through it, so a difference fails them.
 --
 -- = Sign-ins under way
 --
@@ -47,6 +56,10 @@ module Wiki.Server.Opaque
     loadServerSetup
   , setupKey
   , setupFromText
+
+    -- * Configuration
+  , opaqueConfig
+  , stretchKsf
 
     -- * Stretching
   , defaultStretch
@@ -79,13 +92,13 @@ module Wiki.Server.Opaque
   )
 where
 
-import Crypto.OPAQUE (CredentialId (..), Encoding (..), KE1, RegistrationRecord, ServerLoginState, ServerSetup, defaultIdentities, finalizeRegistration, generateServerSetup, registrationRequest, registrationResponse, serverRespond)
+import Crypto.OPAQUE (Config (..), CredentialId (..), Encoding (..), KE1, Ksf (..), RegistrationRecord, ServerLoginState, ServerSetup, defaultIdentities, finalizeRegistration, generateServerSetup, registrationRequest, registrationResponse, serverRespond)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Protolude
-import Wiki.Api.Opaque (Message (..), PasswordRecord (..), RegistrationChallenge (..), Stretch (..), bytesOf, messageOf, opaqueConfig)
+import Wiki.Api.Opaque (Message (..), PasswordRecord (..), RegistrationChallenge (..), Stretch (..), bytesOf, messageOf)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Password (..))
 import Wiki.Server.Password (newToken)
@@ -114,12 +127,26 @@ setupFromText :: Text -> Maybe ServerSetup
 setupFromText t = bytesOf (Message t) >>= rightToMaybe . decode
 
 --------------------------------------------------------------------------------
+-- Configuration
+
+-- | The wiki's OPAQUE configuration for a record stretched with 'Stretch':
+-- an empty context (see the module's haddock) and the record's Argon2id.
+opaqueConfig :: Stretch -> Config
+opaqueConfig s = Config {context = "", ksf = stretchKsf s}
+
+-- | The key stretching function a 'Stretch' names: Argon2id with its
+-- passes and memory in bytes.
+stretchKsf :: Stretch -> Ksf
+stretchKsf s = Argon2id {opsLimit = fromIntegral (max 1 s.opsLimit), memLimit = fromIntegral (max 8192 s.memLimit)}
+
+--------------------------------------------------------------------------------
 -- Stretching
 
 -- | The stretching new records get (see the module's haddock): 128 MiB,
--- four passes, about half a second as wasm in Chromium (WP5.74a's
--- measurement on a four-core machine: 0.53 s; 64 MiB and two passes took
--- 0.13 s).
+-- four passes, parallelism 1. A whole sign-in with it took about half a
+-- second with serenity-kit in headless Chromium (WP5.74a's measurement on a
+-- four-core machine: 0.47 s; 64 MiB and two passes took 0.11 s, 256 MiB and
+-- three passes 0.8 s).
 defaultStretch :: Stretch
 defaultStretch = Stretch {opsLimit = 4, memLimit = 128 * 1024 * 1024}
 
@@ -133,7 +160,8 @@ readStretch t = case map (T.breakOn "=") (T.splitOn "," t) of
   [("t", ops), ("m", mem)] -> do
     opsLimit <- number ops
     memLimit <- number mem
-    guard (opsLimit >= 1 && opsLimit <= 16 && memLimit >= 8192 && memLimit <= 1024 * 1024 * 1024)
+    -- Whole KiB: the browser's serenity-kit counts memory in KiB.
+    guard (opsLimit >= 1 && opsLimit <= 16 && memLimit >= 8192 && memLimit <= 1024 * 1024 * 1024 && memLimit `mod` 1024 == 0)
     pure Stretch {opsLimit, memLimit}
   _ -> Nothing
   where

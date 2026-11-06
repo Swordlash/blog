@@ -21,7 +21,9 @@ import Halogen.Subscription qualified as HS
 import Protolude
 import Servant.Client.Core (Response)
 import Test.Backend.Opaque (opaqueServer)
+import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Hspec
+import Test.Opaque (fakeChallengeMade, fakeRegistrationMade)
 import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
 import Wiki.Api (NotificationsApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
@@ -529,6 +531,11 @@ accounts = describe "signing in and out" $ do
     _ <- runHttpWiki env (attempt listSpaces)
     rs <- readIORef asked
     map (\r -> lookup "X-Wiki-Request" (headersOf r)) rs `shouldBe` [Just "1", Just "1"]
+
+  it "is answered in the browser tests with what the server's functions make" $
+    -- The browser suite cannot use the opaque package, so it carries the
+    -- answers as fixed bytes (Test.Browser.Opaque).
+    (fakeChallenge, fakeRegistration) `shouldBe` (fakeChallengeMade, fakeRegistrationMade)
 
   it "signs in through OPAQUE, sending no password, and starts over with the session it answers" $ do
     (env, asked) <- backend (opaqueServer False signedIn (const (ok (Map.elems demo.spaces))))

@@ -86,7 +86,6 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
-import Crypto.OPAQUE qualified as O
 import Data.Aeson (eitherDecode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -114,7 +113,7 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..), bytesOf, messageOf, opaqueConfig)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (Starring (..), StarsApi (..))
@@ -132,6 +131,7 @@ import Wiki.App.Backend.Http.Cache qualified as Cache
 import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noResponse, prepare, refusal, sessionInfo, withBoundary)
 import Wiki.App.Backend.Http.Transport
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.Islands.Monad (MonadIslands)
@@ -906,13 +906,13 @@ applyImport zipped choices = write (withBoundary endpoints.archive.importApply I
 -- way, which moves an account from before OPAQUE to OPAQUE.
 passwordSignIn :: (MonadIO m) => Text -> Password -> HttpWiki m (Either SignInError SessionInfo)
 passwordSignIn login password =
-  liftIO (O.clientStart (passwordBytes password)) >>= \case
-    Left _ -> oldWay Nothing
-    Right (st, ke1) ->
-      withPassword (endpoints.startPasswordSignIn LoginStart {login, ke1 = messageOf (O.encode ke1)}) >>= \case
+  liftIO (Opaque.startLogin password) >>= \case
+    Nothing -> oldWay Nothing
+    Just (st, ke1) ->
+      withPassword (endpoints.startPasswordSignIn LoginStart {login, ke1}) >>= \case
         Left e -> pure (Left e)
         Right challenge ->
-          finished st challenge >>= \case
+          finished st password challenge >>= \case
             Just ke3 -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3})
             Nothing
               | challenge.fallback -> oldWay (Just challenge.attempt)
@@ -958,24 +958,9 @@ started = \case
     pure (Right s)
 
 -- | The client's last message, if the password is right: 'Nothing' for a
--- wrong password, and for an account without a record. The login's state,
--- which holds the password, and the keys the login agreed on, which the
--- application does not use (the session is the server's cookie), are
--- zeroed at once.
-finished :: (MonadIO m) => O.ClientLoginState -> LoginChallenge -> m (Maybe Message)
-finished st challenge = liftIO $ do
-  let result = do
-        bytes <- bytesOf challenge.ke2
-        ke2 <- rightToMaybe (O.decode bytes)
-        rightToMaybe (O.clientFinish (opaqueConfig challenge.stretch) st ke2 O.defaultIdentities)
-  message <- case result of
-    Nothing -> pure Nothing
-    Just (ke3, key, exportKey) -> do
-      O.scrub key
-      O.scrub exportKey
-      pure (Just (messageOf (O.encode ke3)))
-  O.scrub st
-  pure message
+-- wrong password, and for an account without a record.
+finished :: (MonadIO m) => Opaque.LoginState -> Password -> LoginChallenge -> m (Maybe Message)
+finished st password challenge = liftIO (Opaque.finishLogin st password challenge.stretch challenge.ke2)
 
 -- | A record of a new password, for what the server's challenge is asked
 -- for. The password is checked by the rules here, since the server cannot
@@ -984,25 +969,17 @@ finished st challenge = liftIO $ do
 -- the server says, whatever the password.
 recordFor :: (MonadIO m) => RegistrationFor -> Password -> HttpWiki m (Either SignInError PasswordRecord)
 recordFor purpose password =
-  liftIO (O.registrationRequest (passwordBytes password)) >>= \case
-    Left _ -> pure (Left (SignInFailed (Invalid "This password cannot be used: choose another.")))
-    Right (st, request) ->
-      withPassword (endpoints.passwordRegistration RegistrationStart {for = purpose, request = messageOf (O.encode request)}) >>= \case
+  liftIO (Opaque.startRegistration password) >>= \case
+    Nothing -> pure (Left (SignInFailed (Invalid "This password cannot be used: choose another.")))
+    Just (st, request) ->
+      withPassword (endpoints.passwordRegistration RegistrationStart {for = purpose, request}) >>= \case
         Left e -> pure (Left e)
         Right challenge -> case checkNewPassword password of
           Left why -> pure (Left (SignInFailed (Invalid why)))
-          Right _ -> do
-            made <- liftIO $ case bytesOf challenge.response >>= rightToMaybe . O.decode of
-              Nothing -> pure Nothing
-              Just response -> rightToMaybe <$> O.finalizeRegistration (opaqueConfig challenge.stretch) st response O.defaultIdentities
-            -- The registration's state holds the password, and the export
-            -- key is not used: both are zeroed at once.
-            liftIO $ do
-              for_ made (O.scrub . snd)
-              O.scrub st
-            pure $ case made of
+          Right _ ->
+            liftIO (Opaque.finishRegistration st password challenge.stretch challenge.response) <&> \case
               Nothing -> Left (SignInFailed (Invalid "The server's answer to the new password was not valid: try again."))
-              Just (record, _) -> Right PasswordRecord {credential = challenge.credential, record = messageOf (O.encode record), stretch = challenge.stretch}
+              Just record -> Right PasswordRecord {credential = challenge.credential, record, stretch = challenge.stretch}
 
 -- | The current password for a change that needs it, as the request is to
 -- carry it: proved through OPAQUE, which leaves a proof on the session and
@@ -1012,13 +989,13 @@ proven :: (MonadIO m) => Maybe Password -> HttpWiki m (Either SignInError (Maybe
 proven = \case
   Nothing -> pure (Right Nothing)
   Just password ->
-    liftIO (O.clientStart (passwordBytes password)) >>= \case
-      Left _ -> pure (Right (Just password))
-      Right (st, ke1) ->
-        withPassword (endpoints.account.startPasswordProof ProofStart {ke1 = messageOf (O.encode ke1)}) >>= \case
+    liftIO (Opaque.startLogin password) >>= \case
+      Nothing -> pure (Right (Just password))
+      Just (st, ke1) ->
+        withPassword (endpoints.account.startPasswordProof ProofStart {ke1}) >>= \case
           Left e -> pure (Left e)
           Right challenge ->
-            finished st challenge >>= \case
+            finished st password challenge >>= \case
               Nothing
                 | challenge.fallback -> pure (Right (Just password))
                 | otherwise -> pure (Left WrongCredentials)
@@ -1031,10 +1008,6 @@ proven = \case
 -- password.
 accountWith :: PasswordRecord -> NewAccount -> NewAccountRecord
 accountWith record new = NewAccountRecord {login = new.login, displayName = new.displayName, password = record, email = new.email}
-
--- | A password's bytes, as OPAQUE takes them: its UTF-8.
-passwordBytes :: Password -> ByteString
-passwordBytes (Password p) = encodeUtf8 p
 
 -- | A 'SignInError' where only a 'WikiError' can be returned.
 signInWikiError :: SignInError -> WikiError

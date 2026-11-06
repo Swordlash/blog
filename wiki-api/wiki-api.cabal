@@ -94,7 +94,6 @@ library
       file-embed,
       filepath,
       http-api-data,
-      opaque,
       protolude,
       servant >= 0.20.3 && < 0.21,
       servant-multipart-api >= 0.13 && < 0.14,

@@ -1,8 +1,17 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Signing in with a password through OPAQUE (RFC 9807, the @opaque@
--- package): the messages the browser and the server exchange, as the API
--- carries them (WP5.74a of docs/PLAN.md).
+-- | Signing in with a password through OPAQUE (RFC 9807): the messages the
+-- browser and the server exchange, as the API carries them (WP5.74a of
+-- docs/PLAN.md). The server's side is the @opaque@ package; the browser's
+-- is @\@serenity-kit\/opaque@ (opaque-ke compiled to wasm), which speaks
+-- the same messages. This module knows them only as bytes, so that nothing
+-- built for the browser depends on the @opaque@ package.
+--
+-- The wiki's OPAQUE uses the suite ristretto255, SHA-512 and 3DH, no
+-- identities (they stand for the parties' public keys), an empty context
+-- (serenity-kit passes none, and it cannot be set), and Argon2id with
+-- parallelism 1 as the key stretching function, with the passes and memory
+-- of each record ('Stretch').
 --
 -- With OPAQUE the password never leaves the browser. The server keeps a
 -- registration record per user, made by the browser from the password, and
@@ -59,9 +68,6 @@ module Wiki.Api.Opaque
   , messageOf
   , bytesOf
   , Stretch (..)
-  , stretchKsf
-  , opaqueConfig
-  , opaqueContext
 
     -- * Signing in
   , LoginStart (..)
@@ -79,7 +85,6 @@ module Wiki.Api.Opaque
   )
 where
 
-import Crypto.OPAQUE (Config (..), Ksf (..))
 import Data.Aeson (FromJSON, ToJSON (..), defaultOptions, genericToJSON, omitNothingFields)
 import Data.ByteString.Base64.URL qualified as Base64
 import Protolude
@@ -103,29 +108,17 @@ bytesOf :: Message -> Maybe ByteString
 bytesOf m = rightToMaybe (Base64.decodeUnpadded (encodeUtf8 m.text))
 
 -- | 'Stretch': the Argon2id the browser stretches the OPRF's output with,
--- as the server stored it beside the record: passes and memory in bytes.
--- The server chooses it for new records, so that a later server can ask
--- for more; the browser uses what it is told.
+-- as the server stored it beside the record: passes, and memory in bytes
+-- (libsodium's @memlimit@; serenity-kit and Argon2 itself count KiB), with
+-- parallelism 1. The server chooses it for new records, so that a later
+-- server can ask for more without breaking older records; the browser uses
+-- what it is told, at registration and at every sign-in.
 data Stretch = Stretch
   { opsLimit :: Int
   , memLimit :: Int
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
--- | The key stretching function a 'Stretch' names.
-stretchKsf :: Stretch -> Ksf
-stretchKsf s = Argon2id {opsLimit = fromIntegral (max 1 s.opsLimit), memLimit = fromIntegral (max 8192 s.memLimit)}
-
--- | The wiki's OPAQUE configuration for a record stretched with 'Stretch'.
-opaqueConfig :: Stretch -> Config
-opaqueConfig s = Config {context = opaqueContext, ksf = stretchKsf s}
-
--- | The context string every key of the wiki's OPAQUE exchanges is
--- derived with, so that a transcript of another application's OPAQUE
--- cannot be used here.
-opaqueContext :: ByteString
-opaqueContext = "wiki OPAQUE v1"
 
 -- | 'LoginStart': the first message of a sign-in, @POST
 -- \/api\/v1\/session\/password@.

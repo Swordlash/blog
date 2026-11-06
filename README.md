@@ -1738,8 +1738,11 @@ to the demo, keeping `data/`.
   administrator. It is gone: a deployment that had it loses it on its next run,
   and the script refuses it, pointing at the console below.)
 - **Passwords never leave the browser.** Signing in with a password, and setting
-  one, goes through OPAQUE (RFC 9807, the `opaque` package of this repository):
-  the browser proves that it knows the password, and the server keeps a
+  one, goes through OPAQUE (RFC 9807): the server's side is the `opaque` package
+  of this repository, over libsodium, and the browser's is
+  [`@serenity-kit/opaque`](https://github.com/serenity-kit/opaque) (opaque-ke
+  compiled to WebAssembly, fetched the first time a password is used). The
+  browser proves that it knows the password, and the server keeps a
   registration record made from it, never the password nor a hash of it. Neither
   the server nor anyone who reads the traffic learns the password, or anything
   that lets them test a guess of it without the server's secret. A thief of the

@@ -15,7 +15,8 @@ and password as before.
 
 Signing in, and setting a password, take about half a second longer than
 before, because your browser now does the slow part of protecting the
-password itself.
+password itself. The first time you do either, your browser also fetches
+the part of the wiki that does it (about 160 KB).
 
 An account made before this moves over by itself the next time you sign in:
 that one time your password is sent as before, and from then on never

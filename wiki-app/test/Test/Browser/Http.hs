@@ -49,9 +49,9 @@ import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
+import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
-import Test.Opaque (fakeChallenge, fakeRegistration)
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), StarsApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
