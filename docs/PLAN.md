@@ -441,7 +441,17 @@ confirms it against reality and the plan is amended if it does not hold.
     container, personal spaces under it only); a merge import brings personal spaces in
     as ordinary spaces, a turned-off one with its whole subtree private and the top of
     each run of hidden spaces the import creates sealed, so nothing it hid becomes
-    readable.
+    readable. The container leads somewhere all the same (WP5.72, #178, the owner,
+    2026-11-06): while the reader may open some personal space, it is a link, with
+    the 👤 icon, to the finder of user spaces (`/user-spaces/`, `UserSpaces`), and
+    the sidebar keeps "Your personal space" under it; the front page's card and the
+    breadcrumbs lead there too. The finder lists the reader's own space and the
+    user spaces whose home page they starred (a star on a space's home page is the
+    space's star), then finds the others by login or display name over the spaces
+    already listed, asking the server nothing. A new login is ASCII, with at least
+    one letter or digit (`parseLogin`, the owner, the same day), so a personal
+    space's slug spells its owner's login and the finder matches the login as
+    typed; a login made before the rule is kept.
 38. **Avatars, who is reading, who wrote, the editor's title, a line continuation, the
     page's width and PDFs in a tab** (the owner, 2026-11-04, built by WP5.55). `User` and
     `Version.Author` carry `avatar` (a blob and its media type), joined from the users
@@ -974,19 +984,6 @@ In the order to do it, unless the owner says otherwise.
   title's slug would show the title. Not protected: an administrator who
   changes the JavaScript the server sends, which then reads what the user
   decrypts; no browser API closes that today.
-
-- **WP5.72 User subspaces as a place to go** (the owner, 2026-11-06). The
-  container "User subspaces" stays a space nobody may view (decision 37), but
-  stops being a dead end. In the spaces' sidebar it is a link, with the 👤 icon
-  (U+1F464) in place of its letter, whenever the reader may open some personal
-  space: their own, turned on, or another user's that is public; under it,
-  while the reader's own personal space is on, a fixed entry "Your personal
-  space" leads there. The link, and the container's card on the front page, go
-  to a page of its own, the finder of user spaces: first the starred user
-  spaces, the reader's own first (a star on a personal space's home page is
-  the space's star; the owner, the same day), then "Find another", a text field
-  that filters the personal spaces the reader may open by login or display
-  name, with the results under it.
 
 - **WP5.68 The maker: the toolchain as a Haskell build system** (the owner,
   2026-11-05; four pull requests, a to d, each leaving the old scripts in place
