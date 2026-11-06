@@ -47,7 +47,8 @@ readEveryTable c =
     , counted "reset_tokens" wikiDb.reset_tokens
     , counted "email_verifications" wikiDb.email_verifications
     , counted "passkeys" wikiDb.passkeys
-    , counted "assistant_vaults" wikiDb.assistant_vaults
+    , counted "vaults" wikiDb.vaults
+    , counted "vault_items" wikiDb.vault_items
     , counted "spaces" wikiDb.spaces
     , counted "pages" wikiDb.pages
     , counted "page_versions" wikiDb.page_versions

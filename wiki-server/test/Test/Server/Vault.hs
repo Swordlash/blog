@@ -121,7 +121,7 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     -- The passkey removed takes its wrapped key with it.
     (call r editor methodDelete (links.account.removePasskey info.id) none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
     third :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
-    (third.vault.wrapped, third.tag /= secondVersion.tag) `shouldBe` (mempty, True)
+    (third.vault.wraps, third.tag /= secondVersion.tag) `shouldBe` (mempty, True)
     -- Turned off: the vault and its wrapped keys go, with no passkey asked
     -- for; the passkeys stay, since they sign the user in.
     another <- registerNew r editor (authenticator "another passkey")
@@ -132,10 +132,40 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     (call r editor methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
     map (\p -> (p.id, p.unlocks)) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [(another.id, False)]
 
+  it "takes a vault of WP5.21's format from an older tab as its settings alone, and keeps the rest" $ withSignedIn backing $ \r editor _ -> do
+    info <- registerNew r editor passkey
+    -- A vault of the current format, with an item the assistant does not
+    -- know besides its settings.
+    let notes = Item {keyId = Nothing, sealed = Sealed "bm90ZXMtbm9uY2U" "bm90ZXM"}
+    first' :: StoredVault <- call r editor methodPut links.assistant.storeVault (Just (withItem (ItemName "notes") notes (vaultWith [(info.id, WrappedKey "bm9uY2U" "a2V5")]))) >>= jsonAs 200
+    -- A tab of the wiki before WP5.74 stores its settings in its format,
+    -- over the version it read: only the settings change.
+    let old = "{\"format\":1,\"salt\":\"c2FsdA\",\"nonce\":\"bmV3LW5vbmNl\",\"ciphertext\":\"bmV3\",\"wrapped\":{}}"
+    stored2 :: StoredVault <- send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) old >>= jsonAs 200
+    (sealedOf stored2.vault, itemOf (ItemName "notes") stored2.vault, wrappedFor info.id stored2.vault)
+      `shouldBe` (Just (Sealed "bmV3LW5vbmNl" "bmV3"), Just notes, Just (WrappedKey "bm9uY2U" "a2V5"))
+    stored2.vault.format `shouldBe` vaultFormat
+    -- Over a version it did not read, it is refused, as before.
+    (send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) old >>= jsonAs 409)
+      `shouldReturn` Conflict "The vault was changed on another device meanwhile."
+    -- Turning syncing off, as such a tab does, deletes the settings alone:
+    -- the vault, its other item and its wraps stay, at a new version.
+    (\x -> x.status) <$> call r editor methodDelete links.assistant.deleteVault none `shouldReturn` 204
+    third :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
+    (sealedOf third.vault, itemOf (ItemName "notes") third.vault, wrappedFor info.id third.vault, third.tag /= stored2.tag)
+      `shouldBe` (Nothing, Just notes, Just (WrappedKey "bm9uY2U" "a2V5"), True)
+    -- A vault of a later format than this wiki's, or one with no item, is
+    -- refused, and the stored one stays.
+    let newer = "{\"format\":3,\"salt\":\"c2FsdA\",\"items\":{}}"
+    (\x -> x.status) <$> send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 third.tag.text)]) newer `shouldReturn` 400
+    (call r editor methodPut links.assistant.storeVault (Just (withoutItem assistantItem (withoutItem (ItemName "notes") (vaultWith [])))) >>= jsonAs 400)
+      `shouldReturn` Invalid "A vault holds at least one item."
+    (call r editor methodGet links.assistant.vault none >>= jsonAs 200) `shouldReturn` third
+
   it "refuses a wrapped key, a passkey's answer or a passkey longer than any is" $ withSignedIn backing $ \r editor _ -> do
     info <- registerNew r editor passkey
     let tooLong = T.replicate (256 * 1024 + 1) "a"
-    wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" tooLong)])) >>= jsonAs 400
+    wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" (Ciphertext tooLong))])) >>= jsonAs 400
     wrapped `shouldSatisfy` says "too long"
     _ :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     let other = authenticator "another passkey"
@@ -159,7 +189,7 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
         `shouldBe` Site {rpId = "docs.example.net", origins = ["https://docs.example.net"]}
   where
     passkey = authenticator "the editor's passkey"
-    vaultWith wrapped = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.fromList wrapped}
+    vaultWith wrapped = withSealed Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdA", items = mempty, wraps = Map.fromList [(ByPasskey c, w) | (c, w) <- wrapped]}
     says part = \case
       Invalid t -> part `T.isInfixOf` t
       Conflict t -> part `T.isInfixOf` t

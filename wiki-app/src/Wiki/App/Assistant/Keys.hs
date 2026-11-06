@@ -160,7 +160,7 @@ changeKeys user f = sealing (plainChange user f) $ runExceptT (attempt (2 :: Int
                   sealed <- seal k secrets
                   lift (storeVault (Just copy.tag) (withSealed sealed copy.vault)) >>= \case
                     Right fresh -> do
-                      let changed = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (Just fresh.vault.sealed) kept)
+                      let changed = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (sealedOf fresh.vault) kept)
                       write user changed $> keysOf changed (Opened k secrets)
                     Left (Conflict _) | tries > 0 -> do
                       _ <- refreshed user record
@@ -203,7 +203,7 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
       Opened _ s -> pure s
       Fresh -> pure defaultSettings
       Locked _ _ -> throwError "Unlock your keys first."
-  salt <- lift newSalt
+  salt <- Salt <$> lift newSalt
   existing <- server listPasskeys
   -- The new vault key can be exported, to be wrapped: the page forgets it
   -- however this ends, and keeps only a copy that cannot be.
@@ -224,12 +224,12 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
         ( do
             wrapped <- wrap wrapping vaultKey
             sealed <- seal vaultKey secrets
-            server (storeVault Nothing Vault {format = vaultFormat, salt, sealed, wrapped = Map.singleton credential wrapped})
+            server (storeVault Nothing (withSealed sealed Vault {format = vaultFormat, salt, items = mempty, wraps = Map.singleton (ByPasskey credential) wrapped}))
         )
         `recover` \why -> lift (when made (void (dropPasskey credential))) >> throwError why
     keep user vaultKey (not record.askEachTime)
     pure stored'
-  let synced' = serverTo (Just (ServerCopy stored'.tag stored'.vault)) (sealedTo (Just stored'.vault.sealed) record)
+  let synced' = serverTo (Just (ServerCopy stored'.tag stored'.vault)) (sealedTo (sealedOf stored'.vault) record)
   write user synced'
   keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
 
@@ -247,12 +247,12 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
       Opened _ _ -> throwError "Your keys are unlocked on this device already."
       Locked _ s -> pure s
       Fresh -> pure defaultSettings
-  (credential, wrapping) <- usedPasskey copy.vault.salt (Just (Map.keys copy.vault.wrapped))
+  (credential, wrapping) <- usedPasskey copy.vault.salt (Just (Map.keys (passkeyWraps copy.vault)))
   let vaultKeyOf = forgetting wrapping $ do
         wrapped <- maybe (throwError "This passkey has no copy of the vault's key: add it again from a device where your keys are unlocked.") pure (wrappedFor credential copy.vault)
         unwrap wrapping wrapped False
   (merged, copy') <- withKey vaultKeyOf $ \vaultKey -> do
-    secrets <- openSettings vaultKey copy.vault.sealed
+    secrets <- openSettings vaultKey =<< settingsIn copy.vault
     let merged = mergeUnlocked secrets (secretsOf typed)
     copy' <-
       if merged == secrets
@@ -263,7 +263,7 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
           pure (ServerCopy fresh.tag fresh.vault)
     keep user vaultKey (not record.askEachTime)
     pure (merged, copy')
-  let unlocked = serverTo (Just copy') (sealedTo (Just copy'.vault.sealed) record)
+  let unlocked = serverTo (Just copy') (sealedTo (sealedOf copy'.vault) record)
   write user unlocked
   keysOf unlocked . (\k -> Opened k merged) <$> deviceKeyOrFail user
 
@@ -280,7 +280,7 @@ addPasskey user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
   case opened of
     Opened _ _ -> pass
     _ -> throwError "Unlock your keys on this device first."
-  (known, wrapping) <- usedPasskey copy.vault.salt (Just (Map.keys copy.vault.wrapped))
+  (known, wrapping) <- usedPasskey copy.vault.salt (Just (Map.keys (passkeyWraps copy.vault)))
   -- The vault key unwrapped here can be exported, to be wrapped for the
   -- new passkey: the page forgets it however this ends.
   let vaultKeyOf = forgetting wrapping $ do
@@ -295,7 +295,7 @@ addPasskey user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
           server (storeVault (Just copy.tag) (withWrapped credential rewrapped copy.vault))
       )
       `recover` \why -> lift (void (dropPasskey credential)) >> throwError why
-  let added = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (Just fresh.vault.sealed) record)
+  let added = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (sealedOf fresh.vault) record)
   write user added
   keysOf added <$> open added key
 
@@ -415,14 +415,18 @@ refreshed user record =
     False -> pure record
     True ->
       lift (fetchVault ((\c -> c.tag) <$> record.server)) >>= \case
-        Right (Fetched fresh) -> do
+        Right (Fetched fresh) | isJust (sealedOf fresh.vault) -> do
           let changed = serverTo (Just (ServerCopy fresh.tag fresh.vault)) record
           write user changed $> changed
-        Right NoVault | isJust record.server -> do
-          key <- lift (deviceKey user)
-          traverse_ (\k -> keep user k True) key
-          changed <- unsynced key record
-          write user changed $> changed
+        -- No vault, or one without the assistant's settings: they do not
+        -- sync (any more).
+        Right fetched
+          | isJust record.server
+          , notSyncing fetched -> do
+              key <- lift (deviceKey user)
+              traverse_ (\k -> keep user k True) key
+              changed <- unsynced key record
+              write user changed $> changed
         -- The same version, none at all, or no server to ask: as kept.
         _ -> pure record
 
@@ -434,18 +438,36 @@ refreshed user record =
 unsynced :: (MonadAssistant m) => Maybe KeyRef -> DeviceRecord -> Step m DeviceRecord
 unsynced key record = do
   let off = askTo False (serverTo Nothing record)
-  case (record.server, key) of
-    (Just copy, Just k) ->
-      lift (openWith k copy.vault.sealed sealingData) <&> \case
-        Right _ -> sealedTo (Just copy.vault.sealed) off
+  case (followed record, key) of
+    (Just sealed, Just k) ->
+      lift (openWith k sealed sealingData) <&> \case
+        Right _ -> sealedTo (Just sealed) off
         Left _ -> off
     _ -> pure off
 
+-- | Whether the server's answer says that the settings do not sync: no
+-- vault, or a vault without the assistant's item (one made for the user's
+-- other secrets).
+notSyncing :: Fetched -> Bool
+notSyncing = \case
+  NoVault -> True
+  Fetched fresh -> isNothing (sealedOf fresh.vault)
+  Unchanged -> False
+
+-- | The vault's sealed settings, in the copy of the vault this device
+-- follows, if it follows one.
+followed :: DeviceRecord -> Maybe Sealed
+followed record = record.server >>= \copy -> sealedOf copy.vault
+
+-- | The sealed settings of a vault that has them.
+settingsIn :: (Monad m) => Vault -> Step m Sealed
+settingsIn v = maybe (throwError "The vault holds no settings of the assistant.") pure (sealedOf v)
+
 -- | Open what a device keeps with the key it holds.
 open :: (MonadAssistant m) => DeviceRecord -> Maybe KeyRef -> Step m Opened
-open record key = case (record.server, key) of
-  (Just copy, Just k) ->
-    lift (openWith k copy.vault.sealed sealingData) >>= \case
+open record key = case (followed record, key) of
+  (Just sealed, Just k) ->
+    lift (openWith k sealed sealingData) >>= \case
       Right text -> Opened k <$> decoded text
       Left _ -> Locked (Just k) <$> typedWith k
   (Just _, Nothing) -> pure (Locked Nothing defaultSettings)
@@ -489,11 +511,11 @@ localKey user = do
 -- wraps the vault key for it: from its PRF output at once, or by using it
 -- once. A passkey without the PRF extension cannot wrap the vault key; it
 -- is kept, since it signs the user in (WP5.30), and the person is told.
-newPasskey :: (MonadAssistant m, MonadVault m) => Maybe Password -> Text -> Step m (CredentialId, KeyRef)
+newPasskey :: (MonadAssistant m, MonadVault m) => Maybe Password -> Salt -> Step m (CredentialId, KeyRef)
 newPasskey password salt = do
   -- Making a passkey asks for the user's password, since it signs them in.
   options <- ExceptT (first passwordErrorText <$> beginRegistration password)
-  made <- passkey (createPasskey options salt wrappingInfo)
+  made <- passkey (createPasskey options salt.text wrappingInfo)
   let credential = made.response.id
       -- The key the PRF output gave goes if a step below fails.
       forgetWrapping = lift (traverse_ forgetKey made.wrapping)
@@ -516,13 +538,13 @@ newPasskey password salt = do
 -- used, and the key its PRF output gives. Given a list, only the passkeys
 -- in it are offered: those that hold a copy of the vault's key, so that
 -- no touch goes to a passkey that cannot unlock it.
-usedPasskey :: (MonadAssistant m, MonadVault m) => Text -> Maybe [CredentialId] -> Step m (CredentialId, KeyRef)
+usedPasskey :: (MonadAssistant m, MonadVault m) => Salt -> Maybe [CredentialId] -> Step m (CredentialId, KeyRef)
 usedPasskey salt only = do
   options <- server beginAssertion
   when (null options.allow) (throwError "You have no passkey for this wiki any more: turn syncing off, and on again with a new passkey.")
   let allowed = maybe options.allow (\these -> filter (`elem` these) options.allow) only
   when (null allowed) (throwError "None of your passkeys holds a copy of the vault's key: turn syncing off, and on again with a passkey.")
-  used <- passkey (usePasskey AssertionOptions {challenge = options.challenge, rpId = options.rpId, allow = allowed} salt wrappingInfo)
+  used <- passkey (usePasskey AssertionOptions {challenge = options.challenge, rpId = options.rpId, allow = allowed} salt.text wrappingInfo)
   _ <- server (finishAssertion used.response) `recover` \why -> lift (traverse_ forgetKey used.wrapping) >> throwError why
   wrapping <- maybe (throwError "This passkey gave no PRF output, so it cannot unlock the keys. Use another passkey, or remove this one under Passkeys in your account and turn syncing on again with a new one.") pure used.wrapping
   pure (used.response.id, wrapping)

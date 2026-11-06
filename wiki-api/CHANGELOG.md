@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The user's vault (WP5.74b1). `StoredVault`'s vault is a
+`Wiki.Core.Vault.Vault` of format 2: `{format, salt, items, wraps}`, the
+items by name and the wraps by `passkey:<id>` or `password`. A `PUT
+assistant/vault` of format 1 is still taken.
+
 What's new (WP5.66). `GET api/v1/whats-new` (`WikiApi`'s `whatsNew`)
 answers `Wiki.Api.WhatsNew.WhatsNew` `{version, built, entries}`, each
 entry `WhatsNewEntry` `{pr, url, title, markdown}`; `pullRequestUrl` makes

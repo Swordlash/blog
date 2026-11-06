@@ -95,7 +95,7 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, RegistrationOptions, RegistrationResponse)
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), providerKey)
-import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), WrappedKey (..))
+import Wiki.Core.Assistant.Vault (Ciphertext (..), CredentialId (..), Nonce (..), Sealed (..), WrappedKey (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 
@@ -555,7 +555,7 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_seal k (toJSText text) (toJSText info)
     pure (answered (\o -> Sealed <$> o .: "nonce" <*> o .: "ciphertext") answer)
   openWith (KeyRef k) sealed info = liftIO $ do
-    answer <- evaluate . fromJSText =<< js_open_sealed k (toJSText sealed.nonce) (toJSText sealed.ciphertext) (toJSText info)
+    answer <- evaluate . fromJSText =<< js_open_sealed k (toJSText sealed.nonce.text) (toJSText sealed.ciphertext.text) (toJSText info)
     pure (answered (.: "text") answer)
   forgetKey (KeyRef k) = liftIO (js_forget_key k)
   newSalt = liftIO (fromJSText <$> js_salt)
@@ -578,7 +578,7 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_wrap wrapping k (toJSText info)
     pure (answered (\o -> WrappedKey <$> o .: "nonce" <*> o .: "key") answer)
   unwrapWith (KeyRef wrapping) wrapped info exportable = liftIO $ do
-    answer <- evaluate . fromJSText =<< js_unwrap wrapping (toJSText wrapped.nonce) (toJSText wrapped.key) (toJSText info) exportable
+    answer <- evaluate . fromJSText =<< js_unwrap wrapping (toJSText wrapped.nonce.text) (toJSText wrapped.key.text) (toJSText info) exportable
     pure (answered (\o -> KeyRef <$> o .: "handle") answer)
   discardPasskey rpId credential = liftIO (evaluate =<< js_discard (toJSText rpId) (toJSText credential.text))
   conditionalHere = liftIO (evaluate =<< js_conditional_here)

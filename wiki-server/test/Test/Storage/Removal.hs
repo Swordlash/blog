@@ -23,7 +23,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (removeUser, setCreateSpaces))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
-import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), WrappedKey (..), vaultFormat)
+import Wiki.Core.Assistant.Vault (Sealed (..), Unlock (..), Vault (..), WrappedKey (..), vaultFormat, withSealed)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
@@ -61,7 +61,7 @@ spec backing = describe "removing an account" $ do
     signInUser st now "127.0.0.1" u >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
     void (ok =<< enrol st now u)
     passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
-    let vault = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.singleton passkey.id (WrappedKey "bm9uY2U" "a2V5")}
+    let vault = withSealed Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdA", items = mempty, wraps = Map.singleton (ByPasskey passkey.id) (WrappedKey "bm9uY2U" "a2V5")}
     void (ok =<< storeVault st now u Nothing vault)
     blog <- ok =<< asEditor (getSpace (path "blog"))
     void (ok =<< asAdmin (setWatching (WatchSpace blog.id) True))
@@ -75,8 +75,7 @@ spec backing = describe "removing an account" $ do
     void (ok =<< asAdmin (setSpaceGrant blog.id (SubjectUser u) AdministerSpace True))
     void (ok =<< asAdmin (setCreateSpaces u True))
     tablesMentioning u.text st
-      `shouldReturn` [ "assistant_vaults"
-                     , "audit_log"
+      `shouldReturn` [ "audit_log"
                      , "comments"
                      , "drafts"
                      , "global_grants"
@@ -89,6 +88,8 @@ spec backing = describe "removing an account" $ do
                      , "stars"
                      , "totp"
                      , "users"
+                     , "vault_items"
+                     , "vaults"
                      , "watches"
                      ]
     -- An enabled login is refused, and nothing changes.

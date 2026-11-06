@@ -90,7 +90,8 @@ tableRows st = reading st rows
         , dump "reset_tokens" wikiDb.reset_tokens
         , dump "email_verifications" wikiDb.email_verifications
         , dump "passkeys" wikiDb.passkeys
-        , dump "assistant_vaults" wikiDb.assistant_vaults
+        , dump "vaults" wikiDb.vaults
+        , dump "vault_items" wikiDb.vault_items
         , dump "spaces" wikiDb.spaces
         , dump "pages" wikiDb.pages
         , dump "page_versions" wikiDb.page_versions

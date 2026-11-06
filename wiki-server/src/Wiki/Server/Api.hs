@@ -953,7 +953,7 @@ handlers env caller =
               u <- signedInUser
               now <- liftIO getCurrentTime
               liftIO (Vault.storeVault env.storage now u base v) >>= either (throwError . wikiError) pure
-          , deleteVault = signedInUser >>= \u -> liftIO (Vault.deleteVault env.storage u) $> NoContent
+          , deleteVault = signedInUser >>= \u -> liftIO (getCurrentTime >>= \now -> Vault.deleteVault env.storage now u) $> NoContent
           , beginAssertion = do
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime

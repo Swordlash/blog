@@ -1,31 +1,20 @@
--- | The vault: the writing assistant's settings encrypted (WP5.21 of
--- docs/PLAN.md). The settings hold the user's API keys
--- ("Wiki.Core.Assistant"), so neither this browser's IndexedDB nor the
--- wiki's server keeps them as text.
+-- | The writing assistant's part of the user's vault (WP5.21 of
+-- docs/PLAN.md, "Wiki.Core.Vault"). The assistant's settings hold the
+-- user's API keys ("Wiki.Core.Assistant"), so neither this browser's
+-- IndexedDB nor the wiki's server keeps them as text.
 --
--- = How the vault is locked
+-- = What is sealed
 --
--- A random key, the vault key (AES-GCM, 256 bits), encrypts the settings
--- that matter: the keys, the models, the efforts and the base URLs
--- ('secretsOf'). The result is 'Sealed': a nonce and the ciphertext. The
--- model lists fetched from the providers, and whether each provider could
--- be reached, are not secret, and stay out of the vault ('learntOf').
+-- The vault key seals the settings that matter: the keys, the models, the
+-- efforts and the base URLs ('secretsOf'), as the vault's item
+-- @assistant@ ('assistantItem'). The model lists fetched from the
+-- providers, and whether each provider could be reached, are not secret,
+-- and stay out of the vault ('learntOf').
 --
--- To follow the user to another device, the vault key itself is
--- encrypted ("wrapped") once per passkey ('WrappedKey'). The key that
--- wraps it is derived (HKDF-SHA256) from the output of the passkey's PRF
--- extension (WebAuthn), evaluated on the vault's salt. The authenticator
--- computes that output from a secret that never leaves it, the same on
--- every device the passkey is synced to, so one touch of the passkey on a
--- new device unwraps the vault key there. The browser never sends the PRF
--- output, the vault key or the settings to the server. The server stores
--- the 'Vault' (the salt, the sealed settings, and the wrapped copies by
--- the passkeys' credential ids) and gives it back; it cannot open it.
---
--- The cryptography runs in the browser, with WebCrypto
--- (@wiki-app\/jsbits\/vault.js@). This module is the format, pure: what is
--- sealed, how the vault and this device's record are written, and how
--- they change.
+-- The settings sync across the user's devices when the vault has the
+-- @assistant@ item, and only then: a vault made for other items (the
+-- user's key pair) does not make the assistant sync. Syncing still needs a
+-- passkey, as it did before the vault held anything else.
 --
 -- = This device's record
 --
@@ -39,13 +28,11 @@
 -- before the vault existed was the settings as text ('OldSettings'); it
 -- is sealed and replaced the first time it is read.
 module Wiki.Core.Assistant.Vault
-  ( -- * The vault
-    Vault (..)
-  , vaultFormat
-  , Sealed (..)
-  , WrappedKey (..)
-  , CredentialId (..)
-  , VaultTag (..)
+  ( -- * The vault ("Wiki.Core.Vault")
+    module Wiki.Core.Vault
+
+    -- * The assistant's item
+  , assistantItem
   , sealedOf
   , withSealed
   , withWrapped
@@ -78,129 +65,47 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
 import Protolude
-import Text.Show (Show (showsPrec))
-import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import Wiki.Core.Assistant (Mode (..), Provider (..), ProviderSettings (..), Settings (..), defaultSettings)
+import Wiki.Core.Vault
 
 --------------------------------------------------------------------------------
--- The vault
+-- The assistant's item
 
--- | The version of the vault's format that this module writes. A vault of
--- a later version is refused as made by a newer wiki, rather than misread.
-vaultFormat :: Int
-vaultFormat = 1
+-- | The name the assistant's settings are kept under in the vault.
+assistantItem :: ItemName
+assistantItem = ItemName "assistant"
 
--- | 'CredentialId': a passkey's credential id, in base64url without
--- padding, as WebAuthn writes it. The vault keeps a wrapped copy of its
--- key under each.
-newtype CredentialId = CredentialId {text :: Text}
-  deriving stock (Eq, Ord, Show)
-  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+-- | The sealed settings of a vault, if it has them: whether the
+-- assistant's settings sync.
+sealedOf :: Vault -> Maybe Sealed
+sealedOf v = (\i -> i.sealed) <$> itemOf assistantItem v
 
--- | 'VaultTag': the version of the vault on the server, as its @ETag@
--- gives it. A device keeps the tag of the copy it has, and fetches the
--- vault again only when the server's tag differs; a change is stored
--- only over the version it was made to.
-newtype VaultTag = VaultTag {text :: Text}
-  deriving stock (Eq, Ord, Show)
-  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
-
--- | 'Sealed': text encrypted with AES-GCM: the 12-byte nonce and the
--- ciphertext with its tag, each in base64url. Its 'Show' instance prints
--- neither, although neither reveals anything without the key.
-data Sealed = Sealed
-  { nonce :: Text
-  , ciphertext :: Text
-  }
-  deriving stock (Eq)
-
-instance Show Sealed where
-  showsPrec _ _ rest = "Sealed <ciphertext>" <> rest
-
-instance ToJSON Sealed where
-  toJSON s = object ["nonce" .= s.nonce, "ciphertext" .= s.ciphertext]
-
-instance FromJSON Sealed where
-  parseJSON = withObject "Sealed" $ \o -> Sealed <$> o .: "nonce" <*> o .: "ciphertext"
-
--- | 'WrappedKey': the vault key encrypted with the key derived from one
--- passkey's PRF output: the nonce and the encrypted key, in base64url.
-data WrappedKey = WrappedKey
-  { nonce :: Text
-  , key :: Text
-  }
-  deriving stock (Eq)
-
-instance Show WrappedKey where
-  showsPrec _ _ rest = "WrappedKey <encrypted>" <> rest
-
-instance ToJSON WrappedKey where
-  toJSON w = object ["nonce" .= w.nonce, "key" .= w.key]
-
-instance FromJSON WrappedKey where
-  parseJSON = withObject "WrappedKey" $ \o -> WrappedKey <$> o .: "nonce" <*> o .: "key"
-
--- | 'Vault': the settings as the server stores them for a user. It holds
--- the format's version, the salt the passkeys' PRF is evaluated on (32
--- random bytes in base64url, chosen once per user when the vault is
--- made), the sealed settings, and the vault key wrapped for each passkey.
-data Vault = Vault
-  { format :: Int
-  , salt :: Text
-  , sealed :: Sealed
-  , wrapped :: Map CredentialId WrappedKey
-  }
-  deriving stock (Eq, Show)
-
--- | Written as one object: @format@, @salt@, @nonce@, @ciphertext@, and
--- @wrapped@, an object by credential id.
-instance ToJSON Vault where
-  toJSON v =
-    object
-      [ "format" .= v.format
-      , "salt" .= v.salt
-      , "nonce" .= v.sealed.nonce
-      , "ciphertext" .= v.sealed.ciphertext
-      , "wrapped" .= Map.mapKeys (\c -> c.text) v.wrapped
-      ]
-
-instance FromJSON Vault where
-  parseJSON = withObject "Vault" $ \o -> do
-    format <- o .: "format"
-    when (format > vaultFormat) (fail ("a vault of format " <> show format <> ", which a newer version of the wiki made"))
-    when (format < 1) (fail ("not a vault's format: " <> show format))
-    Vault format
-      <$> o
-      .: "salt"
-      <*> (Sealed <$> o .: "nonce" <*> o .: "ciphertext")
-      <*> (Map.mapKeys CredentialId <$> o .:? "wrapped" .!= mempty)
-
--- | The sealed settings of a vault.
-sealedOf :: Vault -> Sealed
-sealedOf v = v.sealed
-
--- | A vault with its settings sealed again (after a change), its salt and
--- its wrapped keys as they were: the vault key has not changed.
+-- | A vault with its settings sealed again (after a change), or sealed for
+-- the first time; its salt, its wraps and its other items as they were:
+-- the vault key has not changed.
 withSealed :: Sealed -> Vault -> Vault
-withSealed s v = Vault {format = v.format, salt = v.salt, sealed = s, wrapped = v.wrapped}
+withSealed s = withItem assistantItem Item {keyId = Nothing, sealed = s}
 
 -- | A vault with the vault key wrapped for one more passkey, or wrapped
 -- anew for one it had.
 withWrapped :: CredentialId -> WrappedKey -> Vault -> Vault
-withWrapped c w v = v {wrapped = Map.insert c w v.wrapped}
+withWrapped c = withWrap (ByPasskey c)
 
 -- | A vault without a passkey's wrapped copy of its key: the passkey,
 -- removed, opens it no more.
 withoutPasskey :: CredentialId -> Vault -> Vault
-withoutPasskey c v = v {wrapped = Map.delete c v.wrapped}
+withoutPasskey c = withoutWrap (ByPasskey c)
 
 -- | A passkey's wrapped copy of the vault key, if the vault has one.
 wrappedFor :: CredentialId -> Vault -> Maybe WrappedKey
-wrappedFor c v = Map.lookup c v.wrapped
+wrappedFor c = wrapFor (ByPasskey c)
 
 -- | The additional data AES-GCM authenticates with the sealed settings:
 -- the format's name and version. A ciphertext of another kind, or of
 -- another format, then fails to open rather than being read as settings.
+-- The three strings are those WP5.21 sealed and wrapped every existing
+-- vault with, and stay as they are: a change would leave every vault
+-- made before it unopenable.
 sealingData :: Text
 sealingData = "wiki-assistant-vault/1 settings"
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The user's vault (WP5.74b1). Migration `0010-user-vault` replaces
+`assistant_vaults` with `vaults` (the salt, the password's wrap of the
+vault key when there is one, and the revision, kept) and `vault_items`
+(the sealed items by name, each vault's settings moved to its `assistant`
+item). `PUT assistant/vault` takes a vault of format 2 whole (its items and
+its password's wrap), and one of format 1, which a tab from before this
+version sends, as the assistant's settings alone, keeping the other items.
+`DELETE assistant/vault` deletes the `assistant` item, and the vault only
+when nothing else is left in it. `Wiki.Server.Vault` gains `storeVaultIn`,
+for a transaction of the caller's.
+
 What's new (WP5.66). The server embeds, when it is compiled, the
 repository's changelog entries (`changelog/*.md`, reached through the
 symbolic link `wiki-server/changelog`, listed in `extra-source-files` so
