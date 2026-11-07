@@ -60,7 +60,7 @@ import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Vault (Step, VaultDevice (..), forgetting, newPasskey, readDevice, recover, server, unwrap, usedPasskey, vaultSlot, wikiText, withKey, wrap)
+import Wiki.App.Vault (Step, VaultDevice (..), forgetting, newPasskey, passwordVaultKey, readDevice, recover, server, unwrap, usedPasskey, vaultSlot, wikiText, withKey, wrap)
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
@@ -202,7 +202,7 @@ turnOnSync user password = sealing (pure (Left needsSealing)) $ runExceptT $ do
       Fresh -> pure defaultSettings
       Locked _ _ -> throwError "Unlock your keys first."
   lift (fetchVault Nothing) >>= \case
-    Right (Fetched s) -> joinVault user record secrets s
+    Right (Fetched s) -> joinVault user password record secrets s
     _ -> newVault user password record secrets
 
 -- | Sync the settings in a vault of their own, made for them: the vault
@@ -241,28 +241,59 @@ newVault user password record secrets = do
   keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
 
 -- | Sync the settings in the vault the user has already, made for their
--- other secrets (their key pair): its key, which one of the passkeys it
--- knows unwraps (one touch), seals the settings, and they are added to
--- it. A vault that no passkey unlocks yet (one the password alone
--- unlocks) needs a passkey added to it first, under Keys in the account's
--- security, since syncing the settings needs one.
-joinVault :: (MonadAssistant m, MonadVault m) => UserId -> DeviceRecord -> Settings -> StoredVault -> Step m Keys
-joinVault user record secrets s = do
+-- other secrets (their key pair). Its key seals the settings, which are
+-- added to it. One of the passkeys the vault knows gives the key (one
+-- touch). A vault no passkey unlocks yet (the one a first sign-in with a
+-- password makes, which the password alone unlocks) is unlocked with the
+-- password, proved again, and its key is wrapped for a passkey of the
+-- user's, or a new one, as syncing has always needed: the settings follow
+-- the user through that passkey too.
+joinVault :: (MonadAssistant m, MonadVault m) => UserId -> Maybe Password -> DeviceRecord -> Settings -> StoredVault -> Step m Keys
+joinVault user password record secrets s = do
   let unlocking = Map.keys (passkeyWraps s.vault)
-  when (null unlocking) (throwError "Your vault opens with your password only. Add a passkey to it under Keys in your account's security, then turn syncing on.")
-  (credential, wrapping) <- usedPasskey s.vault.salt (Just unlocking)
-  let vaultKeyOf = forgetting wrapping $ do
-        wrapped <- maybe (throwError "This passkey has no copy of the vault's key: use another one.") pure (wrappedFor credential s.vault)
-        unwrap wrapping wrapped False
-  fresh <- withKey vaultKeyOf $ \vaultKey -> do
-    sealed <- seal vaultKey secrets
-    fresh <- server (storeVault (Just s.tag) (withSealed sealed s.vault))
-    keep user vaultKey (not record.askEachTime)
-    keepForVault user vaultKey
-    pure fresh
+  fresh <-
+    if null unlocking
+      then do
+        typed <- maybe (throwError "Your vault opens with your password only: type your password to turn syncing on.") pure password
+        existing <- server listPasskeys
+        -- The vault key can be exported here, to be wrapped for the
+        -- passkey: the page forgets it however this ends.
+        withKey (passwordVaultKey s typed True) $ \vaultKey -> do
+          -- The proof of the password just made lets the passkey be made
+          -- without the password again.
+          (credential, wrapping) <-
+            if null existing
+              then newPasskey Nothing s.vault.salt
+              else usedPasskey s.vault.salt Nothing `recover` const (newPasskey Nothing s.vault.salt)
+          let made = credential `notElem` map (\p -> p.id) existing
+          stored' <-
+            forgetting
+              wrapping
+              ( do
+                  wrapped <- wrap wrapping vaultKey
+                  sealed <- seal vaultKey secrets
+                  server (storeVault (Just s.tag) (withWrapped credential wrapped (withSealed sealed s.vault)))
+              )
+              `recover` \why -> lift (when made (void (dropPasskey credential))) >> throwError why
+          keepBoth vaultKey
+          pure stored'
+      else do
+        (credential, wrapping) <- usedPasskey s.vault.salt (Just unlocking)
+        let vaultKeyOf = forgetting wrapping $ do
+              wrapped <- maybe (throwError "This passkey has no copy of the vault's key: use another one.") pure (wrappedFor credential s.vault)
+              unwrap wrapping wrapped False
+        withKey vaultKeyOf $ \vaultKey -> do
+          sealed <- seal vaultKey secrets
+          stored' <- server (storeVault (Just s.tag) (withSealed sealed s.vault))
+          keepBoth vaultKey
+          pure stored'
   let synced' = serverTo (Just (ServerCopy fresh.tag fresh.vault)) (sealedTo (sealedOf fresh.vault) record)
   write user synced'
   keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
+  where
+    keepBoth vaultKey = do
+      keep user vaultKey (not record.askEachTime)
+      keepForVault user vaultKey
 
 -- | Unlock the vault on this device with a passkey: the vault key
 -- unwrapped with what the passkey gives, kept, and the settings opened.

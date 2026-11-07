@@ -699,6 +699,24 @@ userKeys m = describe "the user's keys" $ do
     isJust (field ["vault", "password", "key"] made) `shouldBe` True
     closed ui
 
+  it "turns the assistant's syncing on in the vault the first sign-in made, with the password and a new passkey" $ runPage $ do
+    ui <- signedOutAt AssistantSettings "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    -- The vault opens with the password alone: the password unwraps its
+    -- key, which is wrapped for the passkey syncing makes.
+    find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
+    find ui ".assistant-sync-on-button" >>= click
+    eventually $ find ui ".assistant-sync-on" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: on")
+    kept <- vaultState
+    ( isJust (field ["vault", "items", "assistant"] kept)
+      , isJust (field ["passkeys", "0", "wrapped", "key"] kept)
+      , isJust (field ["vault", "password", "key"] kept)
+      , field ["publicKey", "keyId"] kept == field ["publicKey", "keyId"] made
+      )
+      `shouldBe` (True, True, True, True)
+    closed ui
+
   it "unlocks the key pair on a second device with the password: the same key pair, and nothing stored again" $ runPage $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
@@ -781,7 +799,9 @@ userKeys m = describe "the user's keys" $ do
     -- The wiki with nobody signed in, the editor's password registered
     -- with the OPAQUE server, and the vault's server empty.
     signedOut :: Text -> PageM s (Mounted s Shell.Query Void m)
-    signedOut password = do
+    signedOut = signedOutAt Home
+    signedOutAt :: Route -> Text -> PageM s (Mounted s Shell.Query Void m)
+    signedOutAt at password = do
       serverStarts
       serveDemo
       answerAccount
@@ -790,7 +810,7 @@ userKeys m = describe "the user's keys" $ do
       unsafeIOToPageM (js_opaque_server (toJSText (decodeUtf8 (BSL.toStrict (encode me)))))
       unsafeIOToPageM (evaluate =<< js_opaque_register (toJSText password))
       unsafeIOToPageM (js_install True True)
-      restarted
+      restartedAt at
     -- The wiki again, with nobody signed in, over the same servers.
     restarted :: PageM s (Mounted s Shell.Query Void m)
     restarted = restartedAt Home

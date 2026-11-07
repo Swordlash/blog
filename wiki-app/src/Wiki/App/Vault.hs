@@ -72,6 +72,7 @@ module Wiki.App.Vault
 
     -- * Steps
   , Step
+  , passwordVaultKey
   , newPasskey
   , usedPasskey
   , wrap
@@ -325,6 +326,16 @@ provedKey password =
     Left e -> throwError (passwordErrorText e)
     Right Nothing -> throwError "This browser gave no key for your password: open the wiki at its HTTPS address."
     Right (Just k) -> pure k
+
+-- | The vault key, unwrapped with the key the password gives, proved again
+-- to the server (no new session); exportable only when asked. The proof
+-- left on the session also lets the next change that needs the password go
+-- without it (making a passkey, for one).
+passwordVaultKey :: (MonadAssistant m, MonadVault m) => StoredVault -> Password -> Bool -> Step m KeyRef
+passwordVaultKey s password exportable = do
+  w <- maybe (throwError "Your vault does not open with your password: unlock it with a passkey.") pure (wrapFor ByPassword s.vault)
+  k <- provedKey password
+  forgetting k (unwrapWith' k s w exportable)
 
 -- | The vault key, unwrapped with one of the passkeys the vault knows (one
 -- touch); exportable only when asked.
