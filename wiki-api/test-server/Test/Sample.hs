@@ -55,6 +55,7 @@ module Test.Sample
   , vault
   , storedVault
   , passkeyInfo
+  , publicKeyEntry
   , registrationOptions
   , registrationResponse
   , assertionOptions
@@ -77,11 +78,10 @@ import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState 
 import Wiki.Api.ServerSettings (AssistantApi (..), AssistantService (..), Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..), defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), PublicKeyEntry (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.WhatsNew (WhatsNew (..), WhatsNewEntry (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), Vault (..), VaultTag (..), WrappedKey (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..))
 import Wiki.Core.Audit qualified as Audit
@@ -99,6 +99,7 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.Vault (CredentialId (..), Item (..), ItemName (..), KeyId (..), PublicKey (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), vaultFormat)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -673,20 +674,25 @@ feedAddress = FeedAddress {address = Just (feedAddressOf "sample-secret")}
 starredPage :: StarredPage
 starredPage = StarredPage {page = page.id, space = space.id, title = "Tour", location = PageLocation {space = [slug "docs"], page = [slug "tour"]}}
 
--- | A user's vault of the assistant's settings, with the vault key
+-- | A user's vault, holding the assistant's settings, with the vault key
 -- wrapped for one passkey. Every part is made-up base64url: nothing here
 -- is a real key or ciphertext.
 vault :: Vault
 vault =
   Vault
-    { format = 1
+    { format = vaultFormat
     , salt = "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY"
-    , sealed = Sealed {nonce = "bm9uY2UtMTJieQ", ciphertext = "c2VhbGVkLXNldHRpbmdz"}
-    , wrapped = Map.fromList [(CredentialId "Y3JlZGVudGlhbC0x", WrappedKey {nonce = "d3JhcC1ub25jZQ", key = "d3JhcHBlZC1rZXk"})]
+    , items = Map.fromList [(ItemName "assistant", Item {keyId = Nothing, sealed = Sealed {nonce = "bm9uY2UtMTJieQ", ciphertext = "c2VhbGVkLXNldHRpbmdz"}})]
+    , wraps = Map.fromList [(ByPasskey (CredentialId "Y3JlZGVudGlhbC0x"), WrappedKey {nonce = "d3JhcC1ub25jZQ", key = "d3JhcHBlZC1rZXk"})]
     }
 
 storedVault :: StoredVault
 storedVault = StoredVault {tag = VaultTag "\"3\"", vault}
+
+-- | A user's public key in the directory: made-up bytes of the right
+-- lengths, and the id the server would compute for them.
+publicKeyEntry :: PublicKeyEntry
+publicKeyEntry = PublicKeyEntry {user = UserId "user-ada", keyId = KeyId "Y2-9-YWJjZGVmZ2hpams", publicKey = PublicKey "YW4gWDI1NTE5IHB1YmxpYyBrZXksIDMyIGJ5dGVzISE", createdAt = time}
 
 passkeyInfo :: PasskeyInfo
 passkeyInfo = PasskeyInfo {id = CredentialId "Y3JlZGVudGlhbC0x", name = "Added on 2026-10-28 at 09:30 UTC", createdAt = time, lastUsedAt = Just later, unlocks = True}

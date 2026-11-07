@@ -48,7 +48,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..))
+import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..), summaryOf)
@@ -98,7 +98,7 @@ slugs = either (panic . show) identity . parsePath
 
 -- | A vault as the server stores it; its contents do not matter here.
 demoVault :: Vault
-demoVault = Vault {format = 1, salt = "salt", sealed = Sealed {nonce = "nonce", ciphertext = "ciphertext"}, wrapped = mempty}
+demoVault = withSealed Sealed {nonce = "nonce", ciphertext = "ciphertext"} Vault {format = vaultFormat, salt = "salt", items = mempty, wraps = mempty}
 
 spec :: Spec
 spec = describe "Wiki.App.Backend.Http" $ do

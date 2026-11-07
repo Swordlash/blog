@@ -1,4 +1,6 @@
-// The assistant's keys across devices end to end (WP5.21 of docs/PLAN.md):
+// The assistant's keys across devices end to end (WP5.21 of docs/PLAN.md),
+// in the user's vault, which the first sign-in with a password makes
+// (WP5.74b1):
 // the server's build of the wiki, served by a real wiki-server, in headless
 // Chromium with a virtual authenticator (Chromium's own WebAuthn, through
 // DevTools' WebAuthn domain), which makes and uses real passkeys with the
@@ -84,6 +86,21 @@ await signInPage.locator("#app .sign-in-form input[name=login]").fill("ada");
 await signInPage.locator("#app .sign-in-form input[name=password]").fill(password);
 await signInPage.locator("#app .sign-in-form button[type=submit]").click();
 await signInPage.locator("#app .sign-out").waitFor({ timeout });
+// The first sign-in with a password makes Ada's vault (WP5.74b1): her key
+// pair, the vault's key wrapped for her password, and her public key.
+const signedInApi = async (path) => (await signInContext.request.get(`${origin}/api/v1/${path}`, { headers: { "X-Wiki-Request": "1" } })).json();
+const first = await (async () => {
+  for (let tries = 0; tries < 60; tries++) {
+    const answer = await signInContext.request.get(`${origin}/api/v1/assistant/vault`, { headers: { "X-Wiki-Request": "1" } });
+    if (answer.status() === 200) return answer.json();
+    await new Promise((later) => setTimeout(later, 500));
+  }
+  return null;
+})();
+assert.ok(first?.vault.items.identity && first.vault.wraps.password, "the first sign-in made no vault with the key pair and the password's wrap");
+const ownKey = await signedInApi("account/public-keys/" + encodeURIComponent((await signedInApi("session")).user.id));
+assert.equal(ownKey.keyId, first.vault.items.identity.keyId, "the directory names another key pair than the vault's");
+console.log("ok: the first sign-in with a password makes the key pair, wrapped for the password, and the public key");
 const token = (await signInContext.cookies()).find((c) => c.name === "wiki_session")?.value;
 assert.ok(token, "no session cookie");
 await signInContext.close();
@@ -113,7 +130,7 @@ try {
     hasPrf: true,
     automaticPresenceSimulation: true,
   };
-  const first = await devtools.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });
+  const firstAuthenticator = await devtools.send("WebAuthn.addVirtualAuthenticator", { options: authenticator });
 
   await page.goto(`${origin}/assistant/`);
   const anthropic = page.locator(".assistant-provider-settings[data-provider='anthropic']");
@@ -121,14 +138,25 @@ try {
   await anthropic.locator(".assistant-key-form button").click();
   await anthropic.locator(".assistant-key-kept").waitFor({ timeout });
 
-  // Making a passkey asks for the password: a passkey signs Ada in.
+  // Making a passkey asks for the password: a passkey signs Ada in. The
+  // vault her sign-in made opens with the password alone, which unwraps
+  // its key for the new passkey to wrap.
   await page.locator(".assistant-passkey-password").fill(password);
   await page.locator(".assistant-sync-on-button").click();
-  await page.locator(".assistant-sync-on").waitFor({ timeout });
+  await Promise.race([
+    page.locator(".assistant-sync-on").waitFor({ timeout }),
+    page
+      .locator(".assistant-sync-problem")
+      .waitFor({ timeout })
+      .then(async () => assert.fail(`turning syncing on: ${await page.locator(".assistant-sync-problem").textContent()}`)),
+  ]);
   const vault = await (await api("assistant/vault")).json();
-  assert.equal(Object.keys(vault.vault.wrapped).length, 1, "the vault key is wrapped for the passkey");
+  const passkeyWraps = (v) => Object.keys(v.vault.wraps).filter((u) => u.startsWith("passkey:"));
+  assert.equal(passkeyWraps(vault).length, 1, "the vault key is wrapped for the passkey");
+  assert.ok(vault.vault.wraps.password, "the password's wrap is gone");
+  assert.ok(vault.vault.items.assistant && vault.vault.items.identity, "the vault holds the settings and the key pair");
   assert.ok(!JSON.stringify(vault).includes("a-test-key-for-anthropic"), "the server holds the key in the clear");
-  console.log("ok: a real passkey with the PRF extension turns syncing on, and the server keeps the keys sealed");
+  console.log("ok: a real passkey with the PRF extension turns syncing on in the vault, and the server keeps the keys sealed");
 
   // Asked each time: after a reload the vault is locked, and one use of the
   // passkey, whose assertion the server checks, unlocks it.
@@ -161,7 +189,7 @@ try {
   });
   beforeCreate = async () => {
     beforeCreate = async () => {};
-    await devtools.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: first.authenticatorId });
+    await devtools.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: firstAuthenticator.authenticatorId });
     await devtools.send("WebAuthn.addVirtualAuthenticator", { options: { ...authenticator, transport: "usb" } });
   };
   await page.locator(".assistant-passkey-password").fill(password);
@@ -177,13 +205,17 @@ try {
   assert.deepEqual(both.map((p) => p.unlocks), [true, true], "both passkeys unlock the vault");
   console.log("ok: a second passkey is added, and unlocks the vault too");
 
+  // Turned off, the settings leave the vault; the vault stays, holding the
+  // key pair, and so do the ways it unlocks.
   await page.locator(".assistant-sync-off").click();
   await page.locator(".assistant-sync-off-state").waitFor({ timeout });
-  assert.equal((await api("assistant/vault")).status, 404, "the vault is still on the server");
+  const left = await (await api("assistant/vault")).json();
+  assert.ok(!left.vault.items.assistant, "the settings are still in the vault");
+  assert.ok(left.vault.items.identity, "the key pair left the vault with the settings");
   await anthropic.locator(".assistant-key-kept").waitFor({ timeout });
   const kept = await (await api("account/passkeys")).json();
-  assert.deepEqual(kept.map((p) => p.unlocks), [false, false], "the passkeys stay, unlocking nothing");
-  console.log("ok: turned off, the vault is gone from the server, the key stays in the browser, and the passkeys stay");
+  assert.deepEqual(kept.map((p) => p.unlocks), [true, true], "the passkeys stopped unlocking the vault that holds the key pair");
+  console.log("ok: turned off, the settings leave the vault, which keeps the key pair, the key stays in the browser, and the passkeys stay");
 
   // Signed out, the passkey left on the authenticator signs Ada in alone:
   // a discoverable credential, whose user handle names her, and no code.

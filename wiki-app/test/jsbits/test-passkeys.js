@@ -139,6 +139,7 @@ function wiki_test_passkeys_uninstall() {
   if (wikiTestPasskeys.original) Object.defineProperty(navigator, "credentials", wikiTestPasskeys.original);
   if (wikiTestPasskeys.insecure !== null) {
     delete globalThis.isSecureContext;
+    if (wikiTestPasskeys.insecure) Object.defineProperty(globalThis, "isSecureContext", wikiTestPasskeys.insecure);
     wikiTestPasskeys.insecure = null;
   }
 }
@@ -170,8 +171,11 @@ function wiki_test_passkeys_pick() {
 
 // The page as one served over plain HTTP to another machine: not a secure
 // context, where a browser offers no passkeys.
+// The window's own isSecureContext is kept, to be put back: deleting the
+// property the test defined would delete the browser's with it, and leave
+// every later test of the page without passkeys.
 function wiki_test_passkeys_insecure() {
-  wikiTestPasskeys.insecure = true;
+  wikiTestPasskeys.insecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext") ?? false;
   Object.defineProperty(globalThis, "isSecureContext", { value: false, configurable: true });
 }
 
@@ -190,17 +194,20 @@ function wiki_test_passkeys_cancel_after(touches) {
   wikiTestPasskeys.cancelAt = wikiTestPasskeys.touches + touches + 1;
 }
 
-// The vault's server: one user's vault and passkeys.
-const wikiTestVault = { vault: null, revision: 0, passkeys: [] };
+// The vault's server: one user's vault (its salt, its items by name and
+// the password's wrap of its key), their passkeys with each one's wrap,
+// and their current public key in the directory.
+const wikiTestVault = { vault: null, revision: 0, passkeys: [], publicKey: null };
 
 function wikiTestJson(status, value, headers = {}) {
   return { status, body: JSON.stringify(value), headers };
 }
 
 function wikiTestStored() {
-  const wrapped = {};
-  for (const p of wikiTestVault.passkeys) if (p.wrapped) wrapped[p.id] = p.wrapped;
-  return { tag: `"${wikiTestVault.revision}"`, vault: { ...wikiTestVault.vault, wrapped } };
+  const wraps = {};
+  if (wikiTestVault.vault.password) wraps.password = wikiTestVault.vault.password;
+  for (const p of wikiTestVault.passkeys) if (p.wrapped) wraps[`passkey:${p.id}`] = p.wrapped;
+  return { tag: `"${wikiTestVault.revision}"`, vault: { format: 2, salt: wikiTestVault.vault.salt, items: wikiTestVault.vault.items, wraps } };
 }
 
 function wikiTestInfo(p) {
@@ -224,20 +231,46 @@ function wikiTestVaultServer(request) {
     if (wikiTestVault.vault === null ? base !== undefined : base !== `"${wikiTestVault.revision}"`) {
       return wikiTestJson(409, { error: "Conflict", text: "The vault was changed on another device meanwhile." });
     }
-    for (const [id, wrapped] of Object.entries(sent.wrapped ?? {})) {
-      const p = wikiTestVault.passkeys.find((k) => k.id === id);
-      if (!p) return wikiTestJson(400, { error: "Invalid", text: "The vault names a passkey that is not one of yours." });
-      p.wrapped = wrapped;
+    const wraps = Object.entries(sent.wraps ?? {});
+    for (const [unlock] of wraps) {
+      if (unlock.startsWith("passkey:") && !wikiTestVault.passkeys.some((k) => `passkey:${k.id}` === unlock)) {
+        return wikiTestJson(400, { error: "Invalid", text: "The vault names a passkey that is not one of yours." });
+      }
     }
-    wikiTestVault.vault = { format: sent.format, salt: sent.salt, nonce: sent.nonce, ciphertext: sent.ciphertext };
+    const identity = sent.items?.identity;
+    if (sent.publicKey) {
+      if (identity?.keyId !== sent.publicKey.keyId) return wikiTestJson(400, { error: "Invalid", text: "The public key sent is not the key pair the vault holds." });
+      if (wikiTestVault.publicKey && wikiTestVault.publicKey.keyId !== sent.publicKey.keyId) {
+        return wikiTestJson(409, { error: "Conflict", text: "You have a key pair already: it is replaced only after a password reset." });
+      }
+      wikiTestVault.publicKey = { user: "user-editor", keyId: sent.publicKey.keyId, publicKey: sent.publicKey.publicKey, createdAt: "2026-11-06T09:30:00Z" };
+    } else if (identity && identity.keyId !== wikiTestVault.publicKey?.keyId) {
+      return wikiTestJson(400, { error: "Invalid", text: "The vault holds a key pair the directory does not have: send its public key with it." });
+    }
+    for (const [unlock, wrapped] of wraps) {
+      const p = wikiTestVault.passkeys.find((k) => `passkey:${k.id}` === unlock);
+      if (p) p.wrapped = wrapped;
+    }
+    wikiTestVault.vault = { salt: sent.salt, items: sent.items ?? {}, password: sent.wraps?.password ?? null };
     wikiTestVault.revision++;
     return wikiTestJson(200, wikiTestStored());
   }
   if (path === "vault" && request.method === "DELETE") {
-    // The passkeys stay, since they sign the user in; their wrapped keys go.
-    wikiTestVault.vault = null;
-    for (const p of wikiTestVault.passkeys) p.wrapped = null;
+    // The assistant's settings go; the vault goes only when it holds
+    // nothing else, and its passkeys' wraps with it. The passkeys stay,
+    // since they sign the user in.
+    if (wikiTestVault.vault !== null) {
+      delete wikiTestVault.vault.items.assistant;
+      if (Object.keys(wikiTestVault.vault.items).length > 0) wikiTestVault.revision++;
+      else {
+        wikiTestVault.vault = null;
+        for (const p of wikiTestVault.passkeys) p.wrapped = null;
+      }
+    }
     return { status: 204, body: "" };
+  }
+  if (path.startsWith("public-keys/") && request.method === "GET") {
+    return wikiTestVault.publicKey ? wikiTestJson(200, wikiTestVault.publicKey) : wikiTestJson(404, { error: "NotFound" });
   }
   if (path === "passkeys" && request.method === "GET") return wikiTestJson(200, wikiTestVault.passkeys.map(wikiTestInfo));
   if (path === "passkeys/registration" && request.method === "POST") {
@@ -278,11 +311,12 @@ function wikiTestVaultServer(request) {
 // Start the vault's server, empty, in fetch's place (after the test's
 // server has started: Test.Browser.Http's serverStarts).
 function wiki_test_vault_server_start() {
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [] });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
   globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestVaultServer];
 }
 
-// What the vault's server keeps, as JSON: {vault, revision, passkeys}.
+// What the vault's server keeps, as JSON: {vault, revision, passkeys,
+// publicKey}.
 function wiki_test_vault_server_state() {
   return JSON.stringify(wikiTestVault);
 }
@@ -407,7 +441,7 @@ let wikiTestStashed = null;
 
 function wiki_test_vault_server_stash() {
   wikiTestStashed = JSON.parse(JSON.stringify(wikiTestVault));
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [] });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
 }
 
 function wiki_test_vault_server_unstash() {
@@ -496,4 +530,145 @@ async function wiki_test_exportable_keys_left() {
     wikiTestPasskeys.prf = prf;
     wikiTestPasskeys.credentials = wikiTestPasskeys.credentials.filter((c) => c !== id);
   }
+}
+
+// The server's side of OPAQUE for the user's keys' tests (Test.Browser.Keys),
+// with @serenity-kit/opaque's own server functions: a sign-in, a proof of
+// the password and a registration run for real, so that the browser's
+// export key is the one a real server's exchange gives, the same at each
+// sign-in with the same password. One user, the editor, with the session
+// the test gives. A change of password takes the vault's new password wrap
+// as wiki-server does (both or neither), and a reset takes away what only
+// the old password unlocked.
+const wikiTestOpaque = { setup: null, record: null, attempts: new Map(), session: null, next: 0, secondFactor: false };
+
+const wikiTestCheap = { opsLimit: 1, memLimit: 8192 };
+
+async function wikiTestOpaqueServer(request) {
+  const path = request.url.replace(/^.*api\/v1\//, "");
+  const routes = ["session/password", "account/password/proof", "password-registration", "account/password", "password-reset/"];
+  if (!routes.some((r) => path === r || (r.endsWith("/") && path.startsWith(r)))) return null;
+  const opaque = await globalThis.wikiIslands.opaque();
+  await opaque.ready;
+  const server = opaque.server;
+  if (wikiTestOpaque.setup === null) wikiTestOpaque.setup = server.createSetup();
+  const sent = request.body === "" ? {} : JSON.parse(request.body);
+  const starting = (path === "session/password" || path === "account/password/proof") && request.method === "POST";
+  if (starting) {
+    if (wikiTestOpaque.record === null) return wikiTestJson(401, { error: "Unauthenticated" });
+    const started = server.startLogin({ serverSetup: wikiTestOpaque.setup, registrationRecord: wikiTestOpaque.record, startLoginRequest: sent.ke1, userIdentifier: "user-editor" });
+    const attempt = `t${++wikiTestOpaque.next}`;
+    wikiTestOpaque.attempts.set(attempt, started.serverLoginState);
+    return wikiTestJson(200, { attempt, ke2: started.loginResponse, stretch: wikiTestCheap, fallback: false });
+  }
+  if ((path === "session/password" || path === "account/password/proof") && request.method === "PUT") {
+    const state = wikiTestOpaque.attempts.get(sent.attempt);
+    wikiTestOpaque.attempts.delete(sent.attempt);
+    try {
+      server.finishLogin({ finishLoginRequest: sent.ke3, serverLoginState: state });
+    } catch {
+      return wikiTestJson(401, { error: "Unauthenticated" });
+    }
+    if (path === "account/password/proof") return { status: 204, body: "" };
+    // An account with a second factor waits for its code (which the test
+    // answers) rather than being signed in.
+    return wikiTestOpaque.secondFactor ? wikiTestJson(401, { error: "SecondFactorRequired" }) : wikiTestJson(200, wikiTestOpaque.session);
+  }
+  if (path === "password-registration" && request.method === "POST") {
+    const made = server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: sent.request });
+    return wikiTestJson(200, { credential: "user-editor", response: made.registrationResponse, stretch: wikiTestCheap });
+  }
+  if (path === "account/password" && request.method === "PUT") {
+    const vault = wikiTestVault.vault;
+    if (sent.vault) {
+      if (vault === null || !vault.password || sent.vault.tag !== `"${wikiTestVault.revision}"`) {
+        return wikiTestJson(409, { error: "Conflict", text: "Your vault was changed meanwhile: try again." });
+      }
+      vault.password = sent.vault.wrapped;
+      wikiTestVault.revision++;
+    } else if (vault?.password) {
+      return wikiTestJson(409, { error: "Conflict", text: "Your vault opens with your password." });
+    }
+    wikiTestOpaque.record = sent.password.record;
+    return wikiTestJson(200, { password: true, identities: [] });
+  }
+  if (path.startsWith("password-reset/") && request.method === "POST") {
+    wikiTestOpaque.record = sent.record;
+    const vault = wikiTestVault.vault;
+    if (vault !== null) {
+      if (wikiTestVault.passkeys.some((p) => p.wrapped)) {
+        vault.password = null;
+        wikiTestVault.revision++;
+      } else {
+        wikiTestVault.vault = null;
+        wikiTestVault.publicKey = null;
+      }
+    }
+    return { status: 204, body: "" };
+  }
+  return null;
+}
+
+// Play OPAQUE's server, for the user whose session (JSON) a sign-in
+// answers, before the vault's server (wiki_test_vault_server_start).
+function wiki_test_opaque_server_start(session) {
+  Object.assign(wikiTestOpaque, { setup: null, record: null, attempts: new Map(), session: JSON.parse(session), next: 0, secondFactor: false });
+  globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestOpaqueServer];
+}
+
+// Give the editor a second factor: a sign-in with the password then waits
+// for its code.
+function wiki_test_opaque_second_factor() {
+  wikiTestOpaque.secondFactor = true;
+}
+
+// Register the editor's password, as an administrator would have set it.
+async function wiki_test_opaque_register(password) {
+  const opaque = await globalThis.wikiIslands.opaque();
+  await opaque.ready;
+  if (wikiTestOpaque.setup === null) wikiTestOpaque.setup = opaque.server.createSetup();
+  const start = opaque.client.startRegistration({ password });
+  const response = opaque.server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: start.registrationRequest });
+  const done = opaque.client.finishRegistration({
+    clientRegistrationState: start.clientRegistrationState,
+    registrationResponse: response.registrationResponse,
+    password,
+    keyStretching: { "argon2id-custom": { iterations: 1, memory: 8, parallelism: 1 } },
+  });
+  wikiTestOpaque.record = done.registrationRecord;
+}
+
+// Whether this device's private key for a user, in IndexedDB, refuses to
+// be exported, as a key that cannot be exported must: "refused", "exported"
+// or "none" when the device holds no key.
+async function wiki_test_identity_export(user) {
+  const [found] = ((await wikiTestEntries("wiki-assistant-keys", "keys")) ?? []).filter(([key]) => key === `identity:${user}`);
+  if (found === undefined || !(found[1] instanceof CryptoKey)) return "none";
+  try {
+    await crypto.subtle.exportKey("pkcs8", found[1]);
+    return "exported";
+  } catch {
+    return found[1].extractable === false ? "refused" : "exported";
+  }
+}
+
+// The names of the page's globals that hold text as long as an export key
+// written in base64url (64 bytes, 86 characters) or longer, and whether
+// the page's registry of keys holds anything but CryptoKeys: an export key
+// left in the page would show in one of them.
+function wiki_test_export_key_traces() {
+  const found = [];
+  for (const name of Object.getOwnPropertyNames(globalThis)) {
+    let value;
+    try {
+      value = globalThis[name];
+    } catch {
+      continue;
+    }
+    if (typeof value === "string" && /^[A-Za-z0-9_-]{86,}$/.test(value)) found.push(name);
+  }
+  for (const value of globalThis.wikiKeyRegistry?.keys.values() ?? []) {
+    if (!(value instanceof CryptoKey)) found.push("wikiKeyRegistry");
+  }
+  return JSON.stringify(found);
 }

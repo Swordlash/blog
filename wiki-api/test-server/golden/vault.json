@@ -1,10 +1,14 @@
 {
-  "ciphertext": "c2VhbGVkLXNldHRpbmdz",
-  "format": 1,
-  "nonce": "bm9uY2UtMTJieQ",
+  "format": 2,
+  "items": {
+    "assistant": {
+      "ciphertext": "c2VhbGVkLXNldHRpbmdz",
+      "nonce": "bm9uY2UtMTJieQ"
+    }
+  },
   "salt": "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY",
-  "wrapped": {
-    "Y3JlZGVudGlhbC0x": {
+  "wraps": {
+    "passkey:Y3JlZGVudGlhbC0x": {
       "key": "d3JhcHBlZC1rZXk",
       "nonce": "d3JhcC1ub25jZQ"
     }

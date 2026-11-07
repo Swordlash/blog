@@ -10,7 +10,11 @@
 -- when the password is set, and a link that was used or has expired is
 -- reported then. So the page the server prerenders is the form itself, as
 -- the program renders it. Someone signed in is told to sign out first,
--- since the reset would sign them out without warning. A wiki that signs
+-- since the reset would sign them out without warning. The form says what
+-- a reset deletes when only the old password unlocked the user's vault
+-- ('Wiki.App.Vault.resetLosses'), whoever the link is for: the page is not
+-- signed in, and says nothing of this user's own keys to whoever holds the
+-- link. A wiki that signs
 -- nobody in (the demo) says that it has no passwords to reset. The inputs
 -- are uncontrolled, like the sign-in form's ("Wiki.App.View.SignIn").
 module Wiki.App.View.Reset
@@ -28,6 +32,7 @@ import Protolude hiding (State)
 import Wiki.Api.Security (ResetToken)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (Session (..), WikiError (..))
+import Wiki.App.Vault (resetLosses)
 import Wiki.App.View.Common (errorMessage)
 import Wiki.Core.User (Password (..), User (..), minimumPasswordLength)
 
@@ -99,6 +104,15 @@ component =
                 [hh|
                   <form class="reset-form" aria-label="Choose a new password" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
                     <p>Choose a new password for your account. Setting it signs you out everywhere you are signed in.</p>
+                    <div class="reset-warning" role="note">
+                      <p>Unless one of your passkeys unlocks your keys, a new password set here deletes what only your old password unlocked:</p>
+                      <ul>
+                        {% for lost in resetLosses %}
+                          <li>{{ lost }}</li>
+                        {% end %}
+                      </ul>
+                      <p>If a passkey of yours unlocks them, nothing is lost: sign in, and let them open with your new password too under Keys in your account's security, which asks for the passkey once.</p>
+                    </div>
                     <label class="field">
                       <span>New password</span>
                       <input type="password" name="new" autocomplete="new-password" required minlength={{ minimumPasswordLength }} onValueInput={{ TypedPassword }}>

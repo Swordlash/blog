@@ -35,6 +35,9 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   // The browser's OPAQUE client (web/src/opaque.js), bundled as
   // islands/opaque.js.
   ["@serenity-kit/opaque", ["@serenity-kit/opaque"]],
+  // HPKE over WebCrypto for the keys sealed to a user (web/src/hpke.js),
+  // bundled as islands/hpke.js.
+  ["@hpke/core", ["@hpke/core"]],
   // Its package.json names no file it ships as its main; web/bundle.sh copies
   // dist/ as it is.
   ["@drgrice1/tikzjax", ["@drgrice1/tikzjax/dist/run-tex.js", "@drgrice1/tikzjax/dist/core.dump.gz"]],

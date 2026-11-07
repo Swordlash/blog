@@ -17,6 +17,7 @@
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //   wikiIslands.opaque(): Promise<module>
+//   wikiIslands.hpke(): Promise<module>
 //
 // It also gives the pages' spoilers and the code blocks' copy buttons their
 // behaviour (see "Spoilers" and "Copy buttons" below), with listeners on the
@@ -49,7 +50,9 @@
 // opens), for wiki-app/jsbits/avatar.js. Nor is opaque: it loads the
 // browser's OPAQUE client, @serenity-kit/opaque (opaque.js, bundled into
 // islands/opaque.js), the first time a password is used, for
-// wiki-app/jsbits/opaque.js.
+// wiki-app/jsbits/opaque.js. Nor is hpke: it loads HPKE, @hpke/core (hpke.js,
+// bundled into islands/hpke.js), the first time a key is sealed to someone
+// or opened.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -144,6 +147,7 @@ const loadEditor = lazily("islands/editor.js");
 const loadAssistant = lazily("islands/assistant.js");
 const loadAvatar = lazily("islands/avatar.js");
 const loadOpaque = lazily("islands/opaque.js");
+const loadHpke = lazily("islands/hpke.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -631,4 +635,5 @@ globalThis.wikiIslands = Object.freeze({
   assistant: loadAssistant,
   cropAvatar,
   opaque: loadOpaque,
+  hpke: loadHpke,
 });

@@ -87,12 +87,13 @@ function wiki_test_server_start() {
     }
     if (signal?.aborted) throw abortError();
     if (wikiTestServer.offline) throw new TypeError("Failed to fetch");
-    // A handler a test installed answers first, if it answers at all (the
+    // A handler a test installed answers first, if it answers at all, at
+    // once or with a promise (the
     // vault's server, test-passkeys.js, which is in another file's scope,
     // so the handlers are a global); then the table.
     let answer = null;
     for (const handle of globalThis.wikiTestHandlers ?? []) {
-      answer = handle(request);
+      answer = await handle(request);
       if (answer) break;
     }
     if (answer === null) answer = wikiTestServer.answers.get(`${method} ${url}`) ?? { status: 404, body: '{"error":"NotFound"}' };

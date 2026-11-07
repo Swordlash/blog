@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+`PasswordRecordChange` gains `vault :: Maybe PasswordWrapChange`
+(`{tag, wrapped}`), written only when there is one (WP5.74b1).
+
+The directory of public keys (WP5.74b1). `PUT assistant/vault` takes a
+`VaultChange`: the vault's own object, with `publicKey`
+(`NewPublicKey {keyId, publicKey}`) when its `identity` item is new; a bare
+vault still reads. `AccountApi` gains `publicKey`, `GET
+account/public-keys/<user>`, answering a `PublicKeyEntry {user, keyId,
+publicKey, createdAt}`.
+
+The user's vault (WP5.74b1). `StoredVault`'s vault is a
+`Wiki.Core.Vault.Vault` of format 2: `{format, salt, items, wraps}`, the
+items by name and the wraps by `passkey:<id>` or `password`. A `PUT
+assistant/vault` of format 1 is still taken.
+
 What's new (WP5.66). `GET api/v1/whats-new` (`WikiApi`'s `whatsNew`)
 answers `Wiki.Api.WhatsNew.WhatsNew` `{version, built, entries}`, each
 entry `WhatsNewEntry` `{pr, url, title, markdown}`; `pullRequestUrl` makes

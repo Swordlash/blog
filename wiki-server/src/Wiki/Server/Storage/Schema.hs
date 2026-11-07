@@ -43,7 +43,9 @@ module Wiki.Server.Storage.Schema
   , ResetTokens (..)
   , EmailVerifications (..)
   , Passkeys (..)
-  , AssistantVaults (..)
+  , Vaults (..)
+  , VaultItems (..)
+  , PublicKeys (..)
 
     -- * The wiki
   , Spaces (..)
@@ -320,25 +322,64 @@ instance Table Passkeys where
     deriving anyclass (Beamable)
   primaryKey r = PasskeyKey r.credential_id
 
--- | A user's vault of the writing assistant's settings
--- (@assistant_vaults@), sealed by their browser.
-data AssistantVaults f = VaultRow
+-- | A user's vault (@vaults@, "Wiki.Server.Vault"), sealed by their
+-- browser: the salt, the vault key wrapped by the password's key when
+-- the user chose that, and the revision that is its tag. Its items are
+-- 'VaultItems'; its passkeys' wraps are in 'Passkeys'.
+data Vaults f = VaultRow
   { user_id :: Columnar f Text
-  , format :: Columnar f Int32
   , salt :: Columnar f Text
-  , nonce :: Columnar f Text
-  , ciphertext :: Columnar f Text
+  , password_nonce :: Columnar f (Maybe Text)
+  , password_key :: Columnar f (Maybe Text)
   , revision :: Columnar f Int64
   , updated_at :: Columnar f UTCTime
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
 
-instance Table AssistantVaults where
-  newtype PrimaryKey AssistantVaults f = VaultKey (Columnar f Text)
+instance Table Vaults where
+  newtype PrimaryKey Vaults f = VaultKey (Columnar f Text)
     deriving stock (Generic)
     deriving anyclass (Beamable)
   primaryKey r = VaultKey r.user_id
+
+-- | One sealed item of a user's vault (@vault_items@), by name, with the
+-- id of the key pair it holds, if it holds one.
+data VaultItems f = VaultItemRow
+  { user_id :: Columnar f Text
+  , name :: Columnar f Text
+  , key_id :: Columnar f (Maybe Text)
+  , nonce :: Columnar f Text
+  , ciphertext :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table VaultItems where
+  data PrimaryKey VaultItems f = VaultItemKey (Columnar f Text) (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = VaultItemKey r.user_id r.name
+
+-- | A user's public key in the directory (@public_keys@): the public half
+-- of their key pair, by its id. The current one has no @retired_at@; one
+-- replaced keeps its row, with when and why.
+data PublicKeys f = PublicKeyRow
+  { key_id :: Columnar f Text
+  , user_id :: Columnar f Text
+  , public_key :: Columnar f Text
+  , created_at :: Columnar f UTCTime
+  , retired_at :: Columnar f (Maybe UTCTime)
+  , retired_because :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table PublicKeys where
+  newtype PrimaryKey PublicKeys f = PublicKeyKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = PublicKeyKey r.key_id
 
 --------------------------------------------------------------------------------
 -- The wiki
@@ -721,9 +762,17 @@ deriving stock instance Eq (Passkeys Identity)
 
 deriving stock instance Show (Passkeys Identity)
 
-deriving stock instance Eq (AssistantVaults Identity)
+deriving stock instance Eq (Vaults Identity)
 
-deriving stock instance Show (AssistantVaults Identity)
+deriving stock instance Show (Vaults Identity)
+
+deriving stock instance Eq (VaultItems Identity)
+
+deriving stock instance Show (VaultItems Identity)
+
+deriving stock instance Eq (PublicKeys Identity)
+
+deriving stock instance Show (PublicKeys Identity)
 
 deriving stock instance Eq (EmailVerifications Identity)
 
@@ -803,7 +852,9 @@ data WikiDb f = WikiDb
   , reset_tokens :: f (TableEntity ResetTokens)
   , email_verifications :: f (TableEntity EmailVerifications)
   , passkeys :: f (TableEntity Passkeys)
-  , assistant_vaults :: f (TableEntity AssistantVaults)
+  , vaults :: f (TableEntity Vaults)
+  , vault_items :: f (TableEntity VaultItems)
+  , public_keys :: f (TableEntity PublicKeys)
   , spaces :: f (TableEntity Spaces)
   , pages :: f (TableEntity Pages)
   , page_versions :: f (TableEntity PageVersions)

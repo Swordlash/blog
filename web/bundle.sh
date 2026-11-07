@@ -27,7 +27,9 @@
 #                    time a picture is cropped, and opaque.js
 #                    (web/src/opaque.js), @serenity-kit/opaque, the OPAQUE
 #                    client passwords are signed in and set with, which it
-#                    imports the first time a password is used;
+#                    imports the first time a password is used, and hpke.js
+#                    (web/src/hpke.js), @hpke/core, HPKE over WebCrypto, which
+#                    it imports the first time a key is sealed to someone;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
 #                    its worker patched by web/src/tikz-patch.mjs), which
 #                    tikz.js runs, with the worker that starts it
@@ -106,6 +108,12 @@ npx esbuild web/src/avatar.js \
 npx esbuild web/src/opaque.js \
   --bundle --minify --format=esm --target=es2022 --platform=browser --log-level=warning \
   --metafile="$meta/opaque.json" --outfile="$out_dir/islands/opaque.js"
+
+# HPKE (RFC 9180), @hpke/core over WebCrypto: one file in islands/ too,
+# fetched the first time a key is sealed to someone or opened.
+npx esbuild web/src/hpke.js \
+  --bundle --minify --format=esm --target=es2022 --platform=browser --log-level=warning \
+  --metafile="$meta/hpke.json" --outfile="$out_dir/islands/hpke.js"
 
 # TikZJax's files, copied from its npm package: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are

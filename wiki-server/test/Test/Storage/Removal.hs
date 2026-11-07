@@ -17,13 +17,13 @@ import Test.Hspec
 import Test.Storage.Fixture (countWhere, ok, path, tableRows, withDemo, withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Notifications (Notifications (..))
-import Wiki.Api.Vault (PasskeyInfo (..))
+import Wiki.Api.Vault (NewPublicKey (..), PasskeyInfo (..), VaultChange (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeUser, setCreateSpaces))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
-import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), WrappedKey (..), vaultFormat)
+import Wiki.Core.Assistant.Vault (Item (..), KeyId (..), PublicKey (..), Sealed (..), Unlock (..), Vault (..), WrappedKey (..), identityItem, vaultFormat, withItem, withSealed)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
@@ -38,7 +38,7 @@ import Wiki.Server.SecondFactor (enrol)
 import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, runStoredWiki, userByLogin, withStorage)
 import Wiki.Server.Storage.Rows (permissionsGeneration)
 import Wiki.Server.Storage.Schema (AuditLog (..), Pages (..), Spaces (..), WikiDb (..), wikiDb)
-import Wiki.Server.Vault (registerPasskey, storeVault)
+import Wiki.Server.Vault (keyIdOf, registerPasskey, storeVault)
 import Wiki.Server.WebAuthn (NewCredential (..))
 
 spec :: Backing -> Spec
@@ -53,7 +53,8 @@ spec backing = describe "removing an account" $ do
         asAdmin program = runStoredWiki st (AsUser adminId) program
     now <- getCurrentTime
     -- Everything a user can have: a session, a second factor, a passkey
-    -- and the vault it opens, a draft, a watch and its notification, a star, a
+    -- and the vault it opens (with their key pair, whose public key is in
+    -- the directory), a draft, a watch and its notification, a star, a
     -- membership (the demo's writers) and grants of their own. And the
     -- administrator watches the blog, for notifications of what the user
     -- did there.
@@ -61,8 +62,11 @@ spec backing = describe "removing an account" $ do
     signInUser st now "127.0.0.1" u >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
     void (ok =<< enrol st now u)
     passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
-    let vault = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.singleton passkey.id (WrappedKey "bm9uY2U" "a2V5")}
-    void (ok =<< storeVault st now u Nothing vault)
+    let vault = withSealed Sealed {nonce = "bm9uY2UtMTJieXRl", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY", items = mempty, wraps = Map.singleton (ByPasskey passkey.id) (WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")}
+    let key = PublicKey "YW4gWDI1NTE5IHB1YmxpYyBrZXksIDMyIGJ5dGVzISE"
+        keyId = fromMaybe (KeyId "") (keyIdOf key)
+        pair = Item {keyId = Just keyId, sealed = Sealed {nonce = "bm9uY2UtMTJieXRl", ciphertext = "YSBrZXkgcGFpciBzZWFsZWQ6IGl0cyBwa2NzOCBhbmQgaXRzIHRhZywgc2l4dHktZm91ciBieXRlcyBvZiBpdA"}}
+    void (ok =<< storeVault st now u Nothing VaultChange {vault = withItem identityItem pair vault, publicKey = Just NewPublicKey {keyId, publicKey = key}})
     blog <- ok =<< asEditor (getSpace (path "blog"))
     void (ok =<< asAdmin (setWatching (WatchSpace blog.id) True))
     made <- ok =<< asEditor (createPage blog.id Nothing "Field notes" "First words.")
@@ -75,8 +79,7 @@ spec backing = describe "removing an account" $ do
     void (ok =<< asAdmin (setSpaceGrant blog.id (SubjectUser u) AdministerSpace True))
     void (ok =<< asAdmin (setCreateSpaces u True))
     tablesMentioning u.text st
-      `shouldReturn` [ "assistant_vaults"
-                     , "audit_log"
+      `shouldReturn` [ "audit_log"
                      , "comments"
                      , "drafts"
                      , "global_grants"
@@ -84,11 +87,14 @@ spec backing = describe "removing an account" $ do
                      , "notifications"
                      , "page_versions"
                      , "passkeys"
+                     , "public_keys"
                      , "sessions"
                      , "space_grants"
                      , "stars"
                      , "totp"
                      , "users"
+                     , "vault_items"
+                     , "vaults"
                      , "watches"
                      ]
     -- An enabled login is refused, and nothing changes.

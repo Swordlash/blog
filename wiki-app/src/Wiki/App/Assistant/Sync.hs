@@ -11,6 +11,7 @@
 module Wiki.App.Assistant.Sync
   ( MonadVault (..)
   , Fetched (..)
+  , Rewrap (..)
   )
 where
 
@@ -20,11 +21,14 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
 import Protolude
-import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
+import Wiki.Api.Account (PasswordChange, SignInMethods)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, PublicKeyEntry, RegistrationOptions, RegistrationResponse, StoredVault, VaultChange)
 import Wiki.App.Account (SignInError (..))
+import Wiki.App.Assistant (KeyRef)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Mem (MemWiki)
-import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
+import Wiki.Core.Assistant.Vault (CredentialId, Salt, Vault, VaultTag)
+import Wiki.Core.Id (UserId)
 import Wiki.Core.User (Password)
 
 -- | 'Fetched': the server's answer to a device that asks for the vault.
@@ -56,7 +60,21 @@ class (Monad m) => MonadVault m where
   default storeVault :: (MonadTrans t, m ~ t n, MonadVault n) => Maybe VaultTag -> Vault -> m (Either WikiError StoredVault)
   storeVault tag = lift . storeVault tag
 
-  -- | Turn synchronisation off: the vault and every passkey go.
+  -- | Store a new version of the vault as 'storeVault' does, with the
+  -- public half of the key pair its @identity@ item holds when that item
+  -- is new.
+  storeVaultChange :: Maybe VaultTag -> VaultChange -> m (Either WikiError StoredVault)
+  default storeVaultChange :: (MonadTrans t, m ~ t n, MonadVault n) => Maybe VaultTag -> VaultChange -> m (Either WikiError StoredVault)
+  storeVaultChange tag = lift . storeVaultChange tag
+
+  -- | A user's current public key in the server's directory, if they have
+  -- one.
+  publicKeyOf :: UserId -> m (Either WikiError (Maybe PublicKeyEntry))
+  default publicKeyOf :: (MonadTrans t, m ~ t n, MonadVault n) => UserId -> m (Either WikiError (Maybe PublicKeyEntry))
+  publicKeyOf = lift . publicKeyOf
+
+  -- | Turn the assistant's synchronisation off: the vault's settings go,
+  -- and the vault with them when it holds nothing else.
   deleteVault :: m (Either WikiError ())
   default deleteVault :: (MonadTrans t, m ~ t n, MonadVault n) => m (Either WikiError ())
   deleteVault = lift deleteVault
@@ -94,6 +112,38 @@ class (Monad m) => MonadVault m where
   default dropPasskey :: (MonadTrans t, m ~ t n, MonadVault n) => CredentialId -> m (Either WikiError [PasskeyInfo])
   dropPasskey = lift . dropPasskey
 
+  -- | The key OPAQUE's export key gave at the last sign-in with a password
+  -- (or a registration that signed in), if any: the page's, taken once,
+  -- for the user's vault ("Wiki.App.Vault"), which forgets it.
+  takePasswordKey :: m (Maybe KeyRef)
+  default takePasswordKey :: (MonadTrans t, m ~ t n, MonadVault n) => m (Maybe KeyRef)
+  takePasswordKey = lift takePasswordKey
+
+  -- | Prove the signed-in user's password again (a re-authentication: no
+  -- new session), for a change that needs it: the key the export key gives
+  -- the page, when the proof went through OPAQUE in a browser. The proof
+  -- left on the session lets one change go without the password.
+  provePassword :: Password -> m (Either SignInError (Maybe KeyRef))
+  default provePassword :: (MonadTrans t, m ~ t n, MonadVault n) => Password -> m (Either SignInError (Maybe KeyRef))
+  provePassword = lift . provePassword
+
+  -- | Change the signed-in user's password and carry their vault along:
+  -- the vault key, which the page holds and can export, is wrapped with
+  -- the new password's key and stored with the new password, both or
+  -- neither.
+  changePasswordCarrying :: PasswordChange -> Rewrap -> m (Either SignInError SignInMethods)
+  default changePasswordCarrying :: (MonadTrans t, m ~ t n, MonadVault n) => PasswordChange -> Rewrap -> m (Either SignInError SignInMethods)
+  changePasswordCarrying c = lift . changePasswordCarrying c
+
+-- | 'Rewrap': what carrying the vault over to a new password needs: the
+-- version of the vault the change is made to, its salt, and its key, held
+-- by the page, which can export it for this.
+data Rewrap = Rewrap
+  { tag :: VaultTag
+  , salt :: Salt
+  , vaultKey :: KeyRef
+  }
+
 -- | A component's handlers ask through its monad.
 instance (MonadVault m) => MonadVault (HalogenM st act slots output m)
 
@@ -105,6 +155,8 @@ instance (Monad m) => MonadVault (MemWiki m) where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))
@@ -112,6 +164,9 @@ instance (Monad m) => MonadVault (MemWiki m) where
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)
   dropPasskey _ = pure (Left unavailable)
+  takePasswordKey = pure Nothing
+  provePassword _ = pure (Left (SignInFailed unavailable))
+  changePasswordCarrying _ _ = pure (Left (SignInFailed unavailable))
 
 -- | The browser's DOM alone has no server either: what runs in it
 -- directly (the browser tests' own reads of the settings) keeps the keys
@@ -120,6 +175,8 @@ instance MonadVault BrowserDOM where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))
@@ -127,12 +184,17 @@ instance MonadVault BrowserDOM where
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)
   dropPasskey _ = pure (Left unavailable)
+  takePasswordKey = pure Nothing
+  provePassword _ = pure (Left (SignInFailed unavailable))
+  changePasswordCarrying _ _ = pure (Left (SignInFailed unavailable))
 
 -- | Nor has the in-memory document of the prerender and the native tests.
 instance MonadVault MemDOM where
   vaultSync = pure False
   fetchVault _ = pure (Right NoVault)
   storeVault _ _ = pure (Left unavailable)
+  storeVaultChange _ _ = pure (Left unavailable)
+  publicKeyOf _ = pure (Right Nothing)
   deleteVault = pure (Right ())
   listPasskeys = pure (Right [])
   beginRegistration _ = pure (Left (SignInFailed unavailable))
@@ -140,6 +202,9 @@ instance MonadVault MemDOM where
   beginAssertion = pure (Left unavailable)
   finishAssertion _ = pure (Left unavailable)
   dropPasskey _ = pure (Left unavailable)
+  takePasswordKey = pure Nothing
+  provePassword _ = pure (Left (SignInFailed unavailable))
+  changePasswordCarrying _ _ = pure (Left (SignInFailed unavailable))
 
 -- | The demo's refusal: syncing the keys is a server's.
 unavailable :: WikiError

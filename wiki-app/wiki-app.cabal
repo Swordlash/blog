@@ -110,6 +110,7 @@ library
       Wiki.App.Shell
       Wiki.App.Editor.Browser
       Wiki.App.Editor.Problems
+      Wiki.App.Vault
       Wiki.App.View.Access
       Wiki.App.View.Activity
       Wiki.App.View.Assistant
@@ -397,6 +398,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Favicon
       Test.Browser.History
       Test.Browser.HomePage
+      Test.Browser.Hpke
       Test.Browser.Http
       Test.Browser.Hydrate
       Test.Browser.Import

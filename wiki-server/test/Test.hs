@@ -43,6 +43,7 @@ import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
 import Test.Storage.Contract qualified as Contract
+import Test.Storage.Keys qualified as Keys
 import Test.Storage.Migrate qualified as Migrate
 import Test.Storage.Permissions qualified as Permissions
 import Test.Storage.Removal qualified as Removal
@@ -82,6 +83,7 @@ main = secureMain $ do
           Backup.spec b
           StorageAccounts.spec b
           Removal.spec b
+          Keys.spec b
           Options.spec b
           Api.spec b
           Static.spec b

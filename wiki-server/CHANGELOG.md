@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+The password unlocks the vault, and a reset says what it costs
+(WP5.74b1). `PUT account/password` takes the vault key wrapped for the new
+password (`vault`) and stores it with the new record in one transaction,
+over the vault's version the change names; a vault the password unlocks
+refuses a change without it. A password reset deletes the vault's password
+wrap when a passkey still unlocks the vault, and otherwise deletes the
+vault and retires the user's public key (`retired_because = 'reset'`).
+A user without a password cannot store a password wrap, and a vault that
+holds the key pair keeps at least one way to unlock it. `Accounts.changePassword`
+takes the wrap; `Wiki.Server.Vault` gains `passwordRewrapIn` and
+`resetVaultIn`.
+
+The directory of public keys (WP5.74b1). Migration `0010-user-vault` also
+makes `public_keys`: each user's X25519 public key by its id (the first 16
+bytes of its SHA-256), one current per user, a key replaced kept with when
+and why (`retired_at`, `retired_because`). `PUT assistant/vault` takes the
+public half of a new key pair beside the vault (`VaultChange`) and stores
+both in one transaction; a vault's `identity` item and the directory's
+current key always name the same key pair, a new key pair is refused while
+a current one exists, and the item cannot be dropped. The vault's parts
+are checked for their exact lengths (a 32-byte salt, 12-byte nonces,
+48-byte wrapped keys, 16-byte key ids, a 64-byte key pair), and nothing
+more. `GET account/public-keys/<user>` answers a user's current key to
+anyone signed in. `Wiki.Server.Vault` gains `vaultProblem`, `publicKeyOf`,
+`currentKeyIn` and `keyIdOf`.
+
+The user's vault (WP5.74b1). Migration `0010-user-vault` replaces
+`assistant_vaults` with `vaults` (the salt, the password's wrap of the
+vault key when there is one, and the revision, kept) and `vault_items`
+(the sealed items by name, each vault's settings moved to its `assistant`
+item). `PUT assistant/vault` takes a vault of format 2 whole (its items and
+its password's wrap), and one of format 1, which a tab from before this
+version sends, as the assistant's settings alone, keeping the other items.
+`DELETE assistant/vault` deletes the `assistant` item, and the vault only
+when nothing else is left in it. `Wiki.Server.Vault` gains `storeVaultIn`,
+for a transaction of the caller's.
+
 What's new (WP5.66). The server embeds, when it is compiled, the
 repository's changelog entries (`changelog/*.md`, reached through the
 symbolic link `wiki-server/changelog`, listed in `extra-source-files` so

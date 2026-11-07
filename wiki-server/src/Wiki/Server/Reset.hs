@@ -60,7 +60,7 @@ import Wiki.Server.Opaque (storedRecordOf)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (deleteSessionsOf, insertResetToken, micro, noPasswordToSet, providerNames, resetsSince, storeRecord)
+import Wiki.Server.Storage.Rows (insertResetToken, micro, noPasswordToSet, providerNames, replaceRecord, resetsSince)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 
@@ -212,7 +212,11 @@ forgetReset st token = writing st (runDelete (delete wikiDb.reset_tokens (\r -> 
 -- | Set a new password with a reset link: once, before it expires, and for
 -- a user who is not disabled. The password is the OPAQUE record the
 -- browser made for the link's user ("Wiki.Api.Opaque"). Every session of
--- the user ends, and every other link mailed to them stops working.
+-- the user ends, and every other link mailed to them stops working. The
+-- user's vault loses what the old password unlocked
+-- ('Wiki.Server.Storage.Rows.resetVaultIn'): its password's wrap, or, when the
+-- password was its only way to unlock, the vault itself and the user's
+-- key pair.
 -- 'NotFound' for a link that does not work; 'Invalid' for a record that is
 -- not one, or not the link's user's (checked first, which uses nothing
 -- up), and for a user who has no password to set because they sign in
@@ -231,8 +235,7 @@ resetPassword st now token new = do
             noPasswordToSet configured u >>= \case
               True -> pure (Left (Invalid noPasswordHere))
               False -> do
-                storeRecord u stored
-                deleteSessionsOf u
+                replaceRecord now u stored
                 runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
                 pure (Right ())
       Nothing -> pure (Left NotFound)

@@ -113,16 +113,17 @@ import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
-import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), PasswordWrapChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (Starring (..), StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Vault (VaultChange (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
-import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
+import Wiki.App.Assistant (KeyRef, MonadAssistant, forgetHeld, wrapForPassword)
+import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
 import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -170,6 +171,11 @@ data HttpEnv = HttpEnv
   -- in the old way and waits for its second factor: once the second
   -- factor is given, its OPAQUE record is registered with it (see
   -- "Passwords through OPAQUE"), and it is forgotten.
+  , passwordKey :: IORef (Maybe KeyRef)
+  -- ^ The key OPAQUE's export key gave at the last sign-in with a password
+  -- (or a registration that signed in), for the user's vault to take
+  -- ('takePasswordKey', "Wiki.App.Vault"): a WebCrypto key the page holds,
+  -- never its bytes. A newer one replaces it, and the page forgets it.
   }
 
 -- | A backend over this transport, with an empty cache.
@@ -186,7 +192,8 @@ newHttpEnvWith transport start = liftIO $ do
   feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
   preloading <- newIORef True
   moving <- newIORef Nothing
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, moving}
+  passwordKey <- newIORef Nothing
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, moving, passwordKey}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -734,17 +741,17 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
         pure (Right s)
   sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
   register new =
-    recordFor ForSignUp new.password >>= \case
+    recordWith ForSignUp new.password >>= \case
       Left e -> pure (Left e)
-      Right record -> signingIn (getResponse <$> endpoints.register (accountWith record new))
+      Right (record, key) -> signingIn (getResponse <$> endpoints.register (accountWith record new)) >>= keptAfter key
 
   -- Cached, so that the page of an invitation's link that the server
   -- prerendered is also the program's first render.
   invitationFor token = cached (\c -> Map.lookup token c.invitationAt) (endpoints.invitations.details token) (withInvitationAt token)
   acceptInvitation token new =
-    recordFor (ForInvitation token) new.password >>= \case
+    recordWith (ForInvitation token) new.password >>= \case
       Left e -> pure (Left e)
-      Right record -> signingIn (getResponse <$> endpoints.invitations.accept token (accountWith record new))
+      Right (record, key) -> signingIn (getResponse <$> endpoints.invitations.accept token (accountWith record new)) >>= keptAfter key
 
   -- Fetched afresh each time they are shown: they change through a round
   -- trip to a provider's pages, which this program does not see.
@@ -759,7 +766,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
       Right current ->
         recordFor ForOwnPassword change.new >>= \case
           Left e -> pure (Left e)
-          Right password -> withPassword (endpoints.account.changePassword PasswordRecordChange {current, password})
+          Right password -> withPassword (endpoints.account.changePassword PasswordRecordChange {current, password, vault = Nothing})
 
   -- The end of a sign-in, like signing in. The cookie of the sign-in
   -- waiting for its code is sent with it, since the browser sends every
@@ -812,7 +819,12 @@ instance (MonadIO m) => MonadVault (HttpWiki m) where
       Just 304 -> Right Unchanged
       Just 404 -> Right NoVault
       _ -> Fetched <$> answer answered
-  storeVault base v = send (endpoints.assistant.storeVault base v)
+  storeVault base v = send (endpoints.assistant.storeVault base VaultChange {vault = v, publicKey = Nothing})
+  storeVaultChange base change = send (endpoints.assistant.storeVault base change)
+  publicKeyOf u =
+    call (endpoints.account.publicKey u) <&> \answered -> case statusCode . (\r -> r.responseStatusCode) <$> refusal answered of
+      Just 404 -> Right Nothing
+      _ -> Just <$> answer answered
   deleteVault = send_ endpoints.assistant.deleteVault
   listPasskeys = send endpoints.account.passkeys
   beginRegistration password = proven password >>= either (pure . Left) (\p -> withPassword (endpoints.account.beginRegistration CurrentPassword {password = p}))
@@ -820,6 +832,25 @@ instance (MonadIO m) => MonadVault (HttpWiki m) where
   beginAssertion = send endpoints.assistant.beginAssertion
   finishAssertion r = send (endpoints.assistant.finishAssertion r)
   dropPasskey c = send (endpoints.account.removePasskey c)
+  takePasswordKey = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.passwordKey (Nothing,)))
+  provePassword password =
+    provenWith (Just password) <&> \case
+      Left e -> Left e
+      Right (_, key) -> Right key
+  changePasswordCarrying change rewrap =
+    proven change.current >>= \case
+      Left e -> pure (Left e)
+      Right current ->
+        recordWith ForOwnPassword change.new >>= \case
+          Left e -> pure (Left e)
+          Right (password, key) -> do
+            -- The vault key, wrapped for the new password at once; the key
+            -- the export key gave is forgotten either way.
+            wrapped <- liftIO (maybe (pure (Left "this browser gave no key for the new password")) (\k -> wrapForPassword k rewrap.salt rewrap.vaultKey) key)
+            liftIO (traverse_ forgetHeld key)
+            case wrapped of
+              Left why -> pure (Left (SignInFailed (Invalid ("Your vault could not be carried over to the new password: " <> why <> "."))))
+              Right w -> withPassword (endpoints.account.changePassword PasswordRecordChange {current, password, vault = Just PasswordWrapChange {tag = rewrap.tag, wrapped = w}})
 
 -- | A request that signs someone in (signing in, creating one's own
 -- account, accepting an invitation). The result is the new session, with
@@ -913,7 +944,7 @@ passwordSignIn login password =
         Left e -> pure (Left e)
         Right challenge ->
           finished st password challenge >>= \case
-            Just ke3 -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3})
+            Just (ke3, key) -> withPassword (getResponse <$> endpoints.finishPasswordSignIn LoginFinish {attempt = challenge.attempt, ke3}) >>= keptAfter key
             Nothing
               | challenge.fallback -> oldWay (Just challenge.attempt)
               | otherwise -> pure (Left WrongCredentials)
@@ -944,9 +975,9 @@ movedAfter result = do
 -- from before OPAQUE, which the server then deletes.
 moveToOpaque :: (MonadIO m) => Password -> HttpWiki m (Either SignInError SignInMethods)
 moveToOpaque password =
-  recordFor ForOwnPassword password >>= \case
+  recordWith ForOwnPassword password >>= \case
     Left e -> pure (Left e)
-    Right record -> withPassword (endpoints.account.changePassword PasswordRecordChange {current = Nothing, password = record})
+    Right (record, key) -> withPassword (endpoints.account.changePassword PasswordRecordChange {current = Nothing, password = record, vault = Nothing}) >>= keptAfter key
 
 -- | A signed-in session as the backend keeps it, started over.
 started :: (MonadIO m) => Either SignInError SessionInfo -> HttpWiki m (Either SignInError Session)
@@ -959,7 +990,7 @@ started = \case
 
 -- | The client's last message, if the password is right: 'Nothing' for a
 -- wrong password, and for an account without a record.
-finished :: (MonadIO m) => Opaque.LoginState -> Password -> LoginChallenge -> m (Maybe Message)
+finished :: (MonadIO m) => Opaque.LoginState -> Password -> LoginChallenge -> m (Maybe (Message, Maybe KeyRef))
 finished st password challenge = liftIO (Opaque.finishLogin st password challenge.stretch challenge.ke2)
 
 -- | A record of a new password, for what the server's challenge is asked
@@ -969,6 +1000,14 @@ finished st password challenge = liftIO (Opaque.finishLogin st password challeng
 -- the server says, whatever the password.
 recordFor :: (MonadIO m) => RegistrationFor -> Password -> HttpWiki m (Either SignInError PasswordRecord)
 recordFor purpose password =
+  recordWith purpose password >>= \case
+    Left e -> pure (Left e)
+    Right (record, key) -> liftIO (traverse_ forgetHeld key) $> Right record
+
+-- | 'recordFor', with the key the new password's export key gives the
+-- page, when the browser gives one: the caller keeps it or forgets it.
+recordWith :: (MonadIO m) => RegistrationFor -> Password -> HttpWiki m (Either SignInError (PasswordRecord, Maybe KeyRef))
+recordWith purpose password =
   liftIO (Opaque.startRegistration password) >>= \case
     Nothing -> pure (Left (SignInFailed (Invalid "This password cannot be used: choose another.")))
     Just (st, request) ->
@@ -979,7 +1018,7 @@ recordFor purpose password =
           Right _ ->
             liftIO (Opaque.finishRegistration st password challenge.stretch challenge.response) <&> \case
               Nothing -> Left (SignInFailed (Invalid "The server's answer to the new password was not valid: try again."))
-              Just record -> Right PasswordRecord {credential = challenge.credential, record, stretch = challenge.stretch}
+              Just (record, key) -> Right (PasswordRecord {credential = challenge.credential, record, stretch = challenge.stretch}, key)
 
 -- | The current password for a change that needs it, as the request is to
 -- carry it: proved through OPAQUE, which leaves a proof on the session and
@@ -988,11 +1027,23 @@ recordFor purpose password =
 -- naming the attempt that was counted ('proveOldPassword'), which leaves
 -- the same proof; the change then sends nothing either.
 proven :: (MonadIO m) => Maybe Password -> HttpWiki m (Either SignInError (Maybe Password))
-proven = \case
-  Nothing -> pure (Right Nothing)
+proven given =
+  provenWith given >>= \case
+    Left e -> pure (Left e)
+    Right (p, key) -> liftIO (traverse_ forgetHeld key) $> Right p
+
+-- | 'proven', with the key the export key gives the page when the proof
+-- went through OPAQUE in a browser: the caller keeps it or forgets it.
+-- This is the wiki's re-authentication: a proof of the password by a
+-- user signed in already, which makes no session and changes no cookie,
+-- counted by the same limit as a sign-in, and gives the browser what its
+-- vault needs while the export key stays in the browser.
+provenWith :: (MonadIO m) => Maybe Password -> HttpWiki m (Either SignInError (Maybe Password, Maybe KeyRef))
+provenWith = \case
+  Nothing -> pure (Right (Nothing, Nothing))
   Just password ->
     liftIO (Opaque.startLogin password) >>= \case
-      Nothing -> pure (Right (Just password))
+      Nothing -> pure (Right (Just password, Nothing))
       Just (st, ke1) ->
         withPassword (endpoints.account.startPasswordProof ProofStart {ke1}) >>= \case
           Left e -> pure (Left e)
@@ -1001,13 +1052,28 @@ proven = \case
               Nothing
                 | challenge.fallback ->
                     withPassword (endpoints.account.proveOldPassword OldPasswordProof {attempt = challenge.attempt, password}) <&> \case
-                      Right _ -> Right Nothing
+                      Right _ -> Right (Nothing, Nothing)
                       Left e -> Left e
                 | otherwise -> pure (Left WrongCredentials)
-              Just ke3 ->
-                withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) <&> \case
-                  Right _ -> Right Nothing
-                  Left e -> Left e
+              Just (ke3, key) ->
+                withPassword (endpoints.account.finishPasswordProof LoginFinish {attempt = challenge.attempt, ke3}) >>= \case
+                  Right _ -> pure (Right (Nothing, key))
+                  Left e -> liftIO (traverse_ forgetHeld key) $> Left e
+
+-- | Keep the key a sign-in gave for the vault, when it signed in, or
+-- when it waits for the second factor (the key is taken once the sign-in
+-- is complete, as 'moving' is); forget it otherwise.
+keptAfter :: (MonadIO m) => Maybe KeyRef -> Either SignInError a -> HttpWiki m (Either SignInError a)
+keptAfter key result = do
+  let keep = HttpWiki $ do
+        env <- ask
+        before <- liftIO (atomicModifyIORef' env.passwordKey (\old -> (key <|> old, if isJust key then old else Nothing)))
+        liftIO (traverse_ forgetHeld before)
+  case result of
+    Right _ -> keep
+    Left SecondFactorNeeded -> keep
+    Left _ -> liftIO (traverse_ forgetHeld key)
+  pure result
 
 -- | An account to create, as it travels: its record instead of its
 -- password.

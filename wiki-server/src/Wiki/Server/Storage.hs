@@ -2767,13 +2767,16 @@ insertUserTx uid login rawName stored = do
         pure account
 
 -- | Give a user an OPAQUE record as an administrator, which ends their
--- sessions. The audit log records that the password changed, never
--- anything of it.
+-- sessions and takes from their vault what only the old password
+-- unlocked, as a reset link does ('replaceRecord'). The audit log records
+-- that the password changed, never anything of it.
 setRecordTx :: (MonadIO m) => UserId -> StoredRecord -> StoredWiki m (Either WikiError Account)
-setRecordTx u stored = run Writes $ do
-  requireAdministrator
-  findUser u >>= requirePasswordToSet
-  changeAccountTx "user.password" [] u (storeRecord u stored >> deleteSessionsOf u)
+setRecordTx u stored = do
+  at <- liftIO getCurrentTime
+  run Writes $ do
+    requireAdministrator
+    findUser u >>= requirePasswordToSet
+    changeAccountTx "user.password" [] u (replaceRecord at u stored)
 
 -- | A password's OPAQUE record for a user, made with both sides in this
 -- process ("Wiki.Server.Opaque"), with the stretching new records get:
