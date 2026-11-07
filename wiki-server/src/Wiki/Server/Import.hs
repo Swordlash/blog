@@ -62,6 +62,7 @@ module Wiki.Server.Import
 
     -- * Carrying it out
   , planImport
+  , intoEncrypted
   , applyImport
   , mergeArchive
   , attach
@@ -224,6 +225,19 @@ resolutionOf choices space path =
 planImport :: Storage -> Archive -> IO ImportPlan
 planImport st a = toPlan a <$> reading st (matchIn a)
 
+-- | The paths of the archive's spaces that would land in an encrypted
+-- space of the wiki ("Wiki.Core.Encrypted"), or under one: an import
+-- writes plain text, which an encrypted space must never hold, so the
+-- server refuses such an import before it starts.
+intoEncrypted :: (Backend be) => Archive -> Db be [[Slug]]
+intoEncrypted a = do
+  matches <- matchIn a
+  spaces <- Map.elems <$> loadSpaces
+  let encryptedAt path = case resolvePath (findChild spaces) path of
+        Right chain -> any (\s -> isJust s.encryption) chain
+        Left _ -> False
+  pure [m.path | m <- matches, any (\k -> encryptedAt (take k m.path)) [1 .. length m.path]]
+
 -- | The archive matched against the wiki in a database.
 matchIn :: (Backend be) => Archive -> Db be [SpaceMatch]
 matchIn a = do
@@ -338,6 +352,7 @@ importSpace blobs a discussions choices progress m
                 -- to more people than before the import.
                 public = m.archived.public && not hidden
               , sealed = m.archived.sealed || (hidden && not underCreatedHidden)
+              , encryption = Nothing
               , owner = Nothing
               , active = True
               , personalContainer = False

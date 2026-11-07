@@ -109,6 +109,8 @@ import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailT
 import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Core.Export (Archive)
+import Wiki.Core.Slug (slugText)
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
@@ -136,7 +138,7 @@ import Wiki.Server.Export (Engine, Exported (..), Exports, availableFormats, che
 import Wiki.Server.Feed (FeedCache)
 import Wiki.Server.Guide (canInstallGuide)
 import Wiki.Server.Guide qualified as Guide
-import Wiki.Server.Import (applyImport, planImport, readUploadFile)
+import Wiki.Server.Import (applyImport, intoEncrypted, planImport, readUploadFile)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
@@ -805,6 +807,19 @@ handlers env caller =
           , restore = \p at current -> versioned <$> wiki (restoreVersion p at.time current.time)
           , export = \p format request respond -> liftIO (exporting request respond (\key -> exportPage env.exports env.texEngine key env.storage who p format))
           }
+    , encrypted =
+        EncryptedApi
+          { space = wiki . spaceEncryption
+          , encrypt = \s body -> wiki (encryptSpace s body)
+          , grant = \s body -> wiki (grantSpaceKey s body) $> NoContent
+          , pages = wiki . sealedPages
+          , contents = wiki . sealedContents
+          , pageAt = \s path -> versionedSealed <$> wiki (sealedPageAt s path)
+          , createPage = \s new -> versionedSealed <$> wiki (createSealedPage s new)
+          , save = \p version edit -> versionedSealed <$> wiki (saveSealedPage p version.time edit)
+          , versions = \p before limit -> wiki (sealedVersions p (VersionsQuery ((\v -> v.time) <$> before) (fromMaybe versionsPageSize limit)))
+          , version = \p at -> wiki (sealedVersionAt p at.time)
+          }
     , attachments =
         AttachmentsApi
           { delete = \a -> wiki (deleteAttachment a) $> NoContent
@@ -822,10 +837,12 @@ handlers env caller =
           , importPreview = \upload -> do
               administrator
               archive <- liftIO (readUploadFile upload.archive) >>= either (refuse . notAnArchive) pure
+              notIntoEncrypted archive
               liftIO (planImport env.storage archive)
           , importApply = \apply -> do
               administrator
               archive <- liftIO (readUploadFile apply.archive) >>= either (refuse . notAnArchive) pure
+              notIntoEncrypted archive
               actor <- liftIO (actorOf env.storage who)
               liftIO (applyImport env.storage actor caller.address archive apply.choices)
           }
@@ -1133,6 +1150,12 @@ handlers env caller =
     ask' = liftIO . runStoredWikiFrom env.storage who caller.address
     wiki :: StoredWiki IO (Either WikiError a) -> Handler a
     wiki program = ask' program >>= either (throwError . wikiError) pure
+    -- An import writes plain text, which an encrypted space never holds.
+    notIntoEncrypted :: Archive -> Handler ()
+    notIntoEncrypted archive = do
+      blocked <- liftIO (reading env.storage (intoEncrypted archive))
+      for_ (head blocked) $ \path ->
+        refuse (ApiError.Conflict ("An import cannot go into an encrypted space, whose pages the server cannot write: the archive's space at /" <> T.intercalate "/" (map slugText path) <> " is in one. Import it elsewhere."))
     -- An export, as a file to download. Each caller may run one export at
     -- a time, and callers are told apart by a key: a user by their id, the
     -- operator as one caller, and someone not signed in by their address.

@@ -53,6 +53,7 @@ space i name parent made position subspaceOrder =
     , parent = SpaceId <$> parent
     , public = False
     , sealed = False
+    , encryption = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

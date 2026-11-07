@@ -73,6 +73,7 @@ module Wiki.Api
   , NotificationsApi (..)
   , StarsApi (..)
   , AssistantApi (..)
+  , EncryptedApi (..)
 
     -- * Sessions
   , WithCookie
@@ -82,6 +83,7 @@ module Wiki.Api
   , Versioned
   , IfMatch
   , versioned
+  , versionedSealed
 
     -- * Archives
   , exportDisposition
@@ -97,6 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, SealedEdit, SealedPage, SealedSummary, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -255,6 +258,57 @@ data WikiApi form mode = WikiApi
   , assistant :: mode :- "assistant" :> NamedRoutes AssistantApi
   -- ^ The writing assistant's keys across devices: the vault and the
   -- passkeys that unlock it ("Wiki.Api.Vault").
+  , encrypted :: mode :- "encrypted" :> NamedRoutes EncryptedApi
+  -- ^ Encrypted spaces: their keys, and their pages as ciphertext
+  -- ("Wiki.Api.Encrypted").
+  }
+  deriving stock (Generic)
+
+-- | 'EncryptedApi': encrypted spaces (WP5.74 of docs/PLAN.md,
+-- "Wiki.Api.Encrypted", "Wiki.Core.Encrypted"). Every title and text these
+-- routes take or give is a ciphertext the browser made. The permissions are
+-- those of the plain routes: reading a space's pages needs 'View', writing
+-- them 'Edit', and turning a space encrypted 'AdministerSpace'; a space or
+-- page the caller may not view is 'Wiki.Api.Error.NotFound'. A plain space
+-- or page given to these routes is 'Wiki.Api.Error.Conflict', as an
+-- encrypted one given to the plain routes is.
+data EncryptedApi mode = EncryptedApi
+  { space :: mode :- "spaces" :> Capture "space" SpaceId :> Get '[JSON] SpaceEncryption
+  -- ^ The space's current key id, the caller's grant of it, and who waits
+  -- for one.
+  , encrypt :: mode :- "spaces" :> Capture "space" SpaceId :> ReqBody '[JSON] EncryptSpace :> Post '[JSON] Space
+  -- ^ Turn a private space with nothing written in it into an encrypted
+  -- one, with its first key granted to the caller. A space that is public,
+  -- not private, has subspaces or pages other than its untouched home page,
+  -- or is encrypted already is 'Wiki.Api.Error.Conflict'; a caller without a
+  -- current public key, or a grant of the wrong length, is
+  -- 'Wiki.Api.Error.Invalid'. The untouched home page is deleted, since its
+  -- text is plain.
+  , grant :: mode :- "spaces" :> Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] NewGrants :> PostNoContent
+  -- ^ Grant the space's current key to readers waiting for it: only a
+  -- caller who holds a grant of that key may, only to readers of the space
+  -- with a current public key, and only of the current key
+  -- ('Wiki.Api.Error.Conflict' for an older one). A grant there already is
+  -- left as it is.
+  , pages :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> Get '[JSON] [SealedSummary]
+  -- ^ The space's pages with their encrypted titles, in the order they
+  -- were made.
+  , contents :: mode :- "spaces" :> Capture "space" SpaceId :> "contents" :> Get '[JSON] [SealedPage]
+  -- ^ The space's pages with their latest versions, encrypted: what the
+  -- browser's search reads.
+  , pageAt :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned SealedPage)
+  -- ^ A page by its path of slugs.
+  , createPage :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewSealedPage :> PostCreated '[JSON] (Versioned SealedPage)
+  -- ^ A new page, with its key wrapped by the space's current key and its
+  -- first version. An id that is not a fresh UUID is
+  -- 'Wiki.Api.Error.Invalid'.
+  , save :: mode :- "pages" :> Capture "page" PageId :> IfMatch :> ReqBody '[JSON] SealedEdit :> Put '[JSON] (Versioned SealedPage)
+  -- ^ A new version of a page, against the version in @If-Match@, as a
+  -- plain save.
+  , versions :: mode :- "pages" :> Capture "page" PageId :> "versions" :> QueryParam "before" VersionTime :> QueryParam "limit" Int :> Get '[JSON] [SealedVersionInfo]
+  -- ^ A page of the page's history, latest first, as for a plain page.
+  , version :: mode :- "pages" :> Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] SealedVersion
+  -- ^ One version, by its time.
   }
   deriving stock (Generic)
 
@@ -770,6 +824,10 @@ type IfMatch = Header' '[Required, Strict] "If-Match" PageVersion
 -- | A page, with its version.
 versioned :: Page -> Versioned Page
 versioned p = addHeader (pageVersion p) p
+
+-- | A page of an encrypted space, with its version.
+versionedSealed :: SealedPage -> Versioned SealedPage
+versionedSealed p = addHeader (sealedVersion p) p
 
 -- | The @Content-Disposition@ of an export made at this time: a file named
 -- as the demo names its own exports, @wiki-\<date>.zip@.

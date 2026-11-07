@@ -133,6 +133,7 @@ library
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema
+        Wiki.Server.Storage.Sealed
         Wiki.Server.Storage.Sqlite
         Wiki.Server.Storage.Stars
         Wiki.Server.Tls
@@ -353,6 +354,7 @@ test-suite wiki-server-test
         Test.Storage.Backup
         Test.Storage.Contract
         Test.Storage.Fixture
+        Test.Storage.Encrypted
         Test.Storage.Keys
         Test.Storage.Migrate
         Test.Storage.Permissions

@@ -364,6 +364,21 @@ stubs =
           , beginAssertion = pure Sample.assertionOptions
           , finishAssertion = \_ -> pure Sample.passkeyInfo
           }
+    , -- The routes of encrypted spaces know no space: the server's own
+      -- tests ("Test.Server.Encrypted" of wiki-server) answer them.
+      encrypted =
+        EncryptedApi
+          { space = \_ -> refuse NotFound
+          , encrypt = \_ _ -> refuse NotFound
+          , grant = \_ _ -> refuse NotFound
+          , pages = \_ -> refuse NotFound
+          , contents = \_ -> refuse NotFound
+          , pageAt = \_ _ -> refuse NotFound
+          , createPage = \_ _ -> refuse NotFound
+          , save = \_ _ _ -> refuse NotFound
+          , versions = \_ _ _ -> refuse NotFound
+          , version = \_ _ -> refuse NotFound
+          }
     }
 
 -- | The options of a sign-in with a passkey alone: the sample's, naming

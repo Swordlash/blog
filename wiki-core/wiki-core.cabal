@@ -72,6 +72,7 @@ library
       Wiki.Core.Comment
       Wiki.Core.Diff
       Wiki.Core.Draft
+      Wiki.Core.Encrypted
       Wiki.Core.Export
       Wiki.Core.HomePage
       Wiki.Core.Id

@@ -93,6 +93,7 @@ makeHomeDocument d slug time h =
       , S.parent = Nothing
       , S.public = True
       , S.sealed = False
+      , S.encryption = Nothing
       , S.owner = Nothing
       , S.active = True
       , S.personalContainer = False

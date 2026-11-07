@@ -51,6 +51,7 @@ import Wiki.Core.Slug
 import Wiki.Core.Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User
+import Wiki.Core.Vault (KeyId (..))
 import Wiki.Core.Version (Author (..))
 
 -- | Any text, Unicode included.
@@ -133,7 +134,8 @@ genSpace = do
   owner <- oneof [pure Nothing, Just <$> genUserId]
   active <- arbitrary
   personalContainer <- arbitrary
-  pure Space {id, name, slug, parent, public, sealed, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  encryption <- oneof [pure Nothing, Just . KeyId <$> genText]
+  pure Space {id, name, slug, parent, public, sealed, encryption, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 genIcon :: Gen Icon
 genIcon =
@@ -233,7 +235,7 @@ genChain = do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
     sealed <- frequency [(1, pure True), (4, pure False)]
-    pure Space {id, name = "", slug, parent, public, sealed, owner = Nothing, active = True, personalContainer = False, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
+    pure Space {id, name = "", slug, parent, public, sealed, encryption = Nothing, owner = Nothing, active = True, personalContainer = False, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do
