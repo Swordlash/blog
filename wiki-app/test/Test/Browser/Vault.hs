@@ -609,7 +609,10 @@ vault m = do
     sentKey :: PageM s Bool
     sentKey = any (\r -> any (`T.isInfixOf` r.body) [secretKey, "test-key-openai", "test-key-anthropic-changed"]) <$> asked
     closed :: Mounted s Shell.Query Void m -> PageM s ()
+    -- As for the user's keys below: no test leaves a key in the page that
+    -- can be exported.
     closed ui = do
+      exportable `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
