@@ -25,7 +25,8 @@ async function wikiOpaqueExportKey(exportKey) {
   try {
     bytes = Uint8Array.fromBase64(exportKey, { alphabet: "base64url" });
     const key = await crypto.subtle.importKey("raw", bytes, "HKDF", false, ["deriveKey"]);
-    const registry = (globalThis.wikiKeyRegistry ??= { next: 0, keys: new Map() });
+    if (!globalThis.wikiKeyRegistry) globalThis.wikiKeyRegistry = { next: 0, keys: new Map() };
+    const registry = globalThis.wikiKeyRegistry;
     const handle = ++registry.next;
     registry.keys.set(handle, key);
     return handle;

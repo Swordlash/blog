@@ -1060,15 +1060,18 @@ provenWith = \case
                   Right _ -> pure (Right (Nothing, key))
                   Left e -> liftIO (traverse_ forgetHeld key) $> Left e
 
--- | Keep the key a sign-in gave for the vault, when it signed in; forget
--- it otherwise.
-keptAfter :: (MonadIO m) => Maybe KeyRef -> Either e a -> HttpWiki m (Either e a)
+-- | Keep the key a sign-in gave for the vault, when it signed in, or
+-- when it waits for the second factor (the key is taken once the sign-in
+-- is complete, as 'moving' is); forget it otherwise.
+keptAfter :: (MonadIO m) => Maybe KeyRef -> Either SignInError a -> HttpWiki m (Either SignInError a)
 keptAfter key result = do
+  let keep = HttpWiki $ do
+        env <- ask
+        before <- liftIO (atomicModifyIORef' env.passwordKey (\old -> (key <|> old, if isJust key then old else Nothing)))
+        liftIO (traverse_ forgetHeld before)
   case result of
-    Right _ -> HttpWiki $ do
-      env <- ask
-      before <- liftIO (atomicModifyIORef' env.passwordKey (\old -> (key <|> old, if isJust key then old else Nothing)))
-      liftIO (traverse_ forgetHeld before)
+    Right _ -> keep
+    Left SecondFactorNeeded -> keep
     Left _ -> liftIO (traverse_ forgetHeld key)
   pure result
 

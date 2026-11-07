@@ -117,7 +117,7 @@ finishRegistration (RegistrationState kept) (Password password) stretch response
 -- | The page's key a step's answer names by its handle, if any (0 is
 -- none).
 heldKey :: Text -> Maybe KeyRef
-heldKey = keyRefOf <=< readMaybe . toS
+heldKey t = keyRefOf =<< readMaybe t
 
 #else
 

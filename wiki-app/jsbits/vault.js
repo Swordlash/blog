@@ -29,7 +29,10 @@
 // client (jsbits/opaque.js), declared in another module, can hand over the
 // key OPAQUE's export key gives without its bytes leaving JavaScript.
 function wikiVaultRegistry() {
-  return (globalThis.wikiKeyRegistry ??= { next: 0, keys: new Map() });
+  // Written out rather than with the nullish assignment operator: the file
+  // is embedded in C, where that operator's characters are a trigraph.
+  if (!globalThis.wikiKeyRegistry) globalThis.wikiKeyRegistry = { next: 0, keys: new Map() };
+  return globalThis.wikiKeyRegistry;
 }
 
 // The vault key this page holds for each user, once opened: what "ask for

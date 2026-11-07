@@ -331,9 +331,11 @@ passkeyVaultKey s exportable = do
     unwrap wrapping wrapped exportable
 
 -- | Unlock the vault with the password too: the password proved again
--- gives its key, a passkey the vault knows gives the vault key (one
--- touch), and the vault key is wrapped for the password. The vault is then
--- as strong as the password.
+-- (or the key a sign-in gave) gives its key, a passkey the vault knows
+-- gives the vault key (one touch: the page cannot wrap the copy a device
+-- keeps, which cannot be exported), and the vault key is wrapped for the
+-- password. This device is unlocked with it too. The vault is then as
+-- strong as the password.
 addPasswordUnlock :: (MonadAssistant m, MonadVault m) => UserId -> Maybe KeyRef -> Maybe Password -> m (Either Text UserKeys)
 addPasswordUnlock u given password = runExceptT $ do
   s <- fetched >>= maybe (throwError "You have no vault.") pure
@@ -341,7 +343,13 @@ addPasswordUnlock u given password = runExceptT $ do
   fresh <- forgetting k $ withKey (passkeyVaultKey s True) $ \v -> do
     w <- ExceptT (passwordKey k s.vault.salt)
     wrapped <- forgetting w (wrap w v)
-    server (storeVaultChange (Just s.tag) VaultChange {vault = withWrap ByPassword wrapped s.vault, publicKey = Nothing})
+    stored <- server (storeVaultChange (Just s.tag) VaultChange {vault = withWrap ByPassword wrapped s.vault, publicKey = Nothing})
+    -- The touch that gave the vault key unlocks this device too: the key
+    -- is kept (as one that cannot be exported) and opens the key pair.
+    device <- lift (readDevice u)
+    keepVaultKey u v (not device.askEachTime)
+    lift (shareWithAssistant u v)
+    withIdentity u device v stored
   describe u (Just fresh) True
 
 -- | Unlock the vault with the passkeys alone: the password's wrap goes. The

@@ -84,6 +84,7 @@ $( browserJS
      , ("js_opaque_registerPromise", "wiki_test_opaque_register", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_identity_exportPromise", "wiki_test_identity_export", Safe, [t|JSText -> IO (Promise JSText)|])
      , ("js_export_key_traces", "wiki_test_export_key_traces", Safe, [t|IO JSText|])
+     , ("js_opaque_second_factor", "wiki_test_opaque_second_factor", Safe, [t|IO ()|])
      ]
  )
 
@@ -660,8 +661,8 @@ signedInAs uid = unsafeIOToPageM $ do
   pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 -- | The user's keys (WP5.74b1 of docs/PLAN.md, "Wiki.App.Vault"): made at
--- the first sign-in with a password, the vault key wrapped for the
--- password, the private key kept on the device as a key that cannot be
+-- the first sign-in with a password (once its second factor is given, if
+-- it has one), the vault key wrapped for the password, the private key kept on the device as a key that cannot be
 -- exported and no export key left in the page; unlocked with the password
 -- on a second device, the same key pair; carried through a change of
 -- password; made anew after a reset of a password that alone unlocked
@@ -682,11 +683,27 @@ userKeys m = describe "the user's keys" $ do
     unsafeIOToPageM (fromJSText <$> js_export_key_traces) `shouldReturn` "[]"
     closed ui
 
+  it "makes the key pair once a sign-in with a password is completed by its second factor" $ runPage $ do
+    ui <- signedOut "editor's password"
+    unsafeIOToPageM js_opaque_second_factor
+    me <- signedInAs "user-editor"
+    answerWith "POST" "api/v1/session/second-factor" 200 me
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "editor")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "editor's password")
+    find ui ".sign-in-form button[type=submit]" >>= click
+    find ui ".sign-in-code-form input[name=code]" >>= (`typeText` "287082")
+    find ui ".sign-in-code-form button[type=submit]" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    made <- madeKeys
+    isJust (field ["vault", "password", "key"] made) `shouldBe` True
+    closed ui
+
   it "unlocks the key pair on a second device with the password: the same key pair, and nothing stored again" $ runPage $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
-    closed ui
+    unmount ui
     unsafeIOToPageM (evaluate =<< js_new_device)
     identityExport `shouldReturn` "none"
     again <- restarted
@@ -711,7 +728,7 @@ userKeys m = describe "the user's keys" $ do
     -- The new wrap, with the new password, in one request.
     (field ["vault", "password"] changed /= field ["vault", "password"] made, field ["publicKey", "keyId"] changed == field ["publicKey", "keyId"] made)
       `shouldBe` (True, True)
-    closed ui
+    unmount ui
     unsafeIOToPageM (evaluate =<< js_new_device)
     again <- restarted
     signIn again "a password of the editor's"
@@ -724,7 +741,7 @@ userKeys m = describe "the user's keys" $ do
     signIn ui "editor's password"
     _ <- madeKeys
     before' <- fingerprint ui
-    closed ui
+    unmount ui
     resetPage <- restartedAt (ResetPassword (ResetToken "t1"))
     find resetPage ".reset-warning" >>= textContent >>= (`shouldSatisfy` \t -> "writing assistant's settings and API keys" `T.isInfixOf` t && "key pair" `T.isInfixOf` t)
     find resetPage ".reset-form input[name=new]" >>= (`typeText` "a password set again")
@@ -732,7 +749,7 @@ userKeys m = describe "the user's keys" $ do
     find resetPage ".reset-form button[type=submit]" >>= click
     _ <- find resetPage ".reset-sign-in"
     field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
-    closed resetPage
+    unmount resetPage
     again <- restarted
     signIn again "a password set again"
     _ <- madeKeys
@@ -748,7 +765,7 @@ userKeys m = describe "the user's keys" $ do
     find ui ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
     find ui ".keys-passkey-add" >>= click
     eventually $ length <$> findAll ui ".keys-unlock-passkey" `shouldReturn` 1
-    closed ui
+    unmount ui
     unsafeIOToPageM (evaluate =<< js_new_device)
     me <- signedInAs "user-editor"
     answerWith "GET" "api/v1/session" 200 me
@@ -792,7 +809,7 @@ userKeys m = describe "the user's keys" $ do
       eventually $ (isJust . field ["publicKey", "keyId"]) <$> vaultState `shouldReturn` True
       eventually $ identityExport `shouldReturn` "refused"
       vaultState
-    identityExport = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_identity_export "user-editor"))
+    identityExport = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_identity_export (toJSText "user-editor")))
     fingerprint ui = do
       find ui ".account-toggle" >>= click
       printed <- find ui ".keys-fingerprint code" >>= textContent

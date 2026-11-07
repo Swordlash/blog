@@ -139,6 +139,7 @@ function wiki_test_passkeys_uninstall() {
   if (wikiTestPasskeys.original) Object.defineProperty(navigator, "credentials", wikiTestPasskeys.original);
   if (wikiTestPasskeys.insecure !== null) {
     delete globalThis.isSecureContext;
+    if (wikiTestPasskeys.insecure) Object.defineProperty(globalThis, "isSecureContext", wikiTestPasskeys.insecure);
     wikiTestPasskeys.insecure = null;
   }
 }
@@ -170,8 +171,11 @@ function wiki_test_passkeys_pick() {
 
 // The page as one served over plain HTTP to another machine: not a secure
 // context, where a browser offers no passkeys.
+// The window's own isSecureContext is kept, to be put back: deleting the
+// property the test defined would delete the browser's with it, and leave
+// every later test of the page without passkeys.
 function wiki_test_passkeys_insecure() {
-  wikiTestPasskeys.insecure = true;
+  wikiTestPasskeys.insecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext") ?? false;
   Object.defineProperty(globalThis, "isSecureContext", { value: false, configurable: true });
 }
 
@@ -536,7 +540,7 @@ async function wiki_test_exportable_keys_left() {
 // the test gives. A change of password takes the vault's new password wrap
 // as wiki-server does (both or neither), and a reset takes away what only
 // the old password unlocked.
-const wikiTestOpaque = { setup: null, record: null, attempts: new Map(), session: null, next: 0 };
+const wikiTestOpaque = { setup: null, record: null, attempts: new Map(), session: null, next: 0, secondFactor: false };
 
 const wikiTestCheap = { opsLimit: 1, memLimit: 8192 };
 
@@ -547,7 +551,7 @@ async function wikiTestOpaqueServer(request) {
   const opaque = await globalThis.wikiIslands.opaque();
   await opaque.ready;
   const server = opaque.server;
-  wikiTestOpaque.setup ??= server.createSetup();
+  if (wikiTestOpaque.setup === null) wikiTestOpaque.setup = server.createSetup();
   const sent = request.body === "" ? {} : JSON.parse(request.body);
   const starting = (path === "session/password" || path === "account/password/proof") && request.method === "POST";
   if (starting) {
@@ -565,7 +569,10 @@ async function wikiTestOpaqueServer(request) {
     } catch {
       return wikiTestJson(401, { error: "Unauthenticated" });
     }
-    return path === "session/password" ? wikiTestJson(200, wikiTestOpaque.session) : { status: 204, body: "" };
+    if (path === "account/password/proof") return { status: 204, body: "" };
+    // An account with a second factor waits for its code (which the test
+    // answers) rather than being signed in.
+    return wikiTestOpaque.secondFactor ? wikiTestJson(401, { error: "SecondFactorRequired" }) : wikiTestJson(200, wikiTestOpaque.session);
   }
   if (path === "password-registration" && request.method === "POST") {
     const made = server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: sent.request });
@@ -605,15 +612,21 @@ async function wikiTestOpaqueServer(request) {
 // Play OPAQUE's server, for the user whose session (JSON) a sign-in
 // answers, before the vault's server (wiki_test_vault_server_start).
 function wiki_test_opaque_server_start(session) {
-  Object.assign(wikiTestOpaque, { setup: null, record: null, attempts: new Map(), session: JSON.parse(session), next: 0 });
+  Object.assign(wikiTestOpaque, { setup: null, record: null, attempts: new Map(), session: JSON.parse(session), next: 0, secondFactor: false });
   globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestOpaqueServer];
+}
+
+// Give the editor a second factor: a sign-in with the password then waits
+// for its code.
+function wiki_test_opaque_second_factor() {
+  wikiTestOpaque.secondFactor = true;
 }
 
 // Register the editor's password, as an administrator would have set it.
 async function wiki_test_opaque_register(password) {
   const opaque = await globalThis.wikiIslands.opaque();
   await opaque.ready;
-  wikiTestOpaque.setup ??= opaque.server.createSetup();
+  if (wikiTestOpaque.setup === null) wikiTestOpaque.setup = opaque.server.createSetup();
   const start = opaque.client.startRegistration({ password });
   const response = opaque.server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: start.registrationRequest });
   const done = opaque.client.finishRegistration({
