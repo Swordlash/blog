@@ -713,6 +713,30 @@ userKeys m = describe "the user's keys" $ do
     isJust (field ["vault", "password", "key"] made) `shouldBe` True
     closed ui
 
+  it "gives a passkey's sign-in no key of a password sign-in left at its second factor" $ runPage $ do
+    ui <- signedOut "editor's password"
+    unsafeIOToPageM js_opaque_second_factor
+    -- A password sign-in reaches its second factor, and is left there.
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "editor")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "editor's password")
+    find ui ".sign-in-form button[type=submit]" >>= click
+    _ <- find ui ".sign-in-code-form input[name=code]"
+    find ui ".sign-in-toggle" >>= click
+    -- A passkey signs in instead: the password's key is not this
+    -- sign-in's, so no vault is made with it.
+    me <- signedInAs "user-editor"
+    answerWith "POST" "api/v1/session/passkey" 200 (Aeson.object ["challenge" Aeson..= ("Y2hhbGxlbmdl" :: Text), "rpId" Aeson..= ("localhost" :: Text), "allow" Aeson..= ([] :: [Text])])
+    answerWith "PUT" "api/v1/session/passkey" 200 me
+    _ <- unsafeIOToPageM js_existing
+    find ui ".sign-in-toggle" >>= click
+    find ui ".passkey-sign-in" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    find ui ".account-toggle" >>= click
+    _ <- eventually $ find ui ".keys-none"
+    field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
+    closed ui
+
   it "turns the assistant's syncing on in the vault the first sign-in made, with the password and a new passkey" $ runPage $ do
     ui <- signedOutAt AssistantSettings "editor's password"
     signIn ui "editor's password"

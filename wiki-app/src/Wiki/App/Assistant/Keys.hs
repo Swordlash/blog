@@ -371,30 +371,12 @@ removePasskey user credential = runExceptT $ do
 -- which needs no passkey (the way back for someone who lost every
 -- passkey). The keys stay on this device: the vault's latest version,
 -- fetched first, when this device can open it, or else what was typed
--- here while it was locked. The key is kept on this device from now on.
--- Settings this device can open are sealed again with a new key of the
--- assistant's own: the old key is the vault key, and the vault stays when
--- it holds the user's key pair. A copy of the vault key in the
--- assistant's slot, kept on disk, would reopen the vault after a reload
--- even when the vault asks for an unlock each time.
+-- here while it was locked ('leaveVault').
 turnOffSync :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
 turnOffSync user = sealing (runExceptT (server deleteVault) >>= either (pure . Left) (const (plainKeys user))) $ runExceptT $ do
   record <- refreshed user =<< current user
   server deleteVault
-  key <- lift (deviceKey user)
-  open record key >>= \case
-    Opened old secrets -> do
-      own <- localKey user
-      lift (forgetKey old)
-      sealed <- seal own secrets
-      let off = sealedTo (Just sealed) (askTo False (serverTo Nothing record))
-      write user off
-      pure (keysOf off (Opened own secrets))
-    _ -> do
-      traverse_ (\k -> keep user k True) key
-      off <- unsynced key record
-      write user off
-      keysOf off <$> open off key
+  uncurry keysOf <$> leaveVault user record
 
 -- | Whether this device asks for the passkey each time the wiki opens: if
 -- so, it keeps the vault key for the page's life only; if not, in
@@ -483,9 +465,9 @@ current user =
         pure record
 
 -- | A record brought up to date with the server's vault, and stored if it
--- changed: the vault fetched when its tag changed; the copy dropped when
--- there is none any more (syncing was turned off elsewhere), the key then
--- kept on this device.
+-- changed: the vault fetched when its tag changed; syncing stopped here
+-- when the vault has no settings any more (turned off elsewhere:
+-- 'leaveVault').
 refreshed :: (MonadAssistant m, MonadVault m) => UserId -> DeviceRecord -> Step m DeviceRecord
 refreshed user record =
   lift vaultSync >>= \case
@@ -499,13 +481,36 @@ refreshed user record =
         -- sync (any more).
         Right fetched
           | isJust record.server
-          , notSyncing fetched -> do
-              key <- lift (deviceKey user)
-              traverse_ (\k -> keep user k True) key
-              changed <- unsynced key record
-              write user changed $> changed
+          , notSyncing fetched ->
+              fst <$> leaveVault user record
         -- The same version, none at all, or no server to ask: as kept.
         _ -> pure record
+
+-- | Stop syncing on this device, once the vault's settings have gone:
+-- turned off here ('turnOffSync') or on another device ('refreshed').
+-- Settings this device can open are sealed again with a new key of the
+-- assistant's own, kept on this device. The old key is the vault key, and
+-- the vault stays when it holds the user's key pair: a copy of it in the
+-- assistant's slot, kept on disk, would reopen the vault after a reload
+-- even when the vault asks for an unlock each time. Settings this device
+-- cannot open (it is still locked) stay what was typed here, with the key
+-- it has. The record is stored, and returned with what it opens to.
+leaveVault :: (MonadAssistant m) => UserId -> DeviceRecord -> Step m (DeviceRecord, Opened)
+leaveVault user record = do
+  key <- lift (deviceKey user)
+  open record key >>= \case
+    Opened old secrets -> do
+      own <- localKey user
+      lift (forgetKey old)
+      sealed <- seal own secrets
+      let off = sealedTo (Just sealed) (askTo False (serverTo Nothing record))
+      write user off
+      pure (off, Opened own secrets)
+    _ -> do
+      traverse_ (\k -> keep user k True) key
+      off <- unsynced key record
+      write user off
+      (\opened -> (off, opened)) <$> open off key
 
 -- | A record that no longer syncs. The settings it keeps become the
 -- vault's, the latest version this device fetched, when the device's key
