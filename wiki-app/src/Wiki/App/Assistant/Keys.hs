@@ -56,12 +56,11 @@ import Data.Aeson (eitherDecodeStrict, encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Protolude
-import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
-import Wiki.App.Account (passwordErrorText)
-import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), PasskeyRefusal (..), Used (..))
+import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
+import Wiki.App.Assistant (KeyRef, MonadAssistant (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Vault (VaultDevice (..), readDevice, vaultSlot)
+import Wiki.App.Vault (Step, VaultDevice (..), forgetting, newPasskey, readDevice, recover, server, unwrap, usedPasskey, vaultSlot, wikiText, withKey, wrap)
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
@@ -91,8 +90,6 @@ data Opened
     Locked (Maybe KeyRef) Settings
   | -- | Nothing sealed that this device can open: nothing set yet.
     Fresh
-
-type Step m = ExceptT Text m
 
 --------------------------------------------------------------------------------
 -- Reading and changing
@@ -542,59 +539,11 @@ localKey user = do
   keep user k True
   pure k
 
--- | Make a passkey for the wiki, checked by the server, and the key that
--- wraps the vault key for it: from its PRF output at once, or by using it
--- once. A passkey without the PRF extension cannot wrap the vault key; it
--- is kept, since it signs the user in (WP5.30), and the person is told.
-newPasskey :: (MonadAssistant m, MonadVault m) => Maybe Password -> Salt -> Step m (CredentialId, KeyRef)
-newPasskey password salt = do
-  -- Making a passkey asks for the user's password, since it signs them in.
-  options <- ExceptT (first passwordErrorText <$> beginRegistration password)
-  made <- passkey (createPasskey options salt.text wrappingInfo)
-  let credential = made.response.id
-      -- The key the PRF output gave goes if a step below fails.
-      forgetWrapping = lift (traverse_ forgetKey made.wrapping)
-  -- A passkey the server did not take is told to the password manager as
-  -- not the wiki's, so that it does not linger there.
-  _ <-
-    server (finishRegistration made.response)
-      `recover` \why -> lift (discardPasskey options.rpId credential) >> forgetWrapping >> throwError why
-  unless made.prf $ do
-    forgetWrapping
-    throwError "This passkey cannot sync the keys: it has no PRF extension, which the browser or the password manager that keeps it does not offer. It was kept to sign in with, and is listed under Passkeys in your account. Try a passkey kept elsewhere (Google Password Manager, iCloud Keychain, Windows Hello, a security key)."
-  case made.wrapping of
-    Just wrapping -> pure (credential, wrapping)
-    Nothing ->
-      ((Right <$> usedPasskey salt (Just [credential])) `recover` (pure . Left)) >>= \case
-        Right (_, wrapping) -> pure (credential, wrapping)
-        Left why -> lift (void (dropPasskey credential)) >> throwError why
-
--- | Use one of the user's passkeys, checked by the server: the passkey
--- used, and the key its PRF output gives. Given a list, only the passkeys
--- in it are offered: those that hold a copy of the vault's key, so that
--- no touch goes to a passkey that cannot unlock it.
-usedPasskey :: (MonadAssistant m, MonadVault m) => Salt -> Maybe [CredentialId] -> Step m (CredentialId, KeyRef)
-usedPasskey salt only = do
-  options <- server beginAssertion
-  when (null options.allow) (throwError "You have no passkey for this wiki any more: turn syncing off, and on again with a new passkey.")
-  let allowed = maybe options.allow (\these -> filter (`elem` these) options.allow) only
-  when (null allowed) (throwError "None of your passkeys holds a copy of the vault's key: turn syncing off, and on again with a passkey.")
-  used <- passkey (usePasskey AssertionOptions {challenge = options.challenge, rpId = options.rpId, allow = allowed} salt.text wrappingInfo)
-  _ <- server (finishAssertion used.response) `recover` \why -> lift (traverse_ forgetKey used.wrapping) >> throwError why
-  wrapping <- maybe (throwError "This passkey gave no PRF output, so it cannot unlock the keys. Use another passkey, or remove this one under Passkeys in your account and turn syncing on again with a new one.") pure used.wrapping
-  pure (used.response.id, wrapping)
-
 seal :: (MonadAssistant m) => KeyRef -> Settings -> Step m Sealed
 seal k s = ExceptT (sealWith k (decodeUtf8 (BSL.toStrict (encode (secretsOf s)))) sealingData)
 
 openSettings :: (MonadAssistant m) => KeyRef -> Sealed -> Step m Settings
 openSettings k s = decoded =<< ExceptT (openWith k s sealingData)
-
-wrap :: (MonadAssistant m) => KeyRef -> KeyRef -> Step m WrappedKey
-wrap wrapping k = ExceptT (wrapWith wrapping k wrappingData)
-
-unwrap :: (MonadAssistant m) => KeyRef -> WrappedKey -> Bool -> Step m KeyRef
-unwrap wrapping w exportable = ExceptT (unwrapWith wrapping w wrappingData exportable)
 
 keep :: (MonadAssistant m) => UserId -> KeyRef -> Bool -> Step m ()
 keep user k onDisk = ExceptT (keepDeviceKey user k onDisk)
@@ -618,40 +567,3 @@ write user record = stored user (Just (BSL.toStrict (encode record)))
 
 stored :: (MonadAssistant m) => UserId -> Maybe ByteString -> Step m ()
 stored user = ExceptT . keepDeviceRecord user
-
-server :: (Monad m) => m (Either WikiError a) -> Step m a
-server request = ExceptT (first wikiText <$> request)
-
-passkey :: (Monad m) => m (Either PasskeyRefusal a) -> Step m a
-passkey request =
-  lift request >>= \case
-    Right a -> pure a
-    Left Cancelled -> throwError "The passkey was not used: the browser's dialog was closed."
-    Left (PasskeyFailed why) -> throwError ("The browser could not use a passkey: " <> why)
-
--- | A step, or else what to do with why it failed.
-recover :: (Monad m) => Step m a -> (Text -> Step m a) -> Step m a
-recover step otherwise' = lift (runExceptT step) >>= either otherwise' pure
-
--- | A step with a key the page holds for it alone: the key is forgotten
--- when the step ends, whether it succeeds or fails. A key that can be
--- exported must not stay in the page longer than it is needed.
-withKey :: (MonadAssistant m) => Step m KeyRef -> (KeyRef -> Step m a) -> Step m a
-withKey acquire step = do
-  k <- acquire
-  result <- lift (runExceptT (step k))
-  lift (forgetKey k)
-  either throwError pure result
-
--- | A step, after which the page forgets the given key, however it ends.
-forgetting :: (MonadAssistant m) => KeyRef -> Step m a -> Step m a
-forgetting k step = withKey (pure k) (const step)
-
--- | What a backend's refusal says.
-wikiText :: WikiError -> Text
-wikiText = \case
-  NotFound -> "The server knows nothing of it."
-  Forbidden -> "The server refused it."
-  Conflict t -> t
-  Invalid t -> t
-  Unreachable t -> "The server could not be reached: " <> t

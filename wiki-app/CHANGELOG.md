@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+The password unlocks the vault (WP5.74b1). The browser's OPAQUE client
+gives OPAQUE's export key as a WebCrypto key the page holds
+(`Wiki.App.Backend.Opaque`'s last steps answer its `KeyRef`), never its
+bytes; the HTTP backend keeps the last sign-in's for the vault
+(`takePasswordKey`). After a sign-in with a password the sign-in view
+brings the vault up to date (`Wiki.App.Vault.afterSignIn`): a user with no
+vault gets one, with a key pair and a password wrap; a vault the password
+unlocks is unlocked on a new device with it; and the password is offered
+once per device as another way to unlock a vault it does not ("Also
+unlock your keys with your password?", default no). A re-authentication
+(`provePassword`) is the existing proof of the password, which now gives
+the key too. A change of password carries the vault along
+(`changeOwnPassword`, `changePasswordCarrying`). The reset page lists what
+a reset deletes when only the password unlocked the vault
+(`resetLosses`). `MonadAssistant` gains `passwordKey`.
+
 The user's key pair on this device (WP5.74b1). `Wiki.App.Vault`, new, is
 the user's vault as this browser keeps it: the vault key and the private
 half of the user's X25519 key pair, each a WebCrypto key that cannot be

@@ -37,6 +37,8 @@ module Wiki.Server.Vault
   , storeVaultIn
   , deleteVault
   , vaultProblem
+  , passwordRewrapIn
+  , resetVaultIn
 
     -- * The directory of public keys
   , publicKeyOf
@@ -76,6 +78,7 @@ import Database.Beam (all_, asc_, current_, delete, filter_, insert, insertValue
 import Network.Wai (Request)
 import Protolude
 import Wiki.Api.ContentPolicy (originOf)
+import Wiki.Api.Opaque (PasswordWrapChange (..))
 import Wiki.Api.Vault (NewPublicKey (..), PasskeyInfo (..), PublicKeyEntry (..), StoredVault (..), VaultChange (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (assistantItem)
@@ -85,7 +88,7 @@ import Wiki.Core.Vault (Ciphertext (..), CredentialId (..), Item (..), ItemName 
 import Wiki.Server.Address (requestOrigin)
 import Wiki.Server.Storage (Storage, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Rows (StoredPassword (..), micro, passwordOf)
 import Wiki.Server.Storage.Schema (Passkeys (..), PublicKeys (..), VaultItems (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.WebAuthn (AssertionRefusal (..), NewCredential (..), StoredKey (..), fromBase64Url, toBase64Url)
 
@@ -270,6 +273,11 @@ storeVaultIn now u base change
       mine <- map (\p -> p.credential_id) <$> passkeysWhere u
       before <- vaultIn u
       current <- currentKeyIn u
+      hasRecord <-
+        passwordOf u <&> \case
+          Just (WithRecord _) -> True
+          _ -> False
+      let unlocking = maybe [] (Map.keys . passkeyWraps . (\b -> b.vault)) before
       taken <- case change.publicKey of
         Just k | Just k.keyId /= ((\c -> c.keyId) <$> current) -> not . null <$> runSelectReturningList (select (filter_ (\x -> x.key_id ==. val_ k.keyId.text) (all_ wikiDb.public_keys)))
         _ -> pure False
@@ -282,6 +290,8 @@ storeVaultIn now u base change
       case (before, base) of
         _ | any (\i -> i.text `notElem` mine) named -> pure (Left (Invalid "The vault names a passkey that is not one of yours."))
         _ | Just problem <- identityProblem (Map.lookup identityItem (fst whole)) change.publicKey current -> pure (Left problem)
+        _ | isJust (snd whole) && not hasRecord -> pure (Left (Invalid "You have no password to unlock a vault with: you sign in with a provider."))
+        _ | Map.member identityItem (fst whole) && isNothing (snd whole) && null (named <> unlocking) -> pure (Left (Invalid "A vault that holds your key pair keeps at least one way to unlock it."))
         _ | taken -> pure (Left (Conflict "This public key is in the directory already."))
         (Nothing, Nothing) -> do
           runInsert . insert wikiDb.vaults $
@@ -330,6 +340,62 @@ deleteVault st now u = writing st $ do
       runDelete (delete wikiDb.vaults (\x -> x.user_id ==. val_ u.text))
       runUpdate (update wikiDb.passkeys (\p -> (p.wrapped_nonce <-. val_ Nothing) <> (p.wrapped_key <-. val_ Nothing)) (\p -> p.user_id ==. val_ u.text))
     else runUpdate (update wikiDb.vaults (\x -> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now))) (\x -> x.user_id ==. val_ u.text))
+
+--------------------------------------------------------------------------------
+-- The password's wrap
+
+-- | Replace the password's wrap of a user's vault key, in the transaction
+-- of a change of their password ("Wiki.Server.Accounts"): the vault key
+-- wrapped with the new password's key, over the version of the vault the
+-- tag names. A vault that opens with the password needs the new wrap, or
+-- the change is refused: the old wrap would open with nothing any more. A
+-- wrap for a vault that does not open with the password, or over another
+-- version, is refused too. Without a vault, or for a vault without the
+-- password's wrap, a change carries none and nothing happens here.
+passwordRewrapIn :: (Backend be) => UTCTime -> UserId -> Maybe PasswordWrapChange -> Db be (Either WikiError ())
+passwordRewrapIn now u change = do
+  row <- runSelectReturningList (select (filter_ (\x -> x.user_id ==. val_ u.text) (all_ wikiDb.vaults)))
+  let hasPassword x = isJust x.password_key
+  case (row, change) of
+    ([x], Nothing) | hasPassword x -> pure (Left (Conflict "Your vault opens with your password: change it from a page that can carry the vault along (the wiki at its HTTPS address), or reload this page and try again."))
+    (_, Nothing) -> pure (Right ())
+    ([x], Just c)
+      | not (hasPassword x) -> pure (Left (Conflict "Your vault does not open with your password."))
+      | tagOf x.revision /= c.tag -> pure (Left (Conflict "Your vault was changed meanwhile: try again."))
+      | not (holds 12 c.wrapped.nonce.text && holds 48 c.wrapped.key.text) -> pure (Left (Invalid "This is not a vault this wiki keeps: a wrapped key is not of its length."))
+      | otherwise -> do
+          runUpdate $
+            update
+              wikiDb.vaults
+              (\v -> (v.password_nonce <-. val_ (Just c.wrapped.nonce.text)) <> (v.password_key <-. val_ (Just c.wrapped.key.text)) <> (v.revision <-. current_ v.revision + 1) <> (v.updated_at <-. val_ (micro now)))
+              (\v -> v.user_id ==. val_ u.text)
+          pure (Right ())
+    (_, Just _) -> pure (Left (Conflict "You have no vault to carry along."))
+
+-- | What a password reset does to a user's vault, in its transaction
+-- ("Wiki.Server.Reset"): the old password's key is gone, so is its wrap.
+-- A vault that a passkey still unlocks keeps everything else, and the
+-- user unlocks it with a passkey to add the new password's wrap. A vault
+-- that only the password unlocked can no longer be opened by anyone: it
+-- is deleted, with its items (the assistant's settings and the user's
+-- private key), and the user's public key is retired, as changed by a
+-- reset, so that what was sealed to it can be found again. The next
+-- sign-in makes a new vault and key pair.
+resetVaultIn :: (Backend be) => UTCTime -> UserId -> Db be ()
+resetVaultIn now u = do
+  unlocking <- runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text &&. isJust_ p.wrapped_key) (all_ wikiDb.passkeys)))
+  if null unlocking
+    then do
+      runDelete (delete wikiDb.vault_items (\i -> i.user_id ==. val_ u.text))
+      runDelete (delete wikiDb.vaults (\x -> x.user_id ==. val_ u.text))
+      runUpdate (update wikiDb.public_keys (\k -> (k.retired_at <-. val_ (Just (micro now))) <> (k.retired_because <-. val_ (Just "reset"))) (\k -> k.user_id ==. val_ u.text &&. isNothing_ k.retired_at))
+    else
+      runUpdate
+        ( update
+            wikiDb.vaults
+            (\x -> (x.password_nonce <-. val_ Nothing) <> (x.password_key <-. val_ Nothing) <> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now)))
+            (\x -> x.user_id ==. val_ u.text &&. isJust_ x.password_key)
+        )
 
 --------------------------------------------------------------------------------
 -- Passkeys

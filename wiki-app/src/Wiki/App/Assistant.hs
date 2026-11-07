@@ -60,6 +60,10 @@ module Wiki.App.Assistant
   , KeyRef
   , Made (..)
   , NewIdentity (..)
+  , keyRefOf
+  , passwordKeyIO
+  , wrapForPassword
+  , forgetHeld
   , PasskeyTicket
   , Used (..)
   , PasskeyRefusal (..)
@@ -96,7 +100,7 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, RegistrationOptions, RegistrationResponse)
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), providerKey)
-import Wiki.Core.Assistant.Vault (Ciphertext (..), CredentialId (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..), identityData, identityDataPrefix)
+import Wiki.Core.Assistant.Vault (Ciphertext (..), CredentialId (..), KeyId (..), Nonce (..), PublicKey (..), Salt (..), Sealed (..), WrappedKey (..), identityData, identityDataPrefix, passwordWrappingInfo, wrappingData)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 
@@ -136,6 +140,7 @@ $( browserJS
      , ("js_keys_generatePromise", "wiki_keys_generate", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
      , ("js_keys_openPromise", "wiki_keys_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_keys_fingerprintPromise", "wiki_keys_fingerprint", Safe, [t|JSText -> IO (Promise JSText)|])
+     , ("js_password_keyPromise", "wiki_vault_password_key", Safe, [t|Int -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_conditional_herePromise", "wiki_passkey_conditional_here", Safe, [t|IO (Promise Bool)|])
      , ("js_passkey_sign_inPromise", "wiki_passkey_sign_in", Safe, [t|JSText -> Bool -> Int -> IO (Promise JSText)|])
      , ("js_passkey_offer_ticket", "wiki_passkey_offer_ticket", Safe, [t|IO Int|])
@@ -205,6 +210,9 @@ js_keys_generate a1 a2 = if inBrowser then wait =<< js_keys_generatePromise a1 a
 
 js_keys_open :: Int -> JSText -> JSText -> JSText -> IO JSText
 js_keys_open a1 a2 a3 a4 = if inBrowser then wait =<< js_keys_openPromise a1 a2 a3 a4 else pure inert
+
+js_password_key :: Int -> JSText -> JSText -> IO JSText
+js_password_key a1 a2 a3 = if inBrowser then wait =<< js_password_keyPromise a1 a2 a3 else pure inert
 
 js_keys_fingerprint :: JSText -> IO JSText
 js_keys_fingerprint a1 = if inBrowser then wait =<< js_keys_fingerprintPromise a1 else pure inert
@@ -514,6 +522,13 @@ class (Monad m) => MonadAssistant m where
   default openIdentity :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> KeyId -> Sealed -> m (Either Text KeyRef)
   openIdentity k i = lift . openIdentity k i
 
+  -- | The key that wraps the vault key for the password, from the key
+  -- OPAQUE's export key gave the page ("Wiki.App.Backend.Opaque") and the
+  -- vault's salt: one that only wraps and unwraps.
+  passwordKey :: KeyRef -> Salt -> m (Either Text KeyRef)
+  default passwordKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> Salt -> m (Either Text KeyRef)
+  passwordKey k = lift . passwordKey k
+
   -- | A public key's fingerprint: SHA-256 of its bytes, in hexadecimal;
   -- empty where the browser cannot compute it.
   fingerprintOf :: PublicKey -> m Text
@@ -637,6 +652,7 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_keys_open v (toJSText sealed.nonce.text) (toJSText sealed.ciphertext.text) (toJSText (identityData keyId))
     pure (answered (\o -> KeyRef <$> o .: "handle") answer)
   fingerprintOf k = liftIO (fromJSText <$> (evaluate =<< js_keys_fingerprint (toJSText k.text)))
+  passwordKey base salt = liftIO (passwordKeyIO base salt)
   conditionalHere = liftIO (evaluate =<< js_conditional_here)
   passkeyTicket = liftIO (PasskeyTicket <$> js_passkey_offer_ticket)
   signInPasskey options conditional (PasskeyTicket ticket) = liftIO $ do
@@ -704,6 +720,7 @@ instance MonadAssistant MemDOM where
   newIdentity _ = pure (Left noBrowser)
   openIdentity _ _ _ = pure (Left noBrowser)
   fingerprintOf _ = pure ""
+  passwordKey _ _ = pure (Left noBrowser)
   conditionalHere = pure False
   passkeyTicket = pure (PasskeyTicket 0)
   signInPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
@@ -718,6 +735,34 @@ instance MonadAssistant MemDOM where
   closeTalk _ = pass
   checkKey _ = pure (Just (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
   listModels _ = pure (Left (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
+
+-- | 'passwordKey' in IO, for the HTTP backend, which holds no
+-- 'MonadAssistant' ("Wiki.App.Backend.Http"). Natively there is no key.
+passwordKeyIO :: KeyRef -> Salt -> IO (Either Text KeyRef)
+passwordKeyIO (KeyRef base) salt
+  | not inBrowser = pure (Left noBrowser)
+  | otherwise = do
+      answer <- evaluate . fromJSText =<< js_password_key base (toJSText salt.text) (toJSText passwordWrappingInfo)
+      pure (answered (\o -> KeyRef <$> o .: "handle") answer)
+
+-- | Wrap a vault key (one that can be exported) for a new password: the
+-- key OPAQUE's export key gave for it, and the vault's salt, give the
+-- wrapping key, which the page forgets at once. For the HTTP backend's
+-- change of password, which sends the new wrap with the new password.
+wrapForPassword :: KeyRef -> Salt -> KeyRef -> IO (Either Text WrappedKey)
+wrapForPassword base salt (KeyRef vault)
+  | not inBrowser = pure (Left noBrowser)
+  | otherwise =
+      passwordKeyIO base salt >>= \case
+        Left e -> pure (Left e)
+        Right (KeyRef wrapping) -> do
+          answer <- evaluate . fromJSText =<< js_wrap wrapping vault (toJSText wrappingData)
+          js_forget_key wrapping
+          pure (answered (\o -> WrappedKey <$> o .: "nonce" <*> o .: "key") answer)
+
+-- | Let the page forget a key, in IO, for the HTTP backend.
+forgetHeld :: KeyRef -> IO ()
+forgetHeld (KeyRef k) = when inBrowser (js_forget_key k)
 
 -- | Why the browser would refuse a request to another service's base URL,
 -- if it would: the page's Content Security Policy ("Wiki.Api.ContentPolicy")

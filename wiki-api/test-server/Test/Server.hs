@@ -871,9 +871,9 @@ spec = describe "a server of the API's type" $ do
 
     it "changes the user's own password, with the current one" $ do
       links.account.changePassword `shouldBe` "api/v1/account/password"
-      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Just (Password "the current one"), password = record "u1"}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
-      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Nothing, password = record "proved"}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
-      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Nothing, password = record "u1"}) 401 Unauthenticated
+      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Just (Password "the current one"), password = record "u1", vault = Nothing}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
+      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Nothing, password = record "proved", vault = Nothing}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
+      answers (sendJson methodPut links.account.changePassword PasswordRecordChange {current = Nothing, password = record "u1", vault = Nothing}) 401 Unauthenticated
 
     it "lets the administration disconnect a user's account at a provider" $ do
       links.admin.unlinkIdentity (UserId "u2") "github" `shouldBe` "api/v1/admin/users/u2/identities/github"

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`PasswordRecordChange` gains `vault :: Maybe PasswordWrapChange`
+(`{tag, wrapped}`), written only when there is one (WP5.74b1).
+
 The directory of public keys (WP5.74b1). `PUT assistant/vault` takes a
 `VaultChange`: the vault's own object, with `publicKey`
 (`NewPublicKey {keyId, publicKey}`) when its `identity` item is new; a bare

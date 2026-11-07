@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The password's wrap (WP5.74b1). `Wiki.Core.Vault` gains
+`passwordWrappingInfo`, the HKDF info of the key OPAQUE's export key gives
+for wrapping the vault key.
+
 The user's key pair (WP5.74b1). `Wiki.Core.Vault` gains `PublicKey`,
 `identityItem` (the item `identity`: the user's X25519 private key, sealed
 as PKCS #8 under the vault key with its `KeyId`), `identityData` (the

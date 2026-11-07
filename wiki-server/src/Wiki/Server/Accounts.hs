@@ -136,13 +136,13 @@ where
 
 import Control.Monad.UUID (MonadUUID (..))
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Database.Beam (Q, QExpr, all_, delete, desc_, filter_, insert, insertValues, join_, orderBy_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (/=.), (<-.), (<=.), (==.))
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
-import Wiki.Api.Opaque (NewAccountRecord (..), PasswordRecord (..))
+import Wiki.Api.Opaque (NewAccountRecord (..), PasswordRecord (..), PasswordWrapChange)
 import Wiki.Api.Security (SessionRef (..), SessionSummary (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
@@ -158,6 +158,7 @@ import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (IdentityRow (..), StoredPassword (..), StoredRecord, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, loadPasswordByLogin, micro, noPasswordToSet, passwordOf, pendingInvitation, providerNames, refreshIdentity, setGlobalGrant, storeRecord, totpEnabled, updateDisabled)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
+import Wiki.Server.Vault (passwordRewrapIn)
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -530,8 +531,8 @@ data PasswordRefusal
 -- user without a password who signs in with a server provider is refused
 -- ('Invalid'): they have no password to set. Every session of theirs ends
 -- except the one with this id (from the request's cookie), if any.
-changePassword :: Storage -> UserId -> Maybe SessionToken -> IO (Maybe Proof) -> Maybe Password -> PasswordRecord -> IO (Either PasswordRefusal SignInMethods)
-changePassword st u keep proved current new = runExceptT $ do
+changePassword :: Storage -> UserId -> Maybe SessionToken -> IO (Maybe Proof) -> Maybe Password -> PasswordRecord -> Maybe PasswordWrapChange -> IO (Either PasswordRefusal SignInMethods)
+changePassword st u keep proved current new wrap = runExceptT $ do
   stored <- either (throwError . PasswordRefused . Invalid) pure (storedRecordOf u new)
   configured <- liftIO (providerNames <$> readServerSettings st)
   before <- liftIO (reading st (passwordOf u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
@@ -552,16 +553,24 @@ changePassword st u keep proved current new = runExceptT $ do
             Nothing -> (False, False)
     _ -> (,False) <$> passwordProved before proved current
   unless right (throwError WrongCurrent)
+  at <- liftIO getCurrentTime
   ExceptT $ writingEither st $ do
     now <- passwordOf u
     if now /= Just before
       then pure (Left (PasswordRefused (Conflict "Your password was changed meanwhile: sign in again with the new one.")))
       else do
         storeRecord u stored
-        unless moving $ case keep of
-          Just token -> runDelete (delete wikiDb.sessions (\x -> x.user_id ==. val_ u.text &&. x.id_hash /=. val_ (tokenHash token.text)))
-          Nothing -> deleteSessionsOf u
-        first PasswordRefused <$> methodsOf u
+        -- The vault's password wrap is replaced in the same transaction:
+        -- a wrap the vault cannot take refuses the new password too, and
+        -- a vault that opens with the password needs the new wrap.
+        rewrapped <- passwordRewrapIn at u wrap
+        case rewrapped of
+          Left e -> pure (Left (PasswordRefused e))
+          Right () -> do
+            unless moving $ case keep of
+              Just token -> runDelete (delete wikiDb.sessions (\x -> x.user_id ==. val_ u.text &&. x.id_hash /=. val_ (tokenHash token.text)))
+              Nothing -> deleteSessionsOf u
+            first PasswordRefused <$> methodsOf u
 
 -- | Whether a user proved the password they have: by the session's proof
 -- through OPAQUE for a record; by any proof or the password given, against

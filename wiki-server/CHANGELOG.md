@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+The password unlocks the vault, and a reset says what it costs
+(WP5.74b1). `PUT account/password` takes the vault key wrapped for the new
+password (`vault`) and stores it with the new record in one transaction,
+over the vault's version the change names; a vault the password unlocks
+refuses a change without it. A password reset deletes the vault's password
+wrap when a passkey still unlocks the vault, and otherwise deletes the
+vault and retires the user's public key (`retired_because = 'reset'`).
+A user without a password cannot store a password wrap, and a vault that
+holds the key pair keeps at least one way to unlock it. `Accounts.changePassword`
+takes the wrap; `Wiki.Server.Vault` gains `passwordRewrapIn` and
+`resetVaultIn`.
+
 The directory of public keys (WP5.74b1). Migration `0010-user-vault` also
 makes `public_keys`: each user's X25519 public key by its id (the first 16
 bytes of its SHA-256), one current per user, a key replaced kept with when

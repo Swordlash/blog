@@ -67,6 +67,9 @@ module Wiki.Core.Vault
   , identityData
   , identityDataPrefix
   , fingerprintGroups
+
+    -- * The password's wrap
+  , passwordWrappingInfo
   )
 where
 
@@ -339,3 +342,15 @@ identityData k = identityDataPrefix <> k.text
 -- to read and compare.
 fingerprintGroups :: Text -> [Text]
 fingerprintGroups = T.chunksOf 4 . T.toUpper
+
+--------------------------------------------------------------------------------
+-- The password's wrap
+
+-- | The @info@ of the HKDF that derives the key wrapping the vault key from
+-- OPAQUE's export key, whose salt is the vault's. The export key is the
+-- same at every sign-in with the same password, and changes with the
+-- password. The wrapped vault key is authenticated with the same
+-- additional data as a passkey's wrap
+-- ('Wiki.Core.Assistant.Vault.wrappingData'): it is the same key.
+passwordWrappingInfo :: Text
+passwordWrappingInfo = "wiki-vault/2 password wrapping key"

@@ -306,7 +306,7 @@ changing r token current new = do
     Nothing -> pure False
     Just c -> (\x -> x.status == 204) <$> provePassword r (onPublic r) [cookie token] c
   withRecord r (onPublic r) [cookie token] ForOwnPassword new $ \record ->
-    send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie token] (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record})
+    send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie token] (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record, vault = Nothing})
 
 -- | A PUT with a JSON body and these headers.
 sendJson' :: (ToJSON a) => Running -> Text -> [Header] -> a -> IO Reply
@@ -367,13 +367,13 @@ ownPassword backing = describe "one's own password" $ do
     (.status) <$> changing r admin (Just "admin's password") "a longer new password" `shouldReturn` 200
 
   it "is no one's to change who is not signed in, nor the operator's, nor without the application's header" $ withPasswords backing identity $ \r -> do
-    let body = encode PasswordRecordChange {current = Nothing, password = noRecord}
+    let body = encode PasswordRecordChange {current = Nothing, password = noRecord, vault = Nothing}
     nobody <- send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json")] body
     jsonAs 401 nobody `shouldReturn` Unauthenticated
     operator <- send r methodPut (onAdmin r links.account.changePassword) [(hContentType, "application/json")] body
     operator.status `shouldBe` 400
     here <- signInAs r "editor" "editor's password"
-    bare <- sendBare r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie here] (encode PasswordRecordChange {current = Just (Password "editor's password"), password = noRecord})
+    bare <- sendBare r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie here] (encode PasswordRecordChange {current = Just (Password "editor's password"), password = noRecord, vault = Nothing})
     bare.status `shouldBe` 403
     _ <- signInAs r "editor" "editor's password"
     pass
@@ -494,7 +494,7 @@ opaque backing = describe "passwords through OPAQUE" $ do
     reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
     token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
     record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's old password"
-    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record, vault = Nothing} >>= jsonAs 200
     legacyPasswords r `shouldReturn` 0
     -- The move keeps the account's other sessions: its password is the same.
     (still, _) <- sessionWith r [cookie elsewhere]
@@ -529,7 +529,7 @@ opaque backing = describe "passwords through OPAQUE" $ do
       either (panic . show) (storeRecord (UserId "user-editor")) stored
     -- The migration path cannot overwrite it.
     record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "the session's own choice"
-    (sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    (sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record, vault = Nothing} >>= jsonAs 401) `shouldReturn` Unauthenticated
     _ <- signInAs r "editor" "a password set elsewhere"
     (.status) <$> passwordSignIn r (onPublic r) [] "editor" "the session's own choice" `shouldReturn` 401
 
@@ -543,7 +543,7 @@ opaque backing = describe "passwords through OPAQUE" $ do
     -- that needs it then takes the session's proof.
     (.status) <$> provePassword r (onPublic r) [cookie token] "editor's old password" `shouldReturn` 204
     record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's new password"
-    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record, vault = Nothing} >>= jsonAs 200
     _ <- signInAs r "editor" "editor's new password"
     pass
 
@@ -557,7 +557,7 @@ opaque backing = describe "passwords through OPAQUE" $ do
     -- not the move of the same password that a sign-in's proof makes.
     (.status) <$> provePassword r (onPublic r) [cookie token] "editor's old password" `shouldReturn` 204
     record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's new password"
-    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record, vault = Nothing} >>= jsonAs 200
     (ended, _) <- sessionWith r [cookie elsewhere]
     ended.user `shouldBe` Nothing
     (kept, _) <- sessionWith r [cookie token]
@@ -568,7 +568,7 @@ opaque backing = describe "passwords through OPAQUE" $ do
     (.status) <$> provePassword r (onPublic r) [cookie here] "not the password" `shouldReturn` 401
     (.status) <$> provePassword r (onPublic r) [cookie here] "editor's password" `shouldReturn` 204
     record <- passwordRecord r (onPublic r) [cookie here] ForOwnPassword "a newer password"
-    let change = sendJson' r (onPublic r links.account.changePassword) [cookie here] PasswordRecordChange {current = Nothing, password = record}
+    let change = sendJson' r (onPublic r links.account.changePassword) [cookie here] PasswordRecordChange {current = Nothing, password = record, vault = Nothing}
     (.status) <$> change `shouldReturn` 200
     -- The proof is used up.
     (.status) <$> change `shouldReturn` 401

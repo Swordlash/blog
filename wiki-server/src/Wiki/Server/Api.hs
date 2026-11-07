@@ -1219,7 +1219,7 @@ handlers env caller =
               { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
               }
         Allowed ->
-          liftIO (Accounts.changePassword env.storage u s.token (proofOf s now u) change.current change.password) >>= \case
+          liftIO (Accounts.changePassword env.storage u s.token (proofOf s now u) change.current change.password change.vault) >>= \case
             Left Accounts.WrongCurrent -> do
               liftIO (Limiter.failed env.limiter now login s.address)
               refuse ApiError.Unauthenticated
