@@ -560,6 +560,8 @@ vault m = do
     closed again
 
   it "leaves no key that can be exported in the page when a step fails" $ runPage $ do
+    -- None before the test, from another test of the page.
+    exportable `shouldReturn` 0
     ui <- opened m True True
     turnOn ui
     exportable `shouldReturn` 0
