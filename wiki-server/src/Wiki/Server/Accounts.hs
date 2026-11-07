@@ -155,7 +155,7 @@ import Wiki.Server.Password (SessionToken (..), checkNewPassword, newPublicId, n
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (IdentityRow (..), StoredPassword (..), StoredRecord, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, loadPasswordByLogin, micro, noPasswordToSet, passwordOf, pendingInvitation, providerNames, refreshIdentity, setGlobalGrant, storeRecord, totpEnabled, updateDisabled)
+import Wiki.Server.Storage.Rows (IdentityRow (..), StoredPassword (..), StoredRecord, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, loadPasswordByLogin, micro, noPasswordToSet, passwordOf, pendingInvitation, providerNames, refreshIdentity, replaceRecord, setGlobalGrant, storeRecord, totpEnabled, updateDisabled)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 import Wiki.Server.Vault (passwordRewrapIn)
@@ -204,14 +204,18 @@ createAccount st rawLogin rawName password = runExceptT $ do
     taken login = Conflict ("There is a user with the login " <> login.text <> " already.")
 
 -- | Give a user a new password, and end their sessions. It is registered
--- through OPAQUE with both sides here, as 'createAccount' does.
+-- through OPAQUE with both sides here, as 'createAccount' does. The vault
+-- loses what only the old password unlocked, as with a reset link
+-- ('replaceRecord').
 setPassword :: Storage -> UserId -> Password -> IO (Either WikiError Account)
 setPassword st u password = case checkNewPassword password of
   Left why -> pure (Left (Invalid why))
   Right p ->
     recordHere st u p >>= \case
       Left why -> pure (Left (Invalid why))
-      Right stored -> changeAccount st u "user.password" [] (storeRecord u stored >> deleteSessionsOf u)
+      Right stored -> do
+        now <- getCurrentTime
+        changeAccount st u "user.password" [] (replaceRecord now u stored)
 
 -- | Disable a user's login, which ends their sessions, or enable it again.
 setDisabled :: Storage -> UserId -> Bool -> IO (Either WikiError Account)

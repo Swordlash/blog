@@ -38,7 +38,6 @@ module Wiki.Server.Vault
   , deleteVault
   , vaultProblem
   , passwordRewrapIn
-  , resetVaultIn
 
     -- * The directory of public keys
   , publicKeyOf
@@ -371,31 +370,6 @@ passwordRewrapIn now u change = do
               (\v -> v.user_id ==. val_ u.text)
           pure (Right ())
     (_, Just _) -> pure (Left (Conflict "You have no vault to carry along."))
-
--- | What a password reset does to a user's vault, in its transaction
--- ("Wiki.Server.Reset"): the old password's key is gone, so is its wrap.
--- A vault that a passkey still unlocks keeps everything else, and the
--- user unlocks it with a passkey to add the new password's wrap. A vault
--- that only the password unlocked can no longer be opened by anyone: it
--- is deleted, with its items (the assistant's settings and the user's
--- private key), and the user's public key is retired, as changed by a
--- reset, so that what was sealed to it can be found again. The next
--- sign-in makes a new vault and key pair.
-resetVaultIn :: (Backend be) => UTCTime -> UserId -> Db be ()
-resetVaultIn now u = do
-  unlocking <- runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text &&. isJust_ p.wrapped_key) (all_ wikiDb.passkeys)))
-  if null unlocking
-    then do
-      runDelete (delete wikiDb.vault_items (\i -> i.user_id ==. val_ u.text))
-      runDelete (delete wikiDb.vaults (\x -> x.user_id ==. val_ u.text))
-      runUpdate (update wikiDb.public_keys (\k -> (k.retired_at <-. val_ (Just (micro now))) <> (k.retired_because <-. val_ (Just "reset"))) (\k -> k.user_id ==. val_ u.text &&. isNothing_ k.retired_at))
-    else
-      runUpdate
-        ( update
-            wikiDb.vaults
-            (\x -> (x.password_nonce <-. val_ Nothing) <> (x.password_key <-. val_ Nothing) <> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now)))
-            (\x -> x.user_id ==. val_ u.text &&. isJust_ x.password_key)
-        )
 
 --------------------------------------------------------------------------------
 -- Passkeys

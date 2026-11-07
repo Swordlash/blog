@@ -373,8 +373,12 @@ vault m = do
   it "asks for the passkey each time the wiki opens, when told to, and keeps no key then" $ runPage $ do
     ui <- opened m True True
     turnOn ui
+    -- Syncing keeps the key, which is the vault key, in the vault's slot
+    -- too: both copies follow the setting.
+    stored "vault:user-editor" `shouldReturn` True
     find ui ".assistant-ask-each-time" >>= click
-    eventually $ unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` False
+    eventually $ stored "user-editor" `shouldReturn` False
+    stored "vault:user-editor" `shouldReturn` False
     unmount ui
     -- The wiki opened again: the page holds no key, and none is stored.
     unsafeIOToPageM js_reload
@@ -385,10 +389,12 @@ vault m = do
     _ <- eventually $ find again ".assistant-sync-on"
     touches `shouldReturn` (before + 1)
     find again ".assistant-ask-each-time" >>= (`getProperty` "checked") >>= (`shouldBe` "true")
-    unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` False
-    -- Told not to any more: the key is stored again.
+    stored "user-editor" `shouldReturn` False
+    stored "vault:user-editor" `shouldReturn` False
+    -- Told not to any more: the key is stored again, in both slots.
     find again ".assistant-ask-each-time" >>= click
-    eventually $ unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
+    eventually $ stored "user-editor" `shouldReturn` True
+    stored "vault:user-editor" `shouldReturn` True
     closed again
 
   it "adds a passkey on an unlocked device, and removes one, with its copy of the key" $ runPage $ do
@@ -589,6 +595,9 @@ vault m = do
     secretKey = "test-key-anthropic-one"
     touches :: PageM s Int
     touches = unsafeIOToPageM js_touches
+    -- Whether IndexedDB holds a key in this slot.
+    stored :: Text -> PageM s Bool
+    stored slot = unsafeIOToPageM (evaluate =<< js_stores_key (toJSText slot))
     exportable :: PageM s Int
     exportable = unsafeIOToPageM (evaluate =<< js_exportable)
     vaultState :: PageM s Value

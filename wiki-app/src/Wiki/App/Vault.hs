@@ -55,6 +55,7 @@ module Wiki.App.Vault
   , afterSignIn
   , opensVault
   , keepVaultKey
+  , keepSharedKey
 
     -- * Unlocking and the ways to unlock
   , unlockWithPasskey
@@ -229,7 +230,7 @@ settleWith u password = do
       fresh <- case here of
         Nothing -> pure s
         Just v -> forgettingAfter v $ do
-          keepVaultKey u v (not device.askEachTime)
+          keepVaultKey u v
           lift (shareWithAssistant u v)
           withIdentity u device v s
       let offering = isJust password && isNothing (wrapFor ByPassword s.vault) && not device.offered
@@ -256,7 +257,7 @@ createWithPassword u device k = do
     lift (storeVaultChange Nothing VaultChange {vault, publicKey = Just NewPublicKey {keyId = made.keyId, publicKey = made.publicKey}}) >>= \case
       Left e -> lift (forgetKey made.key) >> throwError ("Your keys could not be stored: " <> wikiText e)
       Right fresh -> do
-        keepVaultKey u v (not device.askEachTime)
+        keepVaultKey u v
         keepIdentityKey u device made.key made.keyId
         pure fresh
 
@@ -280,11 +281,9 @@ shareWithAssistant u v =
         Right (Just bytes)
           | Right (Current r) <- readStored bytes
           , isJust r.server -> do
-              -- On disk only when neither the assistant nor the vault asks
-              -- each time: the copy is the vault key, and either setting
-              -- means it must not outlive the page.
-              device <- readDevice u
-              void (keepDeviceKey u v (not r.askEachTime && not device.askEachTime))
+              -- The copy is the vault key: 'vaultKeyOnDisk' says where.
+              onDisk <- vaultKeyOnDisk u
+              void (keepDeviceKey u v onDisk)
         _ -> pass
 
 --------------------------------------------------------------------------------
@@ -314,7 +313,7 @@ settleHolding :: (MonadAssistant m, MonadVault m) => UserId -> StoredVault -> Ke
 settleHolding u s v = do
   device <- lift (readDevice u)
   fresh <- forgetting v $ do
-    keepVaultKey u v (not device.askEachTime)
+    keepVaultKey u v
     lift (shareWithAssistant u v)
     withIdentity u device v s
   describe u (Just fresh) True
@@ -365,7 +364,7 @@ addPasswordUnlock u given password = runExceptT $ do
     -- The touch that gave the vault key unlocks this device too: the key
     -- is kept (as one that cannot be exported) and opens the key pair.
     device <- lift (readDevice u)
-    keepVaultKey u v (not device.askEachTime)
+    keepVaultKey u v
     lift (shareWithAssistant u v)
     withIdentity u device v stored
   describe u (Just fresh) True
@@ -437,7 +436,7 @@ createWithPasskey u password = runExceptT $ do
     lift (storeVaultChange Nothing VaultChange {vault, publicKey = Just NewPublicKey {keyId = made.keyId, publicKey = made.publicKey}}) >>= \case
       Left e -> lift (forgetKey made.key) >> throwError ("Your keys could not be stored: " <> wikiText e)
       Right fresh -> do
-        keepVaultKey u v (not device.askEachTime)
+        keepVaultKey u v
         keepIdentityKey u device made.key made.keyId
         pure fresh
   describe u (Just fresh) True
@@ -450,20 +449,20 @@ setVaultAskEachTime u asking = runExceptT $ do
   stored <- fetched
   device <- lift (readDevice u)
   v <- lift (vaultKeyHere u stored) >>= maybe (throwError "Unlock your vault on this device first.") pure
-  forgetting v (keepVaultKey u v (not asking))
+  -- The setting is recorded first: 'vaultKeyOnDisk' reads it.
+  ExceptT (writeDevice u VaultDevice {held = device.held, askEachTime = asking, offered = device.offered})
+  onDisk <- lift (vaultKeyOnDisk u)
+  forgetting v (keepVaultKey u v)
   lift (deviceKey (identitySlot u)) >>= traverse_ (\k -> forgetting k (ExceptT (keepDeviceKey (identitySlot u) k (not asking))))
   -- The assistant's slot may hold the same vault key (shared when its
-  -- settings sync). Asking each time must cover that copy too, or a reload
-  -- would reopen the vault from it without an unlock. A key of the
-  -- assistant's own (one that does not open the vault) is left as it is.
-  when asking $
-    lift (deviceKey u)
-      >>= traverse_
-        ( \k -> forgetting k $ do
-            same <- lift (maybe (pure False) (\s -> opensVault k s.vault) stored)
-            when same (ExceptT (keepDeviceKey u k False))
-        )
-  ExceptT (writeDevice u VaultDevice {held = device.held, askEachTime = asking, offered = device.offered})
+  -- settings sync), which follows the same rule. A key of the assistant's
+  -- own (one that does not open the vault) is left as it is.
+  lift (deviceKey u)
+    >>= traverse_
+      ( \k -> forgetting k $ do
+          same <- lift (maybe (pure False) (\s -> opensVault k s.vault) stored)
+          when same (ExceptT (keepDeviceKey u k onDisk))
+      )
   describe u stored True
 
 --------------------------------------------------------------------------------
@@ -549,10 +548,43 @@ opensVault k v = case (itemOf identityItem v, itemOf assistantItem v) of
   (_, Just a) -> isRight <$> openWith k a.sealed sealingData
   _ -> pure False
 
--- | Keep the vault key as this device's: on disk, or for the page's life
--- only.
-keepVaultKey :: (MonadAssistant m) => UserId -> KeyRef -> Bool -> Step m ()
-keepVaultKey u key onDisk = ExceptT (keepDeviceKey (vaultSlot u) key onDisk)
+-- | Keep the vault key as this device's, on disk or for the page's life
+-- only, as 'vaultKeyOnDisk' says.
+keepVaultKey :: (MonadAssistant m) => UserId -> KeyRef -> Step m ()
+keepVaultKey u key = do
+  onDisk <- lift (vaultKeyOnDisk u)
+  ExceptT (keepDeviceKey (vaultSlot u) key onDisk)
+
+-- | Whether this device may keep the vault key on disk. The key has two
+-- copies when the assistant's settings sync: the vault's slot and the
+-- assistant's, which hold the same key. Each copy can reopen the vault and
+-- the assistant's settings after a reload. So both copies follow one rule:
+-- on disk only when neither the vault nor a syncing assistant asks for an
+-- unlock each time.
+vaultKeyOnDisk :: (MonadAssistant m) => UserId -> m Bool
+vaultKeyOnDisk u = do
+  device <- readDevice u
+  assistant <- assistantAsksEachTime u
+  pure (not device.askEachTime && not assistant)
+
+-- | Whether the assistant's settings sync, sealed with the vault key, and
+-- the assistant asks for the passkey each time the wiki opens.
+assistantAsksEachTime :: (MonadAssistant m) => UserId -> m Bool
+assistantAsksEachTime u =
+  deviceRecord u <&> \case
+    Right (Just bytes) | Right (Current r) <- readStored bytes -> isJust r.server && r.askEachTime
+    _ -> False
+
+-- | Keep the vault key in both of this device's slots for it, the
+-- assistant's and the vault's, when the assistant starts to share it or
+-- unlocks it ("Wiki.App.Assistant.Keys"). The assistant's record may not
+-- say yet that it syncs, so its setting is given.
+keepSharedKey :: (MonadAssistant m) => UserId -> Bool -> KeyRef -> Step m ()
+keepSharedKey u assistantAsks key = do
+  device <- lift (readDevice u)
+  let onDisk = not device.askEachTime && not assistantAsks
+  ExceptT (keepDeviceKey u key onDisk)
+  ExceptT (keepDeviceKey (vaultSlot u) key onDisk)
 
 -- | The vault with the user's key pair: the private key unsealed and kept
 -- here when this device does not hold it, or a key pair made and stored
