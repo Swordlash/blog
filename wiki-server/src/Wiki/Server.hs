@@ -57,6 +57,7 @@ import Wiki.Server.Mail (SendMail, smtpSend)
 import Wiki.Server.Metrics (newMetrics)
 import Wiki.Server.Notifier (newNotifier, newWake, runNotifier, wakeUp)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
+import Wiki.Server.Opaque (newAttempts, newProofs)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen, resolvePlace)
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
@@ -134,6 +135,8 @@ withServerUsing given raw sendMail action = do
   -- Ten password resets requested from an address in fifteen minutes.
   resets <- newLimiter defaultLimits {perLogin = 10, perAddress = 10}
   pending <- newPendingSignIns
+  attempts <- newAttempts
+  proofs <- newProofs
   ceremonies <- newCeremonies
   events <- newHub
   wake <- newWake
@@ -152,7 +155,7 @@ withServerUsing given raw sendMail action = do
   handle (\(DataDirInUse why) -> throwIO (ServerError [why]))
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
-    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
+    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, passwordStretch = options.passwordStretch, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
     $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage
       let notifier = newNotifier logger sendMail wake storage
@@ -175,6 +178,8 @@ withServerUsing given raw sendMail action = do
               , resets
               , resetTasks
               , pending
+              , attempts
+              , proofs
               , logger
               , errors
               , metrics

@@ -20,7 +20,10 @@ import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription qualified as HS
 import Protolude
 import Servant.Client.Core (Response)
+import Test.Backend.Opaque (opaqueServer)
+import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Hspec
+import Test.Opaque (fakeChallengeMade, fakeRegistrationMade)
 import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
 import Wiki.Api (NotificationsApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
@@ -499,6 +502,10 @@ caching = describe "what it keeps" $ do
 
 -- | Who is asking: the demo's admin, signed in, or nobody, as the server
 -- sends them.
+-- | That no request's body holds a password.
+noPassword :: (HasCallStack) => [HttpRequest] -> Text -> Expectation
+noPassword rs password = [r | r <- rs, maybe False ((encodeUtf8 password `BS.isInfixOf`) . snd) (bodyOf r)] `shouldSatisfy` null
+
 signedIn, nobody :: SessionInfo
 signedIn =
   SessionInfo
@@ -525,19 +532,47 @@ accounts = describe "signing in and out" $ do
     rs <- readIORef asked
     map (\r -> lookup "X-Wiki-Request" (headersOf r)) rs `shouldBe` [Just "1", Just "1"]
 
-  it "signs in with the credentials as JSON, and starts over with the session it answers" $ do
-    (env, asked) <- backend $ \r ->
-      if
-        | methodOf r == "POST" -> ok signedIn
-        | otherwise -> ok (Map.elems demo.spaces)
+  it "is answered in the browser tests with what the server's functions make" $
+    -- The browser suite cannot use the opaque package, so it carries the
+    -- answers as fixed bytes (Test.Browser.Opaque).
+    (fakeChallenge, fakeRegistration) `shouldBe` (fakeChallengeMade, fakeRegistrationMade)
+
+  it "signs in through OPAQUE, sending no password, and starts over with the session it answers" $ do
+    (env, asked) <- backend (opaqueServer False signedIn (const (ok (Map.elems demo.spaces))))
     _ <- runHttpWiki env listSpaces
     s <- runHttpWiki env (signIn "admin" (Password "correct horse"))
     (\x -> (x.user, x.standing)) <$> s `shouldBe` Right (signedIn.user, SignedIn)
-    [r, _] <- readIORef asked
-    (methodOf r, requestUrl r, bodyOf r) `shouldBe` ("POST", "api/v1/session", Just ("application/json;charset=utf-8", "{\"login\":\"admin\",\"password\":\"correct horse\"}"))
+    rs <- reverse <$> readIORef asked
+    map (\r -> (methodOf r, requestUrl r)) rs `shouldBe` [("GET", "api/v1/spaces"), ("POST", "api/v1/session/password"), ("PUT", "api/v1/session/password")]
+    noPassword rs "correct horse"
     -- What was read as nobody is gone; who is asking is known.
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
+
+  it "answers a wrong password without sending it, once no account from before OPAQUE is left" $ do
+    (env, asked) <- backend (opaqueServer False signedIn (const (status 500 "")))
+    runHttpWiki env (signIn "admin" (Password "battery staple")) `shouldReturn` Left WrongCredentials
+    runHttpWiki env (signIn "nobody" (Password "correct horse")) `shouldReturn` Left WrongCredentials
+    rs <- readIORef asked
+    map (\r -> (methodOf r, requestUrl r)) rs `shouldBe` replicate 2 ("POST", "api/v1/session/password")
+    noPassword rs "battery staple"
+
+  it "signs an account from before OPAQUE in the old way, with the password once, and registers its record at once" $ do
+    let old r
+          | requestUrl r == "api/v1/session" = ok signedIn
+          | otherwise = status 500 ""
+    (env, asked) <- backend (opaqueServer True signedIn old)
+    s <- runHttpWiki env (signIn "olga" (Password "olga's old password"))
+    (\x -> x.standing) <$> s `shouldBe` Right SignedIn
+    rs <- reverse <$> readIORef asked
+    map (\r -> (methodOf r, requestUrl r)) rs
+      `shouldBe` [("POST", "api/v1/session/password"), ("POST", "api/v1/session"), ("POST", "api/v1/password-registration"), ("PUT", "api/v1/account/password")]
+    -- The old sign-in names the attempt that failed, and is the one
+    -- request with the password.
+    [_, legacy, _, record] <- pure rs
+    fmap snd (bodyOf legacy) `shouldSatisfy` maybe False (\b -> "\"attempt\":\"olga " `BS.isInfixOf` b && "olga's old password" `BS.isInfixOf` b)
+    noPassword [r | r <- rs, requestUrl r /= "api/v1/session"] "olga's old password"
+    fmap snd (bodyOf record) `shouldSatisfy` maybe False ("\"current\":null" `BS.isInfixOf`)
 
   it "says why signing in failed" $ do
     let failing n body = backend (const (status n body)) >>= \(env, _) -> runHttpWiki env (signIn "admin" (Password "nope"))
@@ -546,15 +581,18 @@ accounts = describe "signing in and out" $ do
     failing 403 "{\"error\":\"Forbidden\"}" `shouldReturn` Left (SignInFailed Forbidden)
     failing 503 "" `shouldReturn` Left (SignInFailed (Unreachable "the server failed, with status 503"))
 
-  it "changes the password with PUT, keeps what it has read, and says why it could not" $ do
-    (env, asked) <- backend $ \r ->
-      if
-        | methodOf r == "PUT" -> ok SignInMethods {password = True, identities = []}
-        | otherwise -> ok (Map.elems demo.spaces)
+  it "changes the password with PUT, the current one proved and the new one registered, keeps what it has read, and says why it could not" $ do
+    (env, asked) <- backend (opaqueServer False signedIn (const (ok (Map.elems demo.spaces))))
     _ <- runHttpWiki env listSpaces
-    runHttpWiki env (changePassword PasswordChange {current = Just (Password "old one"), new = Password "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
-    (r : _) <- readIORef asked
-    (methodOf r, requestUrl r, bodyOf r) `shouldBe` ("PUT", "api/v1/account/password", Just ("application/json;charset=utf-8", "{\"current\":\"old one\",\"new\":\"a new one\"}"))
+    runHttpWiki env (changePassword PasswordChange {current = Just (Password "correct horse"), new = Password "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
+    rs <- reverse <$> readIORef asked
+    map (\r -> (methodOf r, requestUrl r)) rs
+      `shouldBe` [("GET", "api/v1/spaces"), ("POST", "api/v1/account/password/proof"), ("PUT", "api/v1/account/password/proof"), ("POST", "api/v1/password-registration"), ("PUT", "api/v1/account/password")]
+    noPassword rs "correct horse"
+    noPassword rs "a new one"
+    -- The rules for a new password are the backend's to apply, since the
+    -- server never sees it.
+    runHttpWiki env (changePassword PasswordChange {current = Just (Password "correct horse"), new = Password "short"}) >>= (`shouldSatisfy` \case Left (SignInFailed (Invalid _)) -> True; _ -> False)
     -- Who is asking is the same: what was read stays.
     isJust <$> runHttpWiki env (atOnce listSpaces) `shouldReturn` True
     let failing n body = backend (const (status n body)) >>= \(e, _) -> runHttpWiki e (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"})
@@ -574,7 +612,7 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env' (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"}) `shouldReturn` Left WrongCredentials
     readIORef changed `shouldReturn` False
     runHttpWiki env' (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
-    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password"]
+    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password/proof"]
 
   it "signs out with DELETE, and starts over as nobody" $ do
     (env, asked) <- backend (const (ok nobody))

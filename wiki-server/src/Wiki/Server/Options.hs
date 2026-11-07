@@ -58,7 +58,9 @@ import Options.Applicative
 import Protolude
 import System.Environment (lookupEnv)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import Wiki.Api.Opaque (Stretch)
 import Wiki.Server.Export (probeTimeout)
+import Wiki.Server.Opaque (defaultStretch)
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (Database (..), Place (..))
 import Wiki.Server.Storage.Layout (PgDatabase (..), PgPrograms (..), defaultDatabase, defaultPgPrograms, postgresAt, withPostgres, withoutPostgres)
@@ -220,6 +222,10 @@ data ServeOptions = ServeOptions
   -- ("Wiki.Server.Export"'s 'probeTimeout', 20 seconds). No option sets
   -- it: the tests shorten it, so that an engine that never ends is given
   -- up in a second.
+  , passwordStretch :: Stretch
+  -- ^ The Argon2id new OPAQUE records are stretched with
+  -- ("Wiki.Server.Opaque"'s 'defaultStretch'). No option sets it: the tests
+  -- lower it, so that their many sign-ins are quick.
   }
   deriving stock (Eq, Show)
 
@@ -245,6 +251,7 @@ defaultServeOptions dataDir =
     , pdf = True
     , whatsNew = True
     , texProbeTimeout = probeTimeout
+    , passwordStretch = defaultStretch
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
@@ -299,6 +306,7 @@ serveOptions = do
       , pdf = not noPdf
       , whatsNew = not noWhatsNew
       , texProbeTimeout = probeTimeout
+      , passwordStretch = defaultStretch
       }
   where
     address = eitherReader (first toS . parseListen . toS)

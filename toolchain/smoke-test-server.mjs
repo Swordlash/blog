@@ -210,20 +210,48 @@ const url = (path) => `${origin}${path}`;
 const here = (page) => new URL(page.url()).pathname;
 console.log(`note: wiki-server at ${origin}, data in ${data}, administrator ${adminLogin}`);
 
-// The administrator's session, for what the walk asks the API itself and for
-// the browsers that start signed in: signed in as the application does,
-// with the header its requests carry.
-const signedIn = await fetch(url("/api/v1/session"), {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-  body: JSON.stringify({ login: adminLogin, password: adminPassword }),
-});
-assert.equal(signedIn.status, 200, "signing in through the API");
-const sessionToken = /wiki_session=([^;]+)/.exec(signedIn.headers.get("set-cookie") ?? "")?.[1];
-assert.ok(sessionToken, "no session cookie");
-const sessionCookie = `wiki_session=${sessionToken}`;
-
 const browser = await chromium.launch();
+
+// Sign in with a password through the header's form, in a browser of its
+// own: a password signs in through OPAQUE (WP5.74a), which the application
+// runs (with @serenity-kit/opaque) and which never sends the password, so
+// a fetch cannot do it. The outcome ("signed in", "second factor" or
+// "refused") and the session cookie's value, if any.
+async function signInThroughTheForm(login, password) {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  try {
+    const page = await context.newPage();
+    await page.goto(url("/"));
+    await page.locator("#app .sign-in-toggle").click();
+    await page.locator("#app .sign-in-form input[name=login]").fill(login);
+    await page.locator("#app .sign-in-form input[name=password]").fill(password);
+    await page.locator("#app .sign-in-form button[type=submit]").click();
+    // The first of the three to show; the others never settle.
+    const shown = (selector, outcome) =>
+      page.locator(selector).waitFor({ timeout }).then(
+        () => outcome,
+        () => new Promise(() => {}),
+      );
+    const outcome = await Promise.race([
+      shown("#app .sign-out", "signed in"),
+      shown("#app .sign-in-code-form", "second factor"),
+      shown("#app .sign-in-form .sign-in-error", "refused"),
+      new Promise((_, fail) => setTimeout(() => fail(new Error(`signing ${login} in: nothing happened`)), timeout)),
+    ]);
+    const token = (await context.cookies()).find((c) => c.name === "wiki_session")?.value;
+    return { outcome, token };
+  } finally {
+    await context.close();
+  }
+}
+
+// The administrator's session, for what the walk asks the API itself and for
+// the browsers that start signed in.
+const adminIn = await signInThroughTheForm(adminLogin, adminPassword);
+assert.equal(adminIn.outcome, "signed in", "the administrator signing in");
+assert.ok(adminIn.token, "no session cookie");
+const sessionToken = adminIn.token;
+const sessionCookie = `wiki_session=${sessionToken}`;
 
 async function eventually(check, what) {
   let last;
@@ -736,13 +764,13 @@ try {
   await page.locator("#app .admin-view .user-create-password").fill("sam's password");
   await page.locator("#app .admin-view .user-create button.primary").click();
   await page.locator("#app .admin-view .user-row[data-login=sam] .user-sign-in", { hasText: "With a password" }).waitFor({ timeout });
-  const sam = await fetch(url("/api/v1/session"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-    body: JSON.stringify({ login: "sam", password: "sam's password" }),
-  });
-  assert.equal(sam.status, 200, "the user made in the administration signing in");
-  assert.equal((await sam.json()).user.displayName, "Sam Smoke");
+  // The administration's browser registered Sam's password through OPAQUE;
+  // Sam signs in with it from another browser, through OPAQUE too.
+  const samIn = await signInThroughTheForm("sam", "sam's password");
+  assert.equal(samIn.outcome, "signed in", "the user made in the administration signing in");
+  const sam = await (await fetch(url("/api/v1/session"), { headers: { Cookie: `wiki_session=${samIn.token}` } })).json();
+  assert.equal(sam.user.displayName, "Sam Smoke");
+  assert.equal((await signInThroughTheForm("sam", "not sam's password")).outcome, "refused", "a wrong password signing Sam in");
   await page.locator("#app .admin-nav-link[data-section=groups]").click();
   await page.locator("#app .admin-view .group-create-name").fill("Smoke testers");
   await page.locator("#app .admin-view .group-create button.primary").click();
@@ -971,7 +999,7 @@ try {
   const ownRefused = await fetch(url("/api/v1/account/password"), {
     method: "PUT",
     headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: `wiki_session=${oliveSession.value}` },
-    body: JSON.stringify({ current: null, new: "olive's own password" }),
+    body: JSON.stringify({ current: null, password: { credential: "user-olive", record: "AAAA", stretch: { opsLimit: 1, memLimit: 8192 } } }),
   });
   assert.equal(ownRefused.status, 400, "her own password, set while she signs in with a provider");
   const oliveId = landed.user.id;
@@ -1007,16 +1035,12 @@ try {
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .account-password", { hasText: "With your password" }).waitFor({ timeout });
   await olive.locator("#app .password-change-toggle", { hasText: "Change password" }).waitFor({ timeout });
-  const withPassword = await fetch(url("/api/v1/session"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-    body: JSON.stringify({ login: "olive", password: "olive's own password" }),
-  });
-  assert.equal(withPassword.status, 200, "signing in with the password she set");
+  const withPassword = await signInThroughTheForm("olive", "olive's own password");
+  assert.equal(withPassword.outcome, "signed in", "signing in with the password she set");
   // Her sessions: this browser's, marked, and the one just signed in from
   // outside it, which "Sign out everywhere" ends while hers stays.
-  const outside = (withPassword.headers.get("set-cookie") ?? "").split(";")[0];
-  assert.ok(outside.startsWith("wiki_session="), "no session cookie for the password's sign-in");
+  assert.ok(withPassword.token, "no session cookie for the password's sign-in");
+  const outside = `wiki_session=${withPassword.token}`;
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .session-item").nth(1).waitFor({ timeout });
@@ -1040,13 +1064,8 @@ try {
   await olive.locator("#app .recovery-code-list li").nth(9).waitFor({ timeout });
   await olive.locator("#app .recovery-kept").click();
   await olive.locator("#app .second-factor-on").waitFor({ timeout });
-  const halfWay = await fetch(url("/api/v1/session"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-    body: JSON.stringify({ login: "olive", password: "olive's own password" }),
-  });
-  assert.equal(halfWay.status, 401, "her password alone signed her in");
-  assert.equal((await halfWay.json()).error, "SecondFactorRequired", "the second factor was not asked for");
+  const halfWay = await signInThroughTheForm("olive", "olive's own password");
+  assert.equal(halfWay.outcome, "second factor", "her password alone signed her in, or the second factor was not asked for");
   await olive.context().close();
   for (const secret of [oidcSecret, ...oidcIssued]) assert.ok(!log.includes(secret), "a provider's code, token or secret is in the server's log");
   console.log("ok: signing in with a provider goes there and back, and lands signed in, as a new account, on the page it left");
@@ -1120,12 +1139,7 @@ try {
     body: JSON.stringify({ subject: { tag: "SubjectUser", contents: samUser.id }, permission: "Edit", granted: true }),
   });
   assert.equal(grantedSam.status, 204, "Sam's grant to edit the smoke space");
-  const samSession = await fetch(url("/api/v1/session"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
-    body: JSON.stringify({ login: "sam", password: "sam's password" }),
-  });
-  const samToken = /wiki_session=([^;]+)/.exec(samSession.headers.get("set-cookie") ?? "")?.[1];
+  const samToken = (await signInThroughTheForm("sam", "sam's password")).token;
   assert.ok(samToken, "no session cookie for Sam");
   const samTab = await newPage({ anonymous: true });
   await samTab.context().addCookies([{ name: "wiki_session", value: samToken, url: origin }]);
@@ -1247,7 +1261,8 @@ try {
   assert.equal(metrics.status, 200, "the metrics on the admin listener");
   assert.ok((metrics.headers.get("content-type") ?? "").startsWith("text/plain; version=0.0.4"), metrics.headers.get("content-type"));
   const scraped = await metrics.text();
-  assert.ok(scraped.includes('wiki_http_requests_total{listener="public",route="/api/v1/session",method="POST",status="2xx"}'), "signing in is counted by its route");
+  // A password signs in through OPAQUE, whose last message is the PUT.
+  assert.ok(scraped.includes('wiki_http_requests_total{listener="public",route="/api/v1/session/password",method="PUT",status="2xx"}'), "signing in is counted by its route");
   assert.ok(/^wiki_users \d+$/m.test(scraped) && /^wiki_database_bytes \d+$/m.test(scraped), "the gauges");
   assert.ok(!scraped.includes(sessionToken), "a session's secret in the metrics");
   assert.equal((await fetch(url("/metrics"))).status, 404, "the metrics on the public listener");

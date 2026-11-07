@@ -50,7 +50,8 @@
 -- * A closed wiki ("Wiki.Core.Access") responds to a visitor who is not
 --   signed in with 'Wiki.Api.Error.Unauthenticated' (401) on every endpoint
 --   except 'info', 'session' (to read the session, sign in and sign out),
---   'register' (which refuses by itself), 'invitations' and the endpoints
+--   'register' and 'passwordRegistration' (which refuse by themselves),
+--   'invitations' and the endpoints
 --   of links sent by mail ('passwordReset', 'emailVerification',
 --   'unsubscribe').
 module Wiki.Api
@@ -91,7 +92,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API hiding (Vault)
 import Servant.Multipart.API (MultipartForm, Tmp)
-import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
+import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, SignInMethods)
 import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
@@ -100,7 +101,8 @@ import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Notifications (NotificationsApi (..))
-import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
+import Wiki.Api.Opaque (LoginChallenge, LoginFinish, LoginStart, NewAccountRecord, OldPasswordProof, PasswordRecord, PasswordRecordChange, ProofStart, RegistrationChallenge, RegistrationStart)
+import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
 import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Stars (StarsApi (..))
 import Wiki.Api.Types
@@ -149,6 +151,24 @@ data WikiApi form mode = WikiApi
   -- and the cookie that carries it. A login and password that do not
   -- match are 'Wiki.Api.Error.Unauthenticated', too many failed attempts
   -- 'Wiki.Api.Error.TooManyRequests'.
+  , startPasswordSignIn :: mode :- "session" :> "password" :> ReqBody '[JSON] LoginStart :> Post '[JSON] LoginChallenge
+  -- ^ Begin a sign-in with a password through OPAQUE ("Wiki.Api.Opaque"):
+  -- the server's message for the login's record, or for a fake record
+  -- when the login has none, in the same shape. Every start counts as a
+  -- failed sign-in until it is finished ('Wiki.Api.Error.TooManyRequests'
+  -- when there have been too many).
+  , finishPasswordSignIn :: mode :- "session" :> "password" :> ReqBody '[JSON] LoginFinish :> Put '[JSON] (WithCookie SessionInfo)
+  -- ^ Finish it: the response is the user's new session and its cookie, or
+  -- 'Wiki.Api.Error.SecondFactorRequired' with the cookie of the sign-in
+  -- waiting for its code, as for 'signIn'. A wrong last message (a wrong
+  -- password), an unknown or expired attempt, and a login without a record
+  -- are 'Wiki.Api.Error.Unauthenticated'.
+  , passwordRegistration :: mode :- "password-registration" :> ReqBody '[JSON] RegistrationStart :> Post '[JSON] RegistrationChallenge
+  -- ^ The server's half of a new record ("Wiki.Api.Opaque"), for the
+  -- purpose the request names, checked as the request that will carry the
+  -- record checks it: an open wiki for one's own account, a usable
+  -- invitation or reset link, a signed-in user, an administrator. Asked
+  -- too often from one address it is 'Wiki.Api.Error.TooManyRequests'.
   , signOut :: mode :- "session" :> Delete '[JSON] (WithCookie SessionInfo)
   -- ^ Sign out: the session ends and its cookie is cleared. The response
   -- is the new session state, with no user.
@@ -186,7 +206,7 @@ data WikiApi form mode = WikiApi
   -- was sent to becomes the user's verified address, if it is still the
   -- user's address. A link that has been used or has expired, or whose
   -- address is no longer the user's, is 'Wiki.Api.Error.NotFound'.
-  , register :: mode :- "accounts" :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
+  , register :: mode :- "accounts" :> ReqBody '[JSON] NewAccountRecord :> Post '[JSON] (WithCookie SessionInfo)
   -- ^ Create an account for oneself, in an open wiki, and sign in with it;
   -- the response is as for 'signIn'. A closed wiki refuses with
   -- 'Wiki.Api.Error.Forbidden', a login another user has is
@@ -455,11 +475,11 @@ data AdminApi mode = AdminApi
   -- ^ @addMember@.
   , removeMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> DeleteNoContent
   -- ^ @removeMember@.
-  , createUser :: mode :- "users" :> ReqBody '[JSON] NewAccount :> PostCreated '[JSON] Account
+  , createUser :: mode :- "users" :> ReqBody '[JSON] NewAccountRecord :> PostCreated '[JSON] Account
   -- ^ @createUser@: create a user who signs in with a password
   -- ("Wiki.Api.Account"). A login another user has is
   -- 'Wiki.Api.Error.Conflict'.
-  , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] NewPassword :> Put '[JSON] Account
+  , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] PasswordRecord :> Put '[JSON] Account
   -- ^ @setPassword@: give a user a new password, which ends their
   -- sessions. A user who cannot have a password (who signs in only with a
   -- sign-in provider, 'Wiki.Api.Account.providerOnly') is
@@ -563,7 +583,7 @@ data InvitationsApi mode = InvitationsApi
   -- ^ The address it was sent to and when it expires, if it can still be
   -- used. One that has been used, revoked or has expired is
   -- 'Wiki.Api.Error.NotFound'.
-  , accept :: mode :- Capture "token" InvitationToken :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
+  , accept :: mode :- Capture "token" InvitationToken :> ReqBody '[JSON] NewAccountRecord :> Post '[JSON] (WithCookie SessionInfo)
   -- ^ Create the account the invitation is for, with the chosen login,
   -- name and password, and sign in with it. The invitation is then used
   -- up. Like 'register', but in an open or a closed wiki.
@@ -586,7 +606,21 @@ data AccountApi form mode = AccountApi
   -- methods after the change. Disconnecting the last way to sign in (no
   -- password, no other identity) is 'Wiki.Api.Error.Conflict', and a
   -- provider the user has no identity with is 'Wiki.Api.Error.NotFound'.
-  , changePassword :: mode :- "password" :> ReqBody '[JSON] PasswordChange :> Put '[JSON] SignInMethods
+  , startPasswordProof :: mode :- "password" :> "proof" :> ReqBody '[JSON] ProofStart :> Post '[JSON] LoginChallenge
+  -- ^ Begin proving the user's password again, through OPAQUE, as a
+  -- sign-in begins ("Wiki.Api.Opaque"): for what a session alone may not
+  -- do. Counted as 'startPasswordSignIn' is.
+  , finishPasswordProof :: mode :- "password" :> "proof" :> ReqBody '[JSON] LoginFinish :> PutNoContent
+  -- ^ Finish it: the session has proved its password, for five minutes
+  -- and one change that needs it. A wrong last message is
+  -- 'Wiki.Api.Error.Unauthenticated'.
+  , proveOldPassword :: mode :- "password" :> "proof" :> "old" :> ReqBody '[JSON] OldPasswordProof :> PutNoContent
+  -- ^ Prove the password of an account from before OPAQUE instead, after
+  -- its 'startPasswordProof' fell back, naming that attempt. The session
+  -- then holds the proof as after 'finishPasswordProof', so that every
+  -- change that needs the password takes it the same way and the try is
+  -- counted once. A wrong password is 'Wiki.Api.Error.Unauthenticated'.
+  , changePassword :: mode :- "password" :> ReqBody '[JSON] PasswordRecordChange :> Put '[JSON] SignInMethods
   -- ^ Change the user's password, or set one if they have none. The
   -- response is their sign-in methods after the change. Where they have a
   -- password, the request must carry the correct current one, or it is
@@ -688,7 +722,7 @@ data PasswordResetApi mode = PasswordResetApi
   -- only to a user's verified address. Too many requests from one address
   -- are 'Wiki.Api.Error.TooManyRequests'; a server that sends no mail
   -- responds 'Wiki.Api.Error.Invalid', for every login alike.
-  , reset :: mode :- Capture "token" ResetToken :> ReqBody '[JSON] NewPasswordByMail :> PostNoContent
+  , reset :: mode :- Capture "token" ResetToken :> ReqBody '[JSON] PasswordRecord :> PostNoContent
   -- ^ Set a new password with a reset link, which ends every session the
   -- user had; they then sign in with the new password. A link that has
   -- been used or has expired is 'Wiki.Api.Error.NotFound'; an invalid

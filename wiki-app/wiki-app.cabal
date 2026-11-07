@@ -83,6 +83,7 @@ library
       Wiki.App.Backend.Http.Client
       Wiki.App.Backend.Http.Preload
       Wiki.App.Backend.Http.Transport
+      Wiki.App.Backend.Opaque
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.Archive
       Wiki.App.Backend.Mem.Persist
@@ -177,6 +178,12 @@ library
   if !arch(wasm32)
     exposed-modules:
         Wiki.App.Static
+
+  -- The client's half of OPAQUE (Wiki.App.Backend.Opaque) is the opaque
+  -- package natively and @serenity-kit/opaque in the browser: opaque is
+  -- not built for wasm32.
+  if !arch(wasm32)
+    build-depends: opaque
 
   build-depends:
       aeson,
@@ -308,6 +315,9 @@ test-suite wiki-app-test
     other-modules:
         Test.Assistant
         Test.Backend.Http
+        Test.Backend.Opaque
+        Test.Opaque
+        Test.Browser.Opaque
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Blog
@@ -347,6 +357,7 @@ test-suite wiki-app-test
         hspec >= 2,
         http-media,
         http-types,
+        opaque,
         protolude,
         servant-client-core,
         text,
@@ -371,6 +382,7 @@ test-suite wiki-app-browser-test
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
   other-modules:
+      Test.Browser.Opaque
       Test.Browser.Access
       Test.Browser.Activity
       Test.Browser.Admin

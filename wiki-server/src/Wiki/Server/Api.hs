@@ -70,11 +70,14 @@ module Wiki.Server.Api
   )
 where
 
+import Control.Monad.UUID (MonadUUID (..))
+import Crypto.OPAQUE qualified as O
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.UUID.Types qualified as UUID
 import Ki qualified
 import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status500, status503)
 import Network.HTTP.Types.URI (urlEncode)
@@ -89,7 +92,7 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.FilePath (takeFileName)
 import System.IO (hClose, openBinaryTempFile)
 import Wiki.Api
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
@@ -99,7 +102,9 @@ import Wiki.Api.Export (documentDisposition, formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecordChange (..), ProofStart (..), RegistrationFor (..), RegistrationStart (..), Stretch)
+import Wiki.Api.Opaque qualified as Opaque
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
 import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState, serviceOrigin)
 import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
@@ -113,6 +118,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.App.Backend.Stars (MonadStars (..))
+import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
@@ -137,6 +143,7 @@ import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
+import Wiki.Server.Opaque (Attempt (..), Attempts, Proof (..), Proofs, attemptLifetime, holdAttempt, prove, recordFromStored, registrationChallenge, respondTo, takeAttempt, takeProof)
 import Wiki.Server.Password (SessionToken (..), newToken, tokenHash)
 import Wiki.Server.Reset qualified as Reset
 import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken (..), checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
@@ -146,7 +153,7 @@ import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
-import Wiki.Server.Storage.Rows (countRows)
+import Wiki.Server.Storage.Rows (StoredPassword (..), countRows, legacyPasswordCount, loadPasswordByLogin, passwordOf)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, beginSignIn, ownerOf, passkeysOf, registerPasskey, storedVault, takeCeremony, takeSignIn)
 import Wiki.Server.Vault qualified as Vault
@@ -194,6 +201,11 @@ data Env = Env
   -- caller.
   , pending :: PendingSignIns
   -- ^ The sign-ins waiting for a second factor's code.
+  , attempts :: Attempts
+  -- ^ The sign-ins through OPAQUE between their first and last message
+  -- ("Wiki.Server.Opaque").
+  , proofs :: Proofs
+  -- ^ The sessions that have just proved their password.
   , logger :: Logger
   -- ^ Where events after an answer are logged, such as a reset mail that
   -- could not be sent.
@@ -382,29 +394,116 @@ handlers env caller =
       -- built with is no secret. Off, it is not there, as a PDF export is
       -- not with --no-pdf.
       whatsNew = maybe (refuse ApiError.NotFound) pure env.whatsNew
-    , signIn = \credentials -> do
+    , -- The sign-in of an account from before OPAQUE ("Wiki.Api.Opaque"),
+      -- off at once when no such account is left. The browser sends it
+      -- after its OPAQUE sign-in with the same password failed, naming
+      -- that attempt, which was counted as a failure when it started: the
+      -- one try is not counted twice. Without it, a failure is counted
+      -- here. A right password leaves the new session (or the sign-in
+      -- waiting for its second factor) with a proof of it, so that the
+      -- browser registers the account's record at once without sending
+      -- the password again.
+      signIn = \credentials -> do
         s <- signingHere
         now <- liftIO getCurrentTime
-        liftIO (Limiter.verdict env.limiter now credentials.login s.address) >>= \case
+        legacy <- liftIO (reading env.storage legacyPasswordCount)
+        when (legacy == 0) (refuse ApiError.Unauthenticated)
+        -- An attempt the OPAQUE exchange already admitted and counted is
+        -- taken first: the limit was applied when it started, so it is
+        -- not applied again here (with four failures behind it, the right
+        -- password of an account from before OPAQUE would otherwise be
+        -- refused on the fifth try). Only a sign-in naming no such attempt
+        -- passes the limit now.
+        admitted <- case credentials.attempt of
+          Just key ->
+            liftIO (takeAttempt env.attempts now key) <&> \case
+              Just a | T.toCaseFold (T.strip a.login) == T.toCaseFold (T.strip credentials.login) -> Just a
+              _ -> Nothing
+          Nothing -> pure Nothing
+        let counted = isJust admitted
+        verdict <- if counted then pure Allowed else liftIO (Limiter.verdict env.limiter now credentials.login s.address)
+        case verdict of
           Refused seconds ->
             throwError
               (apiError (ApiError.TooManyRequests ("Too many failed attempts to sign in as " <> T.strip credentials.login <> ": try again in " <> waitText seconds <> ".")))
                 { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
                 }
-          Allowed ->
+          Allowed -> do
             liftIO (Accounts.signIn env.storage now s.address credentials.login credentials.password) >>= \case
               Left (Accounts.SecondFactorWanted user) -> do
                 -- The password was right, but the user is not signed in
                 -- yet: the second factor's code comes next, with the
-                -- cookie that names this sign-in.
+                -- cookie that names this sign-in. The attempt counted when
+                -- it started is given back, as a sign-in through OPAQUE
+                -- gives its own back before its second factor, so that the
+                -- code is not refused by the password's count.
+                for_ admitted $ \a -> liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
                 held <- liftIO (holdSignIn env.pending now user.id user.login "")
+                liftIO (prove env.proofs now (pendingKey held) user.id ByOldPassword)
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
               Left _ -> do
-                liftIO (Limiter.failed env.limiter now credentials.login s.address)
+                unless counted $ liftIO (Limiter.failed env.limiter now credentials.login s.address)
                 refuse ApiError.Unauthenticated
               Right (user, token) -> do
                 liftIO (Limiter.succeeded env.limiter credentials.login s.address)
+                liftIO (prove env.proofs now (tokenHash token.text) user.id ByOldPassword)
                 startedAs s user token
+    , startPasswordSignIn = \body -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        limitedFor body.login s $ do
+          ke1 <- opaqueMessage body.ke1
+          found <- liftIO (reading env.storage (loadPasswordByLogin (T.strip body.login)))
+          -- A login nobody has is answered under a credential id made from
+          -- it, so that its answers are those of one record however often
+          -- it is tried, as a real login's are.
+          let (user, record, credential) = case found of
+                Just (a, WithRecord r) -> (Just a.user.id, recordFromStored r, encodeUtf8 a.user.id.text)
+                Just (a, _) -> (Just a.user.id, Nothing, encodeUtf8 a.user.id.text)
+                Nothing -> (Nothing, Nothing, "unknown:" <> encodeUtf8 (T.toCaseFold (T.strip body.login)))
+          let against = case found of
+                Just (_, WithRecord r) | isJust record -> Just r
+                _ -> Nothing
+              attempt st = Attempt {state = st, user, login = body.login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record, against}
+          legacy <- liftIO (reading env.storage legacyPasswordCount)
+          opaqueChallenge attempt (legacy > 0) s now record credential ke1
+    , finishPasswordSignIn = \body -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        a <- finishedAttempt now body
+        case a.user of
+          Nothing -> refuse ApiError.Unauthenticated
+          Just u -> do
+            liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
+            liftIO (Accounts.signInUser env.storage now s.address u) >>= \case
+              Left (Accounts.SecondFactorWanted user) -> do
+                held <- liftIO (holdSignIn env.pending now user.id user.login "")
+                throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
+              Left _ -> refuse ApiError.Unauthenticated
+              Right (user, token) -> startedAs s user token
+    , passwordRegistration = \body -> do
+        now <- liftIO getCurrentTime
+        u <- case body.for of
+          ForSignUp -> do
+            open <- liftIO (takesNewAccounts . (\x -> x.access) <$> readSettings env.storage)
+            unless open (refuse ApiError.Forbidden)
+            registrationsAllowed now
+            freshUser
+          ForInvitation token -> do
+            registrationsAllowed now
+            liftIO (Accounts.invitationFor env.storage now token) >>= maybe (refuse ApiError.NotFound) (const freshUser)
+          ForOwnPassword -> signedInUser
+          ForReset token -> liftIO (Reset.resetUser env.storage now token) >>= either (throwError . wikiError) pure
+          ForNewUser -> do
+            administrator
+            settings <- wiki wikiSettings
+            unless settings.adminCreatesPasswordAccounts (refuse ApiError.Forbidden)
+            freshUser
+          ForUser uid -> do
+            administrator
+            pure uid
+        setup <- liftIO (serverSetup env.storage)
+        either (refuse . ApiError.Invalid) pure (registrationChallenge setup (storageStretch env.storage) u body.request)
     , signOut = do
         s <- signingHere
         liftIO (traverse_ (endSession env.storage) s.token)
@@ -431,6 +530,7 @@ handlers env caller =
                   liftIO (Accounts.accountOf env.storage p.user) >>= \case
                     Just a | not a.disabled -> do
                       token <- liftIO (writing env.storage (Accounts.startSession now p.user s.address))
+                      carryProof now held p.user token
                       startedAs s a.user token
                     _ -> refuse ApiError.Unauthenticated
           _ -> refuse (ApiError.Invalid "This sign-in has expired, or was begun in another browser: sign in again with your password.")
@@ -459,7 +559,7 @@ handlers env caller =
             Right _ -> do
               liftIO (finishPending env.pending held)
               liftIO (Limiter.succeeded env.limiter p.login.text s.address)
-              signInAs s now p.user
+              signInAsCarrying s now p.user (Just held)
     , beginPasskeySignIn = do
         s <- signingHere
         now <- liftIO getCurrentTime
@@ -505,7 +605,7 @@ handlers env caller =
           { request = requestingReset
           , reset = \token body -> do
               now <- liftIO getCurrentTime
-              liftIO (Reset.resetPassword env.storage now token body.password) >>= either (throwError . wikiError) (const (pure NoContent))
+              liftIO (Reset.resetPassword env.storage now token body) >>= either (throwError . wikiError) (const (pure NoContent))
           }
     , emailVerification = \token -> do
         now <- liftIO getCurrentTime
@@ -520,6 +620,60 @@ handlers env caller =
         AccountApi
           { identities = signedInUser >>= \u -> liftIO (Accounts.signInMethods env.storage u) >>= either (throwError . wikiError) pure
           , unlinkIdentity = \provider -> signedInUser >>= \u -> liftIO (Accounts.unlinkIdentity env.storage u provider) >>= either (throwError . wikiError) pure
+          , startPasswordProof = \body -> do
+              u <- signedInUser
+              s <- signingHere
+              login <- loginOf u
+              now <- liftIO getCurrentTime
+              limitedFor login s $ do
+                ke1 <- opaqueMessage body.ke1
+                stored <- liftIO (reading env.storage (passwordOf u))
+                let record = case stored of
+                      Just (WithRecord r) -> recordFromStored r
+                      _ -> Nothing
+                let against = case stored of
+                      Just (WithRecord r) | isJust record -> Just r
+                      _ -> Nothing
+                    attempt st = Attempt {state = st, user = Just u, login, startedAt = now, expires = addUTCTime attemptLifetime now, hasRecord = isJust record, against}
+                let legacy = case stored of
+                      Just (LegacyHash _) -> True
+                      _ -> False
+                opaqueChallenge attempt legacy s now record (encodeUtf8 u.text) ke1
+          , finishPasswordProof = \body -> do
+              u <- signedInUser
+              s <- signingHere
+              now <- liftIO getCurrentTime
+              token <- maybe (refuse ApiError.Unauthenticated) pure s.token
+              a <- finishedAttempt now body
+              unless (a.user == Just u) (refuse ApiError.Unauthenticated)
+              liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
+              liftIO (prove env.proofs now (tokenHash token.text) u ByOpaque)
+              pure NoContent
+          , -- The attempt the fallen-back proof started was admitted and
+            -- counted then, so it is taken first and the limit is not
+            -- applied again; a proof naming no such attempt passes the
+            -- limit now, and its wrong password is counted here.
+            proveOldPassword = \body -> do
+              u <- signedInUser
+              s <- signingHere
+              now <- liftIO getCurrentTime
+              token <- maybe (refuse ApiError.Unauthenticated) pure s.token
+              login <- loginOf u
+              taken <- liftIO (takeAttempt env.attempts now body.attempt)
+              let counted = maybe False (\a -> a.user == Just u) taken
+                  proving = do
+                    ok <- liftIO (Accounts.oldPasswordIs env.storage u body.password)
+                    if ok
+                      then do
+                        liftIO $ case taken of
+                          Just a | counted -> Limiter.succeededAfter env.limiter a.startedAt a.login s.address
+                          _ -> Limiter.succeeded env.limiter login s.address
+                        liftIO (prove env.proofs now (tokenHash token.text) u ByOldPasswordAgain)
+                        pure NoContent
+                      else do
+                        unless counted $ liftIO (Limiter.failed env.limiter now login s.address)
+                        refuse ApiError.Unauthenticated
+              if counted then proving else limitedFor login s proving
           , changePassword = ownPassword
           , sessions = do
               u <- signedInUser
@@ -702,14 +856,14 @@ handlers env caller =
               -- An address that cannot be one is refused before the user is
               -- made, so that nothing is left half done.
               for_ new.email $ \e -> unless (T.null (T.strip e)) (either (refuse . ApiError.Invalid) (const pass) (parseEmail e))
-              made <- wiki (createUser new)
+              made <- wiki (createUserWithRecord new)
               for_ (mfilter (not . T.null . T.strip) new.email) $ \e -> do
                 now <- liftIO getCurrentTime
                 liftIO (Reset.setEmail env.storage now made.user.id e) >>= \case
                   Right (Just toVerify) -> void (liftIO (mailVerification made.user.id toVerify))
                   _ -> pass
               pure made
-          , setPassword = \u body -> wiki (setPassword u body.password)
+          , setPassword = \u body -> wiki (setPasswordRecord u body)
           , sendPasswordLink = mailPasswordLink
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
           , removeUser = \u -> wiki (removeUser u) $> NoContent
@@ -845,6 +999,80 @@ handlers env caller =
     -- hashed as a session's is.
     pendingKey :: PendingToken -> Text
     pendingKey held = "pending:" <> tokenHash held.text
+    -- An OPAQUE message the browser sent, decoded, or the request refused.
+    opaqueMessage :: (O.Encoding a) => Message -> Handler a
+    opaqueMessage m = maybe (refuse (ApiError.Invalid "A sign-in message is not an OPAQUE message.")) pure (Opaque.bytesOf m >>= rightToMaybe . O.decode)
+    -- The server's answer to a sign-in's (or a proof's) first message:
+    -- counted as a failed sign-in until it finishes, and kept for its
+    -- last message.
+    opaqueChallenge :: (O.ServerLoginState -> Attempt) -> Bool -> Signing -> UTCTime -> Maybe (O.RegistrationRecord, Stretch) -> ByteString -> O.KE1 -> Handler LoginChallenge
+    opaqueChallenge attemptOf fallback s now record credential ke1 = do
+      setup <- liftIO (serverSetup env.storage)
+      (st, ke2, stretch) <- liftIO (respondTo setup (storageStretch env.storage) record credential ke1) >>= either (refuse . ApiError.Invalid) pure
+      let a = attemptOf st
+      liftIO (Limiter.failed env.limiter now a.login s.address)
+      key <- liftIO (holdAttempt env.attempts now a)
+      pure LoginChallenge {attempt = key, ke2, stretch, fallback}
+    -- The sign-in (or proof) a last message finishes, if the message is
+    -- right; refused otherwise, as a wrong password is (its failure was
+    -- counted when it started).
+    finishedAttempt :: UTCTime -> LoginFinish -> Handler Attempt
+    finishedAttempt now body = do
+      a <- liftIO (takeAttempt env.attempts now body.attempt) >>= maybe (refuse ApiError.Unauthenticated) pure
+      -- The attempt is used up: its state, and the session key a right
+      -- message releases (the session is the server's own token), are
+      -- zeroed now rather than when they are collected.
+      ok <- liftIO $ case Opaque.bytesOf body.ke3 >>= rightToMaybe . O.decode of
+        Nothing -> False <$ O.scrub a.state
+        Just ke3 -> do
+          let finish = O.serverFinish a.state ke3
+          for_ (rightToMaybe finish) O.scrub
+          O.scrub a.state
+          pure (a.hasRecord && isRight finish)
+      unless ok (refuse ApiError.Unauthenticated)
+      -- The record must still be the one the exchange ran against: a
+      -- reset or a change of password in the meantime ends the exchange,
+      -- as it ends the user's sessions.
+      current <- case a.user of
+        Just u ->
+          liftIO (reading env.storage (passwordOf u)) <&> \case
+            Just (WithRecord r) -> Just r
+            _ -> Nothing
+        Nothing -> pure Nothing
+      unless (isJust a.against && current == a.against) (refuse ApiError.Unauthenticated)
+      pure a
+    -- Use up the session's proof of its user's password, if it has one.
+    proofOf :: Signing -> UTCTime -> UserId -> IO (Maybe Proof)
+    proofOf s now u = maybe (pure Nothing) (\t -> takeProof env.proofs now (tokenHash t.text) u) s.token
+    -- Move the proof a sign-in from before OPAQUE left on the sign-in
+    -- waiting for its second factor to the session it became.
+    carryProof :: UTCTime -> PendingToken -> UserId -> SessionToken -> Handler ()
+    carryProof now held u token = liftIO $ do
+      had <- takeProof env.proofs now (pendingKey held) u
+      for_ had (prove env.proofs now (tokenHash token.text) u)
+    -- 'signInAs', carrying the waiting sign-in's proof to the session.
+    signInAsCarrying s now u held =
+      liftIO (Accounts.accountOf env.storage u) >>= \case
+        Just a | not a.disabled -> do
+          token <- liftIO (writing env.storage (Accounts.startSession now u s.address))
+          traverse_ (\h -> carryProof now h u token) held
+          startedAs s a.user token
+        _ -> refuse ApiError.Unauthenticated
+    -- A new user's id, for a record made before the account.
+    freshUser :: Handler UserId
+    freshUser = liftIO (UserId . UUID.toText <$> generateV4)
+    -- Whether accounts may be made from the request's address now, by the
+    -- limit 'making' counts against.
+    registrationsAllowed :: UTCTime -> Handler ()
+    registrationsAllowed now = do
+      s <- signingHere
+      liftIO (Limiter.verdict env.registrations now registering s.address) >>= \case
+        Refused seconds ->
+          throwError
+            (apiError (ApiError.TooManyRequests ("Too many attempts to make an account from here: try again in " <> waitText seconds <> ".")))
+              { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+              }
+        Allowed -> pass
     -- The half-finished sign-in this browser's cookie names.
     pendingHere s now =
       liftIO (maybe (pure Nothing) (pendingSignIn env.pending now) s.pending) >>= \waiting -> case (s.pending, waiting) of
@@ -975,7 +1203,7 @@ handlers env caller =
     -- someone who finds a browser left signed in gets no more guesses at
     -- the password than the sign-in form gives. A right one clears the
     -- failed attempts, as signing in does.
-    ownPassword :: PasswordChange -> Handler SignInMethods
+    ownPassword :: PasswordRecordChange -> Handler SignInMethods
     ownPassword change = do
       u <- signedInUser
       s <- signingHere
@@ -988,7 +1216,7 @@ handlers env caller =
               { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
               }
         Allowed ->
-          liftIO (Accounts.changePassword env.storage u s.token change.current change.new) >>= \case
+          liftIO (Accounts.changePassword env.storage u s.token (proofOf s now u) change.current change.password) >>= \case
             Left Accounts.WrongCurrent -> do
               liftIO (Limiter.failed env.limiter now login s.address)
               refuse ApiError.Unauthenticated
@@ -1039,7 +1267,7 @@ handlers env caller =
       login <- loginOf u
       limitedFor login s $ do
         now <- liftIO getCurrentTime
-        liftIO (Accounts.currentPasswordIs env.storage u given) >>= \case
+        liftIO (Accounts.currentPasswordIs env.storage u (proofOf s now u) given) >>= \case
           Just True -> liftIO (Limiter.succeeded env.limiter login s.address)
           Just False -> do
             liftIO (Limiter.failed env.limiter now login s.address)
@@ -1338,6 +1566,7 @@ statusOfServer env = do
   connections <- openConnections env.events
   errors <- recentErrors env.errors
   guideInstallable <- canInstallGuide env.storage
+  legacyPasswords <- reading env.storage legacyPasswordCount
   case counts of
     [spaces, pages, attachments, users] ->
       pure
@@ -1355,5 +1584,6 @@ statusOfServer env = do
           , connections
           , errors
           , guideInstallable
+          , legacyPasswords
           }
     _ -> panic "four counts were asked for"

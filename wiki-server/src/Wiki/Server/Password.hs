@@ -1,5 +1,8 @@
--- | Passwords, stored as argon2id hashes (decision 8 of docs/PLAN.md), and
--- the random ids of sessions.
+-- | The argon2id hashes of the passwords of accounts from before OPAQUE
+-- (decision 8 of docs/PLAN.md), and the random ids of sessions. Since
+-- WP5.74a a password is an OPAQUE record ("Wiki.Server.Opaque") and no new
+-- hash is made: these are checked once, at such an account's next sign-in,
+-- which replaces its hash with a record.
 --
 -- A hash is written in the PHC string format that argon2's reference
 -- implementation, libsodium and most others write:

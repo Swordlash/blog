@@ -161,6 +161,11 @@ module Wiki.Server.Storage
     -- * Accounts
   , PasswordLink (..)
   , passwordLinkFor
+  , createUserWithRecord
+  , setPasswordRecord
+  , recordHere
+  , serverSetup
+  , storageStretch
 
     -- * Whole wikis
   , importArchive
@@ -174,6 +179,7 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
+import Crypto.OPAQUE (ServerSetup)
 import Crypto.Random (getRandomBytes)
 import Data.ByteArray.Encoding (Base (Base64URLUnpadded), convertToBase)
 import Data.ByteString qualified as BS
@@ -193,6 +199,7 @@ import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (.
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
 import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, feedAddressOf, maxPeopleFound, searchable)
+import Wiki.Api.Opaque (NewAccountRecord (..), PasswordRecord (..), Stretch)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkHomePage, checkServerSettings, defaultHomePage, kindName, secretState, securityName)
 import Wiki.Api.ServerSettings qualified as SS
@@ -248,10 +255,11 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
+import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), authorOf, maxVersionsPageSize, namedAuthor, versionInfo)
 import Wiki.Server.HomePage (importHomeDocument)
-import Wiki.Server.Password (hashPassword, newToken, tokenHash)
+import Wiki.Server.Opaque (defaultStretch, loadServerSetup, registerHere, setupFromText, setupKey, storedRecordOf)
+import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
@@ -352,6 +360,10 @@ data Config = Config
   -- live channel ("Wiki.Server.Events"): every change to the page's
   -- comments, and every save of the page. It is called once the change is
   -- committed, before any other write may begin, so it must not wait.
+  , passwordStretch :: Stretch
+  -- ^ The Argon2id new OPAQUE records are stretched with, which the
+  -- server tells the browser at each registration ("Wiki.Server.Opaque"):
+  -- 'defaultStretch', or less in the tests.
   , notify :: [(UserId, Notification)] -> IO ()
   -- ^ The callback that receives the notifications a write made
   -- ("Wiki.Core.Notification") and passes them to the users' tabs over the
@@ -367,6 +379,7 @@ defaultConfig =
     { attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text
     , iconAddress = \s -> "/api/v1/spaces/" <> s.id.text <> "/icon"
     , avatarAddress = \u a -> "/api/v1/users/" <> u.text <> "/avatar/" <> a.blob.text
+    , passwordStretch = defaultStretch
     , publish = \_ _ -> pass
     , notify = \_ -> pass
     }
@@ -1285,42 +1298,35 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   setAdministrator u = run Writes . setGlobalGrantTx Administer u
   setCreateSpaces u = run Writes . setGlobalGrantTx CreateSpaces u
 
-  -- A password is checked and hashed before the transaction that keeps
-  -- it, since hashing takes tens of milliseconds the database should not
-  -- wait for; and only for an administrator whom the wiki's settings let
-  -- create accounts, so that nobody else can make the server spend that
-  -- time. The transaction checks both again.
+  -- A password given here is registered through OPAQUE with both sides
+  -- in this process ("Wiki.Server.Opaque"), before the transaction that
+  -- keeps its record, since the stretching takes a while the database
+  -- should not wait for; and only for an administrator whom the wiki's
+  -- settings let create accounts, so that nobody else can make the server
+  -- spend that time. The transaction checks both again. The server's API
+  -- receives a record the browser made instead ('createUserWithRecord',
+  -- 'setPasswordRecord').
   createUser new =
     run Reads requireAccountCreator >>= \case
       Left e -> pure (Left e)
       Right () -> case (,) <$> parseLogin new.login <*> checkNewPassword new.password of
         Left why -> pure (Left (Invalid why))
         Right (login, password) -> do
-          phc <- liftIO (hashPassword password)
-          uid <- liftIO (UUID.toText <$> generateV4)
-          let name = case T.strip new.displayName of
-                "" -> login.text
-                n -> n
-          run Writes $ do
-            requireAccountCreator
-            db (insertAccount (UserId uid) login name (Just phc)) >>= \case
-              Left taken -> failWith (Conflict ("There is a user with the login " <> taken.text <> " already."))
-              Right account -> do
-                record "user.create" (userSubject account.user) [("login", login.text), ("name", name)]
-                pure account
+          uid <- liftIO (UserId . UUID.toText <$> generateV4)
+          st <- StoredWiki (asks (\x -> x.storage))
+          liftIO (recordHere st uid password) >>= \case
+            Left why -> pure (Left (Invalid why))
+            Right stored -> insertUserTx uid login new.displayName stored
   setPassword u password =
     run Reads (requireAdministrator >> findUser u >>= requirePasswordToSet) >>= \case
       Left e -> pure (Left e)
       Right _ -> case checkNewPassword password of
         Left why -> pure (Left (Invalid why))
         Right p -> do
-          phc <- liftIO (hashPassword p)
-          -- The audit log records that the password changed, never the
-          -- password.
-          run Writes $ do
-            requireAdministrator
-            findUser u >>= requirePasswordToSet
-            changeAccountTx "user.password" [] u (updatePasswordHash u phc >> deleteSessionsOf u)
+          st <- StoredWiki (asks (\x -> x.storage))
+          liftIO (recordHere st u p) >>= \case
+            Left why -> pure (Left (Invalid why))
+            Right stored -> setRecordTx u stored
 
   -- Sending mail needs the server, not the storage: the server's API
   -- mails the link that 'passwordLinkFor' makes.
@@ -2710,6 +2716,85 @@ changeAccountTx action detail u change = do
   db change
   record action (userSubject user) detail
   db (loadAccount u) >>= maybe (failWith NotFound) pure
+
+-- | Create a user who signs in with an OPAQUE record, as an administrator
+-- whom the wiki's settings let create accounts with a password: the
+-- server's API's @createUser@, whose body carries the record the
+-- administrator's browser made ("Wiki.Api.Opaque"). The new user's id is
+-- the record's credential id.
+createUserWithRecord :: (MonadIO m) => NewAccountRecord -> StoredWiki m (Either WikiError Account)
+createUserWithRecord new =
+  run Reads requireAccountCreator >>= \case
+    Left e -> pure (Left e)
+    Right () -> case parseLogin new.login of
+      Left why -> pure (Left (Invalid why))
+      Right login -> case UUID.fromText new.password.credential of
+        Nothing -> pure (Left (Invalid "The password was prepared for no account: try again."))
+        Just uuid -> do
+          let uid = UserId (UUID.toText uuid)
+          case storedRecordOf uid new.password of
+            Left why -> pure (Left (Invalid why))
+            Right stored -> insertUserTx uid login new.displayName stored
+
+-- | Give a user the OPAQUE record the administrator's browser made, which
+-- ends their sessions: the server's API's @setPassword@.
+setPasswordRecord :: (MonadIO m) => UserId -> PasswordRecord -> StoredWiki m (Either WikiError Account)
+setPasswordRecord u r =
+  run Reads (requireAdministrator >> findUser u >>= requirePasswordToSet) >>= \case
+    Left e -> pure (Left e)
+    Right () -> case storedRecordOf u r of
+      Left why -> pure (Left (Invalid why))
+      Right stored -> setRecordTx u stored
+
+-- | Insert a user with an OPAQUE record, as an administrator who may
+-- create accounts, recorded in the audit log. A blank display name becomes
+-- the login. An id another user has (a record's credential id used twice)
+-- or a login another user has is a 'Conflict'.
+insertUserTx :: (MonadIO m) => UserId -> Login -> Text -> StoredRecord -> StoredWiki m (Either WikiError Account)
+insertUserTx uid login rawName stored = do
+  let name = case T.strip rawName of
+        "" -> login.text
+        n -> n
+  run Writes $ do
+    requireAccountCreator
+    db (loadAccount uid) >>= \case
+      Just _ -> failWith (Conflict "The password was prepared for an account that exists already: try again.")
+      Nothing -> pass
+    db (insertAccount uid login name (Just stored)) >>= \case
+      Left taken -> failWith (Conflict ("There is a user with the login " <> taken.text <> " already."))
+      Right account -> do
+        record "user.create" (userSubject account.user) [("login", login.text), ("name", name)]
+        pure account
+
+-- | Give a user an OPAQUE record as an administrator, which ends their
+-- sessions. The audit log records that the password changed, never
+-- anything of it.
+setRecordTx :: (MonadIO m) => UserId -> StoredRecord -> StoredWiki m (Either WikiError Account)
+setRecordTx u stored = run Writes $ do
+  requireAdministrator
+  findUser u >>= requirePasswordToSet
+  changeAccountTx "user.password" [] u (storeRecord u stored >> deleteSessionsOf u)
+
+-- | A password's OPAQUE record for a user, made with both sides in this
+-- process ("Wiki.Server.Opaque"), with the stretching new records get:
+-- for a password the server is given (the console, the storage's own
+-- operations), which it registers and forgets.
+recordHere :: Storage -> UserId -> Password -> IO (Either Text StoredRecord)
+recordHere st u p = do
+  setup <- serverSetup st
+  registerHere setup (storageStretch st) u p
+
+-- | The Argon2id new OPAQUE records are stretched with.
+storageStretch :: Storage -> Stretch
+storageStretch st = st.config.passwordStretch
+
+-- | The server's OPAQUE secret ("Wiki.Server.Opaque"), read from the
+-- settings table, and made and stored there the first time, in a write.
+serverSetup :: Storage -> IO ServerSetup
+serverSetup st =
+  reading st (settingValue setupKey) >>= \case
+    Just t | Just setup <- setupFromText t -> pure setup
+    _ -> writing st loadServerSetup
 
 -- | Refuse a password to a user who has none to set (WP5.6 of
 -- docs/PLAN.md): one who signs in with a provider the server has, and has

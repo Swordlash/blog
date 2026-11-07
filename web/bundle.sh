@@ -24,7 +24,10 @@
 #                    SDKs, which it imports the first time the assistant
 #                    is used, and avatar.js (web/src/avatar.js), Cropper.js
 #                    for the account's avatar, which it imports the first
-#                    time a picture is cropped;
+#                    time a picture is cropped, and opaque.js
+#                    (web/src/opaque.js), @serenity-kit/opaque, the OPAQUE
+#                    client passwords are signed in and set with, which it
+#                    imports the first time a password is used;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
 #                    its worker patched by web/src/tikz-patch.mjs), which
 #                    tikz.js runs, with the worker that starts it
@@ -97,6 +100,12 @@ npx esbuild web/src/assistant.js \
 npx esbuild web/src/avatar.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --metafile="$meta/avatar.json" --outfile="$out_dir/islands/avatar.js"
+
+# The OPAQUE client, @serenity-kit/opaque with its wasm inlined: one file in
+# islands/ too, fetched the first time a password is used.
+npx esbuild web/src/opaque.js \
+  --bundle --minify --format=esm --target=es2022 --platform=browser --log-level=warning \
+  --metafile="$meta/opaque.json" --outfile="$out_dir/islands/opaque.js"
 
 # TikZJax's files, copied from its npm package: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are

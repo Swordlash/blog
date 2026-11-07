@@ -32,6 +32,9 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   // The writing assistant's providers (web/src/assistant.js).
   ["@anthropic-ai/sdk", ["@anthropic-ai/sdk"]],
   ["openai", ["openai"]],
+  // The browser's OPAQUE client (web/src/opaque.js), bundled as
+  // islands/opaque.js.
+  ["@serenity-kit/opaque", ["@serenity-kit/opaque"]],
   // Its package.json names no file it ships as its main; web/bundle.sh copies
   // dist/ as it is.
   ["@drgrice1/tikzjax", ["@drgrice1/tikzjax/dist/run-tex.js", "@drgrice1/tikzjax/dist/core.dump.gz"]],

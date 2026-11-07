@@ -43,6 +43,7 @@ import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Log (newErrorRing, silentLogger)
 import Wiki.Server.Metrics (newMetrics)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
+import Wiki.Server.Opaque (newAttempts, newProofs)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Storage (Storage, Who (..))
@@ -125,8 +126,10 @@ withApiEnv storage test = Ki.scoped $ \resetTasks -> do
   backups <- newBackupService (silentLogger (const pass)) "rclone" storage
   resets <- newLimiter defaultLimits
   pending <- newPendingSignIns
+  attempts <- newAttempts
+  proofs <- newProofs
   errors <- newErrorRing
   metrics <- newMetrics
   feeds <- newFeedCache
   ceremonies <- newCeremonies
-  test Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, texEngine, backups, resets, resetTasks, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies, whatsNew = Nothing}
+  test Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, texEngine, backups, resets, resetTasks, pending, attempts, proofs, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies, whatsNew = Nothing}

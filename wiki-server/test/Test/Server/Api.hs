@@ -20,10 +20,11 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..))
-import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (attachmentUrl, avatarUrl, links, searchUrl, spaceIconUrl)
+import Wiki.Api.Opaque (NewAccountRecord (..))
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
@@ -355,9 +356,9 @@ people backing = describe "the wiki's people" $ do
     renamed <- put' (links.admin.renameGroup made.id) GroupName {name = "Editors"} >>= jsonAs 200
     renamed `shouldBe` Group {id = made.id, name = "Editors"}
     -- The accounts' operations too.
-    bea :: Account <- post' links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
+    bea :: Account <- createUserVia r (onPublic r) [session] NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
     (bea.hasPassword, bea.disabled) `shouldBe` (True, False)
-    reset :: Account <- put' (links.admin.setPassword bea.user.id) NewPassword {password = Password "another password"} >>= jsonAs 200
+    reset :: Account <- setPasswordVia r (onPublic r) [session] bea.user.id "another password" >>= jsonAs 200
     reset.hasPassword `shouldBe` True
     off :: Account <- put' (links.admin.setDisabled bea.user.id) AccountDisabled {disabled = True} >>= jsonAs 200
     off.disabled `shouldBe` True
@@ -378,9 +379,9 @@ people backing = describe "the wiki's people" $ do
     getUrlWith r (onPublic r links.admin.status) [editor] >>= forbidden
     put' (links.admin.setAdministrator (loginId d "editor")) AdministratorFlag {administrator = True} >>= forbidden
     put' (links.admin.setCreateSpaces (loginId d "editor")) CreateSpacesFlag {createSpaces = True} >>= forbidden
-    put' (links.admin.setPassword rita) NewPassword {password = Password "a password of mine"} >>= forbidden
+    setPasswordVia r (onPublic r) [editor] rita "a password of mine" >>= forbidden
     put' (links.admin.setDisabled rita) AccountDisabled {disabled = True} >>= forbidden
-    send r methodPost (onPublic r links.admin.createUser) [editor, (hContentType, "application/json")] (encode NewAccount {login = "mine", displayName = "", password = Password "a password of mine", email = Nothing}) >>= forbidden
+    send r methodPost (onPublic r links.admin.createUser) [editor, (hContentType, "application/json")] (encode NewAccountRecord {login = "mine", displayName = "", password = noRecord, email = Nothing}) >>= forbidden
     send r methodPost (onPublic r links.admin.createGroup) [editor, (hContentType, "application/json")] (encode GroupName {name = "Mine"}) >>= forbidden
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
 
@@ -399,8 +400,8 @@ people backing = describe "the wiki's people" $ do
     send r methodPut (onPublic r (links.admin.addMember writers rita)) [] "" >>= forbidden
     send r methodDelete (onPublic r (links.admin.removeMember writers rita)) [] "" >>= forbidden
     sendJson r methodPut (onPublic r (links.admin.setCreateSpaces rita)) CreateSpacesFlag {createSpaces = True} >>= forbidden
-    sendJson r methodPost (onPublic r links.admin.createUser) NewAccount {login = "mine", displayName = "", password = Password "a password of mine", email = Nothing} >>= forbidden
-    sendJson r methodPut (onPublic r (links.admin.setPassword rita)) NewPassword {password = Password "a password of mine"} >>= forbidden
+    sendJson r methodPost (onPublic r links.admin.createUser) NewAccountRecord {login = "mine", displayName = "", password = noRecord, email = Nothing} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setPassword rita)) noRecord >>= forbidden
     sendJson r methodPut (onPublic r (links.admin.setDisabled nobody)) AccountDisabled {disabled = True} >>= forbidden
     -- Nothing changed.
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
@@ -419,7 +420,7 @@ usersPaged backing = describe "the users, a page at a time" $ do
         page offset limit q administrators disabled = ok200 (getUrl r (onAdmin r (links.admin.users offset limit q administrators disabled)))
         logins p = [u.user.login.text | u <- (p :: UserPage).users]
     for_ ["Zed", "bob", "Carla", "dora"] $ \login -> do
-      made <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login, displayName = login <> " Doe", password = Password "a good password", email = Nothing}
+      made <- createUserVia r (onAdmin r) [] NewAccount {login, displayName = login <> " Doe", password = Password "a good password", email = Nothing}
       made.status `shouldBe` 201
     everyone <- page Nothing Nothing Nothing False False
     logins everyone `shouldBe` ["admin", "bob", "Carla", "dora", "editor", "reader", "Zed"]
@@ -454,7 +455,7 @@ usersPaged backing = describe "the users, a page at a time" $ do
             Invalid _ -> pass
             other -> expectationFailure ("expected Invalid, got " <> show other)
     for_ [1 .. 30 :: Int] $ \i -> do
-      made <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "user" <> show i, displayName = "", password = Password "a good password", email = Nothing}
+      made <- createUserVia r (onAdmin r) [] NewAccount {login = "user" <> show i, displayName = "", password = Password "a good password", email = Nothing}
       made.status `shouldBe` 201
     first25 :: UserPage <- ok200 (get' (links.admin.users Nothing Nothing Nothing False False))
     (length first25.users, first25.total) `shouldBe` (25, 33)

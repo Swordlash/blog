@@ -4,23 +4,27 @@
 -- has that).
 module Test.Storage.Accounts (spec) where
 
+import Crypto.OPAQUE qualified as O
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Protolude
 import Test.Database (Backing, placeOptionsOf)
 import Test.Hspec
 import Test.Storage.Fixture (withPlaceIn)
 import Wiki.Api.Account (Account (..))
+import Wiki.Api.Opaque (bytesOf)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
-import Wiki.Server.Accounts
+import Wiki.Server.Accounts hiding (signIn)
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Limiter (Limits (..), Verdict (..), failed, newLimiter, succeeded, verdict)
+import Wiki.Server.Opaque (opaqueConfig, recordFromStored, respondTo)
 import Wiki.Server.Password
-import Wiki.Server.Storage (Storage, Who (..), defaultConfig, runStoredWiki, withStorage)
+import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, runStoredWiki, serverSetup, storageStretch, withStorage)
+import Wiki.Server.Storage.Rows (StoredPassword (..), loadPasswordByLogin)
 
 spec :: Backing -> Spec
 spec backing = describe "accounts" $ do
@@ -33,6 +37,27 @@ spec backing = describe "accounts" $ do
 -- | A storage in a directory of its own, empty.
 withEmpty :: Backing -> (Storage -> IO a) -> IO a
 withEmpty backing action = withPlaceIn backing $ \at -> withStorage defaultConfig at action
+
+-- | Sign in with a password through OPAQUE, the browser's side and the
+-- server's in this process, as they run over HTTP ("Wiki.Api.Opaque"):
+-- the user and their new session, or why not.
+signIn :: Storage -> UTCTime -> Text -> Text -> Password -> IO (Either SignInFailure (User, SessionToken))
+signIn st now address login (Password password) = do
+  setup <- serverSetup st
+  found <- reading st (loadPasswordByLogin (T.strip login))
+  (cst, ke1) <- either (panic . show) pure =<< O.clientStart (encodeUtf8 password)
+  let (user, record, credential) = case found of
+        Just (a, WithRecord r) -> (Just a.user.id, recordFromStored r, encodeUtf8 a.user.id.text)
+        Just (a, _) -> (Just a.user.id, Nothing, encodeUtf8 a.user.id.text)
+        Nothing -> (Nothing, Nothing, "unknown:" <> encodeUtf8 login)
+  (sst, ke2, stretch) <- either panic pure =<< respondTo setup (storageStretch st) record credential ke1
+  let finished = do
+        ke2' <- bytesOf ke2 >>= rightToMaybe . O.decode
+        (ke3, _, _) <- rightToMaybe (O.clientFinish (opaqueConfig stretch) cst ke2' O.defaultIdentities)
+        rightToMaybe (O.serverFinish sst ke3)
+  case (user, record, finished) of
+    (Just u, Just _, Just _) -> signInUser st now address u
+    _ -> pure (Left NoSuchAccount)
 
 -- | Something that should have worked.
 ok :: (HasCallStack, Show e) => IO (Either e a) -> IO a
