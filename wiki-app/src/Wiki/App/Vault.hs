@@ -200,7 +200,10 @@ data Settled = Settled
 afterSignIn :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Settled)
 afterSignIn u = do
   key <- takePasswordKey
-  result <- runExceptT (settleWith u key)
+  -- Where the browser offers no WebCrypto (a page over plain HTTP), there
+  -- are no keys to settle: the panel says why.
+  here <- sealingHere
+  result <- if here then runExceptT (settleWith u key) else pure (Left "This browser offers no encryption to this page.")
   case result of
     Left e -> traverse_ forgetKey key $> Left e
     Right settled -> do

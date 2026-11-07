@@ -34,6 +34,7 @@ import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveD
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.Security (ResetToken (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant, assistantDatabase)
@@ -79,6 +80,10 @@ $( browserJS
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
      , ("js_offers", "wiki_test_passkeys_offers", Safe, [t|IO Int|])
      , ("js_insecure", "wiki_test_passkeys_insecure", Safe, [t|IO ()|])
+     , ("js_opaque_server", "wiki_test_opaque_server_start", Safe, [t|JSText -> IO ()|])
+     , ("js_opaque_registerPromise", "wiki_test_opaque_register", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_identity_exportPromise", "wiki_test_identity_export", Safe, [t|JSText -> IO (Promise JSText)|])
+     , ("js_export_key_traces", "wiki_test_export_key_traces", Safe, [t|IO JSText|])
      ]
  )
 
@@ -100,6 +105,12 @@ js_record a1 = if inBrowser then wait =<< js_recordPromise a1 else pure inert
 js_other_tab_drops :: JSText -> IO ()
 js_other_tab_drops a1 = if inBrowser then wait =<< js_other_tab_dropsPromise a1 else pure inert
 
+js_opaque_register :: JSText -> IO ()
+js_opaque_register a1 = if inBrowser then wait =<< js_opaque_registerPromise a1 else pure inert
+
+js_identity_export :: JSText -> IO JSText
+js_identity_export a1 = if inBrowser then wait =<< js_identity_exportPromise a1 else pure inert
+
 js_exportable :: IO Int
 js_exportable = if inBrowser then wait =<< js_exportablePromise else pure inert
 
@@ -109,6 +120,7 @@ spec :: forall m -> (Specs m) => Spec
 spec m = do
   vault m
   signing m
+  userKeys m
 
 -- | Signing in with a passkey, and the account's passkeys (WP5.30 of
 -- docs/PLAN.md): the button and the login field's offer sign in with the
@@ -646,6 +658,157 @@ signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId uid)})
   me <- runMemWiki wiki session
   pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
+
+-- | The user's keys (WP5.74b1 of docs/PLAN.md, "Wiki.App.Vault"): made at
+-- the first sign-in with a password, the vault key wrapped for the
+-- password, the private key kept on the device as a key that cannot be
+-- exported and no export key left in the page; unlocked with the password
+-- on a second device, the same key pair; carried through a change of
+-- password; made anew after a reset of a password that alone unlocked
+-- them, after the reset page's warning; and unlocked with a passkey. Over
+-- a real OPAQUE exchange, with serenity-kit's server functions playing the
+-- server's side (@jsbits\/test-passkeys.js@), so that the export key is
+-- the one each sign-in with the same password gives.
+userKeys :: forall m -> (Specs m) => Spec
+userKeys m = describe "the user's keys" $ do
+  it "makes the key pair at the first sign-in with a password, and keeps neither its private key exportable nor the export key in the page" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    -- The vault holds the key pair and the vault key wrapped for the
+    -- password, and the directory the public key; nothing in the clear.
+    (field ["vault", "password", "key"] made, isJust (field ["publicKey", "publicKey"] made)) `shouldSatisfy` (\(w, k) -> isJust w && k)
+    identityExport `shouldReturn` "refused"
+    unsafeIOToPageM (fromJSText <$> js_export_key_traces) `shouldReturn` "[]"
+    closed ui
+
+  it "unlocks the key pair on a second device with the password: the same key pair, and nothing stored again" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    closed ui
+    unsafeIOToPageM (evaluate =<< js_new_device)
+    identityExport `shouldReturn` "none"
+    again <- restarted
+    signIn again "editor's password"
+    eventually $ identityExport `shouldReturn` "refused"
+    now <- vaultState
+    (field ["publicKey", "keyId"] now, field ["revision"] now) `shouldBe` (field ["publicKey", "keyId"] made, field ["revision"] made)
+    closed again
+
+  it "keeps the key pair through a change of password: the new password unlocks it on another device" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    find ui ".account-toggle" >>= click
+    find ui ".password-change-toggle" >>= click
+    find ui ".password-change input[name=current]" >>= (`typeText` "editor's password")
+    find ui ".password-change input[name=new]" >>= (`typeText` "a password of the editor's")
+    find ui ".password-change input[name=repeat]" >>= (`typeText` "a password of the editor's")
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".account-told" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Your password is changed")
+    changed <- vaultState
+    -- The new wrap, with the new password, in one request.
+    (field ["vault", "password"] changed /= field ["vault", "password"] made, field ["publicKey", "keyId"] changed == field ["publicKey", "keyId"] made)
+      `shouldBe` (True, True)
+    closed ui
+    unsafeIOToPageM (evaluate =<< js_new_device)
+    again <- restarted
+    signIn again "a password of the editor's"
+    eventually $ identityExport `shouldReturn` "refused"
+    field ["publicKey", "keyId"] <$> vaultState `shouldReturn` field ["publicKey", "keyId"] made
+    closed again
+
+  it "makes a new key pair after a reset of the password that alone unlocked the keys, after saying what is lost" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    before' <- fingerprint ui
+    closed ui
+    resetPage <- restartedAt (ResetPassword (ResetToken "t1"))
+    find resetPage ".reset-warning" >>= textContent >>= (`shouldSatisfy` \t -> "writing assistant's settings and API keys" `T.isInfixOf` t && "key pair" `T.isInfixOf` t)
+    find resetPage ".reset-form input[name=new]" >>= (`typeText` "a password set again")
+    find resetPage ".reset-form input[name=repeat]" >>= (`typeText` "a password set again")
+    find resetPage ".reset-form button[type=submit]" >>= click
+    _ <- find resetPage ".reset-sign-in"
+    field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
+    closed resetPage
+    again <- restarted
+    signIn again "a password set again"
+    _ <- madeKeys
+    after' <- fingerprint again
+    (T.length before', before' /= after') `shouldBe` (79, True)
+    closed again
+
+  it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    find ui ".account-toggle" >>= click
+    find ui ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
+    find ui ".keys-passkey-add" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-passkey" `shouldReturn` 1
+    closed ui
+    unsafeIOToPageM (evaluate =<< js_new_device)
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    again <- startServer m Home
+    find again ".account-toggle" >>= click
+    find again ".keys-device" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "does not hold your keys")
+    find again ".keys-unlock-passkey-button" >>= click
+    eventually $ find again ".keys-device" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "holds your private key")
+    identityExport `shouldReturn` "refused"
+    field ["publicKey", "keyId"] <$> vaultState `shouldReturn` field ["publicKey", "keyId"] made
+    closed again
+  where
+    -- The wiki with nobody signed in, the editor's password registered
+    -- with the OPAQUE server, and the vault's server empty.
+    signedOut :: Text -> PageM s (Mounted s Shell.Query Void m)
+    signedOut password = do
+      serverStarts
+      serveDemo
+      answerAccount
+      unsafeIOToPageM js_vault_server
+      me <- signedInAs "user-editor"
+      unsafeIOToPageM (js_opaque_server (toJSText (decodeUtf8 (BSL.toStrict (encode me)))))
+      unsafeIOToPageM (evaluate =<< js_opaque_register (toJSText password))
+      unsafeIOToPageM (js_install True True)
+      restarted
+    -- The wiki again, with nobody signed in, over the same servers.
+    restarted :: PageM s (Mounted s Shell.Query Void m)
+    restarted = restartedAt Home
+    restartedAt :: Route -> PageM s (Mounted s Shell.Query Void m)
+    restartedAt at = do
+      answerWith "GET" "api/v1/session" 200 nobody
+      startServer m at
+    signIn ui password = do
+      find ui ".sign-in-toggle" >>= click
+      find ui ".sign-in-form input[name=login]" >>= (`typeText` "editor")
+      find ui ".sign-in-form input[name=password]" >>= (`typeText` password)
+      find ui ".sign-in-form button[type=submit]" >>= click
+      find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    -- The vault's server once the key pair is stored.
+    madeKeys = do
+      eventually $ (isJust . field ["publicKey", "keyId"]) <$> vaultState `shouldReturn` True
+      eventually $ identityExport `shouldReturn` "refused"
+      vaultState
+    identityExport = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_identity_export "user-editor"))
+    fingerprint ui = do
+      find ui ".account-toggle" >>= click
+      printed <- find ui ".keys-fingerprint code" >>= textContent
+      find ui ".account-toggle" >>= click
+      pure printed
+    closed ui = do
+      unmount ui
+      unsafeIOToPageM js_uninstall
+      serverStops
+    vaultState :: PageM s Value
+    vaultState = unsafeIOToPageM (fromMaybe Aeson.Null . decodeStrict . encodeUtf8 . fromJSText <$> js_vault_state)
+    answerAccount = do
+      answerWith "GET" "api/v1/account/identities" 200 (Aeson.object ["password" Aeson..= True, "identities" Aeson..= ([] :: [Text])])
+      answerWith "GET" "api/v1/account/sessions" 200 ([] :: [Text])
+      answerWith "GET" "api/v1/account/second-factor" 200 (Aeson.object ["enabled" Aeson..= False, "recoveryCodesLeft" Aeson..= (0 :: Int), "asksPassword" Aeson..= True])
+      answerWith "GET" "api/v1/account/email" 200 (Aeson.object ["email" Aeson..= Aeson.Null, "verified" Aeson..= False, "mailing" Aeson..= False, "mailError" Aeson..= Aeson.Null, "asksPassword" Aeson..= True])
 
 -- | A field of JSON, by its path of keys (an array's items by number).
 field :: [Text] -> Value -> Maybe Value

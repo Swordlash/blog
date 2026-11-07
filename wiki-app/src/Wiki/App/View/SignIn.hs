@@ -194,8 +194,7 @@ data State m = State
   -- vault with the password too ("Wiki.App.Vault"), with the key the
   -- password gave, which the page forgets when it is answered.
   , keysProblem :: Maybe Text
-  -- ^ Why the user's keys could not be brought up to date after a
-  -- sign-in, or the offer not taken.
+  -- ^ Why the offer could not be taken.
   }
 
 data Action
@@ -791,7 +790,9 @@ component =
     settleAfter :: Session -> H.HalogenM (State m) Action Slots Output m ()
     settleAfter s = for_ s.user $ \u ->
       lift (afterSignIn u.id) >>= \case
-        Left why -> modify (\st -> st {keysProblem = Just ("Your keys were not brought up to date on this device: " <> why)})
+        -- Nothing waits on the keys: the security panel shows them, and
+        -- why they could not be brought up to date, when it is opened.
+        Left _ -> pass
         Right settled -> do
           gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
           modify (\st -> st {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})

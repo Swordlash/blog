@@ -698,6 +698,59 @@ browsers the wiki runs in have: Chrome and Edge 140 or later, Firefox 133 or
 later, Safari 18.2 or later. A passkey here does
 not sign you in; it only unlocks the assistant's keys.
 
+### Your keys
+
+Over `wiki-server`, every user has a key pair (X25519), which encrypted
+spaces will use to share their keys with you: a space's key is sealed to
+your public key (HPKE, RFC 9180), and only your private key opens it. The
+key pair is made in your browser the first time you sign in with your
+password, and its private half is sealed in your vault, the same vault the
+assistant's keys sync in; the server keeps the vault and your public key,
+and cannot open the vault. **Keys**, in your account panel's security,
+shows:
+
+- **Your key's fingerprint**, in groups of four. Another member's wiki
+  shows the fingerprint of the key it seals to for you: compare the two,
+  by a way you trust, to be sure the server gave them your key.
+- **Whether this browser holds your private key**, and, where it does not,
+  **Unlock with a passkey** or **Unlock with your password**.
+- **What unlocks your keys**: your passkeys, and your password if you chose
+  it. Signing in with your password unlocks them on a new device by itself
+  when your password is among them. A user whose vault a passkey unlocks
+  already (the assistant's syncing) is asked once, at a sign-in with the
+  password, whether the password should unlock it too; the answer is no
+  unless you say yes, and the panel adds or takes it away later.
+- **Ask for a passkey or your password each time the wiki opens**, which
+  keeps no key in this browser between visits.
+
+Changing your password keeps your keys: your browser carries them over to
+the new password in the same request. A password reset cannot, since your
+old password is gone: if a passkey of yours unlocks your keys, nothing is
+lost, and the panel lets the new password unlock them too; if your password
+was the only way, the reset deletes them (your key pair, and the
+assistant's synced settings and API keys), says so before it is done, and
+your next sign-in makes a new key pair. If you sign in with a provider
+instead of a password, a passkey makes your keys, under **Keys**.
+
+What this protects against, and what it does not:
+
+- The server never sees what is sealed in your vault, your private key, or
+  the vault's key, in the clear. What it sees is that a vault exists, the
+  names of what it holds, and your public key.
+- Your keys are as safe as the weakest way that unlocks them: with your
+  password among them, your password; without it, your passkeys.
+- The server is trusted to tell the truth about who is a member and which
+  public key is whose: comparing fingerprints is how you check it.
+- A server, or an administrator, that changes the program it sends your
+  browser reads whatever your browser opens. That is not defended against.
+- The browser holds every key as a WebCrypto key it cannot export, except
+  one: the password's secret (OPAQUE's export key), which the OPAQUE
+  library gives the page as text. The page turns it into a WebCrypto key
+  at once and drops the text.
+
+Your keys need HTTPS (or the machine's own address): the browser offers no
+encryption to a page served over plain HTTP, and the panel says so there.
+
 ### The assistant at another address
 
 Each provider's settings choose a **Service**: the provider's own, or one of

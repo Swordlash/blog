@@ -527,3 +527,135 @@ async function wiki_test_exportable_keys_left() {
     wikiTestPasskeys.credentials = wikiTestPasskeys.credentials.filter((c) => c !== id);
   }
 }
+
+// The server's side of OPAQUE for the user's keys' tests (Test.Browser.Keys),
+// with @serenity-kit/opaque's own server functions: a sign-in, a proof of
+// the password and a registration run for real, so that the browser's
+// export key is the one a real server's exchange gives, the same at each
+// sign-in with the same password. One user, the editor, with the session
+// the test gives. A change of password takes the vault's new password wrap
+// as wiki-server does (both or neither), and a reset takes away what only
+// the old password unlocked.
+const wikiTestOpaque = { setup: null, record: null, attempts: new Map(), session: null, next: 0 };
+
+const wikiTestCheap = { opsLimit: 1, memLimit: 8192 };
+
+async function wikiTestOpaqueServer(request) {
+  const path = request.url.replace(/^.*api\/v1\//, "");
+  const routes = ["session/password", "account/password/proof", "password-registration", "account/password", "password-reset/"];
+  if (!routes.some((r) => path === r || (r.endsWith("/") && path.startsWith(r)))) return null;
+  const opaque = await globalThis.wikiIslands.opaque();
+  await opaque.ready;
+  const server = opaque.server;
+  wikiTestOpaque.setup ??= server.createSetup();
+  const sent = request.body === "" ? {} : JSON.parse(request.body);
+  const starting = (path === "session/password" || path === "account/password/proof") && request.method === "POST";
+  if (starting) {
+    if (wikiTestOpaque.record === null) return wikiTestJson(401, { error: "Unauthenticated" });
+    const started = server.startLogin({ serverSetup: wikiTestOpaque.setup, registrationRecord: wikiTestOpaque.record, startLoginRequest: sent.ke1, userIdentifier: "user-editor" });
+    const attempt = `t${++wikiTestOpaque.next}`;
+    wikiTestOpaque.attempts.set(attempt, started.serverLoginState);
+    return wikiTestJson(200, { attempt, ke2: started.loginResponse, stretch: wikiTestCheap, fallback: false });
+  }
+  if ((path === "session/password" || path === "account/password/proof") && request.method === "PUT") {
+    const state = wikiTestOpaque.attempts.get(sent.attempt);
+    wikiTestOpaque.attempts.delete(sent.attempt);
+    try {
+      server.finishLogin({ finishLoginRequest: sent.ke3, serverLoginState: state });
+    } catch {
+      return wikiTestJson(401, { error: "Unauthenticated" });
+    }
+    return path === "session/password" ? wikiTestJson(200, wikiTestOpaque.session) : { status: 204, body: "" };
+  }
+  if (path === "password-registration" && request.method === "POST") {
+    const made = server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: sent.request });
+    return wikiTestJson(200, { credential: "user-editor", response: made.registrationResponse, stretch: wikiTestCheap });
+  }
+  if (path === "account/password" && request.method === "PUT") {
+    const vault = wikiTestVault.vault;
+    if (sent.vault) {
+      if (vault === null || !vault.password || sent.vault.tag !== `"${wikiTestVault.revision}"`) {
+        return wikiTestJson(409, { error: "Conflict", text: "Your vault was changed meanwhile: try again." });
+      }
+      vault.password = sent.vault.wrapped;
+      wikiTestVault.revision++;
+    } else if (vault?.password) {
+      return wikiTestJson(409, { error: "Conflict", text: "Your vault opens with your password." });
+    }
+    wikiTestOpaque.record = sent.password.record;
+    return wikiTestJson(200, { password: true, identities: [] });
+  }
+  if (path.startsWith("password-reset/") && request.method === "POST") {
+    wikiTestOpaque.record = sent.record;
+    const vault = wikiTestVault.vault;
+    if (vault !== null) {
+      if (wikiTestVault.passkeys.some((p) => p.wrapped)) {
+        vault.password = null;
+        wikiTestVault.revision++;
+      } else {
+        wikiTestVault.vault = null;
+        wikiTestVault.publicKey = null;
+      }
+    }
+    return { status: 204, body: "" };
+  }
+  return null;
+}
+
+// Play OPAQUE's server, for the user whose session (JSON) a sign-in
+// answers, before the vault's server (wiki_test_vault_server_start).
+function wiki_test_opaque_server_start(session) {
+  Object.assign(wikiTestOpaque, { setup: null, record: null, attempts: new Map(), session: JSON.parse(session), next: 0 });
+  globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestOpaqueServer];
+}
+
+// Register the editor's password, as an administrator would have set it.
+async function wiki_test_opaque_register(password) {
+  const opaque = await globalThis.wikiIslands.opaque();
+  await opaque.ready;
+  wikiTestOpaque.setup ??= opaque.server.createSetup();
+  const start = opaque.client.startRegistration({ password });
+  const response = opaque.server.createRegistrationResponse({ serverSetup: wikiTestOpaque.setup, userIdentifier: "user-editor", registrationRequest: start.registrationRequest });
+  const done = opaque.client.finishRegistration({
+    clientRegistrationState: start.clientRegistrationState,
+    registrationResponse: response.registrationResponse,
+    password,
+    keyStretching: { "argon2id-custom": { iterations: 1, memory: 8, parallelism: 1 } },
+  });
+  wikiTestOpaque.record = done.registrationRecord;
+}
+
+// Whether this device's private key for a user, in IndexedDB, refuses to
+// be exported, as a key that cannot be exported must: "refused", "exported"
+// or "none" when the device holds no key.
+async function wiki_test_identity_export(user) {
+  const [found] = ((await wikiTestEntries("wiki-assistant-keys", "keys")) ?? []).filter(([key]) => key === `identity:${user}`);
+  if (found === undefined || !(found[1] instanceof CryptoKey)) return "none";
+  try {
+    await crypto.subtle.exportKey("pkcs8", found[1]);
+    return "exported";
+  } catch {
+    return found[1].extractable === false ? "refused" : "exported";
+  }
+}
+
+// The names of the page's globals that hold text as long as an export key
+// written in base64url (64 bytes, 86 characters) or longer, and whether
+// the page's registry of keys holds anything but CryptoKeys: an export key
+// left in the page would show in one of them.
+function wiki_test_export_key_traces() {
+  const found = [];
+  for (const name of Object.getOwnPropertyNames(globalThis)) {
+    let value;
+    try {
+      value = globalThis[name];
+    } catch {
+      continue;
+    }
+    if (typeof value === "string" && /^[A-Za-z0-9_-]{86,}$/.test(value)) found.push(name);
+  }
+  for (const value of globalThis.wikiKeyRegistry?.keys.values() ?? []) {
+    if (!(value instanceof CryptoKey)) found.push("wikiKeyRegistry");
+  }
+  return JSON.stringify(found);
+}
