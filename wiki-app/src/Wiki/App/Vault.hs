@@ -594,7 +594,8 @@ keepIdentityKey u device k keyId = do
 resetLosses :: [Text]
 resetLosses =
   [ "your key pair, which encrypted spaces use (a new one is made at your next sign-in);"
-  , "the writing assistant's settings and API keys, where they sync across your devices."
+  , "the writing assistant's settings and API keys, where they sync across your devices;"
+  , "your encrypted pages will be destroyed for you: you read an encrypted space again only once another member opens it and shares its key with your new key pair, and an encrypted space nobody else can read is lost."
   ]
 
 --------------------------------------------------------------------------------

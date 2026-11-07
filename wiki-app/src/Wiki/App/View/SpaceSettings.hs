@@ -34,6 +34,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
 import Wiki.App.Backend (MonadLoad, MonadWiki (..), WikiError (..))
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
@@ -106,7 +107,7 @@ data Action
   | Save
   | FromPermissions ViewOutput
 
-component :: forall query m. (MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadEncryption m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec

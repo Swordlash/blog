@@ -70,6 +70,7 @@ import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Http (HttpEnv, Transport, cacheOf, newHttpEnv, newImmediateHttpEnv, runHttpWiki, silentTransport)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
@@ -217,7 +218,7 @@ startServed how env base at container =
 -- for, and an action that disposes of the application.
 startApp
   :: forall m
-   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadWhatsNew m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadWhatsNew m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadEncryption m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

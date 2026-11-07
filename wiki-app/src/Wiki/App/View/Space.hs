@@ -53,6 +53,7 @@ import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Wiki.Api.Export (ExportFormat, spaceFormats)
 import Wiki.App.Backend (ExportTarget (..), MonadLoad, MonadWiki (..), Session (exports), WikiError)
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
@@ -119,7 +120,7 @@ data Action
   | ShiftPage PageId Shift
   | ShiftSpace SpaceId Shift
 
-component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadEncryption m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec

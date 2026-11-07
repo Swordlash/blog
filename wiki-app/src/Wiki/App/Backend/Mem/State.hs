@@ -536,6 +536,7 @@ insertSpace parent name public now st0 =
           , parent
           , public
           , sealed = False
+          , encryption = Nothing
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -772,6 +773,7 @@ respace parent slug position s =
     , parent
     , public = s.public
     , sealed = s.sealed
+    , encryption = s.encryption
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -979,6 +981,7 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , parent = s.parent
       , public = s.public
       , sealed = s.sealed
+      , encryption = s.encryption
       , owner = s.owner
       , active = s.active
       , personalContainer = s.personalContainer

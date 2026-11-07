@@ -136,6 +136,7 @@ import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
@@ -175,6 +176,7 @@ import Wiki.App.View.LivePreview qualified as LivePreviewView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
+import Wiki.App.View.Encrypted qualified as EncryptedView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Reset qualified as ResetView
@@ -279,6 +281,7 @@ data ViewSlot
   | StatusSlot
   | PersonalSpaceSlot
   | AvatarSlot
+  | EncryptedSlot
   deriving stock (Eq, Ord)
 
 -- | 'PartSlot' is the index of a child under the label "part". The output
@@ -436,7 +439,7 @@ data Action
 
 component
   :: forall output m
-   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadWhatsNew m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (Typeable m, MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadStars m, MonadWhatsNew m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadVault m, MonadEncryption m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -1117,7 +1120,13 @@ component =
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
-        SpaceFailed _ e -> failureView e RetryHere
+        SpaceFailed path e
+          -- An encrypted space whose pages this browser cannot read now
+          -- says why, and offers to unlock the user's keys.
+          | Just space <- findSpace (context st).spaces path >>= lastMay
+          , isJust space.encryption ->
+              HH.slot "view" EncryptedSlot EncryptedView.component EncryptedView.Input {context = context st, space, problem = e} FromView
+          | otherwise -> failureView e RetryHere
         InSpace _ space pages ->
           let homePath = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
            in case st.route of

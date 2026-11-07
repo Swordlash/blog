@@ -2063,6 +2063,9 @@ component =
     storeDraft told = do
       st <- get
       case st.loaded of
+        -- A draft of a page of an encrypted space is not kept on the
+        -- server, which would read it: the work stays in the editor.
+        _ | isJust st.input.space.encryption -> pure True
         Ready _ | offering st, not told -> pure False
         Ready w
           | changed w ->
