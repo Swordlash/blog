@@ -205,6 +205,11 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     rest :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
     (sealedOf rest.vault, itemOf identityItem rest.vault) `shouldBe` (Nothing, Just pair)
     (call r theReader methodGet (links.account.publicKey (UserId "user-editor")) none >>= jsonAs 200) `shouldReturn` entry
+    -- The passkey that alone unlocks the vault holding the key pair is
+    -- not removed, whatever the panel showed: the vault would be lost.
+    (call r editor methodDelete (links.account.removePasskey info.id) none >>= jsonAs 409)
+      `shouldReturn` Conflict "This passkey is the last way to unlock your vault, which holds your keys: add your password or another passkey as a way to unlock it first."
+    map (\p -> (p.id, p.unlocks)) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [(info.id, True)]
 
   it "refuses parts of a vault that are not of their lengths" $ withSignedIn backing $ \r editor _ -> do
     info <- registerNew r editor passkey

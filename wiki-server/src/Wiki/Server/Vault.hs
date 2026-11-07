@@ -495,16 +495,26 @@ assertPasskey st now u i verify =
 
 -- | Remove one of a user's passkeys, with its wrapped copy of the vault
 -- key, which changes the vault's version. The result is their passkeys
--- left; another user's passkey, or none, is 'NotFound'.
+-- left; another user's passkey, or none, is 'NotFound'. The passkey that
+-- is the last way to unlock a vault holding the user's key pair is
+-- refused ('Conflict'): checked here, in the transaction, because the
+-- panel's guard can work from a stale list (another tab, two removals in
+-- a row), and a vault nothing unlocks is lost once the device's copies go.
 removePasskey :: Storage -> UTCTime -> UserId -> CredentialId -> IO (Either WikiError [PasskeyInfo])
 removePasskey st now u i = writingEither st $ do
   there <- runSelectReturningList (select (filter_ (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text) (all_ wikiDb.passkeys)))
-  if null there
-    then pure (Left NotFound)
-    else do
-      runDelete (delete wikiDb.passkeys (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
-      runUpdate (update wikiDb.vaults (\x -> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now))) (\x -> x.user_id ==. val_ u.text))
-      Right <$> passkeysIn u
+  holdsPair <- not . null <$> runSelectReturningList (select (filter_ (\x -> x.user_id ==. val_ u.text &&. x.name ==. val_ identityItem.text) (all_ wikiDb.vault_items)))
+  byPassword <- any (\x -> isJust x.password_key) <$> runSelectReturningList (select (filter_ (\x -> x.user_id ==. val_ u.text) (all_ wikiDb.vaults)))
+  othersUnlock <- any (\p -> p.credential_id /= i.text && isJust p.wrapped_key) <$> runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text) (all_ wikiDb.passkeys)))
+  let unlocksVault = any (\p -> isJust p.wrapped_key) there
+  if
+    | null there -> pure (Left NotFound)
+    | holdsPair && unlocksVault && not byPassword && not othersUnlock ->
+        pure (Left (Conflict "This passkey is the last way to unlock your vault, which holds your keys: add your password or another passkey as a way to unlock it first."))
+    | otherwise -> do
+        runDelete (delete wikiDb.passkeys (\p -> p.credential_id ==. val_ i.text &&. p.user_id ==. val_ u.text))
+        runUpdate (update wikiDb.vaults (\x -> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now))) (\x -> x.user_id ==. val_ u.text))
+        Right <$> passkeysIn u
 
 --------------------------------------------------------------------------------
 -- Ceremonies

@@ -276,7 +276,14 @@ shareWithAssistant u v =
     Just k -> forgetKey k
     Nothing ->
       deviceRecord u >>= \case
-        Right (Just bytes) | Right (Current r) <- readStored bytes, isJust r.server -> void (keepDeviceKey u v (not r.askEachTime))
+        Right (Just bytes)
+          | Right (Current r) <- readStored bytes
+          , isJust r.server -> do
+              -- On disk only when neither the assistant nor the vault asks
+              -- each time: the copy is the vault key, and either setting
+              -- means it must not outlive the page.
+              device <- readDevice u
+              void (keepDeviceKey u v (not r.askEachTime && not device.askEachTime))
         _ -> pass
 
 --------------------------------------------------------------------------------
@@ -434,6 +441,17 @@ setVaultAskEachTime u asking = runExceptT $ do
   v <- lift (vaultKeyHere u stored) >>= maybe (throwError "Unlock your vault on this device first.") pure
   forgetting v (keepVaultKey u v (not asking))
   lift (deviceKey (identitySlot u)) >>= traverse_ (\k -> forgetting k (ExceptT (keepDeviceKey (identitySlot u) k (not asking))))
+  -- The assistant's slot may hold the same vault key (shared when its
+  -- settings sync). Asking each time must cover that copy too, or a reload
+  -- would reopen the vault from it without an unlock. A key of the
+  -- assistant's own (one that does not open the vault) is left as it is.
+  when asking $
+    lift (deviceKey u)
+      >>= traverse_
+        ( \k -> forgetting k $ do
+            same <- lift (maybe (pure False) (\s -> opensVault k s.vault) stored)
+            when same (ExceptT (keepDeviceKey u k False))
+        )
   ExceptT (writeDevice u VaultDevice {held = device.held, askEachTime = asking, offered = device.offered})
   describe u stored True
 

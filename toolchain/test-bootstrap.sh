@@ -737,7 +737,7 @@ readiness_fixture() {
   unset CC
   for package in esbuild katex highlight.js mermaid fflate @drgrice1/tikzjax http-server @bjorn3/browser_wasi_shim \
     @codemirror/state @codemirror/view @codemirror/commands @codemirror/language @codemirror/lang-markdown @codemirror/lint @lezer/highlight \
-    @anthropic-ai/sdk openai cropperjs @serenity-kit/opaque; do
+    @anthropic-ai/sdk openai cropperjs @serenity-kit/opaque @hpke/core; do
     mkdir -p "$case_dir/repo/node_modules/$package"
     printf '{"main":"index.js"}\n' >"$case_dir/repo/node_modules/$package/package.json"
     printf 'module.exports = {};\n' >"$case_dir/repo/node_modules/$package/index.js"
