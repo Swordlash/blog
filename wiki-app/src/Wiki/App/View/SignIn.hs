@@ -456,7 +456,7 @@ component =
         <section class="account-panel" aria-label="How you sign in">
           <h2>How you sign in</h2>
           {{ body }}
-          {{ HH.slot_ "security" () SecurityView.component () }}
+          {{ HH.slot_ "security" () SecurityView.component ((\u -> u.id) <$> st.input.session.user) }}
           <section class="account-avatar" aria-label="Avatar">
             <h3>Avatar</h3>
             <p class="account-note">A picture of you, shown round beside your name, at your comments and to the readers of a page.</p>

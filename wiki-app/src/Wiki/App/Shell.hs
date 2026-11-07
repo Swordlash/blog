@@ -727,7 +727,7 @@ component =
                 <h3>Avatar</h3>
                 {{ HH.slot "view" AvatarSlot AvatarView.component AvatarView.Input {user = st.session.user} FromView }}
               </section>
-              {{ HH.slot_ "part" DemoAccountSlot SecurityView.component () }}
+              {{ HH.slot_ "part" DemoAccountSlot SecurityView.component Nothing }}
               <section class="account-notifications" aria-label="Notifications">
                 <h3>Notifications</h3>
                 {{ HH.slot_ "part" DemoNotificationsSlot NotificationSettingsView.component () }}

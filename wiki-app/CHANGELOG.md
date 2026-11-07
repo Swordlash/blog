@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+The account's keys (WP5.74b1). The security panel gains a Keys section
+(`Wiki.App.View.Security`, whose input is now the signed-in user's id): the
+fingerprint of the user's public key in groups of four, to compare with
+what another member's wiki shows; whether this browser holds the private
+key, with an unlock by passkey or by password where it does not; the ways
+the vault unlocks, the password added ("Also unlock with my password", one
+touch of a passkey) or taken away; a passkey added to a vault the password
+alone unlocks; and "ask each time". A user without keys makes them there,
+with the password or, without one, with a passkey. A passkey that is the
+vault's last way to unlock cannot be removed. Opening the panel settles the
+keys on this browser (`settleKeys`).
+
 The password unlocks the vault (WP5.74b1). The browser's OPAQUE client
 gives OPAQUE's export key as a WebCrypto key the page holds
 (`Wiki.App.Backend.Opaque`'s last steps answer its `KeyRef`), never its

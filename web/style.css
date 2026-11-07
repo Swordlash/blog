@@ -5408,6 +5408,51 @@ div.server-secret > span:first-child {
   font-size: 0.85rem;
 }
 
+/* The account's keys (Wiki.App.View.Security): the fingerprint of the
+   user's public key, in groups of four digits that wrap as whole groups,
+   and the ways the vault unlocks. */
+.keys-fingerprint code {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.85rem;
+  word-spacing: 0.3em;
+  overflow-wrap: normal;
+}
+
+.keys-vault,
+.keys-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.4rem;
+}
+
+.keys-unlocks {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+
+.keys-actions {
+  flex-wrap: wrap;
+}
+
+/* The offer, after a sign-in with a password, to unlock the keys with the
+   password too (Wiki.App.View.SignIn), under the account's buttons. */
+.keys-offer {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 21;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  font-size: 0.9rem;
+}
+
 .session-list {
   display: flex;
   flex-direction: column;

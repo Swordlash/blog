@@ -21,6 +21,18 @@
 --   Each signs the user in; those the writing assistant's vault has a key
 --   for also unlock it, which the list says. A browser offers passkeys only
 --   to a secure page, so over plain HTTP the section says that instead.
+-- * __Keys.__ The user's vault and key pair (WP5.74 of docs/PLAN.md,
+--   "Wiki.App.Vault"): the fingerprint of their public key, in groups of
+--   four, to compare with what another member's wiki shows; whether this
+--   browser holds the private key, and if not, an unlock with a passkey or
+--   the password; the ways the vault unlocks (passkeys, and the password
+--   when the user chose it), with the password added or taken away; and
+--   "ask each time". A user with no key pair yet makes one here: with the
+--   password, or, without one, with a passkey. The last way to unlock the
+--   vault cannot be taken away: a passkey that is that way cannot be
+--   removed. Opening the panel brings this browser up to date with the
+--   vault ('Wiki.App.Vault.settleKeys'): it unseals the private key, or
+--   makes the key pair, when it holds the vault key.
 -- * __E-mail.__ The address, whether it is verified, a form to set another
 --   one (a verification link is mailed there), "Send the link again" while
 --   it is not verified, and "Remove". Without mail it is disabled, saying
@@ -54,6 +66,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -64,16 +77,24 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Security (EmailState (..), RecoveryCodes (..), SecondFactorState (..), SessionRef, SessionSummary (..), TotpEnrolment (..))
-import Wiki.Api.Vault (PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..))
+import Wiki.Api.Vault
+  ( PasskeyInfo (..)
+  , PublicKeyEntry (..)
+  , RegistrationOptions (..)
+  , RegistrationResponse (..)
+  , StoredVault (..)
+  )
 import Wiki.App.Account (codeErrorText, passwordErrorText)
 import Wiki.App.Assistant (Made (..), MonadAssistant (..), PasskeyRefusal (..))
 import Wiki.App.Assistant.Sync (MonadVault (..))
 import Wiki.App.Backend (WikiError)
 import Wiki.App.Editor.Browser (clearField, focusElement)
 import Wiki.App.Security (MonadSecurity (..))
+import Wiki.App.Vault (UserKeys (..), addPasskeyUnlock, addPasswordUnlock, createWithPasskey, createWithProvedPassword, removePasswordUnlock, setVaultAskEachTime, settleKeys, unlockWithPasskey, unlockWithPassword)
 import Wiki.App.View.Common (attr, errorMessage)
-import Wiki.Core.Assistant.Vault (CredentialId)
+import Wiki.Core.Id (UserId)
 import Wiki.Core.User (Email (..), Password (..))
+import Wiki.Core.Vault (CredentialId (..), Unlock (..), Vault (..), fingerprintGroups, identityItem, itemOf, passkeyWraps, wrapFor)
 
 data State = State
   { available :: Bool
@@ -112,6 +133,15 @@ data State = State
   -- ^ The current password, which making a passkey asks for, since a
   -- passkey signs the user in.
   , keysProblem :: Maybe Text
+  , owner :: Maybe UserId
+  -- ^ The signed-in user, whose keys the panel shows: none in the demo.
+  , sealable :: Bool
+  -- ^ Whether the browser offers WebCrypto to this page.
+  , userKeys :: Maybe (Either Text UserKeys)
+  -- ^ The user's keys, once settled when the panel opens.
+  , typedVaultPassword :: Text
+  , vaultPasswordField :: H.RefLabel
+  , vaultProblem :: Maybe Text
   }
 
 -- | Which of the address's forms is open.
@@ -147,16 +177,26 @@ data Action
   | TypedKeyPassword Text
   | AddKey
   | RemoveKey CredentialId
+  | TypedVaultPassword Text
+  | MakeKeys
+  | MakeKeysWithPasskey
+  | UnlockByPasskey
+  | UnlockByPassword
+  | AddPasswordUnlock
+  | RemovePasswordUnlock
+  | AddPasskeyUnlock
+  | VaultAskEachTime Bool
 
-component :: forall query input output m. (MonadSecurity m, MonadVault m, MonadAssistant m, MonadUUID m, MonadIO m) => H.Component query input output m
+component :: forall query output m. (MonadSecurity m, MonadVault m, MonadAssistant m, MonadUUID m, MonadIO m) => H.Component query (Maybe UserId) output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \_ -> do
+      { initialState = \owner -> do
           codeField <- H.newRefLabel "second-factor-code"
           emailField <- H.newRefLabel "account-email"
           passwordField <- H.newRefLabel "account-current-password"
           keyPasswordField <- H.newRefLabel "passkey-current-password"
+          vaultPasswordField <- H.newRefLabel "keys-current-password"
           pure
             State
               { available = True
@@ -186,6 +226,12 @@ component =
               , typedKeyPassword = ""
               , keyPasswordField
               , keysProblem = Nothing
+              , owner
+              , sealable = False
+              , userKeys = Nothing
+              , typedVaultPassword = ""
+              , vaultPasswordField
+              , vaultProblem = Nothing
               }
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.initialize = Just Initialize}
@@ -206,6 +252,10 @@ component =
           <section class="account-passkeys" aria-label="Passkeys">
             <h3>Passkeys</h3>
             {{ keysView st }}
+          </section>
+          <section class="account-keys" aria-label="Keys">
+            <h3>Keys</h3>
+            {{ vaultView st }}
           </section>
           <section class="account-email" aria-label="E-mail address">
             <h3>E-mail address</h3>
@@ -259,9 +309,9 @@ component =
                       <span class="passkey-name">{{ k.name }}</span>
                       <span class="passkey-times">{{ "Added " <> stamped k.createdAt <> maybe ", never used" (\t -> ", last used " <> stamped t) k.lastUsedAt }}</span>
                       {% if k.unlocks %}
-                        <span class="passkey-unlocks">Also unlocks your assistant's keys</span>
+                        <span class="passkey-unlocks">Also unlocks your keys</span>
                       {% end %}
-                      <button type="button" class="passkey-remove" disabled={{ st.busy }} onClick={{ const (RemoveKey k.id) }}>Remove</button>
+                      <button type="button" class="passkey-remove" disabled={{ st.busy || lastWay k.id }} title={{ if lastWay k.id then "The only way to unlock your keys: add another first." else "" }} onClick={{ const (RemoveKey k.id) }}>Remove</button>
                     </li>
                   {% end %}
                 </ul>
@@ -288,9 +338,97 @@ component =
       where
         -- A user without a password (one who signs in with a provider)
         -- has none to give; while the state is not known, the field shows.
-        asksPassword = case st.factor of
-          Just (Right f) -> f.asksPassword
-          _ -> True
+        asksPassword = givesPassword st
+        lastWay = lastUnlock st
+
+    vaultView :: State -> H.ComponentHTML Action Empty m
+    vaultView st
+      | not st.keysKept = [hh|<p class="account-note">Keys are kept by a wiki on a server; this demo keeps none.</p>|]
+      | not st.sealable = [hh|<p class="account-note keys-unavailable">Your keys need this wiki at its HTTPS address: the browser offers no encryption to a page served over plain HTTP.</p>|]
+      | otherwise = case st.userKeys of
+          Nothing -> [hh|<p class="loading">Loading…</p>|]
+          Just (Left why) -> [hh|<div><p class="error keys-error" role="alert">{{ why }}</p></div>|]
+          Just (Right k) ->
+            [hh|
+              <div>
+                <p class="account-note">Your key pair lets encrypted spaces share their keys with you. Its private half is sealed in your vault, which only you can unlock: the server keeps the vault, and cannot open it.</p>
+                {% for entry in maybeToList k.publicKey %}
+                  <div class="keys-identity">
+                    <p class="keys-fingerprint">Your key's fingerprint: <code>{{ T.unwords (fingerprintGroups k.fingerprint) }}</code></p>
+                    <p class="account-note">{{ "Made " <> stamped entry.createdAt <> ". Another member's wiki shows this fingerprint for you: compare the two, by a way you trust, to be sure the server gave them your key." }}</p>
+                  </div>
+                {% end %}
+                {% if isNothing k.publicKey %}
+                  <p class="keys-none">{{ noKeysText }}</p>
+                {% end %}
+                {% for v in maybeToList k.vault %}
+                  <div class="keys-vault">
+                    <p class="keys-device">{{ deviceText k }}</p>
+                    <p class="keys-unlocked-by">Unlocked by:</p>
+                    <ul class="keys-unlocks">
+                      {% for p in unlockingPasskeys v %}
+                        <li class="keys-unlock-passkey">{{ "Passkey: " <> p }}</li>
+                      {% end %}
+                      {% if passwordUnlocks v %}
+                        <li class="keys-unlock-password">Your password</li>
+                      {% end %}
+                    </ul>
+                    {% if passwordUnlocks v %}
+                      <p class="account-note">With your password among them, your keys are as safe as your password.</p>
+                    {% end %}
+                    <label class="keys-ask">
+                      <input type="checkbox" class="keys-ask-each-time" checked={{ k.askEachTime }} disabled={{ st.busy || not k.unlocked }} onChecked={{ VaultAskEachTime }}>
+                      <span>Ask for a passkey or your password each time the wiki opens in this browser</span>
+                    </label>
+                  </div>
+                {% end %}
+                {% if givesPassword st %}
+                  <label class="field">
+                    <span>Current password</span>
+                    <input type="password" name="keys-password" autocomplete="current-password" onValueInput={{ TypedVaultPassword }} {{ HP.ref st.vaultPasswordField }}>
+                  </label>
+                {% end %}
+                <div class="actions keys-actions">
+                  {% for b in buttons k %}
+                    {{ b }}
+                  {% end %}
+                </div>
+                <div class="sign-in-told">
+                  {% for p in maybeToList st.vaultProblem %}
+                    <p class="error keys-error" role="alert">{{ p }}</p>
+                  {% end %}
+                </div>
+              </div>
+            |]
+      where
+        noKeysText :: Text
+        noKeysText
+          | givesPassword st = "You have no key pair yet. It is made the next time you sign in with your password, or now, with your current password."
+          | otherwise = "You have no key pair yet. You sign in with a provider and have no password, so a passkey unlocks your keys: encrypted spaces need one."
+        deviceText :: UserKeys -> Text
+        deviceText k
+          | k.heldHere = "This browser holds your private key."
+          | k.unlocked = "This browser holds your vault's key, not yet your private key."
+          | otherwise = "This browser does not hold your keys: unlock them here to use encrypted spaces."
+        unlockingPasskeys v =
+          let ids = Map.keys (passkeyWraps v.vault)
+           in case st.keys of
+                Just (Right ks) -> [p.name | p <- ks, p.id `elem` ids]
+                _ -> map (\c -> c.text) ids
+        passwordUnlocks v = isJust (wrapFor ByPassword v.vault)
+        button cls label act = [hh|<button type="button" class={{ cls }} disabled={{ st.busy }} onClick={{ const act }}>{{ label :: Text }}</button>|]
+        buttons k = case k.vault of
+          Nothing
+            | givesPassword st -> [button "keys-make" "Make my keys" MakeKeys]
+            | otherwise -> [button "keys-make-passkey" "Make my keys with a passkey" MakeKeysWithPasskey]
+          Just v ->
+            let byPasskey = not (Map.null (passkeyWraps v.vault))
+                byPassword = passwordUnlocks v
+             in [button "keys-unlock-passkey-button" "Unlock with a passkey" UnlockByPasskey | not k.heldHere, byPasskey]
+                  <> [button "keys-unlock-password-button" "Unlock with your password" UnlockByPassword | not k.heldHere, byPassword]
+                  <> [button "keys-password-add" "Also unlock with my password" AddPasswordUnlock | givesPassword st, not byPassword, byPasskey]
+                  <> [button "keys-password-remove" "Stop unlocking with my password" RemovePasswordUnlock | byPassword, byPasskey]
+                  <> [button "keys-passkey-add" "Also unlock with a passkey" AddPasskeyUnlock | byPassword, not byPasskey, st.keysHere]
 
     factorView :: State -> H.ComponentHTML Action Empty m
     factorView st
@@ -477,6 +615,25 @@ component =
         when (keysKept && keysHere) $ do
           keys <- lift listPasskeys
           modify (\st -> st {keys = Just keys})
+        sealable <- lift sealingHere
+        modify (\st -> st {sealable})
+        owner <- gets (\st -> st.owner)
+        for_ owner $ \u ->
+          when (keysKept && sealable) $ do
+            -- Opening the panel brings this browser up to date with the
+            -- vault: the private key unsealed, or the key pair made, when
+            -- the browser holds the vault key.
+            vault <- lift (settleKeys u)
+            modify (\st -> st {userKeys = Just vault})
+      TypedVaultPassword t -> modify (\st -> st {typedVaultPassword = t})
+      MakeKeys -> withVaultPassword (\u p -> maybe (pure (Left "Type your current password.")) (createWithProvedPassword u) p)
+      MakeKeysWithPasskey -> withVault (\u -> createWithPasskey u Nothing)
+      UnlockByPasskey -> withVault unlockWithPasskey
+      UnlockByPassword -> withVaultPassword (\u p -> maybe (pure (Left "Type your current password.")) (unlockWithPassword u) p)
+      AddPasswordUnlock -> withVaultPassword (\u p -> addPasswordUnlock u Nothing p)
+      RemovePasswordUnlock -> withVault removePasswordUnlock
+      AddPasskeyUnlock -> withVaultPassword addPasskeyUnlock
+      VaultAskEachTime asking -> withVault (`setVaultAskEachTime` asking)
       TypedKeyName t -> modify (\st -> st {typedKeyName = t})
       TypedKeyPassword t -> modify (\st -> st {typedKeyPassword = t})
       AddKey -> busily $ do
@@ -564,6 +721,30 @@ component =
       ConfirmClear -> gets (\st -> st.typedPassword) >>= emailChange "" . Just . Password
 
     -- Run something while nothing else may run.
+    -- A change to the user's vault, showing the keys after it, or why it
+    -- failed; the passkeys are fetched again, since their wraps may have
+    -- changed.
+    withVault :: (UserId -> m (Either Text UserKeys)) -> H.HalogenM State Action Empty output m ()
+    withVault act =
+      gets (\st -> st.owner) >>= traverse_ (\u -> busily (changed u))
+      where
+        changed u = do
+          modify (\st -> st {vaultProblem = Nothing})
+          lift (act u) >>= \case
+            Left why -> modify (\st -> st {vaultProblem = Just why})
+            Right k -> modify (\st -> st {userKeys = Just (Right k)})
+          keys <- lift listPasskeys
+          modify (\st -> st {keys = Just keys})
+
+    -- 'withVault', with the password typed, which goes with this one
+    -- attempt however it ends, as the passkeys' does.
+    withVaultPassword :: (UserId -> Maybe Password -> m (Either Text UserKeys)) -> H.HalogenM State Action Empty output m ()
+    withVaultPassword act = do
+      typed <- gets (\st -> st.typedVaultPassword)
+      modify (\st -> st {typedVaultPassword = ""})
+      gets (\st -> st.vaultPasswordField) >>= H.getRef >>= traverse_ (H.liftEffect . clearField)
+      withVault (\u -> act u (if T.null typed then Nothing else Just (Password typed)))
+
     busily :: H.HalogenM State Action Empty output m () -> H.HalogenM State Action Empty output m ()
     busily act =
       gets (\st -> st.busy) >>= \busy -> unless busy $ do
@@ -688,3 +869,20 @@ addressText e = case e.email of
     | not e.verified -> address.text <> ", not verified yet: follow the link mailed to it."
     | e.asksPassword -> address.text <> ", verified: a forgotten password can be reset by mail."
     | otherwise -> address.text <> ", verified: the wiki's mail to you goes there."
+
+-- | Whether the user has a password to give: a user who signs in with a
+-- provider has none. While the state is not known, the field shows.
+givesPassword :: State -> Bool
+givesPassword st = case st.factor of
+  Just (Right f) -> f.asksPassword
+  _ -> True
+
+-- | Whether a passkey is the last way to unlock the user's vault, which
+-- holds their key pair: then it cannot be removed.
+lastUnlock :: State -> CredentialId -> Bool
+lastUnlock st c = case st.userKeys of
+  Just (Right k)
+    | Just v <- k.vault
+    , isJust (itemOf identityItem v.vault) ->
+        Map.keys v.vault.wraps == [ByPasskey c]
+  _ -> False
