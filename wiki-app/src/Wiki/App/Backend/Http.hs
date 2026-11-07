@@ -144,7 +144,8 @@ import Wiki.Core.Id (PageId (..), SpaceId)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, pathOf)
-import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain, searchable)
+import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
+import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Vault (KeyId)
@@ -156,7 +157,7 @@ import Wiki.App.Vault (identitySlot)
 import Data.Time (UTCTime)
 import Data.Text qualified as T
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.User (Password (..), Standing (..), User, checkNewPassword)
+import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
@@ -560,7 +561,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
     where
       plainVersions =
         pageContent
-      (\c -> Map.lookup (pid, q) c.versionLists)
+          (\c -> Map.lookup (pid, q) c.versionLists)
           (endpoints.pages.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit)))
           (withVersions pid q)
   getVersion pid at =
@@ -1166,19 +1167,19 @@ signInWikiError = \case
 -- | 'Held': what this page holds of encrypted spaces. Forgotten with the
 -- page.
 data Held = Held
-  { spaceKeys :: Map SpaceId (KeyId, SpaceKey)
+  { heldKeys :: Map SpaceId (KeyId, SpaceKey)
   -- ^ Each space's key opened here, with the id of the key.
-  , pages :: Map PageId (SpaceId, PageKey)
+  , heldPages :: Map PageId (SpaceId, PageKey)
   -- ^ The pages of encrypted spaces read here, with their keys as stored
   -- (wrapped): what tells a save of one of them from a plain save.
-  , found :: Map SpaceId [(PageSummary, Text)]
+  , heldFound :: Map SpaceId [(PageSummary, Text)]
   -- ^ Each space's pages decrypted for the search, with their texts:
   -- fetched at the first search that needs them, and forgotten at every
   -- write.
   }
 
 noneHeld :: Held
-noneHeld = Held {spaceKeys = mempty, pages = mempty, found = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldFound = mempty}
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))
@@ -1189,11 +1190,11 @@ readHeld = HttpWiki (ask >>= \env -> liftIO (readIORef env.held))
 -- | Forget the pages decrypted for the search: a write may have changed
 -- them.
 forgetFound :: (MonadIO m) => HttpWiki m ()
-forgetFound = modifyHeld (\h -> h {found = mempty})
+forgetFound = modifyHeld (\h -> h {heldFound = mempty})
 
 -- | Remember pages of an encrypted space read here.
 rememberPages :: (MonadIO m) => SpaceId -> [(PageId, PageKey)] -> HttpWiki m ()
-rememberPages sid ps = modifyHeld (\h -> h {pages = Map.union (Map.fromList [(p, (sid, k)) | (p, k) <- ps]) h.pages})
+rememberPages sid ps = modifyHeld (\h -> h {heldPages = Map.union (Map.fromList [(p, (sid, k)) | (p, k) <- ps]) h.heldPages})
 
 -- | The spaces the user may see, as 'listSpaces' reads them.
 spacesNow :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
@@ -1209,7 +1210,7 @@ encryptedOr sid plain sealed =
 
 -- | The space and stored key of a page of an encrypted space read here.
 sealedPage :: (MonadIO m) => PageId -> HttpWiki m (Maybe (SpaceId, PageKey))
-sealedPage pid = Map.lookup pid . (\h -> h.pages) <$> readHeld
+sealedPage pid = Map.lookup pid . (\h -> h.heldPages) <$> readHeld
 
 -- | What the server's own prerender says of an encrypted space, which it
 -- cannot decrypt: the browser decrypts the page once it runs.
@@ -1221,7 +1222,7 @@ inServer = "This space is encrypted: its pages are decrypted in your browser."
 -- shares it with the space's readers waiting for it.
 openKey :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError (Either KeyState SpaceKey))
 openKey sid current =
-  Map.lookup sid . (\h -> h.spaceKeys) <$> readHeld >>= \case
+  Map.lookup sid . (\h -> h.heldKeys) <$> readHeld >>= \case
     Just (k, key) | k == current -> pure (Right (Right key))
     _ ->
       liftIO encryptionHere >>= \case
@@ -1237,21 +1238,21 @@ openKey sid current =
                   Just g ->
                     liftIO (deviceKeyIO (identitySlot u.id)) >>= \case
                       Nothing -> pure (Right (Left KeysLocked))
-                      Just identity -> do
-                        opened <- liftIO (openSpaceKey identity sid g)
+                      Just idKey -> do
+                        opened <- liftIO (openSpaceKey idKey sid g)
                         -- Any member's browser seals the key to the readers
                         -- waiting for it; a refusal (another member was
                         -- quicker, a key changed) is left for the next.
                         when (isRight opened && not (null e.pending)) $
-                          liftIO (shareSpaceKey identity sid g e.pending) >>= traverse_ (\grants -> void (send (endpoints.encrypted.grant sid NewGrants {keyId = e.keyId, grants})))
-                        liftIO (forgetHeld identity)
+                          liftIO (shareSpaceKey idKey sid g e.pending) >>= traverse_ (\grants -> void (send (endpoints.encrypted.grant sid NewGrants {keyId = e.keyId, grants})))
+                        liftIO (forgetHeld idKey)
                         case opened of
                           -- The device holds a private key that does not
                           -- open the grant: a key pair from before a
                           -- reset, which an unlock replaces.
                           Left _ -> pure (Right (Left KeysLocked))
                           Right key -> do
-                            modifyHeld (\h -> h {spaceKeys = Map.insert sid (e.keyId, key) h.spaceKeys})
+                            modifyHeld (\h -> h {heldKeys = Map.insert sid (e.keyId, key) h.heldKeys})
                             pure (Right (Right key))
 
 -- | A step with the space's key, or the reason it is not held as an error
@@ -1384,7 +1385,7 @@ sealedSearch q =
       candidates <- for [(s.id, k) | s <- spaces, Just k <- [s.encryption], wanted s] $ \(sid, k) ->
         foundIn sid k <&> \pages ->
           let summaries = Map.fromList [(p.id, p) | (p, _) <- pages]
-           in [ Candidate {page = p.id, space = sid, spacePath = map (\s -> s.slug) (chain sid), pagePath, text = searchable p.title body}
+           in [ Candidate {page = p.id, space = sid, spacePath = map (\s -> s.slug) (chain sid), pagePath, text = Search.searchable p.title body}
               | (p, body) <- pages
               , Just pagePath <- [pathOf (`Map.lookup` summaries) p.id]
               ]
@@ -1394,7 +1395,7 @@ sealedSearch q =
 -- none when the space's key cannot be held here.
 foundIn :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m [(PageSummary, Text)]
 foundIn sid current =
-  Map.lookup sid . (\h -> h.found) <$> readHeld >>= \case
+  Map.lookup sid . (\h -> h.heldFound) <$> readHeld >>= \case
     Just pages -> pure pages
     Nothing -> do
       immediate <- HttpWiki (asks (\env -> env.immediate))
@@ -1406,7 +1407,7 @@ foundIn sid current =
             Right listed -> do
               opened <- liftIO (openPages space sid [(p.id, p.pageKey, p.content) | p <- listed])
               let pages = [(PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False}, body) | p <- listed, Just (title, body) <- [Map.lookup p.id opened]]
-              modifyHeld (\h -> h {found = Map.insert sid pages h.found})
+              modifyHeld (\h -> h {heldFound = Map.insert sid pages h.heldFound})
               pure pages
         _ -> pure []
 
@@ -1416,7 +1417,7 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
     encryptedOr sid (pure (Right NotEncrypted)) $ \current -> do
       immediate <- HttpWiki (asks (\env -> env.immediate))
       if immediate
-        then pure (Right WaitingForKey)
+        then pure (Left (Invalid inServer))
         else fmap (either identity (const KeyReady)) <$> openKey sid current
 
   -- The key is made here, sealed to the user's own public key, and sent
@@ -1437,7 +1438,7 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
                   Right made -> do
                     result <- write (endpoints.encrypted.encrypt sid EncryptSpace {keyId = made.keyId, grant = NewGrant {recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}})
                     case result of
-                      Right _ -> modifyHeld (\h -> h {spaceKeys = Map.insert sid (made.keyId, made.key) h.spaceKeys})
+                      Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (made.keyId, made.key) h.heldKeys})
                       Left _ -> liftIO (forgetSpaceKey made.key)
                     pure result
   spaceEncryption sid = send (endpoints.encrypted.space sid)

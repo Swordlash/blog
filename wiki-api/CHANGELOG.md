@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Encrypted spaces (WP5.74b2). `WikiApi` gains `encrypted`, the routes under
+`encrypted/` (`EncryptedApi`): a space's key as its reader sees it, turning
+a space encrypted, grants of its key, and its pages as ciphertext (listed,
+with their contents, by path, created, saved, and their histories). Their
+types are in the new `Wiki.Api.Encrypted`; no field of them holds a page's
+plain title or text. The plain routes of pages answer 409 for a page of an
+encrypted space.
+
 `PasswordRecordChange` gains `vault :: Maybe PasswordWrapChange`
 (`{tag, wrapped}`), written only when there is one (WP5.74b1).
 

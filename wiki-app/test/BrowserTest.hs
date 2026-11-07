@@ -18,6 +18,7 @@ import Test.Browser.Export qualified as Export
 import Test.Browser.Favicon qualified as Favicon
 import Test.Browser.History qualified as History
 import Test.Browser.HomePage qualified as HomePage
+import Test.Browser.Encrypted qualified as Encrypted
 import Test.Browser.Hpke qualified as Hpke
 import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
@@ -115,6 +116,7 @@ spec = do
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices, and the user's keys" (Vault.spec BrowserDOM)
   describe "HPKE, as encrypted spaces will seal keys" Hpke.spec
+  describe "Encrypted spaces" (Encrypted.spec BrowserDOM)
   describe "What's new" (WhatsNew.spec BrowserDOM)
 #endif
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Encrypted spaces (WP5.74b2). Migration `0011-encrypted-spaces` adds
+`spaces.key_id`, `key_grants`, `page_keys` and `sealed_versions`. The
+storage serves the encrypted routes (`spaceEncryption`, `encryptSpace`,
+`grantSpaceKey`, `sealedPages`, `sealedContents`, `sealedPageAt`,
+`createSealedPage`, `saveSealedPage`, `sealedVersions`, `sealedVersionAt`),
+and refuses with 409, after its permission checks, every plain path that
+reads or writes a page's text in an encrypted space; the search leaves
+encrypted spaces out, and a whole-wiki export leaves them and their pages
+out. An import into an encrypted space is refused.
+
 The password unlocks the vault, and a reset says what it costs
 (WP5.74b1). `PUT account/password` takes the vault key wrapped for the new
 password (`vault`) and stores it with the new record in one transaction,

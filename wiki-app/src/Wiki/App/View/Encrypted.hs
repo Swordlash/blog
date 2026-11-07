@@ -18,6 +18,7 @@ module Wiki.App.View.Encrypted
   )
 where
 
+import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
@@ -59,7 +60,7 @@ data Action
   | Typed Text
   | Again
 
-component :: forall query m. (MonadEncryption m, MonadAssistant m, MonadVault m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadEncryption m, MonadAssistant m, MonadVault m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -109,8 +110,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      Initialize -> check
-      Receive input -> modify (\st -> st {input}) >> check
+      Initialize -> askKeys
+      Receive input -> modify (\st -> st {input}) >> askKeys
       Typed t -> modify (\st -> st {typed = t})
       Again -> H.raise (Changed Nothing)
       UnlockByPasskey -> unlocking unlockWithPasskey
@@ -121,7 +122,7 @@ component =
         gets (\st -> st.passwordField) >>= H.getRef >>= traverse_ (H.liftEffect . clearField)
         unlocking (\u -> unlockWithPassword u (Password typed))
       where
-        check = do
+        askKeys = do
           sid <- gets (\st -> st.input.space.id)
           lift (keyState sid) >>= \case
             Left e -> modify (\st -> st {told = Just (errorMessage e)})

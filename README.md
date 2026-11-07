@@ -751,6 +751,57 @@ What this protects against, and what it does not:
 Your keys need HTTPS (or the machine's own address): the browser offers no
 encryption to a page served over plain HTTP, and the panel says so there.
 
+### Encrypted spaces
+
+Over `wiki-server`, a private space can be **encrypted**: the titles and
+texts of its pages, and their histories, are encrypted in its members'
+browsers, and the server keeps only ciphertext it cannot read. In the
+space's settings, under **Permissions**, **Encrypt this space…** turns a
+space encrypted. Only a private space with nothing written in it yet can be
+(a new space's untouched home page is deleted with it), and an encrypted
+space stays encrypted.
+
+How it works:
+
+- The space has a key of its own, made in the browser that encrypts it.
+  Each member gets the key sealed to their public key (see **Your keys**).
+  Who is a member is decided by the permissions, as for any space: a
+  reader granted on the space waits for the key until another member's
+  browser opens the space, which seals the key to them at once. A reader
+  without a key pair yet (who has not signed in since keys came) waits
+  until their first sign-in makes one.
+- Each page has a key of its own, encrypted with the space's key, so that
+  a single page can be shared later.
+- On a device that does not hold your keys, the space shows as locked and
+  offers to unlock them there, with a passkey or your password.
+- Slugs in an encrypted space are random, since a title's slug would show
+  the title.
+- Search runs in your browser: the first search after the page opens
+  fetches every page of each encrypted space whose key you hold and
+  decrypts it in memory, until the next change. That suits small spaces,
+  the kind encrypted spaces are for; a space of thousands of pages makes
+  that first search slow.
+
+What the server does with a page's text cannot be done in an encrypted
+space, and is refused there with the reason: the server's search, PDF and
+Word exports, feeds and link previews, comments and attachments, drafts
+kept on the server (the editor keeps your work instead), templates, moving
+a page in or out, importing an archive into it, subspaces, and making it
+public. A whole-wiki export leaves encrypted spaces out. Notifications of
+a change in an encrypted space carry no title and no excerpt, and mentions
+there notify nobody: the server cannot read them.
+
+What the server still sees: the space's name (shown in the list of
+spaces), the shape of its tree of pages, how large each page is, when and
+by whom pages are saved, who the members are, and their public keys. Not
+the titles, texts or histories. Removing a member does not change the
+space's key yet: someone removed who kept the key can still read what the
+server stores, the pages written before and after. A password reset that
+deletes your keys takes away your access to encrypted spaces until another
+member opens them and shares the key with your new key pair; a space no
+other member can read is lost. Encrypted spaces need the wiki's HTTPS
+address, as your keys do.
+
 ### The assistant at another address
 
 Each provider's settings choose a **Service**: the provider's own, or one of

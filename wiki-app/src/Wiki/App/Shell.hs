@@ -205,7 +205,7 @@ import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, tit
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent, personalContainer), containerName, subspacesOf)
+import Wiki.Core.Space (Icon (..), Space (blog, description, encryption, icon, id, name, pageOrder, parent, personalContainer), containerName, subspacesOf)
 import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a

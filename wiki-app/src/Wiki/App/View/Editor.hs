@@ -357,7 +357,7 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), hasGlobalPermission)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (encryption, id))
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author (..), Version (author))
 

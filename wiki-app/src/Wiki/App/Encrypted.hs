@@ -43,7 +43,7 @@ import Data.Aeson (Object, ToJSON (..), eitherDecodeStrict, encode, object, with
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Protolude hiding (wait)
 import Wiki.Api.Encrypted (NewGrant (..), PendingMember (..))
@@ -68,6 +68,33 @@ $( browserJS
      , ("js_forget", "wiki_enc_forget", Safe, [t|Int -> IO ()|])
      ]
  )
+
+-- Each promise is waited for here, and forced where it is used
+-- ('evaluate'): an asynchronous import returns a thunk, which waits only
+-- when forced.
+js_space_key_new :: JSText -> JSText -> IO JSText
+js_space_key_new a1 a2 = if inBrowser then wait =<< js_space_key_newPromise a1 a2 else pure inert
+
+js_space_key_open :: Int -> JSText -> JSText -> JSText -> IO JSText
+js_space_key_open a1 a2 a3 a4 = if inBrowser then wait =<< js_space_key_openPromise a1 a2 a3 a4 else pure inert
+
+js_space_key_share :: Int -> JSText -> JSText -> JSText -> JSText -> IO JSText
+js_space_key_share a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_space_key_sharePromise a1 a2 a3 a4 a5 else pure inert
+
+js_page_key_new :: Int -> JSText -> IO JSText
+js_page_key_new a1 a2 = if inBrowser then wait =<< js_page_key_newPromise a1 a2 else pure inert
+
+js_page_key_open :: Int -> JSText -> JSText -> JSText -> IO JSText
+js_page_key_open a1 a2 a3 a4 = if inBrowser then wait =<< js_page_key_openPromise a1 a2 a3 a4 else pure inert
+
+js_seal :: Int -> JSText -> JSText -> IO JSText
+js_seal a1 a2 a3 = if inBrowser then wait =<< js_sealPromise a1 a2 a3 else pure inert
+
+js_open :: Int -> JSText -> JSText -> JSText -> IO JSText
+js_open a1 a2 a3 a4 = if inBrowser then wait =<< js_openPromise a1 a2 a3 a4 else pure inert
+
+js_open_many :: Int -> JSText -> IO JSText
+js_open_many a1 a2 = if inBrowser then wait =<< js_open_manyPromise a1 a2 else pure inert
 
 --------------------------------------------------------------------------------
 -- Where encryption works
@@ -128,16 +155,16 @@ newSpaceKey sid public = whenHere $ do
 
 -- | Open a grant of a space's key with this device's private key.
 openSpaceKey :: KeyRef -> SpaceId -> KeyGrant -> IO (Either Text SpaceKey)
-openSpaceKey identity sid g = whenHere $ do
-  answer <- evaluate . fromJSText =<< js_space_key_open (heldHandle identity) (toJSText g.enc.text) (toJSText g.sealed.text) (toJSText (grantInfo sid g.keyId))
+openSpaceKey idKey sid g = whenHere $ do
+  answer <- evaluate . fromJSText =<< js_space_key_open (heldHandle idKey) (toJSText g.enc.text) (toJSText g.sealed.text) (toJSText (grantInfo sid g.keyId))
   pure (answered (\o -> SpaceKey <$> o .: "handle") answer)
 
 -- | Seal a space's key, opened again from one's own grant, to each of the
 -- readers waiting for it.
 shareSpaceKey :: KeyRef -> SpaceId -> KeyGrant -> [PendingMember] -> IO (Either Text [NewGrant])
-shareSpaceKey identity sid g waiting = whenHere $ do
+shareSpaceKey idKey sid g waiting = whenHere $ do
   let recipients = [object ["user" .= m.user, "keyId" .= m.keyId, "publicKey" .= m.publicKey] | m <- waiting]
-  answer <- evaluate . fromJSText =<< js_space_key_share (heldHandle identity) (toJSText g.enc.text) (toJSText g.sealed.text) (toJSText (grantInfo sid g.keyId)) (json recipients)
+  answer <- evaluate . fromJSText =<< js_space_key_share (heldHandle idKey) (toJSText g.enc.text) (toJSText g.sealed.text) (toJSText (grantInfo sid g.keyId)) (json recipients)
   pure (answered (.: "grants") answer)
 
 -- | Let the page forget a space's key.
@@ -165,10 +192,10 @@ newPageKey :: SpaceKey -> KeyId -> SpaceId -> PageId -> IO (Either Text (PageKey
 newPageKey (SpaceKey space) spaceKeyId sid pid = whenHere $ do
   answer <- evaluate . fromJSText =<< js_page_key_new space (toJSText (pageKeyData sid pid (KeyId "")))
   pure . flip answered answer $ \o -> do
-    handle <- o .: "handle"
+    h <- o .: "handle"
     keyId <- o .: "keyId"
     wrapped <- WrappedKey <$> o .: "nonce" <*> o .: "wrapped"
-    pure (PageKeyRef handle, PageKey {keyId, spaceKeyId, wrapped})
+    pure (PageKeyRef h, PageKey {keyId, spaceKeyId, wrapped})
 
 -- | Open a page's key with its space's key.
 openPageKey :: SpaceKey -> SpaceId -> PageId -> PageKey -> IO (Either Text PageKeyRef)

@@ -34,9 +34,9 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..))
-import Wiki.Core.Id (PageId (..), UserId (..))
+import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (slugText)
@@ -55,7 +55,10 @@ spec backing = describe "encrypted spaces in the storage" $ do
   it "turns a private space with nothing written in it encrypted, and only such a space" $ withPeople backing $ \st p -> do
     let as :: UserId -> StoredWiki IO a -> IO a
         as u = runStoredWiki st (AsUser u)
-    open <- ok =<< as p.ada (createSpace Nothing "Open")
+    -- A subspace not private from its parent: refused. (A top-level space
+    -- is made private as it is encrypted.)
+    above <- ok =<< as p.ada (createSpace Nothing "Above")
+    open <- ok =<< as p.ada (createSpace (Just above.id) "Open")
     -- Not private: refused.
     as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) `shouldReturn` Left (Conflict "Only a private space can be encrypted: make it private from its parent first.")
     void (ok =<< as p.ada (setSpaceSealed open.id True))
@@ -64,7 +67,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) `shouldReturn` Left (Conflict "A public space cannot be encrypted: anyone may read it.")
     void (ok =<< as p.ada (setSpacePublic open.id False))
     -- Its home page written to: refused, since the server has read it.
-    home <- ok =<< as p.ada (getPage open.id [])
+    home <- ok =<< as p.ada (homeOf open.id)
     void (ok =<< as p.ada (savePage home.id home.updatedAt "Home" "A secret written in plain text."))
     as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
     -- Sealed to someone else's key, or with a part of the wrong length.
@@ -115,7 +118,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     now <- getCurrentTime
     writing st (runUpdate (update wikiDb.public_keys (\k -> mconcat [k.retired_at <-. val_ (Just now), k.retired_because <-. val_ (Just "reset")]) (\k -> k.user_id ==. val_ p.bob.text)))
     (\x -> x.grant) <$> (ok =<< as p.bob (spaceEncryption secret.id)) `shouldReturn` Nothing
-    (\x -> x.waiting) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` [p.bob, p.cyd]
+    (sort . (\x -> x.waiting)) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` sort [p.bob, p.cyd]
     fresh <- giveKey st p.bob 'f'
     (map (\m -> (m.user, m.keyId)) . (\x -> x.pending)) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` [(p.bob, fresh)]
 
@@ -175,7 +178,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
         pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
     made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
     plain <- ok =<< as p.ada (createSpace Nothing "Plain")
-    plainHome <- ok =<< as p.ada (getPage plain.id [])
+    plainHome <- ok =<< as p.ada (homeOf plain.id)
     let refused :: Text -> Either WikiError b -> (Text, Text)
         refused what result = (what, either (\e -> if refusedAsEncrypted (Left e :: Either WikiError ()) then "refused" else show e) (const "done") result)
     results <-
@@ -222,6 +225,14 @@ spec backing = describe "encrypted spaces in the storage" $ do
     let body = "{\"id\":\"6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f\",\"parent\":null,\"pageKey\":{\"keyId\":\"a\",\"spaceKeyId\":\"b\",\"wrapped\":{\"nonce\":\"n\",\"key\":\"k\"}},\"content\":{\"tag\":\"t\",\"keyId\":\"a\",\"title\":\"My plain title\",\"body\":\"My plain text\"}}"
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
+
+-- | A space's only page, its home page, as a new space has it.
+homeOf :: (MonadWiki m) => SpaceId -> m (Either WikiError Page)
+homeOf sid =
+  listPages sid >>= \case
+    Right [h] -> getPage sid [h.slug]
+    Right _ -> pure (Left NotFound)
+    Left e -> pure (Left e)
 
 --------------------------------------------------------------------------------
 -- The people

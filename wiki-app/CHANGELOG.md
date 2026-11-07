@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Encrypted spaces (WP5.74b2). The HTTP backend reads and writes the pages of
+an encrypted space through the encrypted routes, encrypting and decrypting
+in the browser (`Wiki.App.Encrypted`, `jsbits/encrypted.js`), and searches
+them in the browser; the new class `MonadEncryption`
+(`Wiki.App.Backend.Encrypted`: `keyState`, `encryptSpace`,
+`spaceEncryption`) is what the views ask besides, and the demo's backend
+answers that it has no encrypted spaces. The shell shows an encrypted space
+this browser cannot read as locked, with an unlock (`Wiki.App.View.Encrypted`);
+the permissions offer "Encrypt this space…" and say what encryption does
+not yet do. The shell, the space's view and the permissions now need
+`MonadEncryption`. `Wiki.App.Assistant` gains `deviceKeyIO` and
+`heldHandle`. The editor keeps no server draft of an encrypted page.
+
 The account's keys (WP5.74b1). The security panel gains a Keys section
 (`Wiki.App.View.Security`, whose input is now the signed-in user's id): the
 fingerprint of the user's public key in groups of four, to compare with
