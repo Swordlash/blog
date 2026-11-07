@@ -844,7 +844,11 @@ userKeys m = describe "the user's keys" $ do
       printed <- find ui ".keys-fingerprint code" >>= textContent
       find ui ".account-toggle" >>= click
       pure printed
+    -- Every test ends with no key in the page that can be exported: the
+    -- page shares its keys between the tests, so a key one leaves would
+    -- fail another's count.
     closed ui = do
+      unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
