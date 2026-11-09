@@ -984,6 +984,28 @@ confirms it against reality and the plan is amended if it does not hold.
     account with a password from before OPAQUE, and one through a provider,
     still sign in after the migration (the owner, 2026-11-09).
 
+60. **Each user's keys live in the vault the assistant had (WP5.74b1, #185;
+    the owner, 2026-11-06: "as generic as possible, married to what
+    exists").** The assistant's vault (WP5.21) becomes the user's vault:
+    format 2 seals named items (`assistant`, the old settings; `identity`,
+    the user's X25519 private key) and is unlocked by wraps of kinds (one per
+    passkey, and a password wrap from HKDF over OPAQUE's `export_key`).
+    Format 1 is still read, and an old tab can neither overwrite a format-2
+    vault nor delete its key pair. The key pair is made in WebCrypto,
+    non-extractable, at the first OPAQUE sign-in. Its public key is in a
+    directory any signed-in user reads (`account/public-keys/<user>`), under
+    a key id (the first 16 bytes of the public key's SHA-256). A new vault
+    gets a password wrap; a vault that opens with a passkey is offered one
+    once per device. A password change carries the new wrap in the same
+    request. A reset deletes only the password wrap when a passkey still
+    opens the vault, and otherwise deletes the vault and retires the key pair
+    (`retired_because = 'reset'`). Users who sign in only through a provider
+    get keys through a passkey. `@hpke/core` is pinned for b2. As built, by
+    the recommendations the owner merged: the vault's routes stay under
+    `assistant/vault`; the password wrap is offered once per device; a
+    password change over plain HTTP is refused where the vault opens with the
+    password; the server does not refuse removing a vault's last passkey.
+
 ## Repository layout
 
 ```
@@ -1041,8 +1063,8 @@ In the order to do it, unless the owner says otherwise.
     liboprf, built from source, once their vectors are checked against the
     RFCs' final ones.
   - **b is cut in two** (the session, 2026-11-07): b1, each user's key pair
-    in the vault the assistant already had (#185), and b2, encrypted spaces
-    over it (#209).
+    in the vault the assistant already had, is done (decision 60, #185); b2,
+    encrypted spaces over it, is #209.
   - **b, encrypted spaces, with a key per page.** Each user has a long-term
     key pair (X25519, for libsodium's sealed boxes). The server keeps every
     user's public key; the private key is stored on the server wrapped by the
@@ -1220,6 +1242,14 @@ In the order to do it, unless the owner says otherwise.
   settings (WP5.21) so they follow the user across devices.
 
 ## Known gaps and notes
+
+- **A key pair left exportable until a reload (WP5.74b1).** A step that
+  holds the vault's key (`withKey`) is not exception-safe: when the
+  component running it is unmounted mid-step (the sign-in dialog closed),
+  the unwrapped key stays in the page as an exportable WebCrypto key until
+  the page is reloaded. The browser tests wait for it to go before each
+  test ends; the code does not make it go. A bracket around the step, or a
+  finalizer the shell runs, is the fix.
 
 What the work done so far left out, found and did not fix, or learnt that later work
 needs. Each was true when its package merged; check before relying on one.
