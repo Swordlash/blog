@@ -3,9 +3,11 @@
 -- development files, curl, tar and xz) before it builds the maker; the
 -- maker installs the rest here, first of every mode: git (cabal fetches
 -- haskell-halogen with it), pkg-config, the C libraries wiki-server links
--- (zlib, libsodium, libpq unless the build has no PostgreSQL, ncurses for
--- the configuration wizard), and what ghc-wasm-meta's setup runs (jq,
--- unzip, zstd) in the modes that install the wasm toolchain.
+-- (zlib, libpq unless the build has no PostgreSQL, ncurses for the
+-- configuration wizard), and what ghc-wasm-meta's setup runs (jq, unzip,
+-- zstd) in the modes that install the wasm toolchain. libsodium is not a
+-- package here: "Maker.Toolchain.Libsodium" builds the pinned release from
+-- source, since Debian's is too old for the opaque package.
 --
 -- On Debian or Ubuntu the packages that are missing are installed with
 -- apt-get, as root or through a sudo that needs no password; the bootstrap
@@ -32,7 +34,7 @@ import System.Exit (ExitCode (..), exitWith)
 debianPackages :: Context -> [String]
 debianPackages ctx =
   base
-    <> ["libsodium-dev", "pkg-config", "zlib1g-dev"]
+    <> ["pkg-config", "zlib1g-dev"]
     <> ["libpq-dev" | ctx.postgres]
     <> ["libncurses-dev" | ctx.wizard]
   where

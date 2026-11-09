@@ -188,7 +188,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_LIBSODIUM FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
@@ -427,7 +427,7 @@ case $name in
         printf 'cabal build PKG_CONFIG_PATH=%s LIBRARY_PATH=%s C_INCLUDE_PATH=%s\n' "${PKG_CONFIG_PATH:-}" "${LIBRARY_PATH:-}" "${C_INCLUDE_PATH:-}" >>"$EVENTS"
         printf 'cabal build WIKI_BUILD_VERSION=%s\n' "${WIKI_BUILD_VERSION:-}" >>"$EVENTS"
         if [ -n "${FAKE_CABAL_NO_LIBRARY:-}" ]; then
-          printf "Error: The pkg-config package 'libsodium' is required but it could not be found.\n" >&2
+          printf "Error: The pkg-config package 'zlib' is required but it could not be found.\n" >&2
           exit 1
         fi
         if [ -n "${FAKE_CABAL_SEMOPEN:-}" ]; then
@@ -450,31 +450,20 @@ case $name in
     esac ;;
   pkg-config)
     # libpq and zlib are found, zlib unless FAKE_NO_ZLIB hides it and the
-    # fake bootstrap has not written FAKE_BOOTSTRAP_ZLIB. libsodium
-    # is found unless FAKE_NO_LIBSODIUM hides the system's and
-    # PKG_CONFIG_PATH names no directory with its libsodium.pc; that one's
-    # libdir and includedir are those of the prefix it is under.
+    # fake bootstrap has not written FAKE_BOOTSTRAP_ZLIB.
     case $* in
       '--exists libpq') exit 0 ;;
       '--exists zlib') [ -z "${FAKE_NO_ZLIB:-}" ] || [ -f "${FAKE_BOOTSTRAP_ZLIB:-/nowhere}" ] ;;
-      '--exists libsodium')
-        [ -z "${FAKE_NO_LIBSODIUM:-}" ] || [ -f "${PKG_CONFIG_PATH:-/nowhere}/libsodium.pc" ] ;;
-      '--variable=libdir libsodium') printf '%s\n' "${PKG_CONFIG_PATH%/pkgconfig}" ;;
-      '--variable=includedir libsodium') printf '%s\n' "${PKG_CONFIG_PATH%/lib/pkgconfig}/include" ;;
       *) exit 1 ;;
     esac ;;
   pg_config) printf '/usr/lib/postgresql/17/bin\n' ;;
   cc)
-    # The preprocessor finds every header (gmp.h). A link with -lsodium,
-    # the probe of toolchain/check-native.sh, writes its program, unless
-    # FAKE_NO_LIBSODIUM hides the system's libsodium and LIBRARY_PATH and
-    # C_INCLUDE_PATH name no directories with libsodium.a and sodium.h. A
-    # link with -ltinfo, the wizard's probe, fails with FAKE_NO_TINFO.
-    output= sodium= tinfo=
+    # The preprocessor finds every header (gmp.h). A link with -ltinfo,
+    # the wizard's probe, writes its program, unless FAKE_NO_TINFO is set.
+    output= tinfo=
     while [ $# -gt 0 ]; do
       case $1 in
         -o) output=$2; shift ;;
-        -lsodium) sodium=1 ;;
         -ltinfo) tinfo=1 ;;
       esac
       shift
@@ -482,11 +471,6 @@ case $name in
     if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
     if [ -n "$tinfo" ] && [ -n "${FAKE_NO_TINFO:-}" ]; then
       printf 'ld: cannot find -ltinfo\n' >&2
-      exit 1
-    fi
-    if [ -n "$sodium" ] && [ -n "${FAKE_NO_LIBSODIUM:-}" ] &&
-      ! { [ -f "${LIBRARY_PATH:-/nowhere}/libsodium.a" ] && [ -f "${C_INCLUDE_PATH:-/nowhere}/sodium.h" ]; }; then
-      printf 'ld: cannot find -lsodium\n' >&2
       exit 1
     fi
     printf '#!/bin/sh\n' >"$output"
@@ -2142,12 +2126,13 @@ pass '--bind with another address than 127.0.0.1 implies --http; --https drops a
 fixture native-deps
 out=$case_dir/check
 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail 'the check failed with everything there'
-# Nine items, and the xelatex of the PDF exports, which is not counted.
-[ "$(grep -c '^ok ' "$out")" = 10 ] || fail 'the check did not report nine items and xelatex ok'
+# Eight items, and the xelatex of the PDF exports, which is not counted;
+# libsodium is not counted either, since the bootstrap builds it.
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check did not report eight items and xelatex ok'
 assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
 assert_contains "$out" 'ok       zlib        pkg-config --exists zlib'
-assert_contains "$out" 'ok       libsodium   sodium.h and -lsodium, through cc'
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+assert_contains "$out" '--       libsodium   not needed from the system: the bootstrap builds libsodium 1.0.22 from source (toolchain/libsodium.sh; not counted)'
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
 out=$case_dir/check-no-zlib
 status=0
 FAKE_NO_ZLIB=1 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
@@ -2158,7 +2143,7 @@ assert_contains "$out" 'sudo apt-get install zlib1g-dev'
 assert_contains "$out" 'sudo dnf install zlib-devel'
 assert_contains "$out" 'LIBRARY_PATH, C_INCLUDE_PATH, CPATH'
 assert_contains "$out" 'LD_LIBRARY_PATH'
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without zlib did not report the other eight items and xelatex ok'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without zlib did not report the other seven items and xelatex ok'
 pass 'toolchain/check-native.sh reports each item ok, and names a missing one with its packages and exits 1'
 
 # libpq is found through pg_config on PATH, which postgresql-libpq's build
@@ -2183,7 +2168,7 @@ assert_contains "$out" 'missing  libpq       no pg_config on PATH, though pkg-co
 assert_contains "$out" 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.'
 assert_contains "$out" "PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin"
 assert_contains "$out" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without pg_config did not report the other eight items and xelatex ok'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without pg_config did not report the other seven items and xelatex ok'
 mkdir -p "$case_dir/pgsql-16/bin"
 ln -s "$case_dir/bin/tool" "$case_dir/pgsql-16/bin/pg_config"
 out=$case_dir/check-pg-config-elsewhere
@@ -2206,8 +2191,8 @@ out=$case_dir/check-without-postgres
 sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres >"$out" 2>&1 ||
   fail 'the check --without-postgres failed with everything there'
 assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
-assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-postgres did not report eight items and xelatex ok'
+assert_contains "$out" 'All 7 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-postgres did not report seven items and xelatex ok'
 assert_lacks "$out" 'missing'
 status=0
 sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=$?
@@ -2227,8 +2212,8 @@ WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" --without-tex >
   fail 'the check --without-tex failed with everything there'
 [ ! -e "$case_dir/xelatex-ran" ] || fail 'the check --without-tex ran xelatex'
 assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
-assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-tex did not report nine items ok'
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-tex did not report eight items ok'
 assert_lacks "$out" 'PDF exports need xelatex'
 # Without the option the same xelatex is probed, and reported as failing.
 out=$case_dir/check-hanging-tex
@@ -2334,8 +2319,8 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 # The check after the bootstrap is told, as the first was, that a wiki in
-# SQLite needs no libpq: eight items. Neither check probes xelatex.
-assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+# SQLite needs no libpq: seven items. Neither check probes xelatex.
+assert_contains "$out" 'All 7 items the native build of wiki-server needs are there.'
 [ "$(grep -c -F -- "--       xelatex     checked by the deploy's TeX step" "$out")" = 2 ] ||
   fail 'the check and the check after the bootstrap did not both leave xelatex to the TeX step'
 assert_lacks "$out" "working at $case_dir/bin/xelatex"
@@ -2696,41 +2681,23 @@ done
 pass 'after a download the cache keeps its five newest zips, and deletes the .meta files of the others'
 
 # A machine without libsodium that is not Debian (no dpkg-query on PATH),
-# so nothing would install it: the check refuses.
+# so nothing would install one: the check does not ask for it, since the
+# bootstrap builds libsodium from source, and the deploy goes on to the
+# bootstrap and the build. (The fakes know no libsodium at all.)
 : >"$EVENTS"
 out=$case_dir/no-libsodium
-if FAKE_NO_LIBSODIUM=1 PATH=$case_dir/bin:$NO_DPKG deploy --prefix "$pre" >"$out" 2>&1; then fail 'a machine without libsodium deployed'; fi
-assert_contains "$out" 'missing  libsodium   cc cannot compile and link a program with sodium.h and -lsodium (Debian: libsodium-dev; RHEL: libsodium-devel)'
-assert_contains "$out" 'RHEL has libsodium in EPEL only'
-assert_contains "$out" 'LIBRARY_PATH=<dir>/lib C_INCLUDE_PATH=<dir>/include PKG_CONFIG_PATH=<dir>/lib/pkgconfig'
-assert_lacks "$EVENTS" 'curl https://'
-assert_lacks "$EVENTS" 'bootstrap'
-assert_lacks "$EVENTS" 'cabal'
-# One built from source into a directory of its own: PKG_CONFIG_PATH alone
-# is not enough, since the build links -lsodium without pkg-config, and the
-# check says which directories to give it.
-mkdir -p "$case_dir/libsodium/lib/pkgconfig" "$case_dir/libsodium/include"
-touch "$case_dir/libsodium/lib/pkgconfig/libsodium.pc" "$case_dir/libsodium/lib/libsodium.a" "$case_dir/libsodium/include/sodium.h"
-: >"$EVENTS"
-out=$case_dir/pkg-config-libsodium
-if FAKE_NO_LIBSODIUM=1 PKG_CONFIG_PATH=$case_dir/libsodium/lib/pkgconfig PATH=$case_dir/bin:$NO_DPKG deploy --prefix "$pre" >"$out" 2>&1; then
-  fail 'a libsodium named by PKG_CONFIG_PATH alone was taken'
-fi
-assert_contains "$out" "pkg-config finds a libsodium in $case_dir/libsodium/lib, but cc does not: the build looks where cc does, so give it LIBRARY_PATH=$case_dir/libsodium/lib C_INCLUDE_PATH=$case_dir/libsodium/include"
-assert_lacks "$EVENTS" 'cabal'
-: >"$EVENTS"
-out=$case_dir/own-libsodium
-FAKE_NO_LIBSODIUM=1 LIBRARY_PATH=$case_dir/libsodium/lib C_INCLUDE_PATH=$case_dir/libsodium/include deploy --prefix "$pre" >"$out" 2>&1 ||
-  fail 'a libsodium named by LIBRARY_PATH and C_INCLUDE_PATH was not taken'
-assert_contains "$out" 'ok       libsodium   sodium.h and -lsodium, through cc'
-assert_contains "$EVENTS" "LIBRARY_PATH=$case_dir/libsodium/lib C_INCLUDE_PATH=$case_dir/libsodium/include"
+PATH=$case_dir/bin:$NO_DPKG deploy --prefix "$pre" >"$out" 2>&1 || fail "a machine without libsodium was refused: $(cat "$out")"
+assert_contains "$out" '--       libsodium   not needed from the system: the bootstrap builds libsodium 1.0.22 from source (toolchain/libsodium.sh; not counted)'
+assert_lacks "$out" 'libsodium-dev'
+assert_contains "$EVENTS" 'bootstrap'
+assert_contains "$EVENTS" 'cabal build'
 : >"$EVENTS"
 out=$case_dir/no-library
 if FAKE_CABAL_NO_LIBRARY=1 deploy --prefix "$pre" >"$out" 2>&1; then fail 'a build that lacks a library deployed'; fi
 assert_contains "$out" 'the build of wiki-server lacks a C library or pkg-config (see above): sh toolchain/check-native.sh says what is missing'
 assert_lacks "$EVENTS" 'systemctl stop'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'a failed build took the server down'
-pass 'a machine without libsodium is refused before the build by toolchain/check-native.sh, which names its packages and the directories to give the build; LIBRARY_PATH and C_INCLUDE_PATH reach the build; a build that lacks a library points at the check'
+pass 'a machine without libsodium deploys, since the bootstrap builds it; a build that lacks a library points at the check'
 
 # A build that fails in a dependency's log, as on the RHEL server whose GHC
 # could not open cabal's semaphore: the deploy shows the newest log written

@@ -48,6 +48,13 @@
 #     the revision comes from gitlab.haskell.org, or from its GitHub mirror
 #     where that host is refused;
 #   - Node $NODE_VERSION, into ~/.wiki-toolchain/node;
+#   - libsodium $LIBSODIUM_VERSION, which every native build links statically,
+#     built from source by toolchain/libsodium.sh into
+#     ~/.wiki-toolchain/libsodium-$LIBSODIUM_VERSION (behind the link
+#     ~/.wiki-toolchain/libsodium), in every mode that builds natively, with
+#     --system-tools too: Debian and Ubuntu ship a libsodium too old for the
+#     opaque package, and a static library leaves wiki-server needing none
+#     on the machine it runs on;
 #   - Chromium's headless shell for Playwright, the revision the project's
 #     Playwright (package-lock.json, or $PLAYWRIGHT_VERSION before there is
 #     one) asks for, into $PLAYWRIGHT_BROWSERS_PATH or Playwright's default;
@@ -58,8 +65,8 @@
 #     and it can (root or password-less sudo); otherwise it names them and stops.
 #     This script installs those GHC needs (a C toolchain, GMP's development
 #     files, curl and xz); the maker those of the builds (git, pkg-config,
-#     zlib, libsodium, libpq, ncurses for the wizard, and jq, unzip and zstd
-#     for the wasm sysroot's setup).
+#     zlib, libpq, ncurses for the wizard, and jq, unzip and zstd for the
+#     wasm sysroot's setup).
 #
 # Then, for each of cabal.project and cabal-wasm.project that exists in the
 # repository, it runs `cabal build all --only-dependencies` with the flags
@@ -97,9 +104,9 @@
 #
 # `native` installs what building wiki-server natively needs and nothing
 # else: GHC and cabal through ghcup, the system packages a native build
-# links with, and cabal's package index; no wasm sysroot, cross compiler,
-# Node, Chromium or fourmolu, none of which a native build of wiki-server
-# needs. toolchain/deploy-local.sh --backend-only runs it, on a
+# links with, libsodium built from source, and cabal's package index; no
+# wasm sysroot, cross compiler, Node, Chromium or fourmolu, none of which a
+# native build of wiki-server needs. toolchain/deploy-local.sh --backend-only runs it, on a
 # machine that downloads the page instead of building it. It does not assume
 # Debian: without dpkg-query it installs no system packages, and only checks
 # the commands GHC needs. Either way the maker then installs the C
@@ -301,6 +308,19 @@ PATH=\$(
 export PATH
 EOF
   fi
+  # libsodium, which toolchain/libsodium.sh builds into the toolchain's
+  # directory (the maker runs it in every mode that builds natively, with
+  # --system-tools too): its directories go first, so that pkg-config, the
+  # C compiler and the linker find the pinned static library before any
+  # libsodium the system has. Each is added once, however often the file
+  # is read.
+  cat <<EOF
+# libsodium $LIBSODIUM_VERSION, built from source by toolchain/libsodium.sh, ahead of any the system has.
+case :\${PKG_CONFIG_PATH:-}: in *:"$STATE/libsodium/lib/pkgconfig":*) ;; *) PKG_CONFIG_PATH="$STATE/libsodium/lib/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}" ;; esac
+case :\${LIBRARY_PATH:-}: in *:"$STATE/libsodium/lib":*) ;; *) LIBRARY_PATH="$STATE/libsodium/lib\${LIBRARY_PATH:+:\$LIBRARY_PATH}" ;; esac
+case :\${C_INCLUDE_PATH:-}: in *:"$STATE/libsodium/include":*) ;; *) C_INCLUDE_PATH="$STATE/libsodium/include\${C_INCLUDE_PATH:+:\$C_INCLUDE_PATH}" ;; esac
+export PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH
+EOF
   [ -z "$NAMED_BASE" ] || cat <<EOF
 # The toolchain is under $BASE, and the tools keep their files there too.
 WIKI_TOOLCHAIN_HOME='$BASE'
@@ -528,6 +548,11 @@ check() {
     printf 'bootstrap: reuse Node %s (%s), npm (%s)\n' "$(node --version)" "$(command -v node)" "$(command -v npm)"
   else
     printf 'bootstrap: install Node %s (requires Node >=24 and npm)\n' "$NODE_VERSION"
+  fi
+  if sh "$ROOT/toolchain/libsodium.sh" ready "$STATE"; then
+    printf 'bootstrap: reuse libsodium %s (%s)\n' "$LIBSODIUM_VERSION" "$STATE/libsodium-$LIBSODIUM_VERSION"
+  else
+    printf 'bootstrap: install libsodium %s (built from source)\n' "$LIBSODIUM_VERSION"
   fi
   if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
     printf 'bootstrap: reuse fourmolu %s (%s)\n' "$FOURMOLU_VERSION" "$(command -v fourmolu)"

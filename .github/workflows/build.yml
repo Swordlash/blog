@@ -311,6 +311,30 @@ jobs:
         path: ~/.cache/wiki-apt/*.deb
         key: ${{ steps.apt-cache.outputs.cache-primary-key }}
 
+    # libsodium, which every native build links statically:
+    # toolchain/libsodium.sh builds the release toolchain/pins.env pins into
+    # ~/.wiki-toolchain (under a minute), and the cache keeps the built
+    # library, keyed by the pinned version and checksum and by the script
+    # that builds it. Its env mode gives the later steps PKG_CONFIG_PATH,
+    # LIBRARY_PATH and C_INCLUDE_PATH, through which cabal finds it.
+    - name: Read the libsodium pin
+      id: libsodium
+      run: |
+        . toolchain/pins.env
+        echo "version=$LIBSODIUM_VERSION" >> "$GITHUB_OUTPUT"
+        echo "sha256=$LIBSODIUM_SHA256" >> "$GITHUB_OUTPUT"
+
+    - name: Cache libsodium
+      uses: actions/cache@v5
+      with:
+        path: ~/.wiki-toolchain/libsodium-${{ steps.libsodium.outputs.version }}
+        key: ${{ runner.os }}-libsodium-${{ steps.libsodium.outputs.version }}-${{ steps.libsodium.outputs.sha256 }}-${{ hashFiles('toolchain/libsodium.sh') }}
+
+    - name: Build libsodium
+      run: |
+        sh toolchain/libsodium.sh install
+        sh toolchain/libsodium.sh env >> "$GITHUB_ENV"
+
     - name: Update Cabal package index
       run: cabal update
 
@@ -576,6 +600,30 @@ jobs:
     - name: Install the system packages the build links with
       run: sh toolchain/ci-native-deps.sh base
 
+    # libsodium, which every native build links statically:
+    # toolchain/libsodium.sh builds the release toolchain/pins.env pins into
+    # ~/.wiki-toolchain (under a minute), and the cache keeps the built
+    # library, keyed by the pinned version and checksum and by the script
+    # that builds it. Its env mode gives the later steps PKG_CONFIG_PATH,
+    # LIBRARY_PATH and C_INCLUDE_PATH, through which cabal finds it.
+    - name: Read the libsodium pin
+      id: libsodium
+      run: |
+        . toolchain/pins.env
+        echo "version=$LIBSODIUM_VERSION" >> "$GITHUB_OUTPUT"
+        echo "sha256=$LIBSODIUM_SHA256" >> "$GITHUB_OUTPUT"
+
+    - name: Cache libsodium
+      uses: actions/cache@v5
+      with:
+        path: ~/.wiki-toolchain/libsodium-${{ steps.libsodium.outputs.version }}
+        key: ${{ runner.os }}-libsodium-${{ steps.libsodium.outputs.version }}-${{ steps.libsodium.outputs.sha256 }}-${{ hashFiles('toolchain/libsodium.sh') }}
+
+    - name: Build libsodium
+      run: |
+        sh toolchain/libsodium.sh install
+        sh toolchain/libsodium.sh env >> "$GITHUB_ENV"
+
     - name: Update Cabal package index
       run: cabal update
 
@@ -721,12 +769,39 @@ jobs:
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
     # The prerender is built natively with every package's dependencies,
-    # the server's among them: libsodium's development files, which sel
-    # (under the second factor's codes) builds against, and libpq's, as in
-    # the native job. A self-hosted runner has them from the bootstrap.
-    - name: Install libpq and libsodium (hosted)
+    # the server's among them: libpq's development files, as in the native
+    # job, and libsodium (below). A self-hosted runner has libpq from the
+    # bootstrap.
+    - name: Install libpq (hosted)
       if: runner.environment == 'github-hosted'
-      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev
+
+    # libsodium, which every native build links statically:
+    # toolchain/libsodium.sh builds the release toolchain/pins.env pins into
+    # ~/.wiki-toolchain (under a minute), and the cache keeps the built
+    # library, keyed by the pinned version and checksum and by the script
+    # that builds it. Its env mode gives the later steps PKG_CONFIG_PATH,
+    # LIBRARY_PATH and C_INCLUDE_PATH, through which cabal finds it. A
+    # self-hosted runner's bootstrap has built it already, and keeps it, so
+    # only its variables are written there.
+    - name: Read the libsodium pin
+      id: libsodium
+      run: |
+        . toolchain/pins.env
+        echo "version=$LIBSODIUM_VERSION" >> "$GITHUB_OUTPUT"
+        echo "sha256=$LIBSODIUM_SHA256" >> "$GITHUB_OUTPUT"
+
+    - name: Cache libsodium
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      with:
+        path: ~/.wiki-toolchain/libsodium-${{ steps.libsodium.outputs.version }}
+        key: ${{ runner.os }}-libsodium-${{ steps.libsodium.outputs.version }}-${{ steps.libsodium.outputs.sha256 }}-${{ hashFiles('toolchain/libsodium.sh') }}
+
+    - name: Build libsodium
+      run: |
+        sh toolchain/libsodium.sh install
+        sh toolchain/libsodium.sh env >> "$GITHUB_ENV"
 
     - name: Install JavaScript dependencies
       run: npm ci

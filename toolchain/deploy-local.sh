@@ -31,7 +31,8 @@
 #
 #   1. Build: with --server, first toolchain/check-native.sh, which checks
 #      the commands and C libraries wiki-server's native build needs (GMP,
-#      libpq, zlib, libsodium) before anything is downloaded or built, and
+#      libpq, zlib; libsodium the bootstrap builds from source, and links
+#      into wiki-server) before anything is downloaded or built, and
 #      names their Debian and RHEL packages; a library built elsewhere is
 #      found through LIBRARY_PATH, C_INCLUDE_PATH, CPATH or PKG_CONFIG_PATH,
 #      which reach cabal untouched. On Debian or Ubuntu (dpkg-query on PATH)

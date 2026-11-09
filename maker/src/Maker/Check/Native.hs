@@ -1,7 +1,7 @@
 -- | The check of what the native build of wiki-server needs from the
 -- machine: the commands cc, make, curl, git and pkg-config, and the C
--- libraries GMP, libpq, zlib and libsodium (terminfo too for the
--- configuration wizard). It prints one line per item, ok or missing, with how
+-- libraries GMP, libpq and zlib (terminfo too for the configuration
+-- wizard). It prints one line per item, ok or missing, with how
 -- the item was found or what was tried, then a summary that names the Debian
 -- and RHEL packages of what is missing. It installs nothing.
 --
@@ -22,8 +22,10 @@
 --   directories @WIKI_PG_CONFIG_DIRS@ names, for the tests), to name the one
 --   to put on PATH. A build without PostgreSQL needs no libpq.
 -- * zlib: through pkg-config (@zlib.pc@), as the zlib package finds it.
--- * libsodium: libsodium-bindings does not use pkg-config, so the check
---   compiles and links a one-line program with @-lsodium@ as cabal does.
+-- * libsodium is not looked for: the bootstrap builds the release
+--   @toolchain/pins.env@ pins from source (@toolchain/libsodium.sh@), as a
+--   static library in the toolchain's directory, so the machine needs none.
+--   Its line says so, and is not counted.
 -- * terminfo, for the wizard only: vty links @-ltinfo@.
 --
 -- One more line says whether the @xelatex@ on PATH typesets the PDF
@@ -47,10 +49,11 @@ import Data.Char (isSpace)
 import Data.List (intercalate, sort, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Development.Shake (getDirectoryFilesIO)
-import Maker.Process (decodeFs, firstLine, found, output, succeeds)
+import Maker.Process (decodeFs, found, output, succeeds)
 import System.Directory (doesFileExist, executable, getPermissions)
 import System.Environment (lookupEnv)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
+import System.IO (readFile')
 import System.IO.Extra (withTempDir)
 import System.Process.Typed
 
@@ -100,8 +103,6 @@ data Findings = Findings
   -- ^ Why the PDF exports would not work, for the summary.
   , pgConfigElsewhere :: Maybe FilePath
   -- ^ A @pg_config@ off PATH, to name in the hint.
-  , sodiumHint :: Maybe String
-  -- ^ Where pkg-config finds a libsodium that cc does not.
   }
   deriving (Eq, Show)
 
@@ -147,7 +148,6 @@ render options f = (map line f.lines' <> summary, null missing)
           , "    RHEL, Fedora:   sudo dnf install " <> unwords (map (\l -> l.rhel) missing)
           ]
             <> (if "libpq" `elem` names then libpqHint else [])
-            <> (if "libsodium" `elem` names then sodiumLines else [])
             <> [ "The build sees the environment this runs in: LIBRARY_PATH, C_INCLUDE_PATH, CPATH"
                , "and PKG_CONFIG_PATH reach cabal untouched, for a library in a directory of its own."
                , "A shared library there also needs LD_LIBRARY_PATH when wiki-server runs"
@@ -167,12 +167,6 @@ render options f = (map line f.lines' <> summary, null missing)
             [ "Put the directory of pg_config on PATH for the deploy:"
             , "    PATH=/usr/pgsql-NN/bin:$PATH sh toolchain/deploy-local.sh ..."
             ]
-    sodiumLines =
-      [hint <> "." | Just hint <- [f.sodiumHint]]
-        <> [ "RHEL has libsodium in EPEL only. Built from source into a directory <dir> of your own:"
-           , "    ./configure --prefix=<dir> --disable-shared --enable-static --with-pic && make install"
-           , "    then run with LIBRARY_PATH=<dir>/lib C_INCLUDE_PATH=<dir>/include PKG_CONFIG_PATH=<dir>/lib/pkgconfig"
-           ]
 
 -- | Look at the machine, item by item, in the report's order.
 findings :: FilePath -> Options -> IO Findings
@@ -192,14 +186,13 @@ findings root options = do
   gmp <- gmpItem hasCc
   (libpq, elsewhere) <- libpqItem options hasPkgConfig
   zlib <- zlibItem hasPkgConfig
-  (sodium, hint) <- sodiumItem hasCc hasPkgConfig
+  sodium <- sodiumLine root
   terminfo <- terminfoItem options hasCc
   pure
     Findings
       { lines' = commands <> [texLine, gmp, libpq, zlib, sodium, terminfo]
       , texNote = texNote'
       , pgConfigElsewhere = elsewhere
-      , sodiumHint = hint
       }
 
 -- | A command on PATH. It is only looked up: running it is the build's
@@ -299,37 +292,17 @@ zlibItem hasPkgConfig
   where
     lacks = Missing . Lack "zlib" "zlib1g-dev" "zlib-devel"
 
--- | libsodium, compiled and linked as the build does it. When the link
--- fails but pkg-config knows a libsodium, the hint says which directories to
--- give the build.
-sodiumItem :: Bool -> Bool -> IO (Line, Maybe String)
-sodiumItem hasCc hasPkgConfig
-  | not hasCc = pure (lacks "not checked: needs cc", Nothing)
-  | otherwise = do
-      linked <- probe "sodium" "#include <sodium.h>\nint main(void) { return sodium_init() < 0; }\n" "-lsodium"
-      if linked
-        then pure (Ok "libsodium" "sodium.h and -lsodium, through cc", Nothing)
-        else do
-          knows <- if hasPkgConfig then succeeds "pkg-config" ["--exists", "libsodium"] else pure False
-          hint <-
-            if not knows
-              then pure Nothing
-              else do
-                libdir <- variable "libdir"
-                includedir <- variable "includedir"
-                pure . Just $
-                  "pkg-config finds a libsodium"
-                    <> maybe "" (" in " <>) libdir
-                    <> ", but cc does not: the build looks where cc does, so give it LIBRARY_PATH="
-                    <> fromMaybe "<its lib>" libdir
-                    <> " C_INCLUDE_PATH="
-                    <> fromMaybe "<its include>" includedir
-          pure (lacks "cc cannot compile and link a program with sodium.h and -lsodium", hint)
-  where
-    lacks = Missing . Lack "libsodium" "libsodium-dev" "libsodium-devel"
-    variable name = do
-      value <- maybe "" firstLine <$> output "pkg-config" ["--variable=" <> name, "libsodium"]
-      pure (if null value then Nothing else Just value)
+-- | libsodium's line, which is not counted: the bootstrap builds the
+-- pinned release from source, so nothing is needed from the machine. The
+-- version comes from @toolchain/pins.env@, read as the shell script reads
+-- it, so that a missing file leaves it empty rather than failing the check.
+sodiumLine :: FilePath -> IO Line
+sodiumLine root = do
+  let file = root </> "toolchain" </> "pins.env"
+  exists <- doesFileExist file
+  text' <- if exists then readFile' file else pure ""
+  let version = fromMaybe "" (listToMaybe [v | l <- Prelude.lines text', Just v <- [stripPrefix "LIBSODIUM_VERSION=" l]])
+  pure (Uncounted "--" "libsodium" ("not needed from the system: the bootstrap builds libsodium " <> version <> " from source (toolchain/libsodium.sh; not counted)"))
 
 -- | terminfo, linked as vty links it (GHC's terminfo package names
 -- @-ltinfo@). The probe declares the one function it calls, so that it

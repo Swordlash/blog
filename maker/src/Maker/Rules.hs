@@ -28,6 +28,7 @@ import Maker.Store (warm)
 import Maker.Toolchain.Chromium (installChromium)
 import Maker.Toolchain.Debian (systemPackages)
 import Maker.Toolchain.Fourmolu (installFourmolu)
+import Maker.Toolchain.Libsodium (installLibsodium)
 import Maker.Toolchain.Node (installNode, nodeVersionNow)
 import Maker.Toolchain.Wasm (guardSysroot, installSysroot, installWasmGhc)
 import System.Exit (ExitCode (..), exitWith)
@@ -39,6 +40,7 @@ import System.Posix.Types (Fd (..))
 -- | What the maker can be asked to install or do.
 data Target
   = SystemPackages
+  | Libsodium
   | WasmSysroot
   | WasmGhc
   | Node
@@ -51,6 +53,7 @@ data Target
 targetName :: Target -> String
 targetName = \case
   SystemPackages -> "system-packages"
+  Libsodium -> "libsodium"
   WasmSysroot -> "wasm-sysroot"
   WasmGhc -> "wasm-ghc"
   Node -> "node"
@@ -58,18 +61,20 @@ targetName = \case
   Fourmolu -> "fourmolu"
   Store -> "store"
 
--- | What a mode installs, in order, the system packages first. A build
+-- | What a mode installs, in order, the system packages first, then
+-- libsodium, built from source for every mode that builds natively. A build
 -- (@build@, the Dockerfile's builder, the deploy's page built on the
 -- machine) runs neither the browser tests nor the formatter; @native@ (the
--- deploy's server built on the machine) needs only the packages, and then
--- the check of what its build links ('bootstrap').
+-- deploy's server built on the machine) needs only the packages and
+-- libsodium, and then the check of what its build links ('bootstrap');
+-- @static@ builds no wiki-server, and needs no libsodium.
 targetsFor :: Mode -> [Target]
 targetsFor = \case
-  Toolchain -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
-  Build -> [SystemPackages, WasmSysroot, WasmGhc, Node]
-  All -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
-  Warm -> [SystemPackages, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
-  Native -> [SystemPackages]
+  Toolchain -> [SystemPackages, Libsodium, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
+  Build -> [SystemPackages, Libsodium, WasmSysroot, WasmGhc, Node]
+  All -> [SystemPackages, Libsodium, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
+  Warm -> [SystemPackages, Libsodium, WasmSysroot, WasmGhc, Node, Chromium, Fourmolu]
+  Native -> [SystemPackages, Libsodium]
   Static -> [Node]
 
 -- | What each rule found out, for the summary at the end.
@@ -83,6 +88,9 @@ rules ctx found' = do
   forM_ [minBound .. maxBound] $ \target ->
     phony (targetName target) $ case target of
       SystemPackages -> liftIO (systemPackages ctx)
+      Libsodium -> do
+        need [targetName SystemPackages]
+        liftIO (installLibsodium ctx)
       WasmSysroot -> liftIO (installSysroot ctx)
       WasmGhc -> do
         need [targetName WasmSysroot]
@@ -96,7 +104,7 @@ rules ctx found' = do
         path <- liftIO (installFourmolu ctx)
         liftIO (writeIORef found'.fourmolu (Just path))
       Store -> do
-        need [targetName WasmGhc]
+        need [targetName Libsodium, targetName WasmGhc]
         liftIO (warm ctx)
 
 -- | Run the targets one after another, as listed: their messages come in
@@ -142,15 +150,16 @@ bootstrap ctx lockFd logBefore started = do
   ghcFound <- numericVersion "ghc"
   cabalFound <- numericVersion "cabal"
   let p = ctx.pins
-      base' = "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> ", wasm32-wasi-ghc " <> p.wasmGhcVersion <> ", Node " <> node
+      sodium = ", libsodium " <> p.libsodiumVersion
+      base' = "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> sodium <> ", wasm32-wasi-ghc " <> p.wasmGhcVersion <> ", Node " <> node
       noWasm = "; no wasm toolchain, Node, Chromium or fourmolu (native)"
       summary = case ctx.mode of
         Static
           | ctx.systemTools -> "this machine's GHC " <> ghcFound <> ", cabal " <> cabalFound <> " and Node " <> node <> " (--system-tools); no wasm toolchain, Chromium or fourmolu (static)"
           | otherwise -> "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> ", Node " <> node <> "; no wasm toolchain, Chromium or fourmolu (static)"
         Native
-          | ctx.systemTools -> "this machine's GHC " <> ghcFound <> " and cabal " <> cabalFound <> " (--system-tools)" <> noWasm
-          | otherwise -> "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> noWasm
+          | ctx.systemTools -> "this machine's GHC " <> ghcFound <> " and cabal " <> cabalFound <> " (--system-tools)" <> sodium <> noWasm
+          | otherwise -> "GHC " <> p.ghcVersion <> ", cabal " <> p.cabalVersion <> sodium <> noWasm
         Build -> base' <> "; no Chromium or fourmolu (build)"
         _ -> base' <> ", Chromium in " <> maybe "" id chromium <> ", fourmolu " <> p.fourmoluVersion <> " at " <> maybe "" id fourmolu
   logAfter <- logSize ctx

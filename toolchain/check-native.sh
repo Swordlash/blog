@@ -41,16 +41,16 @@
 #     no pg_config: libpq is then reported as not needed;
 #   - zlib, for the zlib package, which is built without its bundled copy and
 #     finds the system's zlib through pkg-config (zlib.pc);
-#   - libsodium, for the second factor's codes: libsodium-bindings does not
-#     use pkg-config, so cabal includes sodium.h and links -lsodium from the
-#     compiler's own directories and those LIBRARY_PATH and C_INCLUDE_PATH
-#     name. The check compiles and links a one-line program the same way;
 #   - terminfo, for the configuration wizard only (--with-wizard): vty, the
 #     terminal library under brick, links GHC's terminfo package, which
 #     links -ltinfo (Debian's libncurses-dev, RHEL's ncurses-devel). The
 #     check links a one-line program with -ltinfo through the compiler.
 #
-# SQLite is not an item: direct-sqlite builds its own copy of SQLite.
+# SQLite is not an item: direct-sqlite builds its own copy of SQLite. Nor
+# is libsodium: the bootstrap builds the pinned release from source
+# (toolchain/libsodium.sh) as a static library, which the build links into
+# wiki-server, so the machine needs no libsodium to build or to run it. Its
+# line says so, and is not counted.
 #
 # One more line, after the commands, is for information only: xelatex,
 # which the server's PDF exports need and the build does not. It runs
@@ -89,8 +89,9 @@ for option do
     -h | --help)
       usage
       printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
-      printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, libsodium), one line each,\n'
-      printf 'and exits 1 when one is missing. It installs nothing. It also says whether the\n'
+      printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib), one line each, and exits 1\n'
+      printf 'when one is missing. It installs nothing. libsodium is not needed from the system:\n'
+      printf 'the bootstrap builds it from source (toolchain/libsodium.sh). It also says whether the\n'
       printf 'xelatex on PATH typesets the PDF exports (toolchain/check-tex.sh), which is not\n'
       printf 'needed for the build and never fails the check. --without-postgres\n'
       printf 'is for a build with the cabal flag postgres off, which needs no libpq.\n'
@@ -219,30 +220,12 @@ else
   lack zlib zlib1g-dev zlib-devel "pkg-config --exists zlib failed"
 fi
 
-# libsodium, compiled and linked as the build does it. The program is
-# written into a directory of its own and removed afterwards. When the link
-# fails but pkg-config knows a libsodium, the hint says which directories to
-# give the build.
-sodium_hint=
-if ! has cc; then
-  lack libsodium libsodium-dev libsodium-devel "not checked: needs cc"
-else
-  probe=$(mktemp -d)
-  trap 'rm -rf "$probe"' EXIT
-  printf '#include <sodium.h>\nint main(void) { return sodium_init() < 0; }\n' >"$probe/sodium.c"
-  if cc -o "$probe/sodium" "$probe/sodium.c" -lsodium >"$probe/cc.log" 2>&1; then
-    report libsodium ok "sodium.h and -lsodium, through cc"
-  else
-    if has pkg-config && pkg-config --exists libsodium; then
-      libdir=$(pkg-config --variable=libdir libsodium 2>/dev/null || true)
-      includedir=$(pkg-config --variable=includedir libsodium 2>/dev/null || true)
-      sodium_hint="pkg-config finds a libsodium${libdir:+ in $libdir}, but cc does not: the build looks where cc does, so give it LIBRARY_PATH=${libdir:-<its lib>} C_INCLUDE_PATH=${includedir:-<its include>}"
-    fi
-    lack libsodium libsodium-dev libsodium-devel "cc cannot compile and link a program with sodium.h and -lsodium"
-  fi
-  rm -rf "$probe"
-  trap - EXIT
-fi
+# libsodium is not the machine's: the bootstrap builds the release
+# toolchain/pins.env pins from source (toolchain/libsodium.sh), as a static
+# library in the toolchain's directory, and the build finds it there. Its
+# line says so, and is not counted.
+libsodium_version=$(sed -n 's/^LIBSODIUM_VERSION=//p' "$(dirname "$0")/pins.env" 2>/dev/null || true)
+printf '%-8s %-11s %s\n' -- libsodium "not needed from the system: the bootstrap builds libsodium $libsodium_version from source (toolchain/libsodium.sh; not counted)"
 
 # terminfo, linked as vty links it (GHC's terminfo package names -ltinfo).
 # The probe declares the one function it calls, so that it needs no header:
@@ -293,13 +276,6 @@ case $missing in
       printf 'Put the directory of pg_config on PATH for the deploy:\n'
       printf "    PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh ...\n"
     fi ;;
-esac
-case $missing in
-  *libsodium*)
-    [ -z "$sodium_hint" ] || printf '%s.\n' "$sodium_hint"
-    printf 'RHEL has libsodium in EPEL only. Built from source into a directory <dir> of your own:\n'
-    printf '    ./configure --prefix=<dir> --disable-shared --enable-static --with-pic && make install\n'
-    printf '    then run with LIBRARY_PATH=<dir>/lib C_INCLUDE_PATH=<dir>/include PKG_CONFIG_PATH=<dir>/lib/pkgconfig\n' ;;
 esac
 printf 'The build sees the environment this runs in: LIBRARY_PATH, C_INCLUDE_PATH, CPATH\n'
 printf 'and PKG_CONFIG_PATH reach cabal untouched, for a library in a directory of its own.\n'
