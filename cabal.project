@@ -24,6 +24,19 @@ semaphore: True
 -- below; cabal-wasm.project and the other project files import it.
 index-state: 2026-11-09T00:00:00Z
 
+-- The everyday native build compiles this repository's own packages
+-- without optimisation; the dependencies keep theirs, so the store still
+-- serves them. It is the build of `npm run build-native` and of CI's
+-- native jobs, which run the tests. Measured on four cores (#207): at -O1
+-- a full build of these packages took 397 s, and GHC spent 887 of its
+-- 1865 s of compile time in the simplifier; at -O0 it took 171 s. The
+-- tests run about as fast: the unit group in 95 s rather than 72, the
+-- server's database groups in the same time, since they wait on the
+-- database. What is deployed is built elsewhere and keeps optimisation:
+-- the server at -O2 (cabal-native-opt.project), the browser's application
+-- through cabal-wasm.project and cabal-wasm-opt.project.
+optimization: False
+
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
 -- Hackage, and the application needs the router, the hooks and the th quoters
 -- as well. Every package it is used from is listed, jsbits included (the WASM

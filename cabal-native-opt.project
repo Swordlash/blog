@@ -12,6 +12,10 @@
 -- suites, which a deployment does not run.
 import: cabal.project
 
+-- cabal.project turns optimisation off for the everyday build; the
+-- package stanzas below give -O2.
+optimization: True
+
 tests: False
 
 -- The build semaphore of cabal.project is off here. It is a POSIX named
