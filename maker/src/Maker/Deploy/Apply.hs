@@ -33,6 +33,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
 import Maker.Deploy.Prepare (pgCompose, pgWrapper)
+import Maker.Deploy.Rehearse (rehearse)
 import Maker.Deploy.State (renderState, stateGet, stateSet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
@@ -68,6 +69,12 @@ apply p = do
       databaseArgs
         | db == "postgres" = ["--database", dbUrl dbPort, "--database-password-file", pgDir </> "db-password"]
         | otherwise = ["--sqlite", dir </> "data" </> "wiki.sqlite"]
+
+  -- The upgrade is rehearsed on a copy of the wiki before anything of the
+  -- running deployment changes, which keeps running meanwhile: a failed
+  -- rehearsal stops the deploy here, with nothing to undo
+  -- ("Maker.Deploy.Rehearse").
+  rehearse p
 
   -- From here on the running deployment changes.
   madeBackup <- newIORef Nothing
