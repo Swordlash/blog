@@ -18,6 +18,7 @@ import Test.Browser.Export qualified as Export
 import Test.Browser.Favicon qualified as Favicon
 import Test.Browser.History qualified as History
 import Test.Browser.HomePage qualified as HomePage
+import Test.Browser.Hpke qualified as Hpke
 import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
@@ -112,7 +113,8 @@ spec = do
   describe "Spoilers and listings that scroll" (Spoilers.spec BrowserDOM)
   describe "Copying a code block" (CopyCode.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
-  describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
+  describe "The assistant's keys across devices, and the user's keys" (Vault.spec BrowserDOM)
+  describe "HPKE, as encrypted spaces will seal keys" Hpke.spec
   describe "What's new" (WhatsNew.spec BrowserDOM)
 #endif
 

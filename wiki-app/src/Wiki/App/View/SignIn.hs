@@ -94,19 +94,21 @@ import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (.
 import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.Api.Security (resetLifetime)
 import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passkeyErrorText, passwordErrorText, signInErrorText)
-import Wiki.App.Assistant (MonadAssistant (..), PasskeyRefusal (..))
+import Wiki.App.Assistant (KeyRef, MonadAssistant (..), PasskeyRefusal (..))
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadWiki, Session (..), WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.Security (MonadSecurity)
+import Wiki.App.Vault (Settled (..), addPasswordUnlock, afterSignIn, changeOwnPassword)
 import Wiki.App.View.Avatar qualified as AvatarView
 import Wiki.App.View.Common (AvatarSize (..), ViewOutput, ariaBool, avatar, errorMessage)
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
+import Wiki.Core.Id (UserId)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Email (..), Password (..), SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
 
@@ -187,6 +189,12 @@ data State m = State
   -- ^ Whether the last change was made.
   , currentField :: H.RefLabel
   , newField :: H.RefLabel
+  , keysOffer :: Maybe (UserId, KeyRef)
+  -- ^ The offer, after a sign-in with a password, to unlock the user's
+  -- vault with the password too ("Wiki.App.Vault"), with the key the
+  -- password gave, which the page forgets when it is answered.
+  , keysProblem :: Maybe Text
+  -- ^ Why the offer could not be taken.
   }
 
 data Action
@@ -218,6 +226,8 @@ data Action
   | SavePassword
   | Followed (Follow Route)
   | FromPersonal
+  | AcceptKeysOffer
+  | DeclineKeysOffer
 
 component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadWiki m, MonadSecurity m, MonadNotifications m, MonadAssistant m, MonadVault m) => H.Component Query (Input m) Output m
 component =
@@ -259,6 +269,8 @@ component =
               , passwordTold = Nothing
               , currentField
               , newField
+              , keysOffer = Nothing
+              , keysProblem = Nothing
               }
       , render
       , eval =
@@ -285,6 +297,7 @@ component =
             {% if st.accountOpen %}
               {{ accountPanel st }}
             {% end %}
+            {{ keysNotice st }}
           </div>
         |]
       Session {user = Just u} -> [hh|<span class="user-name">{{ u.displayName }}</span>|]
@@ -442,7 +455,7 @@ component =
         <section class="account-panel" aria-label="How you sign in">
           <h2>How you sign in</h2>
           {{ body }}
-          {{ HH.slot_ "security" () SecurityView.component () }}
+          {{ HH.slot_ "security" () SecurityView.component ((\u -> u.id) <$> st.input.session.user) }}
           <section class="account-avatar" aria-label="Avatar">
             <h3>Avatar</h3>
             <p class="account-note">A picture of you, shown round beside your name, at your comments and to the readers of a page.</p>
@@ -558,11 +571,30 @@ component =
 
     handleAction :: Action -> H.HalogenM (State m) Action Slots Output m ()
     handleAction = \case
-      Receive session face here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, avatar = face, here, router = st.input.router}})
+      Receive session face here -> do
+        -- The offer to unlock the keys with the password is the signed-in
+        -- user's: another session (a sign-out, another user) drops it.
+        offered <- gets (\st -> fst <$> st.keysOffer)
+        when (isJust offered && offered /= ((\u -> u.id) <$> session.user)) dropKeysOffer
+        modify (\st -> st {input = Input {accounts = st.input.accounts, session, avatar = face, here, router = st.input.router}})
       Followed f -> do
         modify (\st -> st {accountOpen = False})
         gets (\st -> st.input.router) >>= (`Router.follow` f)
       FromPersonal -> H.raise SpacesChanged
+      AcceptKeysOffer -> do
+        signedIn <- gets (\st -> (\u -> u.id) <$> st.input.session.user)
+        gets (\st -> st.keysOffer)
+          >>= traverse_
+            ( \(u, key) ->
+                if Just u /= signedIn
+                  then dropKeysOffer
+                  else do
+                    modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
+                    lift (addPasswordUnlock u (Just key) Nothing) >>= \case
+                      Left why -> modify (\st -> st {keysProblem = Just why})
+                      Right _ -> pass
+            )
+      DeclineKeysOffer -> dropKeysOffer
       Toggle ->
         gets (\st -> st.open) >>= \case
           True -> close
@@ -586,6 +618,7 @@ component =
             Right s -> do
               modify (\x -> x {busy = False, open = False, typedPassword = "", notice = Nothing, problem = Nothing})
               H.raise (AccountChanged s)
+              settleAfter s
       Offer -> do
         -- The login field's offer of saved passkeys. It waits until a
         -- passkey is picked there, which signs in as the button does, or
@@ -642,6 +675,7 @@ component =
                     Right s -> do
                       modify (\x -> x {busy = False, open = False, step = AtPassword, typedCode = "", notice = Nothing, problem = Nothing})
                       H.raise (AccountChanged s)
+                      settleAfter s
       TypedCode typedCode -> modify (\st -> st {typedCode})
       SubmitCode -> do
         st <- get
@@ -655,6 +689,7 @@ component =
             Right s -> do
               modify (\x -> x {busy = False, open = False, step = AtPassword, typedCode = "", notice = Nothing, problem = Nothing})
               H.raise (AccountChanged s)
+              settleAfter s
       ForgotPassword -> do
         modify (\st -> st {step = AtReset, typedLogin = "", typedPassword = "", notice = Nothing, problem = Nothing, resetTold = Nothing})
         gets (\st -> st.resetField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
@@ -693,6 +728,7 @@ component =
             Right s -> do
               modify (\x -> x {busy = False, registering = False, typedPassword = "", typedName = "", problem = Nothing})
               H.raise (AccountChanged s)
+              settleAfter s
       ToggleAccount ->
         gets (\st -> st.accountOpen) >>= \case
           True -> modify (\st -> (forgetPassword st) {accountOpen = False, problem = Nothing, passwordTold = Nothing})
@@ -730,7 +766,7 @@ component =
             | otherwise -> do
                 modify (\s -> s {busy = True, passwordProblem = Nothing})
                 let change = PasswordChange {current = if m.password then Just (Password st.typedCurrent) else Nothing, new = Password st.typedNew}
-                lift (st.input.accounts.changePassword change) >>= \case
+                lift (changeOwnPassword st.input.accounts.changePassword change) >>= \case
                   Left e -> modify (\s -> s {busy = False, passwordProblem = Just (passwordErrorText e)})
                   Right after ->
                     modify $ \s ->
@@ -751,9 +787,32 @@ component =
           modify (\s -> s {busy = True})
           result <- lift st.input.accounts.signOut
           modify (\s -> s {busy = False})
+          when (isRight result) dropKeysOffer
           -- A sign-out that failed leaves the session as it was; the next
           -- request shows whether it still is.
           traverse_ (H.raise . AccountChanged) (rightToMaybe result)
+
+    -- After a sign-in: the user's keys brought up to date on this device
+    -- with the key the password gave, if any, and the offer to unlock the
+    -- vault with the password too, when there is one to make.
+    settleAfter :: Session -> H.HalogenM (State m) Action Slots Output m ()
+    settleAfter s = do
+      -- An earlier sign-in's offer is not this one's, even when bringing
+      -- this one's keys up to date fails.
+      dropKeysOffer
+      for_ s.user $ \u ->
+        lift (afterSignIn u.id) >>= \case
+          -- Nothing waits on the keys: the security panel shows them, and
+          -- why they could not be brought up to date, when it is opened.
+          Left _ -> pass
+          Right settled -> modify (\st -> st {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})
+
+    -- Withdraw the offer to unlock the keys with the password, and forget
+    -- the key it holds.
+    dropKeysOffer :: H.HalogenM (State m) Action Slots Output m ()
+    dropKeysOffer = do
+      gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
+      modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
 
     handleQuery :: Query a -> H.HalogenM (State m) Action Slots Output m (Maybe a)
     handleQuery (Prompt why next) = openForm (Just why) $> Just next
@@ -811,3 +870,25 @@ passwordOffer providers m
   | m.password = Just "Change password…"
   | providerOnly (map (\p -> p.name) providers) m.password (map (\i -> i.provider) m.identities) = Nothing
   | otherwise = Just "Set a password…"
+
+-- | The offer, after a sign-in with a password, to unlock the user's vault
+-- with the password too, and why the keys could not be brought up to date,
+-- if they could not.
+keysNotice :: State m -> H.ComponentHTML Action Slots m
+keysNotice st =
+  [hh|
+    <div class="keys-notice">
+    {% if isJust st.keysOffer %}
+      <div class="keys-offer" role="dialog" aria-label="Unlock your keys with your password">
+        <p>Also unlock your keys with your password? Then signing in with your password opens them on any device, without a passkey; they are then as safe as your password. It asks for one of your passkeys once.</p>
+        <div class="actions">
+          <button type="button" class="primary keys-offer-accept" onClick={{ const AcceptKeysOffer }}>Also with my password</button>
+          <button type="button" class="keys-offer-decline" onClick={{ const DeclineKeysOffer }}>Not now</button>
+        </div>
+      </div>
+    {% end %}
+    {% for p in maybeToList st.keysProblem %}
+      <p class="error keys-problem" role="alert">{{ p }}</p>
+    {% end %}
+    </div>
+  |]

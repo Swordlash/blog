@@ -355,6 +355,7 @@ test-suite wiki-server-test
         Test.Storage.Backup
         Test.Storage.Contract
         Test.Storage.Fixture
+        Test.Storage.Keys
         Test.Storage.Migrate
         Test.Storage.Permissions
         Test.Storage.Removal

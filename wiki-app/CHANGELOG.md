@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+The account's keys (WP5.74b1). The security panel gains a Keys section
+(`Wiki.App.View.Security`, whose input is now the signed-in user's id): the
+fingerprint of the user's public key in groups of four, to compare with
+what another member's wiki shows; whether this browser holds the private
+key, with an unlock by passkey or by password where it does not; the ways
+the vault unlocks, the password added ("Also unlock with my password", one
+touch of a passkey) or taken away; a passkey added to a vault the password
+alone unlocks; and "ask each time". A user without keys makes them there,
+with the password or, without one, with a passkey. A passkey that is the
+vault's last way to unlock cannot be removed. Opening the panel settles the
+keys on this browser (`settleKeys`).
+
+The password unlocks the vault (WP5.74b1). The browser's OPAQUE client
+gives OPAQUE's export key as a WebCrypto key the page holds
+(`Wiki.App.Backend.Opaque`'s last steps answer its `KeyRef`), never its
+bytes; the HTTP backend keeps the last sign-in's for the vault
+(`takePasswordKey`). After a sign-in with a password the sign-in view
+brings the vault up to date (`Wiki.App.Vault.afterSignIn`): a user with no
+vault gets one, with a key pair and a password wrap; a vault the password
+unlocks is unlocked on a new device with it; and the password is offered
+once per device as another way to unlock a vault it does not ("Also
+unlock your keys with your password?", default no). A re-authentication
+(`provePassword`) is the existing proof of the password, which now gives
+the key too. A change of password carries the vault along
+(`changeOwnPassword`, `changePasswordCarrying`). The reset page lists what
+a reset deletes when only the password unlocked the vault
+(`resetLosses`). `MonadAssistant` gains `passwordKey`.
+
+The user's key pair on this device (WP5.74b1). `Wiki.App.Vault`, new, is
+the user's vault as this browser keeps it: the vault key and the private
+half of the user's X25519 key pair, each a WebCrypto key that cannot be
+exported, in IndexedDB slots of their own (`vaultSlot`, `identitySlot`),
+and a `VaultDevice` record; `settleKeys` finds the vault key on the device,
+unseals the private key, or makes the key pair and stores it with its
+public key; `loadUserKeys` reads what the security panel shows.
+`MonadAssistant` gains `newIdentity`, `openIdentity` and `fingerprintOf`
+(`jsbits/vault.js`), and `MonadVault` `storeVaultChange` and
+`publicKeyOf`. Turning the assistant's syncing on when a vault exists
+already adds the settings to it, with a passkey it knows.
+
 What's new (WP5.66). On a server, the page "What's new?" at
 `/whats-new/` (the route `WhatsNewPage`, `Wiki.App.View.WhatsNew`) shows
 the server's version and build date, then its newest changelog entries,

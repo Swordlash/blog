@@ -47,6 +47,9 @@
 -- right uses one of their passkeys instead of a code.
 module Wiki.Api.Vault
   ( StoredVault (..)
+  , VaultChange (..)
+  , NewPublicKey (..)
+  , PublicKeyEntry (..)
   , PasskeyInfo (..)
   , RegistrationOptions (..)
   , RegistrationResponse (..)
@@ -55,15 +58,59 @@ module Wiki.Api.Vault
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), withObject, (.:?))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Time (UTCTime)
 import Protolude
-import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
+import Wiki.Core.Id (UserId)
+import Wiki.Core.Vault (CredentialId, KeyId, PublicKey, Vault, VaultTag)
 
 -- | 'StoredVault': a user's vault and its version, @GET assistant\/vault@.
 data StoredVault = StoredVault
   { tag :: VaultTag
   , vault :: Vault
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'NewPublicKey': the public half of a key pair the browser made for the
+-- user, with its id (the first 16 bytes of the key's SHA-256), for the
+-- server's directory of public keys.
+data NewPublicKey = NewPublicKey
+  { keyId :: KeyId
+  , publicKey :: PublicKey
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'VaultChange': what @PUT assistant\/vault@ stores: the vault, and,
+-- when its @identity@ item holds a key pair the directory does not have
+-- yet, that key pair's public half, which the server stores in the same
+-- transaction. Written as the vault's own object with @publicKey@ added,
+-- so that a vault alone, as a browser from before WP5.74 sends it, reads
+-- as a change with no public key.
+data VaultChange = VaultChange
+  { vault :: Vault
+  , publicKey :: Maybe NewPublicKey
+  }
+  deriving stock (Eq, Show)
+
+instance ToJSON VaultChange where
+  toJSON c = case toJSON c.vault of
+    Object o -> Object (maybe o (\k -> KeyMap.insert "publicKey" (toJSON k) o) c.publicKey)
+    other -> other
+
+instance FromJSON VaultChange where
+  parseJSON v = VaultChange <$> parseJSON v <*> withObject "VaultChange" (.:? "publicKey") v
+
+-- | 'PublicKeyEntry': a user's current public key, as the directory gives
+-- it to any signed-in user, @GET account\/public-keys\/\<user>@: the key,
+-- its id, and when it was stored.
+data PublicKeyEntry = PublicKeyEntry
+  { user :: UserId
+  , keyId :: KeyId
+  , publicKey :: PublicKey
+  , createdAt :: UTCTime
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+The password's wrap (WP5.74b1). `Wiki.Core.Vault` gains
+`passwordWrappingInfo`, the HKDF info of the key OPAQUE's export key gives
+for wrapping the vault key.
+
+The user's key pair (WP5.74b1). `Wiki.Core.Vault` gains `PublicKey`,
+`identityItem` (the item `identity`: the user's X25519 private key, sealed
+as PKCS #8 under the vault key with its `KeyId`), `identityData` (the
+additional data it is sealed with, `wiki-vault/2 identity ` and the key
+id) and `fingerprintGroups`.
+
+The user's vault (WP5.74b1). `Wiki.Core.Vault`, new, is the vault of
+WP5.21 made general: a `Vault` is `{format, salt, items, wraps}`, its
+sealed `Item`s kept by `ItemName` (`assistant` for the writing assistant's
+settings) and the vault key's `WrappedKey`s by `Unlock` (`ByPasskey`, and
+`ByPassword`). The bytes travel as the newtypes `Salt`, `Nonce`,
+`Ciphertext` and `KeyId`. `vaultFormat` is 2: the JSON has `items` and
+`wraps`, and a vault of format 1 is still read, as one `assistant` item
+and its passkeys' wraps, with `format = 1` kept. Names a vault does not
+know are kept. `Wiki.Core.Assistant.Vault` keeps the assistant's part
+(the device's record, what is sealed, `sealingData`, `wrappingData` and
+`wrappingInfo`, unchanged) and re-exports `Wiki.Core.Vault`; `sealedOf`
+answers a `Maybe Sealed`, since a vault need not hold the settings, and
+`withSealed` adds them as the `assistant` item.
+
 `Wiki.Core.Markdown.Problems` (WP5.65), new: the places in a page's Markdown
 that do not render as written, for the editor to mark. `parserProblems`
 lists the parser's, each a `Problem` with its first and last source line, a

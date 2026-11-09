@@ -185,7 +185,7 @@ spec = describe "golden JSON" $ do
     golden "email-change" EmailChange {email = "ada@example.org", password = Just (Password "correct horse battery staple")}
     golden "current-password" CurrentPassword {password = Just (Password "correct horse battery staple")}
     golden "reset-request" ResetRequest {login = "ada"}
-    golden "password-record-change" PasswordRecordChange {current = Just (Password "correct horse battery staple"), password = passwordRecord}
+    golden "password-record-change" PasswordRecordChange {current = Just (Password "correct horse battery staple"), password = passwordRecord, vault = Nothing}
     golden "account-disabled" AccountDisabled {disabled = True}
     golden "vault" Sample.vault
     golden "registration-response" Sample.registrationResponse

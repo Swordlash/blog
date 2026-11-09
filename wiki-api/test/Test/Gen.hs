@@ -173,7 +173,7 @@ genNewAccountRecord :: Gen NewAccountRecord
 genNewAccountRecord = NewAccountRecord <$> genText <*> genText <*> genPasswordRecord <*> genMaybe genText
 
 genPasswordRecordChange :: Gen PasswordRecordChange
-genPasswordRecordChange = PasswordRecordChange <$> genMaybe (Password <$> genText) <*> genPasswordRecord
+genPasswordRecordChange = PasswordRecordChange <$> genMaybe (Password <$> genText) <*> genPasswordRecord <*> pure Nothing
 
 genNewPassword :: Gen NewPassword
 genNewPassword = NewPassword . Password <$> genText

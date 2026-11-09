@@ -18,6 +18,11 @@
 -- package is not built for wasm32, so that nothing in the browser can
 -- depend on it, and is in this package's dependencies natively only.
 --
+-- A finished sign-in or registration also gives OPAQUE's export key, in
+-- the browser as a handle of the page's keys (@jsbits\/opaque.js@), which
+-- the user's vault derives its password's key from ("Wiki.App.Vault").
+-- Natively it is zeroed with the rest, and none is given.
+--
 -- A step's state is the client's secret between two messages: serenity-kit's
 -- state as text in the browser, and natively the package's state, kept in
 -- memory it zeroes. The native steps zero their states, and the keys a
@@ -35,12 +40,14 @@ where
 
 import Protolude
 import Wiki.Api.Opaque (Message (..), Stretch (..))
+import Wiki.App.Assistant (KeyRef)
 import Wiki.Core.User (Password (..))
 #if defined(wasm32_HOST_ARCH)
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.JSBits.Promise (Promise)
 import Halogen.JSBits.Promise qualified as Promise
+import Wiki.App.Assistant (keyRefOf)
 #else
 import Crypto.OPAQUE qualified as O
 import Wiki.Api.Opaque (bytesOf, messageOf)
@@ -84,10 +91,10 @@ startLogin (Password password) =
 -- | 'finishLogin' is a sign-in's last step, with the server's KE2 and the
 -- stretching it named: KE3, the last message, or 'Nothing' for a wrong
 -- password (and for an account without a record).
-finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe Message)
+finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishLogin (LoginState kept) (Password password) stretch ke2 =
   answered (js_finish_login (toJSText kept) (toJSText password) stretch.opsLimit (kib stretch) (toJSText ke2.text)) <&> \case
-    [ke3] -> Just (Message ke3)
+    [ke3, held] -> Just (Message ke3, heldKey held)
     _ -> Nothing
 
 -- | 'startRegistration' is a registration's first step: the state to keep
@@ -101,11 +108,16 @@ startRegistration (Password password) =
 -- | 'finishRegistration' is a registration's last step, with the server's
 -- response and the stretching it named: the record to send, or 'Nothing'
 -- when the response is not valid.
-finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe Message)
+finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishRegistration (RegistrationState kept) (Password password) stretch response =
   answered (js_finish_registration (toJSText kept) (toJSText password) stretch.opsLimit (kib stretch) (toJSText response.text)) <&> \case
-    [record] -> Just (Message record)
+    [record, held] -> Just (Message record, heldKey held)
     _ -> Nothing
+
+-- | The page's key a step's answer names by its handle, if any (0 is
+-- none).
+heldKey :: Text -> Maybe KeyRef
+heldKey t = keyRefOf =<< readMaybe t
 
 #else
 
@@ -141,7 +153,7 @@ startLogin password =
 -- | 'finishLogin' is a sign-in's last step, with the server's KE2 and the
 -- stretching it named: KE3, the last message, or 'Nothing' for a wrong
 -- password (and for an account without a record).
-finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe Message)
+finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishLogin (LoginState st) _ stretch ke2 = do
   let result = do
         ke2' <- bytesOf ke2 >>= rightToMaybe . O.decode
@@ -151,7 +163,7 @@ finishLogin (LoginState st) _ stretch ke2 = do
     Just (ke3, key, exportKey) -> do
       O.scrub key
       O.scrub exportKey
-      pure (Just (messageOf (O.encode ke3)))
+      pure (Just (messageOf (O.encode ke3), Nothing))
   O.scrub st
   pure message
 
@@ -166,13 +178,13 @@ startRegistration password =
 -- | 'finishRegistration' is a registration's last step, with the server's
 -- response and the stretching it named: the record to send, or 'Nothing'
 -- when the response is not valid.
-finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe Message)
+finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishRegistration (RegistrationState st) _ stretch response = do
   made <- case bytesOf response >>= rightToMaybe . O.decode of
     Nothing -> pure Nothing
     Just response' -> rightToMaybe <$> O.finalizeRegistration (opaqueConfig stretch) st response' O.defaultIdentities
   for_ made (O.scrub . snd)
   O.scrub st
-  pure (messageOf . O.encode . fst <$> made)
+  pure ((\m -> (messageOf (O.encode (fst m)), Nothing)) <$> made)
 
 #endif

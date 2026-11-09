@@ -694,6 +694,9 @@ handlers env caller =
               u <- signedInUser
               now <- liftIO getCurrentTime
               liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
+          , publicKey = \owner -> do
+              _ <- signedInUser
+              liftIO (Vault.publicKeyOf env.storage owner) >>= maybe (refuse ApiError.NotFound) pure
           , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
           , beginRegistration = \body -> do
               (u, s, key) <- ceremonyCaller
@@ -960,7 +963,7 @@ handlers env caller =
               u <- signedInUser
               now <- liftIO getCurrentTime
               liftIO (Vault.storeVault env.storage now u base v) >>= either (throwError . wikiError) pure
-          , deleteVault = signedInUser >>= \u -> liftIO (Vault.deleteVault env.storage u) $> NoContent
+          , deleteVault = signedInUser >>= \u -> liftIO (getCurrentTime >>= \now -> Vault.deleteVault env.storage now u) $> NoContent
           , beginAssertion = do
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime
@@ -1223,7 +1226,7 @@ handlers env caller =
               { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
               }
         Allowed ->
-          liftIO (Accounts.changePassword env.storage u s.token (proofOf s now u) change.current change.password) >>= \case
+          liftIO (Accounts.changePassword env.storage u s.token (proofOf s now u) change.current change.password change.vault) >>= \case
             Left Accounts.WrongCurrent -> do
               liftIO (Limiter.failed env.limiter now login s.address)
               refuse ApiError.Unauthenticated

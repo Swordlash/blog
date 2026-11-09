@@ -36,7 +36,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Totp (codeAt, secretFromText)
-import Wiki.Server.Vault (Site (..), siteFor)
+import Wiki.Server.Vault (Site (..), keyIdOf, siteFor)
 import Wiki.Server.WebAuthn (fromBase64Url, toBase64Url)
 
 spec :: Backing -> Spec
@@ -91,7 +91,7 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     (use r theReader passkey 1 r.public >>= jsonAs 404) `shouldReturn` NotFound
     (call r theReader methodDelete (links.account.removePasskey info.id) none >>= jsonAs 404) `shouldReturn` NotFound
     (call r theReader methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
-    refused :: ApiError <- call r theReader methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bg" "aw")])) >>= jsonAs 400
+    refused :: ApiError <- call r theReader methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")])) >>= jsonAs 400
     refused `shouldSatisfy` says "not one of yours"
     (call r editor methodGet links.account.passkeys none >>= jsonAs 200) `shouldReturn` [info]
 
@@ -110,10 +110,10 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     unchanged <- send r methodGet (r.public <> "/" <> links.assistant.vault) (editor <> [("If-None-Match", encodeUtf8 first'.tag.text)]) ""
     (unchanged.status, unchanged.body) `shouldBe` (304, "")
     -- A new version, with the key wrapped for the passkey.
-    let wrapped = vaultWith [(info.id, WrappedKey "bm9uY2U" "a2V5")]
+    let wrapped = vaultWith [(info.id, WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")]
     secondVersion :: StoredVault <- send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) (encodeBody wrapped) >>= jsonAs 200
     secondVersion.tag `shouldNotBe` first'.tag
-    wrappedFor info.id secondVersion.vault `shouldBe` Just (WrappedKey "bm9uY2U" "a2V5")
+    wrappedFor info.id secondVersion.vault `shouldBe` Just (WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")
     map (\p -> p.unlocks) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [True]
     -- Over the first version again: changed meanwhile.
     stale :: ApiError <- send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) (encodeBody wrapped) >>= jsonAs 409
@@ -121,21 +121,110 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     -- The passkey removed takes its wrapped key with it.
     (call r editor methodDelete (links.account.removePasskey info.id) none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
     third :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
-    (third.vault.wrapped, third.tag /= secondVersion.tag) `shouldBe` (mempty, True)
+    (third.vault.wraps, third.tag /= secondVersion.tag) `shouldBe` (mempty, True)
     -- Turned off: the vault and its wrapped keys go, with no passkey asked
     -- for; the passkeys stay, since they sign the user in.
     another <- registerNew r editor (authenticator "another passkey")
     stored :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
     _ :: StoredVault <-
-      send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 stored.tag.text)]) (encodeBody (vaultWith [(another.id, WrappedKey "bm9uY2U" "a2V5")])) >>= jsonAs 200
+      send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 stored.tag.text)]) (encodeBody (vaultWith [(another.id, WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")])) >>= jsonAs 200
     (\x -> x.status) <$> call r editor methodDelete links.assistant.deleteVault none `shouldReturn` 204
     (call r editor methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
     map (\p -> (p.id, p.unlocks)) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [(another.id, False)]
 
+  it "takes a vault of WP5.21's format from an older tab as its settings alone, and keeps the rest" $ withSignedIn backing $ \r editor _ -> do
+    info <- registerNew r editor passkey
+    -- A vault of the current format, with an item the assistant does not
+    -- know besides its settings.
+    let notes = Item {keyId = Nothing, sealed = Sealed "b3RoZXItbm9uY2Uh" "bm90ZXM"}
+    first' :: StoredVault <- call r editor methodPut links.assistant.storeVault (Just (withItem (ItemName "notes") notes (vaultWith [(info.id, WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n")]))) >>= jsonAs 200
+    -- A tab of the wiki before WP5.74 stores its settings in its format,
+    -- over the version it read: only the settings change.
+    let old = "{\"format\":1,\"salt\":\"c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY\",\"nonce\":\"b3RoZXItbm9uY2Uh\",\"ciphertext\":\"bmV3\",\"wrapped\":{}}"
+    stored2 :: StoredVault <- send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) old >>= jsonAs 200
+    (sealedOf stored2.vault, itemOf (ItemName "notes") stored2.vault, wrappedFor info.id stored2.vault)
+      `shouldBe` (Just (Sealed "b3RoZXItbm9uY2Uh" "bmV3"), Just notes, Just (WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n"))
+    stored2.vault.format `shouldBe` vaultFormat
+    -- Over a version it did not read, it is refused, as before.
+    (send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 first'.tag.text)]) old >>= jsonAs 409)
+      `shouldReturn` Conflict "The vault was changed on another device meanwhile."
+    -- Turning syncing off, as such a tab does, deletes the settings alone:
+    -- the vault, its other item and its wraps stay, at a new version.
+    (\x -> x.status) <$> call r editor methodDelete links.assistant.deleteVault none `shouldReturn` 204
+    third :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
+    (sealedOf third.vault, itemOf (ItemName "notes") third.vault, wrappedFor info.id third.vault, third.tag /= stored2.tag)
+      `shouldBe` (Nothing, Just notes, Just (WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n"), True)
+    -- A vault of a later format than this wiki's, or one with no item, is
+    -- refused, and the stored one stays.
+    let newer = "{\"format\":3,\"salt\":\"c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY\",\"items\":{}}"
+    (\x -> x.status) <$> send r methodPut (r.public <> "/" <> links.assistant.storeVault) (jsonHeader <> editor <> [("If-Match", encodeUtf8 third.tag.text)]) newer `shouldReturn` 400
+    (call r editor methodPut links.assistant.storeVault (Just (withoutItem assistantItem (withoutItem (ItemName "notes") (vaultWith [])))) >>= jsonAs 400)
+      `shouldReturn` Invalid "A vault holds at least one item."
+    (call r editor methodGet links.assistant.vault none >>= jsonAs 200) `shouldReturn` third
+
+  it "stores the user's key pair with its public key in one request, and gives the public key to anyone signed in" $ withSignedIn backing $ \r editor theReader -> do
+    info <- registerNew r editor passkey
+    let key = PublicKey "YW4gWDI1NTE5IHB1YmxpYyBrZXksIDMyIGJ5dGVzISE"
+        keyId = fromMaybe (KeyId "") (keyIdOf key)
+        pair = Item {keyId = Just keyId, sealed = Sealed "b3RoZXItbm9uY2Uh" "YSBrZXkgcGFpciBzZWFsZWQ6IGl0cyBwa2NzOCBhbmQgaXRzIHRhZywgc2l4dHktZm91ciBieXRlcyBvZiBpdA"}
+        withIdentity = withItem identityItem pair (vaultWith [(info.id, wrap)])
+        change v k = VaultChange {vault = v, publicKey = k}
+    -- The key pair alone, with no public key for the directory, or with
+    -- one that is not the key pair's, is refused.
+    (call r editor methodPut links.assistant.storeVault (Just (change withIdentity Nothing)) >>= jsonAs 400)
+      `shouldReturn` Invalid "The vault holds a key pair the directory does not have: send its public key with it."
+    (call r editor methodPut links.assistant.storeVault (Just (change withIdentity (Just NewPublicKey {keyId, publicKey = PublicKey "YW5vdGhlciBYMjU1MTkgcHVibGljIGtleSwgMzJiLi4"}))) >>= jsonAs 400)
+      `shouldReturn` Invalid "A public key is X25519's 32 bytes, and its id the first 16 bytes of its SHA-256."
+    (call r editor methodPut links.assistant.storeVault (Just (change (vaultWith []) (Just NewPublicKey {keyId, publicKey = key}))) >>= jsonAs 400)
+      `shouldReturn` Invalid "The public key sent is not the key pair the vault holds."
+    -- Nobody has a key yet.
+    (call r theReader methodGet (links.account.publicKey (UserId "user-editor")) none >>= jsonAs 404) `shouldReturn` NotFound
+    stored :: StoredVault <- call r editor methodPut links.assistant.storeVault (Just (change withIdentity (Just NewPublicKey {keyId, publicKey = key}))) >>= jsonAs 200
+    itemOf identityItem stored.vault `shouldBe` Just pair
+    -- Anyone signed in reads the public key; nobody else reads the vault.
+    entry :: PublicKeyEntry <- call r theReader methodGet (links.account.publicKey (UserId "user-editor")) none >>= jsonAs 200
+    (entry.user, entry.keyId, entry.publicKey) `shouldBe` (UserId "user-editor", keyId, key)
+    (call r editor methodGet (links.account.publicKey (UserId "user-reader")) none >>= jsonAs 404) `shouldReturn` NotFound
+    (\x -> x.status) <$> send r methodGet (r.public <> "/" <> links.account.publicKey (UserId "user-editor")) [] "" `shouldReturn` 401
+    (call r theReader methodGet links.assistant.vault none >>= jsonAs 404) `shouldReturn` NotFound
+    -- The vault changes on with its key pair, which needs no public key
+    -- again; another key pair does not replace it, and the item cannot be
+    -- dropped.
+    let at t = jsonHeader <> editor <> [("If-Match", encodeUtf8 t.text)]
+    again :: StoredVault <- send r methodPut (r.public <> "/" <> links.assistant.storeVault) (at stored.tag) (encode (change (withSealed (Sealed "b3RoZXItbm9uY2Uh" "c2VhbGVkIGFnYWlu") stored.vault) Nothing)) >>= jsonAs 200
+    itemOf identityItem again.vault `shouldBe` Just pair
+    let otherKey = PublicKey "YW5vdGhlciBYMjU1MTkgcHVibGljIGtleSwgMzJiLi4"
+        otherId = fromMaybe (KeyId "") (keyIdOf otherKey)
+        other = withItem identityItem Item {keyId = Just otherId, sealed = pair.sealed} again.vault
+    (send r methodPut (r.public <> "/" <> links.assistant.storeVault) (at again.tag) (encode (change other (Just NewPublicKey {keyId = otherId, publicKey = otherKey}))) >>= jsonAs 409)
+      `shouldReturn` Conflict "You have a key pair already: it is replaced only after a password reset."
+    (send r methodPut (r.public <> "/" <> links.assistant.storeVault) (at again.tag) (encode (change (withoutItem identityItem again.vault) Nothing)) >>= jsonAs 400)
+      `shouldReturn` Invalid "The vault's key pair cannot be removed."
+    -- Turning the assistant's syncing off leaves the key pair and its key.
+    (\x -> x.status) <$> call r editor methodDelete links.assistant.deleteVault none `shouldReturn` 204
+    rest :: StoredVault <- call r editor methodGet links.assistant.vault none >>= jsonAs 200
+    (sealedOf rest.vault, itemOf identityItem rest.vault) `shouldBe` (Nothing, Just pair)
+    (call r theReader methodGet (links.account.publicKey (UserId "user-editor")) none >>= jsonAs 200) `shouldReturn` entry
+    -- The passkey that alone unlocks the vault holding the key pair is
+    -- not removed, whatever the panel showed: the vault would be lost.
+    (call r editor methodDelete (links.account.removePasskey info.id) none >>= jsonAs 409)
+      `shouldReturn` Conflict "This passkey is the last way to unlock your vault, which holds your keys: add your password or another passkey as a way to unlock it first."
+    map (\p -> (p.id, p.unlocks)) <$> (call r editor methodGet links.account.passkeys none >>= jsonAs @[PasskeyInfo] 200) `shouldReturn` [(info.id, True)]
+
+  it "refuses parts of a vault that are not of their lengths" $ withSignedIn backing $ \r editor _ -> do
+    info <- registerNew r editor passkey
+    let base = vaultWith [(info.id, wrap)]
+        refused v = call r editor methodPut links.assistant.storeVault (Just v) >>= jsonAs @ApiError 400
+    refused Vault {format = base.format, salt = "c2FsdA", items = base.items, wraps = base.wraps} >>= (`shouldSatisfy` says "salt is not of its length")
+    refused (withSealed (Sealed "bm9uY2U" "c2VhbGVk") base) >>= (`shouldSatisfy` says "nonce is not of its length")
+    refused (vaultWith [(info.id, WrappedKey "bm9uY2UtMTJieXRl" "a2V5")]) >>= (`shouldSatisfy` says "wrapped key is not of its length")
+    refused (withItem identityItem Item {keyId = Just (KeyId "a2V5"), sealed = Sealed "b3RoZXItbm9uY2Uh" "YSBrZXkgcGFpciBzZWFsZWQ6IGl0cyBwa2NzOCBhbmQgaXRzIHRhZywgc2l4dHktZm91ciBieXRlcyBvZiBpdA"} base) >>= (`shouldSatisfy` says "key id is not of its length")
+    refused (withItem identityItem Item {keyId = keyIdOf (PublicKey "YW4gWDI1NTE5IHB1YmxpYyBrZXksIDMyIGJ5dGVzISE"), sealed = Sealed "b3RoZXItbm9uY2Uh" "c2hvcnQ"} base) >>= (`shouldSatisfy` says "key pair is not of its length")
+
   it "refuses a wrapped key, a passkey's answer or a passkey longer than any is" $ withSignedIn backing $ \r editor _ -> do
     info <- registerNew r editor passkey
     let tooLong = T.replicate (256 * 1024 + 1) "a"
-    wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2U" tooLong)])) >>= jsonAs 400
+    wrapped :: ApiError <- call r editor methodPut links.assistant.storeVault (Just (vaultWith [(info.id, WrappedKey "bm9uY2UtMTJieXRl" (Ciphertext tooLong))])) >>= jsonAs 400
     wrapped `shouldSatisfy` says "too long"
     _ :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
     let other = authenticator "another passkey"
@@ -159,7 +248,8 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
         `shouldBe` Site {rpId = "docs.example.net", origins = ["https://docs.example.net"]}
   where
     passkey = authenticator "the editor's passkey"
-    vaultWith wrapped = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.fromList wrapped}
+    wrap = WrappedKey "bm9uY2UtMTJieXRl" "YSB2YXVsdCBrZXkgd3JhcHBlZCwgYW5kIHRoZSB0YWcgb2YgaXRzIHdyYXBwaW5n"
+    vaultWith wrapped = withSealed Sealed {nonce = "bm9uY2UtMTJieXRl", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY", items = mempty, wraps = Map.fromList [(ByPasskey c, w) | (c, w) <- wrapped]}
     says part = \case
       Invalid t -> part `T.isInfixOf` t
       Conflict t -> part `T.isInfixOf` t

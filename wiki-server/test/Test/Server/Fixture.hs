@@ -500,7 +500,7 @@ changeOwnPassword r at hs current new = do
     Nothing -> pure False
     Just c -> (\x -> x.status == 204) <$> provePassword r at hs c
   withRecord r at hs ForOwnPassword new $ \record ->
-    send r "PUT" (at links.account.changePassword) (jsonType : hs) (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record})
+    send r "PUT" (at links.account.changePassword) (jsonType : hs) (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record, vault = Nothing})
 
 -- | A record that is none: for a request refused before its record is
 -- looked at.

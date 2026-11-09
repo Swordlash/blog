@@ -1,27 +1,39 @@
-// The assistant's vault in the browser (WP5.21 of docs/PLAN.md), declared
-// in Wiki.App.Assistant: WebCrypto for the keys and the sealed settings,
-// IndexedDB for this device's key, and WebAuthn (navigator.credentials)
-// for the passkeys that unlock the vault on another device. The format is
-// Wiki.Core.Assistant.Vault's; the steps are Wiki.App.Assistant.Keys's.
+// The user's vault in the browser (WP5.21 and WP5.74 of docs/PLAN.md),
+// declared in Wiki.App.Assistant: WebCrypto for the keys, the sealed
+// items and the user's key pair, IndexedDB for this device's keys, and
+// WebAuthn (navigator.credentials) for the passkeys that unlock the vault
+// on another device. The format is Wiki.Core.Vault's; the steps are
+// Wiki.App.Vault's and Wiki.App.Assistant.Keys's.
 //
 // Keys never leave this file as bytes. The application holds a number for
-// each (a handle, in wikiVaultKeys), and asks for what to do with it:
-// seal or open text with a vault key, wrap a vault key with the key a
-// passkey's PRF output gives, unwrap it. The vault key the device keeps
-// is a CryptoKey that cannot be exported, stored in an IndexedDB database
-// of its own (wiki-assistant-keys), apart from the record the application
-// stores (wiki-assistant). The PRF output of a passkey is read here, made
-// into a key that can only wrap and unwrap (HKDF-SHA256 with the vault's
-// salt), and its bytes are then overwritten; it is never returned, logged
-// or sent.
+// each (a handle, in the page's registry of keys), and asks for what to
+// do with it: seal or open text with a vault key, wrap a vault key with
+// the key a passkey's PRF output or the password gives, unwrap it, make
+// or open the user's key pair. The keys a device keeps are CryptoKeys that
+// cannot be exported, stored in an IndexedDB database of their own
+// (wiki-assistant-keys), apart from the records the application stores
+// (wiki-assistant): the assistant's under the user's id, the user's vault
+// key under "vault:" and the id, the user's private key under "identity:"
+// and the id. The PRF output of a passkey is read here, made into a key
+// that can only wrap and unwrap (HKDF-SHA256 with the vault's salt), and
+// its bytes are then overwritten; it is never returned, logged or sent.
+// So are the bytes of the user's private key, which exist only while they
+// are sealed or opened.
 //
 // Bytes cross to the application in base64url without padding, as
 // WebAuthn writes them. A failure comes back as {error: text}, with
 // {cancelled: true} when the person closed the browser's passkey dialog
 // or it timed out.
 
-const wikiVaultKeys = new Map();
-let wikiVaultNextKey = 0;
+// The page's keys by handle. The registry is a global so that the OPAQUE
+// client (jsbits/opaque.js), declared in another module, can hand over the
+// key OPAQUE's export key gives without its bytes leaving JavaScript.
+function wikiVaultRegistry() {
+  // Written out rather than with the nullish assignment operator: the file
+  // is embedded in C, where that operator's characters are a trigraph.
+  if (!globalThis.wikiKeyRegistry) globalThis.wikiKeyRegistry = { next: 0, keys: new Map() };
+  return globalThis.wikiKeyRegistry;
+}
 
 // The vault key this page holds for each user, once opened: what "ask for
 // the passkey each time" keeps instead of storing it. A reload of the page
@@ -48,13 +60,14 @@ function wikiVaultListen() {
 }
 
 function wikiVaultHandle(key) {
-  const handle = ++wikiVaultNextKey;
-  wikiVaultKeys.set(handle, key);
+  const registry = wikiVaultRegistry();
+  const handle = ++registry.next;
+  registry.keys.set(handle, key);
   return handle;
 }
 
 function wikiVaultKey(handle) {
-  const key = wikiVaultKeys.get(handle);
+  const key = wikiVaultRegistry().keys.get(handle);
   if (key === undefined) throw new Error("The key is no longer in this page.");
   return key;
 }
@@ -129,7 +142,26 @@ async function wiki_vault_open(handle, nonce, ciphertext, data) {
 
 // The handle no longer needed: the page lets the key go.
 function wiki_vault_forget_key(handle) {
-  wikiVaultKeys.delete(handle);
+  wikiVaultRegistry().keys.delete(handle);
+}
+
+// The key that wraps the vault key for the password: HKDF-SHA256 over the
+// key OPAQUE's export key gave (jsbits/opaque.js), with the vault's salt
+// and the format's info, to an AES-GCM key that only wraps and unwraps.
+// JSON {handle}, or {error}.
+async function wiki_vault_password_key(base, salt, info) {
+  try {
+    const key = await crypto.subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt: wikiVaultFromBase64(salt), info: wikiVaultText(info) },
+      wikiVaultKey(base),
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["wrapKey", "unwrapKey"],
+    );
+    return JSON.stringify({ handle: wikiVaultHandle(key) });
+  } catch (error) {
+    return wikiVaultFailure(error);
+  }
 }
 
 // 32 random bytes, in base64url: a vault's salt.
@@ -175,7 +207,7 @@ async function wiki_vault_keep_key(user, handle, onDisk) {
       new Uint8Array(raw).fill(0);
       // The handle holds the copy that cannot be exported from now on, so
       // that the exportable one is not left in the page.
-      wikiVaultKeys.set(handle, key);
+      wikiVaultRegistry().keys.set(handle, key);
     }
     wikiVaultPageKeys().set(String(user), key);
     if (onDisk) await wikiVaultStore("readwrite", (store) => store.put(key, String(user)));
@@ -358,6 +390,78 @@ async function wiki_vault_unwrap(wrapping, nonce, key, data, exportable) {
     return JSON.stringify({ handle: wikiVaultHandle(unwrapped) });
   } catch (error) {
     return JSON.stringify({ error: error?.name === "OperationError" ? "This passkey's copy of the vault key does not open." : String(error?.message ?? error) });
+  }
+}
+
+// The user's key pair (WP5.74 of docs/PLAN.md, Wiki.Core.Vault's identity
+// item): X25519 in WebCrypto. The private key is sealed in the vault under
+// the vault key, as PKCS #8, and kept on this device as a key that cannot
+// be exported, in IndexedDB under "identity:" and the user's id. The
+// public key goes to the server's directory, raw (32 bytes), with its id:
+// the first 16 bytes of its SHA-256.
+
+async function wikiKeysIdOf(raw) {
+  return wikiVaultToBase64(new Uint8Array(await crypto.subtle.digest("SHA-256", raw)).slice(0, 16));
+}
+
+// A new key pair for the user, its private key sealed with the vault key
+// under the additional data given with the key id appended: JSON {handle,
+// keyId, publicKey, nonce, ciphertext}, where handle is the private key,
+// which cannot be exported; or {error}. The PKCS #8 bytes exist only while
+// they are sealed, and are overwritten then.
+async function wiki_keys_generate(vaultHandle, data) {
+  try {
+    const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+    const raw = await crypto.subtle.exportKey("raw", pair.publicKey);
+    const keyId = await wikiKeysIdOf(raw);
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+    try {
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: wikiVaultText(data + keyId) }, wikiVaultKey(vaultHandle), pkcs8);
+      const kept = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "X25519" }, false, ["deriveBits"]);
+      return JSON.stringify({
+        handle: wikiVaultHandle(kept),
+        keyId,
+        publicKey: wikiVaultToBase64(raw),
+        nonce: wikiVaultToBase64(nonce),
+        ciphertext: wikiVaultToBase64(sealed),
+      });
+    } finally {
+      pkcs8.fill(0);
+    }
+  } catch (error) {
+    return wikiVaultFailure(error);
+  }
+}
+
+// Open the user's sealed private key with the vault key: JSON {handle},
+// a key that cannot be exported, or {error}.
+async function wiki_keys_open(vaultHandle, nonce, ciphertext, data) {
+  let pkcs8 = null;
+  try {
+    pkcs8 = new Uint8Array(
+      await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: wikiVaultFromBase64(nonce), additionalData: wikiVaultText(data) },
+        wikiVaultKey(vaultHandle),
+        wikiVaultFromBase64(ciphertext),
+      ),
+    );
+    const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "X25519" }, false, ["deriveBits"]);
+    return JSON.stringify({ handle: wikiVaultHandle(key) });
+  } catch (error) {
+    return JSON.stringify({ error: error?.name === "OperationError" ? "The vault key does not open this key pair." : String(error?.message ?? error) });
+  } finally {
+    pkcs8?.fill(0);
+  }
+}
+
+// A public key's fingerprint: SHA-256 of its raw bytes, in hexadecimal.
+async function wiki_keys_fingerprint(publicKey) {
+  try {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", wikiVaultFromBase64(publicKey)));
+    return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
   }
 }
 

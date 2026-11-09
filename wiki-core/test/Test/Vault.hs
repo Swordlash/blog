@@ -1,8 +1,9 @@
--- | The vault's format ("Wiki.Core.Assistant.Vault"): what is sealed and
--- what stays in the clear, the vault and a device's record written and
--- read back, a vault of a newer format refused, a removed passkey's
--- wrapped key gone, the old settings told from a record, and the
--- settings merged when a device unlocks the vault.
+-- | The vault's format ("Wiki.Core.Vault", "Wiki.Core.Assistant.Vault"):
+-- what is sealed and what stays in the clear, the vault and a device's
+-- record written and read back, a vault of WP5.21's format read as one
+-- item and its passkeys' wraps, a vault of a newer format refused, a
+-- removed passkey's wrapped key gone, the old settings told from a
+-- record, and the settings merged when a device unlocks the vault.
 module Test.Vault (spec) where
 
 import Data.Aeson (decode, encode, object, (.=))
@@ -36,8 +37,8 @@ vault =
   Vault
     { format = vaultFormat
     , salt = "c2FsdA"
-    , sealed = Sealed {nonce = "bm9uY2U", ciphertext = "Y2lwaGVy"}
-    , wrapped = Map.fromList [(CredentialId "Y3JlZC0x", WrappedKey "bjE" "azE"), (CredentialId "Y3JlZC0y", WrappedKey "bjI" "azI")]
+    , items = Map.singleton assistantItem Item {keyId = Nothing, sealed = Sealed {nonce = "bm9uY2U", ciphertext = "Y2lwaGVy"}}
+    , wraps = Map.fromList [(ByPasskey (CredentialId "Y3JlZC0x"), WrappedKey "bjE" "azE"), (ByPasskey (CredentialId "Y3JlZC0y"), WrappedKey "bjI" "azI")]
     }
 
 spec :: Spec
@@ -66,35 +67,66 @@ spec = describe "Wiki.Core.Assistant.Vault" $ do
     it "is read back as it is written" $
       decode (encode vault) `shouldBe` Just vault
 
-    it "is written with its format, salt, sealed settings and wrapped keys by credential id" $
+    it "is written with its format, salt, items by name and wraps by what unlocks them" $
       decode (encode vault)
         `shouldBe` Just
           ( object
-              [ "format" .= (1 :: Int)
+              [ "format" .= (2 :: Int)
               , "salt" .= ("c2FsdA" :: Text)
-              , "nonce" .= ("bm9uY2U" :: Text)
-              , "ciphertext" .= ("Y2lwaGVy" :: Text)
-              , "wrapped" .= object ["Y3JlZC0x" .= object ["nonce" .= ("bjE" :: Text), "key" .= ("azE" :: Text)], "Y3JlZC0y" .= object ["nonce" .= ("bjI" :: Text), "key" .= ("azI" :: Text)]]
+              , "items" .= object ["assistant" .= object ["nonce" .= ("bm9uY2U" :: Text), "ciphertext" .= ("Y2lwaGVy" :: Text)]]
+              , "wraps" .= object ["passkey:Y3JlZC0x" .= object ["nonce" .= ("bjE" :: Text), "key" .= ("azE" :: Text)], "passkey:Y3JlZC0y" .= object ["nonce" .= ("bjI" :: Text), "key" .= ("azI" :: Text)]]
               ]
           )
 
+    it "reads WP5.21's format as the assistant's item and its passkeys' wraps, and remembers it was that" $ do
+      let old =
+            encode
+              ( object
+                  [ "format" .= (1 :: Int)
+                  , "salt" .= ("c2FsdA" :: Text)
+                  , "nonce" .= ("bm9uY2U" :: Text)
+                  , "ciphertext" .= ("Y2lwaGVy" :: Text)
+                  , "wrapped" .= object ["Y3JlZC0x" .= object ["nonce" .= ("bjE" :: Text), "key" .= ("azE" :: Text)], "Y3JlZC0y" .= object ["nonce" .= ("bjI" :: Text), "key" .= ("azI" :: Text)]]
+                  ]
+              )
+      decode old `shouldBe` Just vault {format = 1}
+      -- Written again, it is in the current format.
+      (decode . encode =<< (decode old :: Maybe Vault)) `shouldBe` Just vault
+
+    it "keeps an item and a way to unlock it of a newer wiki's, which it does not know" $ do
+      let newer = vault {items = Map.insert (ItemName "notes") Item {keyId = Just (KeyId "a2V5LWlk"), sealed = Sealed "bjk" "Yzk"} vault.items, wraps = Map.insert ByPassword (WrappedKey "bnA" "a3A") vault.wraps}
+      decode (encode newer) `shouldBe` Just newer
+      itemOf (ItemName "notes") newer `shouldBe` Just Item {keyId = Just (KeyId "a2V5LWlk"), sealed = Sealed "bjk" "Yzk"}
+
     it "is refused when a newer wiki wrote it, or it is no vault's format" $ do
       let at n = encode (object ["format" .= (n :: Int), "salt" .= ("s" :: Text), "nonce" .= ("n" :: Text), "ciphertext" .= ("c" :: Text)])
-      (decode (at 2) :: Maybe Vault) `shouldBe` Nothing
+      (decode (at 3) :: Maybe Vault) `shouldBe` Nothing
       (decode (at 0) :: Maybe Vault) `shouldBe` Nothing
-      (\v -> v.wrapped) <$> (decode (at 1) :: Maybe Vault) `shouldBe` Just mempty
+      (\v -> v.wraps) <$> (decode (at 1) :: Maybe Vault) `shouldBe` Just mempty
+      (decode (encode (object ["format" .= (2 :: Int), "salt" .= ("s" :: Text), "wraps" .= object ["fingerprint" .= object ["nonce" .= ("n" :: Text), "key" .= ("k" :: Text)]]])) :: Maybe Vault)
+        `shouldBe` Nothing
 
     it "loses a removed passkey's wrapped key, and keeps the others" $ do
       let removed = withoutPasskey (CredentialId "Y3JlZC0x") vault
       wrappedFor (CredentialId "Y3JlZC0x") removed `shouldBe` Nothing
       wrappedFor (CredentialId "Y3JlZC0y") removed `shouldBe` Just (WrappedKey "bjI" "azI")
       encode removed `shouldSatisfy` (not . contains "Y3JlZC0x")
-      removed.sealed `shouldBe` vault.sealed
+      sealedOf removed `shouldBe` sealedOf vault
 
-    it "keeps its salt and wrapped keys when its settings are sealed again" $ do
-      let again = withSealed (Sealed "bmV3" "bmV3IGNpcGhlcg") vault
-      (again.salt, again.wrapped, sealedOf again) `shouldBe` (vault.salt, vault.wrapped, Sealed "bmV3" "bmV3IGNpcGhlcg")
+    it "keeps its salt, wraps and other items when its settings are sealed again" $ do
+      let other = withItem (ItemName "notes") Item {keyId = Nothing, sealed = Sealed "bjk" "Yzk"} vault
+          again = withSealed (Sealed "bmV3" "bmV3IGNpcGhlcg") other
+      (again.salt, again.wraps, sealedOf again, itemOf (ItemName "notes") again) `shouldBe` (vault.salt, vault.wraps, Just (Sealed "bmV3" "bmV3IGNpcGhlcg"), itemOf (ItemName "notes") other)
       wrappedFor (CredentialId "Y3JlZC0z") (withWrapped (CredentialId "Y3JlZC0z") (WrappedKey "bjM" "azM") vault) `shouldBe` Just (WrappedKey "bjM" "azM")
+
+    it "has no settings of the assistant without its item, and so does not make them sync" $
+      sealedOf (withoutItem assistantItem vault) `shouldBe` Nothing
+
+    it "seals and wraps under the additional data and info WP5.21's vaults were made with" $
+      -- Every vault made before WP5.74 was sealed and wrapped under these;
+      -- another text would leave each of them unopenable.
+      (sealingData, wrappingData, wrappingInfo)
+        `shouldBe` ("wiki-assistant-vault/1 settings", "wiki-assistant-vault/1 vault key", "wiki-assistant-vault/1 wrapping key")
 
   describe "a device's record" $ do
     let record = DeviceRecord {sealed = Just (Sealed "bg" "Yw"), server = Just ServerCopy {tag = VaultTag "\"3\"", vault}, learnt = learntOf full, askEachTime = True}

@@ -13,17 +13,20 @@ import Protolude
 import Test.Database (Backing (..), withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
+import Wiki.Api.Vault (StoredVault (..))
+import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
+import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place, TableRead (..), checkDatabase, closeStorage, defaultConfig, importArchive, migrateDatabase, openStorage, withStorage)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Rows (micro)
 import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
+import Wiki.Server.Vault (storedVault)
 
 -- | The tables of the wiki's schema, the same on both databases.
 wikiTables :: [Text]
 wikiTables =
-  [ "assistant_vaults"
-  , "attachments"
+  [ "attachments"
   , "audit_log"
   , "comments"
   , "drafts"
@@ -38,6 +41,7 @@ wikiTables =
   , "pages"
   , "passkeys"
   , "permissions_generation"
+  , "public_keys"
   , "recovery_codes"
   , "reset_tokens"
   , "sessions"
@@ -49,6 +53,8 @@ wikiTables =
   , "threads"
   , "totp"
   , "users"
+  , "vault_items"
+  , "vaults"
   , "watches"
   , "wiki_schema"
   ]
@@ -116,6 +122,22 @@ spec backing = describe "the schema's versions" $ do
         let steps = migrationsFor (schemaSuffix c)
         schemaVersion c `shouldReturn` length steps
         versionsOf c `shouldReturn` [1 .. length steps]
+
+  it "move each vault of the assistant to the user's vault, its settings as its assistant item, at the same tag" $
+    withPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        -- The schema of WP5.74a, with one user's vault in it as WP5.21
+        -- stored it.
+        void (applyMigrations (take 9 (migrationsFor (schemaSuffix c))) c)
+        runScript c "INSERT INTO users (id, login, display_name) VALUES ('user-old', 'old', 'Old');"
+        runScript c "INSERT INTO assistant_vaults (user_id, format, salt, nonce, ciphertext, revision, updated_at) VALUES ('user-old', 1, 'c2FsdA', 'bm9uY2U', 'c2VhbGVk', 7, CURRENT_TIMESTAMP);"
+      withStorage defaultConfig at $ \st ->
+        storedVault st (UserId "user-old")
+          `shouldReturn` Just
+            StoredVault
+              { tag = VaultTag "\"7\""
+              , vault = withSealed Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"} Vault {format = vaultFormat, salt = "c2FsdA", items = mempty, wraps = mempty}
+              }
 
   it "apply every pending step or none: a step that fails leaves the database as it was" $
     withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do

@@ -83,16 +83,18 @@ module Wiki.Api.Opaque
   , PasswordRecord (..)
   , NewAccountRecord (..)
   , PasswordRecordChange (..)
+  , PasswordWrapChange (..)
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON (..), defaultOptions, genericToJSON, omitNothingFields)
+import Data.Aeson (FromJSON, ToJSON (..), defaultOptions, genericToJSON, object, omitNothingFields, (.=))
 import Data.ByteString.Base64.URL qualified as Base64
 import Protolude
 import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (ResetToken)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.User (Password)
+import Wiki.Core.Vault (VaultTag, WrappedKey)
 
 -- | 'Message': an OPAQUE message, record or key share, as the API carries
 -- it: its bytes in unpadded base64url.
@@ -242,10 +244,30 @@ instance ToJSON NewAccountRecord where
 -- \/api\/v1\/account\/password@. An account from before OPAQUE gives its
 -- current password ('current'), which the server checks against its hash;
 -- an account with a record proves it first (@account\/password\/proof@)
--- and gives none.
+-- and gives none. When the user's vault opens with their password too
+-- (WP5.74 of docs/PLAN.md, "Wiki.Core.Vault"), the vault key comes wrapped
+-- with the new password's key ('vault'), and the server stores the new
+-- record and the new wrap together, or neither.
 data PasswordRecordChange = PasswordRecordChange
   { current :: Maybe Password
   , password :: PasswordRecord
+  , vault :: Maybe PasswordWrapChange
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON)
+
+-- | Written with @current@ always (@null@ when proved), and @vault@ only
+-- when there is one, as a change from before WP5.74 was written.
+instance ToJSON PasswordRecordChange where
+  toJSON c = object (["current" .= c.current, "password" .= c.password] <> maybe [] (\v -> ["vault" .= v]) c.vault)
+
+-- | 'PasswordWrapChange': the vault key wrapped with the key a new
+-- password gives, to replace the password's wrap in the vault of the
+-- version the tag names. Another version on the server refuses the whole
+-- change.
+data PasswordWrapChange = PasswordWrapChange
+  { tag :: VaultTag
+  , wrapped :: WrappedKey
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
