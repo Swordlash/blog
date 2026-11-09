@@ -136,7 +136,19 @@ front root o0 = do
   -- there now and is named by absolute path from here on.
   installer <- source "texlive-installer" o1.optTexliveInstaller
   perlSource <- source "perl-source" o1.optPerlSource
-  let o = o1 {optTexliveInstaller = installer, optPerlSource = perlSource}
+  -- libsodium's release tarball brought onto the machine by hand
+  -- (--libsodium-source), which the bootstrap's native and build modes
+  -- check and build instead of downloading the release. It must be there
+  -- now, and is named by absolute path from here on.
+  libsodiumSource <-
+    if null o1.optLibsodiumSource
+      then pure ""
+      else do
+        let file = o1.optLibsodiumSource
+        readable <- isReadableFile file
+        unless readable (die ("--libsodium-source " <> file <> ": no such file here (or it cannot be read); give libsodium's release tarball, libsodium-<version>.tar.gz"))
+        realpath [] file
+  let o = o1 {optTexliveInstaller = installer, optPerlSource = perlSource, optLibsodiumSource = libsodiumSource}
 
   n <- checkName o.name
   l <- layoutFor n o.optPrefix
@@ -465,7 +477,11 @@ front root o0 = do
         unless (code == ExitSuccess) (exitWith code)
       systemToolsFlag = ["--system-tools" | not (null systemTools)]
       hackageFlag = ["--hackage-mirror=" <> hackageMirror | not (null hackageMirror)]
+      -- Only the bootstrap's native and build modes build libsodium.
+      sodiumFlag = ["--libsodium-source=" <> o.optLibsodiumSource | not (null o.optLibsodiumSource)]
+      sodiumUnused why = unless (null o.optLibsodiumSource) (say ("--libsodium-source: not used, since " <> why))
       under = if null toolchainHome then "" else ", under " <> toolchainHome
+  unless o.build (sodiumUnused "--no-build builds nothing")
   when o.build $ do
     unless (null systemTools) $ do
       let needs = "native" : ["node" | not server || not (null bundleLocally)]
@@ -492,11 +508,12 @@ front root o0 = do
       then do
         say ("installing or checking Node, which serves the demo, and GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh static)" <> under)
         bootstrap "static" (systemToolsFlag <> hackageFlag)
+        sodiumUnused "the demo with the page CI built builds nothing natively"
       else
         if not (null prebuilt)
           then do
             say ("installing or checking the toolchain wiki-server's build needs (toolchain/bootstrap.sh native)" <> under)
-            bootstrap "native" (["--without-postgres" | server && db == "sqlite"] <> systemToolsFlag <> hackageFlag)
+            bootstrap "native" (["--without-postgres" | server && db == "sqlite"] <> systemToolsFlag <> hackageFlag <> sodiumFlag)
             unless (null bundleLocally) $ do
               say ("installing or checking Node, which builds the page's bundles (toolchain/bootstrap.sh node)" <> under)
               bootstrap "node" systemToolsFlag
@@ -504,7 +521,7 @@ front root o0 = do
             built <- doesDirectoryExist (root </> "dist-newstyle" </> "wasm-opt")
             unless built (say "first -O2 build: every dependency is compiled again at -O2 for wasm, so this can take over an hour once; later runs rebuild only what changed.")
             say ("installing or checking the toolchain a build needs (toolchain/bootstrap.sh build)" <> under)
-            bootstrap "build" (["--without-postgres" | server && db == "sqlite"] <> hackageFlag)
+            bootstrap "build" (["--without-postgres" | server && db == "sqlite"] <> hackageFlag <> sodiumFlag)
     when recheck $ do
       say "checking again what the native build of wiki-server needs, after the bootstrap"
       code <- runInherit "sh" ((root </> "toolchain" </> "check-native.sh") : checkFlags)

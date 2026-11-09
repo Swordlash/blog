@@ -65,6 +65,10 @@ data Context = Context
   , systemTools :: Bool
   -- ^ Whether GHC and cabal are the machine's own, as PATH finds them
   -- (@native --system-tools@): the summary then names the versions found.
+  , libsodiumSource :: Maybe FilePath
+  -- ^ libsodium's release tarball, brought onto the machine by hand
+  -- (@native@ and @build@ with @--libsodium-source=FILE@), which
+  -- @toolchain/libsodium.sh@ checks and builds instead of downloading one.
   }
 
 -- | The toolchain's own directory: its state, its log, Node, the markers.

@@ -350,7 +350,7 @@ for option do
   shift
   case $option in
     --system-tools) system_tools=1 ;;
-    --hackage-mirror=*) ;;
+    --hackage-mirror=* | --libsodium-source=*) ;;
     *) set -- "$@" "$option" ;;
   esac
 done
@@ -4025,6 +4025,28 @@ assert_lacks "$EVENTS" 'hackage'
 [ -z "$(pstate hackage_mirror)" ] || fail '--hackage-mirror= did not forget the mirror'
 pass '--hackage-mirror reaches the bootstrap'"'"'s native mode and the state, ~/.cabal untouched; --hackage-mirror= forgets it'
 
+# libsodium's release tarball given by hand goes to the bootstrap's native
+# mode, named by absolute path, for this run only: the state does not keep
+# it. toolchain/test-bootstrap.sh checks what the bootstrap does with it.
+# A file that is not there is refused before anything is done, and a
+# deploy that runs no bootstrap says the file was not used.
+printf 'not really libsodium\n' >"$case_dir/libsodium-1.0.22.tar.gz"
+: >"$EVENTS"
+out=$case_dir/libsodium-source
+(cd "$case_dir" && locked --backend-only --libsodium-source libsodium-1.0.22.tar.gz) >"$out" 2>&1 ||
+  fail "the deploy with --libsodium-source failed: $(cat "$out")"
+assert_contains "$EVENTS" "bootstrap native --without-postgres --libsodium-source=$case_dir/libsodium-1.0.22.tar.gz WIKI_TOOLCHAIN_HOME=$pre/toolchain"
+if grep -F 'libsodium' "$pre/state/wiki-demo.state" >/dev/null; then fail "the state keeps --libsodium-source: $(cat "$pre/state/wiki-demo.state")"; fi
+: >"$EVENTS"
+locked --no-build --libsodium-source="$case_dir/libsodium-1.0.22.tar.gz" >"$out" 2>&1 ||
+  fail "the deploy with --no-build and --libsodium-source failed: $(cat "$out")"
+assert_contains "$out" '--libsodium-source: not used, since --no-build builds nothing'
+assert_lacks "$EVENTS" 'bootstrap native'
+expected="--libsodium-source $case_dir/no-libsodium.tar.gz: no such file here (or it cannot be read); give libsodium's release tarball, libsodium-<version>.tar.gz"
+refused locked --backend-only --libsodium-source "$case_dir/no-libsodium.tar.gz"
+assert_lacks "$EVENTS" 'bootstrap'
+pass '--libsodium-source reaches the bootstrap'"'"'s native mode by absolute path, is not remembered, is said unused with --no-build, and a file that is not there is refused before anything is done'
+
 # The machine's own toolchain: checked first, before the native check and
 # the page's download, by the real bootstrap's check; each tool missing or
 # too old stops the deploy, named with what was found.
@@ -4170,22 +4192,28 @@ sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrap
 assert_contains "$out" 'sh toolchain/configure.sh --args-from FILE'
 pass 'toolchain/configure.sh checks the machine with terminfo and without libpq, runs bootstrap native --with-wizard, then the wizard through toolchain/maker.sh tui deploy'
 
-# On a machine that installs nothing from the internet: --system-tools and
-# --hackage-mirror reach the bootstrap that installs the wizard's compiler,
-# --npm-registry the environment, and all three the wizard, as given.
+# On a machine that installs nothing from the internet: --system-tools,
+# --hackage-mirror and --libsodium-source reach the bootstrap that installs
+# the wizard's compiler, --npm-registry the environment, and all four the
+# wizard, as given. The bootstrap here is the fixtures' fake, so the file
+# need not be there; the real one's check is toolchain/test-bootstrap.sh's.
 : >"$EVENTS"
 (cd "$case_dir" && sh "$case_dir/repo/toolchain/configure.sh" --system-tools --hackage-mirror https://hackage.example.org/ \
-  --npm-registry=https://npm.example.org/ --args-from answers) >"$out" 2>&1 ||
+  --npm-registry=https://npm.example.org/ --libsodium-source /srv/incoming/libsodium-1.0.22.tar.gz --args-from answers) >"$out" 2>&1 ||
   fail "the wrapper with the options of a locked-down machine failed: $(cat "$out")"
-assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ WIKI_TOOLCHAIN_HOME='
-assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --args-from answers"
+assert_contains "$EVENTS" 'bootstrap native --without-postgres --with-wizard --system-tools --hackage-mirror=https://hackage.example.org/ --libsodium-source=/srv/incoming/libsodium-1.0.22.tar.gz WIKI_TOOLCHAIN_HOME='
+assert_contains "$EVENTS" "wiki-server --root $case_dir/repo deploy --system-tools --hackage-mirror https://hackage.example.org/ --npm-registry=https://npm.example.org/ --libsodium-source /srv/incoming/libsodium-1.0.22.tar.gz --args-from answers"
 status=0
 sh "$case_dir/repo/toolchain/configure.sh" --hackage-mirror >"$out" 2>&1 || status=$?
 [ "$status" = 1 ] || fail "the wrapper with --hackage-mirror and no URL exited $status, not 1"
 assert_contains "$out" 'configure: --hackage-mirror needs a URL'
+status=0
+sh "$case_dir/repo/toolchain/configure.sh" --libsodium-source >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the wrapper with --libsodium-source and no file exited $status, not 1"
+assert_contains "$out" 'configure: --libsodium-source needs a file'
 sh "$case_dir/repo/toolchain/configure.sh" --help >"$out" 2>&1 || fail 'the wrapper'"'"'s --help failed'
 assert_contains "$out" '--system-tools         compile the wizard with this machine'"'"'s own GHC and'
-pass 'toolchain/configure.sh gives --system-tools and --hackage-mirror to the bootstrap, and the three options to the wizard'
+pass 'toolchain/configure.sh gives --system-tools, --hackage-mirror and --libsodium-source to the bootstrap, and the four options to the wizard'
 
 printf 'Passed %s deploy regression cases.\n' "$passed"
 "$NODE_REAL" "$SOURCE_DIR/test-deploy-server.mjs"

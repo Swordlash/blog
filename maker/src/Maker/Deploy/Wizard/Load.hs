@@ -74,8 +74,9 @@ absolute t
 
 -- | The answers' paths as the deploy will resolve them ('absolute'): the
 -- prefix as the deploy keeps it in the state, the toolchain and the
--- certificate's files as the unit will name them, and the directories TeX
--- Live's installer and Perl's source come from, as the deploy reads them.
+-- certificate's files as the unit will name them, the directories TeX
+-- Live's installer and Perl's source come from and libsodium's tarball, as
+-- the deploy reads them.
 resolvePaths :: Answers -> IO Answers
 resolvePaths a = do
   p <- absolute (a.prefix)
@@ -86,7 +87,8 @@ resolvePaths a = do
   i <- source (a.texInstaller)
   ps <- source (a.perlSource)
   ap <- absolute (a.appPage)
-  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca, texInstaller = i, perlSource = ps, appPage = ap}
+  ls <- absolute (a.libsodiumSource)
+  pure a {prefix = p, toolchain = t, tlsCert = c, tlsKey = k, tlsCa = ca, texInstaller = i, perlSource = ps, appPage = ap, libsodiumSource = ls}
   where
     -- A source of the TeX step is a URL, kept as it is, or a directory.
     source v = if "://" `T.isInfixOf` v then pure v else absolute v

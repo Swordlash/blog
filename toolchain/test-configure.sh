@@ -257,7 +257,10 @@ expect "sh toolchain/deploy-local.sh --server --prefix $TMP/srv/locked --app-pag
   npm_registry=https://npm.example.org/ hackage_mirror=https://hackage.example.org/ db=sqlite way=proxy port=8090
 expect "sh toolchain/deploy-local.sh --static --backend-only=main --bundle-locally --system-tools --npm-registry https://npm.example.org/ --behind-proxy --port 8090" \
   mode=static backend_only=main bundle_locally=yes system_tools=yes npm_registry=https://npm.example.org/ way=proxy port=8090
-pass 'the page from a file or from GitHub with --bundle-locally, --system-tools and the two mirrors'
+# libsodium's tarball, resolved as the deploy resolves it, after the mirrors.
+expect "sh toolchain/deploy-local.sh --server --backend-only --system-tools --libsodium-source $TMP/pages/libsodium-1.0.22.tar.gz --sqlite --behind-proxy --port 8090 --admin-port 8081" \
+  backend_only=head system_tools=yes "libsodium_source=$TMP/srv/../pages/libsodium-1.0.22.tar.gz" db=sqlite way=proxy port=8090
+pass 'the page from a file or from GitHub with --bundle-locally, --system-tools, the two mirrors and libsodium'"'"'s tarball'
 
 # From the state: a rerun gives them all again, and what the answers drop
 # is forgotten explicitly: --no-bundle-locally, --no-system-tools,
@@ -326,7 +329,13 @@ printf 'mode=static\nbackend_only=head\n' >"$TMP/answers"
   fail "the presets did not reach a first run's command line: $(cat "$TMP/out")"
 if "$WIZARD" --args-from "$TMP/answers" --hackage-mirror >"$TMP/out" 2>"$TMP/err"; then fail 'the wizard took --hackage-mirror without a URL'; fi
 grep -F -- '--hackage-mirror needs a URL' "$TMP/err" >/dev/null || fail "the wizard did not say what --hackage-mirror lacks: $(cat "$TMP/err")"
-pass 'the wizard takes --system-tools, --hackage-mirror and --npm-registry as answers over the state, and an answer file wins over them'
+"$WIZARD" --libsodium-source=/srv/incoming/libsodium-1.0.22.tar.gz --args-from "$TMP/answers" >"$TMP/out" 2>"$TMP/err" ||
+  fail "the wizard with libsodium's tarball preset failed: $(cat "$TMP/err")"
+[ "$(cat "$TMP/out")" = 'sh toolchain/deploy-local.sh --static --backend-only --libsodium-source /srv/incoming/libsodium-1.0.22.tar.gz --https --port 8080' ] ||
+  fail "libsodium's tarball preset did not reach the command line: $(cat "$TMP/out")"
+if "$WIZARD" --args-from "$TMP/answers" --libsodium-source >"$TMP/out" 2>"$TMP/err"; then fail 'the wizard took --libsodium-source without a file'; fi
+grep -F -- '--libsodium-source needs a file' "$TMP/err" >/dev/null || fail "the wizard did not say what --libsodium-source lacks: $(cat "$TMP/err")"
+pass 'the wizard takes --system-tools, --hackage-mirror, --npm-registry and --libsodium-source as answers over the state, and an answer file wins over them'
 
 # The presets reach whichever deployment is chosen, not only the one the
 # wizard starts with: the first screen loads another deployment's state

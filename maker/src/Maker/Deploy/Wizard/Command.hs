@@ -71,10 +71,12 @@ deployArgs a = case a.action of
       | otherwise = flag "--no-bundle-locally" (a.rememberedBundle)
     -- For a machine that installs nothing from the internet. What the
     -- state remembers and the answers drop is forgotten explicitly.
+    -- libsodium's tarball is not remembered, so it has nothing to forget.
     sourceArgs =
       (if a.systemTools then ["--system-tools"] else flag "--no-system-tools" (a.rememberedSystemTools))
         ++ forgettable "--npm-registry" (a.npmRegistry) (a.rememberedNpmRegistry)
         ++ forgettable "--hackage-mirror" (a.hackageMirror) (a.rememberedHackageMirror)
+        ++ option "--libsodium-source" (a.libsodiumSource)
     forgettable key v remembered
       | not (T.null v) = [key, v]
       | remembered = [key <> "="]

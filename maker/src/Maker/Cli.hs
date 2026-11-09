@@ -58,6 +58,7 @@ data Bootstrap = Bootstrap
   , withoutPostgres :: Bool
   , withWizard :: Bool
   , systemTools :: Bool
+  , libsodiumSource :: Maybe FilePath
   }
   deriving (Eq, Show)
 
@@ -157,6 +158,7 @@ parser =
         <*> switch (long "without-postgres" <> help "wiki-server is built without PostgreSQL: no libpq")
         <*> switch (long "with-wizard" <> help "The configuration wizard is built too: terminfo")
         <*> switch (long "system-tools" <> help "GHC and cabal are the machine's own")
+        <*> optional (strOption (long "libsodium-source" <> metavar "FILE" <> help "libsodium's release tarball, used instead of a download"))
     checkNativeOptions =
       (\r p w t -> CheckNative r Check.Options {postgres = not p, wizard = w, tex = not t})
         <$> rootOption
@@ -202,6 +204,7 @@ contextFromEnvironment rootArg mode' = do
       , postgres = True
       , wizard = False
       , systemTools = False
+      , libsodiumSource = Nothing
       }
   where
     nonEmpty = \case
@@ -227,6 +230,7 @@ main = do
               , postgres = not b.withoutPostgres
               , wizard = b.withWizard
               , systemTools = b.systemTools
+              , libsodiumSource = b.libsodiumSource
               }
       bootstrap ctx b.lockFd b.logSizeBefore b.started
     Status rootArg -> do
