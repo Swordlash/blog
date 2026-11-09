@@ -134,6 +134,7 @@ data Name
   | SystemToolsField
   | NpmRegistryField
   | HackageMirrorField
+  | LibsodiumSourceField
   | DatabaseChoice Database
   | DbPortField
   | FreshField
@@ -170,7 +171,7 @@ screenTitle s = case s of
   PageSource -> ("Where the page comes from", "The page is the application the browser runs, compiled to WebAssembly.")
   Sources ->
     ( "Where the toolchain and the packages come from"
-    , "For a machine that installs nothing from the internet: the machine's own compilers, and mirrors for npm's and Hackage's packages. Empty and unticked, the deploy downloads them as usual."
+    , "For a machine that installs nothing from the internet: the machine's own compilers, mirrors for npm's and Hackage's packages, and libsodium's release tarball as a file. Empty and unticked, the deploy downloads them as usual."
     )
   DatabaseScreen -> ("The database and PDFs", "Where the wiki's server keeps the wiki, and the TeX that makes its PDF exports.")
   Reach -> ("How it is reached", "HTTPS one of three ways, or plain HTTP. The ways exclude each other.")
@@ -289,6 +290,11 @@ fieldsFor s a = case s of
         "A mirror of Hackage that cabal takes its index and packages from, written into the toolchain's own cabal configuration and never into ~/.cabal, so it needs a prefix or a toolchain directory of its own. It must serve Hackage's signed index (root.json and the rest), as a full mirror does. Empty: Hackage. Remembered."
         hackageMirrorL
         HackageMirrorField
+    , text
+        "--libsodium-source"
+        "The release tarball of libsodium (libsodium-<version>.tar.gz, the version toolchain/pins.env pins), copied onto this machine, which the bootstrap builds instead of downloading it from download.libsodium.org or GitHub. Its checksum is checked against the pin, as a download's is. Needed only while libsodium is not built under the toolchain yet. Empty: downloaded. Not remembered."
+        libsodiumSourceL
+        LibsodiumSourceField
     ]
   DatabaseScreen ->
     [ choice
@@ -505,10 +511,11 @@ bindL = lens (.bind) (\a v -> a {bind = v})
 adminPortL = lens (.adminPort) (\a v -> a {adminPort = v})
 toolchainL = lens (.toolchain) (\a v -> a {toolchain = v})
 
-appPageL, npmRegistryL, hackageMirrorL :: Lens' Answers Text
+appPageL, npmRegistryL, hackageMirrorL, libsodiumSourceL :: Lens' Answers Text
 appPageL = lens (.appPage) (\a v -> a {appPage = v})
 npmRegistryL = lens (.npmRegistry) (\a v -> a {npmRegistry = v})
 hackageMirrorL = lens (.hackageMirror) (\a v -> a {hackageMirror = v})
+libsodiumSourceL = lens (.libsodiumSource) (\a v -> a {libsodiumSource = v})
 
 bundleLocallyL, systemToolsL :: Lens' Answers Bool
 bundleLocallyL = lens (.bundleLocally) (\a v -> a {bundleLocally = v})

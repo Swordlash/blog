@@ -10,10 +10,13 @@ spec :: Spec
 spec = describe "the command line" $ do
   it "takes the bootstrap's hand-over with every path it computed" $
     parseArgs ["bootstrap", "build", "--root", "/r", "--base", "/b", "--named-base", "--ghcup-bin", "/g", "--log-size", "12", "--started", "100", "--lock-fd", "9"]
-      `shouldBe` Just (RunBootstrap (Bootstrap Build "/r" "/b" True "/g" 12 100 (Just 9) False False False))
+      `shouldBe` Just (RunBootstrap (Bootstrap Build "/r" "/b" True "/g" 12 100 (Just 9) False False False Nothing))
   it "carries on with the native mode, with its options" $
     parseArgs ["bootstrap", "native", "--root", "/r", "--base", "/b", "--ghcup-bin", "/g", "--log-size", "0", "--started", "0", "--without-postgres", "--with-wizard", "--system-tools"]
-      `shouldBe` Just (RunBootstrap (Bootstrap Native "/r" "/b" False "/g" 0 0 Nothing True True True))
+      `shouldBe` Just (RunBootstrap (Bootstrap Native "/r" "/b" False "/g" 0 0 Nothing True True True Nothing))
+  it "takes libsodium's tarball given by hand" $
+    parseArgs ["bootstrap", "native", "--root", "/r", "--base", "/b", "--ghcup-bin", "/g", "--log-size", "0", "--started", "0", "--system-tools", "--libsodium-source=/srv/libsodium-1.0.22.tar.gz"]
+      `shouldBe` Just (RunBootstrap (Bootstrap Native "/r" "/b" False "/g" 0 0 Nothing False False True (Just "/srv/libsodium-1.0.22.tar.gz")))
   it "refuses a mode the maker does not carry on with" $
     parseArgs ["bootstrap", "node", "--root", "/r", "--base", "/b", "--ghcup-bin", "/g", "--log-size", "0", "--started", "0"] `shouldBe` Nothing
   it "checks what the native build needs, with the script's options" $

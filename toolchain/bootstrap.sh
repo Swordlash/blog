@@ -54,7 +54,10 @@
 #     ~/.wiki-toolchain/libsodium), in every mode that builds natively, with
 #     --system-tools too: Debian and Ubuntu ship a libsodium too old for the
 #     opaque package, and a static library leaves wiki-server needing none
-#     on the machine it runs on;
+#     on the machine it runs on. Its release tarball comes from
+#     download.libsodium.org or GitHub, or with --libsodium-source=FILE
+#     (native and build) from a file brought onto the machine by hand,
+#     checked against the same checksum;
 #   - Chromium's headless shell for Playwright, the revision the project's
 #     Playwright (package-lock.json, or $PLAYWRIGHT_VERSION before there is
 #     one) asks for, into $PLAYWRIGHT_BROWSERS_PATH or Playwright's default;
@@ -148,7 +151,9 @@
 # found; one that is not the pinned version is used with a warning, since
 # only the pins are tested. The rest is as without it: the Debian packages
 # a build links with still come through apt, from the machine's own package
-# sources, and the cabal index is updated. `system-tools native node` is the
+# sources, the cabal index is updated, and libsodium is built from its
+# release tarball, which is downloaded unless --libsodium-source=FILE gives
+# it (below). `system-tools native node` is the
 # same check alone, and changes nothing. `build` takes no --system-tools:
 # the page's build needs the wasm toolchain, which no machine has of its
 # own. The environment file then puts nothing first on PATH.
@@ -160,6 +165,15 @@
 # configuration there is the user's) before the index is updated, so that
 # cabal takes the index and every package from it. See hackage_config. A
 # later run without the option puts Hackage's own address back.
+#
+# `native --libsodium-source=FILE` and `build --libsodium-source=FILE` take
+# libsodium's release tarball (libsodium-$LIBSODIUM_VERSION.tar.gz) from
+# FILE instead of downloading it, for a machine that downloads nothing:
+# toolchain/libsodium.sh copies it and checks it against LIBSODIUM_SHA256
+# exactly as it checks a download, and a file with another checksum stops
+# the run with nothing built. FILE must be there when the run starts. It is
+# used only when libsodium is not installed yet; an installed one is
+# reused, and the maker says the file was not used.
 #
 # CI on a self-hosted runner runs it the same way (`toolchain`), and appends
 # what `path` prints to $GITHUB_PATH: one directory per line, in the order
@@ -198,7 +212,7 @@ mode=${1:-all}
 case $mode in
   all | toolchain | build | native | static | maker | node | warm | env | path | check | ready | system-tools) ;;
   *)
-    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]|static [--system-tools] [--hackage-mirror=URL]|maker [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build [--without-postgres] [--hackage-mirror=URL] [--libsodium-source=FILE]|native [--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL] [--libsodium-source=FILE]|static [--system-tools] [--hackage-mirror=URL]|maker [--system-tools] [--hackage-mirror=URL]|node [--system-tools]|warm|env [--system-tools]|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]|system-tools [native] [node]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -214,14 +228,17 @@ esac
 # the check checks terminfo. The deploy never gives it.
 # native, static and node also take --system-tools, and native, static and
 # build --hackage-mirror=URL (see above); env takes --system-tools, for the
-# lines of an environment without the bootstrap's own tools.
+# lines of an environment without the bootstrap's own tools. native and
+# build, the modes the deploy builds libsodium in, take
+# --libsodium-source=FILE (see above).
 check_postgres=
 check_wizard=
 system_tools=
 hackage_mirror=
+libsodium_source=
 case $mode in
-  native) usage_options='[--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL]' ;;
-  build) usage_options='[--without-postgres] [--hackage-mirror=URL]' ;;
+  native) usage_options='[--without-postgres] [--with-wizard] [--system-tools] [--hackage-mirror=URL] [--libsodium-source=FILE]' ;;
+  build) usage_options='[--without-postgres] [--hackage-mirror=URL] [--libsodium-source=FILE]' ;;
   static | maker) usage_options='[--system-tools] [--hackage-mirror=URL]' ;;
   *) usage_options='[--system-tools]' ;;
 esac
@@ -237,6 +254,13 @@ if [ "$mode" = native ] || [ "$mode" = build ] || [ "$mode" = static ] || [ "$mo
         exit 2
         ;;
       native:--hackage-mirror=* | build:--hackage-mirror=* | static:--hackage-mirror=* | maker:--hackage-mirror=*) hackage_mirror=${option#*=} ;;
+      native:--libsodium-source=* | build:--libsodium-source=*)
+        libsodium_source=${option#*=}
+        [ -n "$libsodium_source" ] || {
+          printf 'bootstrap: --libsodium-source=FILE needs the file: libsodium-%s.tar.gz, the release'"'"'s tarball\n' "$LIBSODIUM_VERSION" >&2
+          exit 2
+        }
+        ;;
       *)
         printf 'usage: %s %s %s\n' "$0" "$mode" "$usage_options" >&2
         exit 2
@@ -264,6 +288,18 @@ case $hackage_mirror in
     exit 2
     ;;
 esac
+
+# libsodium's tarball given by hand must be there now, before anything is
+# installed, rather than when the maker comes to it; it is named by absolute
+# path from here on, since the maker runs toolchain/libsodium.sh from
+# another directory.
+if [ -n "$libsodium_source" ]; then
+  if [ ! -f "$libsodium_source" ] || [ ! -r "$libsodium_source" ]; then
+    printf 'bootstrap: --libsodium-source=%s: no such file here (or it cannot be read); give libsodium-%s.tar.gz, the release'"'"'s tarball\n' "$libsodium_source" "$LIBSODIUM_VERSION" >&2
+    exit 2
+  fi
+  libsodium_source=$(realpath "$libsodium_source")
+fi
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
 # or the default one this script installs into. Under a named directory the
@@ -1065,7 +1101,8 @@ hand_over() {
   build_maker
   exec "$maker" bootstrap "$mode" --root "$ROOT" --base "$BASE" ${NAMED_BASE:+--named-base} \
     --ghcup-bin "$GHCUP_BIN" --log-size "$quiet_before" --started "$started" --lock-fd 9 \
-    ${check_postgres:+--without-postgres} ${check_wizard:+--with-wizard} ${system_tools:+--system-tools}
+    ${check_postgres:+--without-postgres} ${check_wizard:+--with-wizard} ${system_tools:+--system-tools} \
+    ${libsodium_source:+"--libsodium-source=$libsodium_source"}
 }
 
 # --- Main -------------------------------------------------------------------

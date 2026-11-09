@@ -23,6 +23,11 @@
 #                          /srv/wiki/toolchain for --prefix /srv/wiki
 #   --npm-registry URL     the npm registry (NPM_CONFIG_REGISTRY); the wizard
 #                          itself needs no npm
+#   --libsodium-source FILE
+#                          libsodium's release tarball, which the bootstrap
+#                          builds instead of downloading it (bootstrap.sh
+#                          native --libsodium-source=FILE), until libsodium
+#                          is built under the toolchain
 #
 # Each is also given to the wizard, whose screens then start with it as the
 # answer, so that the deploy it runs takes it too.
@@ -42,7 +47,7 @@
 #   2. toolchain/bootstrap.sh native --without-postgres --with-wizard
 #      installs GHC and cabal (and on Debian the packages above, with root
 #      or a sudo that needs no password), and checks again; with
-#      --system-tools and --hackage-mirror, as above.
+#      --system-tools, --hackage-mirror and --libsodium-source, as above.
 #   3. The toolchain's env file (~/.wiki-toolchain/env, or under
 #      WIKI_TOOLCHAIN_HOME) puts them on PATH, and
 #      `sh toolchain/maker.sh tui deploy` builds maker-tui and runs the
@@ -73,21 +78,27 @@ esac
 
 # The options for a machine that installs nothing from the internet, for
 # the bootstrap below; all the arguments go to the wizard as they are.
-system_tools='' hackage_mirror='' npm_registry=''
+system_tools='' hackage_mirror='' npm_registry='' libsodium_source=''
 expect_value=''
 for arg do
   case $expect_value in
     --hackage-mirror) hackage_mirror=$arg expect_value=''; continue ;;
     --npm-registry) npm_registry=$arg expect_value=''; continue ;;
+    --libsodium-source) libsodium_source=$arg expect_value=''; continue ;;
   esac
   case $arg in
     --system-tools) system_tools=--system-tools ;;
-    --hackage-mirror | --npm-registry) expect_value=$arg ;;
+    --hackage-mirror | --npm-registry | --libsodium-source) expect_value=$arg ;;
     --hackage-mirror=*) hackage_mirror=${arg#*=} ;;
     --npm-registry=*) npm_registry=${arg#*=} ;;
+    --libsodium-source=*) libsodium_source=${arg#*=} ;;
   esac
 done
-[ -z "$expect_value" ] || die "$expect_value needs a URL"
+case $expect_value in
+  '') ;;
+  --libsodium-source) die "$expect_value needs a file" ;;
+  *) die "$expect_value needs a URL" ;;
+esac
 if [ -n "$npm_registry" ]; then
   NPM_CONFIG_REGISTRY=$npm_registry
   export NPM_CONFIG_REGISTRY
@@ -102,7 +113,8 @@ if ! check_output=$(sh "$ROOT/toolchain/check-native.sh" --without-postgres --wi
   fi
 fi
 
-sh "$ROOT/toolchain/bootstrap.sh" native --without-postgres --with-wizard ${system_tools:+"$system_tools"} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"} ||
+sh "$ROOT/toolchain/bootstrap.sh" native --without-postgres --with-wizard ${system_tools:+"$system_tools"} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"} \
+  ${libsodium_source:+"--libsodium-source=$libsodium_source"} ||
   die "the bootstrap could not install GHC and cabal (see above), or did not take the options given, which the wizard is compiled with"
 
 # With --system-tools the tools are the machine's, as PATH finds them: the

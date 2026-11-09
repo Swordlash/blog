@@ -2,7 +2,8 @@
 # Build libsodium from source, as a static library, into the toolchain's
 # directory, and say where it is.
 #
-#   sh toolchain/libsodium.sh install [STATE]   # download, check, build and install, unless it is there
+#   sh toolchain/libsodium.sh install [STATE [FILE]]
+#                                               # download, check, build and install, unless it is there
 #   sh toolchain/libsodium.sh ready [STATE]     # read-only: exit 0 when it is installed, 1 when not
 #   sh toolchain/libsodium.sh env [STATE]       # KEY=VALUE lines of the variables a build needs
 #
@@ -48,21 +49,29 @@
 # which do not run the bootstrap, with the installed directory cached.
 # The release comes from download.libsodium.org, or where that host is
 # refused, from the same release on GitHub; both serve the same file, and
-# the checksum is checked either way. Building it needs a C compiler, make,
-# curl, tar and gzip, and takes under a minute.
+# the checksum is checked either way. FILE is the release's tarball
+# (libsodium-<version>.tar.gz) brought onto the machine by hand, for a
+# machine that downloads nothing (the bootstrap's --libsodium-source): it
+# is copied instead of downloaded, and its checksum is checked the same
+# way. The file itself is left as it is. Building it needs a C compiler,
+# make, tar and gzip, and curl when there is no FILE, and takes under a
+# minute.
 set -eu
 
 # shellcheck source=toolchain/pins.env
 . "$(cd "$(dirname "$0")" && pwd)/pins.env"
 
 usage() {
-  printf 'usage: sh toolchain/libsodium.sh install|ready|env [STATE]\n' >&2
+  printf 'usage: sh toolchain/libsodium.sh install [STATE [FILE]] | ready [STATE] | env [STATE]\n' >&2
   exit 2
 }
 
-if [ $# -lt 1 ] || [ $# -gt 2 ]; then usage; fi
+if [ $# -lt 1 ] || [ $# -gt 3 ]; then usage; fi
 mode=$1
+[ $# -lt 3 ] || [ "$mode" = install ] || usage
 STATE=${2:-${WIKI_TOOLCHAIN_HOME:-$HOME}/.wiki-toolchain}
+# The release's tarball given by hand, used instead of a download.
+SOURCE=${3:-}
 DIR=$STATE/libsodium-$LIBSODIUM_VERSION
 LINK=$STATE/libsodium
 MARK="$LIBSODIUM_VERSION $LIBSODIUM_SHA256"
@@ -89,8 +98,15 @@ fetch() {
 
 install() {
   if ! built; then
+    if [ -n "$SOURCE" ] && { [ ! -f "$SOURCE" ] || [ ! -r "$SOURCE" ]; }; then
+      say "$SOURCE: no such file here (or it cannot be read); nothing was built"
+      exit 1
+    fi
+    # curl only downloads, and a file given needs no download.
+    fetcher=curl
+    [ -z "$SOURCE" ] || fetcher=
     missing=
-    for cmd in cc make curl tar gzip sha256sum; do
+    for cmd in cc make $fetcher tar gzip sha256sum; do
       command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
     done
     if [ -n "$missing" ]; then
@@ -98,12 +114,42 @@ install() {
       exit 1
     fi
     say "building libsodium $LIBSODIUM_VERSION from source into $DIR"
-    archive=$DIR.tar.gz
     src=$DIR.src
-    rm -rf "$DIR" "$src" "$archive"
-    mkdir -p "$src"
     name=libsodium-$LIBSODIUM_VERSION.tar.gz
-    if ! fetch "https://download.libsodium.org/libsodium/releases/$name" "$archive"; then
+    if [ -n "$SOURCE" ]; then
+      # The file given is copied before anything here is deleted, to a
+      # name of its own, so that no clean-up below can remove it: it may
+      # sit in STATE under the name a download would take. A file inside
+      # the directories this install replaces is refused outright.
+      # Both sides are compared as canonical paths, so that a relative
+      # STATE, or one reached through a symbolic link, is caught too.
+      given=$(realpath "$SOURCE")
+      mkdir -p "$STATE"
+      state=$(realpath "$STATE")
+      case $given in
+        "$state/libsodium-$LIBSODIUM_VERSION"/* | "$state/libsodium-$LIBSODIUM_VERSION.src"/*)
+          say "$SOURCE is inside $DIR or $src, which the install replaces; put it elsewhere; nothing was built"
+          exit 1
+          ;;
+      esac
+      say "taking $name from $SOURCE instead of downloading it"
+      mkdir -p "$STATE"
+      archive=$(mktemp "$STATE/libsodium-given.XXXXXX")
+      cp "$SOURCE" "$archive" || {
+        say "copying $SOURCE failed; nothing was built"
+        rm -f "$archive"
+        exit 1
+      }
+      name=$SOURCE
+      rm -rf "$DIR" "$src"
+    else
+      archive=$DIR.tar.gz
+      rm -rf "$DIR" "$src" "$archive"
+    fi
+    mkdir -p "$src"
+    if [ -n "$SOURCE" ]; then
+      :
+    elif ! fetch "https://download.libsodium.org/libsodium/releases/$name" "$archive"; then
       say "download.libsodium.org did not give $name; fetching the same release from GitHub"
       fetch "https://github.com/jedisct1/libsodium/releases/download/$LIBSODIUM_VERSION-RELEASE/$name" "$archive" || {
         say "downloading $name failed"

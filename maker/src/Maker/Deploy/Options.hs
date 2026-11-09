@@ -50,6 +50,7 @@ data Options = Options
   , optNpmRegistryGiven :: Bool
   , optHackageMirror :: String
   , optHackageMirrorGiven :: Bool
+  , optLibsodiumSource :: String
   , optTlsCert :: String
   , optTlsKey :: String
   , optTlsCa :: String
@@ -98,6 +99,7 @@ defaultOptions =
     , optNpmRegistryGiven = False
     , optHackageMirror = ""
     , optHackageMirrorGiven = False
+    , optLibsodiumSource = ""
     , optTlsCert = ""
     , optTlsKey = ""
     , optTlsCa = ""
@@ -156,6 +158,7 @@ table =
   , ("--no-system-tools", Flag (\o -> Right o {optSystemTools = "no"}))
   , ("--npm-registry", Value (\v o -> o {optNpmRegistry = v, optNpmRegistryGiven = True}))
   , ("--hackage-mirror", Value (\v o -> o {optHackageMirror = v, optHackageMirrorGiven = True}))
+  , ("--libsodium-source", Value (\v o -> o {optLibsodiumSource = v}))
   , ("--prefix", Value (\v o -> o {optPrefix = v}))
   , ("--dir", Value (\v o -> o {optPrefix = v}))
   , ("--toolchain", Value (\v o -> o {optToolchain = v}))

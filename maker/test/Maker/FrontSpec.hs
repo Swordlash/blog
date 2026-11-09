@@ -32,6 +32,7 @@ spec = describe "the deploy's front" $ do
     fmap (fmap (.optBackendOnly)) (parsedOf ["--backend-only"]) `shouldBe` Right (Just "head")
     fmap (fmap (.optBackendOnly)) (parsedOf ["--backend-only="]) `shouldBe` Right (Just "head")
     fmap (fmap (.optPrefix)) (parsedOf ["--dir=/d"]) `shouldBe` Right (Just "/d")
+    fmap (fmap (.optLibsodiumSource)) (parsedOf ["--libsodium-source", "libsodium-1.0.22.tar.gz"]) `shouldBe` Right (Just "libsodium-1.0.22.tar.gz")
     parseOptions ["--name"] `shouldBe` Left "--name needs a value"
     parseOptions ["--server", "-h"] `shouldBe` Right Help
   it "refuses what the shell refused, in its words" $ do

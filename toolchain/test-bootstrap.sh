@@ -613,6 +613,114 @@ bootstrap check >"$case_dir/libsodium-check"
 assert_contains "$case_dir/libsodium-check" 'install libsodium 1.0.22 (built from source)'
 pass 'native builds libsodium from the pinned release, from GitHub where download.libsodium.org is refused, and refuses a download whose checksum is not the pinned one'
 
+# libsodium's release tarball given by hand (--libsodium-source=FILE), for
+# a machine that downloads nothing: native --system-tools builds libsodium
+# from the file, named relative to the directory the bootstrap starts in,
+# and never runs curl (the fixture's records every call). No tarball made
+# here has the pinned release's checksum, so this fixture's pins.env pins
+# the checksum of the one made here; its configure and the fake make, first
+# on PATH, install what toolchain/libsodium.sh checks for.
+fixture libsodium-source
+rm -rf "$HOME/.wiki-toolchain"
+mkdir -p "$case_dir/tarball/libsodium-1.0.22" "$case_dir/incoming"
+cat >"$case_dir/tarball/libsodium-1.0.22/configure" <<'EOF'
+#!/bin/sh
+printf 'configure %s\n' "$*" >>"$EVENTS"
+for arg do
+  case $arg in --prefix=*) printf '%s\n' "${arg#*=}" >.prefix ;; esac
+done
+EOF
+chmod +x "$case_dir/tarball/libsodium-1.0.22/configure"
+cat >"$case_dir/bin/make" <<'EOF'
+#!/bin/sh
+printf 'make %s\n' "$*" >>"$EVENTS"
+[ "${1:-}" = install ] || exit 0
+prefix=$(cat .prefix)
+mkdir -p "$prefix/lib/pkgconfig" "$prefix/include"
+: >"$prefix/lib/libsodium.a"
+: >"$prefix/include/sodium.h"
+printf 'prefix=%s\nlibdir=${prefix}/lib\nLibs: -L${libdir} -lsodium\n' "$prefix" >"$prefix/lib/pkgconfig/libsodium.pc"
+EOF
+chmod +x "$case_dir/bin/make"
+tarball=$case_dir/incoming/libsodium-1.0.22.tar.gz
+(cd "$case_dir/tarball" && tar czf "$tarball" libsodium-1.0.22)
+tarball_sha=$(sha256sum "$tarball" | cut -d' ' -f1)
+sed -i "s/^LIBSODIUM_SHA256=.*/LIBSODIUM_SHA256=$tarball_sha/" "$case_dir/repo/toolchain/pins.env"
+(cd "$case_dir" && bootstrap native --system-tools --libsodium-source=incoming/libsodium-1.0.22.tar.gz) >"$case_dir/native-source" 2>&1 ||
+  fail "native --system-tools with libsodium's tarball given failed: $(cat "$case_dir/native-source")"
+assert_contains "$case_dir/native-source" "libsodium: taking libsodium-1.0.22.tar.gz from $tarball instead of downloading it"
+assert_contains "$case_dir/native-source" "this machine's GHC 9.14.1 and cabal 3.16.1.0 (--system-tools), libsodium 1.0.22"
+if grep -F 'curl' "$EVENTS" >/dev/null; then fail "native with libsodium's tarball given ran curl: $(cat "$EVENTS")"; fi
+assert_contains "$EVENTS" "configure --prefix=$HOME/.wiki-toolchain/libsodium-1.0.22 --disable-shared --enable-static --with-pic"
+assert_contains "$EVENTS" 'make install'
+[ "$(cat "$HOME/.wiki-toolchain/libsodium-1.0.22/.built")" = "1.0.22 $tarball_sha" ] || fail 'the libsodium built from the file given is not marked built'
+[ "$(readlink "$HOME/.wiki-toolchain/libsodium")" = "$HOME/.wiki-toolchain/libsodium-1.0.22" ] || fail 'the link does not name the libsodium built from the file given'
+# shellcheck disable=SC2016 # ${libdir} is the .pc file's own variable.
+assert_contains "$HOME/.wiki-toolchain/libsodium-1.0.22/lib/pkgconfig/libsodium.pc" 'Libs: -L${libdir} -lsodium-static'
+[ -f "$tarball" ] || fail 'the bootstrap removed the tarball it was given'
+[ -z "$(find "$HOME/.wiki-toolchain" -maxdepth 1 -name 'libsodium-1.0.22.*' -print)" ] || fail "the copy of the tarball or its sources were left: $(find "$HOME/.wiki-toolchain" -maxdepth 1 -name 'libsodium-1.0.22.*')"
+# Installed, it is reused, and the file is not used again.
+: >"$EVENTS"
+bootstrap native --system-tools --libsodium-source="$tarball" >"$case_dir/native-source-again" 2>&1 ||
+  fail "native again with libsodium's tarball given failed: $(cat "$case_dir/native-source-again")"
+assert_contains "$case_dir/native-source-again" "bootstrap: --libsodium-source: $tarball not used, since libsodium 1.0.22 is installed already ($HOME/.wiki-toolchain/libsodium)"
+[ ! -s "$EVENTS" ] || fail "native with libsodium installed built or downloaded something: $(cat "$EVENTS")"
+pass 'native --system-tools --libsodium-source=FILE builds libsodium from the file, without a download, and leaves the file; installed, the file is not used'
+
+# A file whose checksum is not the pinned one (here the tarball above,
+# against the real pins) is refused as a download would be: the run stops,
+# nothing is built or installed, nothing is downloaded instead, and the
+# file is left where it is. A file that is not there is refused before
+# anything is done, and only native and build take the option.
+cp "$SOURCE_DIR/pins.env" "$case_dir/repo/toolchain/pins.env"
+rm -rf "$HOME/.wiki-toolchain"
+: >"$EVENTS"
+status=0
+bootstrap native --system-tools --libsodium-source="$tarball" >"$case_dir/native-source-wrong" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium tarball of another checksum exited $status, not 1"
+assert_contains "$case_dir/native-source-wrong" "libsodium: $tarball does not have the checksum toolchain/pins.env pins (LIBSODIUM_SHA256); nothing was built"
+assert_contains "$case_dir/native-source-wrong" 'bootstrap: building libsodium failed'
+[ ! -s "$EVENTS" ] || fail "a refused libsodium tarball was built, or a download tried instead: $(cat "$EVENTS")"
+[ -z "$(find "$HOME/.wiki-toolchain" -name 'libsodium*' -print)" ] || fail "a refused libsodium tarball left files: $(find "$HOME/.wiki-toolchain" -name 'libsodium*')"
+[ -f "$tarball" ] || fail 'the bootstrap removed the tarball it refused'
+# The same file put in the toolchain's directory, under the name a download
+# takes there: it is copied before the install clears that name, so it is
+# still there after the refusal.
+rm -rf "$HOME/.wiki-toolchain"
+mkdir -p "$HOME/.wiki-toolchain"
+cp "$tarball" "$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz"
+status=0
+bootstrap native --system-tools --libsodium-source="$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz" >"$case_dir/native-source-in-state" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium tarball in the toolchain's directory exited $status, not 1"
+assert_contains "$case_dir/native-source-in-state" 'does not have the checksum toolchain/pins.env pins (LIBSODIUM_SHA256); nothing was built'
+[ -f "$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz" ] || fail 'the bootstrap removed the tarball given from the toolchain directory'
+# A file inside a directory the install replaces (here its build directory)
+# is refused before anything is deleted, and stays.
+rm -rf "$HOME/.wiki-toolchain"
+mkdir -p "$HOME/.wiki-toolchain/libsodium-1.0.22.src"
+cp "$tarball" "$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz"
+status=0
+bootstrap native --system-tools --libsodium-source="$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz" >"$case_dir/native-source-in-src" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium tarball inside the build directory exited $status, not 1"
+assert_contains "$case_dir/native-source-in-src" 'which the install replaces; put it elsewhere; nothing was built'
+[ -f "$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz" ] || fail 'the bootstrap removed a tarball given from inside its build directory'
+rm -rf "$HOME/.wiki-toolchain"
+status=0
+bootstrap native --libsodium-source="$case_dir/incoming/nothing.tar.gz" >"$case_dir/native-source-missing" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "native with a libsodium tarball that is not there exited $status, not 2"
+assert_contains "$case_dir/native-source-missing" "bootstrap: --libsodium-source=$case_dir/incoming/nothing.tar.gz: no such file here (or it cannot be read); give libsodium-1.0.22.tar.gz, the release's tarball"
+[ ! -e "$HOME/.wiki-toolchain" ] || fail 'native with a libsodium tarball that is not there changed something before it stopped'
+status=0
+bootstrap native --libsodium-source= >"$case_dir/native-source-empty" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "native with an empty --libsodium-source= exited $status, not 2"
+assert_contains "$case_dir/native-source-empty" 'bootstrap: --libsodium-source=FILE needs the file'
+status=0
+bootstrap static --libsodium-source="$tarball" >"$case_dir/static-source" 2>&1 || status=$?
+[ "$status" = 2 ] || fail "static with --libsodium-source exited $status, not 2"
+assert_contains "$case_dir/static-source" 'usage: '
+[ ! -s "$EVENTS" ] || fail "a refused --libsodium-source did something: $(cat "$EVENTS")"
+pass 'native refuses a libsodium tarball of another checksum with nothing built and the file kept, and a file that is not there before anything is done; static takes no --libsodium-source'
+
 # What toolchain/deploy-local.sh --static --backend-only needs: GHC and
 # cabal, which build the maker that does the rest of the deploy, and Node,
 # which serves the demo. `static` installs neither the wasm toolchain nor

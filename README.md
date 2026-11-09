@@ -965,16 +965,19 @@ out.
 
 On a machine that installs nothing from the internet (see
 [A machine that installs nothing from the internet](#a-machine-that-installs-nothing-from-the-internet)),
-give the wrapper the deploy's options for it. `--system-tools` and `--hackage-mirror`
-reach the bootstrap that installs the wizard's compiler, so the wizard is compiled with
-the machine's own GHC and cabal, and brick and vty come from the mirror. All three
-start the wizard's screens with those answers, so the deploy it runs takes them too.
+give the wrapper the deploy's options for it. `--system-tools`, `--hackage-mirror`
+and `--libsodium-source` reach the bootstrap that installs the wizard's compiler, so the
+wizard is compiled with the machine's own GHC and cabal, brick and vty come from the
+mirror, and libsodium is built from the tarball given (the bootstrap's `native` mode
+builds it). All four start the wizard's screens with those answers, so the deploy it
+runs takes them too.
 The mirror is written into the toolchain's own cabal configuration, so name the
 deployment's toolchain directory:
 
 ```sh
 WIKI_TOOLCHAIN_HOME=/srv/wiki/toolchain sh toolchain/configure.sh --system-tools \
-  --hackage-mirror https://hackage.example.org/ --npm-registry https://npm.example.org/
+  --hackage-mirror https://hackage.example.org/ --npm-registry https://npm.example.org/ \
+  --libsodium-source /srv/incoming/libsodium-1.0.22.tar.gz
 ```
 
 `toolchain/deploy-local.sh` builds the wiki's server (see
@@ -1309,16 +1312,17 @@ tags that CI built before the demo's page was added have no `app-demo-` zip.
 ### A machine that installs nothing from the internet
 
 A server whose software must come from vetted sources (a bank's, say) can have its
-packages from the company's mirrors and its compilers from its administrators. Five
+packages from the company's mirrors and its compilers from its administrators. Six
 options of the deploy are for it, usable together or apart, each also on the
-configuration wizard's screens and remembered for the next run (`--status` shows
-them):
+configuration wizard's screens. All but `--libsodium-source` are remembered for the
+next run (`--status` shows them):
 
 ```sh
 sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0 --no-firewall \
   --system-tools \
   --npm-registry https://npm.example.org/ \
   --hackage-mirror https://hackage.example.org/ \
+  --libsodium-source /srv/incoming/libsodium-1.0.22.tar.gz \
   --backend-only=main --bundle-locally
 ```
 
@@ -1345,7 +1349,8 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
   install the toolchain again. libsodium is not a tool: the bootstrap still builds the
   pinned release from source (see above), downloading it from
   `download.libsodium.org` or GitHub unless `~/.wiki-toolchain/libsodium` (under the
-  toolchain's directory) already holds it.
+  toolchain's directory) already holds it, or `--libsodium-source` gives its tarball
+  (below).
 - `--npm-registry URL`: the npm registry that `npm ci` and `npx` take every package
   from, as `NPM_CONFIG_REGISTRY` for every npm call of the deploy and of the
   bootstrap. `package-lock.json` names `https://registry.npmjs.org/` in each
@@ -1367,6 +1372,22 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
   refuses a mirror without one. The repository keeps its name, so the cabal store
   is the one Hackage's packages would fill. `--hackage-mirror=` forgets it, and the
   next build writes Hackage's own address back.
+- `--libsodium-source FILE`: libsodium's release tarball from a file instead of
+  `download.libsodium.org` or GitHub. The bootstrap builds libsodium from source
+  whenever the deploy builds (with `--system-tools` too, see above), so without
+  this option a machine that downloads nothing still downloads that one file. Fetch
+  `libsodium-<version>.tar.gz` elsewhere, for the version `toolchain/pins.env` pins
+  (`LIBSODIUM_VERSION`), from
+  `https://download.libsodium.org/libsodium/releases/` or the GitHub release
+  `<version>-RELEASE` of `jedisct1/libsodium`, and copy it over. The file must be there
+  when the deploy starts. `toolchain/libsodium.sh` copies it and checks it against the
+  pinned checksum (`LIBSODIUM_SHA256`) exactly as it checks a download: a file with
+  another checksum stops the deploy before anything is built, saying so, and the file
+  is left where it is. The option is needed only once: libsodium stays built under the
+  toolchain's directory, a later run reuses it and says that the file was not used,
+  and the deploy does not remember the file. The bootstrap takes it as
+  `--libsodium-source=FILE` (`native` and `build`), and `toolchain/configure.sh` as
+  `--libsodium-source FILE`.
 - `--bundle-locally`, with `--backend-only` or `--app-page`: of the page CI built,
   only what needs the wasm toolchain is kept (`app.wasm`, its `ghc_wasm_jsffi.js`,
   the prerendered `index.html` and the page's other files from `web/`), and the
@@ -2406,7 +2427,7 @@ where that host is refused (a proxy that answers 403), the same commit from its
 mirror `github.com/haskell-wasm/ghc-wasm-meta`, whose `setup.sh` then takes
 wasi-sdk, binaryen, wasmtime and its Node from releases on `github.com`; Node from
 `nodejs.org`; libsodium from `download.libsodium.org`, or the same release on
-`github.com`; fourmolu from `github.com`, or Hackage; the package index and
+`github.com` (or from a file, with `--libsodium-source=FILE`); fourmolu from `github.com`, or Hackage; the package index and
 packages from `hackage.haskell.org`; npm packages from `registry.npmjs.org`; and
 Chromium from Playwright's CDN (`playwright.azureedge.net`, `cdn.playwright.dev`),
 which only the browser tests need.

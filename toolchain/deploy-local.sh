@@ -17,7 +17,7 @@
 #                                [--backend-only[=REF] | --no-backend-only] [--refresh-page]
 #                                [--app-page FILE] [--bundle-locally | --no-bundle-locally]
 #                                [--system-tools | --no-system-tools] [--npm-registry URL]
-#                                [--hackage-mirror URL]
+#                                [--hackage-mirror URL] [--libsodium-source FILE]
 #                                [--no-build] [--semaphore | --no-semaphore]
 #                                [--texlive | --no-texlive] [--texlive-mirror URL]
 #                                [--texlive-installer URL|DIR] [--perl-source URL|DIR]
@@ -103,7 +103,9 @@
 #      its JavaScript and CSS bundles here and compares them with CI's;
 #      --system-tools checks this machine's own GHC, cabal and Node first,
 #      before anything else, and downloads none; --npm-registry and
-#      --hackage-mirror name the mirrors npm and cabal take packages from.
+#      --hackage-mirror name the mirrors npm and cabal take packages from;
+#      --libsodium-source gives libsodium's release tarball as a file, which
+#      the bootstrap builds instead of downloading it.
 #      With --server the wiki's database is PostgreSQL by default: the
 #      postgres service of docker-compose.yml (postgres:17), run with Docker
 #      as the compose project <name>, its data in the named volume
@@ -364,6 +366,17 @@
 #                    and the rest) as a full mirror does; the bootstrap fetches its
 #                    root.json first. Remembered; --hackage-mirror= forgets it, and the
 #                    next build writes Hackage's own address back
+#   --libsodium-source FILE
+#                    libsodium's release tarball (libsodium-<version>.tar.gz, the
+#                    version toolchain/pins.env pins), copied onto this machine:
+#                    the bootstrap builds libsodium from it instead of downloading it
+#                    from download.libsodium.org or GitHub, which it does with
+#                    --system-tools too, and checks it against the pinned checksum
+#                    as it checks a download (toolchain/bootstrap.sh native and build
+#                    --libsodium-source=FILE). A file with another checksum stops the
+#                    deploy with nothing built. Needed only while libsodium is not
+#                    built under the toolchain yet: once built it is reused, and the
+#                    file is not used. For this run only
 #   --no-build       deploy the last -O2 build as it is, without the build step
 #   --semaphore      build wiki-server with cabal's build semaphore, through which cabal
 #                    and GHC share one budget of jobs, without the probe
@@ -467,6 +480,7 @@ opt_port='' opt_bind='' opt_prefix='' opt_toolchain='' opt_mode='' opt_admin_por
 opt_backend_only='' refresh_page=''
 opt_app_page='' opt_app_page_given='' opt_bundle_locally='' opt_system_tools=''
 opt_npm_registry='' opt_npm_registry_given='' opt_hackage_mirror='' opt_hackage_mirror_given=''
+opt_libsodium_source=''
 opt_tls_cert='' opt_tls_key='' opt_tls_ca='' opt_tls_ca_given='' opt_proxy=''
 opt_texlive='' opt_texlive_mirror='' opt_texlive_installer='' opt_perl_source=''
 opt_whats_new=''
@@ -511,6 +525,8 @@ while [ $# -gt 0 ]; do
     --npm-registry=*) opt_npm_registry=${1#*=} opt_npm_registry_given=1 ;;
     --hackage-mirror) need_value $# "$1"; opt_hackage_mirror=$2 opt_hackage_mirror_given=1; shift ;;
     --hackage-mirror=*) opt_hackage_mirror=${1#*=} opt_hackage_mirror_given=1 ;;
+    --libsodium-source) need_value $# "$1"; opt_libsodium_source=$2; shift ;;
+    --libsodium-source=*) opt_libsodium_source=${1#*=} ;;
     --github-token-file | --github-token-file=*)
       die "--github-token-file is not needed: the pages CI builds are public release assets, downloaded without a token" ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
@@ -651,6 +667,12 @@ for option in texlive-installer perl-source; do
     perl-source) opt_perl_source=$source ;;
   esac
 done
+# libsodium's release tarball given by hand: a file, which must be there
+# now, rather than when the bootstrap comes to it after the checks. Its
+# checksum is toolchain/libsodium.sh's to check.
+if [ -n "$opt_libsodium_source" ] && { [ ! -f "$opt_libsodium_source" ] || [ ! -r "$opt_libsodium_source" ]; }; then
+  die "--libsodium-source $opt_libsodium_source: no such file here (or it cannot be read); give libsodium's release tarball, libsodium-<version>.tar.gz"
+fi
 check_name "$name"
 resolve_prefix
 layout

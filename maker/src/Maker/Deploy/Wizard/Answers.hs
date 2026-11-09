@@ -18,7 +18,7 @@
 -- >   fresh|refresh_page|no_build|no_firewall|no_rehearsal|enable_linger=yes|no
 -- >   whats_new=yes|no              semaphore=probe|on|off
 -- >   app_page=FILE  bundle_locally|system_tools=yes|no
--- >   npm_registry=URL  hackage_mirror=URL
+-- >   npm_registry=URL  hackage_mirror=URL  libsodium_source=FILE
 --
 -- backend_only is empty for a page built here, head for the page of the
 -- checkout's commit, or a REF (main, a tag, a commit hash), as the state
@@ -27,8 +27,12 @@
 -- --texlive-mirror when a mirror is given) or none (--no-texlive).
 -- app_page is the zip of a page CI built, taken from a file (--app-page,
 -- which a backend_only answer replaces); bundle_locally builds its
--- bundles here. system_tools, npm_registry and hackage_mirror are the
--- options for a machine that installs nothing from the internet.
+-- bundles here. system_tools, npm_registry, hackage_mirror and
+-- libsodium_source are the options for a machine that installs nothing
+-- from the internet; libsodium_source, the release tarball of libsodium
+-- brought onto the machine by hand, is used once, when libsodium is
+-- built, so the deploy does not remember it and the state file does not
+-- give it.
 -- whats_new is whether the server shows the page "What's new?": yes (no
 -- option, unless the state remembers no, which --whats-new forgets) or no
 -- (--no-whats-new). texlive_installer and perl_source are the git
@@ -116,6 +120,7 @@ data Answers = Answers
   , systemTools :: Bool
   , npmRegistry :: Text
   , hackageMirror :: Text
+  , libsodiumSource :: Text
   , database :: Database
   , dbPort :: Text
   , fresh :: Bool
@@ -164,6 +169,7 @@ defaultAnswers =
     , systemTools = False
     , npmRegistry = ""
     , hackageMirror = ""
+    , libsodiumSource = ""
     , database = Postgres
     , dbPort = "5433"
     , fresh = False
@@ -273,6 +279,7 @@ applyAnswer a (key, v) = case key of
   "system_tools" -> yesNo (\x -> a {systemTools = x})
   "npm_registry" -> Right a {npmRegistry = v}
   "hackage_mirror" -> Right a {hackageMirror = v}
+  "libsodium_source" -> Right a {libsodiumSource = v}
   "db" -> pick (\x -> a {database = x}) [("postgres", Postgres), ("sqlite", Sqlite)]
   "db_port" -> Right a {dbPort = v}
   "texlive" -> pick (\x -> a {tex = x}) [("machine", MachineTex), ("toolchain", ToolchainTex), ("none", NoTex)]
@@ -324,10 +331,11 @@ normalise a
 
 -- | The options for a machine that installs nothing from the internet,
 -- which toolchain/configure.sh also gives the bootstrap that installs the
--- wizard's compiler: --system-tools, --hackage-mirror URL and
--- --npm-registry URL, as answers (system_tools, hackage_mirror,
--- npm_registry). They are applied over the deployment's state, so that the
--- screens start with them, and before an answer file's lines, which win.
+-- wizard's compiler: --system-tools, --hackage-mirror URL,
+-- --npm-registry URL and --libsodium-source FILE, as answers
+-- (system_tools, hackage_mirror, npm_registry, libsodium_source). They are
+-- applied over the deployment's state, so that the screens start with
+-- them, and before an answer file's lines, which win.
 -- The rest of the arguments are returned as they are.
 presetArgs :: [String] -> Either String ([(Text, Text)], [String])
 presetArgs args = do
@@ -343,10 +351,12 @@ presetArgs args = do
       "--system-tools" -> go (("system_tools", "yes") : ps) rest more
       "--hackage-mirror" -> withValue "hackage_mirror" more
       "--npm-registry" -> withValue "npm_registry" more
+      "--libsodium-source" -> withValue "libsodium_source" more
       _
         | Just v <- T.stripPrefix "--hackage-mirror=" (T.pack arg) -> go (("hackage_mirror", v) : ps) rest more
         | Just v <- T.stripPrefix "--npm-registry=" (T.pack arg) -> go (("npm_registry", v) : ps) rest more
+        | Just v <- T.stripPrefix "--libsodium-source=" (T.pack arg) -> go (("libsodium_source", v) : ps) rest more
         | otherwise -> go ps (arg : rest) more
       where
         withValue key (v : after) = go ((key, T.pack v) : ps) rest after
-        withValue _ [] = Left (arg <> " needs a URL")
+        withValue key [] = Left (arg <> if key == "libsodium_source" then " needs a file" else " needs a URL")

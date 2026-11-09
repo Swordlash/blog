@@ -4,7 +4,9 @@
 -- hosted runners, which do not run the bootstrap, run it too; the maker
 -- runs it only when the library is not installed yet, and then points this
 -- process's environment at it, so that the cabal store's warm-up and the
--- check after the native mode find it.
+-- check after the native mode find it. A tarball given by hand
+-- ('libsodiumSource') goes to the script, which uses it instead of a
+-- download.
 module Maker.Toolchain.Libsodium
   ( installLibsodium
   , libsodiumLink
@@ -26,14 +28,18 @@ libsodiumLink :: Context -> FilePath
 libsodiumLink ctx = stateDir ctx </> "libsodium"
 
 -- | Build and install the pinned libsodium unless the script says it is
--- installed, then 'useLibsodium'.
+-- installed, then 'useLibsodium'. An installed libsodium is reused, so a
+-- tarball given by hand is then not used, and the run says so.
 installLibsodium :: Context -> IO ()
 installLibsodium ctx = do
   let script = ctx.root </> "toolchain" </> "libsodium.sh"
   ready <- succeeds "sh" [script, "ready", stateDir ctx]
-  unless ready $ do
-    say ctx ("building libsodium " <> ctx.pins.libsodiumVersion <> " from source into " <> stateDir ctx <> " (a static library, once)")
-    runLong ctx "building libsodium" id ["sh", script, "install", stateDir ctx]
+  if ready
+    then forM_ ctx.libsodiumSource $ \file ->
+      say ctx ("--libsodium-source: " <> file <> " not used, since libsodium " <> ctx.pins.libsodiumVersion <> " is installed already (" <> libsodiumLink ctx <> ")")
+    else do
+      say ctx ("building libsodium " <> ctx.pins.libsodiumVersion <> " from source into " <> stateDir ctx <> " (a static library, once)")
+      runLong ctx "building libsodium" id (["sh", script, "install", stateDir ctx] <> maybe [] pure ctx.libsodiumSource)
   useLibsodium ctx
 
 -- | Put the installed libsodium first in this process's PKG_CONFIG_PATH,
