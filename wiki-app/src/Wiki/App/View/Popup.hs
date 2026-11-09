@@ -13,7 +13,10 @@
 -- opens, and ends it with 'H.unsubscribe' when the popup closes. The
 -- holder can be a different element at each opening (the space switcher
 -- is made again with the sidebar), so the element is looked up when the
--- popup opens, not when the component starts.
+-- popup opens, not when the component starts. The search box is the one
+-- exception: its box is in the header for as long as the component lives,
+-- so it subscribes to 'pressedOutside' once, when it starts, and its
+-- picker handles Escape in its own input.
 module Wiki.App.View.Popup
   ( watchPopup
   , pressedOutside
