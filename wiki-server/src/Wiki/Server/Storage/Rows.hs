@@ -77,6 +77,8 @@ module Wiki.Server.Storage.Rows
   , StoredRecord (..)
   , StoredPassword (..)
   , storeRecord
+  , replaceRecord
+  , resetVaultIn
   , passwordOf
   , loadPasswordByLogin
   , legacyPasswordCount
@@ -185,6 +187,7 @@ import Database.Beam
   , as_
   , asc_
   , countAll_
+  , current_
   , default_
   , delete
   , desc_
@@ -194,6 +197,7 @@ import Database.Beam
   , insert
   , insertExpressions
   , insertValues
+  , isJust_
   , isNothing_
   , join_
   , just_
@@ -1076,6 +1080,43 @@ storeRecord u r =
         (\x -> mconcat [x.opaque_record <-. val_ (Just r.record), x.opaque_stretch <-. val_ (Just r.stretch), x.password_hash <-. val_ Nothing])
         (\x -> x.id ==. val_ u.text)
     )
+
+-- | Give a user a password they did not prove they knew the old one for:
+-- a reset link, or an administrator in the panel or the console. The
+-- OPAQUE record is replaced, the vault loses what only the old password
+-- unlocked ('resetVaultIn'), and every session of the user ends. A
+-- password change the user makes themselves rewraps the vault instead
+-- ("Wiki.Server.Vault").
+replaceRecord :: (Backend be) => UTCTime -> UserId -> StoredRecord -> Db be ()
+replaceRecord now u r = do
+  storeRecord u r
+  resetVaultIn now u
+  deleteSessionsOf u
+
+-- | What a password reset does to a user's vault, in its transaction
+-- ('replaceRecord'): the old password's key is gone, so is its wrap.
+-- A vault that a passkey still unlocks keeps everything else, and the
+-- user unlocks it with a passkey to add the new password's wrap. A vault
+-- that only the password unlocked can no longer be opened by anyone: it
+-- is deleted, with its items (the assistant's settings and the user's
+-- private key), and the user's public key is retired, as changed by a
+-- reset, so that what was sealed to it can be found again. The next
+-- sign-in makes a new vault and key pair.
+resetVaultIn :: (Backend be) => UTCTime -> UserId -> Db be ()
+resetVaultIn now u = do
+  unlocking <- runSelectReturningList (select (filter_ (\p -> p.user_id ==. val_ u.text &&. isJust_ p.wrapped_key) (all_ wikiDb.passkeys)))
+  if null unlocking
+    then do
+      runDelete (delete wikiDb.vault_items (\i -> i.user_id ==. val_ u.text))
+      runDelete (delete wikiDb.vaults (\x -> x.user_id ==. val_ u.text))
+      runUpdate (update wikiDb.public_keys (\k -> (k.retired_at <-. val_ (Just (micro now))) <> (k.retired_because <-. val_ (Just "reset"))) (\k -> k.user_id ==. val_ u.text &&. isNothing_ k.retired_at))
+    else
+      runUpdate
+        ( update
+            wikiDb.vaults
+            (\x -> (x.password_nonce <-. val_ Nothing) <> (x.password_key <-. val_ Nothing) <> (x.revision <-. current_ x.revision + 1) <> (x.updated_at <-. val_ (micro now)))
+            (\x -> x.user_id ==. val_ u.text &&. isJust_ x.password_key)
+        )
 
 -- | How a user signs in with a password, if they exist: 'Nothing' for a
 -- user who does not.

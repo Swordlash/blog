@@ -60,7 +60,7 @@ import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Vault (Step, VaultDevice (..), forgetting, newPasskey, passwordVaultKey, readDevice, recover, server, unwrap, usedPasskey, vaultSlot, wikiText, withKey, wrap)
+import Wiki.App.Vault (Step, forgetting, keepSharedKey, newPasskey, passwordVaultKey, recover, server, unwrap, usedPasskey, wikiText, withKey, wrap)
 import Wiki.Core.Assistant (Settings, blankSettings, defaultSettings)
 import Wiki.Core.Assistant.Vault
 import Wiki.Core.Id (UserId)
@@ -233,8 +233,7 @@ newVault user password record secrets = do
             server (storeVault Nothing (withSealed sealed Vault {format = vaultFormat, salt, items = mempty, wraps = Map.singleton (ByPasskey credential) wrapped}))
         )
         `recover` \why -> lift (when made (void (dropPasskey credential))) >> throwError why
-    keep user vaultKey (not record.askEachTime)
-    keepForVault user vaultKey
+    keepSharedKey user record.askEachTime vaultKey
     pure stored'
   let synced' = serverTo (Just (ServerCopy stored'.tag stored'.vault)) (sealedTo (sealedOf stored'.vault) record)
   write user synced'
@@ -292,8 +291,7 @@ joinVault user password record secrets s = do
   keysOf synced' . (\k -> Opened k secrets) <$> deviceKeyOrFail user
   where
     keepBoth vaultKey = do
-      keep user vaultKey (not record.askEachTime)
-      keepForVault user vaultKey
+      keepSharedKey user record.askEachTime vaultKey
 
 -- | Unlock the vault on this device with a passkey: the vault key
 -- unwrapped with what the passkey gives, kept, and the settings opened.
@@ -323,8 +321,7 @@ unlockKeys user = sealing (pure (Left needsSealing)) $ runExceptT $ do
           sealed <- seal vaultKey merged
           fresh <- server (storeVault (Just copy.tag) (withSealed sealed copy.vault))
           pure (ServerCopy fresh.tag fresh.vault)
-    keep user vaultKey (not record.askEachTime)
-    keepForVault user vaultKey
+    keepSharedKey user record.askEachTime vaultKey
     pure (merged, copy')
   let unlocked = serverTo (Just copy') (sealedTo (sealedOf copy'.vault) record)
   write user unlocked
@@ -374,16 +371,12 @@ removePasskey user credential = runExceptT $ do
 -- which needs no passkey (the way back for someone who lost every
 -- passkey). The keys stay on this device: the vault's latest version,
 -- fetched first, when this device can open it, or else what was typed
--- here while it was locked. The key is kept on this device from now on.
+-- here while it was locked ('leaveVault').
 turnOffSync :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Keys)
 turnOffSync user = sealing (runExceptT (server deleteVault) >>= either (pure . Left) (const (plainKeys user))) $ runExceptT $ do
   record <- refreshed user =<< current user
   server deleteVault
-  key <- lift (deviceKey user)
-  traverse_ (\k -> keep user k True) key
-  off <- unsynced key record
-  write user off
-  keysOf off <$> open off key
+  uncurry keysOf <$> leaveVault user record
 
 -- | Whether this device asks for the passkey each time the wiki opens: if
 -- so, it keeps the vault key for the page's life only; if not, in
@@ -396,7 +389,10 @@ setAskEachTime user asking = sealing (pure (Left needsSealing)) $ runExceptT $ d
   case opened of
     Opened _ _ -> pass
     _ -> throwError "Unlock your keys on this device first."
-  keep user key (not asking)
+  -- A key the assistant shares with the vault (its settings sync) is
+  -- kept in both slots by the same rule ('Wiki.App.Vault.vaultKeyOnDisk'),
+  -- which the vault's own setting takes part in.
+  if isJust record.server then keepSharedKey user asking key else keep user key (not asking)
   let changed = askTo asking record
   write user changed
   pure (keysOf changed opened)
@@ -469,9 +465,9 @@ current user =
         pure record
 
 -- | A record brought up to date with the server's vault, and stored if it
--- changed: the vault fetched when its tag changed; the copy dropped when
--- there is none any more (syncing was turned off elsewhere), the key then
--- kept on this device.
+-- changed: the vault fetched when its tag changed; syncing stopped here
+-- when the vault has no settings any more (turned off elsewhere:
+-- 'leaveVault').
 refreshed :: (MonadAssistant m, MonadVault m) => UserId -> DeviceRecord -> Step m DeviceRecord
 refreshed user record =
   lift vaultSync >>= \case
@@ -485,13 +481,36 @@ refreshed user record =
         -- sync (any more).
         Right fetched
           | isJust record.server
-          , notSyncing fetched -> do
-              key <- lift (deviceKey user)
-              traverse_ (\k -> keep user k True) key
-              changed <- unsynced key record
-              write user changed $> changed
+          , notSyncing fetched ->
+              fst <$> leaveVault user record
         -- The same version, none at all, or no server to ask: as kept.
         _ -> pure record
+
+-- | Stop syncing on this device, once the vault's settings have gone:
+-- turned off here ('turnOffSync') or on another device ('refreshed').
+-- Settings this device can open are sealed again with a new key of the
+-- assistant's own, kept on this device. The old key is the vault key, and
+-- the vault stays when it holds the user's key pair: a copy of it in the
+-- assistant's slot, kept on disk, would reopen the vault after a reload
+-- even when the vault asks for an unlock each time. Settings this device
+-- cannot open (it is still locked) stay what was typed here, with the key
+-- it has. The record is stored, and returned with what it opens to.
+leaveVault :: (MonadAssistant m) => UserId -> DeviceRecord -> Step m (DeviceRecord, Opened)
+leaveVault user record = do
+  key <- lift (deviceKey user)
+  open record key >>= \case
+    Opened old secrets -> do
+      own <- localKey user
+      lift (forgetKey old)
+      sealed <- seal own secrets
+      let off = sealedTo (Just sealed) (askTo False (serverTo Nothing record))
+      write user off
+      pure (off, Opened own secrets)
+    _ -> do
+      traverse_ (\k -> keep user k True) key
+      off <- unsynced key record
+      write user off
+      (\opened -> (off, opened)) <$> open off key
 
 -- | A record that no longer syncs. The settings it keeps become the
 -- vault's, the latest version this device fetched, when the device's key
@@ -578,14 +597,6 @@ openSettings k s = decoded =<< ExceptT (openWith k s sealingData)
 
 keep :: (MonadAssistant m) => UserId -> KeyRef -> Bool -> Step m ()
 keep user k onDisk = ExceptT (keepDeviceKey user k onDisk)
-
--- | Keep the vault key as the user's vault's on this device too
--- ("Wiki.App.Vault"), as that vault's device record says: on disk unless
--- it asks each time.
-keepForVault :: (MonadAssistant m) => UserId -> KeyRef -> Step m ()
-keepForVault user k = do
-  device <- lift (readDevice user)
-  ExceptT (keepDeviceKey (vaultSlot user) k (not device.askEachTime))
 
 deviceKeyOrFail :: (MonadAssistant m) => UserId -> Step m KeyRef
 deviceKeyOrFail user = lift (deviceKey user) >>= maybe (throwError "This browser kept no key for your settings.") pure

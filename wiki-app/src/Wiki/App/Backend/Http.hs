@@ -181,21 +181,38 @@ data HttpEnv = HttpEnv
   -- ^ Whether page content is still cached: true until the reader first
   -- goes to another route ('endPreload'). Shared by every copy of the
   -- environment, such as the one 'atOnce' makes.
-  , moving :: IORef (Maybe Password)
-  -- ^ The password of an account from before OPAQUE that has just signed
-  -- in the old way and waits for its second factor: once the second
-  -- factor is given, its OPAQUE record is registered with it (see
-  -- "Passwords through OPAQUE"), and it is forgotten.
+  , awaiting :: IORef Awaiting
+  -- ^ What the password sign-in that waits for its second factor keeps for
+  -- the moment it ends ('Awaiting').
   , passwordKey :: IORef (Maybe KeyRef)
-  -- ^ The key OPAQUE's export key gave at the last sign-in with a password
-  -- (or a registration that signed in), for the user's vault to take
-  -- ('takePasswordKey', "Wiki.App.Vault"): a WebCrypto key the page holds,
-  -- never its bytes. A newer one replaces it, and the page forgets it.
+  -- ^ The key OPAQUE's export key gave at the last sign-in, for the user's
+  -- vault to take ('takePasswordKey', "Wiki.App.Vault"): a WebCrypto key
+  -- the page holds, never its bytes. Every sign-in sets it, to its own key
+  -- or to none (a passkey's sign-in), and a sign-out empties it; the page
+  -- forgets the key it replaces. So the vault never takes the key of
+  -- another sign-in than the one that just ended.
   , held :: IORef Held
   -- ^ What the page holds of encrypted spaces (see "Encrypted spaces"):
   -- their keys, and their pages decrypted for the search. Shared by every
-  -- copy of the environment.
+  -- copy of the environment, and emptied whenever who is signed in changes.
   }
+
+-- | 'Awaiting' is what a password sign-in that waits for its second factor
+-- keeps for the moment the second factor is given: the key OPAQUE's export
+-- key gave, which then becomes the sign-in's ('passwordKey'), and the
+-- password of an account from before OPAQUE, which its OPAQUE record is
+-- then registered with (see "Passwords through OPAQUE"). It belongs to
+-- that one sign-in. Any other sign-in, or a sign-out, drops it and forgets
+-- its key, so that a sign-in left at its second factor never hands its key
+-- or password to the next one.
+data Awaiting = Awaiting
+  { key :: Maybe KeyRef
+  , moving :: Maybe Password
+  }
+
+-- | Nothing awaits a second factor.
+noneAwaiting :: Awaiting
+noneAwaiting = Awaiting {key = Nothing, moving = Nothing}
 
 -- | A backend over this transport, with an empty cache.
 newHttpEnv :: (MonadIO n) => Transport -> n HttpEnv
@@ -210,10 +227,10 @@ newHttpEnvWith transport start = liftIO $ do
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
   feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
   preloading <- newIORef True
-  moving <- newIORef Nothing
+  awaiting <- newIORef noneAwaiting
   passwordKey <- newIORef Nothing
   held <- newIORef noneHeld
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, moving, passwordKey, held}
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, awaiting, passwordKey, held}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -334,6 +351,8 @@ recheckSession env before = do
     let after = fromSessionInfo info
     when (after.user /= before.user) $ do
       atomicModifyIORef' env.cache (const (withSession after emptyCache, ()))
+      -- The keys of encrypted spaces were opened for someone else.
+      forgetHeldOf env
       env.changes.listener.notify after
 
 -- | The signed-in user's own record changed (their avatar): keep the
@@ -348,7 +367,10 @@ ownUserChanged before u = for_ before $ \s -> do
 -- | Start the cache over with the session that signing in or out
 -- returned: everything cached before was read as someone else.
 startOver :: (MonadIO m) => Session -> HttpWiki m ()
-startOver s = modifyCache (const (withSession s emptyCache))
+startOver s = do
+  modifyCache (const (withSession s emptyCache))
+  -- So were the keys of encrypted spaces and their decrypted pages.
+  HttpWiki (ask >>= liftIO . forgetHeldOf)
 
 readCache :: (MonadIO m) => HttpWiki m Cache
 readCache = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
@@ -791,6 +813,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
       Left e -> pure (Left e)
       Right info -> do
         let s = fromSessionInfo info
+        signedInWith Nothing
         startOver s
         forgetReads
         pure (Right s)
@@ -831,7 +854,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   -- A passkey's sign-in, alone or as the second step, in two requests:
   -- the challenge, and the browser's answer, which signs in.
   beginPasskeySignIn = withPassword endpoints.beginPasskeySignIn
-  finishPasskeySignIn used = signingIn (getResponse <$> endpoints.finishPasskeySignIn used)
+  finishPasskeySignIn used = signingIn (getResponse <$> endpoints.finishPasskeySignIn used) >>= keptAfter Nothing
   beginSecondFactorPasskey = withPassword endpoints.beginSecondFactorPasskey
   finishSecondFactorPasskey used = signingIn (getResponse <$> endpoints.finishSecondFactorPasskey used) >>= movedAfter
 
@@ -1011,10 +1034,11 @@ passwordSignIn login password =
           -- proof of the password the sign-in left on the session. A
           -- failure leaves the account as it was, to move at its next
           -- sign-in.
+          signedInWith Nothing
           void (moveToOpaque password)
           pure (Right info)
         Left SecondFactorNeeded -> do
-          HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (const (Just password, ()))))
+          awaitSecondFactor Awaiting {key = Nothing, moving = Just password}
           pure (Left SecondFactorNeeded)
         Left e -> pure (Left e)
 
@@ -1022,8 +1046,10 @@ passwordSignIn login password =
 -- factor: the account's record is registered now that it is signed in.
 movedAfter :: (MonadIO m) => Either SignInError Session -> HttpWiki m (Either SignInError Session)
 movedAfter result = do
-  waiting <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (\p -> (Nothing, p))))
-  for_ (rightToMaybe result) (const (for_ waiting moveToOpaque))
+  for_ (rightToMaybe result) $ \_ -> do
+    waiting <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.awaiting (noneAwaiting,)))
+    signedInWith waiting.key
+    for_ waiting.moving moveToOpaque
   pure result
 
 -- | Register the signed-in user's OPAQUE record, in place of their password
@@ -1115,20 +1141,38 @@ provenWith = \case
                   Right _ -> pure (Right (Nothing, key))
                   Left e -> liftIO (traverse_ forgetHeld key) $> Left e
 
--- | Keep the key a sign-in gave for the vault, when it signed in, or
--- when it waits for the second factor (the key is taken once the sign-in
--- is complete, as 'moving' is); forget it otherwise.
+-- | Keep the key a sign-in gave for the vault ('Nothing' for a sign-in
+-- without a password): as the sign-in's, when it signed in; as what awaits
+-- the second factor, when it waits for one. Forget it otherwise.
 keptAfter :: (MonadIO m) => Maybe KeyRef -> Either SignInError a -> HttpWiki m (Either SignInError a)
 keptAfter key result = do
-  let keep = HttpWiki $ do
-        env <- ask
-        before <- liftIO (atomicModifyIORef' env.passwordKey (\old -> (key <|> old, if isJust key then old else Nothing)))
-        liftIO (traverse_ forgetHeld before)
   case result of
-    Right _ -> keep
-    Left SecondFactorNeeded -> keep
+    Right _ -> signedInWith key
+    Left SecondFactorNeeded -> awaitSecondFactor Awaiting {key, moving = Nothing}
     Left _ -> liftIO (traverse_ forgetHeld key)
   pure result
+
+-- | A sign-in ended, or a sign-out: the key is the new session's (for the
+-- vault to take), and nothing awaits a second factor any more. The keys
+-- this replaces are forgotten.
+signedInWith :: (MonadIO m) => Maybe KeyRef -> HttpWiki m ()
+signedInWith key = HttpWiki $ do
+  env <- ask
+  liftIO $ do
+    before <- atomicModifyIORef' env.passwordKey (key,)
+    waiting <- atomicModifyIORef' env.awaiting (noneAwaiting,)
+    traverse_ forgetHeld (filter (\k -> Just k /= key) (catMaybes [before, waiting.key]))
+
+-- | A password sign-in waits for its second factor: what it keeps for that
+-- moment replaces what another sign-in kept, and no key is the session's
+-- until it ends. The keys this replaces are forgotten.
+awaitSecondFactor :: (MonadIO m) => Awaiting -> HttpWiki m ()
+awaitSecondFactor next = HttpWiki $ do
+  env <- ask
+  liftIO $ do
+    before <- atomicModifyIORef' env.passwordKey (Nothing,)
+    waiting <- atomicModifyIORef' env.awaiting (next,)
+    traverse_ forgetHeld (filter (\k -> Just k /= next.key) (catMaybes [before, waiting.key]))
 
 -- | An account to create, as it travels: its record instead of its
 -- password.
@@ -1180,6 +1224,13 @@ data Held = Held
 
 noneHeld :: Held
 noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldFound = mempty}
+
+-- | Let go of everything held of encrypted spaces: the keys the page holds
+-- are forgotten, and the pages decrypted with them.
+forgetHeldOf :: HttpEnv -> IO ()
+forgetHeldOf env = do
+  was <- atomicModifyIORef' env.held (noneHeld,)
+  traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))

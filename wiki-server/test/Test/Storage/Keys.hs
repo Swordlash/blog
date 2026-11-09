@@ -1,7 +1,8 @@
 -- | The user's vault and key pair in the storage (WP5.74b1 of
 -- docs/PLAN.md, "Wiki.Server.Vault"), on each database: a change of
 -- password stores the new record and the vault's new password wrap
--- together, or neither; a reset deletes the password's wrap of a vault a
+-- together, or neither; a reset, or a password an administrator sets,
+-- deletes the password's wrap of a vault a
 -- passkey still unlocks, and a vault only the password unlocked, with the
 -- user's public key retired as changed by a reset; and a user without a
 -- password cannot wrap a vault for one.
@@ -22,10 +23,10 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Email (..), Password (..), User (..))
 import Wiki.Core.Vault
-import Wiki.Server.Accounts (PasswordRefusal (..), changePassword, createAccount)
+import Wiki.Server.Accounts (PasswordRefusal (..), changePassword, createAccount, setPassword)
 import Wiki.Server.Opaque (Proof (..), defaultStretch)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
-import Wiki.Server.Storage (Storage, defaultConfig, reading, recordHere, withStorage)
+import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, recordHere, runStoredWiki, setPasswordRecord, withStorage)
 import Wiki.Server.Storage.Rows (StoredRecord (..), passwordOf)
 import Wiki.Server.Storage.Schema (PublicKeys (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, publicKeyOf, registerPasskey, storeVault, storedVault)
@@ -81,6 +82,27 @@ spec backing = describe "the user's keys in the storage" $ do
         vault = withItem identityItem Item {keyId = Just freshId, sealed = Sealed nonceA keyPair} (vaultOf [(ByPassword, wrapB)])
     void (ok =<< storeVault st now u Nothing VaultChange {vault, publicKey = Just NewPublicKey {keyId = freshId, publicKey = fresh}})
     fmap (\k -> k.keyId) <$> publicKeyOf st u `shouldReturn` Just freshId
+
+  it "an administrator's new password, in the panel or the console, deletes a vault only the old password unlocked, as a reset does" $ do
+    let byPanel st u = do
+          record <- recordAt st u "a password the administrator set"
+          void (ok =<< runStoredWiki st Administrator (setPasswordRecord u record))
+        byConsole st u = void (ok =<< setPassword st u (Password "a password the console set"))
+    for_ [byPanel, byConsole] $ \setByAdministrator -> withAda backing $ \st u -> do
+      now <- getCurrentTime
+      void (ok =<< storeVault st now u Nothing (withKeyPair (vaultOf [(ByPassword, wrapA)])))
+      setByAdministrator st u
+      storedVault st u `shouldReturn` Nothing
+      publicKeyOf st u `shouldReturn` Nothing
+    -- A vault a passkey still unlocks keeps its key pair and loses the
+    -- old password's wrap.
+    for_ [byPanel, byConsole] $ \setByAdministrator -> withAda backing $ \st u -> do
+      now <- getCurrentTime
+      passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
+      void (ok =<< storeVault st now u Nothing (withKeyPair (vaultOf [(ByPassword, wrapA), (ByPasskey passkey.id, wrapB)])))
+      setByAdministrator st u
+      ((\v -> v.vault.wraps) <$>) <$> storedVault st u `shouldReturn` Just (Map.singleton (ByPasskey passkey.id) wrapB)
+      fmap (\k -> k.keyId) <$> publicKeyOf st u `shouldReturn` Just keyId
 
   it "refuses a password's wrap to a user who has no password, and a vault of a key pair with no way to unlock it" $ withPlaceIn backing $ \at -> withStorage defaultConfig at $ \st -> do
     pat <- ok =<< createAccount st "pat" "Pat" Nothing

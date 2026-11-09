@@ -272,7 +272,11 @@ signing m = describe "signing in with a passkey" $ do
     signedIn <- startServer m Home
     find signedIn ".account-toggle" >>= click
     find signedIn ".passkeys-unavailable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "served over HTTPS")
-    closedSignedIn signedIn
+    -- No key is made on such a page, and the count of keys left needs a
+    -- passkey, which it cannot have: the page is closed without it.
+    unmount signedIn
+    unsafeIOToPageM js_uninstall
+    serverStops
   where
     -- The wiki over the test's server with nobody signed in, the vault's
     -- server keeping one passkey of the editor's, which the stub has too:
@@ -298,6 +302,10 @@ signing m = describe "signing in with a passkey" $ do
       answerWith "GET" "api/v1/account/email" 200 (Aeson.object ["email" Aeson..= Aeson.Null, "verified" Aeson..= False, "mailing" Aeson..= False, "mailError" Aeson..= Aeson.Null, "asksPassword" Aeson..= True])
     closedSignedIn :: Mounted s Shell.Query Void m -> PageM s ()
     closedSignedIn ui = do
+      -- What the sign-in set going (the keys brought up to date, a vault
+      -- made) ends first: a step stopped halfway by the unmount would leave
+      -- its key in the page for the next test.
+      eventually $ unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
@@ -373,8 +381,12 @@ vault m = do
   it "asks for the passkey each time the wiki opens, when told to, and keeps no key then" $ runPage $ do
     ui <- opened m True True
     turnOn ui
+    -- Syncing keeps the key, which is the vault key, in the vault's slot
+    -- too: both copies follow the setting.
+    stored "vault:user-editor" `shouldReturn` True
     find ui ".assistant-ask-each-time" >>= click
-    eventually $ unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` False
+    eventually $ stored "user-editor" `shouldReturn` False
+    stored "vault:user-editor" `shouldReturn` False
     unmount ui
     -- The wiki opened again: the page holds no key, and none is stored.
     unsafeIOToPageM js_reload
@@ -385,10 +397,12 @@ vault m = do
     _ <- eventually $ find again ".assistant-sync-on"
     touches `shouldReturn` (before + 1)
     find again ".assistant-ask-each-time" >>= (`getProperty` "checked") >>= (`shouldBe` "true")
-    unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` False
-    -- Told not to any more: the key is stored again.
+    stored "user-editor" `shouldReturn` False
+    stored "vault:user-editor" `shouldReturn` False
+    -- Told not to any more: the key is stored again, in both slots.
     find again ".assistant-ask-each-time" >>= click
-    eventually $ unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
+    eventually $ stored "user-editor" `shouldReturn` True
+    stored "vault:user-editor" `shouldReturn` True
     closed again
 
   it "adds a passkey on an unlocked device, and removes one, with its copy of the key" $ runPage $ do
@@ -555,6 +569,8 @@ vault m = do
 
   it "leaves no key that can be exported in the page when a step fails" $ runPage $ do
     ui <- opened m True True
+    -- None before the steps, from another test of the page.
+    exportable `shouldReturn` 0
     turnOn ui
     exportable `shouldReturn` 0
     -- Adding a passkey: the vault's key is unwrapped, and the new
@@ -589,6 +605,9 @@ vault m = do
     secretKey = "test-key-anthropic-one"
     touches :: PageM s Int
     touches = unsafeIOToPageM js_touches
+    -- Whether IndexedDB holds a key in this slot.
+    stored :: Text -> PageM s Bool
+    stored slot = unsafeIOToPageM (evaluate =<< js_stores_key (toJSText slot))
     exportable :: PageM s Int
     exportable = unsafeIOToPageM (evaluate =<< js_exportable)
     vaultState :: PageM s Value
@@ -600,7 +619,10 @@ vault m = do
     sentKey :: PageM s Bool
     sentKey = any (\r -> any (`T.isInfixOf` r.body) [secretKey, "test-key-openai", "test-key-anthropic-changed"]) <$> asked
     closed :: Mounted s Shell.Query Void m -> PageM s ()
+    -- As for the user's keys below: no test leaves a key in the page that
+    -- can be exported.
     closed ui = do
+      eventually $ exportable `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
@@ -697,6 +719,30 @@ userKeys m = describe "the user's keys" $ do
     find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
     made <- madeKeys
     isJust (field ["vault", "password", "key"] made) `shouldBe` True
+    closed ui
+
+  it "gives a passkey's sign-in no key of a password sign-in left at its second factor" $ runPage $ do
+    ui <- signedOut "editor's password"
+    unsafeIOToPageM js_opaque_second_factor
+    -- A password sign-in reaches its second factor, and is left there.
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "editor")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "editor's password")
+    find ui ".sign-in-form button[type=submit]" >>= click
+    _ <- find ui ".sign-in-code-form input[name=code]"
+    find ui ".sign-in-toggle" >>= click
+    -- A passkey signs in instead: the password's key is not this
+    -- sign-in's, so no vault is made with it.
+    me <- signedInAs "user-editor"
+    answerWith "POST" "api/v1/session/passkey" 200 (Aeson.object ["challenge" Aeson..= ("Y2hhbGxlbmdl" :: Text), "rpId" Aeson..= ("localhost" :: Text), "allow" Aeson..= ([] :: [Text])])
+    answerWith "PUT" "api/v1/session/passkey" 200 me
+    _ <- unsafeIOToPageM js_existing
+    find ui ".sign-in-toggle" >>= click
+    find ui ".passkey-sign-in" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
+    find ui ".account-toggle" >>= click
+    _ <- eventually $ find ui ".keys-none"
+    field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
     closed ui
 
   it "turns the assistant's syncing on in the vault the first sign-in made, with the password and a new passkey" $ runPage $ do
@@ -835,7 +881,13 @@ userKeys m = describe "the user's keys" $ do
       printed <- find ui ".keys-fingerprint code" >>= textContent
       find ui ".account-toggle" >>= click
       pure printed
+    -- Every test ends with no key in the page that can be exported: the
+    -- page shares its keys between the tests, so a key one leaves would
+    -- fail another's count. A step still running (a vault being made after
+    -- a sign-in) is waited for: stopped halfway by the unmount, it would
+    -- leave its key behind.
     closed ui = do
+      eventually $ unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
