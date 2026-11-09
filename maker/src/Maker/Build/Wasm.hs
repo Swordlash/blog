@@ -22,7 +22,8 @@
 -- @WASM_PROJECT@ and @WASM_BUILDDIR@ (default @cabal-wasm.project@ and
 -- @dist-newstyle/wasm@), @WIKI_PUBLIC_DIR@, @WIKI_BACKEND@ (@demo@, the
 -- serverless demo, or @server@, the pages wiki-server renders into),
--- @NATIVE_PROJECT@ and @NATIVE_BUILDDIR@ for the prerender, and
+-- @NATIVE_PROJECT@ and @NATIVE_BUILDDIR@ for the prerender, with
+-- @NATIVE_CONSTRAINTS@ (cabal constraints, one per line) for its build, and
 -- @HALOGEN_BASE_PATH@, which the prerender reads itself.
 module Maker.Build.Wasm
   ( WasmBuild (..)
@@ -65,6 +66,11 @@ data WasmBuild = WasmBuild
   , backend :: Backend
   , nativeProject :: FilePath
   , nativeBuildDir :: FilePath
+  , nativeConstraints :: [String]
+  -- ^ Constraints for the prerender's build, such as the deploy's
+  -- @wiki-server -postgres@: a deploy builds the prerender in the server's
+  -- project and build directory, so that wiki-app is compiled once, and
+  -- the project's plan must then be the one the server's build solves.
   }
   deriving (Eq, Show)
 
@@ -90,6 +96,7 @@ wasmBuildFrom optimised env = do
       , backend = backend'
       , nativeProject = fromMaybe "cabal-native-fast.project" (env "NATIVE_PROJECT")
       , nativeBuildDir = fromMaybe "dist-newstyle/native-fast" (env "NATIVE_BUILDDIR")
+      , nativeConstraints = filter (not . null) (lines (fromMaybe "" (env "NATIVE_CONSTRAINTS")))
       }
 
 -- | A tool's version, which a rule's result depends on.
@@ -131,15 +138,16 @@ wasmTools environment = WasmTools <$> find "wasm32-wasi-ghc" <*> find "wasm32-wa
 withCompiler :: WasmTools -> [String]
 withCompiler tools = ["--with-compiler=" <> tools.ghc, "--with-hc-pkg=" <> tools.ghcPkg, "--with-hsc2hs=" <> tools.hsc2hs]
 
--- | The prerender, a native program, built with the host GHC without
--- optimisation, and its path. It is built before the wasm environment is
+-- | The prerender, a native program, built with the host GHC (without
+-- optimisation, unless the environment names an optimised project), and
+-- its path. It is built before the wasm environment is
 -- loaded: that environment's @ar@ and @clang@ would invalidate cabal's
 -- native configuration on every switch of backend.
 prerenderProgram :: BuildEnv -> WasmBuild -> IO FilePath
 prerenderProgram be wb = do
   removeCaches wb.nativeBuildDir ["config"]
   let target = "wiki-app:exe:wiki-app-prerender"
-      where' = ["--project-file=" <> wb.nativeProject, "--builddir=" <> wb.nativeBuildDir]
+      where' = ["--project-file=" <> wb.nativeProject, "--builddir=" <> wb.nativeBuildDir] <> map ("--constraint=" <>) wb.nativeConstraints
   stage "native-prerender-build" (call be.native "cabal" (["build", target] <> where'))
   callOut be.native "cabal" (["list-bin", "-v0", target] <> where')
 
