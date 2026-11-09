@@ -1054,6 +1054,7 @@ confirms it against reality and the plan is amended if it does not hold.
     why, for an account without a password. Such an account that turned
     it on before keeps the way to turn it off. A linked provider account
     therefore signs in without the code the password asks for, by design.
+    Done in #216.
 
 ## Repository layout
 
@@ -1101,10 +1102,11 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-**The issues' order (the owner, 2026-11-09).** Stage 0, small and in
-parallel: #192 (menus close on a click away), #193 (the draft's "saved" as
-a notice that moves no button), #199 (decision 62), #214 (libsodium from a
-local file), WP5.76 below; #198 was closed as already done. Stage 1,
+**The issues' order (the owner, 2026-11-09).** Stage 0: #192 (menus
+close on a click away, #219), #193 (the draft's "saved" as a notice that
+moves no button, #217), #199 (decision 62, #216) and #214 (libsodium from
+a local file, #215) are done; WP5.76 below is in #218. #198 was closed as
+already done. Stage 1,
 foundations: #207 (compile times), #202 (migrations in code, with the
 rest of #205). Stage 2, the content's structure, on #202: #195 (one syntax
 for extensions and styles), #197 (comments), #201 (one home page per
@@ -1122,9 +1124,9 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
   - **a is done (decision 59, #184; libsodium from source, #211).** What
     remains of it is **a2b** (#212): an oracle test against libopaque and liboprf,
     built from source, once their vectors are checked against the RFCs'
-    final ones. A deploy with `--system-tools` still downloads libsodium's
-    release (checked by its checksum); a local source, as `--perl-source`
-    gives Perl, would be a follow-up (#214).
+    final ones. A deploy with `--system-tools` downloads libsodium's
+    release (checked by its checksum) unless `--libsodium-source FILE`
+    gives the tarball (#215).
   - **b is done**: b1, each user's key pair in the vault the assistant
     already had (decision 60, #185), and b2, encrypted spaces over it
     (decision 61, #209). What remains is **b3** (#213): encrypted attachments and
@@ -1322,6 +1324,13 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
 
 What the work done so far left out, found and did not fix, or learnt that later work
 needs. Each was true when its package merged; check before relying on one.
+
+- **Stage 0's small fixes.** The server does not refuse turning on a second
+  factor for an account without a password; only the panel's button is
+  disabled (#216). `.editor-pending-note` and the problems count are still
+  in the editor's row of buttons and move them when they appear (#217).
+  Closing a menu with Escape does not put the focus back on its button
+  (#219).
 
 - **Encrypted spaces (WP5.74b2, #209).** Not tested: a click test of the
   vault unlock and of "Encrypt this space…" (the browser test puts the
