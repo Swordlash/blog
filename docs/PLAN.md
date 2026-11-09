@@ -1056,6 +1056,22 @@ confirms it against reality and the plan is amended if it does not hold.
     therefore signs in without the code the password asks for, by design.
     Done in #216.
 
+63. **The index is pinned, and the everyday build is unoptimised (#207,
+    #220; the owner, 2026-11-09: "pin cabal ma sens").** `cabal.project`
+    and `maker/cabal.project` pin `index-state`, so a `cabal update` (the
+    bootstrap's, a deploy's) changes no dependency: unpinned, one update
+    replaced pandoc, tls, warp and fifty other packages. The pin is bumped
+    deliberately, in its own commit, as the haskell-halogen pin. The
+    everyday native build (`npm run build-native`, CI's native jobs)
+    compiles the wiki's own packages at `-O0`: GHC's timings showed the
+    optimiser took most of a full build (397 s at `-O1`, 171 s at `-O0`,
+    on four cores), while the tests run about as fast (the database
+    groups wait on the database). Optimisation is set per package, in
+    `package` stanzas: a top-level `optimization: True` in a file that
+    imports `cabal.project` changed the dependencies' hashes. What is
+    deployed keeps it: the server at `-O2` (`cabal-native-opt.project`,
+    `opaque` included), the browser's application at `-O1` and `-O2`.
+
 ## Repository layout
 
 ```
@@ -1107,8 +1123,8 @@ In the order to do it, unless the owner says otherwise.
 that moves no button, #217), #199 (decision 62, #216), #214 (libsodium
 from a local file, #215) and WP5.76 (#218); #198 was closed as already
 done. Stage 1,
-foundations: #207 (compile times), #202 (migrations in code, with the
-rest of #205). Stage 2, the content's structure, on #202: #195 (one syntax
+foundations: #207 (compile times) is done (#220, decision 63); #202
+(migrations in code, with the rest of #205) is next. Stage 2, the content's structure, on #202: #195 (one syntax
 for extensions and styles), #197 (comments), #201 (one home page per
 space, space administrators). Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
@@ -1325,6 +1341,19 @@ needs. Each was true when its package merged; check before relying on one.
   that it edits the page once the server answers. Any write that bumps the
   generation raises the epoch for every page, so a busy wiki checks more
   than it must; an epoch per space would narrow it.
+- **Compile times and CI (#220).** At `-O0` the build prints `ld`
+  warnings ("type and size of dynamic symbol … are not defined") where
+  Template Haskell loads the dynamic objects (the two `WhatsNew` modules)
+  and where `wiki-app-test` links; they are not GHC's, `-Werror` does not
+  see them, and `-O1` has none. The longest CI step is now the server's
+  tests on PostgreSQL (four to six minutes): each example makes a database
+  from nothing and migrates it; a migrated template database, or the group
+  split over two jobs, would shorten it. The deploy scripts' tests run in a
+  native job of their own (`deploy`, which builds `wiki-server` alone), and
+  only the sqlite job builds the base branch's server and rehearses the
+  upgrade, on SQLite and then on a PostgreSQL it starts after its tests. A
+  machine whose store was built from an older index can keep it with a
+  `cabal.project.local` naming that `index-state`.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
