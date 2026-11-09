@@ -1102,11 +1102,11 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
-**The issues' order (the owner, 2026-11-09).** Stage 0: #192 (menus
-close on a click away, #219), #193 (the draft's "saved" as a notice that
-moves no button, #217), #199 (decision 62, #216) and #214 (libsodium from
-a local file, #215) are done; WP5.76 below is in #218. #198 was closed as
-already done. Stage 1,
+**The issues' order (the owner, 2026-11-09).** Stage 0 is done: #192
+(menus close on a click away, #219), #193 (the draft's "saved" as a notice
+that moves no button, #217), #199 (decision 62, #216), #214 (libsodium
+from a local file, #215) and WP5.76 (#218); #198 was closed as already
+done. Stage 1,
 foundations: #207 (compile times), #202 (migrations in code, with the
 rest of #205). Stage 2, the content's structure, on #202: #195 (one syntax
 for extensions and styles), #197 (comments), #201 (one home page per
@@ -1171,19 +1171,6 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
     random there, since a title's slug would show the title. Not protected:
     an administrator who changes the JavaScript the server sends, which then
     reads what the user decrypts.
-
-- **WP5.76 Presence updates checked only when permissions change** (the owner,
-  2026-11-06, on the question WP5.69 left). The live channel checks
-  `mayReadPage` for every subscriber on each `Reading` and `Editing` update,
-  which carry no page content and are frequent on a busy page. A subscriber's
-  last passed check is remembered by the channel; presence updates go to
-  subscribers who passed without a new check. A change of a space's
-  permissions (a grant, a revocation, a group's membership) marks every
-  subscriber of that space's pages for a check again, and one who fails it is
-  dropped from the page's channel. Content updates (`PageChanged`) keep their
-  check on every event. Tests: the counting test of `Test.Storage.Scale` sees
-  no check for presence updates; a revocation drops the subscriber before the
-  next presence update reaches them.
 
 ### Later, or waiting for the owner
 
@@ -1325,6 +1312,19 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
 What the work done so far left out, found and did not fix, or learnt that later work
 needs. Each was true when its package merged; check before relying on one.
 
+- **Presence checked only when permissions change (WP5.76, #218).** The
+  hub keeps an epoch, raised by `permissionsChanged`: the storage calls it
+  after a write that bumped the permission context's generation, moved or
+  deleted a page, or changed whom the wiki is open to or the home page's
+  visibility. A subscription remembers the epoch of its last passed check;
+  `Reading` and `Editing` go out without a check while it is current, and
+  otherwise the check is made once and shared by the page's subscribers.
+  A failed check drops the subscription and its presence and sends a late
+  `Refused`; the browser then clears the page's readers and editors, drops
+  its cached threads, asks again after 1 s doubling to 30 s, and says again
+  that it edits the page once the server answers. Any write that bumps the
+  generation raises the epoch for every page, so a busy wiki checks more
+  than it must; an epoch per space would narrow it.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
