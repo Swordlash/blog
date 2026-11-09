@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+Steps of the schema in code (#202). A step may now be Haskell as well as
+an SQL file: a `CodeStep` of the new `Wiki.Server.Storage.Migrate.Code`
+(listed in its `codeSteps`, empty for now), numbered in the same sequence
+as the files, applied in the same transaction and recorded in `wiki_schema`
+the same way. A step in code declares the row types it reads and writes,
+as they are at its number, and never uses `Wiki.Server.Storage.Schema`; one
+that rewrites page syntax carries its own rewriter. `Migrate` gains `Step`
+(`InSql` or `InCode`), `stepsFor` (every step of a database), `arrange`,
+`applySteps`, `knownVersion` (the version the program migrates to, which
+`checkDatabase` and a restore's check now use) and `misnumbered`.
+`migrationsFor` still lists the SQL files alone, and `applyMigrations`
+applies files as before. Steps whose numbers are not 1, 2, 3 and so on,
+each once, are refused with `StepsMisnumbered` before the database is
+touched.
+
+The upgrade's rehearsal: its checks are now tested by driving each one
+with this program as both the old and the new (`Test.Server.Rehearsal`),
+and the accounts check's failure when the canary's password no longer
+signs in. What a check drives on the old program is documented as stable
+and changes only compatibly: `serve`'s options and the database's,
+`users add`, the admin listener's API as the administrator (`info`,
+`spaces`, a space's `pages`, a page `at` a path, and the routes CI seeds a
+wiki with), `auth/<provider>/start` and `callback` with the `wiki_oidc` and
+`wiki_session` cookies, and `session`. The accounts check writes the
+copy's `sign_in_providers` through a row type of its own (`CopyProvider`)
+rather than the live schema's, which a later column would break.
+
 No second factor after a provider's sign-in (decision 62, #199). The
 provider's callback signs a user in as soon as the provider confirms who
 they are, whether or not they have a second factor: the provider has its

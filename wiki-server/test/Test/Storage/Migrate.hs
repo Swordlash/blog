@@ -12,7 +12,7 @@ import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningL
 import Protolude
 import Test.Database (Backing (..), withConnectionTo)
 import Test.Hspec
-import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
+import Test.Storage.Fixture (demoArchive, ok, withEmptyPlaceIn)
 import Wiki.Api.Vault (StoredVault (..))
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
 import Wiki.Core.Id (UserId (..))
@@ -100,7 +100,7 @@ spec backing = describe "the schema's versions" $ do
     map (\m -> m.name) (take 1 (migrationsFor "postgres")) `shouldBe` ["0001-initial.postgres.sql"]
 
   it "make the whole schema in an empty database, and say which they applied" $
-    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let steps = migrationsFor (schemaSuffix c)
       schemaVersion c `shouldReturn` 0
       migrate c `shouldReturn` [1 .. length steps]
@@ -109,7 +109,7 @@ spec backing = describe "the schema's versions" $ do
       versionsOf c `shouldReturn` [1 .. length steps]
 
   it "apply nothing a second time, and change nothing" $
-    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       _ <- migrate c
       tables <- tablesOf c
       versions <- versionsOf c
@@ -118,7 +118,7 @@ spec backing = describe "the schema's versions" $ do
       versionsOf c `shouldReturn` versions
 
   it "run when the storage is opened, and find the database migrated the next time" $
-    withPlaceIn backing $ \at -> do
+    withEmptyPlaceIn backing $ \at -> do
       withStorage defaultConfig at (const pass)
       withStorage defaultConfig at (const pass)
       withConnectionTo at $ \c -> do
@@ -127,7 +127,7 @@ spec backing = describe "the schema's versions" $ do
         versionsOf c `shouldReturn` [1 .. length steps]
 
   it "move each vault of the assistant to the user's vault, its settings as its assistant item, at the same tag" $
-    withPlaceIn backing $ \at -> do
+    withEmptyPlaceIn backing $ \at -> do
       withConnectionTo at $ \c -> do
         -- The schema of WP5.74a, with one user's vault in it as WP5.21
         -- stored it.
@@ -143,7 +143,7 @@ spec backing = describe "the schema's versions" $ do
               }
 
   it "apply every pending step or none: a step that fails leaves the database as it was" $
-    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let bad = Migration {version = 2, name = "0002-bad.sql", statements = "CREATE TABLE second (x INTEGER); CREATE TABLE ("}
           good = Migration {version = 2, name = "0002-good.sql", statements = "CREATE TABLE second (x INTEGER);"}
       result <- try @SomeException (applyMigrations [firstStep c, bad] c)
@@ -154,14 +154,14 @@ spec backing = describe "the schema's versions" $ do
       applyMigrations [firstStep c, good] c `shouldReturn` [1, 2]
 
   it "apply only the steps after the database's version" $
-    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let secondStep = Migration {version = 2, name = "0002.sql", statements = "CREATE TABLE second (x INTEGER);"}
       applyMigrations [firstStep c] c `shouldReturn` [1]
       applyMigrations [firstStep c, secondStep] c `shouldReturn` [2]
       tablesOf c `shouldReturn` ["first", "second", "wiki_schema"]
 
   it "refuse a database a newer program has migrated, and leave it alone" $
-    withPlaceIn backing $ \at -> do
+    withEmptyPlaceIn backing $ \at -> do
       withStorage defaultConfig at (const pass)
       known <- withConnectionTo at schemaVersion
       let newer = known + 1
@@ -171,7 +171,7 @@ spec backing = describe "the schema's versions" $ do
       withConnectionTo at schemaVersion `shouldReturn` newer
 
   it "refuse the database of an earlier wiki-server, saying to export and import, and leave it alone" $
-    withPlaceIn backing $ \at -> do
+    withEmptyPlaceIn backing $ \at -> do
       withConnectionTo at $ \c -> do
         begin True c
         runScript c "CREATE TABLE schema_version (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL); CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL);"
@@ -184,7 +184,7 @@ spec backing = describe "the schema's versions" $ do
       withConnectionTo at tablesOf `shouldReturn` ["schema_version", "users"]
 
   it "refuse a database that holds tables of something else, naming them" $
-    withPlaceIn backing $ \at -> do
+    withEmptyPlaceIn backing $ \at -> do
       withConnectionTo at $ \c -> do
         begin True c
         runScript c "CREATE TABLE invoices (id INTEGER);"
@@ -197,13 +197,13 @@ spec backing = describe "the schema's versions" $ do
   -- program before it starts the new server (WP5.73 of docs/PLAN.md).
   describe "by hand (wiki-server migrate, wiki-server check)" $ do
     it "migrate an empty database to this program's version, then find nothing to do" $
-      withPlaceIn backing $ \at -> do
+      withEmptyPlaceIn backing $ \at -> do
         known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
         migrateDatabase at `shouldReturn` Migrated {from = 0, to = known}
         migrateDatabase at `shouldReturn` Migrated {from = known, to = known}
 
     it "check a wiki with every table and record read, and change nothing" $
-      withPlaceIn backing $ \at -> do
+      withEmptyPlaceIn backing $ \at -> do
         withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
         tables0 <- withConnectionTo at tablesOf
         checked <- checkDatabase at
@@ -216,13 +216,13 @@ spec backing = describe "the schema's versions" $ do
         withConnectionTo at tablesOf `shouldReturn` tables0
 
     it "refuse to check a database not at this program's version, which it does not migrate" $
-      withPlaceIn backing $ \at -> do
+      withEmptyPlaceIn backing $ \at -> do
         known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
         checkDatabase at `shouldReturn` Left (NotMigrated 0 known)
         withConnectionTo at tablesOf `shouldReturn` []
 
     it "name a record that does not read: a space whose slug is not one" $
-      withPlaceIn backing $ \at -> do
+      withEmptyPlaceIn backing $ \at -> do
         withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
         withConnectionTo at $ \c -> do
           begin True c
@@ -237,7 +237,7 @@ spec backing = describe "the schema's versions" $ do
     case backing of
       OnSqlite ->
         it "name a table whose rows do not read, and still read the others" $
-          withPlaceIn backing $ \at -> do
+          withEmptyPlaceIn backing $ \at -> do
             withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
             withConnectionTo at $ \c -> do
               begin True c

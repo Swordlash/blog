@@ -133,6 +133,7 @@ library
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
+        Wiki.Server.Storage.Migrate.Code
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema
         Wiki.Server.Storage.Sealed
@@ -354,6 +355,7 @@ test-suite wiki-server-test
         Test.Storage.Accounts
         Test.Storage.Audit
         Test.Storage.Backup
+        Test.Storage.CodeSteps
         Test.Storage.Contract
         Test.Storage.Fixture
         Test.Storage.Encrypted

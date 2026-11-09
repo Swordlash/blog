@@ -90,7 +90,7 @@ import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase, PgPrograms, attachmentsDir)
-import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrationsFor, schemaVersion)
+import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, schemaVersion)
 import Wiki.Server.Storage.Rows (deleteSettingsLike, referencedBlobs, settingValue, settingsLike, storeSetting)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite, vacuumInto)
 #ifdef WIKI_POSTGRES
@@ -482,10 +482,6 @@ restore r = runExceptT $ do
            | missing > 0
            ]
     )
-
--- | The schema version the steps of a database end at.
-knownVersion :: Text -> Int
-knownVersion suffix = maybe 0 (\m -> m.version) (lastMay (migrationsFor suffix))
 
 -- | Check a schema version of a backup against this program's.
 checkVersion :: FilePath -> Text -> Int -> ExceptT Text IO ()

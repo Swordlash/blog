@@ -141,9 +141,17 @@ api = Proxy
 -- uploads (see the module's header).
 data WikiApi form mode = WikiApi
   { info :: mode :- "info" :> Get '[JSON] ServerInfo
-  -- ^ The server's description of itself.
+  -- ^ The server's description of itself. The rehearsal waits for a server
+  -- to answer it.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , session :: mode :- "session" :> Get '[JSON] SessionInfo
-  -- ^ The current user, if any: @session@.
+  -- ^ The current user, if any: @session@. The rehearsal reads the user's
+  -- @id@ after a sign-in through a provider.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , whatsNew :: mode :- "whats-new" :> Get '[JSON] WhatsNew
   -- ^ The version and build date of the server and the newest changelog
   -- entries it was compiled with ("Wiki.Api.WhatsNew"), the same for
@@ -348,14 +356,22 @@ data AssistantApi mode = AssistantApi
 -- | 'SpacesApi': spaces, and the pages of each.
 data SpacesApi form mode = SpacesApi
   { list :: mode :- Get '[JSON] [Space]
-  -- ^ @listSpaces@.
+  -- ^ @listSpaces@. The rehearsal reads each space's @id@, @parent@ and
+  -- @slug@.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , pageCounts :: mode :- "page-counts" :> Get '[JSON] (Map SpaceId Int)
   -- ^ @pageCounts@: the number of pages in each space the requester may
   -- view, as an object keyed by space id.
   , atPath :: mode :- "at" :> CaptureAll "path" Slug :> Get '[JSON] Space
   -- ^ @getSpace@: the space at a path of slugs from the top level.
   , create :: mode :- ReqBody '[JSON] NewSpace :> PostCreated '[JSON] Space
-  -- ^ @createSpace@.
+  -- ^ @createSpace@. CI seeds the wiki it rehearses with it
+  -- (@toolchain/rehearse-ci.sh@), with a @parent@ and a @name@.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , rename :: mode :- Capture "space" SpaceId :> "name" :> ReqBody '[JSON] SpaceName :> Put '[JSON] Space
   -- ^ @renameSpace@.
   , setPublic :: mode :- Capture "space" SpaceId :> "public" :> ReqBody '[JSON] SpacePublic :> Put '[JSON] Space
@@ -393,15 +409,27 @@ data SpacesApi form mode = SpacesApi
   -- or remove it.
   , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [PageSummary]
   -- ^ @listPages@: summaries of the space's pages, without their bodies,
-  -- in the space's page order.
+  -- in the space's page order. The rehearsal reads each page's @id@,
+  -- @parent@ and @slug@; a space nobody may read answers 404.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , postDetails :: mode :- Capture "space" SpaceId :> "post-details" :> Get '[JSON] (Map PageId PostDetails)
   -- ^ @postDetails@: the details each page of the space is listed with as
   -- a blog post (its first author, its number of comments and its
   -- excerpt), as an object keyed by page id.
   , pageAt :: mode :- Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned Page)
   -- ^ @getPage@: the page at a path of slugs from the space's top level.
+  -- The rehearsal reads its @title@ and @body@.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)
-  -- ^ @createPage@.
+  -- ^ @createPage@. CI seeds the wiki it rehearses with it
+  -- (@toolchain/rehearse-ci.sh@), with a @parent@, a @title@ and a @body@.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , export :: mode :- Capture "space" SpaceId :> "export" :> Capture "format" ExportFormat :> RawM
   -- ^ The space's pages as one document ("Wiki.Api.Export"), in the
   -- space's order, after a title page and a table of contents, for anyone

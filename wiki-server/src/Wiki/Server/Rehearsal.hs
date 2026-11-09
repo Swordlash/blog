@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
@@ -23,6 +24,15 @@
 -- the program deployed before it understands, which is why 'OldNotDriven'
 -- is an outcome of its own: an old program that does not take the options
 -- the rehearsal starts it with is not a failed check.
+--
+-- So what the checks drive on the old program is stable: the options of
+-- @serve@ and of the database, @users add@, the admin listener's API
+-- (@info@, the spaces, their pages and a page at a path, and the routes
+-- toolchain/rehearse-ci.sh seeds a wiki with), the sign-in through a
+-- provider with its cookies, and @session@. Each says so in its
+-- documentation, and changes only compatibly: a later version's rehearsal
+-- drives it as it is now. A new check that drives something else marks it
+-- the same way.
 --
 -- Both servers listen on loopback addresses, on ports the system gives.
 -- They are read through their administration listener, which is served
@@ -63,7 +73,7 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Database.Beam (delete, insert, insertValues, runDelete, runInsert, val_, (==.))
+import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, defaultDbSettings, delete, insert, insertValues, runDelete, runInsert, val_, (==.))
 import Network.HTTP.Client (CookieJar, Manager, Request (..), RequestBody (..), Response, createCookieJar, defaultManagerSettings, httpLbs, managerResponseTimeout, newManager, parseRequest, responseBody, responseCookieJar, responseHeaders, responseStatus, responseTimeoutMicro, responseVersion)
 import Network.HTTP.Types (hLocation, hSetCookie, statusCode, urlEncode)
 import Network.Socket qualified as N
@@ -92,8 +102,6 @@ import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
 import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
-import Wiki.Server.Storage.Schema (wikiDb)
-import Wiki.Server.Storage.Schema qualified as S
 
 --------------------------------------------------------------------------------
 -- The command
@@ -344,11 +352,14 @@ data Seeding = Seeding
   { copy :: Place
   -- ^ The copy's data directory and database, at the old program's
   -- schema. Only tables whose shape every version shares may be written,
-  -- such as @settings@.
+  -- such as @settings@, and through row types declared for the copy (as
+  -- 'CopyProvider' is), not those of "Wiki.Server.Storage.Schema", which
+  -- are this program's.
   , console :: [Text] -> Text -> IO (Either Text Text)
   -- ^ Run the old program with these arguments, followed by the copy's
   -- @--data@ and database options, with this text on its standard input.
-  -- Its output, or what it said when it failed.
+  -- Its output, or what it said when it failed. A command a check runs
+  -- here is stable from then on, and says so in its documentation.
   }
 
 -- | A check while its 'holding' runs: its other parts, given what it
@@ -495,11 +506,15 @@ comparePages was now
 -- * one through a fake OpenID Connect provider ("Wiki.Server.FakeProvider"),
 --   by signing in with it on the old program's server.
 --
--- After the migration, the first signs in on the new server as the
--- application does ("Wiki.App.Backend.Http"): an account from before
--- OPAQUE signs in the old way, which moves it to OPAQUE, so it then signs
--- in a second time, which must not use the old way. The second signs in
--- through the provider again and must be the same account.
+-- After the migration, the first signs in on the new server with its
+-- password as the application does ("Wiki.App.Backend.Http"), through the
+-- client of the @opaque@ package. Since OPAQUE (WP5.74a), @users add@
+-- registers the password through OPAQUE, so the check proves that an
+-- upgrade keeps the records it finds signing in. An old program from
+-- before OPAQUE stored a hash instead: its account signs in the old way
+-- once, which moves it to OPAQUE. So the canary signs in a second time,
+-- which must not use the old way. The second account signs in through the
+-- provider again and must be the same account.
 --
 -- For this the copy is opened to newcomers (its @access@ setting: a closed
 -- wiki makes no account for a provider's newcomer), the fake is added to
@@ -556,10 +571,43 @@ seedAccounts fake seeding = runExceptT $ do
   liftIO $ withDatabase seeding.copy $ \c -> runDb c $ do
     storeSetting "access" (accessName Open)
     storeSetting "public-url" rehearsalUrl
-    runDelete (delete wikiDb.sign_in_providers (\p -> p.name ==. val_ rehearsalProvider))
-    runInsert . insert wikiDb.sign_in_providers $
-      insertValues [S.ProviderRow {name = rehearsalProvider, position = 1000, kind = kindName Generic, client_id = "rehearsal-client", issuer = Just fake.url, secret = Just clientSecret}]
+    runDelete (delete copyDb.sign_in_providers (\p -> p.name ==. val_ rehearsalProvider))
+    runInsert . insert copyDb.sign_in_providers $
+      insertValues [CopyProvider {name = rehearsalProvider, position = 1000, kind = kindName Generic, client_id = "rehearsal-client", issuer = Just fake.url, secret = Just clientSecret}]
   pure canary
+
+-- | 'CopyProvider' is a row of @sign_in_providers@ as the accounts check
+-- writes it into the copy, before the migration: the columns the table has
+-- had since the first schema file. It is declared here rather than taken
+-- from "Wiki.Server.Storage.Schema" because the copy is at the old
+-- program's schema, not this program's: a column a later schema adds would
+-- not be in the copy yet, and an insert that names it would fail.
+data CopyProvider f = CopyProvider
+  { name :: Columnar f Text
+  , position :: Columnar f Int32
+  , kind :: Columnar f Text
+  , client_id :: Columnar f Text
+  , issuer :: Columnar f (Maybe Text)
+  , secret :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table CopyProvider where
+  newtype PrimaryKey CopyProvider f = CopyProviderKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = CopyProviderKey r.name
+
+-- | The tables of the copy the checks write, at the old program's schema.
+newtype CopyDb f = CopyDb
+  { sign_in_providers :: f (TableEntity CopyProvider)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Database be)
+
+copyDb :: DatabaseSettings be CopyDb
+copyDb = defaultDbSettings
 
 -- | Sign in through the fake provider as a browser does: the server's
 -- start, the provider, and back to the server's callback with the round

@@ -19,7 +19,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Protolude
 import Test.Database (Backing)
 import Test.Hspec
-import Test.Storage.Fixture (withPlaceIn)
+import Test.Storage.Fixture (withEmptyPlaceIn)
 import Wiki.Server.Storage (Database (..), PgDatabase, Place (..))
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
@@ -84,7 +84,7 @@ spec backing = describe "a transaction" $ do
 -- PostgreSQL, through @pg_stat_activity@ from a second connection; on
 -- SQLite, which has no server, nothing.
 onConnection :: Backing -> (forall be. (Backend be) => Connection be -> IO () -> IO a) -> IO a
-onConnection backing act = withPlaceIn backing $ \at -> case at.database of
+onConnection backing act = withEmptyPlaceIn backing $ \at -> case at.database of
   SqliteFile file -> bracket (openSqlite ReadWrite file) closeSqlite (\c -> act c pass)
   PostgresAt db -> onPostgres db act
 

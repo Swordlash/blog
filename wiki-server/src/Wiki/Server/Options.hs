@@ -261,6 +261,12 @@ defaultMaxImportSize :: Int
 defaultMaxImportSize = 512 * 1024 * 1024
 
 -- | The options of @wiki-server serve@.
+--
+-- Stable for the upgrade's rehearsal: a later version's rehearsal starts
+-- the old program with @serve --data DIR@, the database's options
+-- ('databaseChoice'), @--listen 127.0.0.1:PORT@ and @--admin-listen
+-- 127.0.0.1:PORT@ ("Wiki.Server.Rehearsal"), so these options change only
+-- compatibly.
 serveOptions :: Parser ServeOptions
 serveOptions = do
   dataDir <- strOption (long "data" <> metavar "DIR" <> help "The data directory: the attachments, the backups, and the database on SQLite")
@@ -340,7 +346,9 @@ passwordFileVariable :: [Char]
 passwordFileVariable = "WIKI_DATABASE_PASSWORD_FILE"
 
 -- | The options that name the database: @--sqlite FILE@, or @--database
--- URL@ with @--database-password-file FILE@.
+-- URL@ with @--database-password-file FILE@. Stable for the upgrade's
+-- rehearsal, which gives them to the old program's @serve@ and console
+-- ("Wiki.Server.Rehearsal"): they change only compatibly.
 databaseChoice :: Parser DatabaseChoice
 databaseChoice = sqlite <|> postgres <|> pure InDataDirectory
   where

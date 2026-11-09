@@ -90,7 +90,7 @@ holdingAlone _ _ = ioError (userError (toS withoutPostgres))
 copies :: Backing -> Spec
 copies backing = describe "backup" $ do
   it "has nothing to back up before there is a wiki" $
-    withPlaceIn backing $ \at ->
+    withEmptyPlaceIn backing $ \at ->
       backup at defaultKeep `shouldReturn` Nothing
 
   it "makes a copy that holds the same rows, while the storage is open and has written" $
@@ -105,7 +105,7 @@ copies backing = describe "backup" $ do
       takeDirectory file `shouldBe` backupsDir at.dataDir
       live <- tableRows st
       -- The copy, restored into a database of its own, holds the rows.
-      copied <- withPlaceIn backing $ \fresh -> do
+      copied <- withEmptyPlaceIn backing $ \fresh -> do
         _ <- restore (restoreInto fresh file Nothing) >>= either (panic . toS) pure
         withStorageAside fresh tableRows
       copied `shouldBe` live
@@ -163,7 +163,7 @@ restoring backing = describe "restore" $ do
       rows <- tableRows st
       -- The drill: a copy of the backup and of the attachments elsewhere,
       -- restored into a directory that has never had a wiki.
-      withPlaceIn backing $ \fresh -> do
+      withEmptyPlaceIn backing $ \fresh -> do
         restore (restoreInto fresh file (Just (attachmentsDir at.dataDir))) >>= \case
           Left why -> expectationFailure (toS why)
           Right said -> T.unlines said `shouldSatisfy` (not . T.isInfixOf "Warning")
@@ -198,7 +198,7 @@ restoring backing = describe "restore" $ do
         copyFile made copy
         whenM (doesFileExist (made <> ".json")) (copyFile (made <> ".json") (copy <> ".json"))
         pure copy
-      withPlaceIn backing $ \at -> do
+      withEmptyPlaceIn backing $ \at -> do
         rows <- withStorage defaultConfig at (\st -> importArchive st demoArchive >>= ok >> tableRows st)
         said <- restore (restoreInto at file Nothing) >>= either (panic . toS) pure
         T.unlines said `shouldSatisfy` T.isInfixOf "Warning: 1 of the attachments' files"
@@ -225,7 +225,7 @@ restoring backing = describe "restore" $ do
             Right _ -> expectationFailure "restored a database that a storage has open"
           doesDirectoryExist (other </> "replaced") `shouldReturn` False
         tableRows st `shouldReturn` was
-        withPlaceIn backing $ \fresh -> case fresh.database of
+        withEmptyPlaceIn backing $ \fresh -> case fresh.database of
           PostgresAt db -> do
             withStorage defaultConfig fresh (const pass)
             opened <- holdingAlone db (try @DataDirInUse (withStorage defaultConfig fresh (const pass)))
@@ -247,7 +247,7 @@ restoring backing = describe "restore" $ do
     _ -> pass
 
   it "refuses what is not a sound backup of a wiki, and a directory of attachments that is not there" $
-    withSystemTempDirectory "wiki-restore-test" $ \dir -> withPlaceIn backing $ \at -> do
+    withSystemTempDirectory "wiki-restore-test" $ \dir -> withEmptyPlaceIn backing $ \at -> do
       priorRows <- withStorageAside at tableRows
       let refused r = restore r >>= either (const pass) (\_ -> expectationFailure ("restored " <> show r))
       BS.writeFile (dir </> "junk.sqlite") "not a database at all, but long enough to look like a header of one"

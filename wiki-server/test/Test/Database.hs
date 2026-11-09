@@ -13,8 +13,13 @@
 -- @PATH@ or in the @bin@ directory of a version under
 -- @\/usr\/lib\/postgresql@, and stop at the end.
 -- Without either, every PostgreSQL example is pending ("not run"), never
--- passed. Each example gets a database of its own, made from nothing and
--- dropped afterwards.
+-- passed. Each example gets a database of its own, dropped afterwards.
+-- 'withPlace' copies it from a template database that the program's own
+-- 'migrate' brought to the current schema once per run, so that an example
+-- does not pay for every migration again. The copy needs PostgreSQL 15 or
+-- newer (CI runs 17). 'withEmptyPlace' makes it from
+-- nothing, for the examples about migrations, schema versions and
+-- restores, which need a database with no schema in it.
 --
 -- PostgreSQL's programs refuse to run as root, so a test run as root runs
 -- them as the user @postgres@ (with @su@), in a directory that user owns.
@@ -31,6 +36,7 @@ module Test.Database
   , backingName
   , withBackings
   , withPlace
+  , withEmptyPlace
   , databaseUrl
   , choiceOf
   , placeOptionsOf
@@ -63,6 +69,7 @@ import System.Posix.User (getEffectiveUserID)
 import System.Process (callProcess, readProcessWithExitCode)
 import Wiki.Server.Storage (postgresAt)
 import Wiki.Server.Storage.Layout (defaultPgPrograms)
+import Wiki.Server.Storage.Migrate (migrate)
 import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
 #else
 import Wiki.Server.Storage.Layout (withoutPostgres)
@@ -102,6 +109,10 @@ data PgServer = PgServer
   , programs :: PgPrograms
   -- ^ The @pg_dump@ and @pg_restore@ of the server's version: those of
   -- the cluster's own installation, or those on the PATH.
+  , template :: MVar Bool
+  -- ^ Whether the template database ('templateName') is made yet. The
+  -- first example that needs it makes it, under this lock, so that
+  -- examples running at once make it only once.
   }
 
 -- | How a suite's title names a backing.
@@ -126,8 +137,19 @@ withBackings selection act = case selection of
 withPostgresBackings :: TestGroup -> ([Backing] -> IO a) -> IO a
 
 -- | A place on a PostgreSQL server: a database made for the example in
--- the data directory, and dropped afterwards.
+-- the data directory, and dropped afterwards. The database is a copy of
+-- the template ('templateName'), so it is at the program's current schema
+-- and holds what the migrations put there, as if a storage had migrated
+-- it but never opened it.
 withPostgresPlace :: PgServer -> FilePath -> (Place -> IO a) -> IO a
+
+-- | A place on a PostgreSQL server whose database is empty: made from
+-- nothing for the example, with no schema and no tables, and dropped
+-- afterwards. This is for an example that needs a database no program has
+-- migrated: one about migrations or schema versions, one that restores a
+-- backup into the database, or one that checks how a database with no
+-- wiki is treated.
+withEmptyPostgresPlace :: PgServer -> FilePath -> (Place -> IO a) -> IO a
 
 -- | A connection of its own to a PostgreSQL database.
 withPostgresConnection :: PgDatabase -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
@@ -141,23 +163,81 @@ withPostgresBackings selection act' = do
   case configured of
     Just url -> do
       made <- newIORef 0
+      template <- newMVar False
       dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
       restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
-      run (OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}})
+      let server = PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}, template}
+      -- The server outlives the run, so the template is dropped at the
+      -- end, if an example made it. A run that made none (one with
+      -- --dry-run, or with no PostgreSQL example matched) never connects,
+      -- so the server need not be up for it. A cluster of the tests' own
+      -- is deleted whole instead.
+      run (OnPostgres server) `finally` dropTemplate server
     Nothing ->
       findPostgres >>= \case
         Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
         Just bin -> stoppedByTerm . withCluster bin $ \url -> do
           made <- newIORef 0
-          run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}})
+          template <- newMVar False
+          run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}, template})
 
+-- The copy is made with the strategy FILE_COPY, which copies the
+-- template's files as they are, rather than the default WAL_LOG, which
+-- writes every block of the template to the write-ahead log. On this
+-- small template FILE_COPY made the PostgreSQL tests about 5% faster.
+-- STRATEGY needs PostgreSQL 15 or newer.
 withPostgresPlace server dir act = do
+  ensureTemplate server
+  withDatabaseMade server (" TEMPLATE " <> templateName <> " STRATEGY FILE_COPY") dir act
+
+withEmptyPostgresPlace server dir = withDatabaseMade server "" dir
+
+-- | A place whose database is made with @CREATE DATABASE@ and these
+-- options, and dropped afterwards whatever is still connected to it.
+withDatabaseMade :: PgServer -> Text -> FilePath -> (Place -> IO a) -> IO a
+withDatabaseMade server options dir act = do
   n <- atomicModifyIORef' server.made (\k -> (k + 1, k + 1))
   let name = "wiki_test_" <> show n
-      admin = BC.pack (toS server.url)
-      statement q = bracket (Pg.connectPostgreSQL admin) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
-  bracket_ (statement ("CREATE DATABASE " <> name)) (statement ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
+  bracket_ (adminStatement server ("CREATE DATABASE " <> name <> options)) (adminStatement server ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
     act Place {dataDir = dir, database = postgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
+
+-- | The name of the database the examples' databases are copied from.
+templateName :: Text
+templateName = "wiki_test_template"
+
+-- | Make the template database, if no example has made it yet: a new
+-- database that the program's own 'migrate' brings to the current schema.
+-- Nothing else is written to it: opening a storage writes more (the home
+-- document), and each example's storage does that on its own copy.
+--
+-- PostgreSQL copies a database only while nobody is connected to it. The
+-- connection that migrates the template is closed before any copy, and the
+-- template then refuses connections, so a test that connected to it by
+-- mistake would fail at once rather than make another example's copy
+-- fail. A template a run left behind (one stopped halfway) is dropped
+-- first. When making it fails, the lock is given back as it was, so the
+-- next example tries again and reports the same failure.
+ensureTemplate :: PgServer -> IO ()
+ensureTemplate server = modifyMVar_ server.template $ \ready -> do
+  unless ready $ do
+    adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
+    adminStatement server ("CREATE DATABASE " <> templateName)
+    withPostgresConnection PgDatabase {url = encodeUtf8 (databaseUrl server.url templateName), password = Nothing} (void . migrate)
+    adminStatement server ("ALTER DATABASE " <> templateName <> " WITH ALLOW_CONNECTIONS false")
+  pure True
+
+-- | Drop the template database at the end of a run, if an example made
+-- it. A run that made none never connects to the server.
+dropTemplate :: PgServer -> IO ()
+dropTemplate server = do
+  made <- readMVar server.template
+  when made $ adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
+
+-- | Run one statement on the database of the server's URL, on a connection
+-- of its own: how databases are made and dropped.
+adminStatement :: PgServer -> Text -> IO ()
+adminStatement server q =
+  bracket (Pg.connectPostgreSQL (BC.pack (toS server.url))) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
 
 withPostgresConnection db act = bracket (openPostgres db) closePostgres act
 
@@ -223,6 +303,8 @@ withPostgresBackings _ act' = do
 
 withPostgresPlace _ _ _ = ioError (userError (toS withoutPostgres))
 
+withEmptyPostgresPlace _ _ _ = ioError (userError (toS withoutPostgres))
+
 withPostgresConnection _ _ = ioError (userError (toS withoutPostgres))
 #endif
 
@@ -236,13 +318,27 @@ databaseUrl base name =
    in scheme <> authority <> "/" <> name <> query
 
 -- | A place for an example's wiki in a data directory: on SQLite, the
--- directory's own file; on PostgreSQL, a database made for the example and
--- dropped afterwards. Pending, for PostgreSQL that is not at hand.
+-- directory's own file, not there yet; on PostgreSQL, a database made for
+-- the example, already at the current schema, and dropped afterwards.
+-- Either way no storage has opened it yet, so it holds no wiki's content.
+-- Pending, for PostgreSQL that is not at hand.
 withPlace :: Backing -> FilePath -> (Place -> IO a) -> IO a
-withPlace backing dir act = case backing of
+withPlace backing = placeWith backing withPostgresPlace
+
+-- | A place whose database is empty: no schema, no tables. On SQLite this
+-- is the same as 'withPlace', a file that is not there yet; on
+-- PostgreSQL, a database made from nothing ('withEmptyPostgresPlace'). An
+-- example that looks at a database before any program has migrated it, or
+-- restores a backup into it, uses this one.
+withEmptyPlace :: Backing -> FilePath -> (Place -> IO a) -> IO a
+withEmptyPlace backing = placeWith backing withEmptyPostgresPlace
+
+-- | A place on a backing, with this way of making a PostgreSQL database.
+placeWith :: Backing -> (PgServer -> FilePath -> (Place -> IO a) -> IO a) -> FilePath -> (Place -> IO a) -> IO a
+placeWith backing onPostgres dir act = case backing of
   OnSqlite -> act (inDataDir dir)
   PostgresNotRun why -> pendingWith (toS why) >> panic "pendingWith returned"
-  OnPostgres server -> withPostgresPlace server dir act
+  OnPostgres server -> onPostgres server dir act
 
 -- | The command line's choice of a database, for a place: what a test
 -- gives a server or a console command to find the place's database.

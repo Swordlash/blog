@@ -104,11 +104,19 @@ import Wiki.Server.Session (CookieSettings (..), sessionCookie)
 import Wiki.Server.Storage (Who (..))
 
 -- | The cookie that binds a round trip to the browser that started it.
+-- Stable for the upgrade's rehearsal, as 'authApplication' is.
 flowCookieName :: Text
 flowCookieName = "wiki_oidc"
 
 -- | The routes under @auth\/@ of a listener that serves the wiki at this
 -- path, as the given 'Caller': the provider's name, and what follows it.
+--
+-- Stable for the upgrade's rehearsal: a later version's rehearsal signs
+-- in through a provider on the old program ("Wiki.Server.Rehearsal"):
+-- @auth\/NAME\/start?next=@, which sets 'flowCookieName' and redirects
+-- to the provider, then @auth\/NAME\/callback@ with that cookie, which
+-- sets the session's cookie ('Wiki.Server.Session.cookieName') and answers
+-- 200. These change only compatibly.
 authApplication :: Logger -> Env -> Caller -> Text -> Text -> [Text] -> Application
 authApplication logger env caller mount name rest request respondWithout = do
   -- The providers as the administration has them now: one added a moment

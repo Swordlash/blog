@@ -15,6 +15,10 @@
 # dropped first. The wiki OLD makes has a space with a page and a page
 # under it, written through OLD's administration listener, and the guide
 # OLD installs itself, which the rehearsal leaves out of its comparison.
+# What this script sends OLD (serve's options, POST spaces and POST
+# spaces/ID/pages) is part of what the rehearsal keeps stable (the README's
+# CI section): OLD is the base branch's program, which this script, from the
+# pull request, must still drive.
 set -eu
 old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres]}
 new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres]}
