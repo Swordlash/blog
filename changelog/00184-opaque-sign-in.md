@@ -30,6 +30,12 @@ The server's console sets passwords the same way:
 wiki users password ada --data ~/wiki-demo/data
 ```
 
+Before a deploy upgrades a wiki to this version, it checks on a copy of
+the wiki that accounts still sign in: one made with a password on the old
+version, and one made through a sign-in provider. If either cannot sign in
+on the new version, the deploy stops before it touches the running wiki,
+which stays as it was.
+
 ## Other changes
 
 The rules for a new password (at least eight characters) are now checked by

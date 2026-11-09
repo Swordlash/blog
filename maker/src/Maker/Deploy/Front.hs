@@ -532,6 +532,7 @@ front root o0 = do
           , ("prev_db_port", prevDbPort)
           , ("prev_dir", prevDir)
           , ("no_firewall", flag o.noFirewall)
+          , ("no_rehearsal", flag o.noRehearsal)
           , ("prev_rule_port", prevRulePort)
           , ("port", port)
           , ("bind", bind)

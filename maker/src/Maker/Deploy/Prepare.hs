@@ -16,6 +16,7 @@ module Maker.Deploy.Prepare
   , pageBackend
   , localYml
   , pgWrapper
+  , pgWrapperFor
   , pgCompose
   )
 where
@@ -559,14 +560,19 @@ localYml name =
 -- | The pg_dump or pg_restore wrapper: the container's own program, which
 -- connects to the container's socket as the user wiki.
 pgWrapper :: String -> FilePath -> String -> String -> String
-pgWrapper name pd dbPort program =
+pgWrapper name pd dbPort program = pgWrapperFor name pd dbPort program "wiki"
+
+-- | 'pgWrapper' for another database of the same container: the
+-- rehearsal's copy ("Maker.Deploy.Rehearse").
+pgWrapperFor :: String -> FilePath -> String -> String -> String -> String
+pgWrapperFor name pd dbPort program database =
   unlines
     [ "#!/bin/sh"
     , "# " <> program <> " of the PostgreSQL container of the deployment " <> name <> ", written by"
     , "# toolchain/deploy-local.sh: wiki-server runs it for a backup or a restore"
     , "# with --dbname=<the URL it connects to>, which is this machine's address of"
     , "# the container; inside the container the program connects to its own"
-    , "# socket instead, as the user wiki, to the database wiki."
+    , "# socket instead, as the user wiki, to the database " <> database <> "."
     , "n=$#"
     , "named="
     , "while [ \"$n\" -gt 0 ]; do"
@@ -578,7 +584,7 @@ pgWrapper name pd dbPort program =
     , "    *) set -- \"$@\" \"$arg\" ;;"
     , "  esac"
     , "done"
-    , "[ -z \"$named\" ] || set -- --username=wiki --dbname=wiki \"$@\""
+    , "[ -z \"$named\" ] || set -- --username=wiki --dbname=" <> database <> " \"$@\""
     , "WIKI_DB_PASSWORD_FILE='" <> pd <> "/db-password' WIKI_DB_PORT='" <> dbPort <> "' exec docker compose --project-name '" <> name <> "' \\"
     , "  --file '" <> pd <> "/docker-compose.yml' --file '" <> pd <> "/local.yml' exec -T postgres " <> program <> " \"$@\""
     ]

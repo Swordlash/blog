@@ -936,6 +936,54 @@ confirms it against reality and the plan is amended if it does not hold.
     `dev-test.sh` and `smoke-test.sh` stay scripts, and "the CI scripts as
     rules" is superseded.
 
+58. **An upgrade is rehearsed on a copy before the deploy switches (WP5.75,
+    #206; the owner, 2026-11-09; the design is issue #205).**
+    `wiki-server rehearse --old PROGRAM` backs the running wiki up online
+    into a scratch place (a directory, and on PostgreSQL a scratch database
+    in the same container, `wiki_rehearsal` for the deploy) and restores it
+    there. It then deletes the copy's `backup-*` (but `backup-last`) and
+    `mail-*` settings, so that neither server started on it backs up to the
+    running wiki's destination or sends its mail. The old program serves the
+    copy on loopback; each check's `before` reads it through the admin
+    listener (an administrator, no sign-in). This program then migrates and
+    checks the copy, serves it with `--no-guide`, and each check's `after`
+    runs. Exit 0 passed, 6 a check failed, 7 the old program could not be
+    driven, 1 the rehearsal broke. A check is a pair of functions in
+    `Wiki.Server.Rehearsal.checks`; the first, `pages`, compares every page's
+    title and source outside the guide. The maker runs it at the start of
+    `apply`, before the service stops, for a server-mode upgrade with an old
+    program; `--no-rehearsal` skips it (the wizard offers it). CI builds the
+    base branch's `wiki-server`, seeds a wiki with it through the admin API
+    (`toolchain/rehearse-ci.sh`) and rehearses the upgrade to the pull
+    request's build, on SQLite and on PostgreSQL. What follows, in order:
+    WP5.74a's check (below); then the API and console commands the checks
+    drive are documented as stable; then #202's migrations in code, each with
+    its own check. A migration in code pins the row shapes of its own version
+    rather than the live Beam schema, and one that rewrites page syntax
+    carries its own old-to-new rewriter rather than the live parser.
+
+59. **A password signs in through OPAQUE (WP5.74a, #184; the owner,
+    2026-11-06 to 2026-11-09).** OPAQUE-3DH (RFC 9807) with ristretto255,
+    SHA-512 and Argon2id. The server's side is a package of this repository,
+    `opaque/`, written over libsodium's primitives and kept apart so that it
+    can be published: the messages are newtypes over their wire bytes, read
+    through `HasField` slices, built with one `BS.concat`; secrets live in
+    memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
+    (opaque-ke compiled to wasm, audited), not this package built for wasm,
+    since there is no libsodium for wasm32-wasi (the owner, 2026-11-06); it
+    is pinned and loaded the first time a password is used. The context is
+    empty, because serenity-kit cannot set one. HKDF comes from libsodium
+    1.0.19 or later; the `older-libsodium` flag, on natively while CI and
+    Debian ship 1.0.18, uses a Haskell HKDF instead (WP5.74a2 turns it off).
+    Argon2id runs with 4 passes and 128 MiB, stored with each record so that
+    the defaults can change. An unknown login gets a fake record's answer. An
+    account from before OPAQUE signs in the old way once, through a
+    fallback the server offers only while such accounts exist, and the
+    browser then registers its record; a record is replaced only after a
+    proof by OPAQUE. The upgrade's rehearsal (decision 58) checks that an
+    account with a password from before OPAQUE, and one through a provider,
+    still sign in after the migration (the owner, 2026-11-09).
+
 ## Repository layout
 
 ```
@@ -985,26 +1033,16 @@ In the order to do it, unless the owner says otherwise.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
-  - **a, login without the password leaving the browser: OPAQUE.** The
-    password logs in through OPAQUE (the CFRG's augmented PAKE, ristretto255
-    with SHA-512 and Argon2id): an OPRF and a triple Diffie-Hellman. The server
-    keeps a registration record. Neither the server nor anyone on the wire
-    learns the password or anything equivalent to it, and an eavesdropper has
-    nothing to replay or to attack offline. The protocol is written by hand
-    from libsodium's primitives (ristretto255, scalar multiplication,
-    hash-to-group, HKDF, HMAC-SHA512, Argon2id). The primitives are never
-    written by hand. The owner, the same day: no Rust toolchain; an audited C
-    library is acceptable when built from source. libsodium is built from
-    source for `wasm32-wasi` with the wasi-sdk of ghc-wasm-meta, so that one
-    Haskell implementation runs natively on the server and as wasm in the
-    browser. It is a small library of its own (a package such as
-    `opaque-hs`), written to be published upstream later, and tested against
-    the RFCs' test vectors (OPAQUE, and RFC 9497 for the OPRF) on both
-    targets. An existing account moves to OPAQUE at its next login: it logs in
-    the old way one last time and registers an OPAQUE record at once. The
-    session key OPAQUE agrees on is not used to encrypt traffic (no
-    transport layer of our own, the owner: "let's forget our own TLS"); TLS,
-    or Tailscale's WireGuard, carries the traffic.
+  - **a is done (decision 59, #184).** What remains of it is **a2**: build
+    libsodium 1.0.19 or later from source for the native build and link it
+    statically, so that the `older-libsodium` flag (HKDF written in
+    Haskell over libsodium's HMAC) can be off natively and its test against
+    libsodium's own HKDF runs; and an oracle test against libopaque and
+    liboprf, built from source, once their vectors are checked against the
+    RFCs' final ones.
+  - **b is cut in two** (the session, 2026-11-07): b1, each user's key pair
+    in the vault the assistant already had (#185), and b2, encrypted spaces
+    over it (#209).
   - **b, encrypted spaces, with a key per page.** Each user has a long-term
     key pair (X25519, for libsodium's sealed boxes). The server keeps every
     user's public key; the private key is stored on the server wrapped by the
@@ -1041,7 +1079,7 @@ In the order to do it, unless the owner says otherwise.
     an administrator who changes the JavaScript the server sends, which then
     reads what the user decrypts.
 
-- **WP5.75 Presence updates checked only when permissions change** (the owner,
+- **WP5.76 Presence updates checked only when permissions change** (the owner,
   2026-11-06, on the question WP5.69 left). The live channel checks
   `mayReadPage` for every subscriber on each `Reading` and `Editing` update,
   which carry no page content and are frequent on a busy page. A subscriber's

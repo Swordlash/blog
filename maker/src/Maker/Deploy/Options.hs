@@ -64,6 +64,8 @@ data Options = Options
   , yes :: Bool
   , build :: Bool
   , noFirewall :: Bool
+  , noRehearsal :: Bool
+  -- ^ Deploy without rehearsing the upgrade first ("Maker.Deploy.Rehearse").
   , enableLinger :: Bool
   , force :: Bool
   , optSemaphore :: String
@@ -110,6 +112,7 @@ defaultOptions =
     , yes = False
     , build = True
     , noFirewall = False
+    , noRehearsal = False
     , enableLinger = False
     , force = False
     , optSemaphore = ""
@@ -168,6 +171,7 @@ table =
   , ("--texlive-installer", Value (\v o -> o {optTexliveInstaller = v}))
   , ("--perl-source", Value (\v o -> o {optPerlSource = v}))
   , ("--no-firewall", Flag (\o -> Right o {noFirewall = True}))
+  , ("--no-rehearsal", Flag (\o -> Right o {noRehearsal = True}))
   , ("--enable-linger", Flag (\o -> Right o {enableLinger = True}))
   , ("--force", Flag (\o -> Right o {force = True}))
   , ("--stop", Flag (\o -> Right o {action = Stop}))

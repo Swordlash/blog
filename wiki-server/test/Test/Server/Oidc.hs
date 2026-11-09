@@ -1,6 +1,6 @@
 -- | Signing in with a provider, over real HTTP (WP3.6 of docs/PLAN.md):
 -- the server on the demo's wiki, a fake provider beside it
--- ("Test.Server.FakeProvider"), and a test that plays the browser between
+-- ("Wiki.Server.FakeProvider"), and a test that plays the browser between
 -- them, following the redirects by hand with the cookies a browser would
 -- send (the session's, @SameSite=Strict@, not on the provider's redirect
 -- back; the round trip's own, @SameSite=Lax@, on it).
@@ -29,7 +29,6 @@ import Protolude
 import Test.Database (Backing, placeOptionsOf)
 import Test.HUnit (assertFailure)
 import Test.Hspec
-import Test.Server.FakeProvider
 import Test.Server.Fixture
 import Test.Storage.Fixture (withPlaceIn)
 import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (..))
@@ -47,6 +46,7 @@ import Wiki.Core.User (Email (..), Login (..), SignInProvider (..), Standing (..
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
+import Wiki.Server.FakeProvider
 import Wiki.Server.Oidc (IdClaims (..), checkClaims, decodeIdToken)
 import Wiki.Server.Storage (Who (..), defaultConfig, runStoredWiki, withStorage)
 import Wiki.Server.Totp (codeAt, secretFromText)
