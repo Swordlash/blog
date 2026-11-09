@@ -401,6 +401,22 @@ jobs:
         path: ${{ steps.setup.outputs.cabal-store }}
         key: ${{ steps.cache.outputs.cache-primary-key }}
 
+    # The upgrade's rehearsal (WP5.75 of docs/PLAN.md) needs the program the
+    # base branch would deploy: its wiki-server, built here before this pull
+    # request's, from the same checkout and build directory, so that only
+    # what differs from the restored snapshot compiles. The base's commit is
+    # checked out, built and copied aside, and the pull request's checked out
+    # again for the Build step below.
+    - name: Build the base branch's wiki-server, for the rehearsal
+      if: github.event_name == 'pull_request' && matrix.group != 'unit'
+      run: |
+        head=$(git rev-parse HEAD)
+        git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+        git checkout -q FETCH_HEAD
+        cabal build wiki-server:exe:wiki-server --builddir=dist-newstyle/native
+        cp "$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)" "$RUNNER_TEMP/base-wiki-server"
+        git checkout -q "$head"
+
     - name: Build
       run: npm run build-native
 
@@ -458,6 +474,16 @@ jobs:
 
     - name: Test
       run: npm run test-native
+
+    # The upgrade from the base branch, rehearsed as a deploy rehearses it
+    # (toolchain/rehearse-ci.sh): the base's wiki-server makes a wiki on this
+    # group's database, and this pull request's migrates a copy of it and
+    # checks that it reads the same.
+    - name: Rehearse the upgrade from the base branch
+      if: github.event_name == 'pull_request' && matrix.group != 'unit'
+      run: |
+        new=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)
+        sh toolchain/rehearse-ci.sh "$RUNNER_TEMP/base-wiki-server" "$new" ${{ matrix.group == 'postgres' && '--postgres' || '' }}
 
     - name: Stop PostgreSQL
       if: always() && matrix.group == 'postgres'
