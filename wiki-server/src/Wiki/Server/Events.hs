@@ -11,11 +11,30 @@
 -- has already refused someone not signed in with a 401 before this point.
 -- A connection keeps the user it was opened as: a tab that signs in or out
 -- opens another. A page is subscribed to only if that user may read it.
--- That is checked when they subscribe ('Refused' otherwise), and again
--- before each event is sent, since a grant may have been removed since.
--- The check before an event is made once for each user the event goes to,
--- however many of their tabs show the page ('Check'), and on one of the
--- storage's readers, so it waits for no write.
+-- That is checked when they subscribe ('Refused' otherwise).
+--
+-- = Checked again
+--
+-- A grant may be removed after a subscription, so the user may be checked
+-- again before an event is sent. A change to a page's comments and a save
+-- ('PageChanged') carry what the page says, and are checked before each
+-- one is sent. Who reads and who edits the page ('Reading', 'Editing')
+-- carry no content and change often on a busy page, so they are not
+-- checked each time (WP5.76 of docs/PLAN.md). Each subscription keeps the
+-- hub's 'epoch' at its last passed check. The storage tells the hub when
+-- who may read which page may have changed: a grant, a revocation, a
+-- group's members, a user, a space, a page moved, the wiki's settings
+-- ("Wiki.Server.Storage"'s @Config@ @permissionsChanged@). The hub then
+-- counts a new epoch, and asks every connection to check each page it is
+-- subscribed to again ('Recheck'). A presence update goes without a check
+-- to a subscription checked in the current epoch, and is checked first
+-- otherwise. A subscription that fails a check, of any kind, is dropped:
+-- the tab is told 'Refused', and stops being counted among the page's
+-- readers and editors.
+--
+-- A check is made once for each user an event goes to, however many of
+-- their tabs show the page ('Check'), and on one of the storage's readers,
+-- so it waits for no write.
 --
 -- The answer to a subscription carries the page's threads, read as that
 -- user may read them. The subscription is made while the storage's writer
@@ -84,6 +103,7 @@ module Wiki.Server.Events
   , newHub
   , publish
   , notify
+  , permissionsChanged
   , closeAll
   , openConnections
   , eventsApplication
@@ -96,7 +116,6 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Network.HTTP.Types (hContentType, status403, status426)
 import Network.Wai (Application, Request (..), responseLBS)
 import Network.Wai.Handler.WebSockets (websocketsApp)
@@ -116,6 +135,10 @@ data Hub = Hub
   { connections :: TVar (Map Key Connection)
   , presence :: TVar Presence
   -- ^ Who is editing and reading which page, by connection.
+  , epoch :: TVar Epoch
+  -- ^ How many times the storage has said that who may read which page
+  -- may have changed ('permissionsChanged'). A subscription checked in an
+  -- earlier epoch is checked again before a presence update is sent.
   , next :: TVar Key
   , closing :: TVar Bool
   -- ^ Set when the server stops: no new connection is accepted.
@@ -125,7 +148,9 @@ data Hub = Hub
 data Connection = Connection
   { who :: Who
   -- ^ Who it was opened as.
-  , pages :: TVar (Set PageId)
+  , pages :: TVar (Map PageId Epoch)
+  -- ^ The pages it is subscribed to, each with the epoch its last passed
+  -- check began in.
   , outbox :: TBQueue Outgoing
   , behind :: TVar Bool
   -- ^ Set when its outbox was full: the connection is then closed.
@@ -143,19 +168,27 @@ enqueue c message = do
 openConnections :: Hub -> IO Int
 openConnections hub = Map.size <$> readTVarIO hub.connections
 
+-- | 'Epoch' counts the changes of who may read which page that the hub
+-- has been told of ('permissionsChanged').
+type Epoch = Word64
+
 -- | What a connection's sending thread has to do.
 data Outgoing
   = -- | Send this message.
     Say ServerMessage
   | -- | Send this event, if the page is still subscribed to and may still
-    -- be read. The 'Check' answers whether it may be read.
+    -- be read. The 'Check' answers whether it may be read, when it has to
+    -- be asked ('mustCheck').
     Tell PageId PageEvent Check
+  | -- | Check again whether the page may be read, if it has not been in
+    -- this epoch, and drop the subscription if not.
+    Recheck PageId Check
   | -- | Close the connection: the server is stopping, or the tab is behind.
     Hangup Text
 
 -- | A hub with nobody connected.
 newHub :: IO Hub
-newHub = Hub <$> newTVarIO mempty <*> newTVarIO nobodyEditing <*> newTVarIO 0 <*> newTVarIO False
+newHub = Hub <$> newTVarIO mempty <*> newTVarIO nobodyEditing <*> newTVarIO 0 <*> newTVarIO 0 <*> newTVarIO False
 
 -- | How many messages may wait in a connection's outbox before it counts
 -- as behind, and is closed.
@@ -178,13 +211,53 @@ tellSubscribers page connections eventFor = foldM_ tell mempty connections
   where
     tell :: Map Who Check -> (Key, Connection) -> STM (Map Who Check)
     tell checks (k, c) = do
-      subscribed <- Set.member page <$> readTVar c.pages
+      subscribed <- Map.member page <$> readTVar c.pages
       if not subscribed
         then pure checks
         else do
           shared <- maybe (newTVar Unasked) pure (Map.lookup c.who checks)
           enqueue c (Tell page (eventFor k) shared)
           pure (Map.insert c.who shared checks)
+
+-- | Tell the hub that who may read which page may have changed: the
+-- storage calls it once such a change is committed ("Wiki.Server.Storage"'s
+-- @Config@). A new epoch begins, and every connection is asked to check
+-- each page it is subscribed to again ('Recheck'), sharing one 'Check'
+-- for each user and page. A check that fails drops the subscription, so
+-- someone who may no longer read a page stops being told and counted at
+-- once, not at the page's next event. It never waits.
+permissionsChanged :: Hub -> IO ()
+permissionsChanged hub = atomically $ do
+  modifyTVar' hub.epoch (+ 1)
+  connections <- readTVar hub.connections
+  foldM_ recheck mempty connections
+  where
+    recheck :: Map (Who, PageId) Check -> Connection -> STM (Map (Who, PageId) Check)
+    recheck checks c = do
+      subscribed <- Map.keys <$> readTVar c.pages
+      foldM
+        ( \held page -> do
+            shared <- maybe (newTVar Unasked) pure (Map.lookup (c.who, page) held)
+            enqueue c (Recheck page shared)
+            pure (Map.insert (c.who, page) shared held)
+        )
+        checks
+        subscribed
+
+-- | What a check did to a subscription: it passed, it failed and the
+-- subscription was dropped, or it failed for a subscription that had gone
+-- (or was made again after the check began) and nothing was dropped.
+data Checked = Passed | Dropped | Failed
+  deriving stock (Eq)
+
+-- | Whether an event has to be checked before it is sent to a
+-- subscription checked in the current epoch: one about what the page
+-- says does, who reads and edits it does not.
+mustCheck :: PageEvent -> Bool
+mustCheck = \case
+  Reading _ -> False
+  Editing _ -> False
+  _ -> True
 
 -- | 'Check' is whether one 'Who' may read one page, for one event. Every
 -- connection of that 'Who' that the event goes to shares it. The first
@@ -195,26 +268,30 @@ tellSubscribers page connections eventFor = foldM_ tell mempty connections
 type Check = TVar CheckState
 
 -- | Where a 'Check' is: not asked yet, being asked by a connection, or
--- answered.
-data CheckState = Unasked | Asking | Answered Bool
+-- answered, with the epoch the asking began in.
+data CheckState = Unasked | Asking | Answered Epoch Bool
 
--- | The answer of a 'Check'. The first connection to need it asks, with
--- the action given, and the others wait for that answer. A connection that
--- fails or is closed while it asks puts the check back to 'Unasked', for
--- the next connection to ask.
-answerOf :: Check -> IO Bool -> IO Bool
-answerOf shared askStorage = mask $ \restore -> do
+-- | The answer of a 'Check', with the epoch the storage was asked in. The
+-- first connection to need it asks, with the action given, and the others
+-- wait for that answer. A connection that fails or is closed while it asks
+-- puts the check back to 'Unasked', for the next connection to ask.
+--
+-- The epoch is read as the asking begins, not when the answer comes: a
+-- revocation committed while the storage is asked begins a newer epoch,
+-- so a subscription that passed is checked again.
+answerOf :: Hub -> Check -> IO Bool -> IO (Epoch, Bool)
+answerOf hub shared askStorage = mask $ \restore -> do
   claimed <- atomically $ do
     readTVar shared >>= \case
-      Answered allowed -> pure (Just allowed)
+      Answered at allowed -> pure (Right (at, allowed))
       Asking -> retry
-      Unasked -> writeTVar shared Asking $> Nothing
+      Unasked -> writeTVar shared Asking >> Left <$> readTVar hub.epoch
   case claimed of
-    Just allowed -> pure allowed
-    Nothing -> do
+    Right answered -> pure answered
+    Left at -> do
       allowed <- restore askStorage `onException` atomically (writeTVar shared Unasked)
-      atomically (writeTVar shared (Answered allowed))
-      pure allowed
+      atomically (writeTVar shared (Answered at allowed))
+      pure (at, allowed)
 
 -- | Send each user's notification to every connection of that user. It
 -- never waits: it is called while the storage holds its writer.
@@ -314,7 +391,7 @@ serve storage hub who pending = do
             traverse_ (tellEditors hub) edited
             traverse_ (tellReaders hub Nothing) read'
       flip finally gone . WS.withPingThread socket 20 pass $
-        race_ (sending socket connection) (receiving key socket connection)
+        race_ (sending key socket connection) (receiving key socket connection)
           `catch` \(_ :: WS.ConnectionException) -> pass
   where
     may page = mayReadPage storage who page
@@ -331,9 +408,13 @@ serve storage hub who pending = do
         -- change to it after the answer is sent after it. So is who reads
         -- it, this connection now among them, which the page's other
         -- subscribers are told.
+        --
+        -- The epoch is read before the storage is asked, so that a change
+        -- committed meanwhile leaves the subscription to be checked again.
         Just (Subscribe page) -> do
+          at <- readTVarIO hub.epoch
           read' <- threadsThen storage who page $ \(threads, author) -> atomically $ do
-            modifyTVar' connection.pages (Set.insert page)
+            modifyTVar' connection.pages (Map.insert page at)
             let readingAs = case who of
                   Anonymous -> Just Visitor
                   AsUser _ -> Named <$> author
@@ -343,10 +424,10 @@ serve storage hub who pending = do
             enqueue connection (Say (Subscribed page threads (editorsFor key page now) (readersFor key page now)))
             when changed (tellReaders hub (Just key) page)
           when (isLeft read') $ atomically $ do
-            modifyTVar' connection.pages (Set.delete page)
+            modifyTVar' connection.pages (Map.delete page)
             enqueue connection (Say (Refused page))
         Just (Unsubscribe page) -> atomically $ do
-          modifyTVar' connection.pages (Set.delete page)
+          modifyTVar' connection.pages (Map.delete page)
           changeReading hub page (stopReading key page)
         -- Accepted from someone who may edit the page, named as the
         -- storage names them; from anyone else, ignored.
@@ -358,17 +439,51 @@ serve storage hub who pending = do
 
     -- Send the queued messages, in order. A tab that fell behind, or a
     -- stopping server, closes the connection, for the tab to reconnect.
-    sending socket connection = do
+    sending key socket connection = do
       next <- atomically $ do
         behind <- readTVar connection.behind
         if behind then pure (Hangup "Connect again.") else readTBQueue connection.outbox
       case next of
-        Say message -> WS.sendTextData socket (encode message) >> sending socket connection
+        Say message -> WS.sendTextData socket (encode message) >> sending key socket connection
         Tell page event shared -> do
-          subscribed <- Set.member page <$> readTVarIO connection.pages
-          allowed <- if subscribed then answerOf shared (may page) else pure False
+          (passedAt, now) <- atomically ((,) <$> (Map.lookup page <$> readTVar connection.pages) <*> readTVar hub.epoch)
+          allowed <- case passedAt of
+            Nothing -> pure False
+            Just at | at == now && not (mustCheck event) -> pure True
+            Just _ -> checked key socket connection page shared
           when allowed $ WS.sendTextData socket (encode (Event page event))
-          sending socket connection
+          sending key socket connection
+        Recheck page shared -> do
+          (passedAt, now) <- atomically ((,) <$> (Map.lookup page <$> readTVar connection.pages) <*> readTVar hub.epoch)
+          when (any (< now) passedAt) (void (checked key socket connection page shared))
+          sending key socket connection
         -- The tab's close reaches the receiving thread, which ends the
         -- connection; this thread has nothing more to send.
         Hangup why -> WS.sendClose socket why >> forever (threadDelay maxBound)
+
+    -- Whether the connection's user may read a subscribed page, asked
+    -- through the shared check. A pass is kept with its epoch. A failure
+    -- drops the subscription, unless the tab subscribed again after the
+    -- check began: the tab is told 'Refused', and the page's other tabs
+    -- that it no longer reads or edits the page.
+    --
+    -- The shared check of an event queued before a change may have been
+    -- answered before the change, by another tab. Such an answer is not
+    -- trusted: the storage is asked again, for this tab alone.
+    checked key socket connection page shared = do
+      (asked, answer) <- answerOf hub shared (may page)
+      now <- readTVarIO hub.epoch
+      (at, allowed) <- if asked < now then (now,) <$> may page else pure (asked, answer)
+      outcome <- atomically $ do
+        passedAt <- Map.lookup page <$> readTVar connection.pages
+        case passedAt of
+          Just since
+            | allowed -> modifyTVar' connection.pages (Map.insert page (max since at)) $> Passed
+            | since <= at -> do
+                modifyTVar' connection.pages (Map.delete page)
+                changeReading hub page (stopReading key page)
+                changePresence hub page (stopEditing key page)
+                pure Dropped
+          _ -> pure Failed
+      when (outcome == Dropped) $ WS.sendTextData socket (encode (Refused page))
+      pure (outcome == Passed)

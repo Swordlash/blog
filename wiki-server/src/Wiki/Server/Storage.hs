@@ -324,6 +324,10 @@ data Storage = Storage
   , permissions :: IORef (Maybe Permissions)
   -- ^ The permission context of the last generation a read transaction
   -- read from the database ('keptPermissions'); none until the first read.
+  , newestGeneration :: IORef (Maybe Int64)
+  -- ^ The newest generation of the permission context this process has
+  -- seen, in a write or a read ('noticeGeneration'). A newer one calls the
+  -- 'Config' @permissionsChanged@ callback.
   , lock :: Maybe DataLock
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
@@ -392,6 +396,16 @@ data Config = Config
   -- ("Wiki.Core.Notification") and passes them to the users' tabs over the
   -- live channel, and to the thread that mails them. It is called as
   -- 'publish' is, and must not wait either.
+  , permissionsChanged :: IO ()
+  -- ^ The callback that tells the live channel that who may read which
+  -- page may have changed, so that it checks its subscribers again
+  -- ("Wiki.Server.Events"). It is called once the change is committed and
+  -- kept in memory: after a write that changed the permission context
+  -- (its generation went up), moved or deleted a page, or changed the
+  -- settings a permission check reads; and when a read finds a generation
+  -- newer than any seen before (a change the console made in another
+  -- process). It may be called for a change that narrowed nothing. It
+  -- must not wait.
   }
 
 -- | A configuration with attachments at @\/api\/v1\/attachments\/\<id\>@,
@@ -405,6 +419,7 @@ defaultConfig =
     , passwordStretch = defaultStretch
     , publish = \_ _ -> pass
     , notify = \_ -> pass
+    , permissionsChanged = pass
     }
 
 -- | Open the storage at a location, creating the data directory if
@@ -444,7 +459,7 @@ openWith collect config place = do
         SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
         PostgresAt pg -> openPostgresEngine pg
       flip onException (closeEngine engine) $ do
-        (settings, serverKept) <- case engine of
+        (settings, serverKept, newestGeneration) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
             _ <- migrate c
             withTransaction True c (runDb c ensureHomeDocument)
@@ -455,11 +470,13 @@ openWith collect config place = do
               removePathForcibly (temporaryDir place.dataDir)
             -- The settings are read here, on the writer, before any reader
             -- is used. A reader then always finds them in memory, and never
-            -- writes the in-memory copy.
-            (,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings)
+            -- writes the in-memory copy. So is the generation of the
+            -- permission context, so that the first read does not take it
+            -- for a change.
+            (,,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings) <*> (newIORef =<< runDb c permissionsGeneration)
         tracer <- newIORef Nothing
         permissions <- newIORef Nothing
-        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, lock, release}
+        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, newestGeneration, lock, release}
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -634,8 +651,8 @@ writingEitherThen st action committed = case st.engine of
   Engine p -> retrying p.writer $ \c -> do
     outcome <- withTransactionEither True c $ do
       tracer <- tracedBegin st True
-      runTraced tracer c action
-    either (pure . Left) (\a -> Right a <$ committed a) outcome
+      runTraced tracer c (withGeneration action)
+    either (pure . Left) (\(a, generation) -> Right a <$ (committed a >> noticeGeneration st generation)) outcome
 
 -- | 'writing', then, once the transaction is committed and before any
 -- other write may begin, the given action on its result, as a save
@@ -646,8 +663,26 @@ writingThen st action committed = case st.engine of
   Engine p -> retrying p.writer $ \c -> do
     outcome <- withTransactionEither True c $ do
       tracer <- tracedBegin st True
-      runTraced tracer c (Right <$> action)
-    either absurd (\a -> a <$ committed a) outcome
+      runTraced tracer c (withGeneration (Right <$> action))
+    either absurd (\(a, generation) -> a <$ (committed a >> noticeGeneration st generation)) outcome
+
+-- | A write's statements, then the generation of the permission context
+-- they leave, read in the same transaction: the triggers have bumped it if
+-- the write changed the permission context. Nothing is read for a write
+-- that is rolled back.
+withGeneration :: (Backend be) => Db be (Either e a) -> Db be (Either e (a, Maybe Int64))
+withGeneration action = action >>= traverse (\a -> (a,) <$> permissionsGeneration)
+
+-- | Tell the live channel that who may read which page may have changed
+-- ('Config' @permissionsChanged@) if this generation of the permission
+-- context is newer than any this process has seen. Writes call it after
+-- their commit, and reads when they read the generation, which is how a
+-- change the console made in another process is noticed.
+noticeGeneration :: Storage -> Maybe Int64 -> IO ()
+noticeGeneration st = traverse_ $ \generation -> do
+  newer <- atomicModifyIORef' st.newestGeneration $ \seen ->
+    if Just generation > seen then (Just generation, True) else (seen, False)
+  when newer st.config.permissionsChanged
 
 -- | The callback that reports a change of a page to the server's live
 -- channel ('Config' @publish@), for a write made with 'writingThen'.
@@ -726,8 +761,27 @@ readSettings :: Storage -> IO WikiSettings
 readSettings st = readIORef st.settings >>= maybe (writing st loadSettings) pure
 
 -- | Publish server settings after their transaction commits, before another write.
+-- A permission check reads two of them: whether someone not signed in may
+-- read the wiki's home page, and which space that page is in
+-- ('requireView'). A change of either is told to the live channel
+-- ('Config' @permissionsChanged@) once the new settings are in memory.
 cacheServerSettings :: Storage -> Kept -> IO ()
-cacheServerSettings st = writeIORef st.serverKept . Just
+cacheServerSettings st new = do
+  old <- readIORef st.serverKept
+  writeIORef st.serverKept (Just new)
+  when (fmap readRule old /= Just (readRule new)) st.config.permissionsChanged
+  where
+    readRule k = (k.homePage.showAnonymous, k.homePage.document)
+
+-- | Keep the wiki's settings in memory after their transaction commits,
+-- before another write. Whom the wiki is open to is part of every
+-- permission check, so a change of it is told to the live channel
+-- ('Config' @permissionsChanged@) once the new settings are in memory.
+keepSettings :: Storage -> WikiSettings -> IO ()
+keepSettings st new = do
+  old <- readIORef st.settings
+  writeIORef st.settings (Just new)
+  when (fmap (\s -> s.access) old /= Just new.access) st.config.permissionsChanged
 
 -- | The server's own settings as they are now, with their secrets, from memory.
 readServerSettings :: Storage -> IO Kept
@@ -827,6 +881,11 @@ data Ctx = Ctx
   -- network address, @console@, or empty where it is not known.
   , told :: IORef [(UserId, Notification)]
   -- ^ The notifications the transaction made, sent once it commits.
+  , moved :: IORef Bool
+  -- ^ Set by a write that moved or deleted a page ('pagesMoved'). Who may
+  -- read a page depends on its space, and the pages' rows are not part of
+  -- the permission context's generation, so the live channel is told of
+  -- such a write by this flag once it commits.
   }
 
 -- | 'Conn' is the connection a transaction runs on, to a database of
@@ -879,15 +938,25 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
   Engine p -> retrying (if mode == Reads then p.readers else p.writer) $ \c -> do
     outcome <- withTransactionEither (mode == Writes) c $ do
       tracer <- tracedBegin st (mode == Writes)
-      ctx <- context st (mode == Writes) (Conn tracer c) who address
-      fmap (ctx,) <$> runExceptT (runReaderT body ctx)
+      let conn = Conn tracer c
+      ctx <- context st (mode == Writes) conn who address
+      result <- runExceptT (runReaderT body ctx)
+      -- A write that succeeded reads the generation it leaves, as
+      -- 'withGeneration' does.
+      generation <- if mode == Writes && isRight result then viaConn conn permissionsGeneration else pure Nothing
+      pure ((ctx,generation,) <$> result)
     -- Committed: the action and the notifications come after the commit,
-    -- still on the connection, so before any other write may begin.
-    for_ outcome $ \(ctx, a) -> do
+    -- still on the connection, so before any other write may begin. The
+    -- live channel hears of a change to who may read what last, once the
+    -- action has kept any new settings in memory, so that the checks it
+    -- then makes read them.
+    for_ outcome $ \(ctx, generation, a) -> do
       committed a
       made <- readIORef ctx.told
       unless (null made) (st.config.notify (reverse made))
-    pure (snd <$> outcome)
+      noticeGeneration st generation
+      whenM (readIORef ctx.moved) st.config.permissionsChanged
+    pure ((\(_, _, a) -> a) <$> outcome)
 
 -- | The context an operation starts from. Its grants include whom the wiki
 -- is open to, because the permission rules read that from the grants.
@@ -921,8 +990,9 @@ contextWith st c who address (spaces, avatars) rows activeAs = do
   wiki <- readIORef st.settings >>= maybe (viaConn c loadSettings) pure
   server <- readIORef st.serverKept >>= maybe (viaConn c loadServerSettings) pure
   told <- newIORef []
+  moved <- newIORef False
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.place.dataDir, spaces, avatars, grants, principal, user, author, creator, wiki, server, address, told}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.place.dataDir, spaces, avatars, grants, principal, user, author, creator, wiki, server, address, told, moved}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -1001,7 +1071,8 @@ keptPermissions :: Storage -> Conn -> IO Permissions
 keptPermissions st c =
   viaConn c permissionsGeneration >>= \case
     Nothing -> fresh Nothing
-    Just generation ->
+    Just generation -> do
+      noticeGeneration st (Just generation)
       readIORef st.permissions >>= \case
         Just kept | kept.generation == Just generation -> pure kept
         _ -> do
@@ -1056,6 +1127,12 @@ readWithin st who locate body = case st.engine of
 -- | Run statements on the transaction's connection.
 db :: (forall be. (Backend be) => Db be a) -> Tx a
 db action = asks (\x -> x.conn) >>= \c -> liftIO (viaConn c action)
+
+-- | Mark the transaction as one that moved or deleted pages ('Ctx'
+-- @moved@), so that once it commits the live channel checks again who may
+-- read the pages it shows.
+pagesMoved :: Tx ()
+pagesMoved = asks (\x -> x.moved) >>= \flag -> liftIO (writeIORef flag True)
 
 failWith :: WikiError -> Tx a
 failWith = throwError
@@ -1372,7 +1449,7 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   -- committed, before any other write may begin.
   setWikiSettings new = StoredWiki $ do
     env <- ask
-    liftIO (transactThenFrom env.storage env.who env.address Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
+    liftIO (transactThenFrom env.storage env.who env.address Writes (setWikiSettingsTx new) (keepSettings env.storage))
 
   -- The storage sends no mail. Whether the server does, the server's API
   -- says itself ("Wiki.Server.Api").
@@ -1387,12 +1464,12 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   -- committed, as the wiki's are, and never returned with their secrets.
   setHomePage change = StoredWiki $ do
     env <- ask
-    fmap (\s -> s.homePage) <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setHomePageTx change) (writeIORef env.storage.serverKept . Just))
+    fmap (\s -> s.homePage) <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setHomePageTx change) (cacheServerSettings env.storage))
   serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
   macroUses names = run Reads (requireAdministrator >> macroUsesIn names <$> db loadAllPages)
   setServerSettings change = StoredWiki $ do
     env <- ask
-    fmap hideSecrets <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
+    fmap hideSecrets <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setServerSettingsTx change) (cacheServerSettings env.storage))
 
   -- Asking a provider and sending mail need the server, not the storage:
   -- the server's API does both ("Wiki.Server.Api"), with the settings the
@@ -2544,6 +2621,7 @@ movePageTx pid destination parent = do
     setPageSpace destination (Set.toList (Set.delete pid subtree))
     -- A page that leaves its space is no longer its home page.
     when (destination /= p.space) $ clearHomePage (Set.toList subtree)
+  when (destination /= p.space) pagesMoved
   findPage pid
 
 -- | Make a page one of its space's templates, or not. Not a save: nothing
@@ -2572,6 +2650,7 @@ deletePageTx pid = do
   above <- lineageOf pid
   let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
   db (deletePageRow pid)
+  pagesMoved
   record
     "page.delete"
     Audit.Subject {kind = "page", id = Just pid.text, name = p.title}

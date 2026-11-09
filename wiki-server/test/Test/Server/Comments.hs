@@ -13,6 +13,12 @@
 -- subscription; ignored from someone who may not edit the page; and a save
 -- of the page told to its tabs, with the new version's time.
 --
+-- A change of who may read a page (WP5.76) drops, at once, the tabs of
+-- those who may no longer read it, which are told 'Refused': a grant
+-- removed, a group left, a user disabled, a space made private, the wiki
+-- closed, the page moved to a private space, and a grant removed by
+-- another process, found at the server's next read.
+--
 -- The demo's wiki is the server's, as in "Test.Server.Access": the
 -- reader may read the blog, the editor edit it, and the administrator
 -- (holding the global administer) administers every space.
@@ -31,21 +37,25 @@ import Test.Hspec
 import Test.Server.Fixture
 import Web.HttpApiData (toUrlPiece)
 import Wiki.Api (AdminApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (Account, AccountDisabled (..))
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers (..), ServerMessage (..), eventsPath, noReaders)
 import Wiki.Api.Links (links)
-import Wiki.Api.Types (PageEdit (..))
+import Wiki.Api.Types (PageEdit (..), PageMove (..), SpaceGrantChange (..), SpacePublic (..))
 import Wiki.Api.Version (pageVersion)
+import Wiki.App.Backend (setSpaceGrant)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Version (Author (..))
+import Wiki.Server.Storage (Who (..), runStoredWiki, withStorageAside)
 
 spec :: Backing -> Spec
 spec backing = describe "comments, over HTTP" $ do
@@ -83,6 +93,20 @@ pageNamed r space page = do
   ok200 (getUrl r (onAdmin r (links.spaces.pageAt s.id [slug page])))
   where
     slug t = either (panic . show) identity (mkSlug t)
+
+-- | The id of the space at a path, as the operator finds it.
+spaceAt :: (HasCallStack) => Running -> [Text] -> IO SpaceId
+spaceAt r path = (\(s :: Space) -> s.id) <$> ok200 (getUrl r (onAdmin r (links.spaces.atPath (map slug path))))
+  where
+    slug t = either (panic . show) identity (mkSlug t)
+
+-- | The team's subspace Projects, and its page "The wiki", which the
+-- reader may read through a grant on Projects alone.
+projectsWiki :: (HasCallStack) => Running -> IO (SpaceId, PageId)
+projectsWiki r = do
+  projects <- spaceAt r ["team", "projects"]
+  wiki :: Page <- ok200 (getUrl r (onAdmin r (links.spaces.pageAt projects [either (panic . show) identity (mkSlug "the-wiki")])))
+  pure (projects, wiki.id)
 
 -- | The blog's page nobody has commented on, which anyone may read.
 notesOf :: (HasCallStack) => Running -> IO PageId
@@ -198,6 +222,11 @@ hearReaders c =
   heard c >>= \case
     Event _ (Reading readers) -> pure readers
     _ -> hearReaders c
+
+-- | Hear who reads a page until it is these readers. Two changes at about
+-- the same time reach a tab in either order.
+readersBecome :: (HasCallStack) => WS.Connection -> Readers -> IO ()
+readersBecome c readers = hearReaders c >>= \heard' -> unless (heard' == readers) (readersBecome c readers)
 
 -- | The next message of any kind, within five seconds.
 heard :: (HasCallStack) => WS.Connection -> IO ServerMessage
@@ -397,6 +426,98 @@ live backing = describe "the live channel" $ do
       _ :: Thread <- created (asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Nothing, body = "Unheard."})
       t :: Thread <- created (asWith r (Just people.reader) methodPost (links.comments other).open NewThread {anchor = Nothing, body = "Heard."})
       hear c `shouldReturn` Event other (ThreadOpened t)
+
+  -- Who reads and edits a page is not checked before each update
+  -- (WP5.76): a change of who may read the page is, at once, and drops the
+  -- subscription of someone who may no longer read it.
+  it "drops a tab whose grant is removed, before the next update of who edits the page reaches it" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    (projects, wiki) <- projectsWiki r
+    notes <- notesOf r
+    channel r [people.reader] $ \reading -> channel r [people.admin] $ \watching -> do
+      subscribe reading wiki
+      subscribe watching wiki
+      revoked <- sendJson r methodPut (onAdmin r (links.spaces.setGrant projects)) SpaceGrantChange {subject = SubjectUser (UserId "user-reader"), permission = View, granted = False}
+      revoked.status `shouldBe` 204
+      hear reading `shouldReturn` Refused wiki
+      -- Ada's tab is told that Rita no longer reads the page.
+      hearReaders watching `shouldReturn` noReaders
+      say watching (StartEditing wiki)
+      hear watching `shouldReturn` Event wiki (Editing [])
+      -- Rita's tab is not told that Ada edits the page: the next thing it
+      -- hears is the answer to this.
+      subscribe reading notes
+
+  it "drops a tab whose user leaves the group the grant is to, or is disabled" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    (projects, wiki) <- projectsWiki r
+    let writers = GroupId "group-writers"
+    granted <- sendJson r methodPut (onAdmin r (links.spaces.setGrant projects)) SpaceGrantChange {subject = SubjectGroup writers, permission = View, granted = True}
+    granted.status `shouldBe` 204
+    channel r [people.editor] $ \editing -> channel r [people.reader] $ \reading -> do
+      subscribe editing wiki
+      subscribe reading wiki
+      removed <- send r methodDelete (onAdmin r (links.admin.removeMember writers (UserId "user-editor"))) [] ""
+      removed.status `shouldBe` 204
+      hear editing `shouldReturn` Refused wiki
+      _ :: Account <- sendJson r methodPut (onAdmin r (links.admin.setDisabled (UserId "user-reader"))) AccountDisabled {disabled = True} >>= jsonAs 200
+      hear reading `shouldReturn` Refused wiki
+
+  it "drops the tabs of those who may no longer read a space made private" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    blog <- spaceAt r ["blog"]
+    p <- notesOf r
+    channel r [] $ \visiting -> channel r [people.reader] $ \reading -> channel r [people.editor] $ \editing -> do
+      subscribe visiting p
+      subscribe reading p
+      subscribe editing p
+      _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic blog)) SpacePublic {public = False})
+      hear visiting `shouldReturn` Refused p
+      hear reading `shouldReturn` Refused p
+      -- The editor edits the blog through a grant, and stays, told that
+      -- the others no longer read the page.
+      readersBecome editing noReaders
+
+  it "drops the tab of someone not signed in once the wiki is closed" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    p <- notesOf r
+    channel r [] $ \visiting -> channel r [people.reader] $ \reading -> do
+      subscribe visiting p
+      subscribe reading p
+      _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
+      hear visiting `shouldReturn` Refused p
+      -- Rita has signed in, and reads the blog in a closed wiki too.
+      hearReaders reading `shouldReturn` noReaders
+      other <- pageAt r "blog" "hello-world"
+      subscribe reading other
+
+  it "drops the tabs of those who may not read the space a page is moved to" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    team <- spaceAt r ["team"]
+    p <- notesOf r
+    channel r [] $ \visiting -> channel r [people.reader] $ \reading -> channel r [people.admin] $ \watching -> do
+      subscribe visiting p
+      subscribe reading p
+      subscribe watching p
+      _ :: Page <- ok200 (sendJson r methodPost (onAdmin r (links.pages.move p)) PageMove {space = team, parent = Nothing})
+      hear visiting `shouldReturn` Refused p
+      hear reading `shouldReturn` Refused p
+      -- Ada administers every space, and stays.
+      other <- pageAt r "blog" "hello-world"
+      subscribe watching other
+
+  it "drops a tab whose grant another process removed, at the server's next read" $ withDemoRunning backing identity $ \r -> do
+    people <- signedIn r
+    (projects, wiki) <- projectsWiki r
+    channel r [people.reader] $ \reading -> do
+      subscribe reading wiki
+      -- As the console's commands do, beside the running server: the
+      -- server is not told of the change, and finds it at its next read
+      -- of the permission context.
+      withStorageAside r.place $ \st ->
+        runStoredWiki st Administrator (setSpaceGrant projects (SubjectUser (UserId "user-reader")) View False) >>= either (assertFailure . show) pure
+      _ :: [Space] <- ok200 (getUrl r (onPublic r links.spaces.list))
+      hear reading `shouldReturn` Refused wiki
 
   it "is closed to someone not signed in in a closed wiki, before the upgrade, and open to who signed in" $ withDemoRunning backing identity $ \r -> do
     people <- signedIn r
