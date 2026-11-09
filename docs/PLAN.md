@@ -950,7 +950,10 @@ confirms it against reality and the plan is amended if it does not hold.
     runs. Exit 0 passed, 6 a check failed, 7 the old program could not be
     driven, 1 the rehearsal broke. A check is a pair of functions in
     `Wiki.Server.Rehearsal.checks`; the first, `pages`, compares every page's
-    title and source outside the guide. The maker runs it at the start of
+    title and source outside the guide, and leaves out a space whose pages
+    answer 404 to the administrator: the container of personal spaces, and a
+    personal space its owner hid (#210, after the owner's deploy stopped on
+    one). The maker runs it at the start of
     `apply`, before the service stops, for a server-mode upgrade with an old
     program; `--no-rehearsal` skips it (the wizard offers it). CI builds the
     base branch's `wiki-server`, seeds a wiki with it through the admin API
@@ -1334,6 +1337,11 @@ needs. Each was true when its package merged; check before relying on one.
   wiki's look: `npm run build-wasm`, then `npm run screenshots`, and commit.
 
 **Building**
+- A deploy builds the page's prerender with the server's build
+  (`NATIVE_PROJECT=cabal-native-opt.project`, `NATIVE_BUILDDIR`, and the
+  server's `wiki-server ±postgres` in `NATIVE_CONSTRAINTS`, one per line), so
+  `wiki-app` is compiled once; the demo keeps the `-O0` build. The maker's own
+  build shows cabal's progress (#210).
 - A new `migrations/*.sql` does not recompile `Storage/Migrate.hs` incrementally
   (`embedDir` tracks only the files it saw): delete its `.o`.
 - A deployment under a prefix (`deploy-local.sh --prefix`, WP5.48) leaves one thing in
