@@ -1323,6 +1323,25 @@ presence m = describe "who is editing and reading" $ do
     unmount ui
     serverStops
 
+  it "says again that it edits a page once a refused subscription is back" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _) <- demoHello
+    ui <- startServer m (EditPage blog helloAt)
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    tell (Subscribed hello.id [] [] Events.noReaders)
+    eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id]
+    -- The server drops the subscription, and with it the tab from the
+    -- page's editors. The tab asks again; once the server answers, the
+    -- tab says again that it edits the page.
+    tell (Refused hello.id)
+    eventuallyWithin 3000 $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id, Subscribe hello.id]
+    tell (Subscribed hello.id [] [] Events.noReaders)
+    eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id, Subscribe hello.id, StartEditing hello.id]
+    unmount ui
+    serverStops
+
   it "asks before editing a page someone else edits, says it edits it once told to go on, and stops when it goes" $ runPage $ do
     serverStarts
     serveDemo

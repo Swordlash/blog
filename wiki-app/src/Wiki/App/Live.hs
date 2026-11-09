@@ -43,6 +43,9 @@
 -- gets nothing more, so its editors and readers are cleared and its cached
 -- threads dropped, and it is asked for again after a pause that doubles,
 -- from one second up to half a minute, until the server answers it.
+-- The server also drops the tab from the page's editors when it refuses
+-- the page, so a tab still editing the page says so again once the server
+-- answers.
 --
 -- A socket is opened as the user the browser's cookie names, and stays
 -- that user's: signing in or out 'restart's it.
@@ -348,8 +351,13 @@ connect held keeping tell = do
           -- An answer about a page no longer watched since it was asked
           -- for is dropped. Who else edits and reads the page is delivered
           -- after the threads, as the events that say it.
+          --
+          -- A page the server refused earlier was also dropped from the
+          -- server's list of who edits it. If this tab still edits the
+          -- page, the tab says so again once the subscription is back.
           Just (Subscribed page threads editors readers) -> whenM (watched page) $ do
-            atomicModifyIORef' held (\c -> (c {refused = Map.delete page c.refused}, ()))
+            c <- atomicModifyIORef' held (\c -> (c {refused = Map.delete page c.refused}, c))
+            when (Map.member page c.refused && Set.member page c.editing) (say c (StartEditing page))
             keeping.catchUp page threads
             heardEditors page editors
             heardReaders page readers
