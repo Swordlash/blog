@@ -12,7 +12,10 @@
 -- page's text refuses an encrypted space with a reason; the server's
 -- search leaves it out; notifications carry no title and no excerpt; a
 -- reader who is not a member gets nothing; and a password reset sends its
--- user back to the readers waiting for a grant.
+-- user back to the readers waiting for a grant. A page moves within its
+-- encrypted space, but not out of it or into it; a grant sent twice in one
+-- request is made once; and a whole wiki's archive comes in with every
+-- space plain.
 module Test.Storage.Encrypted (spec) where
 
 import Data.Aeson (eitherDecode)
@@ -24,7 +27,7 @@ import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, 
 import Protolude
 import Test.Database (Backing)
 import Test.Hspec
-import Test.Storage.Fixture (ok, withPlaceIn)
+import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Encrypted
 import Wiki.Api.Notifications (Notifications (..))
@@ -34,19 +37,20 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..))
+import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
-import Wiki.Core.Slug (slugText)
+import Wiki.Core.Slug (mkSlug, slugText)
 import Wiki.Core.Space (Space (..), SpaceProfile (..))
 import Wiki.Core.User (Password (..), User (..))
 import Wiki.Core.Vault
 import Wiki.Core.Version (VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Schema (Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (KeyGrants (..), Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -219,6 +223,46 @@ spec backing = describe "encrypted spaces in the storage" $ do
     void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
     told <- ok =<< as p.bob notifications
     [(n.page, n.title, n.excerpt) | n <- told.items] `shouldBe` [(pid, "an encrypted page", "")]
+
+  it "moves a page within its encrypted space, and refuses a move to or from another space" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+        pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+    parent <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+    child <- ok =<< as p.ada (createSealedPage secret.id (newPage otherId Nothing 'b'))
+    -- Under another page of the space, and back to the top: the page's key
+    -- and versions are as they were.
+    moved <- ok =<< as p.ada (movePage child.id secret.id (Just parent.id))
+    (moved.space, moved.parent) `shouldBe` (secret.id, Just parent.id)
+    back <- ok =<< as p.ada (movePage child.id secret.id Nothing)
+    back.parent `shouldBe` Nothing
+    read' <- ok =<< as p.ada (sealedPageAt secret.id [child.slug])
+    (read'.pageKey, read'.content) `shouldBe` (pageKeyOf, contentOf 'b')
+    -- To a plain space: refused, as from one.
+    plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+    as p.ada (movePage child.id plain.id Nothing) >>= (`shouldSatisfy` refusedAsEncrypted)
+
+  it "makes a grant sent twice in one request once, and refuses more than 500 at once" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+    void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+    ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey, newGrant p.bob p.bobKey]))
+    grants <- reading st (runSelectReturningList (select (all_ wikiDb.key_grants)))
+    sort [g.recipient | g <- grants] `shouldBe` sort [p.ada.text, p.bob.text]
+    -- Too many for one request: refused before any is looked at, so that a
+    -- browser sends them in parts of at most 500.
+    as p.ada (grantSpaceKey secret.id (grantsOf (replicate 501 (newGrant p.bob p.bobKey)))) `shouldReturn` Left (Invalid "At most 500 grants are made at once.")
+
+  it "imports a whole wiki's archive with every space plain, whatever the archive says of their encryption" $
+    withPlaceIn backing $ \at -> withStorage defaultConfig at $ \st -> do
+      let marked = demoArchive {Export.spaces = [s {encryption = Just spaceKey} | s <- demoArchive.spaces]}
+      importArchive st marked >>= (`shouldBe` Right ())
+      spaces <- runStoredWiki st Administrator listSpaces
+      (length spaces > 0, [s.id | s <- spaces, isJust s.encryption]) `shouldBe` (True, [])
+      -- Its pages are read as the plain pages they are.
+      blog <- maybe (panic "no blog") pure (find (\s -> s.slug == either (const (panic "slug")) identity (mkSlug "blog")) spaces)
+      pages <- ok =<< runStoredWiki st Administrator (listPages blog.id)
+      pages `shouldSatisfy` (not . null)
 
   it "takes no plain title or text for a page of an encrypted space" $ do
     -- A title or a text given as text, not as a ciphertext, does not parse.

@@ -195,6 +195,7 @@ import Crypto.OPAQUE (ServerSetup)
 import Crypto.Random (getRandomBytes)
 import Data.ByteArray.Encoding (Base (Base64URLUnpadded), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -2518,8 +2519,14 @@ movePageTx pid destination parent = do
   requireEdit target
   requireOrdinary p.space
   requireOrdinary destination
-  requirePlain "Moving a page in or out of an encrypted space" source
-  requirePlain "Moving a page in or out of an encrypted space" target
+  -- A page moves within an encrypted space as it moves within a plain one:
+  -- its key and ciphertexts name its space and its own id, not its parent
+  -- ("Wiki.Core.Encrypted"), so they stay valid. Moving it to another
+  -- space would need them encrypted again for that space, in a member's
+  -- browser.
+  when (destination /= p.space) $ do
+    requirePlain "Moving a page in or out of an encrypted space" source
+    requirePlain "Moving a page in or out of an encrypted space" target
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
   subtree <- db (subtreeIds pid)
@@ -2835,7 +2842,9 @@ grantSpaceKeyTx sid req = do
   require (any (\g -> g.recipient == me && Just g.recipientKeyId == current me) grants)
   readers <- readersOf c
   time <- now
-  for_ req.grants $ \g -> do
+  -- A grant sent twice in one request is made once: the second would
+  -- repeat the first's row, which the table's key refuses.
+  for_ (nubOrdOn (\g -> (g.recipient, g.recipientKeyId)) req.grants) $ \g -> do
     checkGrantParts k g.enc g.sealed
     unless (g.recipient `elem` readers) $
       invalid "A space's key is granted only to its readers."
@@ -3971,8 +3980,12 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- there. Each is added after its parent, and the spaces' home pages
           -- once the pages are there, so that every foreign key holds at each
           -- step, as PostgreSQL checks them.
+          -- A space comes in plain, whatever the archive says of its
+          -- encryption: the archive holds no key and no ciphertext, only
+          -- the plain pages it was exported with, and an encrypted space's
+          -- mark would make the server refuse to read them.
           let spaces =
-                [ case sp.icon of
+                [ (\x -> x {encryption = Nothing}) $ case sp.icon of
                     Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog, boxNumbering = sp.boxNumbering} sp
                     _ -> sp
                 | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
