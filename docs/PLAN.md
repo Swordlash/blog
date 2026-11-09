@@ -1397,7 +1397,11 @@ needs. Each was true when its package merged; check before relying on one.
   `Test.Storage.Migrate`'s "numbered from 1 with no gaps" checks the SQL
   files only (`migrationsFor`), and other examples there take their count
   as the program's version: they move to `stepsFor` and `knownVersion`
-  with the first real code step. The browser test "counts a notification
+  with the first real code step. Issue #205 stays open for its part 4:
+  `wiki-server check` does not yet check per-feature invariants on the
+  real accounts (for OPAQUE, that every account has a way in the new
+  version can sign it in: a hash, an OPAQUE record or a provider's
+  identity). The browser test "counts a notification
   the live channel tells of, with no page shown" failed once on #221's
   wasm job, whose change touched no application code.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
