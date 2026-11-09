@@ -982,6 +982,31 @@ what is planned, not a log).
 
 In the order to do it, unless the owner says otherwise.
 
+- **WP5.75 Upgrade rehearsal** (the owner, 2026-11-09; the design is issue
+  #205). A deploy proves, before it switches, that what exists still works after
+  the upgrade. The deploy restores the backup it has just made into a scratch
+  copy (a file for SQLite, a scratch database in the same container for
+  PostgreSQL), on loopback only, and deletes it however the rehearsal ends. The
+  old binary runs each check's `before` half on the copy and leaves a small
+  fixture (a test account and its password). The new binary migrates the copy,
+  starts on it, and runs each check's `after` half against that fixture. A
+  failure stops the deploy before the running wiki is touched. Both halves
+  live in the new binary, in a list in wiki-server (`wiki-server rehearse`);
+  the maker only orchestrates. The old binary is driven through what it
+  already has, its console first. The same rehearsal runs in CI, with the
+  `main-latest` server binary as the old version and the pull request's
+  build as the new one. The owner has two production wikis, one on SQLite and
+  one on PostgreSQL, so both databases are in the first package. Order (the
+  owner, 2026-11-09): first this package, against `main`, with a trivial first
+  check (pages read the same after the migration); then WP5.74a (#184) adds
+  its check (an account with a password from before OPAQUE, and one through a
+  fake provider, both sign in after the migration) and merges after it; then
+  the console commands the checks drive are documented as stable. #202's
+  migrations in code come after, each with its own check. Two constraints for
+  them: a migration in code pins the row shapes of its own version rather
+  than the live Beam schema, and one that rewrites page syntax carries its
+  own old-to-new rewriter rather than the live parser.
+
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
