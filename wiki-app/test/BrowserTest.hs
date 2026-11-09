@@ -24,6 +24,7 @@ import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
 import Test.Browser.Macros qualified as Macros
+import Test.Browser.Menus qualified as Menus
 import Test.Browser.Notifications qualified as Notifications
 import Test.Browser.Offline qualified as Offline
 import Test.Browser.Order qualified as Order
@@ -82,6 +83,7 @@ spec = do
   describe "Personal spaces and private subspaces" (Personal.spec BrowserDOM)
   describe "Avatars, and who wrote a page" (Avatars.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
+  describe "Menus closing on a press outside" (Menus.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Problems marked in the editor" (Problems.spec BrowserDOM)
   describe "Wiki.App.Browser" Entries.spec

@@ -10,6 +10,16 @@ corner, out of the flow (on a phone, fixed in the bottom right corner of
 the window). The selectors `.editor-draft-status` and `.editor-saved-notice`
 and their texts are unchanged.
 
+Menus close when the reader turns away from them (issue #192). The new
+module `Wiki.App.View.Popup` watches a popup through the element that holds
+it with its button: `watchPopup` subscribes, while the popup is open, to a
+press outside that element and to Escape, and `pressedOutside` (moved from
+`Wiki.App.View.Search`) and `escapePressed` are the two emitters. The
+Starred list, the bell, the demo's user menu, the space switcher and the
+editor's toolbar menus use it; the search box keeps its own subscription to
+`pressedOutside`. `Wiki.App.View.Starred` and `Wiki.App.View.Bell` now need
+`MonadUUID`, `MonadBrowserDOM` and `MonadUnliftIO`.
+
 Encrypted spaces (WP5.74b2). The HTTP backend reads and writes the pages of
 an encrypted space through the encrypted routes, encrypting and decrypting
 in the browser (`Wiki.App.Encrypted`, `jsbits/encrypted.js`), and searches
