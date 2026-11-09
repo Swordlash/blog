@@ -1,7 +1,8 @@
 // The server of encrypted spaces, played in the browser tests
 // (Test.Browser.Encrypted) beside the test's server in fetch's place
 // (test-fetch.js), as the vault's is (test-passkeys.js): the list of
-// spaces, the directory of public keys, and the routes under encrypted/
+// spaces, the directory of public keys, the starred pages, and the routes
+// under encrypted/
 // (Wiki.Api.Encrypted), with the server's rules for grants (only a holder
 // of the key grants it, only to a reader with a current public key, and
 // only the current key) and for saves (against the version read). It
@@ -56,6 +57,15 @@ function wikiTestEncServer(request) {
     return wikiTestEncJson(200, [...wikiTestEncrypted.spaces.values()].filter((s) => s.readers.includes(me)).map((s) => s.space));
   }
   if (path === "search" && request.method === "GET") return wikiTestEncJson(200, []);
+  // Every page of the encrypted spaces the user reads, starred, with the
+  // empty title the server lists for a page it holds only encrypted.
+  if (path === "stars" && request.method === "GET") {
+    const readable = [...wikiTestEncrypted.pages.values()].filter((p) => wikiTestEncrypted.spaces.get(p.space)?.readers.includes(me));
+    return wikiTestEncJson(
+      200,
+      readable.map((p) => ({ page: p.id, space: p.space, title: "", location: { space: [wikiTestEncrypted.spaces.get(p.space).space.slug], page: [p.slug] } })),
+    );
+  }
   const spaceAt = path.match(/^spaces\/at\/([^/]+)$/);
   if (spaceAt && request.method === "GET") {
     const s = [...wikiTestEncrypted.spaces.values()].find((x) => x.space.slug === decodeURIComponent(spaceAt[1]));

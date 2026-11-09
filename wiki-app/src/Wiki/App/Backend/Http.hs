@@ -119,7 +119,7 @@ import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
 import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), PasswordWrapChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
-import Wiki.Api.Stars (Starring (..), StarsApi (..))
+import Wiki.Api.Stars (StarredPage (..), Starring (..), StarsApi (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Vault (PublicKeyEntry (..), VaultChange (..))
@@ -812,13 +812,43 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
 -- the header's list shows the pages as they are now. Starring changes only
 -- the list, so a successful answer takes the list's place in the cache. A
 -- refusal is about the one page asked for, not the list, and leaves the
--- cache as it was.
+-- cache as it was. A star of a page in an encrypted space comes with an
+-- empty title, which this browser decrypts ('withSealedTitles').
 instance (MonadIO m) => MonadStars (HttpWiki m) where
-  starred = pageContent (\c -> c.stars) endpoints.stars.list withStars
+  starred = pageContent (\c -> c.stars) endpoints.stars.list withStars >>= either (pure . Left) (fmap Right . withSealedTitles)
   setStarred p wanted = do
     result <- send (endpoints.stars.setPage p Starring {starred = wanted})
     when (isRight result) (modifyCache (withStars result))
-    pure result
+    either (pure . Left) (fmap Right . withSealedTitles) result
+
+-- | The starred pages with the titles of those in encrypted spaces
+-- decrypted. The server holds those titles only encrypted and lists them
+-- empty. Each encrypted space with a starred page costs one request, the
+-- list of its pages ('sealedListPages'), whose titles are decrypted. A
+-- page whose space's key this browser cannot open shows 'unreadable'.
+--
+-- Nothing is decrypted while the page the server prerendered is shown
+-- (the server cannot decrypt, and the program's first render must match
+-- that page), nor in the server's own prerender: the empty titles stay
+-- until the next read of the list.
+withSealedTitles :: (MonadIO m) => [StarredPage] -> HttpWiki m [StarredPage]
+withSealedTitles stars = do
+  env <- HttpWiki ask
+  preloading <- liftIO (readIORef env.preloading)
+  if preloading || env.immediate || null stars
+    then pure stars
+    else
+      spacesNow >>= \case
+        Left _ -> pure stars
+        Right spaces -> do
+          let sealed = ordNub [(s.space, k) | s <- stars, Just k <- [encryptionIn s.space spaces]]
+          titles <- Map.fromList . concat <$> for sealed (\(sid, k) -> either (const []) (map (\p -> (p.id, p.title))) <$> sealedListPages sid k)
+          pure
+            [ if isJust (encryptionIn s.space spaces)
+                then StarredPage {page = s.page, space = s.space, title = Map.findWithDefault unreadable s.page titles, location = s.location}
+                else s
+            | s <- stars
+            ]
 
 -- | The server's changelog, which changes only when the server is
 -- replaced: cached like the server's settings, so that the page the

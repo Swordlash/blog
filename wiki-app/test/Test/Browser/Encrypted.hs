@@ -7,7 +7,8 @@
 -- stored; a second member waiting for the key, given it by the first
 -- member's browser when it opens the space, and reading the page; the
 -- search finding a word of an encrypted page in the browser, where the
--- server's finds nothing; a page over plain HTTP refusing; and a device
+-- server's finds nothing; the starred pages' titles decrypted in the
+-- browser; a page over plain HTTP refusing; and a device
 -- that does not hold the user's private key showing the space as locked,
 -- with the unlock offered, and reading it once the key is there.
 --
@@ -44,15 +45,17 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (SpacesApi (..), WikiApi (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..))
 import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, runHttpWiki)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
+import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
@@ -139,6 +142,18 @@ spec m = do
     run reader' (keyState secret.id) `shouldReturn` Right KeyReady
     page <- ok =<< run reader' (getPage secret.id [made.slug])
     (page.title, page.body) `shouldBe` ("Members only", "Shared with the reader.")
+
+  it "shows the titles of starred pages in an encrypted space, decrypted in the browser from the empty ones the server lists" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    launch <- ok =<< run env (createPage secret.id Nothing "Launch notes" "The countdown starts at noon.")
+    other <- ok =<< run env (createPage secret.id Nothing "Other notes" "Nothing to see.")
+    _ <- run env listSpaces
+    -- Past the page the server prerendered, as the shell is once it has
+    -- shown it: only then is the list fetched and decrypted.
+    run env endPreload
+    stars <- ok =<< run env starred
+    sortOn fst [(s.page, s.title) | s <- stars] `shouldBe` sortOn fst [(launch.id, "Launch notes"), (other.id, "Other notes")]
 
   it "finds a word of an encrypted page in the browser, where the server's search finds nothing" $ runPage $ do
     env <- encryptedSpace "user-admin"
