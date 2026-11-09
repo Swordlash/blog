@@ -16,23 +16,31 @@
 -- star in its cache, so opening the list usually asks the server nothing.
 -- It is fetched again too when the wiki is reloaded while the list is
 -- open.
+--
+-- The list closes on a press outside it and on Escape
+-- ("Wiki.App.View.Popup"), and when one of its links is followed.
 module Wiki.App.View.Starred
   ( Input (..)
   , component
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
+import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
 import Halogen qualified as H
+import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.App.Backend (WikiError)
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.App.View.Popup (watchPopup)
 import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Space (Space (id, name))
 
@@ -42,18 +50,26 @@ data State = State
   { input :: Input
   , stars :: Maybe (Either WikiError [StarredPage])
   , open :: Bool
+  , holder :: H.RefLabel
+  -- ^ The element that holds the button and the list: a press outside it
+  -- closes the list.
+  , listWatch :: Maybe H.SubscriptionId
+  -- ^ The watch for a press outside or Escape, while the list is open.
   }
 
 data Action
   = Receive Input
   | Toggle
+  | Close
   | Followed (Follow Route)
 
-component :: forall query output m. (MonadStars m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadStars m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, stars = Nothing, open = False}
+      { initialState = \input -> do
+          holder <- H.newRefLabel "starred-menu"
+          pure State {input, stars = Nothing, open = False, holder, listWatch = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive}
       }
@@ -61,7 +77,7 @@ component =
     render :: State -> H.ComponentHTML Action Empty m
     render st =
       [hh|
-        <div class="starred-menu">
+        <div class="starred-menu" {{ HP.ref st.holder }}>
           <button
             type="button"
             class="starred-toggle"
@@ -137,12 +153,24 @@ component =
         when (isOpen && old.context.revision /= input.context.revision) reload
       Toggle -> do
         isOpen <- gets (\st -> st.open)
-        modify (\st -> st {open = not isOpen})
-        unless isOpen reload
+        if isOpen
+          then close
+          else do
+            modify (\st -> st {open = True})
+            watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
+            modify (\st -> st {listWatch = watch})
+            reload
+      Close -> close
       Followed f -> do
-        modify (\st -> st {open = False})
+        close
         router <- gets (\st -> st.input.context.router)
         Router.follow router f
+
+    close :: H.HalogenM State Action Empty output m ()
+    close = do
+      st <- get
+      traverse_ H.unsubscribe st.listWatch
+      when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
     reload :: H.HalogenM State Action Empty output m ()
     reload = do

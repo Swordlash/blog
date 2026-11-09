@@ -179,6 +179,7 @@ import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
+import Wiki.App.View.Popup (watchPopup)
 import Wiki.App.View.Reset qualified as ResetView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
@@ -347,6 +348,12 @@ data State m = State
   , here :: Here
   , switcherOpen :: Bool
   -- ^ Whether the sidebar's menu of spaces to switch to is open.
+  , switcherHolder :: H.RefLabel
+  -- ^ The element that holds the space switcher's button and menu: a
+  -- press outside it closes the menu ("Wiki.App.View.Popup").
+  , switcherWatch :: Maybe H.SubscriptionId
+  -- ^ The watch for a press outside the space switcher or Escape, while
+  -- its menu is open.
   , sidebarFolded :: Bool
   , chosenWidth :: PageWidth
   -- ^ How wide pages are laid out, as this browser keeps it
@@ -357,6 +364,13 @@ data State m = State
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
   , menuOpen :: Bool
+  -- ^ Whether the demo's menu of users is open.
+  , menuHolder :: H.RefLabel
+  -- ^ The element that holds the demo's user button and menu: a press
+  -- outside it closes the menu.
+  , menuWatch :: Maybe H.SubscriptionId
+  -- ^ The watch for a press outside the user menu or Escape, while it is
+  -- open.
   , demoAccountOpen :: Bool
   -- ^ Whether the demo's account panel (its one session, and the server's
   -- features shown disabled) is open.
@@ -416,8 +430,10 @@ data Action
   | Arrived Route
   | Followed (Follow Route)
   | ToggleSwitcher
+  | CloseSwitcher
   | FoldSidebar Bool
   | ToggleMenu
+  | CloseMenu
   | SwitchTo (Maybe UserId)
   | AskReset
   | ResetDemo
@@ -465,6 +481,8 @@ component =
             here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
+          switcherHolder <- H.newRefLabel "space-switcher"
+          menuHolder <- H.newRefLabel "user-switcher"
           pure
             State
               { router
@@ -484,10 +502,14 @@ component =
               , avatars
               , here
               , switcherOpen = False
+              , switcherHolder
+              , switcherWatch = Nothing
               , sidebarFolded = False
               , chosenWidth = Compact
               , generation = 0
               , menuOpen = False
+              , menuHolder
+              , menuWatch = Nothing
               , demoAccountOpen = False
               , panel = Actions Nothing
               , kept
@@ -692,7 +714,7 @@ component =
     userSwitcher :: State m -> H.ComponentHTML Action Slots m
     userSwitcher st =
       [hh|
-        <div class="user-switcher">
+        <div class="user-switcher" {{ HP.ref st.menuHolder }}>
           <button type="button" class="user-switcher-toggle" aria-expanded={{ ariaBool st.menuOpen }} onClick={{ const ToggleMenu }}>
             {% for u in maybeToList st.session.user %}{{ avatar SmallAvatar (ownAvatar st) u.displayName }}{% end %}
             {{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}
@@ -1006,7 +1028,7 @@ component =
     spaceSidebar st space pages =
       [hh|
         <nav class="wiki-sidebar space-sidebar" aria-label="Space">
-          <div class="space-switcher">
+          <div class="space-switcher" {{ HP.ref st.switcherHolder }}>
             <a class="all-spaces" {{ Router.linkProps st.router Followed Home }}>All spaces</a>
             <button
               type="button"
@@ -1307,7 +1329,9 @@ component =
           else do
             dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
             if dirty
-              then modify (\st -> st {leaving = Just r, menuOpen = False})
+              then do
+                shut <- shutMenu
+                modify (shut . \st -> st {leaving = Just r})
               else arrive r now
       Leave -> do
         now <- H.liftEffect historyEntry
@@ -1326,15 +1350,30 @@ component =
           then H.liftEffect (historyGo (st.entry - now))
           else Router.redirect st.router st.route
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
-      ToggleSwitcher -> modify (\st -> st {switcherOpen = not st.switcherOpen})
+      ToggleSwitcher ->
+        gets (\st -> st.switcherOpen) >>= \case
+          True -> shutSwitcher >>= modify
+          False -> do
+            modify (\st -> st {switcherOpen = True})
+            watch <- gets (\st -> st.switcherHolder) >>= (`watchPopup` CloseSwitcher)
+            modify (\st -> st {switcherWatch = watch})
+      CloseSwitcher -> whenM (gets (\st -> st.switcherOpen)) (shutSwitcher >>= modify)
       FoldSidebar folded -> do
         modify (\st -> st {sidebarFolded = folded})
         H.liftEffect (Storage.setItem LocalStorage sidebarFoldedKey folded)
-      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
+      ToggleMenu ->
+        gets (\st -> st.menuOpen) >>= \case
+          True -> shutMenu >>= modify
+          False -> do
+            modify (\st -> st {menuOpen = True})
+            watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
+            modify (\st -> st {menuWatch = watch})
+      CloseMenu -> whenM (gets (\st -> st.menuOpen)) (shutMenu >>= modify)
       -- The questions and results about the wiki's data were for the user
       -- one was before switching, so they are cleared.
       SwitchTo user -> withDemo $ \demo -> do
-        modify (\st -> st {menuOpen = False, demoAccountOpen = False, panel = Actions Nothing, settled = False})
+        shut <- shutMenu
+        modify (shut . \st -> st {demoAccountOpen = False, panel = Actions Nothing, settled = False})
         lift (demo.switchTo user)
         reload Nothing
       AskReset -> modify (\st -> st {panel = ConfirmingReset})
@@ -1411,7 +1450,9 @@ component =
         reload (Just Home)
       -- A password set through a reset link: the sign-in form, to use it.
       FromReset ResetView.SignInWanted -> H.tell "signIn" () (SignInView.Prompt "Sign in with your new password.")
-      ToggleDemoAccount -> modify (\st -> st {demoAccountOpen = not st.demoAccountOpen, menuOpen = False})
+      ToggleDemoAccount -> do
+        shut <- shutMenu
+        modify (shut . \st -> st {demoAccountOpen = not st.demoAccountOpen})
 
     -- The address of an administration's route as the router writes it,
     -- in place of the one the route was read from: @\/admin\/@ becomes the
@@ -1462,6 +1503,19 @@ component =
         _ -> pass
 
     -- Say in the administration what an export, an import or a reset did.
+    -- The demo's user menu closed: its watch ended now, and the change to
+    -- the state, for the caller to make together with its own.
+    shutMenu :: H.HalogenM (State m) Action Slots output m (State m -> State m)
+    shutMenu = do
+      gets (\st -> st.menuWatch) >>= traverse_ H.unsubscribe
+      pure (\st -> st {menuOpen = False, menuWatch = Nothing})
+
+    -- The space switcher's menu closed, as 'shutMenu'.
+    shutSwitcher :: H.HalogenM (State m) Action Slots output m (State m -> State m)
+    shutSwitcher = do
+      gets (\st -> st.switcherWatch) >>= traverse_ H.unsubscribe
+      pure (\st -> st {switcherOpen = False, switcherWatch = Nothing})
+
     report :: Bool -> Text -> H.HalogenM (State m) Action Slots output m ()
     report refused message = modify (\st -> st {panel = Actions (Just Told {refused, message})})
 
@@ -1473,7 +1527,8 @@ component =
       lift endPreload
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
-      modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      shut <- (.) <$> shutMenu <*> shutSwitcher
+      modify (shut . \st -> st {route = r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
       whatsNewSeen
       loadHere False

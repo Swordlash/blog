@@ -97,7 +97,8 @@
 -- "New kind…", which opens a dialog with the administration's form for a
 -- kind of box ("Wiki.App.View.NewKindDialog"), so that the work here stays
 -- as it is; the kind saved there is written into the text and is in the
--- menu at once. "Link to a page" (Ctrl+Shift+K) opens a dialog with the
+-- menu at once. A toolbar menu closes on a press outside it and on Escape
+-- ("Wiki.App.View.Popup"). "Link to a page" (Ctrl+Shift+K) opens a dialog with the
 -- search box's picker ("Wiki.App.View.LinkDialog"), and the link to the
 -- page (or to one of its sections) chosen there is written around the
 -- selection by the command 'LinkTo', as a toolbar button writes. The
@@ -309,6 +310,7 @@ import Wiki.App.View.LinkDialog qualified as LinkDialog
 import Wiki.App.View.LivePreview (liveKey)
 import Wiki.App.View.MacrosPanel qualified as MacrosPanel
 import Wiki.App.View.NewKindDialog qualified as NewKindDialog
+import Wiki.App.View.Popup (watchPopup)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
 import Wiki.Core.Access (Access (Closed))
@@ -518,6 +520,12 @@ data State = State
   -- kept.
   , menu :: Maybe Menu
   -- ^ Which of the toolbar's menus is open, if one is.
+  , menuHolder :: H.RefLabel
+  -- ^ The element that holds the open menu and its button: a press
+  -- outside it closes the menu. The label is on the open menu's holder
+  -- only.
+  , menuWatch :: Maybe H.SubscriptionId
+  -- ^ The watch for a press outside the open menu or Escape.
   , host :: H.RefLabel
   -- ^ The element where CodeMirror goes, in the textarea's place; the
   -- text is reached through it ("Wiki.App.Editor.Browser").
@@ -694,6 +702,7 @@ component =
           host <- H.newRefLabel "editor-host"
           fileInput <- H.newRefLabel "editor-files"
           backButton <- H.newRefLabel "editor-back"
+          menuHolder <- H.newRefLabel "editor-menu"
           -- Loaded at once rather than in 'Initialize', when the backend
           -- can ('atOnce'), so that the first render is the editor a
           -- prerendered page shows (see "Wiki.App.Shell"); otherwise
@@ -726,6 +735,8 @@ component =
               , fontStep = defaultFontStep
               , previewMounted = False
               , menu = Nothing
+              , menuHolder
+              , menuWatch = Nothing
               , host
               , fileInput
               , backButton
@@ -825,7 +836,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1190,17 +1201,22 @@ component =
     -- The toolbar: its commands in groups, then the preview's controls. It
     -- depends on little of the state ('Bar'), so it is rendered and diffed
     -- again only when that changes, not on every keystroke.
-    toolbar :: Bar -> H.ComponentHTML Action Slots m
-    toolbar = HH.memoized (==) toolbarOf
+    toolbar :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    toolbar holder bar = memoizedToolbar (holder, bar)
 
-    toolbarOf :: Bar -> H.ComponentHTML Action Slots m
-    toolbarOf bar =
+    -- The label of the open menu's holder is the same at every render, so
+    -- only the 'Bar' is compared.
+    memoizedToolbar :: (H.RefLabel, Bar) -> H.ComponentHTML Action Slots m
+    memoizedToolbar = HH.memoized (\a b -> snd a == snd b) (uncurry toolbarOf)
+
+    toolbarOf :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    toolbarOf holder bar =
       [hh|
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
-          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
+          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu holder bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{% if bar.files %}{{ imageButton }}{% end %}{{ toolButton tableTool }}</div>
-          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ macrosButton bar }}{{ htmlMenu bar }}</div>
+          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
             <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
@@ -1232,10 +1248,10 @@ component =
 
     -- The kinds of box, each writing its marker ('Box'), and for an
     -- administrator the way to define another.
-    boxMenu :: Bar -> H.ComponentHTML Action Slots m
-    boxMenu bar =
+    boxMenu :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    boxMenu holder bar =
       [hh|
-        <div class="toolbar-menu-holder">
+        <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just BoxMenu] }}>
           <button type="button" class="tool" title="Box" aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
           {% if bar.menuOpen == Just BoxMenu %}
             <div class="toolbar-menu box-menu" role="menu" aria-label="Box">
@@ -1255,10 +1271,10 @@ component =
     macrosButton bar =
       [hh|<button type="button" class="tool editor-macros-toggle" title="Math macros: the space's and the page's" aria-label="Math macros" aria-pressed={{ ariaBool bar.macrosShown }} onClick={{ const ToggleMacros }}>{{ icon macrosIcon }}</button>|]
 
-    htmlMenu :: Bar -> H.ComponentHTML Action Slots m
-    htmlMenu bar =
+    htmlMenu :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    htmlMenu holder bar =
       [hh|
-        <div class="toolbar-menu-holder">
+        <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just HtmlMenu] }}>
           <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
           {% if bar.menuOpen == Just HtmlMenu %}
             <div class="toolbar-menu" role="menu" aria-label="HTML">
@@ -1274,10 +1290,10 @@ component =
     -- swatch shows its colour with the class it writes (so the palette and
     -- the page cannot differ), and each row ends with the entry that
     -- removes the colour.
-    colourMenu :: Bar -> H.ComponentHTML Action Slots m
-    colourMenu bar =
+    colourMenu :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    colourMenu holder bar =
       [hh|
-        <div class="toolbar-menu-holder">
+        <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just ColourMenu] }}>
           <button type="button" class="tool" title="Colour" aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
           {% if bar.menuOpen == Just ColourMenu %}
             <div class="toolbar-menu colour-menu" role="menu" aria-label="Colour">
@@ -1542,7 +1558,13 @@ component =
       AttachOrImage -> do
         closeMenu
         gets (\st -> st.fileInput) >>= H.getRef >>= traverse_ (H.liftEffect . clickElement)
-      ToggleMenu which -> modify (\st -> st {menu = if st.menu == Just which then Nothing else Just which})
+      ToggleMenu which -> do
+        was <- gets (\st -> st.menu)
+        closeMenu
+        unless (was == Just which) $ do
+          modify (\st -> st {menu = Just which})
+          watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
+          modify (\st -> st {menuWatch = watch})
       CloseMenu -> closeMenu
       ToggleMacros -> closeMenu >> modify (\st -> st {macrosOpen = not st.macrosOpen})
       -- The page's block is written into the text as a toolbar command
@@ -1699,7 +1721,8 @@ component =
           else do
             -- Mounted by this change's render, if it was not, before it is
             -- told the provider.
-            modify (\s -> s {assistantOpen = True, assistantMounted = True, menu = Nothing})
+            closeMenu
+            modify (\s -> s {assistantOpen = True, assistantMounted = True})
             H.tell "assistant" () (Assistant.UseProvider p)
             unless (current == Just p) $ changeAssistant (chooseProvider p)
             -- A model list more than a day old, or a provider that could
@@ -1714,7 +1737,9 @@ component =
           then do
             modify (\s -> s {assistantOpen = False})
             H.tell "assistant" () Assistant.Hide
-          else modify (\s -> s {assistantOpen = True, assistantMounted = True, menu = Nothing})
+          else do
+            closeMenu
+            modify (\s -> s {assistantOpen = True, assistantMounted = True})
       FromAssistant Assistant.Closed -> modify (\st -> st {assistantOpen = False})
       FromAssistant (Assistant.ChangeSettings f) -> changeAssistant f
       FromAssistant (Assistant.Retry p) -> checkProvider p
@@ -1902,7 +1927,10 @@ component =
         H.getRef st.host >>= traverse_ (\host -> H.liftEffect (applyCommand host command))
 
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
-    closeMenu = whenM (gets (\st -> isJust st.menu)) $ modify (\st -> st {menu = Nothing})
+    closeMenu = do
+      st <- get
+      traverse_ H.unsubscribe st.menuWatch
+      when (isJust st.menu || isJust st.menuWatch) $ modify (\s -> s {menu = Nothing, menuWatch = Nothing})
 
     -- Show the work rendered on its own, as it is now, with the focus on
     -- the button back, and the window at the block being edited. Shown by
@@ -1917,7 +1945,8 @@ component =
       when pushing $ do
         H.liftEffect pushPreviewEntry
         H.raise Entered
-      modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
+      closeMenu
+      modify (\st -> st {mode = Previewing, previewMounted = True})
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
       gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . previewShown)
 

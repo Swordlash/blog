@@ -26,14 +26,15 @@ import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.DOM.Element qualified as Element
-import Web.DOM.Internal.Types (Element (..), toNode)
-import Web.Event.Event (EventType (..), defaultPreventedNow, preventDefault)
+import Web.DOM.Internal.Types (Element (..))
+import Web.Event.Event (defaultPreventedNow, preventDefault)
 import Web.Event.Event qualified as Event
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Wiki.App.Backend (MonadLoad (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.PagePicker qualified as Picker
+import Wiki.App.View.Popup (pressedOutside)
 import Wiki.Core.Search (SearchHit (..))
 
 newtype Input = Input {context :: Context}
@@ -85,6 +86,8 @@ component =
         for_ found $ \element -> do
           slashes <- H.liftEffect (slashPressed element)
           void (H.subscribe (Shortcut <$ slashes))
+          -- The list closes on a press outside the box; Escape is the
+          -- picker's own, in its input.
           presses <- H.liftEffect (pressedOutside element)
           void (H.subscribe (PressedOutside <$ presses))
       Receive input -> modify (\st -> st {input})
@@ -123,20 +126,3 @@ slashPressed box = do
         && not (defaultPreventedNow (KeyboardEvent.toEvent pressed))
         && not (pressed.ctrlKey || pressed.metaKey || pressed.altKey)
         && isNothing (Event.target (KeyboardEvent.toEvent pressed) >>= Element.fromEventTarget >>= (`Element.closestNow` "input, textarea, select, [contenteditable], .slides-view"))
-
--- | A press anywhere outside the box, heard on the document, which closes
--- the list: the box's focusout does too, but a press on something that
--- keeps the focus where it is (a toolbar button that prevents its
--- mousedown's default) takes no focus from the input.
-pressedOutside :: (MonadBrowserDOM n, MonadUnliftIO n) => Element -> n (Emitter IO ())
-pressedOutside box = do
-  HS.Emitter register <- WindowEvent.documentEvent (EventType "pointerdown") Just
-  pure . HS.makeEmitter $ \push -> do
-    HS.Subscription stop <- register $ \press -> do
-      connected <- box.isConnected
-      case Event.target press >>= Element.fromEventTarget of
-        Just target | connected -> do
-          inside <- box.contains (toNode target)
-          unless inside (push ())
-        _ -> pass
-    pure stop

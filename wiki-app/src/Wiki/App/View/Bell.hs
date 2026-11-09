@@ -17,12 +17,17 @@
 -- to that user.
 --
 -- Following a notification's link marks it read.
+--
+-- The list closes on a press outside it and on Escape
+-- ("Wiki.App.View.Popup"), and when one of its links is followed.
 module Wiki.App.View.Bell
   ( Input (..)
   , component
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
+import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -31,6 +36,7 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (MonadLoad (..), WikiError)
@@ -40,6 +46,7 @@ import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common
+import Wiki.App.View.Popup (watchPopup)
 import Wiki.Core.Id (NotificationId)
 import Wiki.Core.Notification (Notification (..), PageLocation (..), notificationText)
 
@@ -53,6 +60,11 @@ data State = State
   , notices :: Maybe (Either WikiError Notifications)
   , open :: Bool
   , busy :: Bool
+  , holder :: H.RefLabel
+  -- ^ The element that holds the bell and the list: a press outside it
+  -- closes the list.
+  , listWatch :: Maybe H.SubscriptionId
+  -- ^ The watch for a press outside or Escape, while the list is open.
   }
 
 data Action
@@ -60,18 +72,20 @@ data Action
   | Finalize
   | Receive Input
   | Toggle
+  | Close
   | Heard Live.Heard
   | MarkRead NotificationId
   | MarkAllRead
   | Follow NotificationId (Follow Route)
 
-component :: forall query output m. (MonadLoad m, MonadNotifications m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadLoad m, MonadNotifications m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
           notices <- atOnce notifications
-          pure State {input, notices, open = False, busy = False}
+          holder <- H.newRefLabel "notifications"
+          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing}
       , render
       , eval =
           H.mkEval
@@ -86,7 +100,7 @@ component =
     render :: State -> H.ComponentHTML Action Empty m
     render st =
       [hh|
-        <div class="notifications">
+        <div class="notifications" {{ HP.ref st.holder }}>
           <button
             type="button"
             class="notifications-toggle{% if unread > 0 %} has-unread{% end %}"
@@ -180,7 +194,15 @@ component =
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
         when (old.context.revision /= input.context.revision) reload
-      Toggle -> modify (\st -> st {open = not st.open})
+      Toggle -> do
+        isOpen <- gets (\st -> st.open)
+        if isOpen
+          then close
+          else do
+            modify (\st -> st {open = True})
+            watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
+            modify (\st -> st {listWatch = watch})
+      Close -> close
       Heard heard -> case heard of
         -- A notification received twice (a tab that received it, then
         -- fetched it) counts once.
@@ -191,11 +213,17 @@ component =
       MarkRead i -> marking ReadMark {ids = [i], everything = False}
       MarkAllRead -> marking ReadMark {ids = [], everything = True}
       Follow i f -> do
-        modify (\st -> st {open = False})
+        close
         router <- gets (\st -> st.input.context.router)
         Router.follow router f
         unread <- gets (\st -> any (\n -> n.id == i && not n.read) (foldMap (foldMap (\ns -> ns.items)) st.notices))
         when unread (marking ReadMark {ids = [i], everything = False})
+
+    close :: H.HalogenM State Action Empty output m ()
+    close = do
+      st <- get
+      traverse_ H.unsubscribe st.listWatch
+      when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
     reload :: H.HalogenM State Action Empty output m ()
     reload = do

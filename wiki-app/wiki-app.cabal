@@ -141,6 +141,7 @@ library
       Wiki.App.View.NotificationSettings
       Wiki.App.View.Page
       Wiki.App.View.PagePicker
+      Wiki.App.View.Popup
       Wiki.App.View.Permissions
       Wiki.App.View.PersonalSpace
       Wiki.App.View.Avatar
@@ -408,6 +409,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Import
       Test.Browser.Islands
       Test.Browser.Macros
+      Test.Browser.Menus
       Test.Browser.Mount
       Test.Browser.Notifications
       Test.Browser.Offline
