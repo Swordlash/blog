@@ -1225,11 +1225,14 @@ data Held = Held
 noneHeld :: Held
 noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldFound = mempty}
 
--- | Let go of everything held of encrypted spaces: the keys the page holds
--- are forgotten, and the pages decrypted with them.
+-- | Let go of what is held of encrypted spaces for the user who was signed
+-- in: the keys the page holds are forgotten, and the pages decrypted with
+-- them. Which pages are encrypted ones is kept: it is no secret, and an
+-- editor left open across a change of user must still send its save
+-- encrypted (or not at all), never as plain text.
 forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
-  was <- atomicModifyIORef' env.held (noneHeld,)
+  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
