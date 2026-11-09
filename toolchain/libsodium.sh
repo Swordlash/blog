@@ -121,10 +121,14 @@ install() {
       # name of its own, so that no clean-up below can remove it: it may
       # sit in STATE under the name a download would take. A file inside
       # the directories this install replaces is refused outright.
+      # Both sides are compared as canonical paths, so that a relative
+      # STATE, or one reached through a symbolic link, is caught too.
       given=$(realpath "$SOURCE")
+      mkdir -p "$STATE"
+      state=$(realpath "$STATE")
       case $given in
-        "$DIR"/* | "$src"/*)
-          say "$SOURCE is inside $DIR, which the install replaces; put it elsewhere; nothing was built"
+        "$state/libsodium-$LIBSODIUM_VERSION"/* | "$state/libsodium-$LIBSODIUM_VERSION.src"/*)
+          say "$SOURCE is inside $DIR or $src, which the install replaces; put it elsewhere; nothing was built"
           exit 1
           ;;
       esac

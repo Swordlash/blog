@@ -694,6 +694,16 @@ bootstrap native --system-tools --libsodium-source="$HOME/.wiki-toolchain/libsod
 [ "$status" = 1 ] || fail "native with a libsodium tarball in the toolchain's directory exited $status, not 1"
 assert_contains "$case_dir/native-source-in-state" 'does not have the checksum toolchain/pins.env pins (LIBSODIUM_SHA256); nothing was built'
 [ -f "$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz" ] || fail 'the bootstrap removed the tarball given from the toolchain directory'
+# A file inside a directory the install replaces (here its build directory)
+# is refused before anything is deleted, and stays.
+rm -rf "$HOME/.wiki-toolchain"
+mkdir -p "$HOME/.wiki-toolchain/libsodium-1.0.22.src"
+cp "$tarball" "$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz"
+status=0
+bootstrap native --system-tools --libsodium-source="$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz" >"$case_dir/native-source-in-src" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium tarball inside the build directory exited $status, not 1"
+assert_contains "$case_dir/native-source-in-src" 'which the install replaces; put it elsewhere; nothing was built'
+[ -f "$HOME/.wiki-toolchain/libsodium-1.0.22.src/given.tar.gz" ] || fail 'the bootstrap removed a tarball given from inside its build directory'
 rm -rf "$HOME/.wiki-toolchain"
 status=0
 bootstrap native --libsodium-source="$case_dir/incoming/nothing.tar.gz" >"$case_dir/native-source-missing" 2>&1 || status=$?
