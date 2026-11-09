@@ -49,16 +49,16 @@ spec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
   it "reads every page an administrator may read, and leaves out the spaces nobody may" $ withDemoRunning backing identity $ \r -> do
     manager <- newManager defaultManagerSettings
     let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
-    before <- readPages manager server
-    before `shouldSatisfy` isRight
+    withoutPersonal <- readPages manager server
+    withoutPersonal `shouldSatisfy` isRight
     -- The editor's personal space makes the container of personal spaces,
     -- which the list of spaces names and nobody may read.
     givePassword r "user-editor" "editor's password"
     token <- signInAs r "editor" "editor's password"
     turnedOn <- send r "PUT" (r.public <> "/api/v1/account/personal-space") [(hContentType, "application/json"), cookie token] (encode PersonalSpaceSwitch {enabled = True})
     turnedOn.status `shouldBe` 200
-    after <- readPages manager server
-    after `shouldSatisfy` isRight
+    withPersonal <- readPages manager server
+    withPersonal `shouldSatisfy` isRight
   it "loses its backup and mail settings, and keeps the rest" $
     withSystemTempDirectory "wiki-rehearsal" $ \dir -> withPlace backing dir $ \place -> do
       _ <- migrateDatabase place
