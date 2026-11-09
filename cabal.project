@@ -34,8 +34,20 @@ index-state: 2026-11-09T00:00:00Z
 -- server's database groups in the same time, since they wait on the
 -- database. What is deployed is built elsewhere and keeps optimisation:
 -- the server at -O2 (cabal-native-opt.project), the browser's application
--- through cabal-wasm.project and cabal-wasm-opt.project.
-optimization: False
+-- through cabal-wasm.project and cabal-wasm-opt.project. The setting is
+-- given to each package by name: at the top of a project file, an
+-- optimization field that another file sets back changes the dependencies'
+-- hashes too, and the store would build them all again.
+package opaque
+  optimization: False
+package wiki-core
+  optimization: False
+package wiki-api
+  optimization: False
+package wiki-app
+  optimization: False
+package wiki-server
+  optimization: False
 
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
 -- Hackage, and the application needs the router, the hooks and the th quoters

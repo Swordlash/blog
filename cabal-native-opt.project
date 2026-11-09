@@ -12,9 +12,8 @@
 -- suites, which a deployment does not run.
 import: cabal.project
 
--- cabal.project turns optimisation off for the everyday build; the
--- package stanzas below give -O2.
-optimization: True
+-- cabal.project turns optimisation off for the everyday build, package by
+-- package; the stanzas below turn it on again and give -O2.
 
 tests: False
 
@@ -35,14 +34,21 @@ tests: False
 semaphore: False
 jobs: $ncpus
 
+package opaque
+  optimization: True
+
 package wiki-core
+  optimization: True
   ghc-options: -O2
 
 package wiki-api
+  optimization: True
   ghc-options: -O2
 
 package wiki-app
+  optimization: True
   ghc-options: -O2
 
 package wiki-server
+  optimization: True
   ghc-options: -O2
