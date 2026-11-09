@@ -347,4 +347,4 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         PREFIX: ${{ runner.os }}-wasm-opt-store-cabal-${{ env.CABAL_VERSION }}-github-hosted-v1-
-      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "$PREFIX${{ github.run_id }}"
+      run: sh toolchain/ci-prune-caches.sh "$PREFIX" "${PREFIX}${{ github.run_id }}"
