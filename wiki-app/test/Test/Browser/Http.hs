@@ -1144,7 +1144,8 @@ comments m = describe "a page's comments" $ do
 -- save at once, or offers it while the reader is busy with the page; the editor asks before it starts when someone else edits
 -- the page, says it edits it once the author goes on, names the others,
 -- says it stopped when it goes away, says it again on a new connection,
--- and says when someone else has saved the page meanwhile.
+-- and says when someone else has saved the page meanwhile. A page the
+-- server refuses loses who reads and edits it, and is asked for again.
 presence :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 presence m = describe "who is editing and reading" $ do
   let edgar = Author {id = UserId "user-editor", name = "Edgar Editor", avatar = Nothing}
@@ -1293,6 +1294,32 @@ presence m = describe "who is editing and reading" $ do
     length <$> findAll ui ".page-readers-more" `shouldReturn` 0
     tell (Event hello.id (Events.Reading Events.noReaders))
     eventually $ length <$> findAll ui ".page-readers" `shouldReturn` 0
+    unmount ui
+    serverStops
+
+  it "clears who reads and edits a page the server stops sending, and asks for it again until it answers" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _) <- demoHello
+    ui <- startServer m (Page blog helloAt)
+    _ <- find ui ".page-view .page-body"
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    tell (Subscribed hello.id [] [edgar] Events.Readers {some = [edgar, rita], total = 2, visitors = 0})
+    _ <- find ui ".page-readers"
+    find ui ".page-actions .page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
+    -- A permission changed and the user may no longer read the page: the
+    -- server drops the subscription and says so.
+    tell (Refused hello.id)
+    eventually $ length <$> findAll ui ".page-readers" `shouldReturn` 0
+    eventually $ length <$> findAll ui ".page-live" `shouldReturn` 0
+    -- The tab asks again after a pause, and again after a longer one
+    -- while the server keeps refusing.
+    eventuallyWithin 3000 $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id]
+    tell (Refused hello.id)
+    eventuallyWithin 5000 $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id, Subscribe hello.id]
+    -- The user may read it again: the answer brings back who reads it.
+    tell (Subscribed hello.id [] [] Events.Readers {some = [rita], total = 1, visitors = 0})
+    _ <- find ui ".page-readers"
     unmount ui
     serverStops
 
