@@ -729,6 +729,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
       Left e -> pure (Left e)
       Right info -> do
         let s = fromSessionInfo info
+        dropMoving
         startOver s
         forgetReads
         pure (Right s)
@@ -769,7 +770,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   -- A passkey's sign-in, alone or as the second step, in two requests:
   -- the challenge, and the browser's answer, which signs in.
   beginPasskeySignIn = withPassword endpoints.beginPasskeySignIn
-  finishPasskeySignIn used = signingIn (getResponse <$> endpoints.finishPasskeySignIn used)
+  finishPasskeySignIn used = dropMoving >> signingIn (getResponse <$> endpoints.finishPasskeySignIn used)
   beginSecondFactorPasskey = withPassword endpoints.beginSecondFactorPasskey
   finishSecondFactorPasskey used = signingIn (getResponse <$> endpoints.finishSecondFactorPasskey used) >>= movedAfter
 
@@ -906,7 +907,7 @@ applyImport zipped choices = write (withBoundary endpoints.archive.importApply I
 -- way, which moves an account from before OPAQUE to OPAQUE.
 passwordSignIn :: (MonadIO m) => Text -> Password -> HttpWiki m (Either SignInError SessionInfo)
 passwordSignIn login password =
-  liftIO (Opaque.startLogin password) >>= \case
+  dropMoving >> liftIO (Opaque.startLogin password) >>= \case
     Nothing -> oldWay Nothing
     Just (st, ke1) ->
       withPassword (endpoints.startPasswordSignIn LoginStart {login, ke1}) >>= \case
@@ -934,11 +935,20 @@ passwordSignIn login password =
 
 -- | The end of a sign-in that started the old way and needed a second
 -- factor: the account's record is registered now that it is signed in.
+-- A failed code keeps the password, since the sign-in waits for another
+-- try; a new sign-in, or a sign-out, drops it ('dropMoving').
 movedAfter :: (MonadIO m) => Either SignInError Session -> HttpWiki m (Either SignInError Session)
 movedAfter result = do
-  waiting <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (\p -> (Nothing, p))))
-  for_ (rightToMaybe result) (const (for_ waiting moveToOpaque))
+  for_ (rightToMaybe result) $ \_ -> do
+    waiting <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (\p -> (Nothing, p))))
+    for_ waiting moveToOpaque
   pure result
+
+-- | Forget the password of a sign-in that waited for its second factor:
+-- another sign-in starts, or the user signs out, so that the password is
+-- never registered for whoever signs in next.
+dropMoving :: (MonadIO m) => HttpWiki m ()
+dropMoving = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.moving (const (Nothing, ()))))
 
 -- | Register the signed-in user's OPAQUE record, in place of their password
 -- from before OPAQUE, which the server then deletes.

@@ -457,6 +457,13 @@ opaque backing = describe "passwords through OPAQUE" $ do
     -- The fifth start was admitted and counted; the old way finishes it.
     (.status) <$> tryOldWay "editor's old password" `shouldReturn` 200
 
+  it "gives back the start of each old-way sign-in that signs in, so that an address's many right sign-ins are never refused" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    -- One more than an address's limit of failures: each start through
+    -- OPAQUE is counted as one, until the old way signs in.
+    for_ [1 .. 31 :: Int] $ \_ ->
+      (.status) <$> passwordSignIn r (onPublic r) [] "editor" "editor's old password" `shouldReturn` 200
+
   it "stores a record and no hash for every way a password is set, and each signs in" $ withPasswords backing identity $ \r -> do
     -- The administrator's new user, and new password for a user.
     _ :: Account <- createUser r (onAdmin r) [] (newAccount "bea") >>= jsonAs 201

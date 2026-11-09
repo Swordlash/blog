@@ -202,7 +202,11 @@ signingIn m = describe "signing in with a second factor" $
       -- The login field's offer of passkeys asks for its own challenge.
       -- OPAQUE's first message, answered as for an account from before it
       -- ('serveOpaque'), so the old sign-in follows, naming the attempt.
-      map snd . filter (flip notElem ["api/v1/session/passkey", "api/v1/session/password"] . fst) <$> askedWith "POST" `shouldReturn` ["{\"attempt\":\"a1\",\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
+      map snd . filter (flip notElem ["api/v1/session/passkey", "api/v1/session/password", "api/v1/password-registration"] . fst) <$> askedWith "POST" `shouldReturn` ["{\"attempt\":\"a1\",\"login\":\"ada\",\"password\":\"correct horse\"}", "{\"code\":\"000000\"}", "{\"code\":\"287082\"}"]
+      -- Signed in at last, the account from before OPAQUE moves to it: its
+      -- record is registered once, after the right code. A wrong code
+      -- before it does not drop the move.
+      length . filter ((== "api/v1/password-registration") . fst) <$> askedWith "POST" `shouldReturn` 1
       unmount ui
       serverStops
 
