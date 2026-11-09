@@ -10,12 +10,13 @@
 -- test's (the built pages, in a browser).
 module Test.Server.Render (spec) where
 
-import Data.Aeson (FromJSON)
+import Data.Aeson (FromJSON, encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Network.HTTP.Types (Header)
+import Network.HTTP.Types (Header, hContentType, methodPost, methodPut)
 import Protolude
 import System.FilePath ((</>))
 import Test.Database (Backing, withConnectionTo)
@@ -24,18 +25,27 @@ import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
+import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewSealedPage (..), SealedPage (..))
 import Wiki.Api.Links (links, searchUrl)
+import Wiki.Api.Types qualified as Api
+import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
 import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
+import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Path (parsePath)
-import Wiki.Core.Slug (Slug)
+import Wiki.Core.Slug (Slug, slugText)
+import Wiki.Core.Space qualified as S
+import Wiki.Core.Vault
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Render (routeOf)
 import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Vault (keyIdOf)
+import Wiki.Server.WebAuthn (toBase64Url)
 
 spec :: Backing -> Spec
 spec backing = describe "the pages the server renders" $ do
@@ -46,6 +56,7 @@ spec backing = describe "the pages the server renders" $ do
   preloads backing
   addresses
   failures backing
+  encrypted backing
 
 bodyText :: Reply -> Text
 bodyText reply = decodeUtf8 (BSL.toStrict reply.body)
@@ -283,3 +294,28 @@ failures backing = describe "when a render fails" $ do
     writeFile (r.staticDir </> "template.html") "<html><body>no mount point</body></html>"
     (status, html) <- page r r.public "/s/docs/"
     (status, html) `shouldSatisfy` (\(s, b) -> s == 404 && "<title>missing</title>" `T.isInfixOf` b)
+
+-- | An encrypted space's page (WP5.74b2 of docs/PLAN.md), which the server
+-- cannot decrypt: rendered as the program renders it before it has
+-- decrypted anything, with none of the page's ciphertext, in the page or
+-- in the data it carries.
+encrypted :: Backing -> Spec
+encrypted backing = describe "an encrypted space" $ do
+  it "renders an encrypted space's page with no title, text or ciphertext of it" $ withAdminSession backing identity $ \r session -> do
+    let as' method path body = send r method (r.public <> "/" <> path) [session, (hContentType, "application/json")] body
+        bytesOf n c = toBase64Url (BS.replicate n c)
+        public = PublicKey (bytesOf 32 65)
+        keyId = fromMaybe (KeyId "") (keyIdOf public)
+        vault = Vault {format = vaultFormat, salt = Salt (bytesOf 32 1), items = Map.singleton identityItem Item {keyId = Just keyId, sealed = Sealed (Nonce (bytesOf 12 2)) (Ciphertext (bytesOf 64 3))}, wraps = Map.singleton ByPassword (WrappedKey (Nonce (bytesOf 12 4)) (Ciphertext (bytesOf 48 5)))}
+    (.status) <$> as' methodPut "api/v1/assistant/vault" (encode VaultChange {vault, publicKey = Just NewPublicKey {keyId, publicKey = public}}) `shouldReturn` 200
+    made :: S.Space <- as' methodPost "api/v1/spaces" (encode Api.NewSpace {parent = Nothing, name = "Vault room"}) >>= jsonAs 201
+    let spaceKey = KeyId (bytesOf 16 6)
+    (.status) <$> as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text) (encode EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = UserId "user-admin", recipientKeyId = keyId, enc = Encapsulated (bytesOf 32 7), sealed = Ciphertext (bytesOf 48 8)}}) `shouldReturn` 200
+    let title = Ciphertext (bytesOf 40 9)
+        body = Ciphertext (bytesOf 300 10)
+        content = SealedContent {tag = VersionTag (bytesOf 16 11), keyId = KeyId (bytesOf 16 12), title = Sealed (Nonce (bytesOf 12 13)) title, body = Sealed (Nonce (bytesOf 12 14)) body}
+        pageKey = PageKey {keyId = KeyId (bytesOf 16 12), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 15)) (Ciphertext (bytesOf 48 16))}
+    sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content}) >>= jsonAs 201
+    (_, html) <- pageAs r [session] r.public ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/")
+    filter (`T.isInfixOf` html) [title.text, body.text, pageKey.wrapped.key.text] `shouldBe` []
+    appIn html `shouldSatisfy` T.isInfixOf "decrypted in your browser"

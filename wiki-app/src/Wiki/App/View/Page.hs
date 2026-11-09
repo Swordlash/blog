@@ -138,7 +138,7 @@ import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (blog, boxNumbering, description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Space (Space (blog, boxNumbering, description, encryption, homePage, icon, id, name), SpaceProfile (..))
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (Avatar, User (id))
 import Wiki.Core.Version (Author (..))
@@ -266,7 +266,7 @@ component =
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
           threads <- case loaded of
-            Ready page _ _ _ | not (homeSpace input.context input.space.id) -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
+            Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
@@ -338,7 +338,7 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> attachments page urls
-                <> [commentsOf st place text page CommentsView.Below | not (homeSpace input.context input.space.id)]
+                <> [commentsOf st place text page CommentsView.Below | commentsHere input]
           place = placeOf input page urls st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
@@ -369,7 +369,7 @@ component =
           ]
             <> present
             <> export
-            <> [comments | not home]
+            <> [comments | commentsHere input]
             <> ( if home
                    then [button "Rename" (Open (Renaming page.title))]
                    else
@@ -381,7 +381,7 @@ component =
                        <> useAsTemplate
                        <> setHome
                )
-      | otherwise = [viewSource, history] <> present <> export <> [comments | not home] <> setHome
+      | otherwise = [viewSource, history] <> present <> export <> [comments | commentsHere input] <> setHome
       where
         home = homeSpace input.context input.space.id
         spacePath = spacePathOf input.context.spaces input.space.id
@@ -395,7 +395,8 @@ component =
         present = [Router.link input.context.router Followed (documentRoute input.context page.space (PageSlides spacePath input.path 1 1)) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
-        export = exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
+        -- The server cannot export a page it cannot read.
+        export = if isJust input.space.encryption then [] else exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
         -- Make it the page the space opens at, for an administrator of the
         -- space: offered on every page except the current home page.
         setHome =
@@ -501,7 +502,7 @@ component =
       -> H.ComponentHTML Action Slots m
     textAndPanel st place rendered text page contents =
       [hh|
-        <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
+        <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen && commentsEnabled %} with-comments{% end %}" ref={{ st.text }}>
           <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
             {% if titled %}{{ readersStack st }}{% end %}
             {{ Body.articleOf FollowLink place page.body withByline }}
@@ -522,7 +523,7 @@ component =
                   <nav aria-label="Contents" {{ Body.followingLinks FollowLink place }}>{{ Md.contentsList entries }}</nav>
                 </details>
               {% end %}
-              {% if st.panelOpen %}
+              {% if st.panelOpen && commentsEnabled %}
                 {{ commentsOf st place text page CommentsView.Beside }}
               {% end %}
             </div>
@@ -532,7 +533,7 @@ component =
       where
         -- The column beside the text (above it on a narrow screen): the
         -- page's contents, and the panel of comments when it is open.
-        side = isJust contents || st.panelOpen
+        side = isJust contents || (st.panelOpen && commentsEnabled)
         marked = highlight (markings st text) <$> rendered
         -- The page's own title is the article's first block: the byline
         -- goes after it, once its quotes are marked.
@@ -540,7 +541,7 @@ component =
         withByline
           | titled = (\nodes -> take 1 nodes <> [byline st.avatars page] <> drop 1 nodes) <$> marked
           | otherwise = marked
-        commentsEnabled = not (homeSpace st.input.context st.input.space.id)
+        commentsEnabled = commentsHere st.input
         quoteClicks = [HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread) | commentsEnabled]
         position :: Selected -> Text
         position s = "top: " <> px s.top <> "; left: " <> px s.left
@@ -769,7 +770,7 @@ component =
         found <- H.getRef st.text >>= maybe (pure Nothing) (H.liftEffect . readSelection)
         when (found /= st.selected) $ modify (\s -> s {selected = found})
       CommentOnSelection -> do
-        gets (\st -> st.selected)
+        gets (\st -> mfilter (const (mayCommentHere st)) st.selected)
           >>= traverse_
             ( \s -> do
                 modify (\st -> st {quoting = Just s.anchor, selected = Nothing, panelOpen = True, focused = Nothing})
@@ -811,7 +812,7 @@ component =
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
     loadThreads = withPage $ \page -> do
       input <- gets (\st -> st.input)
-      threads <- if homeSpace input.context input.space.id then pure (ThreadsReady []) else threadsOf <$> listThreads page.id
+      threads <- if commentsHere input then threadsOf <$> listThreads page.id else pure (ThreadsReady [])
       -- Only if it is still the page shown.
       withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
       resolvePeople
@@ -1102,8 +1103,15 @@ copiedLabel c = case c.outcome of
   Just True -> "Link copied:"
   Just False -> "The link could not be copied. It is selected, to copy by hand:"
 
+-- | Whether the page has comments: not on the wiki's home page, and not in
+-- an encrypted space, whose comments are not encrypted yet. A comment on
+-- a selection quotes the page's text, which the server must not read
+-- there.
+commentsHere :: Input -> Bool
+commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.space.encryption
+
 mayCommentHere :: State -> Bool
-mayCommentHere st = not (homeSpace st.input.context st.input.space.id) && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
+mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
 
 -- | Where each inline thread's quote is in the page's text.
 locatedIn :: Text -> [Thread] -> [(Thread, Located)]

@@ -64,6 +64,7 @@ library
       Wiki.Api.Auth
       Wiki.Api.Backups
       Wiki.Api.Comments
+      Wiki.Api.Encrypted
       Wiki.Api.ContentPolicy
       Wiki.Api.ContentPolicy.Embed
       Wiki.Api.Error

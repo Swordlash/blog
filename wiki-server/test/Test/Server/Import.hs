@@ -83,6 +83,7 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , parent = SpaceId <$> parent
     , public
     , sealed = False
+    , encryption = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

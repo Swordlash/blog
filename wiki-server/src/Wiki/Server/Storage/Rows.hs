@@ -250,6 +250,7 @@ import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), personalName, 
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, User (..))
+import Wiki.Core.Vault (KeyId (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Schema (wikiDb)
@@ -466,6 +467,7 @@ spaceOf r =
     , slug = slugOf r.slug
     , public = r.public
     , sealed = r.sealed
+    , encryption = KeyId <$> r.key_id
     , owner = UserId <$> r.owner
     , active = r.active
     , personalContainer = r.personal_container
@@ -507,6 +509,7 @@ spaceRow s =
     , owner = (\o -> o.text) <$> s.owner
     , active = s.active
     , personal_container = s.personalContainer
+    , key_id = (\k -> k.text) <$> s.encryption
     }
 
 -- | Every space, by id. A wiki has tens of them, and every permission is

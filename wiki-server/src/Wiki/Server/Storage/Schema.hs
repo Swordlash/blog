@@ -61,6 +61,11 @@ module Wiki.Server.Storage.Schema
   , Stars (..)
   , Notifications (..)
 
+    -- * Encrypted spaces
+  , KeyGrants (..)
+  , PageKeys (..)
+  , SealedVersions (..)
+
     -- * Settings and the log
   , Settings (..)
   , SignInProviders (..)
@@ -412,6 +417,9 @@ data Spaces f = SpaceRow
   -- ^ Whether a personal space is shown.
   , personal_container :: Columnar f Bool
   -- ^ Whether it is the container of personal spaces.
+  , key_id :: Columnar f (Maybe Text)
+  -- ^ The id of an encrypted space's current key (migration
+  -- @0011-encrypted-spaces@), none for a space of plain pages.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -774,6 +782,18 @@ deriving stock instance Eq (PublicKeys Identity)
 
 deriving stock instance Show (PublicKeys Identity)
 
+deriving stock instance Eq (KeyGrants Identity)
+
+deriving stock instance Show (KeyGrants Identity)
+
+deriving stock instance Eq (PageKeys Identity)
+
+deriving stock instance Show (PageKeys Identity)
+
+deriving stock instance Eq (SealedVersions Identity)
+
+deriving stock instance Show (SealedVersions Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -835,6 +855,71 @@ deriving stock instance Eq (WikiSchema Identity)
 deriving stock instance Show (WikiSchema Identity)
 
 --------------------------------------------------------------------------------
+-- Encrypted spaces
+
+-- | A key sealed to one user's public key (@key_grants@,
+-- "Wiki.Core.Encrypted"'s 'Wiki.Core.Encrypted.KeyGrant'): for now a
+-- space's key (@resource_kind@ @space@), by the space's id.
+data KeyGrants f = KeyGrantRow
+  { resource_kind :: Columnar f Text
+  , resource_id :: Columnar f Text
+  , key_id :: Columnar f Text
+  , recipient :: Columnar f Text
+  , recipient_key_id :: Columnar f Text
+  , enc :: Columnar f Text
+  , sealed :: Columnar f Text
+  , created_at :: Columnar f UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table KeyGrants where
+  data PrimaryKey KeyGrants f = KeyGrantKey (Columnar f Text) (Columnar f Text) (Columnar f Text) (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = KeyGrantKey r.resource_kind r.resource_id r.key_id r.recipient_key_id
+
+-- | The key of a page of an encrypted space (@page_keys@), encrypted with
+-- the space's key @space_key_id@.
+data PageKeys f = PageKeyRow
+  { page_id :: Columnar f Text
+  , key_id :: Columnar f Text
+  , space_key_id :: Columnar f Text
+  , nonce :: Columnar f Text
+  , wrapped :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table PageKeys where
+  newtype PrimaryKey PageKeys f = PageKeyKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = PageKeyKey r.page_id
+
+-- | A version of a page of an encrypted space, encrypted
+-- (@sealed_versions@), beside its row of 'PageVersions', whose title and
+-- text are empty.
+data SealedVersions f = SealedVersionRow
+  { page_id :: Columnar f Text
+  , updated_at :: Columnar f UTCTime
+  , tag :: Columnar f Text
+  , key_id :: Columnar f Text
+  , title_nonce :: Columnar f Text
+  , title :: Columnar f Text
+  , body_nonce :: Columnar f Text
+  , body :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table SealedVersions where
+  data PrimaryKey SealedVersions f = SealedVersionKey (Columnar f Text) (Columnar f UTCTime)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = SealedVersionKey r.page_id r.updated_at
+
+--------------------------------------------------------------------------------
 -- The database
 
 -- | 'WikiDb' is every table of the wiki's database, as Beam sees it.
@@ -869,6 +954,9 @@ data WikiDb f = WikiDb
   , sign_in_providers :: f (TableEntity SignInProviders)
   , audit_log :: f (TableEntity AuditLog)
   , permissions_generation :: f (TableEntity PermissionsGeneration)
+  , key_grants :: f (TableEntity KeyGrants)
+  , page_keys :: f (TableEntity PageKeys)
+  , sealed_versions :: f (TableEntity SealedVersions)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)

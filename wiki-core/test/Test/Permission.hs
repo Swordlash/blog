@@ -25,6 +25,7 @@ space s parent public =
     , parent = (\p -> p.id) <$> parent
     , public
     , sealed = False
+    , encryption = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

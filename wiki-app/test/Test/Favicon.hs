@@ -38,6 +38,7 @@ notes icon =
     , parent = Nothing
     , public = True
     , sealed = False
+    , encryption = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

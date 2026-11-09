@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Encrypted spaces (WP5.74b2). `Wiki.Core.Space.Space` gains `encryption ::
+Maybe KeyId`, the id of an encrypted space's current key (absent in JSON
+means `Nothing`; an archive never carries it). The new `Wiki.Core.Encrypted`
+is their format: `KeyGrant` (a key sealed to a public key with HPKE),
+`PageKey` (a page's key wrapped by its space's), `SealedContent` and
+`SealedHeading` (a version's title and text, or its title, encrypted), and
+the strings each is bound to: `grantInfo`, `pageKeyData`, `fieldData`.
+
 The password's wrap (WP5.74b1). `Wiki.Core.Vault` gains
 `passwordWrappingInfo`, the HKDF info of the key OPAQUE's export key gives
 for wrapping the vault key.

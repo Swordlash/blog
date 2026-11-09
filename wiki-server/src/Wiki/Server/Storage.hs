@@ -159,6 +159,18 @@ module Wiki.Server.Storage
   , uploadAttachmentFile
   , uploadSpaceIconFile
 
+    -- * Encrypted spaces
+  , spaceEncryption
+  , encryptSpace
+  , grantSpaceKey
+  , sealedPages
+  , sealedContents
+  , sealedPageAt
+  , createSealedPage
+  , saveSealedPage
+  , sealedVersions
+  , sealedVersionAt
+
     -- * Accounts
   , PasswordLink (..)
   , passwordLinkFor
@@ -184,6 +196,7 @@ import Crypto.OPAQUE (ServerSetup)
 import Crypto.Random (getRandomBytes)
 import Data.ByteArray.Encoding (Base (Base64URLUnpadded), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -197,6 +210,10 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, r
 import Wiki.Api.Account (Account (..), InvitationToken (..), NewAccount (..), providerOnly)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), checkUserQuery, invitationLifetime, macroUsesIn)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
+-- Imported without their fields, which pages' and spaces' share; the
+-- qualified import brings the fields.
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, PendingMember (PendingMember), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption))
+import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
 import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, feedAddressOf, maxPeopleFound, searchable)
@@ -221,6 +238,8 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
+import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
+import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
@@ -254,9 +273,10 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isHomeBody, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
+import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), authorOf, maxVersionsPageSize, namedAuthor, versionInfo)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Opaque (defaultStretch, loadServerSetup, registerHere, setupFromText, setupKey, storedRecordOf)
@@ -272,8 +292,10 @@ import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, a
 import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrate, migrationsFor, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
+import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
+import Wiki.Server.WebAuthn (fromBase64Url)
 #ifdef WIKI_POSTGRES
 import Wiki.Server.Storage.Postgres (holdDatabaseShared, openPostgres)
 #else
@@ -1530,6 +1552,51 @@ saving tx = StoredWiki $ do
       )
       (\(p, server) -> traverse_ (cacheServerSettings env.storage) server >> env.storage.config.publish p.id (PageChanged p.updatedAt))
 
+-- | The encrypted space's key as the caller sees it: its id, their grant,
+-- and who waits for one ("Wiki.Api.Encrypted"'s 'SpaceEncryption').
+spaceEncryption :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError SpaceEncryption)
+spaceEncryption = run Reads . spaceEncryptionTx
+
+-- | Turn a private space with nothing written in it encrypted.
+encryptSpace :: (MonadIO m) => SpaceId -> EncryptSpace -> StoredWiki m (Either WikiError Space)
+encryptSpace sid = run Writes . (shown <=< encryptSpaceTx sid)
+
+-- | Grant an encrypted space's key to readers waiting for it.
+grantSpaceKey :: (MonadIO m) => SpaceId -> NewGrants -> StoredWiki m (Either WikiError ())
+grantSpaceKey sid = run Writes . grantSpaceKeyTx sid
+
+-- | The pages of an encrypted space, with their encrypted titles.
+sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
+sealedPages = run Reads . sealedPagesTx
+
+-- | The pages of an encrypted space, with their latest versions encrypted.
+sealedContents :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedPage])
+sealedContents = run Reads . sealedContentsTx
+
+-- | A page of an encrypted space by its path.
+sealedPageAt :: (MonadIO m) => SpaceId -> [Slug] -> StoredWiki m (Either WikiError SealedPage)
+sealedPageAt sid = run Reads . sealedPageAtTx sid
+
+-- | A new page of an encrypted space.
+createSealedPage :: (MonadIO m) => SpaceId -> NewSealedPage -> StoredWiki m (Either WikiError SealedPage)
+createSealedPage sid = run Writes . createSealedPageTx sid
+
+-- | A new version of a page of an encrypted space, published once it is
+-- committed so that a tab showing the page fetches it again, as a plain
+-- save is ('saving').
+saveSealedPage :: (MonadIO m) => PageId -> UTCTime -> SealedEdit -> StoredWiki m (Either WikiError SealedPage)
+saveSealedPage pid base edit = StoredWiki $ do
+  env <- ask
+  liftIO (transactThen env.storage env.who Writes (saveSealedPageTx pid base edit) (\p -> env.storage.config.publish p.id (PageChanged p.updatedAt)))
+
+-- | A page of a page's history, encrypted.
+sealedVersions :: (MonadIO m) => PageId -> VersionsQuery -> StoredWiki m (Either WikiError [SealedVersionInfo])
+sealedVersions pid = run Reads . sealedVersionsTx pid
+
+-- | One version of a page of an encrypted space.
+sealedVersionAt :: (MonadIO m) => PageId -> UTCTime -> StoredWiki m (Either WikiError SealedVersion)
+sealedVersionAt pid = run Reads . sealedVersionTx pid
+
 -- | An attachment, if the 'Who' may view its page, with the file its bytes
 -- are in when the storage holds them ('Nothing' for an attachment that
 -- lives on the web). The server's route for an attachment's bytes serves
@@ -1576,6 +1643,7 @@ feedPosts :: (MonadIO m) => SpaceId -> [PageId] -> StoredWiki m (Either WikiErro
 feedPosts sid pids = run Reads $ do
   (_, c) <- findSpace sid
   requireView c
+  requirePlain "A feed" c
   fmap catMaybes . for pids $ \pid ->
     db (loadPage pid) >>= \case
       Just p | p.space == sid -> do
@@ -1588,7 +1656,9 @@ feedPosts sid pids = run Reads $ do
 -- the spaces) through 'MonadWiki', as the application does.
 exportedPage :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError Page)
 exportedPage pid = run Reads $ do
-  requireView =<< chainOfPage =<< findNode pid
+  c <- chainOfPage =<< findNode pid
+  requireView c
+  requirePlain "An export" c
   findPage pid
 
 -- | The file that holds a blob's bytes, if the blob id names one. An export
@@ -1695,6 +1765,7 @@ listPagesTx :: SpaceId -> Tx [PageSummary]
 listPagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
+  requirePlain "Listing its pages as plain text" c
   pageTreeOrder s.pageOrder <$> db (loadPageSummaries sid)
 
 -- | The pages of a space with their bodies and attachments, in the space's
@@ -1705,6 +1776,7 @@ spacePagesTx :: SpaceId -> Tx [Page]
 spacePagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
+  requirePlain "An export" c
   pageTreeOrder s.pageOrder <$> db (loadPages sid)
 
 -- | The details each page of a space is listed with as a blog post: the
@@ -1717,6 +1789,7 @@ postDetailsTx :: SpaceId -> Tx (Map PageId PostDetails)
 postDetailsTx sid = do
   (s, c) <- findSpace sid
   requireView c
+  requirePlain "A blog's list of posts" c
   pages <- db (loadPageSummaries sid)
   firsts <- Map.fromList <$> db (loadFirstVersions sid)
   counts <- Map.fromList <$> db (loadCommentCounts sid)
@@ -1739,6 +1812,7 @@ getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do
   (_, c) <- findSpace sid
   requireView c
+  requirePlain "Reading a page as plain text" c
   resolvePathM (\parent slug -> db (childPage sid parent slug)) path >>= \case
     Right ps | Just p <- lastMay ps -> findPage p.id
     _ -> failWith NotFound
@@ -1763,7 +1837,9 @@ searchPagesTx q = do
           | otherwise -> fmap (\s -> s.id) (lastMay c) == Just sid
       searched =
         Map.filter
-          (\c -> wanted c && not (any (\s -> Home.isHomeSpace ctx.server.homePage s.id) c) && canView ctx.principal ctx.grants c)
+          -- An encrypted space is not searched: its pages' titles and
+          -- texts are empty here, and the browser searches them itself.
+          (\c -> wanted c && not (any (\s -> Home.isHomeSpace ctx.server.homePage s.id || isJust s.encryption) c) && canView ctx.principal ctx.grants c)
           (Map.mapWithKey (\sid _ -> chainOf ctx sid) ctx.spaces)
       ws = queryWords q
   -- No words find nothing, and no space has nothing to find. SQLite would
@@ -1819,6 +1895,7 @@ createSpaceTx parent name = do
   traverse_ requireView parentChain
   traverse_ requireOrdinary parent
   require (mayCreateSpace ctx.principal ctx.grants parentChain)
+  traverse_ (requirePlain "A subspace") parentChain
   n <- nonBlank "A space's name" name
   i <- newId
   time <- now
@@ -1831,6 +1908,7 @@ createSpaceTx parent name = do
           , parent
           , public = False
           , sealed = False
+          , encryption = Nothing
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -1889,6 +1967,7 @@ setSpaceProfileTx sid given = do
   let p = ownProfile avatar (if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given)
   nodes <- db (pageNodes sid)
   checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
+  when (checked.blog && not s.blog) (requirePlain "A blog" c)
   let s' = withProfile checked s
   db (updateSpace s')
   -- The space's settings save the whole profile at once, so a save that
@@ -2000,7 +2079,7 @@ permissionText = \case
 -- | Make a space public, or private again.
 setSpacePublicTx :: SpaceId -> Bool -> Tx Space
 setSpacePublicTx sid public = do
-  s' <- adjustSpace sid (\s -> pure s {public})
+  s' <- adjustSpace sid (\s -> when (public && isJust s.encryption) (requirePlain "Making the space public" [s]) $> s {public})
   record "space.public" (spaceSubject s') [("public", yesNo public)]
   pure s'
 
@@ -2014,7 +2093,7 @@ setSpaceSealedTx :: SpaceId -> Bool -> Tx Space
 setSpaceSealedTx sid sealed = do
   ctx <- ask
   (_, c) <- findSpace sid
-  s' <- adjustSpace sid (\s -> pure s {sealed})
+  s' <- adjustSpace sid (\s -> when (not sealed && isJust s.encryption) (requirePlain "Opening the space to its parent's readers" [s]) $> s {sealed})
   let sealedChain = initSafe c <> [s']
   when (sealed && not (canAdministerSpace ctx.principal ctx.grants sealedChain)) $
     for_ ctx.creator $ \u ->
@@ -2035,6 +2114,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , parent = s.parent
       , public = s.public
       , sealed = s.sealed
+      , encryption = s.encryption
       , owner = s.owner
       , active = s.active
       , personalContainer = s.personalContainer
@@ -2069,6 +2149,7 @@ moveSpaceTx sid destination = do
   when (isPersonal s && destination /= s.parent) $
     invalid "A personal space stays among the users' spaces: it cannot be moved."
   traverse_ (requireOrdinary) destination
+  traverse_ (requirePlain "A subspace") destinationChain
   when (maybe False (within sid) destinationChain) $
     invalid "A space cannot be moved into itself or one of its subspaces."
   let others = Map.elems (Map.delete sid ctx.spaces)
@@ -2184,6 +2265,7 @@ setPersonalSpaceTx enabled = do
                   , parent
                   , public = True
                   , sealed = False
+                  , encryption = Nothing
                   , owner = Just u
                   , active = True
                   , personalContainer = False
@@ -2217,6 +2299,7 @@ setPersonalSpaceTx enabled = do
               , parent = Nothing
               , public = False
               , sealed = False
+              , encryption = Nothing
               , owner = Nothing
               , active = True
               , personalContainer = True
@@ -2246,6 +2329,9 @@ deleteSpaceTx sid = do
   -- Count what is deleted with it, before deleting it.
   counts <- for (sid : map (\sp -> sp.id) below) $ \x -> db (countPagesIn x)
   db (deleteSpaceRow sid)
+  -- The grants of encrypted spaces' keys name their spaces by id only, so
+  -- they are deleted here rather than by a foreign key.
+  db (deleteSpaceGrants (sid : map (\sp -> sp.id) below))
   record
     "space.delete"
     (spaceSubject s)
@@ -2265,6 +2351,7 @@ respace parent slug position s =
     , parent
     , public = s.public
     , sealed = s.sealed
+    , encryption = s.encryption
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -2361,6 +2448,7 @@ createPageTx sid parent title body = do
   parentPage <- traverse findNode parent
   requireEdit c
   requireOrdinary sid
+  requirePlain "Writing a page as plain text" c
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
   t <- nonBlank "A page's title" title
@@ -2397,7 +2485,9 @@ createPageTx sid parent title body = do
 savePageTx :: PageId -> UTCTime -> Text -> Text -> Tx Page
 savePageTx pid base title body = do
   p <- findPage pid
-  requireEdit =<< asks (`chainOf` p.space)
+  c <- asks (`chainOf` p.space)
+  requireEdit c
+  requirePlain "Writing a page as plain text" c
   t <- nonBlank "A page's title" title
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
@@ -2430,6 +2520,14 @@ movePageTx pid destination parent = do
   requireEdit target
   requireOrdinary p.space
   requireOrdinary destination
+  -- A page moves within an encrypted space as it moves within a plain one:
+  -- its key and ciphertexts name its space and its own id, not its parent
+  -- ("Wiki.Core.Encrypted"), so they stay valid. Moving it to another
+  -- space would need them encrypted again for that space, in a member's
+  -- browser.
+  when (destination /= p.space) $ do
+    requirePlain "Moving a page in or out of an encrypted space" source
+    requirePlain "Moving a page in or out of an encrypted space" target
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
   subtree <- db (subtreeIds pid)
@@ -2456,6 +2554,7 @@ setPageTemplateTx pid template = do
   (s, c) <- findSpace p.space
   requireEdit c
   requireOrdinary p.space
+  requirePlain "A template" c
   when (template && s.homePage == Just pid) $
     invalid "A space's home page cannot be a template."
   db (setPageTemplateRow pid template)
@@ -2491,7 +2590,9 @@ deletePageTx pid = do
 uploadAttachmentTx :: PageId -> Text -> Text -> Integer -> (FilePath -> IO BlobId) -> Tx Attachment
 uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
-  requireEdit =<< chainOfPage p
+  c <- chainOfPage p
+  requireEdit c
+  requirePlain "An attachment" c
   n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
     invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
@@ -2519,7 +2620,9 @@ deleteAttachmentTx aid = do
 draftable :: PageId -> Tx UserId
 draftable pid = do
   p <- findNode pid
-  requireEdit =<< chainOfPage p
+  c <- chainOfPage p
+  requireEdit c
+  requirePlain "A draft kept on the server" c
   asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
 
 getDraftTx :: PageId -> Tx (Maybe Draft)
@@ -2559,7 +2662,9 @@ versionOf page r =
 listVersionsTx :: PageId -> VersionsQuery -> Tx [VersionInfo]
 listVersionsTx pid q = do
   p <- findNode pid
-  requireView =<< chainOfPage p
+  c <- chainOfPage p
+  requireView c
+  requirePlain "Reading a page's history as plain text" c
   (before, rows) <- db (loadVersionsPage pid q.before (max 1 (min maxVersionsPageSize q.limit)))
   pure [versionInfo n (versionOf pid r) | (n, r) <- zip [before, before - 1 ..] rows]
 
@@ -2572,7 +2677,9 @@ findVersion pid at = db (loadVersion pid at) >>= maybe (failWith NotFound) (pure
 getVersionTx :: PageId -> UTCTime -> Tx Version
 getVersionTx pid at = do
   p <- findNode pid
-  requireView =<< chainOfPage p
+  c <- chainOfPage p
+  requireView c
+  requirePlain "Reading a page's history as plain text" c
   findVersion pid at
 
 -- | Restore a version: a save of its title and body, as any save, in this
@@ -2580,9 +2687,349 @@ getVersionTx pid at = do
 restoreVersionTx :: PageId -> UTCTime -> UTCTime -> Tx Page
 restoreVersionTx pid at base = do
   p <- findNode pid
-  requireEdit =<< chainOfPage p
+  c <- chainOfPage p
+  requireEdit c
+  requirePlain "Restoring a version on the server" c
   v <- findVersion pid at
   savePageTx pid base v.title v.body
+
+--------------------------------------------------------------------------------
+-- Encrypted spaces
+
+-- | 'Conflict' when the chain goes through an encrypted space: what the
+-- server does with a page's plain title, text, comments, attachments or
+-- drafts cannot be done there ("Wiki.Core.Encrypted"). Permissions are
+-- checked first, so that a reader who may not see the space learns
+-- nothing from the refusal.
+requirePlain :: Text -> [Space] -> Tx ()
+requirePlain what c = when (any (\s -> isJust s.encryption) c) (failWith (Conflict (encryptedRefusal what)))
+
+-- | The reason a plain operation is refused in an encrypted space, as the
+-- application shows it.
+encryptedRefusal :: Text -> Text
+encryptedRefusal what = what <> " is not possible in an encrypted space: its pages are encrypted in its members' browsers, and the server cannot read them."
+
+-- | The current key of an encrypted space, or 'Conflict' for a space whose
+-- pages are plain text.
+requireEncrypted :: Space -> Tx KeyId
+requireEncrypted s = maybe (failWith (Conflict "This space is not encrypted: its pages are read and written as plain text.")) pure s.encryption
+
+-- | Whether base64url text holds exactly so many bytes.
+holdsBytes :: Int -> Text -> Bool
+holdsBytes n t = (BS.length <$> fromBase64Url t) == Just n
+
+-- | Base64url text that holds at least so many bytes and is at most so
+-- many characters long.
+boundedBytes :: Int -> Int -> Text -> Bool
+boundedBytes least most t = T.length t <= most && maybe False (\b -> BS.length b >= least) (fromBase64Url t)
+
+-- | 'Invalid' unless a grant's parts are of their lengths.
+checkGrantParts :: KeyId -> Encapsulated -> Ciphertext -> Tx ()
+checkGrantParts k enc sealed =
+  unless (holdsBytes keyIdBytes k.text && holdsBytes encapsulatedBytes enc.text && holdsBytes sealedKeyBytes sealed.text) $
+    invalid "This is not a key this wiki keeps: a part of the grant is not of its length."
+
+-- | 'Invalid' unless a page key and a version are of their lengths, and
+-- the version is encrypted with that page key.
+checkSealedParts :: PageKey -> SealedContent -> Tx ()
+checkSealedParts pk c = do
+  unless (all (holdsBytes keyIdBytes) [pk.keyId.text, pk.spaceKeyId.text, c.keyId.text, c.tag.text]) $
+    invalid "This is not a page this wiki keeps: a key's id or the version's tag is not of its length."
+  unless (all (holdsBytes nonceBytes) [pk.wrapped.nonce.text, c.title.nonce.text, c.body.nonce.text] && holdsBytes sealedKeyBytes pk.wrapped.key.text) $
+    invalid "This is not a page this wiki keeps: a nonce or the page's key is not of its length."
+  unless (boundedBytes 16 maxTitleCiphertext c.title.ciphertext.text && boundedBytes 16 maxBodyCiphertext c.body.ciphertext.text) $
+    invalid "This is not a page this wiki keeps: its title or its text is empty or too long."
+  unless (c.keyId == pk.keyId) $
+    invalid "The version is not encrypted with the page's key."
+
+-- | The readers of the space at the end of the chain who hold a grant
+-- reaching it: the users granted 'View' or more on it, directly or through
+-- a group, who are not disabled. A global administrator who may view
+-- every space is not one of them unless a grant on the space names them:
+-- an encrypted space's key goes to its members only.
+readersOf :: [Space] -> Tx [UserId]
+readersOf c = do
+  ctx <- ask
+  users <- db loadUsers
+  (disabled, _) <- db loadAccountFlags
+  membership <- db loadMembership
+  let spaceGrantsOnly = Grants {global = [], spaces = ctx.grants.spaces, access = ctx.grants.access}
+  pure
+    [ u.id
+    | u <- users
+    , not (u.id `Set.member` disabled)
+    , canView (Just (Permission.principal membership u.id)) spaceGrantsOnly c
+    ]
+
+-- | An encrypted space's key as the caller sees it ('SpaceEncryption').
+spaceEncryptionTx :: SpaceId -> Tx SpaceEncryption
+spaceEncryptionTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  k <- requireEncrypted s
+  me <- asks (\x -> x.author)
+  grants <- db (grantsOfKey spaceKind sid.text k)
+  readers <- readersOf c
+  keys <- db (currentPublicKeys (ordNub (toList me <> readers)))
+  let current u = fst <$> Map.lookup u keys
+      granted u = any (\g -> g.recipient == u && Just g.recipientKeyId == current u) grants
+      mine = me >>= \u -> find (\g -> g.recipient == u && Just g.recipientKeyId == current u) grants
+  pure
+    SpaceEncryption
+      { keyId = k
+      , grant = mine
+      , pending = if isJust mine then [PendingMember {user = u, keyId = kid, publicKey = pk} | u <- readers, Just (kid, pk) <- [Map.lookup u keys], not (granted u)] else []
+      , waiting = if isJust mine then [u | u <- readers, not (Map.member u keys)] else []
+      }
+
+-- | Turn a space encrypted ('Wiki.Api.EncryptedApi''s @encrypt@).
+encryptSpaceTx :: SpaceId -> EncryptSpace -> Tx Space
+encryptSpaceTx sid req = do
+  ctx <- ask
+  (s, c) <- findSpace sid
+  requireAdminister c
+  when (isJust s.encryption) $ failWith (Conflict "This space is encrypted already.")
+  -- A subspace must be private from its parent, or its parent's readers
+  -- would read it; a top-level space is made private with it, so that a
+  -- later move under another space keeps it so.
+  unless (s.sealed || isNothing s.parent) $ failWith (Conflict "Only a private space can be encrypted: make it private from its parent first.")
+  when s.public $ failWith (Conflict "A public space cannot be encrypted: anyone may read it.")
+  when (isJust s.owner || s.personalContainer || s.blog) $ failWith (Conflict "A personal space or a blog cannot be encrypted.")
+  when (any (\x -> x.parent == Just sid) (Map.elems ctx.spaces)) $
+    failWith (Conflict "A space with subspaces cannot be encrypted yet: only a space with nothing written in it can.")
+  when (any (\x -> isJust x.encryption) (initSafe c)) $
+    failWith (Conflict "A space inside an encrypted space cannot be encrypted again.")
+  nodes <- db (pageNodes sid)
+  untouched <- case nodes of
+    [] -> pure Nothing
+    [home] | s.homePage == Just home.id -> do
+      (versions, _) <- db (loadVersionsPage home.id Nothing 1)
+      page <- findPage home.id
+      comments <- Map.findWithDefault 0 home.id . Map.fromList <$> db (loadCommentCounts sid)
+      -- The page the space was created with ('withHomePage'), never
+      -- edited: the starter's title and text, one version. Its version
+      -- names the space's creator as author, as a page they wrote would,
+      -- so the text is what tells the two apart. A page someone wrote and
+      -- made the home page is not deleted, even with one version: the
+      -- space is then refused, as one with content.
+      let generated = page.title == homeTitle && isHomeBody page.body
+      if generated && versions == 1 && null page.attachments && comments == 0 then pure (Just home.id) else pure Nothing
+    _ -> pure Nothing
+  unless (null nodes || isJust untouched) $
+    failWith (Conflict "Only a space with nothing written in it can be encrypted: its pages are plain text, which the server has read. Make a new private space and encrypt it before writing.")
+  me <- maybe (failWith Forbidden) pure ctx.author
+  checkGrantParts req.keyId req.grant.enc req.grant.sealed
+  keys <- db (currentPublicKeys [me])
+  unless (req.grant.recipient == me && (fst <$> Map.lookup me keys) == Just req.grant.recipientKeyId) $
+    invalid "The space's key must be sealed to your own current public key: open your keys in your account's security first."
+  time <- now
+  for_ untouched (\pid -> db (deletePageRow pid))
+  db $ do
+    setSpaceKey sid req.keyId
+    insertGrant spaceKind sid.text time KeyGrant {keyId = req.keyId, recipient = me, recipientKeyId = req.grant.recipientKeyId, enc = req.grant.enc, sealed = req.grant.sealed}
+  let s' = s {encryption = Just req.keyId, sealed = True, homePage = if isJust untouched then Nothing else s.homePage}
+  db (updateSpace s')
+  record "space.encrypted" (spaceSubject s') [("key", req.keyId.text)]
+  pure s'
+
+-- | Grant a space's current key to readers waiting for it.
+grantSpaceKeyTx :: SpaceId -> NewGrants -> Tx ()
+grantSpaceKeyTx sid req = do
+  (s, c) <- findSpace sid
+  requireView c
+  k <- requireEncrypted s
+  me <- asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
+  when (length req.grants > maxGrantsAtOnce) $
+    invalid ("At most " <> show maxGrantsAtOnce <> " grants are made at once.")
+  unless (req.keyId == k) $
+    failWith (Conflict "The space's key has changed since: open the space again.")
+  grants <- db (grantsOfKey spaceKind sid.text k)
+  keys <- db (currentPublicKeys (ordNub (me : map (\g -> g.recipient) req.grants)))
+  let current u = fst <$> Map.lookup u keys
+  -- Only a member who holds the key can have sealed it.
+  require (any (\g -> g.recipient == me && Just g.recipientKeyId == current me) grants)
+  readers <- readersOf c
+  time <- now
+  -- A grant sent twice in one request is made once: the second would
+  -- repeat the first's row, which the table's key refuses.
+  for_ (nubOrdOn (\g -> (g.recipient, g.recipientKeyId)) req.grants) $ \g -> do
+    checkGrantParts k g.enc g.sealed
+    unless (g.recipient `elem` readers) $
+      invalid "A space's key is granted only to its readers."
+    unless (current g.recipient == Just g.recipientKeyId) $
+      failWith (Conflict "A reader's public key has changed since: open the space again.")
+    unless (any (\x -> x.recipient == g.recipient && x.recipientKeyId == g.recipientKeyId) grants) $
+      db (insertGrant spaceKind sid.text time KeyGrant {keyId = k, recipient = g.recipient, recipientKeyId = g.recipientKeyId, enc = g.enc, sealed = g.sealed})
+
+-- | What a notification names a page of an encrypted space by, in the
+-- bell, the feed and the mail: not its title, which the server cannot
+-- read, but what it is.
+encryptedTitle :: Text
+encryptedTitle = "an encrypted page"
+
+-- | The most grants one request makes.
+maxGrantsAtOnce :: Int
+maxGrantsAtOnce = 500
+
+-- | A page of an encrypted space with its latest version, encrypted.
+sealedPageOf :: Page -> Tx SealedPage
+sealedPageOf p = do
+  pk <- db (loadPageKey p.id) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
+  content <- db (loadSealedVersion p.id p.updatedAt) >>= maybe (failWith NotFound) pure
+  w <- withWriters p
+  pure
+    SealedPage
+      { id = p.id
+      , space = p.space
+      , parent = p.parent
+      , slug = p.slug
+      , createdAt = p.createdAt
+      , updatedAt = p.updatedAt
+      , position = p.position
+      , pageKey = pk
+      , content
+      , createdBy = w.createdBy
+      , updatedBy = w.updatedBy
+      }
+
+-- | The pages of an encrypted space with their encrypted titles.
+sealedPagesTx :: SpaceId -> Tx [SealedSummary]
+sealedPagesTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  _ <- requireEncrypted s
+  summaries <- db (loadPageSummaries sid)
+  keys <- db (loadSpacePageKeys sid)
+  latest <- db (loadSealedLatest sid)
+  pure
+    [ SealedSummary {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, heading = headingOf content}
+    | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
+    , Just pk <- [Map.lookup p.id keys]
+    , Just content <- [Map.lookup p.id latest]
+    ]
+
+-- | The pages of an encrypted space with their latest versions, encrypted.
+sealedContentsTx :: SpaceId -> Tx [SealedPage]
+sealedContentsTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  _ <- requireEncrypted s
+  summaries <- db (loadPageSummaries sid)
+  keys <- db (loadSpacePageKeys sid)
+  latest <- db (loadSealedLatest sid)
+  pure
+    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing}
+    | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
+    , Just pk <- [Map.lookup p.id keys]
+    , Just content <- [Map.lookup p.id latest]
+    ]
+
+-- | A page of an encrypted space by its path.
+sealedPageAtTx :: SpaceId -> [Slug] -> Tx SealedPage
+sealedPageAtTx sid path = do
+  (s, c) <- findSpace sid
+  requireView c
+  _ <- requireEncrypted s
+  resolvePathM (\parent slug -> db (childPage sid parent slug)) path >>= \case
+    Right ps | Just p <- lastMay ps -> findPage p.id >>= sealedPageOf
+    _ -> failWith NotFound
+
+-- | A new page of an encrypted space: a page row with an empty title and
+-- text and a random slug, its key, and its first version, encrypted.
+createSealedPageTx :: SpaceId -> NewSealedPage -> Tx SealedPage
+createSealedPageTx sid new = do
+  (_, c) <- findSpace sid
+  parentPage <- traverse findNode new.parent
+  requireEdit c
+  s <- fst <$> findSpace sid
+  k <- requireEncrypted s
+  when (any (\p -> p.space /= sid) parentPage) $
+    invalid "A page's parent has to be in the same space."
+  when (isNothing (UUID.fromText new.id.text)) $
+    invalid "A new page's id is a UUID."
+  db (pageNode new.id) >>= traverse_ (\_ -> failWith (Conflict "A page with this id exists already."))
+  checkSealedParts new.pageKey new.content
+  unless (new.pageKey.spaceKeyId == k) $
+    failWith (Conflict "The space's key has changed since: open the space again.")
+  nodes <- db (childPages sid new.parent)
+  random <- T.take 12 . T.filter (/= '-') <$> newId
+  time <- now
+  let page =
+        Page
+          { id = new.id
+          , space = sid
+          , parent = new.parent
+          , title = ""
+          , slug = freshSlug (isJust . findChild nodes new.parent) (fallbackSlug random)
+          , body = ""
+          , attachments = []
+          , createdAt = time
+          , updatedAt = time
+          , position = nextPosition (childrenOf nodes new.parent)
+          , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
+          }
+  author <- asks (\x -> x.author)
+  db $ do
+    insertPage page
+    insertVersion page author
+    insertPageKey page.id new.pageKey
+    insertSealedVersion page.id page.updatedAt new.content
+  -- Whoever watches the space is told that a page was saved, by its id:
+  -- with no title ('encryptedTitle' instead) and no excerpt, and no
+  -- mentions, which the server cannot read.
+  tellTx page.id sid encryptedTitle Nothing "" PageSaved mempty
+  sealedPageOf page
+
+-- | A new version of a page of an encrypted space, against the version
+-- given, as 'savePageTx' for a plain page.
+saveSealedPageTx :: PageId -> UTCTime -> SealedEdit -> Tx SealedPage
+saveSealedPageTx pid base edit = do
+  p <- findPage pid
+  c <- asks (`chainOf` p.space)
+  requireEdit c
+  s <- fst <$> findSpace p.space
+  _ <- requireEncrypted s
+  pk <- db (loadPageKey pid) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
+  checkSealedParts pk edit.content
+  when (p.updatedAt /= base) $
+    failWith (Conflict "The page has been saved by someone else since this edit began.")
+  time <- now
+  let p' = savedAs time "" "" p
+  author <- asks (\x -> x.author)
+  db $ do
+    updatePageText pid "" "" p'.updatedAt
+    insertVersion p' author
+    insertSealedVersion pid p'.updatedAt edit.content
+  tellTx p'.id p'.space encryptedTitle Nothing "" PageSaved mempty
+  sealedPageOf p'
+
+-- | A page of a page's history, encrypted, as 'listVersionsTx' lists a
+-- plain page's.
+sealedVersionsTx :: PageId -> VersionsQuery -> Tx [SealedVersionInfo]
+sealedVersionsTx pid q = do
+  p <- findNode pid
+  c <- chainOfPage p
+  requireView c
+  s <- fst <$> findSpace p.space
+  _ <- requireEncrypted s
+  (before, rows) <- db (loadVersionsPage pid q.before (max 1 (min maxVersionsPageSize q.limit)))
+  fmap catMaybes . for (zip [before, before - 1 ..] rows) $ \(n, r) -> do
+    let v = versionOf pid r
+    db (loadSealedVersion pid r.updatedAt) <&> fmap (\content -> SealedVersionInfo {page = pid, updatedAt = v.updatedAt, heading = headingOf content, author = v.author, number = n})
+
+-- | One version of a page of an encrypted space, encrypted.
+sealedVersionTx :: PageId -> UTCTime -> Tx SealedVersion
+sealedVersionTx pid at = do
+  p <- findNode pid
+  c <- chainOfPage p
+  requireView c
+  s <- fst <$> findSpace p.space
+  _ <- requireEncrypted s
+  v <- findVersion pid at
+  content <- db (loadSealedVersion pid at) >>= maybe (failWith NotFound) pure
+  pure SealedVersion {page = pid, updatedAt = v.updatedAt, content, author = v.author}
 
 --------------------------------------------------------------------------------
 -- Administration
@@ -3085,6 +3532,7 @@ discussion pid = do
   requireView c
   home <- asks (\x -> Home.isHomePage x.server.homePage pid)
   when home (failWith NotFound)
+  requirePlain "A comment" c
   ts <- db (Comments.loadThreads commentAuthor pid)
   pure (c, ts)
 
@@ -3540,8 +3988,12 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- there. Each is added after its parent, and the spaces' home pages
           -- once the pages are there, so that every foreign key holds at each
           -- step, as PostgreSQL checks them.
+          -- A space comes in plain, whatever the archive says of its
+          -- encryption: the archive holds no key and no ciphertext, only
+          -- the plain pages it was exported with, and an encrypted space's
+          -- mark would make the server refuse to read them.
           let spaces =
-                [ case sp.icon of
+                [ (\x -> x {encryption = Nothing}) $ case sp.icon of
                     Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog, boxNumbering = sp.boxNumbering} sp
                     _ -> sp
                 | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
@@ -3620,7 +4072,7 @@ writeExport st app target =
 exportRecords :: Storage -> Text -> IO (Either Text (Archive, Map BlobId FilePath))
 exportRecords st app = do
   createdAt <- getCurrentTime
-  (users, groups, membership, grants, spaces, pages, threads, audit, homePage, homeVersions) <-
+  (users, groups, membership, storedGrants, allSpaces, allPages, threads, audit, homePage, homeVersions) <-
     -- One read transaction, so that the records are of one state of the
     -- wiki.
     reading st $
@@ -3642,7 +4094,16 @@ exportRecords st app = do
                     (_, versions) <- loadVersionsPage d.page Nothing maxBound
                     catMaybes <$> traverse (\v -> fmap (versionOf d.page) <$> loadVersion d.page v.updatedAt) versions
             )
-  let commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
+  let -- An encrypted space is left out of the archive, with its pages and
+      -- grants: the server holds its pages' titles and texts only as
+      -- ciphertext, under keys it does not have, and an archive of empty
+      -- pages imported elsewhere would be a plain space that only looks
+      -- like this one. An export decrypted in the browser is for later.
+      encrypted = Set.fromList [sp.id | sp <- allSpaces, isJust sp.encryption]
+      spaces = [sp | sp <- allSpaces, not (sp.id `Set.member` encrypted)]
+      pages = [p | p <- allPages, not (p.space `Set.member` encrypted)]
+      grants = Grants {global = storedGrants.global, spaces = [g | g <- storedGrants.spaces, not (g.space `Set.member` encrypted)], access = storedGrants.access}
+      commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
       dir = attachmentsDir st.place.dataDir
       -- A blob's file, if it is there.
       fileOf b = case blobFile dir b of

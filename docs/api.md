@@ -205,10 +205,12 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | GET | `api/v1/spaces/<space>/grants` | | `SpaceAccess` `{"grants", "users", "groups"}`: the grants on the space and then on each of its ancestors, up (each `SpaceGrant` `{"space", "subject", "permission"}` names the space it is on), every `User` by login and every `Group` by name | 404, 403 | `spaceAccess` |
 | PUT | `api/v1/spaces/<space>/grants` | `SpaceGrantChange` `{"subject", "permission", "granted": bool}` | 204 | 404, 403, 400 | `setSpaceGrant` |
 
-A `Space` is `{"id", "name", "slug", "parent", "public", "sealed", "owner",
-"active", "personalContainer", "mathMacros", "createdAt", "position",
-"subspaceOrder", "pageOrder", "homePage", "icon", "description", "blog",
-"boxNumbering"}`. `sealed` is whether it is private from its parent;
+A `Space` is `{"id", "name", "slug", "parent", "public", "sealed",
+"encryption", "owner", "active", "personalContainer", "mathMacros",
+"createdAt", "position", "subspaceOrder", "pageOrder", "homePage", "icon",
+"description", "blog", "boxNumbering"}`. `sealed` is whether it is private
+from its parent; `encryption` is the id of an encrypted space's current key,
+or `null` for a space of plain pages (see "Encrypted spaces");
 `owner` is the user id of the user whose personal space it is, or `null`;
 `active` is false for a personal space its owner turned off, which nobody
 is then shown; `personalContainer` marks "User subspaces", the space that
@@ -1023,6 +1025,39 @@ names a login, then against that login as a password's do. In the second
 step of a password's sign-in (`session/second-factor/passkey`), the
 challenge is kept for the sign-in waiting, and a refused answer counts as a
 wrong code.
+
+### Encrypted spaces
+
+The pages of an encrypted space (WP5.74b2, `Wiki.Core.Encrypted`) are read
+and written as ciphertext, under `encrypted/`; every title and text below is
+`{"nonce", "ciphertext"}` in base64url, made in a member's browser. The
+plain routes of pages (`spaces/<space>/pages…`, `pages/<page>…`, drafts,
+history, comments, attachments, exports, post details) answer 409 for an
+encrypted space or a page in one, after their permission checks. A page's
+`move` is the exception within one encrypted space: its key and versions
+name the space and the page, not the parent, so a page moves there as in
+any space; a move to or from another space answers 409.
+
+| Method | Path | Body | Response | Errors |
+| ------ | ---- | ---- | -------- | ------ |
+| GET | `api/v1/encrypted/spaces/<space>` | | `SpaceEncryption` `{"keyId", "grant": KeyGrant or null, "pending": [{"user", "keyId", "publicKey"}], "waiting": [user id]}`; `pending` and `waiting` only for a caller holding a grant | 404, 409 (not encrypted) |
+| POST | `api/v1/encrypted/spaces/<space>` | `EncryptSpace` `{"keyId", "grant": {"recipient", "recipientKeyId", "enc", "sealed"}}`, the new key sealed to the caller's current public key | `Space`, with `encryption` | 404, 403, 400 (a part of the wrong length, another key), 409 (public, not private, has subspaces or written pages, a personal space or a blog, encrypted already) |
+| POST | `api/v1/encrypted/spaces/<space>/grants` | `NewGrants` `{"keyId", "grants": [NewGrant]}`, at most 500 (a browser sends more in parts); a grant named twice is made once | 204 | 404, 403 (no grant of the key), 400 (not a reader, a wrong length), 409 (an older key, a public key not current) |
+| GET | `api/v1/encrypted/spaces/<space>/pages` | | `[SealedSummary]`: a `PageSummary` without `title` and `template`, with `pageKey` `{"keyId", "spaceKeyId", "wrapped": {"nonce", "key"}}` and `heading` `{"tag", "keyId", "title"}` | 404, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/contents` | | `[SealedPage]`, each page with its latest version: what the browser's search reads | 404, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/pages/at/<slug>…` | | `SealedPage` `{…, "pageKey", "content": {"tag", "keyId", "title", "body"}, "createdBy", "updatedBy"}`, with `ETag` | 404, 409 |
+| POST | `api/v1/encrypted/spaces/<space>/pages` | `NewSealedPage` `{"id": a fresh UUID, "parent", "pageKey", "content"}` | 201 `SealedPage` with a random slug, with `ETag` | 404, 403, 400, 409 |
+| PUT | `api/v1/encrypted/pages/<page>` | `SealedEdit` `{"content"}`, with `If-Match` | `SealedPage`, with its new `ETag` | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/pages/<page>/versions` | `?before=…&limit=…` as for a plain history | `[SealedVersionInfo]` `{"page", "updatedAt", "heading", "author", "number"}` | 404, 409 |
+| GET | `api/v1/encrypted/pages/<page>/versions/<time>` | | `SealedVersion` `{"page", "updatedAt", "content", "author"}` | 404, 409 |
+
+A grant (`KeyGrant` `{"keyId", "recipient", "recipientKeyId", "enc",
+"sealed"}`) is the space's key sealed with HPKE (base mode, X25519,
+HKDF-SHA256, AES-256-GCM) to the recipient's public key `recipientKeyId`,
+with the info `wiki-grant/1 space <space> <keyId>`. A grant to a public key
+that is no longer the recipient's current one (after a password reset)
+opens for nobody, and its recipient is pending again. The members are the
+readers through the space's own grants, not the wiki's administrators.
 
 ### Administration
 

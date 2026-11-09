@@ -43,11 +43,12 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId (..), UserId (..))
 import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering, sealedChain)
-import Wiki.Core.Space (Space (id, name, parent, public, sealed))
+import Wiki.Core.Space (Space (encryption, id, name, parent, public, sealed))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 
 -- | The permissions view's input: the space, as the space's view has it.
@@ -73,6 +74,8 @@ data State = State
   -- ^ A change has been requested, and the grants not fetched again
   -- since.
   , problem :: Maybe WikiError
+  , confirming :: Bool
+  -- ^ "Encrypt this space…" was pressed, and waits for its confirmation.
   }
 
 data Action
@@ -82,12 +85,14 @@ data Action
   | Followed (Follow Route)
   | TogglePublic
   | ToggleSealed
+  | AskEncrypt Bool
+  | Encrypt
   | ChooseWho Int
   | ChooseWhat Int
   | Grant
   | Revoke SpaceGrant
 
-component :: forall query m. (MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadEncryption m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -95,7 +100,7 @@ component =
           -- Read here when the backend answers at once, as the other views
           -- read their data; otherwise in 'Initialize'.
           loaded <- maybe Loading (either Failed Ready) <$> atOnce (spaceAccess input.space.id)
-          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing}
+          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing, confirming = False}
       , render
       , eval =
           H.mkEval
@@ -141,12 +146,34 @@ component =
               <p class="permissions-intro">{{ sealedText }}</p>
             </div>
           {% end %}
+          {% if isJust space.encryption %}
+            <div class="permissions-encrypted">
+              <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
+              <p class="permissions-intro encrypted-removal">Removing someone here does not change the space's key yet: whoever was removed and kept the key can still read the pages written before, and after, with a copy of what the server stores.</p>
+            </div>
+          {% end %}
+          {% if encryptable %}
+            <div class="permissions-encrypt">
+              {% if st.confirming %}
+                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, show them in feeds or previews, or keep their comments and attachments yet. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
+                <button type="button" class="primary encrypt-confirm" disabled={{ st.busy }} onClick={{ const Encrypt }}>Encrypt</button>
+                <button type="button" class="encrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskEncrypt False) }}>Cancel</button>
+              {% else %}
+                <button type="button" class="encrypt-space" disabled={{ st.busy }} onClick={{ const (AskEncrypt True) }}>Encrypt this space…</button>
+                <p class="permissions-intro">Only a private space with nothing written in it yet can be encrypted.</p>
+              {% end %}
+            </div>
+          {% end %}
           {{ errorView <$> st.problem }}
           {{ body }}
         </section>
       |]
       where
         space = st.input.space
+        -- A private space that is not public may be encrypted: a top-level
+        -- space, or a subspace made private from its parent. The server
+        -- says why one with pages written in it may not.
+        encryptable = isNothing space.encryption && not space.public && (space.sealed || isNothing space.parent)
         publicText :: Text
         publicText
           | space.public = "Anyone may read this space and its subspaces, signed in or not. The grants below say who may do more."
@@ -276,6 +303,11 @@ component =
       ToggleSealed -> do
         space <- gets (\st -> st.input.space)
         change (void <$> setSpaceSealed space.id (not space.sealed))
+      AskEncrypt asking -> modify (\st -> st {confirming = asking})
+      Encrypt -> do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {confirming = False})
+        change (void <$> encryptSpace space.id)
       ChooseWho n -> modify (\st -> st {who = n})
       ChooseWhat n -> for_ (atMay permissions n) $ \p -> modify (\st -> st {what = p})
       Grant ->

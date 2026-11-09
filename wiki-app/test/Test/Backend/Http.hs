@@ -25,7 +25,7 @@ import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Hspec
 import Test.Opaque (fakeChallengeMade, fakeRegistrationMade)
 import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
-import Wiki.Api (NotificationsApi (..), WikiApi (..))
+import Wiki.Api (NotificationsApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
@@ -40,6 +40,7 @@ import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
@@ -57,6 +58,7 @@ import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.Vault (KeyId (..))
 import Wiki.Core.Version (Author)
 
 -- | A transport that answers as the function says, and keeps every request
@@ -211,6 +213,30 @@ requests = describe "its requests" $ do
                  , ("Content-Type", "application/json;charset=utf-8")
                  ]
     bodyOf r `shouldBe` Just ("application/json;charset=utf-8", "{\"body\":\"New body\",\"title\":\"New title\"}")
+
+  it "sends no plain write or search for a space the server says is encrypted now, though the cached list says it is plain" $ do
+    let blog = fromMaybe (panic "no blog") (Map.lookup hello.space demo.spaces)
+        nowEncrypted = blog {encryption = Just (KeyId "a-key")}
+    (transport, asked) <- scripted $ \r ->
+      if
+        | requestUrl r == "api/v1/spaces" -> ok [nowEncrypted]
+        | requestUrl r == endpointUrl (\e -> e.spaces.pageAt hello.space (slugs "hello-world")) -> ok hello
+        | otherwise -> status 500 ""
+    env <- newHttpEnvWith transport (withSpaces [blog] emptyCache)
+    -- Read while the cached list says the space is plain.
+    runHttpWiki env (getPage hello.space (slugs "hello-world")) `shouldReturn` Right hello
+    -- Every write that would carry the page's text asks for the list first,
+    -- and sends nothing once it says the space is encrypted. (Natively the
+    -- encrypted way then stops: there is no WebCrypto.)
+    runHttpWiki env (savePage hello.id hello.updatedAt "Hello" "Edited") >>= (`shouldSatisfy` isLeft)
+    runHttpWiki env (saveDraft hello.id hello.updatedAt "Hello" "Edited") >>= (`shouldSatisfy` isLeft)
+    runHttpWiki env (uploadAttachment hello.id "a.txt" "text/plain" "bytes") >>= (`shouldSatisfy` isLeft)
+    runHttpWiki env (openThread hello.id Nothing "A comment") >>= (`shouldSatisfy` isLeft)
+    runHttpWiki env (createPage hello.space Nothing "New" "Text") >>= (`shouldSatisfy` isLeft)
+    -- A search limited to the space is not sent.
+    runHttpWiki env (searchPages (searchQuery "words") {space = Just hello.space, includeSubspaces = True}) `shouldReturn` []
+    sent <- readIORef asked
+    [(methodOf r, requestUrl r) | r <- sent, methodOf r /= "GET" || "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
 
   it "keeps a draft with the version it started from in the body" $ do
     (env, asked) <- backend (const (ok Draft {page = hello.id, author = UserId "admin", title = "t", body = "b", base = hello.updatedAt, savedAt = hello.updatedAt}))

@@ -44,6 +44,7 @@ module Wiki.Core.Space
     -- * Its home page
   , homeTitle
   , homeBody
+  , isHomeBody
   )
 where
 
@@ -60,6 +61,7 @@ import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrde
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
+import Wiki.Core.Vault (KeyId)
 
 -- | A space, or a subspace of another.
 data Space = Space
@@ -79,6 +81,13 @@ data Space = Space
   -- and only its own grants and public flag do (and those of its
   -- subspaces, in them). A global administrator still sees it
   -- ("Wiki.Core.Permission"'s 'Wiki.Core.Permission.spacePermissions').
+  , encryption :: Maybe KeyId
+  -- ^ For an encrypted space ("Wiki.Core.Encrypted"), the id of its current
+  -- key: its pages' titles and texts are encrypted in its members'
+  -- browsers, and the server cannot read them. 'Nothing' for a space whose
+  -- pages are plain text. Only a private ('sealed') space that is not
+  -- public can be encrypted, and it stays encrypted. In JSON the field
+  -- may be absent, which means 'Nothing'.
   , owner :: Maybe UserId
   -- ^ The user whose personal space it is, or 'Nothing' for any other
   -- space. A personal space lives in the container of personal spaces
@@ -376,6 +385,7 @@ withProfile p s =
     , parent = s.parent
     , public = s.public
     , sealed = s.sealed
+    , encryption = s.encryption
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -440,3 +450,11 @@ homeBody name =
     , ""
     , "This is the space's home page, the page it opens at. Edit it to say what the space is for and where to start reading."
     ]
+
+-- | Whether a page's Markdown is the home page a new space is created with
+-- ('homeBody'), for whatever name the space had then: the space may have
+-- been renamed since.
+isHomeBody :: Text -> Bool
+isHomeBody body = case T.stripPrefix "Welcome to **" body of
+  Just rest -> let (name, after) = T.breakOn "**." rest in not (T.null after) && body == homeBody name
+  Nothing -> False

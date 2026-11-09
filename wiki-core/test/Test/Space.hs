@@ -25,6 +25,7 @@ space i name parent =
     , parent = SpaceId <$> parent
     , public = False
     , sealed = False
+    , encryption = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

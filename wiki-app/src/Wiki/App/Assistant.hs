@@ -64,6 +64,8 @@ module Wiki.App.Assistant
   , passwordKeyIO
   , wrapForPassword
   , forgetHeld
+  , deviceKeyIO
+  , heldHandle
   , PasskeyTicket
   , Used (..)
   , PasskeyRefusal (..)
@@ -763,6 +765,21 @@ wrapForPassword base salt (KeyRef vault)
 -- | Let the page forget a key, in IO, for the HTTP backend.
 forgetHeld :: KeyRef -> IO ()
 forgetHeld (KeyRef k) = when inBrowser (js_forget_key k)
+
+-- | A key's handle in the page's registry of keys, which every module of
+-- JavaScript that holds keys shares (@globalThis.wikiKeyRegistry@): for
+-- "Wiki.App.Encrypted", which opens a space's key with the private key
+-- this module found.
+heldHandle :: KeyRef -> Int
+heldHandle (KeyRef k) = k
+
+-- | The key this device keeps in a slot ('deviceKey'), in IO, for the HTTP
+-- backend's encrypted spaces ("Wiki.App.Encrypted"), which open a space's
+-- key with the user's private key. Natively there is none.
+deviceKeyIO :: UserId -> IO (Maybe KeyRef)
+deviceKeyIO user
+  | not inBrowser = pure Nothing
+  | otherwise = keyRefOf <$> (evaluate =<< js_device_key (toJSText user.text))
 
 -- | Why the browser would refuse a request to another service's base URL,
 -- if it would: the page's Content Security Policy ("Wiki.Api.ContentPolicy")

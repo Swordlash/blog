@@ -87,6 +87,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), noServer)
 import Wiki.App.Backend.Mem.Archive (replaceFromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, changes, changesIn, lazyStores, readVersion, records, restore, storeNames, touched, versionKey, versionsStore)
 import Wiki.App.Backend.Mem.State
@@ -435,6 +436,13 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
 
 -- | Stars, on the same wiki, saved like every other write (each user's
 -- are in their record of notifications, "Wiki.App.Backend.Mem.Persist").
+-- | The demo has no server, and its pages are plain text in this browser:
+-- no space is encrypted, and none can be ("Wiki.App.Backend.Encrypted").
+instance (Monad m) => MonadEncryption (MemWiki m) where
+  keyState _ = pure (Right NotEncrypted)
+  encryptSpace _ = pure (Left noServer)
+  spaceEncryption _ = pure (Left noServer)
+
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn
   setStarred pid = write . setStarredIn pid
