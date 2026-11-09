@@ -114,19 +114,37 @@ install() {
       exit 1
     fi
     say "building libsodium $LIBSODIUM_VERSION from source into $DIR"
-    archive=$DIR.tar.gz
     src=$DIR.src
-    rm -rf "$DIR" "$src" "$archive"
-    mkdir -p "$src"
     name=libsodium-$LIBSODIUM_VERSION.tar.gz
     if [ -n "$SOURCE" ]; then
+      # The file given is copied before anything here is deleted, to a
+      # name of its own, so that no clean-up below can remove it: it may
+      # sit in STATE under the name a download would take. A file inside
+      # the directories this install replaces is refused outright.
+      given=$(realpath "$SOURCE")
+      case $given in
+        "$DIR"/* | "$src"/*)
+          say "$SOURCE is inside $DIR, which the install replaces; put it elsewhere; nothing was built"
+          exit 1
+          ;;
+      esac
       say "taking $name from $SOURCE instead of downloading it"
+      mkdir -p "$STATE"
+      archive=$(mktemp "$STATE/libsodium-given.XXXXXX")
       cp "$SOURCE" "$archive" || {
         say "copying $SOURCE failed; nothing was built"
-        rm -rf "$src" "$archive"
+        rm -f "$archive"
         exit 1
       }
       name=$SOURCE
+      rm -rf "$DIR" "$src"
+    else
+      archive=$DIR.tar.gz
+      rm -rf "$DIR" "$src" "$archive"
+    fi
+    mkdir -p "$src"
+    if [ -n "$SOURCE" ]; then
+      :
     elif ! fetch "https://download.libsodium.org/libsodium/releases/$name" "$archive"; then
       say "download.libsodium.org did not give $name; fetching the same release from GitHub"
       fetch "https://github.com/jedisct1/libsodium/releases/download/$LIBSODIUM_VERSION-RELEASE/$name" "$archive" || {

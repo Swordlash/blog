@@ -683,6 +683,17 @@ assert_contains "$case_dir/native-source-wrong" 'bootstrap: building libsodium f
 [ ! -s "$EVENTS" ] || fail "a refused libsodium tarball was built, or a download tried instead: $(cat "$EVENTS")"
 [ -z "$(find "$HOME/.wiki-toolchain" -name 'libsodium*' -print)" ] || fail "a refused libsodium tarball left files: $(find "$HOME/.wiki-toolchain" -name 'libsodium*')"
 [ -f "$tarball" ] || fail 'the bootstrap removed the tarball it refused'
+# The same file put in the toolchain's directory, under the name a download
+# takes there: it is copied before the install clears that name, so it is
+# still there after the refusal.
+rm -rf "$HOME/.wiki-toolchain"
+mkdir -p "$HOME/.wiki-toolchain"
+cp "$tarball" "$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz"
+status=0
+bootstrap native --system-tools --libsodium-source="$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz" >"$case_dir/native-source-in-state" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium tarball in the toolchain's directory exited $status, not 1"
+assert_contains "$case_dir/native-source-in-state" 'does not have the checksum toolchain/pins.env pins (LIBSODIUM_SHA256); nothing was built'
+[ -f "$HOME/.wiki-toolchain/libsodium-1.0.22.tar.gz" ] || fail 'the bootstrap removed the tarball given from the toolchain directory'
 rm -rf "$HOME/.wiki-toolchain"
 status=0
 bootstrap native --libsodium-source="$case_dir/incoming/nothing.tar.gz" >"$case_dir/native-source-missing" 2>&1 || status=$?
