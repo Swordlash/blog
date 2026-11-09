@@ -289,7 +289,7 @@ import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFi
 import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
-import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrate, migrationsFor, schemaVersion)
+import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrate, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
@@ -593,7 +593,7 @@ data CheckProblem
 checkDatabase :: Place -> IO (Either CheckProblem [TableRead])
 checkDatabase place = withDatabase place $ \c -> do
   at <- databaseVersion c
-  let known = maybe 0 (\m -> m.version) (lastMay (migrationsFor (schemaSuffix c)))
+  let known = knownVersion (schemaSuffix c)
   if at /= known
     then pure (Left (NotMigrated at known))
     else do

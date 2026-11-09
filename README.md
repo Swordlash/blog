@@ -1731,8 +1731,9 @@ to the demo, keeping `data/`.
   script refuses to leave it behind.
 - **Backups.** Before each deploy starts the new server (which brings the
   database's schema up to its own as it starts: the schema's steps are the
-  numbered files of `wiki-server/migrations/`, applied in order, all of a step
-  or none), it stops the old one and runs `wiki-server backup`, which copies the
+  numbered files of `wiki-server/migrations/` and the steps written in
+  Haskell, numbered with them (`Wiki.Server.Storage.Migrate.Code`), applied in
+  order, all of them or none), it stops the old one and runs `wiki-server backup`, which copies the
   database with its own means and keeps the last ten: on PostgreSQL with
   `pg_dump`, the container's own (a `pg_dump` older than the server refuses it),
   into `data/backups/<time>.pgdump`, with `<time>.pgdump.json` beside it (the

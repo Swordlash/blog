@@ -43,6 +43,7 @@ import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
+import Test.Storage.CodeSteps qualified as CodeSteps
 import Test.Storage.Contract qualified as Contract
 import Test.Storage.Encrypted qualified as Encrypted
 import Test.Storage.Keys qualified as Keys
@@ -74,12 +75,14 @@ main = secureMain $ do
         WhatsNew.unitSpec
         Opaque.unitSpec
         Rehearsal.unitSpec
+        CodeSteps.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
           Http.spec b
           Storage.spec b
           Migrate.spec b
+          CodeSteps.spec b
           Transactions.spec b
           Permissions.spec b
           Scale.spec b
