@@ -411,7 +411,11 @@ pagesCheck :: Check
 pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages manager server <&> (>>= comparePages was))
 
 -- | Every page of every space but the guide's, read through a server's
--- administration API.
+-- administration API. A space whose pages answer 404 is left out: the list
+-- of spaces names some that nobody may read, administrators included (the
+-- container of personal spaces, and a personal space its owner hid;
+-- "Wiki.Core.Permission"). A space read before the migration and not after
+-- still shows: its pages are then gone.
 readPages :: Manager -> Server -> IO (Either Text [PageRead])
 readPages manager server = runExceptT $ do
   spaces <- ExceptT (getJson manager (server.adminApi <> "/spaces")) >>= asList "the spaces"
@@ -422,8 +426,11 @@ readPages manager server = runExceptT $ do
         _ -> False
   concat <$> for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s)] (\(i, _) -> pagesOf i)
   where
-    pagesOf spaceId = do
-      summaries <- ExceptT (getJson manager (server.adminApi <> "/spaces/" <> spaceId <> "/pages")) >>= asList ("the pages of space " <> spaceId)
+    pagesOf spaceId =
+      ExceptT (getJsonUnless404 manager (server.adminApi <> "/spaces/" <> spaceId <> "/pages")) >>= \case
+        Nothing -> pure []
+        Just listed -> asList ("the pages of space " <> spaceId) listed >>= pagesIn spaceId
+    pagesIn spaceId summaries = do
       let byId = Map.fromList [(i, p) | p <- summaries, Just i <- [field "id" p]]
           pathOf p = maybe [] pathOf (field "parent" p >>= (`Map.lookup` byId)) <> toList (field "slug" p)
       for (Map.toList byId) $ \(i, p) -> do
@@ -436,6 +443,16 @@ readPages manager server = runExceptT $ do
     asList what = \case
       Array xs -> pure (toList xs)
       _ -> throwError (what <> " are not a list")
+
+-- | A GET of JSON, as 'getJson', with 'Nothing' for an answer of 404.
+getJsonUnless404 :: Manager -> Text -> IO (Either Text (Maybe Value))
+getJsonUnless404 manager url =
+  try @SomeException (parseRequest (toS url) >>= \r -> httpLbs r manager) <&> \case
+    Left e -> Left (show e)
+    Right response
+      | statusCode (responseStatus response) == 404 -> Right Nothing
+      | statusCode (responseStatus response) /= 200 -> Left ("GET " <> url <> " answered " <> show (statusCode (responseStatus response)))
+      | otherwise -> bimap (\why -> "GET " <> url <> ": " <> toS why) Just (eitherDecode (responseBody response))
 
 -- | A text field of a JSON object.
 field :: Text -> Value -> Maybe Text
