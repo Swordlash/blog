@@ -958,12 +958,17 @@ confirms it against reality and the plan is amended if it does not hold.
     program; `--no-rehearsal` skips it (the wizard offers it). CI builds the
     base branch's `wiki-server`, seeds a wiki with it through the admin API
     (`toolchain/rehearse-ci.sh`) and rehearses the upgrade to the pull
-    request's build, on SQLite and on PostgreSQL. What follows, in order:
-    WP5.74a's check (below); then the API and console commands the checks
-    drive are documented as stable; then #202's migrations in code, each with
-    its own check. A migration in code pins the row shapes of its own version
-    rather than the live Beam schema, and one that rewrites page syntax
-    carries its own old-to-new rewriter rather than the live parser.
+    request's build, on SQLite and on PostgreSQL. The second check,
+    `accounts` (WP5.74a's, below), signs in a password canary and an
+    account through `FakeProvider` made on the old program; a test runs
+    every check with this program as old and new (#222). What the checks
+    drive on the old program (the `serve` and database options, `users
+    add`, the admin listener's `info`, spaces and pages, the provider
+    sign-in and its cookies, `session`) is documented as stable and changes
+    only compatibly; a new check that drives something else marks it so.
+    What a check writes into the copy goes through row types of its own,
+    not the live schema, since the copy is at the old program's schema.
+    #202's migrations in code are decision 64; each brings its own check.
 
 59. **A password signs in through OPAQUE (WP5.74a, #184; the owner,
     2026-11-06 to 2026-11-09).** OPAQUE-3DH (RFC 9807) with ristretto255,
@@ -1072,6 +1077,26 @@ confirms it against reality and the plan is amended if it does not hold.
     deployed keeps it: the server at `-O2` (`cabal-native-opt.project`,
     `opaque` included), the browser's application at `-O1` and `-O2`.
 
+64. **A step of the schema may be Haskell (#202, #222; the owner,
+    2026-11-09, with #205's design).** `Wiki.Server.Storage.Migrate.Code`
+    holds `CodeStep`s: a number in the same sequence as the SQL files, a
+    name, and `run` on the migration's connection. `migrate` applies the
+    files and the code steps in the order of their numbers, in one
+    transaction, and records each in `wiki_schema` as a file is; a failing
+    step undoes the whole pass. The numbers of a database's steps, files
+    and code together, must be 1, 2, 3… each once: a program whose steps
+    are not refuses to start before touching the database
+    (`StepsMisnumbered`), and a unit test checks the program's own, so CI
+    catches it (a Template Haskell check would load the whole storage into
+    the interpreter on a module recompiled every build). A step never uses
+    the live schema (`wikiDb`, `Schema`'s rows, `Rows`): it declares the
+    row shapes of its own number, in its own module, and never changes. A
+    step that rewrites page syntax carries its own old-to-new rewriter,
+    not the live parser. A step whose effect can be checked adds a check
+    to `Wiki.Server.Rehearsal.checks`. None exists yet; the first come
+    with #195 and #201. `knownVersion` (the last step of either kind) is
+    the program's schema version for the open check and restore's.
+
 ## Repository layout
 
 ```
@@ -1123,8 +1148,10 @@ In the order to do it, unless the owner says otherwise.
 that moves no button, #217), #199 (decision 62, #216), #214 (libsodium
 from a local file, #215) and WP5.76 (#218); #198 was closed as already
 done. Stage 1,
-foundations: #207 (compile times) is done (#220, decision 63); #202
-(migrations in code, with the rest of #205) is next. Stage 2, the content's structure, on #202: #195 (one syntax
+foundations, is done: #207 (compile times, #220, decision 63), #202
+(migrations in code, with the rest of #205: #222, decisions 58 and 64),
+and the PostgreSQL tests copying a migrated template (#221). Stage 2,
+the content's structure, on #202, is next: #195 (one syntax
 for extensions and styles), #197 (comments), #201 (one home page per
 space, space administrators). Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
@@ -1345,15 +1372,34 @@ needs. Each was true when its package merged; check before relying on one.
   warnings ("type and size of dynamic symbol … are not defined") where
   Template Haskell loads the dynamic objects (the two `WhatsNew` modules)
   and where `wiki-app-test` links; they are not GHC's, `-Werror` does not
-  see them, and `-O1` has none. The longest CI step is now the server's
-  tests on PostgreSQL (four to six minutes): each example makes a database
-  from nothing and migrates it; a migrated template database, or the group
-  split over two jobs, would shorten it. The deploy scripts' tests run in a
+  see them, and `-O1` has none. The longest CI step is the server's
+  tests on PostgreSQL (four to six minutes). Since #221 each example's
+  database is a copy (`STRATEGY FILE_COPY`, PostgreSQL 15 or newer) of a
+  template migrated once per run, which saved only about 12% (276 s to
+  244 s on four cores): the migrations were about 70 ms of an example's
+  940 ms. The rest is a fixed price per example, largest in the HttpWiki
+  and StoredWiki contracts: making and dropping the database and opening
+  the storage's connections. Reusing databases across examples (truncate
+  rather than drop), or the postgres group split over two jobs, is what
+  is left to try. The deploy scripts' tests run in a
   native job of their own (`deploy`, which builds `wiki-server` alone), and
   only the sqlite job builds the base branch's server and rehearses the
   upgrade, on SQLite and then on a PostgreSQL it starts after its tests. A
   machine whose store was built from an older index can keep it with a
   `cabal.project.local` naming that `index-state`.
+- **Test databases and steps in code (#221, #222).** On PostgreSQL
+  `withPlace` and `withPlaceIn` give a database already at the current
+  schema; an example about migrations, schema versions or restores, or
+  one that looks at a database no program has migrated, uses
+  `withEmptyPlace` or `withEmptyPlaceIn`. `withPlaceIn` there still
+  compiles and passes on SQLite, so a new example in `Test.Storage.Migrate`
+  or `Test.Storage.CodeSteps` must be checked to use the empty one.
+  `Test.Storage.Migrate`'s "numbered from 1 with no gaps" checks the SQL
+  files only (`migrationsFor`), and other examples there take their count
+  as the program's version: they move to `stepsFor` and `knownVersion`
+  with the first real code step. The browser test "counts a notification
+  the live channel tells of, with no page shown" failed once on #221's
+  wasm job, whose change touched no application code.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
