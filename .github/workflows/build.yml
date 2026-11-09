@@ -245,12 +245,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Four jobs in parallel. unit, sqlite and postgres run the test suites
+    # of that group (WIKI_TEST_GROUP). deploy builds wiki-server alone and
+    # runs the deploy scripts' tests and the plan job's scripts' tests,
+    # which take about four minutes and need no test suite: in the unit job
+    # they made it the run's longest.
     strategy:
       fail-fast: false
       matrix:
-        group: [unit, sqlite, postgres]
+        group: [unit, sqlite, postgres, deploy]
     env:
-      WIKI_TEST_GROUP: ${{ matrix.group }}
+      WIKI_TEST_GROUP: ${{ matrix.group == 'deploy' && 'unit' || matrix.group }}
 
     steps:
     - name: Checkout code
@@ -284,7 +289,7 @@ jobs:
     # Cache downloads, not an extracted installation: apt/dpkg must still
     # configure TeX and run its triggers on each fresh hosted runner.
     - name: Identify the apt cache platform
-      if: matrix.group != 'unit'
+      if: matrix.group == 'sqlite' || matrix.group == 'postgres'
       id: apt-platform
       run: |
         . /etc/os-release
@@ -292,7 +297,7 @@ jobs:
         echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
     - name: Restore native apt archives
-      if: matrix.group != 'unit'
+      if: matrix.group == 'sqlite' || matrix.group == 'postgres'
       uses: actions/cache/restore@v5
       id: apt-cache
       with:
@@ -301,7 +306,7 @@ jobs:
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
 
     - name: Install native test dependencies
-      run: sh toolchain/ci-native-deps.sh ${{ matrix.group == 'unit' && 'base' || 'full' }}
+      run: sh toolchain/ci-native-deps.sh ${{ (matrix.group == 'unit' || matrix.group == 'deploy') && 'base' || 'full' }}
 
     # One writer for each shared cache; both database jobs read the same apt archives.
     - name: Save native apt archives
@@ -431,9 +436,11 @@ jobs:
     # request's, from the same checkout and build directory, so that only
     # what differs from the restored snapshot compiles. The base's commit is
     # checked out, built and copied aside, and the pull request's checked out
-    # again for the Build step below.
+    # again for the Build step below. Only the sqlite job builds it, and
+    # rehearses the upgrade on both databases: building it in the postgres
+    # job too cost that job two and a half minutes.
     - name: Build the base branch's wiki-server, for the rehearsal
-      if: github.event_name == 'pull_request' && matrix.group != 'unit'
+      if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
       run: |
         head=$(git rev-parse HEAD)
         git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
@@ -443,7 +450,14 @@ jobs:
         git checkout -q "$head"
 
     - name: Build
+      if: matrix.group != 'deploy'
       run: npm run build-native
+
+    # The deploy scripts' tests need only the server, which they serve the
+    # static cases with.
+    - name: Build wiki-server
+      if: matrix.group == 'deploy'
+      run: cabal build wiki-server:exe:wiki-server --builddir=dist-newstyle/native
 
     # Build all native components once per job; the unit job publishes the
     # complete snapshot once the build has passed, even if a later test
@@ -504,50 +518,63 @@ jobs:
       run: sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin" >> "$GITHUB_ENV"
 
     - name: Test
+      if: matrix.group != 'deploy'
       run: npm run test-native
 
     # The upgrade from the base branch, rehearsed as a deploy rehearses it
-    # (toolchain/rehearse-ci.sh): the base's wiki-server makes a wiki on this
-    # group's database, and this pull request's migrates a copy of it and
-    # checks that it reads the same.
-    - name: Rehearse the upgrade from the base branch
-      if: github.event_name == 'pull_request' && matrix.group != 'unit'
+    # (toolchain/rehearse-ci.sh): the base's wiki-server makes a wiki on a
+    # database, and this pull request's migrates a copy of it and checks
+    # that it reads the same. The sqlite job does it on SQLite, then starts
+    # a PostgreSQL of its own, after its tests so that they never see it,
+    # and does it there.
+    - name: Rehearse the upgrade from the base branch on SQLite
+      if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
       run: |
         new=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)
-        sh toolchain/rehearse-ci.sh "$RUNNER_TEMP/base-wiki-server" "$new" ${{ matrix.group == 'postgres' && '--postgres' || '' }}
+        sh toolchain/rehearse-ci.sh "$RUNNER_TEMP/base-wiki-server" "$new"
+
+    - name: Start PostgreSQL for the rehearsal
+      if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
+      run: sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin" >> "$GITHUB_ENV"
+
+    - name: Rehearse the upgrade from the base branch on PostgreSQL
+      if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
+      run: |
+        new=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)
+        sh toolchain/rehearse-ci.sh "$RUNNER_TEMP/base-wiki-server" "$new" --postgres
 
     - name: Stop PostgreSQL
-      if: always() && matrix.group == 'postgres'
+      if: always() && (matrix.group == 'postgres' || (github.event_name == 'pull_request' && matrix.group == 'sqlite'))
       run: sh toolchain/ci-postgres.sh stop
 
     # The deploy scripts against fakes of systemd, ufw, sudo, tailscale (and
     # its serve) and curl, in a temporary home: nothing on the runner is
     # touched, and every server the cases start is stopped when they end.
     # Its last stage serves the static cases with the real wiki-server, the
-    # one the Build step made (cabal list-bin in dist-newstyle/native). About
+    # one the Build wiki-server step made (cabal list-bin in dist-newstyle/native). About
     # two minutes.
     - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
-      if: matrix.group == 'unit'
+      if: matrix.group == 'deploy'
       run: sh toolchain/test-deploy-local.sh
 
     # The plan job's scripts, against a fake GitHub API: a second each.
     - name: Test ci-already-tested.sh
-      if: matrix.group == 'unit'
+      if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-already-tested.sh
 
     - name: Test ci-pick-runner.sh
-      if: matrix.group == 'unit'
+      if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-pick-runner.sh
 
     - name: Test ci-prune-caches.sh
-      if: matrix.group == 'unit'
+      if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-prune-caches.sh
 
     # The README's screenshots are taken by hand (npm run screenshots, which
     # needs a wasm build and Chromium), so nothing in CI runs the script:
     # parsing it at least catches a syntax error before someone next needs it.
     - name: Check screenshots.mjs parses
-      if: matrix.group == 'unit'
+      if: matrix.group == 'deploy'
       run: node --check toolchain/screenshots.mjs
 
     # wiki-server with the cabal flag postgres off, as a deployment on
