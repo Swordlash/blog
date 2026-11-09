@@ -1,5 +1,19 @@
 import: cabal.project
 
+-- cabal.project builds the native packages without optimisation; the wasm
+-- build keeps GHC's usual -O1, since it is the application the browser
+-- tests and the islands run. Package by package, as there.
+package opaque
+  optimization: True
+package wiki-core
+  optimization: True
+package wiki-api
+  optimization: True
+package wiki-app
+  optimization: True
+package wiki-server
+  optimization: True
+
 allow-newer: *:*
 
 -- The cross compiler haskell-halogen pins in its own cabal-wasm.project, from

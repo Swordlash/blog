@@ -2565,9 +2565,17 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 
 `.github/workflows/build.yml` runs three build jobs on every pull request to `main` and
 every push to it, in parallel after a first job, `plan` (below): `native` (build and
-test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`),
-`wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
-and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
+test natively), `wasm` (build for wasm, run the test suites and the smoke test in
+headless Chromium, and keep the built page as the run's `app` artifact) and `format`
+(`npm run format-check`).
+
+`native` runs as four jobs side by side. `unit`, `sqlite` and `postgres` run the
+test groups of the same names (`WIKI_TEST_GROUP`, below); `unit` also builds and
+tests the maker and wiki-server without PostgreSQL. `deploy` builds wiki-server
+alone and tests the deploy scripts (`toolchain/test-deploy-local.sh`) and the plan
+job's scripts. On a pull request, `sqlite` also builds the base branch's wiki-server
+and rehearses the upgrade from it (`toolchain/rehearse-ci.sh`) on SQLite and then
+on a PostgreSQL it starts after its tests.
 
 Besides them, on a pull request only, the job `changelog` checks the pull
 request's changelog entry (`toolchain/check-changelog.sh`, [Changelog

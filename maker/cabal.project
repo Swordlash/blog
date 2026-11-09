@@ -4,6 +4,11 @@
 -- toolchain/maker.sh does that and runs the result.
 packages: .
 
+-- The Hackage index the solver reads, pinned as in the wiki's cabal.project
+-- and bumped with it, so that a `cabal update` changes no dependency of the
+-- maker either.
+index-state: 2026-11-09T00:00:00Z
+
 -- As the wiki's own packages: no warning reaches a commit. Kept out of
 -- maker.cabal so that a newer GHC's new warning never stops a build there.
 package maker
