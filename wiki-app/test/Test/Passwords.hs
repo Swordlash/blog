@@ -19,7 +19,7 @@ import Test.Hspec
 import Wiki.Api.Account (LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), summaryOf)
 import Wiki.Api.Security (AccountEmail (..), EmailState (..))
-import Wiki.App.View.Security (addressText, factorOffText)
+import Wiki.App.View.Security (addressText, factorOffText, factorOnText)
 import Wiki.App.View.SignIn (passwordOffer)
 import Wiki.App.View.UserDialog (NoLink (..), PasswordControl (..), passwordControl)
 import Wiki.Core.Id (UserId (..))
@@ -118,11 +118,13 @@ ownSafety = describe "the panel's second factor and address" $ do
   let stateOf email verified asksPassword = EmailState {email = Email <$> email, verified, mailing = True, mailError = Nothing, asksPassword}
   it "speak of the password of a user who has one" $ do
     factorOffText True `shouldBe` "Off: your password alone signs you in."
+    factorOnText True `shouldBe` "On: a code from your authenticator application is asked for when you sign in with your password."
     addressText (stateOf Nothing False True) `shouldBe` "None: a forgotten password can then only be reset by an administrator."
     addressText (stateOf (Just "ada@example.org") True True) `shouldBe` "ada@example.org, verified: a forgotten password can be reset by mail."
 
   it "speak of the provider's account of a user who has no password, and of no password to reset" $ do
     factorOffText False `shouldBe` "Off: signing in with your provider's account asks for no code."
+    factorOnText False `shouldBe` "On, but no sign-in asks for it: you have no password, and signing in with your provider asks for no code. You can remove it."
     addressText (stateOf Nothing False False) `shouldBe` "None: you sign in with your provider's account, and have no password to reset."
     addressText (stateOf (Just "dee@example.org") True False) `shouldBe` "dee@example.org, verified: the wiki's mail to you goes there."
     for_ [False, True] $ \withOne ->

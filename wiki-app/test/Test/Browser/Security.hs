@@ -20,7 +20,7 @@ import Test.Browser.Http (Asked (..), answerRaw, answerUsers, answerWith, asked,
 import Test.Browser.Mount (start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api.Account (SignInMethods (..))
+import Wiki.Api.Account (LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.Api.Security
 import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
@@ -91,6 +91,7 @@ panel m = describe "the account panel" $ do
         , SessionSummary {id = SessionRef "there", createdAt = demoNow, lastSeenAt = demoNow, address = "100.64.0.9", current = False}
         ]
       off = SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True}
+      offWithout = SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = False}
       noAddress = EmailState {email = Nothing, verified = False, mailing = True, mailError = Nothing, asksPassword = True}
       opened = do
         serverStarts
@@ -101,6 +102,13 @@ panel m = describe "the account panel" $ do
         answerWith "GET" "api/v1/account/sessions" 200 sessions
         answerWith "GET" "api/v1/account/second-factor" 200 off
         answerWith "GET" "api/v1/account/email" 200 noAddress
+      -- The same panel for a user who signs in with a provider and has no
+      -- password, with their second factor as given.
+      withoutPassword factor = do
+        opened
+        answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = False, identities = [LinkedIdentity {provider = "google", email = Nothing, name = Nothing, linkedAt = demoNow}]}
+        answerWith "GET" "api/v1/account/second-factor" 200 factor
+        answerWith "GET" "api/v1/account/email" 200 EmailState {email = Nothing, verified = False, mailing = True, mailError = Nothing, asksPassword = False}
 
   it "lists the user's sessions, this one marked, and signs out another, or all but this one" $ runPage $ do
     opened
@@ -127,6 +135,8 @@ panel m = describe "the account panel" $ do
     ui <- startServer m Home
     find ui ".account-toggle" >>= click
     find ui ".second-factor-off" >>= (`shouldContainText` "Off")
+    -- She has a password: the second factor is hers to turn on.
+    length <$> findAll ui ".second-factor-no-password" `shouldReturn` 0
     find ui ".second-factor-start" >>= click
     -- Her password first, which she has.
     find ui ".totp-password-form input[name=password]" >>= (`typeText` "rita's password")
@@ -150,8 +160,35 @@ panel m = describe "the account panel" $ do
     eventually (length <$> findAll ui ".recovery-code-list li" `shouldReturn` 2)
     filter ((== "api/v1/account/second-factor/totp") . fst) <$> askedWith "PUT" `shouldReturn` replicate 2 ("api/v1/account/second-factor/totp", "{\"code\":\"123456\"}")
     find ui ".recovery-kept" >>= click
-    find ui ".second-factor-on" >>= (`shouldContainText` "You have 2 recovery codes left.")
+    find ui ".second-factor-on" >>= (`shouldContainText` "with your password. You have 2 recovery codes left.")
     length <$> findAll ui ".recovery-code-list" `shouldReturn` 0
+    unmount ui
+    serverStops
+
+  it "offers no second factor to a user without a password, and says why" $ runPage $ do
+    withoutPassword offWithout
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    find ui ".second-factor-off" >>= (`shouldContainText` "asks for no code")
+    start' <- find ui ".second-factor-start"
+    getAttribute start' "disabled" `shouldReturn` Just ""
+    find ui ".second-factor-no-password" >>= (`shouldHaveText` "A second factor protects a password, and you have none: signing in with your provider uses the provider's own.")
+    unmount ui
+    serverStops
+
+  it "lets a user without a password remove a second factor they turned on before" $ runPage $ do
+    withoutPassword SecondFactorState {enabled = True, recoveryCodesLeft = 10, asksPassword = False}
+    answerWith "POST" "api/v1/account/second-factor/remove" 200 offWithout
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    find ui ".second-factor-on" >>= (`shouldContainText` "no sign-in asks for it")
+    find ui ".second-factor-remove-ask" >>= click
+    find ui ".second-factor-remove-form input[name=code]" >>= (`typeText` "287082")
+    find ui ".second-factor-remove-form button[type=submit]" >>= click
+    find ui ".second-factor-off" >>= (`shouldContainText` "asks for no code")
+    askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/remove", "{\"code\":\"287082\"}")]
+    again <- find ui ".second-factor-start"
+    getAttribute again "disabled" `shouldReturn` Just ""
     unmount ui
     serverStops
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+No second factor after a provider's sign-in (decision 62, #199). The
+provider's callback signs a user in as soon as the provider confirms who
+they are, whether or not they have a second factor: the provider has its
+own, and the wiki's protects the password. `POST auth/<provider>/second-factor`
+and the page that posted its code to it are gone (the address now answers
+405), with `Accounts.Landing`'s `SecondFactorFor`. A password's sign-in asks
+for the code as before; the waiting sign-in it holds
+(`SecondFactor.PendingSignIn`) loses its `next`, which only a provider's
+sign-in used, and `holdSignIn` its argument for it.
+
 Encrypted spaces (WP5.74b2). Migration `0011-encrypted-spaces` adds
 `spaces.key_id`, `key_grants`, `page_keys` and `sealed_versions`. The
 storage serves the encrypted routes (`spaceEncryption`, `encryptSpace`,

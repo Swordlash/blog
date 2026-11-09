@@ -832,11 +832,9 @@ Accounts made, and failed exchanges, count against the limit on making
 accounts (five an address in fifteen minutes; 429). Codes, tokens, states
 and secrets are never written in the log (the log has no query strings).
 
-A user with a second factor (below) who signs in with a provider is not
-signed in at the callback: the callback answers a page of its own with a
-form for the code, which it posts to `auth/<provider>/second-factor` with the
-`wiki_pending` cookie; the right code sets the session's cookie and goes on
-to `next`, a wrong one answers the form again (401), five end the sign-in.
+A user with a second factor (below) who signs in with a provider is signed
+in at the callback like anyone else, with no code asked for: the provider
+has its own second factor, and the wiki's protects the password.
 
 ### Avatars
 

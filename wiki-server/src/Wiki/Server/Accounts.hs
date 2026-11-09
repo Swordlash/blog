@@ -62,10 +62,12 @@
 -- it ("Wiki.Server.Oidc" has the provider confirm who it is). 'landWith'
 -- decides the result, in one transaction, by the same rules as the rest.
 -- If the identity belongs to a user, that user is signed in, unless they
--- are disabled. If it belongs to nobody, it is connected to the signed-in
--- user who asked for that; or it creates an account in an open wiki, or
--- with an invitation in any wiki, which it uses up; otherwise a closed
--- wiki refuses it. An account created this way has no password, and a
+-- are disabled. No second factor is asked for, even from a user who has
+-- one: the provider has its own, and the wiki's second factor protects
+-- the password (decision 62 of docs/PLAN.md). If it belongs to nobody, it
+-- is connected to the signed-in user who asked for that; or it creates
+-- an account in an open wiki, or with an invitation in any wiki, which it
+-- uses up; otherwise a closed wiki refuses it. An account created this way has no password, and a
 -- login made from what the provider said ('loginCandidates').
 --
 -- A user may disconnect their identities ('unlinkIdentity'), but not
@@ -371,9 +373,6 @@ data Landing
     SignedInAs User SessionToken Bool
   | -- | The identity now belongs to this user (or already did).
     Linked User
-  | -- | The identity belongs to this user, who has a second factor: they
-    -- are signed in once they give a code ("Wiki.Server.SecondFactor").
-    SecondFactorFor User
   deriving stock (Eq, Show)
 
 -- | Why signing in with a provider failed.
@@ -399,8 +398,8 @@ data Refusal
 -- with it, as requested and as the wiki's rules allow, in one transaction
 -- (see the module's Haddock), from a network address. What the provider
 -- now says about the account is stored with the identity. A user who has
--- a second factor is not signed in by their identity alone, just as not by
--- their password alone: the result says that a code is needed.
+-- a second factor is signed in without its code, since the provider
+-- confirmed who they are with its own sign-in.
 landWith :: Storage -> UTCTime -> Text -> Intent -> Claimed -> IO (Either Refusal Landing)
 landWith st now address intent claimed = do
   settings <- readSettings st
@@ -415,10 +414,7 @@ landWith st now address intent claimed = do
           _ ->
             active found.user >>= \case
               Nothing -> pure (Left DisabledAccount)
-              Just a ->
-                totpEnabled a.user.id >>= \case
-                  True -> pure (Right (SecondFactorFor a.user))
-                  False -> Right . (\token -> SignedInAs a.user token False) <$> startSession now a.user.id address
+              Just a -> Right . (\token -> SignedInAs a.user token False) <$> startSession now a.user.id address
       Nothing -> case intent of
         LinkTo me ->
           active me >>= \case

@@ -1936,10 +1936,12 @@ to the demo, keeping `data/`.
   with "Sign out" for each other session and "Sign out everywhere"; sets up a
   second factor (a code from an authenticator application, scanned from a QR
   code or typed, with ten recovery codes shown once), which signing in then
-  asks for after the password or a provider; and takes an e-mail address,
-  verified by a link mailed to it. "Forgot your password?" under the sign-in
-  form mails a link that sets a new password, once, within thirty minutes, to
-  a verified address only, and says the same whether or not the login exists.
+  asks for after the password (not after a provider's sign-in, which has the
+  provider's own second factor, so an account without a password cannot turn
+  one on); and takes an e-mail address, verified by a link mailed to it.
+  "Forgot your password?" under the sign-in form mails a link that sets a new
+  password, once, within thirty minutes, to a verified address only, and says
+  the same whether or not the login exists.
   Both need the mail server of the "Server" section; without it the forms say
   so. An administrator removes a lost second factor from the Users table, and
   there sends a user that same link with "Send a password link…" rather than

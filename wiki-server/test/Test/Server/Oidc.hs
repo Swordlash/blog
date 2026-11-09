@@ -35,6 +35,7 @@ import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (.
 import Wiki.Api.Account (Account (..), AccountDisabled (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
 import Wiki.Api.ContentPolicy (headerPolicy)
+import Wiki.Api.Error (ApiError (SecondFactorRequired))
 import Wiki.Api.Links (links)
 import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
 import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), defaultHomePage, noServerSettings)
@@ -183,6 +184,16 @@ sendJson' r m url hs value = send r m url ((hContentType, "application/json") : 
 
 says :: Reply -> Text -> Expectation
 says reply words' = decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInfixOf words'
+
+-- | Turn on a second factor for the user of this session, which needs no
+-- password: either they have none, or the session has proved it.
+turnOnSecondFactor :: (HasCallStack) => Running -> Header -> IO ()
+turnOnSecondFactor r c = do
+  enrolment :: TotpEnrolment <- sendJson' r methodPost (onPublic r links.account.enrolTotp) [c] CurrentPassword {password = Nothing} >>= jsonAs 200
+  secret <- maybe (assertFailure "not base32") pure (secretFromText enrolment.secret)
+  now <- getCurrentTime
+  _ :: RecoveryCodes <- sendJson' r methodPut (onPublic r links.account.confirmTotp) [c] OneTimeCode {code = codeAt secret now} >>= jsonAs 200
+  pure ()
 
 overHttp :: Backing -> Spec
 overHttp backing = describe "over HTTP" $ do
@@ -419,34 +430,39 @@ overHttp backing = describe "over HTTP" $ do
       reply <- getUrl r (onPublic r links.account.identities)
       reply.status `shouldBe` 401
 
-  describe "with a second factor" $
-    it "asks for its code on a page of its own, takes the right one only, and goes on where the user was" $
+  describe "with a second factor" $ do
+    -- Decision 62 of docs/PLAN.md: the provider has its own second factor,
+    -- so the wiki's protects the password only.
+    it "signs in through a provider with no code asked for, and goes on where the user was" $
       withOidc backing $ \fake r -> do
         writeIORef fake.user (person "careful")
         c <- signedInWith r "acme" "next=%2F" []
-        enrolment :: TotpEnrolment <- sendJson' r methodPost (onPublic r links.account.enrolTotp) [c] CurrentPassword {password = Nothing} >>= jsonAs 200
-        secret <- maybe (assertFailure "not base32") pure (secretFromText enrolment.secret)
-        now <- getCurrentTime
-        _ :: RecoveryCodes <- sendJson' r methodPut (onPublic r links.account.confirmTotp) [c] OneTimeCode {code = codeAt secret now} >>= jsonAs 200
+        turnOnSecondFactor r c
         reply <- roundTrip r "acme" "next=%2Fs%2Fblog%2F" []
         reply.status `shouldBe` 200
-        reply `says` "second factor"
-        lookup "wiki_session" (cookiesSet reply) `shouldBe` Nothing
-        held <- maybe (assertFailure ("no pending cookie: " <> show reply)) pure (lookup "wiki_pending" (cookiesSet reply))
-        let codeForm code = sendBare r methodPost (onPublic r "auth/acme/second-factor") [(hContentType, "application/x-www-form-urlencoded"), ("Cookie", "wiki_pending=" <> encodeUtf8 held)] ("code=" <> BSL.fromStrict (encodeUtf8 code))
-        wrong <- codeForm "abcdef"
-        wrong.status `shouldBe` 401
-        wrong `says` "not right"
-        lookup "wiki_session" (cookiesSet wrong) `shouldBe` Nothing
-        right <- codeForm (codeAt secret (addUTCTime 30 now))
-        right.status `shouldBe` 200
-        onwardsOf right `shouldBe` Just "/s/blog/"
-        lookup "wiki_pending" (cookiesSet right) `shouldBe` Just ""
-        c' <- sessionGiven right
+        onwardsOf reply `shouldBe` Just "/s/blog/"
+        lookup "wiki_pending" (cookiesSet reply) `shouldBe` Nothing
+        c' <- sessionGiven reply
         loginOf <$> sessionOf r [c'] `shouldReturn` Just "careful"
-        -- Over: the same cookie ends nothing more.
-        again <- codeForm (codeAt secret (addUTCTime 30 now))
-        again.status `shouldBe` 400
+        -- The page that took a code is gone.
+        gone <- send r methodPost (onPublic r "auth/acme/second-factor") [] "code=123456"
+        gone.status `shouldBe` 405
+
+    it "asks the same user for the code after their password, but not after their provider" $
+      withOidc backing $ \fake r -> do
+        givePassword r "user-editor" "editor's password"
+        token <- signInAs r "editor" "editor's password"
+        writeIORef fake.user (person "ed-at-acme")
+        linked <- roundTrip r "acme" "next=%2F&link=1" [cookie token]
+        linked.status `shouldBe` 200
+        _ <- provePassword r (onPublic r) [cookie token] "editor's password"
+        turnOnSecondFactor r (cookie token)
+        byPassword <- passwordSignIn r (onPublic r) [] "editor" "editor's password"
+        jsonAs 401 byPassword `shouldReturn` SecondFactorRequired
+        setCookie byPassword `shouldBe` Nothing
+        lookup "wiki_pending" (cookiesSet byPassword) `shouldSatisfy` maybe False (not . T.null)
+        c <- signedInWith r "acme" "next=%2F" []
+        loginOf <$> sessionOf r [c] `shouldReturn` Just "editor"
 
   describe "refusing" $ do
     it "refuses a disabled user" $ withOidc backing $ \fake r -> do

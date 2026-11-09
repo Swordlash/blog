@@ -20,6 +20,13 @@ editor's toolbar menus use it; the search box keeps its own subscription to
 `pressedOutside`. `Wiki.App.View.Starred` and `Wiki.App.View.Bell` now need
 `MonadUUID`, `MonadBrowserDOM` and `MonadUnliftIO`.
 
+The account panel offers no second factor to an account without a password
+(decision 62, #199): "Set up a second factor…" is disabled, with a line
+saying that a second factor protects a password and that a provider's
+sign-in uses the provider's own. Such an account that turned one on before
+still removes it with a code. The panel says the code is asked for when
+signing in with the password; `Wiki.App.View.Security` gains `factorOnText`.
+
 Encrypted spaces (WP5.74b2). The HTTP backend reads and writes the pages of
 an encrypted space through the encrypted routes, encrypting and decrypting
 in the browser (`Wiki.App.Encrypted`, `jsbits/encrypted.js`), and searches
