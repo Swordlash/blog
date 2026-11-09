@@ -12,6 +12,20 @@ for the code as before; the waiting sign-in it holds
 (`SecondFactor.PendingSignIn`) loses its `next`, which only a provider's
 sign-in used, and `holdSignIn` its argument for it.
 
+The live channel checks who reads and edits a page only when permissions
+change (WP5.76). A `Reading` or `Editing` update goes without a permission
+check to a subscription checked since the last change. The storage's new
+`Config` callback `permissionsChanged` is called after a write that bumped
+the permission context's generation, moved or deleted a page, or changed
+whom the wiki is open to or the home page's visibility, and when a read
+finds a generation newer than any seen (a change made by the console in
+another process); every write now reads the generation before it commits.
+The hub then checks every subscription again, and one that fails is
+dropped: the tab is told `Refused`, and leaves the page's readers and
+editors. A subscription that fails the check before a comment change or a
+save is dropped the same way. `PageChanged` and the comments' events are
+still checked before each one is sent.
+
 Encrypted spaces (WP5.74b2). Migration `0011-encrypted-spaces` adds
 `spaces.key_id`, `key_grants`, `page_keys` and `sealed_versions`. The
 storage serves the encrypted routes (`spaceEncryption`, `encryptSpace`,

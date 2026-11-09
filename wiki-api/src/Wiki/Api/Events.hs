@@ -225,7 +225,9 @@ data ServerMessage
     -- these read it (as in 'Reading').
     Subscribed PageId [Thread] [Author] Readers
   | -- | The tab may not receive this page's changes: the page does not
-    -- exist, or the connection's user may not read it.
+    -- exist, or the connection's user may not read it. It answers a
+    -- subscription, or comes later, when a permission changes and the
+    -- server drops a subscription whose user may no longer read the page.
     Refused PageId
   | -- | A change to a page the tab is subscribed to.
     Event PageId PageEvent

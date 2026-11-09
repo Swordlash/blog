@@ -155,7 +155,7 @@ withServerUsing given raw sendMail action = do
   handle (\(DataDirInUse why) -> throwIO (ServerError [why]))
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
-    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, passwordStretch = options.passwordStretch, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
+    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, passwordStretch = options.passwordStretch, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake, permissionsChanged = Events.permissionsChanged events} place
     $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage
       let notifier = newNotifier logger sendMail wake storage

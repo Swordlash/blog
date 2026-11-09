@@ -38,6 +38,15 @@
 -- threads of every watched page, so that a page shown then fetches them
 -- from the server.
 --
+-- The server refuses a page the tab's user may not read: as the answer to
+-- its subscription, or later, when a permission changes. A refused page
+-- gets nothing more, so its editors and readers are cleared and its cached
+-- threads dropped, and it is asked for again after a pause that doubles,
+-- from one second up to half a minute, until the server answers it.
+-- The server also drops the tab from the page's editors when it refuses
+-- the page, so a tab still editing the page says so again once the server
+-- answers.
+--
 -- A socket is opened as the user the browser's cookie names, and stays
 -- that user's: signing in or out 'restart's it.
 --
@@ -109,7 +118,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter (..), Listener (..))
 import Halogen.Subscription qualified as HS
 import Protolude
-import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers, ServerMessage (..), eventsPath)
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers, ServerMessage (..), eventsPath, noReaders)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (Notification)
@@ -211,6 +220,9 @@ data Channel = Channel
   -- ^ Who else reads each watched page, as the current socket said.
   , pause :: Int
   -- ^ How long to wait before opening it again, in milliseconds.
+  , refused :: Map PageId Int
+  -- ^ The watched pages whose subscription the server refused, each with
+  -- how long to wait before asking for it again, in milliseconds.
   , generation :: Int
   -- ^ Incremented on each restart, so that messages from the socket the
   -- restart closed are not taken for the new one's.
@@ -243,7 +255,7 @@ newFeed keep catchUp forget notified missed
   | not inBrowser = quietFeed
   | otherwise = do
       channel <- HS.create
-      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, editing = mempty, listeners = 0, opened = False, known = mempty, readers = mempty, pause = firstPause, generation = 0}
+      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, editing = mempty, listeners = 0, opened = False, known = mempty, readers = mempty, pause = firstPause, refused = mempty, generation = 0}
       let keeping = Keeping {keep, catchUp, forget, notified, missed}
       let tell = channel.listener.notify
           watch page = do
@@ -256,7 +268,7 @@ newFeed keep catchUp forget notified missed
           unwatch page = do
             gone <- atomicModifyIORef' held $ \c -> case Map.lookup page c.pages of
               Just n | n > 1 -> (c {pages = Map.insert page (n - 1) c.pages}, False)
-              Just _ -> (c {pages = Map.delete page c.pages, known = Map.delete page c.known, readers = Map.delete page c.readers}, True)
+              Just _ -> (c {pages = Map.delete page c.pages, known = Map.delete page c.known, readers = Map.delete page c.readers, refused = Map.delete page c.refused}, True)
               Nothing -> (c, False)
             when gone $ do
               c <- readIORef held
@@ -265,7 +277,7 @@ newFeed keep catchUp forget notified missed
               forget page
           restart = do
             old <- atomicModifyIORef' held $ \c ->
-              (c {socket = Nothing, open = False, connecting = wanted c, known = mempty, readers = mempty, opened = False, generation = c.generation + 1, pause = firstPause}, c)
+              (c {socket = Nothing, open = False, connecting = wanted c, known = mempty, readers = mempty, refused = mempty, opened = False, generation = c.generation + 1, pause = firstPause}, c)
             traverse_ WS.close' old.socket
             when (wanted old) (connect held keeping tell)
           listen = do
@@ -339,13 +351,36 @@ connect held keeping tell = do
           -- An answer about a page no longer watched since it was asked
           -- for is dropped. Who else edits and reads the page is delivered
           -- after the threads, as the events that say it.
+          --
+          -- A page the server refused earlier was also dropped from the
+          -- server's list of who edits it. If this tab still edits the
+          -- page, the tab says so again once the subscription is back.
           Just (Subscribed page threads editors readers) -> whenM (watched page) $ do
+            c <- atomicModifyIORef' held (\c -> (c {refused = Map.delete page c.refused}, c))
+            when (Map.member page c.refused && Set.member page c.editing) (say c (StartEditing page))
             keeping.catchUp page threads
             heardEditors page editors
             heardReaders page readers
             tell (Replaced page threads)
             tell (Heard page (Editing editors))
             tell (Heard page (Reading readers))
+          -- The server refused the page: at subscription, or later, when a
+          -- permission changed and the tab's user may no longer read it.
+          -- Nothing more comes for it, so who edits and reads it is
+          -- cleared, and its cached threads are dropped. The tab asks
+          -- again after a pause that doubles with each refusal, so that
+          -- live updates resume once the user may read the page again.
+          Just (Refused page) -> whenM (watched page) $ do
+            backoff <- atomicModifyIORef' held $ \c ->
+              let backoff = Map.findWithDefault firstPause page c.refused
+               in (c {known = Map.delete page c.known, readers = Map.delete page c.readers, refused = Map.insert page (min longestPause (backoff * 2)) c.refused}, backoff)
+            keeping.forget page
+            tell (Heard page (Editing []))
+            tell (Heard page (Reading noReaders))
+            void . forkIO $ do
+              threadDelay (backoff * 1000)
+              c <- readIORef held
+              whenM current $ when (c.open && Map.member page c.pages && Map.member page c.refused) (say c (Subscribe page))
           Just (Notified n) -> do
             keeping.notified n
             tell (Notice n)

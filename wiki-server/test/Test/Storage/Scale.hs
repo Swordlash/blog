@@ -6,7 +6,8 @@
 -- watches as in the demo. The bell reads one page of notifications and the
 -- pages of each of their spaces once, however many notifications are kept.
 -- The live channel checks once for each user whether they may read a page
--- an event is about, however many of their tabs show it.
+-- an event is about, however many of their tabs show it, and does not
+-- check at all before telling who reads or edits the page (WP5.76).
 --
 -- WP5.25 adds the administration's page of users, filtered to the
 -- administrators however many there are.
@@ -52,7 +53,7 @@ import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
 import Wiki.Api.Admin (UserPage (..), UserQuery (..), UserSummary (..))
-import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), Readers (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -411,7 +412,7 @@ bell backing = describe "the bell" $ do
 
 hub :: Backing -> Spec
 hub backing = describe "the live channel" $
-  it "checks once for each user whether they may read a page an event is about, not once for each tab" $
+  it "checks once for each user whether they may read a page an event is about, not once for each tab, and not at all for who reads or edits it" $
     withDemo backing $ \st -> do
       events <- newHub
       notes <- runStoredWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
@@ -424,30 +425,40 @@ hub backing = describe "the live channel" $
       testWithApplication (pure app) $ \port -> do
         subscribed <- newEmptyMVar
         heard <- newEmptyMVar
+        arrived <- newEmptyMVar
+        left <- newEmptyMVar
+        editing <- newEmptyMVar
         counted <- newEmptyMVar
-        let tab i = WS.runClientWith "127.0.0.1" port ("/" <> toS eventsPath) WS.defaultConnectionOptions [("X-Test-User", show (i `mod` length users))] $ \c -> do
+        let connect headers act = WS.runClientWith "127.0.0.1" port ("/" <> toS eventsPath) WS.defaultConnectionOptions headers $ \c -> do
               WS.sendTextData c (encode (Subscribe notes.id))
               let next = timeout 10_000_000 (WS.receiveData c) >>= maybe (assertFailure "nothing heard in ten seconds") (pure . decode)
                   untilSubscribed =
                     next >>= \case
-                      Just (Subscribed {}) -> putMVar subscribed ()
+                      Just (Subscribed {}) -> pass
                       _ -> untilSubscribed
-                  -- Only the page's saves are counted as heard. Who reads
-                  -- the page comes as an event too ('Reading'), when
-                  -- another user's first tab subscribes, and is skipped.
-                  untilSaves n
+              untilSubscribed
+              act next c
+              -- The tab stays open until the counting is done. The last
+              -- tab of a user to close changes who reads the page.
+              readMVar counted
+            -- What a tab hears and tells the test: three saves of the
+            -- page, a visitor's arrival and departure (who reads the
+            -- page), and the editor starting to edit it. Each user's first
+            -- tab changes who reads the page too, before any of these, and
+            -- is skipped.
+            tab i = connect [("X-Test-User", show (i `mod` length users))] $ \next _ -> do
+              putMVar subscribed ()
+              let listen visited n
                     | n <= (0 :: Int) = pass
                     | otherwise =
                         next >>= \case
-                          Just (Event _ (PageChanged _)) -> putMVar heard () >> untilSaves (n - 1)
-                          _ -> untilSaves n
-              untilSubscribed
-              untilSaves 3
-              -- The tab stays open until the counting is done. The last
-              -- tab of a user to close changes who reads the page, the
-              -- other tabs are told, and that 'Reading' event is checked
-              -- too.
-              readMVar counted
+                          Just (Event _ (PageChanged _)) -> putMVar heard () >> listen visited (n - 1)
+                          Just (Event _ (Reading r))
+                            | r.visitors == 1 -> putMVar arrived () >> listen True (n - 1)
+                            | visited && r.visitors == 0 -> putMVar left () >> listen visited (n - 1)
+                          Just (Event _ (Editing (_ : _))) -> putMVar editing () >> listen visited (n - 1)
+                          _ -> listen visited n
+              listen False 6
         running <- for [1 .. tabs] (async . tab)
         flip finally (traverse_ cancel running) $ do
           replicateM_ tabs (takeMVar subscribed)
@@ -455,24 +466,39 @@ hub backing = describe "the live channel" $
               -- Each permission check is a read transaction on a reader,
               -- which begins with a plain BEGIN; a write begins with
               -- BEGIN IMMEDIATE.
-              checksFor event = do
-                (_, statements) <- statementsOf st (everyTabHears event)
-                pure (length (filter (== "BEGIN") statements))
+              beginsIn act = length . filter (== "BEGIN") . snd <$> statementsOf st act
           -- A save first, not counted, so that the channel is quiet when
-          -- the counting starts. Each subscription that changed who reads
-          -- the page put a 'Reading' event in the other tabs' queues, in
-          -- the same transaction as its own answer, so before the last
-          -- answer the loop above waited for. Those events are checked
-          -- too, as each tab's thread reaches them. A tab's queue is sent
-          -- in order, and an event is sent only once its check is
-          -- answered, so a tab that has heard this save has had every
-          -- earlier check answered. Once every tab has heard it, no check
-          -- is left but those of the saves counted below.
+          -- the counting starts. A tab's queue is sent in order, and an
+          -- event is sent only once its check is answered, so a tab that
+          -- has heard this save has had every earlier check answered.
+          -- Once every tab has heard it, no check is left but those of
+          -- the saves counted below.
           everyTabHears (PageChanged notes.updatedAt)
-          checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
-          checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
-          putMVar counted ()
-          traverse_ wait running
+          -- A save is checked each time, once for each user.
+          beginsIn (everyTabHears (PageChanged notes.updatedAt)) `shouldReturn` length users
+          beginsIn (everyTabHears (PageChanged notes.updatedAt)) `shouldReturn` length users
+          -- Two more tabs, a visitor's and another of the editor's, each
+          -- subscribed (a read on the writer, not counted), and waiting
+          -- for their cue. The visitor's arrival changes who reads the
+          -- page, which every tab hears.
+          visitorIn <- newEmptyMVar
+          visitorGo <- newEmptyMVar
+          editorIn <- newEmptyMVar
+          editorGo <- newEmptyMVar
+          let cued ready go message _ c = putMVar ready () >> takeMVar go >> WS.sendTextData c (encode message)
+          others <- for [connect [] (cued visitorIn visitorGo (Unsubscribe notes.id)), connect [("X-Test-User", "1")] (cued editorIn editorGo (StartEditing notes.id))] async
+          flip finally (traverse_ cancel others) $ do
+            takeMVar visitorIn
+            takeMVar editorIn
+            replicateM_ tabs (takeMVar arrived)
+            -- Who reads the page and who edits it is told to every tab
+            -- without a check: the visitor leaving costs no transaction,
+            -- and the editor starting to edit costs one, which checks
+            -- that they may edit the page.
+            beginsIn (putMVar visitorGo () >> replicateM_ tabs (takeMVar left)) `shouldReturn` 0
+            beginsIn (putMVar editorGo () >> replicateM_ tabs (takeMVar editing)) `shouldReturn` 1
+            putMVar counted ()
+            traverse_ wait (running <> others)
 
 search :: Backing -> Spec
 search backing = describe "the search" $ do
