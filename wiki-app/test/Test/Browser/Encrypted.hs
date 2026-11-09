@@ -145,15 +145,17 @@ spec m = do
     void (ok =<< run env (createPage secret.id Nothing "Behind the lock" "Read me once unlocked."))
     -- A device that never held the admin's private key.
     unsafeIOToPageM (js_forget_device (toJSText ("user-admin" :: Text)))
+    fresh <- as "user-admin"
+    run fresh (keyState secret.id) `shouldReturn` Right KeysLocked
     serveDemo
     answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
     ui <- startServer m (R.Space [secretSlug])
-    eventually (find ui ".encrypted-space .encrypted-state" >>= (`shouldContainText` "does not hold your keys"))
+    eventually (find ui ".encrypted-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "does not hold your keys"))
     _ <- find ui ".encrypted-unlock-passkey"
     -- What an unlock of the vault puts on the device ("Wiki.App.Vault").
     unsafeIOToPageM (js_unlock_device (toJSText ("user-admin" :: Text)))
     find ui ".encrypted-retry" >>= click
-    eventually (find ui "body" >>= (`shouldContainText` "Behind the lock"))
+    eventually (find ui ".page-tree" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Behind the lock"))
     length <$> findAll ui ".encrypted-space" `shouldReturn` 0
   where
     -- The server with the space, the admin and the reader its readers, and
@@ -214,6 +216,3 @@ secret =
     , blog = False
     , boxNumbering = InPage
     }
-
-shouldContainText :: Element s -> Text -> PageM s ()
-shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
