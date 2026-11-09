@@ -984,7 +984,9 @@ find_maker() {
       die "the maker, which does the rest of the deploy, needs GHC and cabal, and this machine has none yet: run this once without --no-build, which installs them (toolchain/bootstrap.sh maker)"
     built=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>/dev/null) || built=
     [ -n "$built" ] && [ -x "$built" ] || say "building the maker (maker/; once, later runs reuse it)"
-    (cd "$ROOT/maker" && cabal build -v0 exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
+    # cabal's own output shows the build's progress: the maker's libraries,
+    # then its modules, which take minutes on a first run.
+    (cd "$ROOT/maker" && cabal build exe:maker) || die "building the maker (cd maker && cabal build exe:maker) failed (see above)"
     maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker) || die "finding the maker's binary (cd maker && cabal list-bin exe:maker) failed"
   fi
 }

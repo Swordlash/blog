@@ -1031,13 +1031,9 @@ build_maker() {
   if [ -z "$maker" ]; then
     maker=$(cd "$ROOT/maker" && cabal list-bin -v0 exe:maker 2>>"$LOG") || fail "finding the maker's binary (maker/)"
     [ -x "$maker" ] || say "building the maker (maker/; once, later runs reuse it)"
-    built=$(mktemp)
-    if ! (cd "$ROOT/maker" && cabal build -v0 exe:maker) >"$built" 2>&1; then
-      cat "$built" >>"$LOG"
-      rm -f "$built"
-      fail "building the maker (cd maker && cabal build exe:maker)"
-    fi
-    rm -f "$built"
+    # A long step: in the deploy's modes its progress (the maker's
+    # libraries, then its modules) is shown as it comes, and it is logged.
+    run_long "building the maker (cd maker && cabal build exe:maker)" sh -c 'cd "$1/maker" && cabal build exe:maker' sh "$ROOT"
   fi
 }
 hand_over() {
