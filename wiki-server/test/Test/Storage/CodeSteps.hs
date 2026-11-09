@@ -13,17 +13,10 @@ import Protolude
 import System.IO.Error (userError)
 import Test.Database (Backing, withConnectionTo)
 import Test.Hspec
-import Test.Storage.Fixture (withPlaceIn)
-import Wiki.Server.Storage (Place)
+import Test.Storage.Fixture (withEmptyPlaceIn)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
-
--- | A place whose database is empty, with no table in it: what every test
--- here starts from, since each applies the schema itself. It is the one
--- place to change if the tests' places come already migrated.
-emptyPlace :: Backing -> (Place -> IO a) -> IO a
-emptyPlace = withPlaceIn
 
 -- | The @settings@ table as the tests' steps pin it, at the version of the
 -- schema they run after: a key and a value, both text. A real step in
@@ -121,7 +114,7 @@ unitSpec = describe "the schema's steps, in SQL and in code" $ do
 spec :: Backing -> Spec
 spec backing = describe "the schema's steps in code" $ do
   it "run after the files numbered before them, and are recorded as the files are" $
-    emptyPlace backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
           n = length files
       applySteps (arrange files [noteStep (n + 1)]) c `shouldReturn` [1 .. n + 1]
@@ -133,7 +126,7 @@ spec backing = describe "the schema's steps in code" $ do
       applySteps (reverse (arrange files [noteStep (n + 1)])) c `shouldReturn` []
 
   it "read and rewrite rows written before them, through tables of their own" $
-    emptyPlace backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
           n = length files
       _ <- applySteps (arrange files []) c
@@ -142,7 +135,7 @@ spec backing = describe "the schema's steps in code" $ do
       settingsOf c `shouldReturn` [("plain", "no marker"), ("quoted", "it's {{a}} and {{b}}")]
 
   it "that fail leave the database at the version before them, and what they wrote is undone" $
-    emptyPlace backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
           n = length files
       _ <- applySteps (arrange files []) c
@@ -156,7 +149,7 @@ spec backing = describe "the schema's steps in code" $ do
       applySteps (arrange files [rewriteStep (n + 1)]) c `shouldReturn` [n + 1]
 
   it "share the transaction of the files: a step in code that fails undoes the files applied before it" $
-    emptyPlace backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
       result <- try @IOException (applySteps (arrange files [failingStep (length files + 1)]) c)
       result `shouldSatisfy` isLeft
@@ -164,7 +157,7 @@ spec backing = describe "the schema's steps in code" $ do
       runDb c tableNames `shouldReturn` []
 
   it "are refused when misnumbered, before the database is touched" $
-    emptyPlace backing $ \at -> withConnectionTo at $ \c -> do
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
       result <- try @StepsMisnumbered (applySteps (arrange files [noteStep (length files)]) c)
       case result of
