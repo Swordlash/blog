@@ -27,6 +27,7 @@ import Test.Server.Metrics qualified as Metrics
 import Test.Server.Notifications qualified as Notifications
 import Test.Server.Observability qualified as Observability
 import Test.Server.Oidc qualified as Oidc
+import Test.Server.Opaque qualified as Opaque
 import Test.Server.Options qualified as Options
 import Test.Server.Presence qualified as Presence
 import Test.Server.Rehearsal qualified as Rehearsal
@@ -69,6 +70,7 @@ main = secureMain $ do
         Compress.spec
         Tls.keySpec
         WhatsNew.unitSpec
+        Opaque.unitSpec
         Rehearsal.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do

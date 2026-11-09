@@ -26,12 +26,8 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Feed (children, parsed, textOf)
 import Test.Server.Fixture
-import Wiki.Api (WikiApi (..))
-import Wiki.Api.Account (Credentials (..))
 import Wiki.Api.Events (ClientMessage (..), ServerMessage (..), eventsPath)
-import Wiki.Api.Links (links)
 import Wiki.Core.Id (PageId (..))
-import Wiki.Core.User (Password (..))
 import Wiki.Server (ServerError (..))
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Tls (loadTls)
@@ -87,7 +83,7 @@ overHttps backing = describe "with a certificate of its own" $ do
       -- The cookie is Secure without --secure-cookies: a server that
       -- speaks TLS is reached over HTTPS only.
       givePassword r "user-admin" "admin's password"
-      reply <- sendJson r "POST" (r.public <> "/" <> links.signIn) Credentials {login = "admin", password = Password "admin's password"}
+      reply <- passwordSignIn r (\l -> r.public <> "/" <> l) [] "admin" "admin's password"
       reply.status `shouldBe` 200
       (snd <$> setCookie reply) `shouldSatisfy` maybe False (elem "Secure")
 

@@ -13,20 +13,33 @@
 -- giving the one they have; wrong ones count as failed sign-ins.
 module Test.Server.Accounts (spec) where
 
-import Data.Aeson (encode)
+import Crypto.OPAQUE qualified as O
+import Data.Aeson
+  ( ToJSON
+  , encode
+  )
+import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
+import Database.Beam (runUpdate, update, val_, (<-.), (==.))
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Protolude
 import Test.Database (Backing, placeOptionsOf)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), PasswordChange (..), SignInMethods (..))
-import Wiki.Api.Admin (Directory (..), ServerStatus, WikiSettings (..))
+import Wiki.Api.Account
+  ( Account (..)
+  , AccountDisabled (..)
+  , Credentials (..)
+  , NewAccount (..)
+  , SignInMethods (..)
+  )
+import Wiki.Api.Admin (Directory (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), NewAccountRecord (..), PasswordRecordChange (..), RegistrationFor (..), Stretch (..), bytesOf, messageOf)
 import Wiki.Api.Types (NewPage (..), NewSpace (..), SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId, UserId (..))
@@ -36,7 +49,12 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
+import Wiki.Server.Opaque (loadServerSetup, registerHere)
 import Wiki.Server.Options (ServeOptions (..))
+import Wiki.Server.Password (hashWith, parameters)
+import Wiki.Server.Storage (withStorageAside, writing)
+import Wiki.Server.Storage.Rows (storeRecord)
+import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
 spec backing = describe "accounts over HTTP" $ do
@@ -45,6 +63,7 @@ spec backing = describe "accounts over HTTP" $ do
   administration backing
   endings backing
   ownPassword backing
+  opaque backing
   pages backing
   guards backing
 
@@ -81,7 +100,7 @@ newPage r hs sid = send r methodPost (onPublic r (links.spaces.createPage sid)) 
 signingIn :: Backing -> Spec
 signingIn backing = describe "signing in" $ do
   it "answers with the session, and a cookie that is HttpOnly, SameSite=Strict, at the base path, for two weeks" $ withPasswords backing identity $ \r -> do
-    reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"}
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's password"
     info :: SessionInfo <- jsonAs 200 reply
     ((\u -> u.login.text) <$> info.user, info.standing) `shouldBe` (Just "editor", SignedIn)
     (snd <$> setCookie reply) `shouldBe` Just ["Path=/", "Max-Age=1209600", "HttpOnly", "SameSite=Strict"]
@@ -91,18 +110,18 @@ signingIn backing = describe "signing in" $ do
 
   it "marks the cookie Secure under --secure-cookies, and sets it below the base path" $
     withPasswords backing (\o -> o {secureCookies = True, basePath = "/wiki/"}) $ \r -> do
-      reply <- sendJson r methodPost (r.public <> "/wiki/" <> links.signIn) Credentials {login = "editor", password = Password "editor's password"}
+      reply <- passwordSignIn r (\l -> r.public <> "/wiki/" <> l) [] "editor" "editor's password"
       (snd <$> setCookie reply) `shouldBe` Just ["Path=/wiki/", "Max-Age=1209600", "HttpOnly", "SameSite=Strict", "Secure"]
 
   it "refuses a wrong password, an unknown login and a login without a password alike, with a 401" $ withPasswords backing identity $ \r -> do
     for_ [("editor", "wrong"), ("nobody", "editor's password"), ("reader", "")] $ \(login, password) -> do
-      reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login, password = Password password}
+      reply <- passwordSignIn r (onPublic r) [] login password
       jsonAs 401 reply `shouldReturn` Unauthenticated
       setCookie reply `shouldBe` Nothing
 
   it "refuses a login tried too often from an address with a 429, even with the right password" $ withPasswords backing identity $ \r -> do
-    replicateM_ 5 $ sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "guess"}
-    reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"}
+    replicateM_ 5 $ passwordSignIn r (onPublic r) [] "editor" "guess"
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's password"
     reply.status `shouldBe` 429
     (json reply :: IO ApiError) >>= (`shouldSatisfy` \case TooManyRequests why -> "try again in" `T.isInfixOf` why; _ -> False)
     header "Retry-After" reply `shouldSatisfy` maybe False (BC.all isDigit)
@@ -112,7 +131,7 @@ signingIn backing = describe "signing in" $ do
 
   it "replaces the session the browser had" $ withPasswords backing identity $ \r -> do
     first' <- signInAs r "editor" "editor's password"
-    reply <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), cookie first'] (encode Credentials {login = "admin", password = Password "admin's password"})
+    reply <- passwordSignIn r (onPublic r) [cookie first'] "admin" "admin's password"
     second' <- maybe (panic "no cookie") (pure . fst) (setCookie reply)
     (old, _) <- sessionWith r [cookie first']
     old.user `shouldBe` Nothing
@@ -162,18 +181,18 @@ administration backing = describe "the administrator on the admin listener" $ do
     editor <- signInAs r "editor" "editor's password"
     me :: SessionInfo <- getUrlWith r (onAdmin r links.session) [cookie editor] >>= jsonAs 200
     ((\u -> u.login.text) <$> me.user, me.standing) `shouldBe` (Just "administrator", Operator)
-    (.status) <$> sendJson r methodPost (onAdmin r links.signIn) Credentials {login = "editor", password = Password "editor's password"} `shouldReturn` 400
+    (.status) <$> passwordSignIn r (onAdmin r) [] "editor" "editor's password" `shouldReturn` 400
 
   it "makes a user with a password, who signs in on the public listener" $ withPasswords backing identity $ \r -> do
-    made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
+    made :: Account <- createUser r (onAdmin r) [] NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
     (made.user.login.text, made.hasPassword, made.disabled) `shouldBe` ("bea", True, False)
     token <- signInAs r "bea" "bea's password"
     (me, _) <- sessionWith r [cookie token]
     (\u -> u.id) <$> me.user `shouldBe` Just made.user.id
-    again <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "BEA", displayName = "", password = Password "another password", email = Nothing}
+    again <- createUser r (onAdmin r) [] NewAccount {login = "BEA", displayName = "", password = Password "another password", email = Nothing}
     (json again :: IO ApiError) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
-    short <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = Password "short", email = Nothing}
-    short.status `shouldBe` 400
+    -- The record is the password as the server stores it; no hash is kept.
+    legacyPasswords r `shouldReturn` 0
 
   -- WP5.18 of docs/PLAN.md: a wiki may leave accounts with a password to
   -- the server's console. The setting is kept in the database, so it
@@ -184,23 +203,23 @@ administration backing = describe "the administrator on the admin listener" $ do
       ( \r -> do
           settings :: WikiSettings <- getUrl r (onAdmin r links.admin.settings) >>= jsonAs 200
           settings.adminCreatesPasswordAccounts `shouldBe` True
-          _ :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) (newAccount "bea") >>= jsonAs 201
+          _ :: Account <- createUser r (onAdmin r) [] (newAccount "bea") >>= jsonAs 201
           answered :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) consoleOnly >>= jsonAs 200
           answered `shouldBe` consoleOnly
-          (sendJson r methodPost (onAdmin r links.admin.createUser) (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
+          (createUser r (onAdmin r) [] (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
           -- Refused before the address is looked at.
-          (sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = Password "cid's password", email = Just "not an address"} >>= jsonAs 403) `shouldReturn` Forbidden
+          (sendJson r methodPost (onAdmin r links.admin.createUser) NewAccountRecord {login = "cid", displayName = "", password = noRecord, email = Just "not an address"} >>= jsonAs 403) `shouldReturn` Forbidden
           -- An administrator signed in on the public listener is refused the same.
           givePassword r "user-admin" "admin's password"
           admin <- signInAs r "admin" "admin's password"
-          reply <- send r methodPost (onPublic r links.admin.createUser) [(hContentType, "application/json"), cookie admin] (encode (newAccount "cid"))
+          reply <- createUser r (onPublic r) [cookie admin] (newAccount "cid")
           jsonAs 403 reply `shouldReturn` Forbidden
           -- An existing user is given a password as before.
           givePassword r "user-editor" "editor's password"
       )
       ( \() again -> do
           (getUrl again (onAdmin again links.admin.settings) >>= jsonAs 200) `shouldReturn` consoleOnly
-          (sendJson again methodPost (onAdmin again links.admin.createUser) (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
+          (createUser again (onAdmin again) [] (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
           users :: Directory <- getUrl again (onAdmin again links.admin.directory) >>= jsonAs 200
           users.adminCreatesPasswordAccounts `shouldBe` False
           map (\u -> u.login.text) users.users `shouldBe` ["admin", "bea", "editor", "reader"]
@@ -210,7 +229,7 @@ administration backing = describe "the administrator on the admin listener" $ do
           _ <- signInAs again "cid" "cid's password"
           -- Turned on again, the administration makes accounts again.
           _ :: WikiSettings <- sendJson again methodPut (onAdmin again links.admin.setSettings) WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
-          _ :: Account <- sendJson again methodPost (onAdmin again links.admin.createUser) (newAccount "dee") >>= jsonAs 201
+          _ :: Account <- createUser again (onAdmin again) [] (newAccount "dee") >>= jsonAs 201
           pass
       )
 
@@ -265,7 +284,7 @@ endings backing = describe "a session" $ do
     givePassword r "user-editor" "a new password"
     (me, _) <- sessionWith r [cookie token]
     me.user `shouldBe` Nothing
-    (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"} `shouldReturn` 401
+    (.status) <$> passwordSignIn r (onPublic r) [] "editor" "editor's password" `shouldReturn` 401
     _ <- signInAs r "editor" "a new password"
     pass
 
@@ -280,8 +299,31 @@ endings backing = describe "a session" $ do
 -- | A change of one's own password, with the cookie of the session it is
 -- made from.
 changing :: Running -> Text -> Maybe Text -> Text -> IO Reply
-changing r token current new =
-  send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie token] (encode PasswordChange {current = Password <$> current, new = Password new})
+changing r token current new = do
+  -- As the application does: the current password proved through OPAQUE
+  -- first, and sent only when that fails.
+  proved <- case current of
+    Nothing -> pure False
+    Just c -> (\x -> x.status == 204) <$> provePassword r (onPublic r) [cookie token] c
+  withRecord r (onPublic r) [cookie token] ForOwnPassword new $ \record ->
+    send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie token] (encode PasswordRecordChange {current = if proved then Nothing else Password <$> current, password = record})
+
+-- | A PUT with a JSON body and these headers.
+sendJson' :: (ToJSON a) => Running -> Text -> [Header] -> a -> IO Reply
+sendJson' r url hs value = send r methodPut url ((hContentType, "application/json") : hs) (encode value)
+
+-- | Create a user as the application does, through the API at the
+-- addresses the function gives: the reply. A registration that is refused
+-- is the reply.
+createUser :: Running -> (Text -> Text) -> [Header] -> NewAccount -> IO Reply
+createUser r at hs new =
+  withRecord r at hs ForNewUser new.password.text $ \record ->
+    send r methodPost (at links.admin.createUser) ((hContentType, "application/json") : hs) (encode NewAccountRecord {login = new.login, displayName = new.displayName, password = record, email = new.email})
+
+-- | How many users have a password hash from before OPAQUE, as the
+-- administration's Overview says.
+legacyPasswords :: Running -> IO Int
+legacyPasswords r = (\(status :: ServerStatus) -> status.legacyPasswords) <$> (getUrl r (onAdmin r links.admin.status) >>= jsonAs 200)
 
 ownPassword :: Backing -> Spec
 ownPassword backing = describe "one's own password" $ do
@@ -294,7 +336,7 @@ ownPassword backing = describe "one's own password" $ do
     (\u -> u.login.text) <$> me.user `shouldBe` Just "editor"
     (other, _) <- sessionWith r [cookie elsewhere]
     other.user `shouldBe` Nothing
-    (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"} `shouldReturn` 401
+    (.status) <$> passwordSignIn r (onPublic r) [] "editor" "editor's password" `shouldReturn` 401
     _ <- signInAs r "editor" "a longer new password"
     -- Another user's sessions are not touched.
     admin <- signInAs r "admin" "admin's password"
@@ -319,29 +361,224 @@ ownPassword backing = describe "one's own password" $ do
     (json held :: IO ApiError) >>= (`shouldSatisfy` \case TooManyRequests why -> "try again in" `T.isInfixOf` why; _ -> False)
     header "Retry-After" held `shouldSatisfy` maybe False (BC.all isDigit)
     -- The same count as signing in.
-    (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"} `shouldReturn` 429
+    (.status) <$> passwordSignIn r (onPublic r) [] "editor" "editor's password" `shouldReturn` 429
     -- Another user's is their own.
     admin <- signInAs r "admin" "admin's password"
     (.status) <$> changing r admin (Just "admin's password") "a longer new password" `shouldReturn` 200
 
-  it "refuses a new one that cannot be a password, before looking at the current one" $ withPasswords backing identity $ \r -> do
-    here <- signInAs r "editor" "editor's password"
-    changing r here (Just "a guess") "short" >>= jsonAs 400 >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
-    -- Not counted as a guess.
-    replicateM_ 4 (changing r here (Just "a guess") "a longer new password")
-    (.status) <$> changing r here (Just "editor's password") "a longer new password" `shouldReturn` 200
-
   it "is no one's to change who is not signed in, nor the operator's, nor without the application's header" $ withPasswords backing identity $ \r -> do
-    let body = encode PasswordChange {current = Nothing, new = Password "a longer new password"}
+    let body = encode PasswordRecordChange {current = Nothing, password = noRecord}
     nobody <- send r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json")] body
     jsonAs 401 nobody `shouldReturn` Unauthenticated
     operator <- send r methodPut (onAdmin r links.account.changePassword) [(hContentType, "application/json")] body
     operator.status `shouldBe` 400
     here <- signInAs r "editor" "editor's password"
-    bare <- sendBare r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie here] (encode PasswordChange {current = Just (Password "editor's password"), new = Password "a longer new password"})
+    bare <- sendBare r methodPut (onPublic r links.account.changePassword) [(hContentType, "application/json"), cookie here] (encode PasswordRecordChange {current = Just (Password "editor's password"), password = noRecord})
     bare.status `shouldBe` 403
     _ <- signInAs r "editor" "editor's password"
     pass
+
+-- | Give a user a password hash from before OPAQUE in place of their
+-- record, as an older server stored it: what a database from before
+-- WP5.74a holds.
+legacyAccount :: Running -> Text -> Text -> IO ()
+legacyAccount r uid password = withStorageAside r.place $ \st ->
+  writing st $
+    runUpdate
+      ( update
+          wikiDb.users
+          (\x -> mconcat [x.password_hash <-. val_ (Just (hashWith parameters "a salt of mine" (Password password))), x.opaque_record <-. val_ Nothing, x.opaque_stretch <-. val_ Nothing])
+          (\x -> x.id ==. val_ uid)
+      )
+
+-- | The server's answer to a sign-in's first message for a login.
+challengeFor :: Running -> Text -> Text -> IO LoginChallenge
+challengeFor r login password = do
+  (_, ke1) <- either (panic . show) pure =<< O.clientStart (encodeUtf8 password)
+  sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login, ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+
+opaque :: Backing -> Spec
+opaque backing = describe "passwords through OPAQUE" $ do
+  it "answers a login nobody has, and one without a password, in the shape of a real one" $ withPasswords backing identity $ \r -> do
+    real <- challengeFor r "editor" "editor's password"
+    for_ ["nobody", "reader"] $ \login -> do
+      fake <- challengeFor r login "editor's password"
+      (T.length fake.ke2.text, fake.stretch, fake.fallback, T.length fake.attempt) `shouldBe` (T.length real.ke2.text, real.stretch, real.fallback, T.length real.attempt)
+      -- Its answer cannot be finished, whatever is sent.
+      reply <- sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = fake.attempt, ke3 = Message (T.replicate 86 "A")}
+      jsonAs 401 reply `shouldReturn` Unauthenticated
+    -- Each start of a sign-in counts against the limit until it finishes.
+    replicateM_ 4 (challengeFor r "nobody" "a guess")
+    (.status) <$> sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "nobody", ke1 = real.ke2} `shouldReturn` 429
+
+  it "refuses a last message that was tampered with, and uses the attempt up" $ withPasswords backing identity $ \r -> do
+    (st, ke1) <- either (panic . show) pure =<< O.clientStart "editor's password"
+    challenge :: LoginChallenge <- sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "editor", ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+    ke3 <- maybe (panic "no last message") pure (clientLast st challenge)
+    let tampered = maybe ke3 (\b -> messageOf (BS.take 10 b <> BS.singleton (complement (BS.index b 10)) <> BS.drop 11 b)) (bytesOf ke3)
+    (sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3 = tampered} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    (sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    -- A fresh attempt with the right message signs in.
+    _ <- signInAs r "editor" "editor's password"
+    pass
+
+  it "refuses a last message sent again after it signed in" $ withPasswords backing identity $ \r -> do
+    (st, ke1) <- either (panic . show) pure =<< O.clientStart "editor's password"
+    challenge :: LoginChallenge <- sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "editor", ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+    ke3 <- maybe (panic "no last message") pure (clientLast st challenge)
+    let finish = sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3}
+    signedIn <- finish
+    signedIn.status `shouldBe` 200
+    isJust (setCookie signedIn) `shouldBe` True
+    -- The same message again, as someone who saw it would send it.
+    replayed <- finish
+    jsonAs 401 replayed `shouldReturn` Unauthenticated
+    setCookie replayed `shouldBe` Nothing
+
+  it "refuses a last message whose exchange started before the password changed" $ withPasswords backing identity $ \r -> do
+    -- Someone who knows the old password starts a sign-in and keeps its
+    -- last message while the password is reset.
+    (st, ke1) <- either (panic . show) pure =<< O.clientStart "editor's password"
+    challenge :: LoginChallenge <- sendJson r methodPost (onPublic r links.startPasswordSignIn) LoginStart {login = "editor", ke1 = messageOf (O.encode ke1)} >>= jsonAs 200
+    ke3 <- maybe (panic "no last message") pure (clientLast st challenge)
+    givePassword r "user-editor" "editor's new password"
+    late <- sendJson r methodPut (onPublic r links.finishPasswordSignIn) LoginFinish {attempt = challenge.attempt, ke3}
+    jsonAs 401 late `shouldReturn` Unauthenticated
+    setCookie late `shouldBe` Nothing
+    _ <- signInAs r "editor" "editor's new password"
+    pass
+
+  it "lets an account from before OPAQUE in with its right password after four wrong ones" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    let tryOldWay password = do
+          c <- challengeFor r "editor" password
+          sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password password, attempt = Just c.attempt}
+    replicateM_ 4 (tryOldWay "a wrong password" >>= jsonAs 401 >>= (`shouldBe` Unauthenticated))
+    -- The fifth start was admitted and counted; the old way finishes it.
+    (.status) <$> tryOldWay "editor's old password" `shouldReturn` 200
+
+  it "gives back the start of each old-way sign-in that signs in, so that an address's many right sign-ins are never refused" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    -- One more than an address's limit of failures: each start through
+    -- OPAQUE is counted as one, until the old way signs in.
+    for_ [1 .. 31 :: Int] $ \_ ->
+      (.status) <$> passwordSignIn r (onPublic r) [] "editor" "editor's old password" `shouldReturn` 200
+
+  it "stores a record and no hash for every way a password is set, and each signs in" $ withPasswords backing identity $ \r -> do
+    -- The administrator's new user, and new password for a user.
+    _ :: Account <- createUser r (onAdmin r) [] (newAccount "bea") >>= jsonAs 201
+    _ <- signInAs r "bea" "bea's password"
+    givePassword r "user-reader" "reader's new password"
+    _ <- signInAs r "reader" "reader's new password"
+    -- One's own change.
+    here <- signInAs r "editor" "editor's password"
+    _ :: SignInMethods <- changing r here (Just "editor's password") "editor's new password" >>= jsonAs 200
+    _ <- signInAs r "editor" "editor's new password"
+    -- One's own account, in an open wiki.
+    made <- withRecord r (onPublic r) [] ForSignUp "cid's password" $ \record ->
+      sendJson r methodPost (onPublic r links.register) NewAccountRecord {login = "cid", displayName = "", password = record, email = Nothing}
+    made.status `shouldBe` 200
+    _ <- signInAs r "cid" "cid's password"
+    legacyPasswords r `shouldReturn` 0
+    -- None of them falls back to sending the password.
+    challenge <- challengeFor r "cid" "cid's password"
+    challenge.fallback `shouldBe` False
+
+  it "refuses a record made for another account" $ withPasswords backing identity $ \r -> do
+    record <- passwordRecord r (onAdmin r) [] (ForUser (UserId "user-reader")) "a password for reader"
+    (sendJson r methodPut (onAdmin r (links.admin.setPassword (UserId "user-editor"))) record >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+
+  it "moves an account from before OPAQUE at its first sign-in, and then signs in through OPAQUE alone" $ withPasswords backing identity $ \r -> do
+    elsewhere <- signInAs r "editor" "editor's password"
+    legacyAccount r "user-editor" "editor's old password"
+    legacyPasswords r `shouldReturn` 1
+    -- While it is left, a failed sign-in is tried the old way.
+    (challengeFor r "admin" "anything") >>= (`shouldBe` True) . (\c -> c.fallback)
+    -- The old way answers an account with a record as a wrong password.
+    (sendJson r methodPost (onPublic r links.signIn) Credentials {login = "admin", password = Password "admin's password", attempt = Nothing} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    -- The editor signs in the old way, with a proof of the password left
+    -- on the session, which registers the record without the password.
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's old password"
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    legacyPasswords r `shouldReturn` 0
+    -- The move keeps the account's other sessions: its password is the same.
+    (still, _) <- sessionWith r [cookie elsewhere]
+    (\u -> u.login.text) <$> still.user `shouldBe` Just "editor"
+    -- From now on through OPAQUE, and the old way is off.
+    (challengeFor r "editor" "editor's old password") >>= (`shouldBe` False) . (\c -> c.fallback)
+    _ <- signInAs r "editor" "editor's old password"
+    (sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's old password", attempt = Nothing} >>= jsonAs 401) `shouldReturn` Unauthenticated
+
+  it "answers the old sign-in alike for an account with a record, a login nobody has, and a wrong old password" $ withPasswords backing identity $ \r -> do
+    -- One account from before OPAQUE keeps the old sign-in open.
+    legacyAccount r "user-editor" "editor's old password"
+    let oldWay login password = sendJson r methodPost (onPublic r links.signIn) Credentials {login, password = Password password, attempt = Nothing}
+    withRecordRight <- oldWay "admin" "admin's password"
+    nobody <- oldWay "nobody" "a guess"
+    wrongOld <- oldWay "editor" "not the old password"
+    let shape reply = (reply.status, reply.body, setCookie reply)
+    shape withRecordRight `shouldBe` shape wrongOld
+    shape nobody `shouldBe` shape wrongOld
+    wrongOld.status `shouldBe` 401
+
+  it "never lets the old password's proof replace a record the account has got meanwhile" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    -- Signed in the old way: the session holds a proof by the old password.
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    -- Meanwhile the account gets a record by another way, without its
+    -- sessions ending.
+    withStorageAside r.place $ \st -> writing st $ do
+      setup <- loadServerSetup
+      stored <- liftIO (registerHere setup Stretch {opsLimit = 1, memLimit = 8192} (UserId "user-editor") (Password "a password set elsewhere"))
+      either (panic . show) (storeRecord (UserId "user-editor")) stored
+    -- The migration path cannot overwrite it.
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "the session's own choice"
+    (sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 401) `shouldReturn` Unauthenticated
+    _ <- signInAs r "editor" "a password set elsewhere"
+    (.status) <$> passwordSignIn r (onPublic r) [] "editor" "the session's own choice" `shouldReturn` 401
+
+  it "counts a wrong old password once when a session of an account from before OPAQUE proves it again" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    -- Two wrong tries, each counted once, at its start.
+    replicateM_ 2 ((.status) <$> provePassword r (onPublic r) [cookie token] "not the old password" `shouldReturn` 401)
+    -- The right one is the third count, far from the limit; the change
+    -- that needs it then takes the session's proof.
+    (.status) <$> provePassword r (onPublic r) [cookie token] "editor's old password" `shouldReturn` 204
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's new password"
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    _ <- signInAs r "editor" "editor's new password"
+    pass
+
+  it "ends the other sessions when an account from before OPAQUE changes its password after proving it again" $ withPasswords backing identity $ \r -> do
+    legacyAccount r "user-editor" "editor's old password"
+    elsewhereReply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    elsewhere <- maybe (panic "not signed in elsewhere") (pure . fst) (setCookie elsewhereReply)
+    reply <- passwordSignIn r (onPublic r) [] "editor" "editor's old password"
+    token <- maybe (panic ("not signed in: " <> show reply)) (pure . fst) (setCookie reply)
+    -- Proved again in this session, then a new password: a real change,
+    -- not the move of the same password that a sign-in's proof makes.
+    (.status) <$> provePassword r (onPublic r) [cookie token] "editor's old password" `shouldReturn` 204
+    record <- passwordRecord r (onPublic r) [cookie token] ForOwnPassword "editor's new password"
+    _ :: SignInMethods <- sendJson' r (onPublic r links.account.changePassword) [cookie token] PasswordRecordChange {current = Nothing, password = record} >>= jsonAs 200
+    (ended, _) <- sessionWith r [cookie elsewhere]
+    ended.user `shouldBe` Nothing
+    (kept, _) <- sessionWith r [cookie token]
+    (\u -> u.login.text) <$> kept.user `shouldBe` Just "editor"
+
+  it "lets a session prove its password again, once, for a change that needs it" $ withPasswords backing identity $ \r -> do
+    here <- signInAs r "editor" "editor's password"
+    (.status) <$> provePassword r (onPublic r) [cookie here] "not the password" `shouldReturn` 401
+    (.status) <$> provePassword r (onPublic r) [cookie here] "editor's password" `shouldReturn` 204
+    record <- passwordRecord r (onPublic r) [cookie here] ForOwnPassword "a newer password"
+    let change = sendJson' r (onPublic r links.account.changePassword) [cookie here] PasswordRecordChange {current = Nothing, password = record}
+    (.status) <$> change `shouldReturn` 200
+    -- The proof is used up.
+    (.status) <$> change `shouldReturn` 401
 
 pages :: Backing -> Spec
 pages backing = describe "the pages the server renders" $ do
@@ -378,8 +615,8 @@ pages backing = describe "the pages the server renders" $ do
 guards :: Backing -> Spec
 guards backing = describe "requests from other sites" $ do
   it "are refused when they change something without the application's header, on both listeners" $ withPasswords backing identity $ \r -> do
-    let body = encode Credentials {login = "editor", password = Password "editor's password"}
-    signIn <- sendBare r methodPost (onPublic r links.signIn) [(hContentType, "application/json")] body
+    let body = encode LoginStart {login = "editor", ke1 = Message "AAAA"}
+    signIn <- sendBare r methodPost (onPublic r links.startPasswordSignIn) [(hContentType, "application/json")] body
     (signIn.status, setCookie signIn) `shouldBe` (403, Nothing)
     jsonAs 403 signIn `shouldReturn` Forbidden
     made <- sendBare r methodPost (onAdmin r links.admin.createUser) [(hContentType, "application/json")] (encode NewAccount {login = "eve", displayName = "", password = Password "eve's password", email = Nothing})
@@ -388,7 +625,7 @@ guards backing = describe "requests from other sites" $ do
     (.status) <$> sendBare r methodGet (onPublic r links.session) [] "" `shouldReturn` 200
 
   it "are refused when the browser says they come from another site, header or not" $ withPasswords backing identity $ \r -> do
-    reply <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), ("Sec-Fetch-Site", "cross-site")] (encode Credentials {login = "editor", password = Password "editor's password"})
+    reply <- passwordSignIn r (onPublic r) [("Sec-Fetch-Site", "cross-site")] "editor" "editor's password"
     reply.status `shouldBe` 403
-    same <- send r methodPost (onPublic r links.signIn) [(hContentType, "application/json"), ("Sec-Fetch-Site", "same-origin")] (encode Credentials {login = "editor", password = Password "editor's password"})
+    same <- passwordSignIn r (onPublic r) [("Sec-Fetch-Site", "same-origin")] "editor" "editor's password"
     same.status `shouldBe` 200

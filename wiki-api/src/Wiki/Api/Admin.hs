@@ -105,6 +105,12 @@ data ServerStatus = ServerStatus
   -- never was), and no space of the wiki's own is at @/guide@, where it
   -- goes. The Overview then offers to install it
   -- (@POST \/api\/v1\/admin\/guide@).
+  , legacyPasswords :: Int
+  -- ^ How many accounts still have a password hash from before OPAQUE
+  -- (WP5.74a of docs/PLAN.md, "Wiki.Api.Opaque"): each moves to OPAQUE at
+  -- its next sign-in. While there is one, a failed OPAQUE sign-in is tried
+  -- again the old way, which sends the password; at none the old way is
+  -- off.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

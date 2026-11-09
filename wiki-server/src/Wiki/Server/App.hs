@@ -187,7 +187,7 @@ addressOf request = case T.breakOnEnd ":" (show (remoteHost request)) of
 -- password reset, an address verification, and turning notification mail
 -- off.
 openToAnyone :: [Text]
-openToAnyone = ["info", "session", "accounts", "invitations", "password-reset", "email-verification", "unsubscribe"]
+openToAnyone = ["info", "session", "accounts", "invitations", "password-registration", "password-reset", "email-verification", "unsubscribe"]
 
 -- | A feed's address below @s\/@: the space's path, and which feed.
 feedOf :: [Text] -> Maybe ([Text], FeedKind)

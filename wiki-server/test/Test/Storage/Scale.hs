@@ -257,7 +257,7 @@ crowd st users watches = do
   now <- micro <$> getCurrentTime
   writing st $ do
     for_ (chunksOf 200 [1 .. users]) $ \is ->
-      runInsert (insert wikiDb.users (insertValues [UserRow {id = crowdUser i, login = "crowd" <> show i, display_name = "Crowd " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing, avatar_blob = Nothing, avatar_media_type = Nothing} | i <- is]))
+      runInsert (insert wikiDb.users (insertValues [UserRow {id = crowdUser i, login = "crowd" <> show i, display_name = "Crowd " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True, feed_token = Nothing, avatar_blob = Nothing, avatar_media_type = Nothing, opaque_record = Nothing, opaque_stretch = Nothing} | i <- is]))
     for_ [1 .. 10 :: Int] $ \i ->
       insertPage
         Page

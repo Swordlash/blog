@@ -20,6 +20,7 @@ import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize, f
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), WikiSettings (..))
 import Wiki.Api.Backups (BackupSettingsOf (..), DestinationOf (..), defaultBackupSettings)
 import Wiki.Api.Import (importEverything)
+import Wiki.Api.Opaque (Message (..), NewAccountRecord (..), PasswordRecord (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -37,9 +38,10 @@ import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport)
+import Wiki.Server.Opaque (defaultStretch)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Audit (loadAuditLog, operator)
-import Wiki.Server.Storage.Rows (insertIdentity, micro)
+import Wiki.Server.Storage.Rows (StoredRecord (..), insertIdentity, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), Totp (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
@@ -195,7 +197,7 @@ eachWrite backing = describe "has one entry for each write of the administration
     admin <- recordsOne st (Accounts.setAdministrator st cleo.id True)
     summary admin `shouldBe` ("user.administrator", "user", "cleo", [("administrator", "yes")])
     now <- getCurrentTime
-    registered <- recordsOne st (Accounts.register st now "100.64.0.10" (newAccount "dora" "Dora"))
+    registered <- recordsOne st (accountRecord st "dora" "Dora" >>= Accounts.register st now "100.64.0.10")
     summary registered `shouldBe` ("user.register", "user", "dora", [])
     registered.actor.login.text `shouldBe` "dora"
     registered.address `shouldBe` "100.64.0.10"
@@ -214,6 +216,12 @@ eachWrite backing = describe "has one entry for each write of the administration
     Map.lookup "pages kept" imported.detail `shouldSatisfy` isJust
   where
     newAccount login displayName = NewAccount {login, displayName, password = Password "a password of theirs", email = Nothing}
+    -- An account with the record of its password, made here as the
+    -- browser makes it, for the id the server gave out.
+    accountRecord st login displayName = do
+      let u = UserId "0c8a2f6e-6b1d-4c39-9f4e-5a7b3c2d1e0f"
+      stored <- recordHere st u (Password "a password of theirs") >>= either panic pure
+      pure NewAccountRecord {login, displayName, password = PasswordRecord {credential = u.text, record = Message stored.record, stretch = defaultStretch}, email = Nothing}
 
 secrets :: Backing -> Spec
 secrets backing = describe "never holds a secret" $ do

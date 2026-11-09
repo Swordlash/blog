@@ -16,6 +16,7 @@
 //   wikiIslands.attachEditor(textarea, host, original)
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
+//   wikiIslands.opaque(): Promise<module>
 //
 // It also gives the pages' spoilers and the code blocks' copy buttons their
 // behaviour (see "Spoilers" and "Copy buttons" below), with listeners on the
@@ -45,7 +46,10 @@
 // the editor's assistant is used, for wiki-app/jsbits/assistant.js. Nor is
 // cropAvatar: it puts Cropper.js in the account's avatar dialog (avatar.js,
 // bundled into islands/avatar.js and fetched the first time the dialog
-// opens), for wiki-app/jsbits/avatar.js.
+// opens), for wiki-app/jsbits/avatar.js. Nor is opaque: it loads the
+// browser's OPAQUE client, @serenity-kit/opaque (opaque.js, bundled into
+// islands/opaque.js), the first time a password is used, for
+// wiki-app/jsbits/opaque.js.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -139,6 +143,7 @@ const loadTikz = lazily("islands/tikz.js");
 const loadEditor = lazily("islands/editor.js");
 const loadAssistant = lazily("islands/assistant.js");
 const loadAvatar = lazily("islands/avatar.js");
+const loadOpaque = lazily("islands/opaque.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -625,4 +630,5 @@ globalThis.wikiIslands = Object.freeze({
   attachEditor,
   assistant: loadAssistant,
   cropAvatar,
+  opaque: loadOpaque,
 });

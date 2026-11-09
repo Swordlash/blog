@@ -110,6 +110,8 @@ component =
             <dd class="status-connections">{{ show s.connections <> " open" :: Text }}</dd>
             <dt>Content</dt>
             <dd class="status-counts">{{ countsText s }}</dd>
+            <dt>Old passwords</dt>
+            <dd class="status-legacy-passwords">{{ legacyText s.legacyPasswords }}</dd>
           </dl>
           <h4>Recent errors</h4>
           {% if null s.errors %}
@@ -177,3 +179,13 @@ countsText :: ServerStatus -> Text
 countsText s = T.intercalate ", " [counted s.spaces "space", counted s.pages "page", counted s.attachments "attachment", counted s.users "user"]
   where
     counted n what = show n <> " " <> what <> (if n == 1 then "" else "s")
+
+-- | How many accounts still sign in with a password hash from before
+-- OPAQUE, in words. Each moves to OPAQUE at its next sign-in; until none
+-- is left, a failed sign-in is tried again the old way, which sends the
+-- password to the server.
+legacyText :: Int -> Text
+legacyText = \case
+  0 -> "None: every password signs in through OPAQUE."
+  1 -> "1 account has a password from before OPAQUE; it moves at its next sign-in."
+  n -> show n <> " accounts have a password from before OPAQUE; each moves at its next sign-in."

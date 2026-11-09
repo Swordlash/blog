@@ -19,6 +19,11 @@ module Test.Gen
   , genCredentials
   , genNewAccount
   , genNewPassword
+  , genPasswordRecord
+  , genLoginChallenge
+  , genRegistrationStart
+  , genNewAccountRecord
+  , genPasswordRecordChange
   , genPasswordChange
   , genAccountDisabled
   , genAccount
@@ -49,9 +54,11 @@ import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..), picosecondsToDiffTime)
 import Protolude
 import Test.QuickCheck
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
+import Wiki.Api.Opaque (LoginChallenge (..), Message (..), NewAccountRecord (..), PasswordRecord (..), PasswordRecordChange (..), RegistrationFor (..), RegistrationStart (..), Stretch (..))
+import Wiki.Api.Security (ResetToken (..))
 import Wiki.Api.ServerSettings (AssistantService (..), defaultHomePage)
 import Wiki.Api.Types
 import Wiki.Core.Attachment (MimeType (..))
@@ -139,10 +146,34 @@ genSessionInfo = do
   pure SessionInfo {user, groups, grants, standing, providers, exports, boxes, homePage = defaultHomePage, mathMacros, assistantServices, whatsNew}
 
 genCredentials :: Gen Credentials
-genCredentials = Credentials <$> genText <*> (Password <$> genText)
+genCredentials = Credentials <$> genText <*> (Password <$> genText) <*> genMaybe genText
 
 genNewAccount :: Gen NewAccount
 genNewAccount = NewAccount <$> genText <*> genText <*> (Password <$> genText) <*> oneof [pure Nothing, Just <$> genText]
+
+genStretch :: Gen Stretch
+genStretch = Stretch <$> chooseInt (1, 16) <*> chooseInt (8192, 1024 * 1024 * 1024)
+
+genMessage :: Gen Message
+genMessage = Message <$> genText
+
+genPasswordRecord :: Gen PasswordRecord
+genPasswordRecord = PasswordRecord <$> genText <*> genMessage <*> genStretch
+
+genLoginChallenge :: Gen LoginChallenge
+genLoginChallenge = LoginChallenge <$> genText <*> genMessage <*> genStretch <*> arbitrary
+
+genRegistrationStart :: Gen RegistrationStart
+genRegistrationStart =
+  RegistrationStart
+    <$> oneof [pure ForSignUp, ForInvitation . InvitationToken <$> genText, pure ForOwnPassword, ForReset . ResetToken <$> genText, pure ForNewUser, ForUser . UserId <$> genText]
+    <*> genMessage
+
+genNewAccountRecord :: Gen NewAccountRecord
+genNewAccountRecord = NewAccountRecord <$> genText <*> genText <*> genPasswordRecord <*> genMaybe genText
+
+genPasswordRecordChange :: Gen PasswordRecordChange
+genPasswordRecordChange = PasswordRecordChange <$> genMaybe (Password <$> genText) <*> genPasswordRecord
 
 genNewPassword :: Gen NewPassword
 genNewPassword = NewPassword . Password <$> genText

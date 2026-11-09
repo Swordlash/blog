@@ -74,8 +74,12 @@ module Wiki.Server.Storage.Rows
   , loadAccountsWithAdministrators
   , loadAccountFlags
   , insertAccount
-  , updatePasswordHash
-  , passwordHashOf
+  , StoredRecord (..)
+  , StoredPassword (..)
+  , storeRecord
+  , passwordOf
+  , loadPasswordByLogin
+  , legacyPasswordCount
   , updateDisabled
   , deleteSessionsOf
   , deleteUserRows
@@ -962,7 +966,7 @@ loadAvatarBlobs = do
 -- Accounts
 
 accountOf :: S.Users Identity -> Account
-accountOf r = Account {user = userOf r, hasPassword = isJust r.password_hash, disabled = r.disabled}
+accountOf r = Account {user = userOf r, hasPassword = isJust r.password_hash || isJust r.opaque_record, disabled = r.disabled}
 
 -- | A user's account, by id.
 loadAccount :: (Backend be) => UserId -> Db be (Maybe Account)
@@ -990,17 +994,17 @@ loadAccountsWithAdministrators = do
 -- | The users who are disabled, and those who have a password.
 loadAccountFlags :: (Backend be) => Db be (Set UserId, Set UserId)
 loadAccountFlags = do
-  rows <- runSelectReturningList (select ((\u -> (u.id, u.disabled, isNothing_ u.password_hash)) <$> all_ wikiDb.users))
+  rows <- runSelectReturningList (select ((\u -> (u.id, u.disabled, isNothing_ u.password_hash &&. isNothing_ u.opaque_record)) <$> all_ wikiDb.users))
   pure
     ( Set.fromList [UserId u | (u, disabled, _) <- rows, disabled]
     , Set.fromList [UserId u | (u, _, none) <- rows, not none]
     )
 
 -- | Add a user with a login no other user has, ignoring case, or return a
--- 'Left' with the login that is taken. The login and the password hash are
--- stored as given.
-insertAccount :: (Backend be) => UserId -> Login -> Text -> Maybe Text -> Db be (Either Login Account)
-insertAccount u login displayName phc =
+-- 'Left' with the login that is taken. The login and the OPAQUE record
+-- ('StoredRecord') are stored as given.
+insertAccount :: (Backend be) => UserId -> Login -> Text -> Maybe StoredRecord -> Db be (Either Login Account)
+insertAccount u login displayName stored =
   loadAccountByLogin login.text >>= \case
     Just _ -> pure (Left login)
     Nothing -> do
@@ -1010,7 +1014,7 @@ insertAccount u login displayName phc =
               { id = u.text
               , login = login.text
               , display_name = displayName
-              , password_hash = phc
+              , password_hash = Nothing
               , disabled = False
               , email = Nothing
               , email_verified_at = Nothing
@@ -1019,6 +1023,8 @@ insertAccount u login displayName phc =
               , feed_token = Nothing
               , avatar_blob = Nothing
               , avatar_media_type = Nothing
+              , opaque_record = (\r -> r.record) <$> stored
+              , opaque_stretch = (\r -> r.stretch) <$> stored
               }
           ]
       maybe (Left login) Right <$> loadAccount u
@@ -1039,14 +1045,61 @@ userByFeedToken secret =
   fmap (\r -> UserId r.id)
     <$> runSelectReturningOne (select (filter_ (\r -> r.feed_token ==. val_ (Just secret) &&. Beam.not_ r.disabled) (all_ wikiDb.users)))
 
--- | Replace a user's password hash.
-updatePasswordHash :: (Backend be) => UserId -> Text -> Db be ()
-updatePasswordHash u phc = runUpdate (update wikiDb.users (\r -> r.password_hash <-. val_ (Just phc)) (\r -> r.id ==. val_ u.text))
+-- | 'StoredRecord': a user's OPAQUE record as the users table keeps it:
+-- the record's bytes in unpadded base64url, and the stretching the browser
+-- made it with (@t=\<passes>,m=\<bytes>@), which a sign-in tells the
+-- browser ("Wiki.Server.Opaque").
+data StoredRecord = StoredRecord
+  { record :: Text
+  , stretch :: Text
+  }
+  deriving stock (Eq, Show)
 
--- | A user's password hash, if they exist: 'Nothing' for a user who does
--- not, @Just Nothing@ for one without a password.
-passwordHashOf :: (Backend be) => UserId -> Db be (Maybe (Maybe Text))
-passwordHashOf u = runSelectReturningOne (select ((\r -> r.password_hash) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
+-- | How a user signs in with a password, as stored: their OPAQUE record,
+-- the argon2id hash of an account from before OPAQUE, or neither.
+data StoredPassword
+  = WithRecord StoredRecord
+  | LegacyHash Text
+  | NoPassword
+  deriving stock (Eq, Show)
+
+-- | Give a user an OPAQUE record, in place of their password: a hash from
+-- before OPAQUE goes with it.
+storeRecord :: (Backend be) => UserId -> StoredRecord -> Db be ()
+storeRecord u r =
+  runUpdate
+    ( update
+        wikiDb.users
+        (\x -> mconcat [x.opaque_record <-. val_ (Just r.record), x.opaque_stretch <-. val_ (Just r.stretch), x.password_hash <-. val_ Nothing])
+        (\x -> x.id ==. val_ u.text)
+    )
+
+-- | How a user signs in with a password, if they exist: 'Nothing' for a
+-- user who does not.
+passwordOf :: (Backend be) => UserId -> Db be (Maybe StoredPassword)
+passwordOf u =
+  fmap storedPassword
+    <$> runSelectReturningOne (select ((\r -> (r.opaque_record, r.opaque_stretch, r.password_hash)) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
+
+-- | The password of a row's three columns.
+storedPassword :: (Maybe Text, Maybe Text, Maybe Text) -> StoredPassword
+storedPassword = \case
+  (Just record, Just stretch, _) -> WithRecord StoredRecord {record, stretch}
+  (_, _, Just phc) -> LegacyHash phc
+  _ -> NoPassword
+
+-- | A user's account by login, as 'loadAccountByLogin' finds it, with how
+-- they sign in with a password.
+loadPasswordByLogin :: (Backend be) => Text -> Db be (Maybe (Account, StoredPassword))
+loadPasswordByLogin login =
+  fmap (\r -> (accountOf r, storedPassword (r.opaque_record, r.opaque_stretch, r.password_hash)))
+    . head
+    <$> runSelectReturningList (select (orderBy_ (\r -> asc_ r.login) (filter_ (\r -> lower_ r.login ==. lower_ (val_ login)) (all_ wikiDb.users))))
+
+-- | How many users still have a password hash from before OPAQUE.
+legacyPasswordCount :: (Backend be) => Db be Int
+legacyPasswordCount =
+  maybe 0 fromIntegral <$> runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ (\r -> Beam.isJust_ r.password_hash) (all_ wikiDb.users))))
 
 -- | Set whether a user is disabled.
 updateDisabled :: (Backend be) => UserId -> Bool -> Db be ()
@@ -1154,7 +1207,7 @@ loadUserPage q = do
     , [ ListedUser
           { user = userOf r
           , disabled = r.disabled
-          , hasPassword = isJust r.password_hash
+          , hasPassword = isJust r.password_hash || isJust r.opaque_record
           , email = (\e -> AccountEmail {email = Email e, verified = isJust r.email_verified_at}) <$> r.email
           }
       | r <- rows
@@ -1264,9 +1317,9 @@ providerNames kept = map (\p -> p.name) kept.providers
 -- of these providers, the ones in the server's settings.
 noPasswordToSet :: (Backend be) => [Text] -> UserId -> Db be Bool
 noPasswordToSet configured u = do
-  hashed <- passwordHashOf u
+  stored <- passwordOf u
   providers <- map (\i -> i.provider) <$> identitiesOf u
-  pure (providerOnly configured (any isJust hashed) providers)
+  pure (providerOnly configured (maybe False (/= NoPassword) stored) providers)
 
 --------------------------------------------------------------------------------
 -- Password resets
@@ -1329,6 +1382,8 @@ insertUsers us =
             , -- Avatars do not travel in an archive.
               avatar_blob = Nothing
             , avatar_media_type = Nothing
+            , opaque_record = Nothing
+            , opaque_stretch = Nothing
             }
         | u <- chunk
         ]

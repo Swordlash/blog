@@ -1,5 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- | 'Wiki.Server.Rehearsal' is the upgrade's rehearsal (WP5.75 of
 -- docs/PLAN.md, issue #205): @wiki-server rehearse@, which a deploy runs
@@ -8,12 +9,13 @@
 -- The rehearsal proves that what exists still works after the upgrade. It
 -- copies the running wiki's database into a scratch place, as a backup
 -- does ('backupInto': @VACUUM INTO@ on SQLite, @pg_dump@ on PostgreSQL),
--- while the wiki keeps running. The old program serves the copy, and each
--- check's 'before' half reads it, or makes something in it, and keeps a
--- fixture. Then this program migrates the copy, checks every row, serves
--- it, and each check's 'after' half compares what it finds with the
--- fixture. A deploy that sees a check fail stops before the running wiki
--- is touched.
+-- while the wiki keeps running. Each check may make something in the copy
+-- first ('seed'), through the old program's console. The old program
+-- serves the copy, and each check's 'before' half reads it, or makes
+-- something in it, and keeps a fixture. Then this program migrates the
+-- copy, checks every row, serves it, and each check's 'after' half
+-- compares what it finds with the fixture. A deploy that sees a check fail
+-- stops before the running wiki is touched.
 --
 -- Both halves of a check live in this program, the new one. The old
 -- program is only driven: through what it had already, the API it serves
@@ -38,6 +40,7 @@ module Wiki.Server.Rehearsal
 
     -- * Checks
   , Check (..)
+  , Seeding (..)
   , Server (..)
   , checks
 
@@ -48,33 +51,49 @@ module Wiki.Server.Rehearsal
   )
 where
 
+import Crypto.Random (getRandomBytes)
 import Data.Aeson (Value (..), eitherDecode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteArray.Encoding (Base (..), convertToBase)
 import Data.ByteString qualified as BS
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Network.HTTP.Client (Manager, defaultManagerSettings, httpLbs, newManager, parseRequest, responseBody, responseStatus)
-import Network.HTTP.Types (statusCode, urlEncode)
+import Database.Beam (delete, insert, insertValues, runDelete, runInsert, val_, (==.))
+import Network.HTTP.Client (CookieJar, Manager, Request (..), RequestBody (..), Response, createCookieJar, defaultManagerSettings, httpLbs, managerResponseTimeout, newManager, parseRequest, responseBody, responseCookieJar, responseHeaders, responseStatus, responseTimeoutMicro, responseVersion)
+import Network.HTTP.Types (hLocation, hSetCookie, statusCode, urlEncode)
 import Network.Socket qualified as N
 import Options.Applicative
 import Protolude
+import Servant.Client.Core qualified as Servant
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly)
 import System.Environment (getExecutablePath)
 import System.IO (hClose)
 import System.Posix.Files (setFileMode)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, readCreateProcessWithExitCode, terminateProcess, waitForProcess)
 import System.Timeout (timeout)
+import Wiki.Api.ServerSettings (ProviderKind (..), kindName)
+import Wiki.App.Account (MonadAccount (..))
+import Wiki.App.Backend (Session (..))
+import Wiki.App.Backend.Http (Transport (..), newHttpEnv, requestHeaderList, requestUrl, runHttpWiki)
 import Wiki.App.Guide (guideSlug)
+import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Slug (slugText)
+import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Console (CheckOutcome (..), MigrateOutcome (..), runCheck, runMigrate)
+import Wiki.Server.FakeProvider (Fake (..), clientSecret, person, withFakeProvider)
 import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
-import Wiki.Server.Storage.Rows (deleteSettingsLike)
+import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
+import Wiki.Server.Storage.Schema (wikiDb)
+import Wiki.Server.Storage.Schema qualified as S
 
 --------------------------------------------------------------------------------
 -- The command
@@ -154,13 +173,25 @@ rehearse o = either identity identity <$> runExceptT steps
       (copy, _) <- liftIO (backupInto livePlace.programs livePlace.database (o.scratch </> "copy") now) >>= either (broken . ("The running wiki could not be copied: " <>)) pure
       _ <- liftIO (restore Restore {backupFile = copy, dataDir = o.scratch, database = scratchPlace.database, programs = scratchPrograms, attachments = Nothing}) >>= either (broken . ("The copy could not be restored: " <>)) pure
       liftIO (try (isolateCopy scratchPlace)) >>= either (\(e :: SomeException) -> broken ("The copy could not be cut off from the outside: " <> show e)) pure
-      manager <- liftIO (newManager defaultManagerSettings)
-      -- The old program on the copy, and what each check keeps of it.
-      fixtures <- withServer (o.scratch </> "old.log") o.old (serveArgs scratchChoice []) (throwError . OldNotDriven) $ \server ->
-        for checks $ \(Check name before after) ->
-          liftIO (before manager server) >>= \case
-            Left why -> throwError (OldNotDriven ("The check of " <> name <> " could not read the old program's wiki: " <> why))
-            Right f -> pure (name, \s -> after manager f s)
+      manager <- liftIO (newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 120_000_000})
+      holdAll checks $ \held -> do
+        -- What each check makes in the copy before the old program serves
+        -- it, through the old program's console or in the copy's settings.
+        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (["--data", o.scratch] <> databaseArgs scratchChoice)}
+        seeded <- for held $ \(Held name seed before after) ->
+          liftIO (try (seed seeding)) >>= \case
+            Left (e :: SomeException) -> broken ("The check of " <> name <> " could not prepare the copy: " <> show e)
+            Right (Left why) -> throwError (OldNotDriven ("The check of " <> name <> " could not prepare the copy with the old program: " <> why))
+            Right (Right s) -> pure (Seeded name (before s) after)
+        -- The old program on the copy, and what each check keeps of it.
+        fixtures <- withServer (o.scratch </> "old.log") o.old (serveArgs scratchChoice []) (throwError . OldNotDriven) $ \server ->
+          for seeded $ \(Seeded name before after) ->
+            liftIO (try (before manager server)) >>= \case
+              Left (e :: SomeException) -> throwError (OldNotDriven ("The check of " <> name <> " could not use the old program's wiki: " <> show e))
+              Right (Left why) -> throwError (OldNotDriven ("The check of " <> name <> " could not use the old program's wiki: " <> why))
+              Right (Right f) -> pure (name, \server' -> either (\(e :: SomeException) -> Left (show e)) identity <$> try (after f manager server'))
+        afterTheMigration scratchOptions scratchChoice fixtures
+    afterTheMigration scratchOptions scratchChoice fixtures = do
       -- The migration, and every row read back, by this program.
       liftIO (runMigrate scratchOptions) >>= \case
         MigratedTo _ -> pass
@@ -208,8 +239,14 @@ a </> b = a <> "/" <> b
 -- Servers
 
 -- | 'Server' is a server the rehearsal started: the base of its
--- administration listener's API, which answers as an administrator.
-newtype Server = Server {adminApi :: Text}
+-- administration listener's API, which answers as an administrator, and
+-- the address of its public listener, where people sign in.
+data Server = Server
+  { adminApi :: Text
+  -- ^ @http:\/\/127.0.0.1:\<port>\/admin\/api\/v1@.
+  , public :: Text
+  -- ^ @http:\/\/127.0.0.1:\<port>@, with no slash at the end.
+  }
 
 -- | Run a program's server on two loopback ports the system gives, wait
 -- until it answers, run the action, and stop the server however the
@@ -223,7 +260,7 @@ withServer logFile program args failed act = do
   admin <- liftIO freePort
   logHandle <- liftIO (openFile logFile WriteMode)
   (_, _, _, process) <- liftIO (createProcess (proc program (args listen admin)) {std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
-  let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1"}
+  let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1", public = "http://127.0.0.1:" <> show listen}
       stop = do
         terminateProcess process
         void (timeout 20_000_000 (waitForProcess process))
@@ -276,21 +313,83 @@ getJson manager url =
 --------------------------------------------------------------------------------
 -- Checks
 
--- | 'Check' is one thing an upgrade must keep working: a name, a 'before'
--- half that reads the old program's wiki and keeps a fixture (or says why
--- it could not), and an 'after' half that reads the new program's wiki and
--- compares it with the fixture. A feature that changes how existing data
--- is read or used adds a check here, written against what the program
--- deployed before it serves.
-data Check = forall fixture. Check
+-- | 'Check' is one thing an upgrade must keep working. A feature that
+-- changes how existing data is read or used adds a check here, written
+-- against what the program deployed before it understands. A check has
+-- four parts, run in this order:
+--
+-- * 'holding': what the check keeps running for the whole rehearsal, given
+--   to the other three (a fake sign-in provider; nothing for most).
+-- * 'seed': what it makes in the copy before the old program serves it,
+--   through the old program's console or in the copy's settings
+--   ('Seeding'). Its result goes to 'before'.
+-- * 'before': what it does with the old program's server and keeps, the
+--   fixture.
+-- * 'after': what it checks with the new program's server against the
+--   fixture.
+--
+-- A 'Left' of 'seed' or 'before' means the old program could not be
+-- driven ('OldNotDriven'); a 'Left' of 'after' is a failed check.
+data Check = forall held seeded fixture. Check
   { name :: Text
-  , before :: Manager -> Server -> IO (Either Text fixture)
-  , after :: Manager -> fixture -> Server -> IO (Either Text ())
+  , holding :: forall a. (held -> IO a) -> IO a
+  , seed :: held -> Seeding -> IO (Either Text seeded)
+  , before :: held -> seeded -> Manager -> Server -> IO (Either Text fixture)
+  , after :: held -> fixture -> Manager -> Server -> IO (Either Text ())
   }
+
+-- | 'Seeding' is what a check's 'seed' may use: the copy, not served yet,
+-- and the old program's console on it.
+data Seeding = Seeding
+  { copy :: Place
+  -- ^ The copy's data directory and database, at the old program's
+  -- schema. Only tables whose shape every version shares may be written,
+  -- such as @settings@.
+  , console :: [Text] -> Text -> IO (Either Text Text)
+  -- ^ Run the old program with these arguments, followed by the copy's
+  -- @--data@ and database options, with this text on its standard input.
+  -- Its output, or what it said when it failed.
+  }
+
+-- | A check while its 'holding' runs: its other parts, given what it
+-- holds.
+data Held = forall seeded fixture. Held Text (Seeding -> IO (Either Text seeded)) (seeded -> Manager -> Server -> IO (Either Text fixture)) (fixture -> Manager -> Server -> IO (Either Text ()))
+
+-- | A check after its 'seed': its 'before', given what the seed made, and
+-- its 'after'.
+data Seeded = forall fixture. Seeded Text (Manager -> Server -> IO (Either Text fixture)) (fixture -> Manager -> Server -> IO (Either Text ()))
+
+-- | Run every check's 'holding' around the action, nested in the checks'
+-- order.
+holdAll :: [Check] -> ([Held] -> ExceptT e IO a) -> ExceptT e IO a
+holdAll [] act = act []
+holdAll (Check name holding seed before after : rest) act =
+  ExceptT $ holding $ \h -> runExceptT $ holdAll rest $ \others -> act (Held name (seed h) (before h) (after h) : others)
+
+-- | Run a program's console command on the copy: the arguments, then the
+-- copy's place options, with the text on standard input.
+runConsole :: FilePath -> [[Char]] -> [Text] -> Text -> IO (Either Text Text)
+runConsole program placeArgs args input =
+  try (readCreateProcessWithExitCode (proc program (map toS args <> placeArgs)) (toS input)) <&> \case
+    Left (e :: SomeException) -> Left (show e)
+    Right (ExitSuccess, out, _) -> Right (toS out)
+    Right (ExitFailure code, out, err) -> Left (T.unwords (map toS args) <> " exited with " <> show code <> ": " <> T.strip (toS err <> toS out))
 
 -- | Every check, in the order they run.
 checks :: [Check]
-checks = [pagesCheck]
+checks = [pagesCheck, accountsCheck]
+
+-- | A check that holds nothing and makes nothing before the old program
+-- serves the copy.
+simpleCheck :: Text -> (Manager -> Server -> IO (Either Text fixture)) -> (fixture -> Manager -> Server -> IO (Either Text ())) -> Check
+simpleCheck name before after =
+  Check
+    { name
+    , holding = ($ ())
+    , seed = \() _ -> pure (Right ())
+    , before = \() () -> before
+    , after = \() -> after
+    }
 
 --------------------------------------------------------------------------------
 -- The pages check
@@ -309,12 +408,7 @@ data PageRead = PageRead
 -- migration, its title and its source. The guide's space is left out: its
 -- pages are the program's own, and change with its version.
 pagesCheck :: Check
-pagesCheck =
-  Check
-    { name = "pages"
-    , before = readPages
-    , after = \manager was server -> readPages manager server <&> (>>= comparePages was)
-    }
+pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages manager server <&> (>>= comparePages was))
 
 -- | Every page of every space but the guide's, read through a server's
 -- administration API.
@@ -370,3 +464,163 @@ comparePages was now
            , what <- ["has another title: " <> q.title | q.title /= p.title] <> ["has another source" | q.body /= p.body]
            ]
         <> ["page " <> q.page <> " (" <> q.title <> ") is new" | (k, q) <- Map.toList after', not (Map.member k before')]
+
+--------------------------------------------------------------------------------
+-- The accounts check
+
+-- | The accounts check (the owner, 2026-11-09, on WP5.74a): accounts made
+-- on the old program still sign in on the new one. Two accounts are made
+-- in the copy, with a login and a provider subject nobody has
+-- ('Canary'):
+--
+-- * one with a password, by the old program's console (@users add@),
+--   before the old program serves the copy;
+-- * one through a fake OpenID Connect provider ("Wiki.Server.FakeProvider"),
+--   by signing in with it on the old program's server.
+--
+-- After the migration, the first signs in on the new server as the
+-- application does ("Wiki.App.Backend.Http"): an account from before
+-- OPAQUE signs in the old way, which moves it to OPAQUE, so it then signs
+-- in a second time, which must not use the old way. The second signs in
+-- through the provider again and must be the same account.
+--
+-- For this the copy is opened to newcomers (its @access@ setting: a closed
+-- wiki makes no account for a provider's newcomer), the fake is added to
+-- its providers, and its public address is set to 'rehearsalUrl'. The
+-- provider sends the browser back to that address, which the check maps
+-- to the server it talks to. All three change the copy only.
+accountsCheck :: Check
+accountsCheck =
+  Check
+    { name = "accounts"
+    , holding = withFakeProvider
+    , seed = seedAccounts
+    , before = \_ canary manager server -> runExceptT $ do
+        who <- ExceptT (providerSignIn manager server)
+        pure (canary, who)
+    , after = \_ (canary, was) manager server -> runExceptT $ do
+        moved <- ExceptT (appSignIn manager server canary <&> first ("the password's first sign-in: " <>))
+        again <- ExceptT (appSignIn manager server canary <&> first ("the password's second sign-in: " <>))
+        when (any oldSignIn again) $
+          throwError ("the password's second sign-in went the old way, so the first did not move the account to OPAQUE (the first sent " <> T.intercalate ", " (map shown moved) <> ")")
+        now <- ExceptT (providerSignIn manager server <&> first ("the provider's sign-in: " <>))
+        unless (now == was) $ throwError ("the provider's sign-in is user " <> now <> ", not user " <> was <> " as before the migration")
+    }
+  where
+    oldSignIn (method', path) = method' == "POST" && path == "api/v1/session"
+    shown (method', path) = decodeUtf8 method' <> " " <> path
+
+-- | 'Canary' is what the accounts check makes: a login, its password,
+-- and the subject the fake provider signs in.
+data Canary = Canary
+  { login :: Text
+  , password :: Text
+  , subject :: Text
+  }
+
+-- | The public address the copy's servers are given: the provider sends
+-- the browser back to it, and the check maps it to the server
+-- ('onServer').
+rehearsalUrl :: Text
+rehearsalUrl = "http://wiki.rehearsal/"
+
+-- | The fake provider's name in the copy.
+rehearsalProvider :: Text
+rehearsalProvider = "rehearsal"
+
+-- | Make the password's account with the old program's console, and set
+-- the copy up for the provider's.
+seedAccounts :: Fake -> Seeding -> IO (Either Text Canary)
+seedAccounts fake seeding = runExceptT $ do
+  tag <- liftIO (decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 8 :: IO ByteString))
+  let canary = Canary {login = "rehearsal-" <> tag, password = "rehearsal-password-" <> tag, subject = "rehearsal-provider-" <> tag}
+  liftIO (writeIORef fake.user (person canary.subject))
+  _ <- ExceptT (seeding.console ["users", "add", canary.login, "--display-name", "Rehearsal"] (canary.password <> "\n"))
+  liftIO $ withDatabase seeding.copy $ \c -> runDb c $ do
+    storeSetting "access" (accessName Open)
+    storeSetting "public-url" rehearsalUrl
+    runDelete (delete wikiDb.sign_in_providers (\p -> p.name ==. val_ rehearsalProvider))
+    runInsert . insert wikiDb.sign_in_providers $
+      insertValues [S.ProviderRow {name = rehearsalProvider, position = 1000, kind = kindName Generic, client_id = "rehearsal-client", issuer = Just fake.url, secret = Just clientSecret}]
+  pure canary
+
+-- | Sign in through the fake provider as a browser does: the server's
+-- start, the provider, and back to the server's callback with the round
+-- trip's cookie. The id of the user the session is for.
+providerSignIn :: Manager -> Server -> IO (Either Text Text)
+providerSignIn manager server = runExceptT $ do
+  started <- fetch (server.public <> "/auth/" <> rehearsalProvider <> "/start?next=%2F") []
+  unless (statusOf started == 302) $ throwError ("the sign-in did not go to the provider: " <> describe started)
+  flow <- maybe (throwError "the sign-in's start set no wiki_oidc cookie") pure (cookieOf "wiki_oidc" started)
+  atProvider <- fetch (locationOf started) []
+  unless (statusOf atProvider == 302) $ throwError ("the provider did not send the browser back: " <> describe atProvider)
+  landed <- fetch (onServer (locationOf atProvider)) [("Cookie", "wiki_oidc=" <> encodeUtf8 flow)]
+  unless (statusOf landed == 200) $ throwError ("the callback did not sign in: " <> describe landed)
+  session <- maybe (throwError "the callback set no wiki_session cookie") pure (cookieOf "wiki_session" landed)
+  sessionReply <- fetch (server.public <> "/api/v1/session") [("Cookie", "wiki_session=" <> encodeUtf8 session)]
+  either (throwError . ("the session: " <>)) pure $ do
+    decoded <- if statusOf sessionReply == 200 then first toS (eitherDecode (responseBody sessionReply)) else Left (describe sessionReply)
+    maybe (Left "no user is signed in") Right (userOf decoded >>= field "id")
+  where
+    fetch url hs =
+      ExceptT $
+        try @SomeException (parseRequest (toS url) >>= \r -> httpLbs r {requestHeaders = ("X-Wiki-Request", "1") : hs, redirectCount = 0} manager)
+          <&> first (\e -> "GET " <> url <> ": " <> show e)
+    statusOf = statusCode . responseStatus
+    describe r = show (statusOf r) <> " " <> T.take 300 (decodeUtf8 (toS (responseBody r)))
+    locationOf r = maybe "" decodeUtf8 (lookup hLocation (responseHeaders r))
+    onServer url = maybe url (server.public <>) (T.stripPrefix (T.dropEnd 1 rehearsalUrl) url)
+    userOf = \case
+      Object o -> KeyMap.lookup "user" o
+      _ -> Nothing
+
+-- | A cookie a response sets, by name.
+cookieOf :: Text -> Response LByteString -> Maybe Text
+cookieOf name r =
+  listToMaybe
+    [ T.drop 1 rest
+    | (headerName, raw) <- responseHeaders r
+    , headerName == hSetCookie
+    , let (key, rest) = T.breakOn "=" (T.takeWhile (/= ';') (decodeUtf8 raw))
+    , key == name
+    , not (T.null (T.drop 1 rest))
+    ]
+
+-- | Sign in with the canary's password as the application does, through a
+-- browser of its own (its own cookies). The requests it made, by method
+-- and address, or why it did not sign in as the canary.
+appSignIn :: Manager -> Server -> Canary -> IO (Either Text [(ByteString, Text)])
+appSignIn manager server canary = do
+  jar <- newIORef (createCookieJar [])
+  sent <- newIORef []
+  env <- newHttpEnv (httpTransport manager server.public jar sent)
+  result <- runHttpWiki env (signIn canary.login (Password canary.password))
+  requests <- reverse <$> readIORef sent
+  pure $ case result of
+    Left e -> Left ("not signed in (" <> show e <> ") after " <> T.intercalate ", " [decodeUtf8 m <> " " <> p | (m, p) <- requests])
+    Right session
+      | ((\u -> u.login.text) <$> session.user) == Just canary.login -> Right requests
+      | otherwise -> Left ("signed in as " <> maybe "nobody" (\u -> u.login.text) session.user)
+
+-- | The application's requests sent over HTTP to a server, with a cookie
+-- jar as a browser keeps one. Every request is noted, its method and
+-- address, the latest first.
+httpTransport :: Manager -> Text -> IORef CookieJar -> IORef [(ByteString, Text)] -> Transport
+httpTransport manager base jar sent = Transport $ \r -> do
+  modifyIORef' sent ((r.requestMethod, requestUrl r) :)
+  answer <- try @SomeException $ do
+    request <- parseRequest (toS (base <> "/" <> requestUrl r))
+    cookies <- readIORef jar
+    response <- httpLbs request {method = r.requestMethod, requestHeaders = requestHeaderList r, requestBody = RequestBodyBS (maybe "" fst r.requestBody), cookieJar = Just cookies, redirectCount = 0} manager
+    writeIORef jar (responseCookieJar response)
+    pure response
+  pure $ case answer of
+    Left e -> Left (show e)
+    Right response ->
+      Right
+        Servant.Response
+          { Servant.responseStatusCode = responseStatus response
+          , Servant.responseHeaders = Seq.fromList (responseHeaders response)
+          , Servant.responseHttpVersion = responseVersion response
+          , Servant.responseBody = responseBody response
+          }

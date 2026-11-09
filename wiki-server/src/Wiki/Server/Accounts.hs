@@ -8,9 +8,17 @@
 -- the caller's responsibility: the console is whoever can read the data
 -- directory, and the API checks for an administrator. Each operation is
 -- one transaction on the storage's writer ('writing'), or a read on a
--- reader, except that a password is hashed before the writer is taken,
--- since hashing takes tens of milliseconds ("Wiki.Server.Password") that
--- the rest of the server should not wait for.
+-- reader.
+--
+-- = Passwords
+--
+-- A password is an OPAQUE record ("Wiki.Server.Opaque", WP5.74a of
+-- docs/PLAN.md): the browser makes it, and the server never sees the
+-- password. The console and the storage's own operations, which are given
+-- a password, register it with both sides in this process and keep only the
+-- record. An account from before OPAQUE keeps its argon2id hash
+-- ("Wiki.Server.Password") until its next sign-in, which the old 'signIn'
+-- checks and which then moves it to a record.
 --
 -- What the console does ('createAccount', 'setPassword', 'setDisabled',
 -- 'setAdministrator') is recorded in the audit log as done by the
@@ -70,9 +78,10 @@
 -- A signed-in user changes their password, or sets one if they have none
 -- and no server provider to sign in with ('changePassword', WP3.7 of
 -- docs/PLAN.md). A user who signs in with such a provider has no password
--- to set (WP5.6), and is refused. The current password must be given and
--- be correct: a session is not enough, so that someone who finds a browser
--- left signed in cannot take over the account. The user's other sessions
+-- to set (WP5.6), and is refused. The current password must be proved: a
+-- session is not enough, so that someone who finds a browser left signed in
+-- cannot take over the account. It is proved through OPAQUE, which leaves
+-- the session a proof, or for an account from before OPAQUE by giving it. The user's other sessions
 -- end, as when an administrator sets a password, but not the one they
 -- change it from, which the caller names by the id its cookie carries.
 module Wiki.Server.Accounts
@@ -104,9 +113,11 @@ module Wiki.Server.Accounts
   , PasswordRefusal (..)
   , changePassword
   , currentPasswordIs
+  , oldPasswordIs
 
     -- * Sessions
   , signIn
+  , signInUser
   , SignInFailure (..)
   , Resolved (..)
   , resolveSession
@@ -129,8 +140,9 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
 import Database.Beam (Q, QExpr, all_, delete, desc_, filter_, insert, insertValues, join_, orderBy_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (/=.), (<-.), (<=.), (==.))
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
+import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
+import Wiki.Api.Opaque (NewAccountRecord (..), PasswordRecord (..))
 import Wiki.Api.Security (SessionRef (..), SessionSummary (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
@@ -138,11 +150,12 @@ import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Subject (SubjectUser))
 import Wiki.Core.User (Email (..), Login (..), Password (..), User (..), parseLogin)
-import Wiki.Server.Password (SessionToken (..), checkNewPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, writing, writingEither)
+import Wiki.Server.Opaque (Proof (..), storedRecordOf)
+import Wiki.Server.Password (SessionToken (..), checkNewPassword, newPublicId, newToken, tokenHash, verifyPassword)
+import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (IdentityRow (..), deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, micro, noPasswordToSet, passwordHashOf, pendingInvitation, providerNames, refreshIdentity, setGlobalGrant, totpEnabled, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Rows (IdentityRow (..), StoredPassword (..), StoredRecord, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, loadPasswordByLogin, micro, noPasswordToSet, passwordOf, pendingInvitation, providerNames, refreshIdentity, setGlobalGrant, storeRecord, totpEnabled, updateDisabled)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 
@@ -166,18 +179,22 @@ listAccounts st = reading st loadAccountsWithAdministrators
 -- | Create a user, who signs in with this password, or (with none) cannot
 -- sign in until they are given one. A blank display name becomes the
 -- login. A login another user has, in any case, is a 'Conflict'; an
--- invalid login or password is 'Invalid'.
+-- invalid login or password is 'Invalid'. The password is registered
+-- through OPAQUE with both sides here ("Wiki.Server.Opaque"): only its
+-- record is stored.
 createAccount :: Storage -> Text -> Text -> Maybe Password -> IO (Either WikiError Account)
 createAccount st rawLogin rawName password = runExceptT $ do
   login <- either (throwError . Invalid) pure (parseLogin rawLogin)
-  phc <- for password $ \p -> either (throwError . Invalid) (liftIO . hashPassword) (checkNewPassword p)
-  uid <- liftIO (UUID.toText <$> generateV4)
+  uid <- liftIO (UserId . UUID.toText <$> generateV4)
+  stored <- for password $ \p -> do
+    checked <- either (throwError . Invalid) pure (checkNewPassword p)
+    ExceptT (first Invalid <$> recordHere st uid checked)
   let name = case T.strip rawName of
         "" -> login.text
         n -> n
   ExceptT $
     writingEither st $
-      insertAccount (UserId uid) login name phc >>= \case
+      insertAccount uid login name stored >>= \case
         Left t -> pure (Left (taken t))
         Right account -> do
           fromConsole "user.create" account.user [("login", login.text), ("name", name)]
@@ -185,13 +202,15 @@ createAccount st rawLogin rawName password = runExceptT $ do
   where
     taken login = Conflict ("There is a user with the login " <> login.text <> " already.")
 
--- | Give a user a new password, and end their sessions.
+-- | Give a user a new password, and end their sessions. It is registered
+-- through OPAQUE with both sides here, as 'createAccount' does.
 setPassword :: Storage -> UserId -> Password -> IO (Either WikiError Account)
 setPassword st u password = case checkNewPassword password of
   Left why -> pure (Left (Invalid why))
-  Right p -> do
-    phc <- hashPassword p
-    changeAccount st u "user.password" [] (updatePasswordHash u phc >> deleteSessionsOf u)
+  Right p ->
+    recordHere st u p >>= \case
+      Left why -> pure (Left (Invalid why))
+      Right stored -> changeAccount st u "user.password" [] (storeRecord u stored >> deleteSessionsOf u)
 
 -- | Disable a user's login, which ends their sessions, or enable it again.
 setDisabled :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
@@ -230,7 +249,7 @@ fromConsole action u detail =
 -- signed in with. A closed wiki refuses it ('Forbidden') before anything
 -- is checked; then the account is checked as 'createAccount' checks one
 -- ('Invalid', 'Conflict').
-register :: Storage -> UTCTime -> Text -> NewAccount -> IO (Either WikiError (User, SessionToken))
+register :: Storage -> UTCTime -> Text -> NewAccountRecord -> IO (Either WikiError (User, SessionToken))
 register st now address new = runExceptT $ do
   open <- liftIO (takesNewAccounts . (\s -> s.access) <$> readSettings st)
   unless open (throwError Forbidden)
@@ -252,7 +271,7 @@ invitationFor st now token = fmap snd <$> reading st (pendingInvitation now (tok
 -- (used, revoked, or expired) is 'NotFound', checked before the account. A
 -- login that is taken leaves the invitation unused, so another can be
 -- tried.
-acceptInvitation :: Storage -> UTCTime -> Text -> InvitationToken -> NewAccount -> IO (Either WikiError (User, SessionToken))
+acceptInvitation :: Storage -> UTCTime -> Text -> InvitationToken -> NewAccountRecord -> IO (Either WikiError (User, SessionToken))
 acceptInvitation st now address token new = runExceptT $ do
   let secret = tokenHash token.text
   pending <- liftIO (reading st (pendingInvitation now secret))
@@ -277,30 +296,37 @@ recordMade address action detail made = do
     insertAudit Recorded {actor = Actor {id = u.id, login = u.login}, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login.text}, detail, address}
   pure made
 
--- | An account to create, checked, with its password hashed: its id,
--- login, display name and the password's hash.
-prepared :: NewAccount -> ExceptT WikiError IO (UserId, Login, Text, Maybe Text)
+-- | An account to create, checked, with its OPAQUE record: its id (the
+-- record's credential id, which the server gave out with the
+-- registration's challenge), login, display name and record. The rules
+-- for a new password are the browser's to apply, since the server never
+-- sees the password.
+prepared :: NewAccountRecord -> ExceptT WikiError IO (UserId, Login, Text, Maybe StoredRecord)
 prepared new = do
-  (login, password) <- either (throwError . Invalid) pure ((,) <$> parseLogin new.login <*> checkNewPassword new.password)
-  phc <- liftIO (hashPassword password)
-  uid <- liftIO (UUID.toText <$> generateV4)
+  login <- either (throwError . Invalid) pure (parseLogin new.login)
+  uid <- maybe (throwError (Invalid "The password was prepared for no account: try again.")) (pure . UserId . UUID.toText) (UUID.fromText new.password.credential)
+  stored <- either (throwError . Invalid) pure (storedRecordOf uid new.password)
   let name = case T.strip new.displayName of
         "" -> login.text
         n -> n
-  pure (UserId uid, login, name, Just phc)
+  pure (uid, login, name, Just stored)
 
 -- | Create a checked account, in a running transaction, with the grant the
 -- wiki's settings give new accounts, and sign its creator in, from their
 -- network address. An account without a password signs in another way:
 -- with a provider's account.
-makeAccount :: (Backend be) => UTCTime -> Text -> WikiSettings -> (UserId, Login, Text, Maybe Text) -> Db be (Either WikiError (User, SessionToken))
-makeAccount now address settings (uid, login, name, phc) =
-  insertAccount uid login name phc >>= \case
-    Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken.text <> " already.")))
-    Right account -> do
-      when settings.newAccountsCreateSpaces (grantCreateSpaces uid)
-      token <- startSession now uid address
-      pure (Right (account.user, token))
+makeAccount :: (Backend be) => UTCTime -> Text -> WikiSettings -> (UserId, Login, Text, Maybe StoredRecord) -> Db be (Either WikiError (User, SessionToken))
+makeAccount now address settings (uid, login, name, stored) =
+  loadAccount uid >>= \case
+    -- The id of a record's credential is used once.
+    Just _ -> pure (Left (Conflict "The password was prepared for an account that exists already: try again."))
+    Nothing ->
+      insertAccount uid login name stored >>= \case
+        Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken.text <> " already.")))
+        Right account -> do
+          when settings.newAccountsCreateSpaces (grantCreateSpaces uid)
+          token <- startSession now uid address
+          pure (Right (account.user, token))
 
 --------------------------------------------------------------------------------
 -- Signing in with a provider
@@ -493,42 +519,77 @@ data PasswordRefusal
     PasswordRefused WikiError
   deriving stock (Eq, Show)
 
--- | A user changes their own password, giving their current one if they
--- have one ('WrongCurrent' if it is wrong). The result is how they sign in
--- afterwards. A user without a password who signs in with a server
--- provider is refused ('Invalid'): they have no password to set. Every
--- session of theirs ends except the one with this id (from the request's
--- cookie), if any. The new password is checked before anything is hashed,
--- and hashed before the writer is taken.
-changePassword :: Storage -> UserId -> Maybe SessionToken -> Maybe Password -> Password -> IO (Either PasswordRefusal SignInMethods)
-changePassword st u keep current new = runExceptT $ do
-  password <- either (throwError . PasswordRefused . Invalid) pure (checkNewPassword new)
+-- | A user changes their own password, which they must prove first: a
+-- user with an OPAQUE record by the session's proof through OPAQUE
+-- ('proved', which is used up only when it is needed), a user from before
+-- OPAQUE by any proof or by their current password, checked against its
+-- hash ('WrongCurrent' if neither). A proof by the old password, which a
+-- sign-in from before OPAQUE leaves, never replaces a record: an account
+-- that got one meanwhile must be proved through OPAQUE. The new password is the record the browser made
+-- ("Wiki.Server.Opaque"). The result is how they sign in afterwards. A
+-- user without a password who signs in with a server provider is refused
+-- ('Invalid'): they have no password to set. Every session of theirs ends
+-- except the one with this id (from the request's cookie), if any.
+changePassword :: Storage -> UserId -> Maybe SessionToken -> IO (Maybe Proof) -> Maybe Password -> PasswordRecord -> IO (Either PasswordRefusal SignInMethods)
+changePassword st u keep proved current new = runExceptT $ do
+  stored <- either (throwError . PasswordRefused . Invalid) pure (storedRecordOf u new)
   configured <- liftIO (providerNames <$> readServerSettings st)
-  before <- liftIO (reading st (passwordHashOf u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
+  before <- liftIO (reading st (passwordOf u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
   none <- liftIO (reading st (noPasswordToSet configured u))
   when none $
     throwError (PasswordRefused (Invalid "You sign in with a provider, and have no password to set: sign in there."))
-  for_ before $ \phc ->
-    unless (maybe False (verifyPassword phc) current) (throwError WrongCurrent)
-  phc <- liftIO (hashPassword password)
+  -- An account from before OPAQUE that proves its password by the proof
+  -- its sign-in left, rather than by giving it, is moving its password to
+  -- OPAQUE: the password stays the same, and so do its other sessions. A
+  -- proof given again in a session already signed in is a real change of
+  -- password, which ends them.
+  (right, moving) <- liftIO $ case before of
+    LegacyHash phc
+      | not (maybe False (verifyPassword phc) current) ->
+          proved <&> \case
+            Just ByOldPassword -> (True, True)
+            Just _ -> (True, False)
+            Nothing -> (False, False)
+    _ -> (,False) <$> passwordProved before proved current
+  unless right (throwError WrongCurrent)
   ExceptT $ writingEither st $ do
-    now <- passwordHashOf u
+    now <- passwordOf u
     if now /= Just before
       then pure (Left (PasswordRefused (Conflict "Your password was changed meanwhile: sign in again with the new one.")))
       else do
-        updatePasswordHash u phc
-        case keep of
+        storeRecord u stored
+        unless moving $ case keep of
           Just token -> runDelete (delete wikiDb.sessions (\x -> x.user_id ==. val_ u.text &&. x.id_hash /=. val_ (tokenHash token.text)))
           Nothing -> deleteSessionsOf u
         first PasswordRefused <$> methodsOf u
 
--- | Whether a given password is a user's current one, for what a session
--- alone may not do (WP4.11 of docs/PLAN.md). 'Just True' for the right
--- one, and for a user who has none (who signs in only with a provider's
--- account, and gives none); 'Nothing' for a user who does not exist.
-currentPasswordIs :: Storage -> UserId -> Maybe Password -> IO (Maybe Bool)
-currentPasswordIs st u given =
-  fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> reading st (passwordHashOf u)
+-- | Whether a user proved the password they have: by the session's proof
+-- through OPAQUE for a record; by any proof or the password given, against
+-- its hash, for an account from before OPAQUE; and at once for a user
+-- without one.
+passwordProved :: StoredPassword -> IO (Maybe Proof) -> Maybe Password -> IO Bool
+passwordProved stored proved given = case stored of
+  NoPassword -> pure True
+  WithRecord _ -> (== Just ByOpaque) <$> proved
+  LegacyHash phc
+    | maybe False (verifyPassword phc) given -> pure True
+    | otherwise -> isJust <$> proved
+
+-- | Whether the requesting user has proved their current password, for
+-- what a session alone may not do (WP4.11 of docs/PLAN.md): see
+-- 'passwordProved'. 'Nothing' for a user who does not exist.
+currentPasswordIs :: Storage -> UserId -> IO (Maybe Proof) -> Maybe Password -> IO (Maybe Bool)
+currentPasswordIs st u proved given =
+  reading st (passwordOf u) >>= traverse (\stored -> passwordProved stored proved given)
+
+-- | Whether the password is the user's from before OPAQUE: true only for
+-- an account that still has that hash and when the password matches it.
+-- An account with a record, or with no password, is never proved this way.
+oldPasswordIs :: Storage -> UserId -> Password -> IO Bool
+oldPasswordIs st u given =
+  reading st (passwordOf u) <&> \case
+    Just (LegacyHash phc) -> verifyPassword phc given
+    _ -> False
 
 --------------------------------------------------------------------------------
 -- Sessions
@@ -563,25 +624,39 @@ data SignInFailure
     SecondFactorWanted User
   deriving stock (Eq, Show)
 
--- | Sign in with a login and a password, from a network address. The
--- result is the user, and the id of their new session for the cookie. An
--- unknown login costs the same hashing as a known one, so that the time
--- the answer takes does not reveal whether a login exists. Sessions that
--- have ended by themselves are deleted along the way.
+-- | Sign in with a login and a password checked against its argon2id
+-- hash, from a network address: the sign-in of an account from before
+-- OPAQUE, which has no record yet ("Wiki.Api.Opaque"). The result is the
+-- user, and the id of their new session for the cookie. Every other login
+-- (one nobody has, one with a record, one without a password) is
+-- 'NoSuchAccount' after the same hashing, so that neither the answer nor
+-- the time it takes tells which logins are from before OPAQUE.
 signIn :: Storage -> UTCTime -> Text -> Text -> Password -> IO (Either SignInFailure (User, SessionToken))
 signIn st now address login password
   | T.length password.text > 1024 = pure (Left BadPassword)
   | otherwise = do
-      found <- reading st (loadAccountByLogin (T.strip login))
-      let matches = verifyPassword (fromMaybe unknownHash (found >>= snd)) password
-      case found of
-        Just (a, Just _)
-          | matches && not a.disabled ->
-              writing st $
-                totpEnabled a.user.id >>= \case
-                  True -> pure (Left (SecondFactorWanted a.user))
-                  False -> Right . (a.user,) <$> startSession now a.user.id address
+      found <- reading st (loadPasswordByLogin (T.strip login))
+      let legacy = case found of
+            Just (a, LegacyHash phc) -> Just (a, phc)
+            _ -> Nothing
+          matches = verifyPassword (maybe unknownHash snd legacy) password
+      case legacy of
+        Just (a, _) | matches -> signInUser st now address a.user.id
         _ -> pure (Left NoSuchAccount)
+
+-- | Sign a user in whose password was right, from a network address: a
+-- new session, or 'SecondFactorWanted' for a user with a second factor;
+-- 'NoSuchAccount' for a user who is disabled or no longer exists.
+signInUser :: Storage -> UTCTime -> Text -> UserId -> IO (Either SignInFailure (User, SessionToken))
+signInUser st now address u =
+  writing st $
+    loadAccount u >>= \case
+      Just a
+        | not a.disabled ->
+            totpEnabled a.user.id >>= \case
+              True -> pure (Left (SecondFactorWanted a.user))
+              False -> Right . (a.user,) <$> startSession now a.user.id address
+      _ -> pure (Left NoSuchAccount)
 
 -- | Create a new session for a user, from now and from a network address,
 -- in a running transaction. The result is the id its cookie is to carry.

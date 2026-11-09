@@ -226,9 +226,13 @@ signing m = describe "signing in with a passkey" $ do
     -- Made without the PRF extension: a passkey to sign in with.
     sent <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
     map (\r -> field ["name"] =<< decodeStrict (encodeUtf8 r.body)) sent `shouldBe` [Just (Aeson.String "My phone")]
-    -- Making it asked for the password, since it signs the user in.
+    -- Making it asked for the password, since it signs the user in: proved
+    -- once at proof/old, as an account from before OPAQUE proves it
+    -- ('serveOpaque'), and not sent with the registration.
     begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
-    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` [Just (Aeson.String "editor's password")]
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` [Just Aeson.Null]
+    proved <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/password/proof/old") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) proved `shouldBe` [Just (Aeson.String "editor's password")]
     findAll ui ".passkey-remove" >>= \case
       remove : _ -> click remove
       [] -> panic "no Remove"
@@ -415,8 +419,11 @@ vault m = do
     (find ui ".assistant-passkey-password" >>= (`getProperty` "value")) `shouldReturn` ""
     find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
     turnOn ui
+    -- Each attempt proves the password once at proof/old ('serveOpaque').
     begun <- filter (\r -> r.method == "POST" && r.url == "api/v1/account/passkeys/registration") <$> asked
-    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) begun `shouldBe` replicate 2 (Just Aeson.Null)
+    proved <- filter (\r -> r.method == "PUT" && r.url == "api/v1/account/password/proof/old") <$> asked
+    map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) proved `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
     closed ui
 
   it "makes a new passkey for syncing when the one the user has is not used" $ runPage $ do

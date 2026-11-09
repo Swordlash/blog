@@ -85,7 +85,10 @@ import Protolude hiding (Generic)
 -- the secret of their feed of notifications (migration
 -- @0006-notification-feed@), none until they ask for one, and their
 -- avatar's blob and media type (migration @0008-avatars@), none until they
--- upload one.
+-- upload one, and their OPAQUE record with the stretching it was made with
+-- (migration @0009-opaque@), none for an account without one.
+-- @password_hash@ is the argon2id hash of an account from before OPAQUE,
+-- kept until its next sign-in.
 data Users f = UserRow
   { id :: Columnar f Text
   , login :: Columnar f Text
@@ -99,6 +102,8 @@ data Users f = UserRow
   , feed_token :: Columnar f (Maybe Text)
   , avatar_blob :: Columnar f (Maybe Text)
   , avatar_media_type :: Columnar f (Maybe Text)
+  , opaque_record :: Columnar f (Maybe Text)
+  , opaque_stretch :: Columnar f (Maybe Text)
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

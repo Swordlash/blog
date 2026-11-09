@@ -1,0 +1,104 @@
+cabal-version:      3.0
+name:               opaque
+version:            0.1.0.0
+synopsis:           OPAQUE (RFC 9807), the augmented PAKE, over libsodium
+description:
+  OPAQUE, the augmented password-authenticated key exchange of RFC 9807,
+  with its OPRF from RFC 9497, for the suite ristretto255, SHA-512 and the
+  3DH key exchange, with a key stretching function chosen by the
+  application (Argon2id, or none for the RFC's test vectors). The protocol
+  is written in Haskell; every primitive (ristretto255, SHA-512,
+  HMAC-SHA-512, Argon2id, random numbers) comes from libsodium. It builds
+  natively.
+license:            MIT
+license-file:       LICENSE
+author:             Mateusz Goślinowski
+maintainer:         mateusz.goslinowski@gmail.com
+category:           Cryptography
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+                    README.md
+extra-source-files: interop/serenity.mjs
+tested-with:        GHC == 9.10.3, GHC == 9.14.1
+
+flag older-libsodium
+  description:
+    Build against libsodium 1.0.18, which has no HKDF of its own: HKDF-SHA-512
+    is then the Haskell polyfill in Crypto.OPAQUE.Kdf.Polyfill, over
+    libsodium's HMAC-SHA-512. Without the flag the package needs libsodium
+    1.0.19 or later and uses its crypto_kdf_hkdf_sha512.
+  default:     False
+  manual:      True
+
+common shared
+  default-language: GHC2021
+  ghc-options: -Wall -Wextra -Wcompat -Wredundant-constraints -Wunused-packages
+  default-extensions:
+      DerivingStrategies
+      DuplicateRecordFields
+      LambdaCase
+      NamedFieldPuns
+      NoFieldSelectors
+      OverloadedRecordDot
+      OverloadedStrings
+      StrictData
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:
+      Crypto.OPAQUE
+      Crypto.OPAQUE.Internal
+      Crypto.OPAQUE.Kdf
+      Crypto.OPAQUE.Kdf.Polyfill
+      Crypto.OPAQUE.OPRF
+      Crypto.OPAQUE.Secret
+      Crypto.OPAQUE.Sodium
+  build-depends:
+      base >= 4.20 && < 5,
+      bytestring >= 0.11.5 && < 0.13,
+      transformers >= 0.6 && < 0.7
+  -- Natively only: the wiki's browser client is @serenity-kit/opaque, from
+  -- npm, and no libsodium is built for wasm32-wasi. Not buildable there, so
+  -- that nothing built for the browser can come to depend on this package.
+  if arch(wasm32)
+    buildable: False
+  if flag(older-libsodium)
+    pkgconfig-depends: libsodium >= 1.0.18
+  else
+    pkgconfig-depends: libsodium >= 1.0.19
+  if flag(older-libsodium)
+    cpp-options: -DOLDER_LIBSODIUM
+
+test-suite opaque-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Test.hs
+  other-modules:
+      Test.Vectors
+      Test.Kdf
+      Test.RoundTrip
+      Test.Hardening
+      Test.Properties
+      Test.Memory
+      Test.Interop
+      Test.KdfAgreement
+  if arch(wasm32)
+    buildable: False
+  -- The comparison of the HKDF polyfill with libsodium's own runs only
+  -- where libsodium's is there: without older-libsodium.
+  if flag(older-libsodium)
+    hs-source-dirs: test-older
+  else
+    hs-source-dirs: test-libsodium
+  build-depends:
+      base,
+      bytestring,
+      hspec >= 2.10 && < 2.12,
+      QuickCheck >= 2.14 && < 2.20,
+      base64-bytestring >= 1.2 && < 1.3,
+      directory,
+      process,
+      text,
+      opaque

@@ -63,7 +63,7 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
-import Database.Beam (QExpr, aggregate_, all_, as_, countAll_, delete, filter_, insert, insertValues, isJust_, isNothing_, runDelete, runInsert, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.))
+import Database.Beam (QExpr, aggregate_, all_, as_, countAll_, delete, filter_, insert, insertValues, isJust_, isNothing_, runDelete, runInsert, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.), (||.))
 import Database.Beam.Backend.SQL.BeamExtensions (conflictingFields, insertOnConflict, onConflictUpdateSet)
 import Network.HTTP.Types (hCookie)
 import Network.Wai (Request (..))
@@ -94,7 +94,7 @@ stateOf :: (Backend be) => UserId -> Db be SecondFactorState
 stateOf u = do
   enabled <- totpEnabled u
   left <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ (\r -> r.user_id ==. val_ u.text &&. isNothing_ r.used_at) (all_ wikiDb.recovery_codes))))
-  withPassword <- runSelectReturningOne (select ((\r -> isJust_ r.password_hash) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
+  withPassword <- runSelectReturningOne (select ((\r -> isJust_ r.password_hash ||. isJust_ r.opaque_record) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
   pure
     SecondFactorState
       { enabled

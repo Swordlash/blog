@@ -73,6 +73,7 @@ library
       Wiki.Api.Info
       Wiki.Api.Links
       Wiki.Api.Notifications
+      Wiki.Api.Opaque
       Wiki.Api.Security
       Wiki.Api.ServerSettings
       Wiki.Api.Stars
@@ -86,6 +87,7 @@ library
   build-depends:
       aeson,
       base,
+      base64-bytestring,
       bytestring,
       containers,
       directory,

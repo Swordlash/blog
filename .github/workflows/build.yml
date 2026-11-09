@@ -273,7 +273,8 @@ jobs:
         # runner.
         cabal-update: false
 
-    # Only for `npm run`: the native commands need no JavaScript packages.
+    # For `npm run`, and for opaque's interoperability tests (Node and
+    # @serenity-kit/opaque).
     - name: Setup Node.js
       if: runner.environment == 'github-hosted'
       uses: actions/setup-node@v5
@@ -465,6 +466,12 @@ jobs:
     - name: Test check-changelog.sh
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-changelog.sh
+
+    # opaque's interoperability tests drive @serenity-kit/opaque, the
+    # browser's OPAQUE client, under Node; without the package they skip.
+    - name: Install JavaScript dependencies for opaque's interoperability tests
+      if: matrix.group == 'unit'
+      run: npm ci --ignore-scripts
 
     # The two database groups use separate hosted VMs. Only PostgreSQL
     # needs a container; unit and SQLite never start or discover a cluster.

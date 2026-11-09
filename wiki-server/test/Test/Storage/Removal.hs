@@ -32,7 +32,7 @@ import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Password (..), User (..))
 import Wiki.Core.Version (Author (..), VersionInfo (..), latestVersions)
-import Wiki.Server.Accounts (createAccount, setDisabled, setPassword, signIn)
+import Wiki.Server.Accounts (createAccount, setDisabled, setPassword, signInUser)
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.SecondFactor (enrol)
 import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, runStoredWiki, userByLogin, withStorage)
@@ -58,7 +58,7 @@ spec backing = describe "removing an account" $ do
     -- administrator watches the blog, for notifications of what the user
     -- did there.
     void (ok =<< setPassword st u (Password "editor's password"))
-    signIn st now "127.0.0.1" "editor" (Password "editor's password") >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
+    signInUser st now "127.0.0.1" u >>= either (const (expectationFailure "the editor does not sign in")) (const pass)
     void (ok =<< enrol st now u)
     passkey <- ok =<< registerPasskey st now u Nothing NewCredential {credentialId = "a passkey", publicKey = "its public key", algorithm = -7, signCount = 0}
     let vault = Vault {format = vaultFormat, salt = "c2FsdA", sealed = Sealed {nonce = "bm9uY2U", ciphertext = "c2VhbGVk"}, wrapped = Map.singleton passkey.id (WrappedKey "bm9uY2U" "a2V5")}
