@@ -13,6 +13,17 @@ packages:
 jobs: $ncpus
 semaphore: True
 
+-- The Hackage index the solver reads, pinned to a moment, so that every
+-- machine and CI make the same plan from the same versions of the
+-- dependencies. Unpinned, each `cabal update` (the bootstrap runs one,
+-- and so does every deploy) let the solver take whatever Hackage had just
+-- received: a new release or revision of one package changed the hashes
+-- of everything above it, and the next build compiled pandoc, servant,
+-- warp and the rest of the stack again, for nothing the wiki asked for.
+-- Bump it deliberately, in its own commit, as the haskell-halogen pin
+-- below; cabal-wasm.project and the other project files import it.
+index-state: 2026-11-09T00:00:00Z
+
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
 -- Hackage, and the application needs the router, the hooks and the th quoters
 -- as well. Every package it is used from is listed, jsbits included (the WASM
