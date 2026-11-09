@@ -799,7 +799,10 @@ space's key yet: someone removed who kept the key can still read what the
 server stores, the pages written before and after. A password reset that
 deletes your keys takes away your access to encrypted spaces until another
 member opens them and shares the key with your new key pair; a space no
-other member can read is lost. Encrypted spaces need the wiki's HTTPS
+other member can read is lost. What you read is decrypted in your browser,
+which keeps what any page leaves on the device (the titles of the pages you
+visited last, for one): encryption protects the pages from the server, not
+from someone at your device. Encrypted spaces need the wiki's HTTPS
 address, as your keys do.
 
 ### The assistant at another address
