@@ -1009,6 +1009,35 @@ confirms it against reality and the plan is amended if it does not hold.
     password change over plain HTTP is refused where the vault opens with the
     password; the server does not refuse removing a vault's last passkey.
 
+61. **A private space can be encrypted, its pages kept on the server only as
+    ciphertext (WP5.74b2, #209; the owner, 2026-11-09).** A space has a
+    random AES-256 key under a 16-byte id (`Space.encryption`), sealed to
+    each member with HPKE (X25519, HKDF-SHA256, AES-256-GCM, `@hpke/core`)
+    as a `KeyGrant`. Each page has a key of its own, wrapped by the space's
+    (`PageKey`). Its title and text are AES-256-GCM with AADs that bind the
+    space, the page, the key ids and a random per-version tag
+    (`Wiki.Core.Encrypted`). On the server an encrypted page is an ordinary
+    row with an empty title and body, its ciphertext in `key_grants`,
+    `page_keys` and `sealed_versions` (migration `0011`). So the tree,
+    permissions, history and cascades are reused, and no plain read can
+    return text. The `encrypted/` routes carry only ciphertext. The plain
+    page routes answer 409 for an encrypted space. Only a private space
+    with nothing written in it can be encrypted: the generated home page is
+    deleted, any other page refuses. It stays encrypted, its slugs are
+    random, and the server's search, the whole-wiki export and import, and
+    notifications' excerpts leave it out. The browser holds every key as a
+    non-extractable WebCrypto handle and decrypts lists, pages, history,
+    search hits and stars' titles. Opening a space's key also seals it to
+    the readers waiting for it, at most 500 grants a request. Members are
+    those the space's own grants let read it. The owner's choices: a space
+    administrator, or a global administrator who grants themselves, is
+    given the key automatically (the README says so); the writing assistant
+    works in encrypted pages as everywhere; removing a member does not
+    rotate the key (b3; the dialog warns); mentions in encrypted pages do
+    not notify; global administrators are not members unless granted; a
+    server that rolls a page back to an older version is not detected (b3
+    can chain each version's AAD to the previous one).
+
 ## Repository layout
 
 ```
@@ -1065,9 +1094,15 @@ In the order to do it, unless the owner says otherwise.
     libsodium's own HKDF runs; and an oracle test against libopaque and
     liboprf, built from source, once their vectors are checked against the
     RFCs' final ones.
-  - **b is cut in two** (the session, 2026-11-07): b1, each user's key pair
-    in the vault the assistant already had, is done (decision 60, #185); b2,
-    encrypted spaces over it, is #209.
+  - **b is done**: b1, each user's key pair in the vault the assistant
+    already had (decision 60, #185), and b2, encrypted spaces over it
+    (decision 61, #209). What remains is **b3**: encrypted attachments and
+    comments; rotating the key when a member is removed; an export
+    decrypted in the browser; encrypting a space that already has pages,
+    and turning encryption off; subspaces inside an encrypted space;
+    decrypted titles in recent changes and notifications; detecting a
+    rolled-back version; hiding the controls the server refuses anyway
+    (attachment upload, the template toggle, move dialogs, "New subspace").
   - **b, encrypted spaces, with a key per page.** Each user has a long-term
     key pair (X25519, for libsodium's sealed boxes). The server keeps every
     user's public key; the private key is stored on the server wrapped by the
@@ -1256,6 +1291,15 @@ In the order to do it, unless the owner says otherwise.
 
 What the work done so far left out, found and did not fix, or learnt that later work
 needs. Each was true when its package merged; check before relying on one.
+
+- **Encrypted spaces (WP5.74b2, #209).** Not tested: a click test of the
+  vault unlock and of "Encrypt this space…" (the browser test puts the
+  user's private key back on the device instead), the smoke test against a
+  real server, and archive export and import and the sitemap with an
+  encrypted space. The browser's search fetches every page of a readable
+  encrypted space at its first search and keeps them decrypted in memory
+  until a write, which suits small spaces. Stars' titles are decrypted only
+  after the prerendered page, one request per encrypted space with a star.
 
 **The application**
 - Drafts: what is typed in the last two seconds before the tab closes is not in the
