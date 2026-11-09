@@ -205,10 +205,12 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | GET | `api/v1/spaces/<space>/grants` | | `SpaceAccess` `{"grants", "users", "groups"}`: the grants on the space and then on each of its ancestors, up (each `SpaceGrant` `{"space", "subject", "permission"}` names the space it is on), every `User` by login and every `Group` by name | 404, 403 | `spaceAccess` |
 | PUT | `api/v1/spaces/<space>/grants` | `SpaceGrantChange` `{"subject", "permission", "granted": bool}` | 204 | 404, 403, 400 | `setSpaceGrant` |
 
-A `Space` is `{"id", "name", "slug", "parent", "public", "sealed", "owner",
-"active", "personalContainer", "mathMacros", "createdAt", "position",
-"subspaceOrder", "pageOrder", "homePage", "icon", "description", "blog",
-"boxNumbering"}`. `sealed` is whether it is private from its parent;
+A `Space` is `{"id", "name", "slug", "parent", "public", "sealed",
+"encryption", "owner", "active", "personalContainer", "mathMacros",
+"createdAt", "position", "subspaceOrder", "pageOrder", "homePage", "icon",
+"description", "blog", "boxNumbering"}`. `sealed` is whether it is private
+from its parent; `encryption` is the id of an encrypted space's current key,
+or `null` for a space of plain pages (see "Encrypted spaces");
 `owner` is the user id of the user whose personal space it is, or `null`;
 `active` is false for a personal space its owner turned off, which nobody
 is then shown; `personalContainer` marks "User subspaces", the space that

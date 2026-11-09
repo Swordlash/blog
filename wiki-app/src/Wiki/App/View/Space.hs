@@ -69,7 +69,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
 import Wiki.Core.Page (PageSummary (id, title), templatePages, treePages)
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), isPersonal, subspacesOf)
+import Wiki.Core.Space (Space (description, encryption, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), isPersonal, subspacesOf)
 
 -- | The space view's input: the space, as the shell has loaded it, with
 -- its pages.
@@ -184,7 +184,8 @@ component =
         <> [button "Delete" (Open ConfirmingDelete) | admin]
         -- Its pages as one document, for anyone who may view it, as for a
         -- page.
-        <> exportMenu (spaceFormats ctx.session.exports) (ExportSpace space.id)
+        -- The server cannot export a space whose pages it cannot read.
+        <> (if isJust space.encryption then [] else exportMenu (spaceFormats ctx.session.exports) (ExportSpace space.id))
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id

@@ -11,6 +11,7 @@
 module Test.Server.Render (spec) where
 
 import Data.Aeson (FromJSON, encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
@@ -24,28 +25,27 @@ import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
+import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewSealedPage (..), SealedPage (..))
 import Wiki.Api.Links (links, searchUrl)
+import Wiki.Api.Types qualified as Api
+import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
 import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
+import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug, slugText)
+import Wiki.Core.Space qualified as S
+import Wiki.Core.Vault
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Render (routeOf)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Vault (keyIdOf)
 import Wiki.Server.WebAuthn (toBase64Url)
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewSealedPage (..), SealedPage (..))
-import Wiki.Api.Types qualified as Api
-import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
-import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
-import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
-import Wiki.Core.Space qualified as S
-import Wiki.Core.Vault
-import Data.ByteString qualified as BS
 
 spec :: Backing -> Spec
 spec backing = describe "the pages the server renders" $ do

@@ -29,15 +29,15 @@ import Protolude hiding (find, wait)
 import Test.Browser.Http (answerWith, serveDemo, serverStarts, startServer)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
+import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..))
 import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, runHttpWiki)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
-import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Backend.Mem.State qualified as M
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Id (SpaceId (..), UserId (..))
@@ -118,6 +118,8 @@ spec m = do
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Launch notes" "The countdown starts at noon.")
     void (ok =<< run env (createPage secret.id Nothing "Other notes" "Nothing to see."))
+    -- The shell holds the list of spaces, which the search goes through.
+    _ <- run env listSpaces
     hits <- run env (searchPages (searchQuery "countdown"))
     map (\h -> h.page) hits `shouldBe` [made.id]
 

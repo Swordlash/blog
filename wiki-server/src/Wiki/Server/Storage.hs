@@ -236,8 +236,8 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
+import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
@@ -274,10 +274,9 @@ import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), authorOf, maxVersionsPageSize, namedAuthor, versionInfo)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), authorOf, maxVersionsPageSize, namedAuthor, versionInfo)
 import Wiki.Server.HomePage (importHomeDocument)
-import Wiki.Server.WebAuthn (fromBase64Url)
 import Wiki.Server.Opaque (defaultStretch, loadServerSetup, registerHere, setupFromText, setupKey, storedRecordOf)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
@@ -294,6 +293,7 @@ import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
+import Wiki.Server.WebAuthn (fromBase64Url)
 #ifdef WIKI_POSTGRES
 import Wiki.Server.Storage.Postgres (holdDatabaseShared, openPostgres)
 #else
@@ -2844,6 +2844,12 @@ grantSpaceKeyTx sid req = do
     unless (any (\x -> x.recipient == g.recipient && x.recipientKeyId == g.recipientKeyId) grants) $
       db (insertGrant spaceKind sid.text time KeyGrant {keyId = k, recipient = g.recipient, recipientKeyId = g.recipientKeyId, enc = g.enc, sealed = g.sealed})
 
+-- | What a notification names a page of an encrypted space by, in the
+-- bell, the feed and the mail: not its title, which the server cannot
+-- read, but what it is.
+encryptedTitle :: Text
+encryptedTitle = "an encrypted page"
+
 -- | The most grants one request makes.
 maxGrantsAtOnce :: Int
 maxGrantsAtOnce = 500
@@ -2954,9 +2960,9 @@ createSealedPageTx sid new = do
     insertPageKey page.id new.pageKey
     insertSealedVersion page.id page.updatedAt new.content
   -- Whoever watches the space is told that a page was saved, by its id:
-  -- with no title and no excerpt, and no mentions, which the server cannot
-  -- read.
-  tellTx page.id sid "" Nothing "" PageSaved mempty
+  -- with no title ('encryptedTitle' instead) and no excerpt, and no
+  -- mentions, which the server cannot read.
+  tellTx page.id sid encryptedTitle Nothing "" PageSaved mempty
   sealedPageOf page
 
 -- | A new version of a page of an encrypted space, against the version
@@ -2979,7 +2985,7 @@ saveSealedPageTx pid base edit = do
     updatePageText pid "" "" p'.updatedAt
     insertVersion p' author
     insertSealedVersion pid p'.updatedAt edit.content
-  tellTx p'.id p'.space "" Nothing "" PageSaved mempty
+  tellTx p'.id p'.space encryptedTitle Nothing "" PageSaved mempty
   sealedPageOf p'
 
 -- | A page of a page's history, encrypted, as 'listVersionsTx' lists a

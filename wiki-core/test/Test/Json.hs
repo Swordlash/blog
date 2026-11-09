@@ -58,6 +58,7 @@ spec = describe "JSON" $ do
           , "parent" .= (Nothing :: Maybe Text)
           , "public" .= True
           , "sealed" .= False
+          , "encryption" .= (Nothing :: Maybe Text)
           , "owner" .= ("u1" :: Text)
           , "active" .= True
           , "personalContainer" .= False

@@ -138,7 +138,7 @@ import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (blog, boxNumbering, description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Space (Space (blog, boxNumbering, description, encryption, homePage, icon, id, name), SpaceProfile (..))
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (Avatar, User (id))
 import Wiki.Core.Version (Author (..))
@@ -338,7 +338,9 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> attachments page urls
-                <> [commentsOf st place text page CommentsView.Below | not (homeSpace input.context input.space.id)]
+                -- A page of an encrypted space has no comments yet: the
+                -- server would read them.
+                <> [commentsOf st place text page CommentsView.Below | not (homeSpace input.context input.space.id), isNothing input.space.encryption]
           place = placeOf input page urls st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
@@ -395,7 +397,8 @@ component =
         present = [Router.link input.context.router Followed (documentRoute input.context page.space (PageSlides spacePath input.path 1 1)) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
-        export = exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
+        -- The server cannot export a page it cannot read.
+        export = if isJust input.space.encryption then [] else exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
         -- Make it the page the space opens at, for an administrator of the
         -- space: offered on every page except the current home page.
         setHome =

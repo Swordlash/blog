@@ -136,10 +136,10 @@ import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
@@ -167,6 +167,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.EditorSettings qualified as EditorSettingsView
+import Wiki.App.View.Encrypted qualified as EncryptedView
 import Wiki.App.View.Groups qualified as GroupsView
 import Wiki.App.View.Help qualified as HelpView
 import Wiki.App.View.History qualified as HistoryView
@@ -176,7 +177,6 @@ import Wiki.App.View.LivePreview qualified as LivePreviewView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
-import Wiki.App.View.Encrypted qualified as EncryptedView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.PersonalSpace qualified as PersonalSpaceView
 import Wiki.App.View.Reset qualified as ResetView

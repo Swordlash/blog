@@ -210,7 +210,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     -- Deleting a page and moving it among its siblings need no text.
     ok =<< as p.ada (deletePage pid)
 
-  it "tells a watcher of the space that a page was saved, by its id alone" $ withEncrypted backing $ \st p secret -> do
+  it "tells a watcher of the space that a page was saved, by its id alone, with no title or excerpt" $ withEncrypted backing $ \st p secret -> do
     let as :: UserId -> StoredWiki IO a -> IO a
         as u = runStoredWiki st (AsUser u)
         pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
@@ -218,7 +218,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     void (ok =<< as p.bob (setWatching (WatchSpace secret.id) True))
     void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
     told <- ok =<< as p.bob notifications
-    [(n.page, n.title, n.excerpt) | n <- told.items] `shouldBe` [(pid, "", "")]
+    [(n.page, n.title, n.excerpt) | n <- told.items] `shouldBe` [(pid, "an encrypted page", "")]
 
   it "takes no plain title or text for a page of an encrypted space" $ do
     -- A title or a text given as text, not as a ciphertext, does not parse.

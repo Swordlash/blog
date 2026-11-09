@@ -89,6 +89,8 @@ import Control.Monad.UUID (MonadUUID (..))
 import Data.Aeson (eitherDecode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Halogen.Subscription (Subscribe (..))
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
@@ -106,6 +108,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
+import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -127,6 +130,7 @@ import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
 import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
 import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Cache qualified as Cache
 import Wiki.App.Backend.Http.Client (ClientApi, answer, fromSessionInfo, noResponse, prepare, refusal, sessionInfo, withBoundary)
@@ -135,12 +139,16 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
 import Wiki.App.Security (MonadSecurity (..))
+import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Comment (Thread (..))
+import Wiki.Core.Encrypted (PageKey (..))
 import Wiki.Core.Id (PageId (..), SpaceId)
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, pathOf)
@@ -148,16 +156,8 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlai
 import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.Vault (KeyId)
-import Wiki.Core.Encrypted (PageKey (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
-import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
-import Wiki.App.Encrypted (PageKeyRef, SpaceKey, NewSpaceKey (..), encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
-import Wiki.App.Vault (identitySlot)
-import Data.Time (UTCTime)
-import Data.Text qualified as T
-import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
+import Wiki.Core.Vault (KeyId)
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
@@ -489,7 +489,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   postDetails sid = pageContent (\c -> Map.lookup sid c.postDetails) (endpoints.spaces.postDetails sid) (withPostDetails sid)
   getPage sid path =
     encryptedOr sid (pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path)
-  createPage sid parent title body = encryptedOr sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
+  createPage sid parent title body = encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
   savePage pid base title body =
     sealedPage pid >>= \case
       Nothing -> write (getResponse <$> endpoints.pages.save pid (PageVersion base) PageEdit {title, body})
@@ -1200,13 +1200,36 @@ rememberPages sid ps = modifyHeld (\h -> h {heldPages = Map.union (Map.fromList 
 spacesNow :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
 spacesNow = cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces
 
--- | A read or write of a space's pages: the plain one, or for an encrypted
--- space the encrypted one with the space's current key id.
+-- | A read of a space's pages: the plain one, or for an encrypted space the
+-- encrypted one with the space's current key id. Which one is decided from
+-- the list of spaces in the cache, which the shell always holds, so that a
+-- read of a plain space costs no request more. Without the list cached, the
+-- plain read is sent, and a refusal because the space is encrypted (409)
+-- sends the encrypted read instead: a read sends no text of the page.
 encryptedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
 encryptedOr sid plain sealed =
+  (\c -> c.spaces) <$> readCache >>= \case
+    Just spaces -> maybe plain sealed (encryptionIn spaces)
+    Nothing ->
+      plain >>= \case
+        refused@(Left (Conflict _)) ->
+          spacesNow >>= \case
+            Right spaces | Just k <- encryptionIn spaces -> sealed k
+            _ -> pure refused
+        other -> pure other
+  where
+    encryptionIn spaces = find (\s -> s.id == sid) spaces >>= \s -> s.encryption
+
+-- | 'encryptedOr', with the list of spaces fetched when the cache does not
+-- hold it: for a write, which sends a title and a text, so that no plain
+-- text is ever sent to the server for an encrypted space, even to be
+-- refused; and for the question whether a space's key is held here.
+encryptedFetched :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
+encryptedFetched sid plain sealed =
   spacesNow >>= \case
     Right spaces | Just k <- find (\s -> s.id == sid) spaces >>= \s -> s.encryption -> sealed k
-    _ -> plain
+    Right _ -> plain
+    Left e -> pure (Left e)
 
 -- | The space and stored key of a page of an encrypted space read here.
 sealedPage :: (MonadIO m) => PageId -> HttpWiki m (Maybe (SpaceId, PageKey))
@@ -1366,15 +1389,17 @@ sealedVersion sid pid k at =
 -- | The search over the encrypted spaces whose keys this browser holds or
 -- can open, in the browser: each space's pages are fetched and decrypted
 -- at the first search that needs them, kept in this page's memory until a
--- write, and matched as the demo's search matches ('searchPlain'). A space
--- whose key is not held here is not searched. This reads every page of a
+-- write, and matched as the demo's search matches ('searchPlain'). The
+-- spaces searched are those of the list of spaces the cache holds (the
+-- shell always holds it); a space whose key is not held here is not
+-- searched. This reads every page of a
 -- space at once, which suits small spaces, the kind encrypted spaces are
 -- meant for.
 sealedSearch :: (MonadIO m) => SearchQuery -> HttpWiki m [SearchHit]
 sealedSearch q =
-  spacesNow >>= \case
-    Left _ -> pure []
-    Right spaces -> do
+  (\c -> c.spaces) <$> readCache >>= \case
+    Nothing -> pure []
+    Just spaces -> do
       let byId = Map.fromList [(s.id, s) | s <- spaces]
           chain sid = fromMaybe [] (ancestry (`Map.lookup` byId) sid)
           wanted s = case q.space of
@@ -1414,7 +1439,7 @@ foundIn sid current =
 -- | Encrypted spaces over the API's @encrypted\/@ routes.
 instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   keyState sid =
-    encryptedOr sid (pure (Right NotEncrypted)) $ \current -> do
+    encryptedFetched sid (pure (Right NotEncrypted)) $ \current -> do
       immediate <- HttpWiki (asks (\env -> env.immediate))
       if immediate
         then pure (Left (Invalid inServer))
