@@ -20,7 +20,7 @@ import Test.Database (Backing)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
-import Test.Storage.Fixture (withPlaceIn)
+import Test.Storage.Fixture (withEmptyPlaceIn)
 import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Backups
 import Wiki.Api.Error (ApiError (..))
@@ -162,7 +162,7 @@ offSite backing = describe "copied off the machine" $ do
       ours `shouldSatisfy` (not . null)
       storedBlobs (away </> "attachments") `shouldReturn` ours
       -- And restored from there, the drill the README describes.
-      withPlaceIn backing $ \fresh -> do
+      withEmptyPlaceIn backing $ \fresh -> do
         restore Restore {backupFile = away </> "backups" </> name, dataDir = fresh.dataDir, database = fresh.database, programs = fresh.programs, attachments = Just (away </> "attachments")} >>= either (assertFailure . toS) (const pass)
         storedBlobs (attachmentsDir fresh.dataDir) `shouldReturn` ours
 

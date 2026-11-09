@@ -4,6 +4,7 @@
 module Test.Storage.Fixture
   ( withStorageIn
   , withPlaceIn
+  , withEmptyPlaceIn
   , withDemo
   , demoArchive
   , whoFor
@@ -17,7 +18,7 @@ where
 import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, QExpr, TableEntity, aggregate_, all_, as_, countAll_, filter_, runSelectReturningList, runSelectReturningOne, select)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing, withPlace)
+import Test.Database (Backing, withEmptyPlace, withPlace)
 import Test.HUnit (assertFailure)
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.App.Backend.Contract qualified as Contract
@@ -32,10 +33,19 @@ import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Schema (WikiDb (..), wikiDb)
 
 -- | A place for a wiki in a temporary directory of its own, on the
--- backing's database, which is gone once the action is done.
+-- backing's database ('withPlace': on PostgreSQL, one already at the
+-- current schema), which is gone once the action is done.
 withPlaceIn :: Backing -> (Place -> IO a) -> IO a
 withPlaceIn backing action =
   withSystemTempDirectory "wiki-server-test" $ \dir -> withPlace backing dir action
+
+-- | A place in a temporary directory of its own whose database is empty,
+-- no schema and no tables, as no program has migrated it
+-- ('withEmptyPlace'); gone once the action is done. For the examples
+-- about migrations and schema versions, and those that restore a backup.
+withEmptyPlaceIn :: Backing -> (Place -> IO a) -> IO a
+withEmptyPlaceIn backing action =
+  withSystemTempDirectory "wiki-server-test" $ \dir -> withEmptyPlace backing dir action
 
 -- | A storage opened in a temporary directory of its own, on the backing's
 -- database, which is gone once the action is done.

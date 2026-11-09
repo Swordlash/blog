@@ -10,7 +10,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing, withConnectionTo, withPlace)
+import Test.Database (Backing, withConnectionTo, withEmptyPlace)
 import Test.Hspec
 import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoRunning)
 import Wiki.Api.Types (PersonalSpaceSwitch (..))
@@ -60,7 +60,7 @@ spec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
     withPersonal <- readPages manager server
     withPersonal `shouldSatisfy` isRight
   it "loses its backup and mail settings, and keeps the rest" $
-    withSystemTempDirectory "wiki-rehearsal" $ \dir -> withPlace backing dir $ \place -> do
+    withSystemTempDirectory "wiki-rehearsal" $ \dir -> withEmptyPlace backing dir $ \place -> do
       _ <- migrateDatabase place
       withConnectionTo place $ \c ->
         runDb c $
