@@ -2963,12 +2963,6 @@ body:has(.slides-view) {
   cursor: pointer;
 }
 
-/* Whether the work is kept as a draft: quiet, beside the buttons. */
-.editor-draft-status {
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
 /* How many problems the editor marks in the text (WP5.65): quiet, beside
    the buttons, in the colour of the marks; a click moves to the next one. */
 .editor-problems {
@@ -3008,8 +3002,8 @@ body:has(.slides-view) {
   background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
-/* That the browser is offline, over the server's backend, in the corner of
-   the window opposite "Saved", until it is back online. */
+/* That the browser is offline, over the server's backend, in the bottom
+   left corner of the window, until it is back online. */
 .offline-notice {
   position: fixed;
   left: 1rem;
@@ -3031,13 +3025,9 @@ body:has(.slides-view) {
   }
 }
 
-/* "Saved", for a few seconds after a save that stays in the editor, in the
-   corner of the window. The element is always there, empty and so with no
-   size when there is nothing to say, so that a screen reader has its live
-   region before the word arrives in it. */
 /* The notice of a section's or a selection's address copied by the page
-   view (WP5.53): in a corner, as the editor's "Saved", with the address
-   in small print. */
+   view (WP5.53): in the bottom right corner of the window, with the
+   address in small print. */
 .link-copied {
   position: fixed;
   right: 1rem;
@@ -3066,26 +3056,86 @@ body:has(.slides-view) {
   overflow-wrap: anywhere;
 }
 
-.editor-saved-notice {
-  position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  z-index: 20;
-  padding: 0.45rem 0.9rem;
+/* The editor's notices of saves (issue #193): "Saved" in green for a few
+   seconds after a save that stays in the editor, and "Draft saved" in grey
+   once the draft is kept. They hang under the bottom right corner of the
+   editor's top, out of the flow: the top is sticky, so they stay in view
+   with it, and a notice that appears covers none of its controls and moves
+   none of its buttons. On a wide screen they keep clear of the writing
+   assistant's bubbles, which hang at the right edge of the text; with the
+   preview alone, or with two panes, the text's right edge is elsewhere and
+   the notices go to the corner. Clicks go through them to the text. */
+.editor-corner {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: calc(64px + 1.25rem);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.editor-form.previewing .editor-corner {
+  right: 0;
+}
+
+@media (min-width: 961px) {
+  .editor-form.side-by-side .editor-corner,
+  .editor-form.conflicting .editor-corner {
+    right: 0;
+  }
+}
+
+/* On a phone the top does not stay (it has no box of its own there, see
+   .editor-top below): the notices go to the bottom right corner of the
+   window instead, above the help button. */
+@media (max-width: 760px) {
+  .editor-corner,
+  .editor-form.previewing .editor-corner {
+    position: fixed;
+    top: auto;
+    right: 1rem;
+    bottom: 4rem;
+    z-index: 20;
+  }
+}
+
+/* Each notice is always there, empty and so with no size when there is
+   nothing to say, so that a screen reader has the live region of "Saved"
+   before the word arrives in it. */
+.editor-saved-notice,
+.editor-draft-status {
+  padding: 0.3rem 0.75rem;
   border-radius: 6px;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+}
+
+.editor-saved-notice {
   color: var(--background);
   background: var(--tip);
   font-weight: 600;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
 }
 
-.editor-saved-notice:empty {
+.editor-draft-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.editor-saved-notice:empty,
+.editor-draft-status:empty {
   padding: 0;
+  border: none;
   box-shadow: none;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .editor-saved-notice:not(:empty) {
+  .editor-saved-notice:not(:empty),
+  .editor-draft-status:not(:empty) {
     animation: saved-notice-in 150ms ease-out;
   }
 }
@@ -3093,7 +3143,13 @@ body:has(.slides-view) {
 @keyframes saved-notice-in {
   from {
     opacity: 0;
-    transform: translateY(0.5rem);
+    transform: translateY(-0.25rem);
+  }
+}
+
+@media print {
+  .editor-corner {
+    display: none;
   }
 }
 
@@ -6270,7 +6326,7 @@ mark.comment-mark-focused {
 }
 
 /* Help (WP5.44): a round red "?" in the bottom right corner of every page,
-   under the editor's "Saved" when that shows, and its dialog in the middle
+   with the editor's notices of saves above it on a phone, and its dialog in the middle
    of the window, as the administration's "Manage" dialog is. */
 .help-toggle {
   position: fixed;

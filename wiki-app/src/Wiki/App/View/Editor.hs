@@ -11,13 +11,15 @@
 -- 'Conflict' and shown in place (see below), with the work kept. "Save"
 -- (and Ctrl+S, and Enter in the title) saves and stays in the editor: the
 -- version saved is then the one the next save is made against, and a
--- "Saved" notice shows in a corner for a few seconds ('savedNoticeTime'),
+-- green "Saved" notice shows for a few seconds ('savedNoticeTime'),
 -- announced to screen readers. "Save and close" saves and tells the shell,
 -- which navigates to the page.
 --
 -- The text is also saved as the author's draft ("Wiki.Core.Draft"),
 -- 'draftDelay' after the typing stops, so that a closed tab or a crash
--- loses little; a quiet "Draft saved" beside the buttons confirms it.
+-- loses little; a quiet grey "Draft saved" confirms it. Both notices show
+-- in a corner under the editor's top bar, out of the bar's flow, so that
+-- their coming and going never moves the buttons (issue #193).
 -- Saving the page discards the draft. Cancel, with unsaved changes or a
 -- draft, asks whether to keep the draft. Opening the editor on a page that
 -- has a draft of its current version loads the draft and says so, with a
@@ -428,7 +430,7 @@ data Found
     -- saved, and when the page was saved since.
     Offered D.Draft UTCTime UTCTime
 
--- | What the quiet line beside the buttons says about the draft.
+-- | What the grey notice under the editor's top bar says about the draft.
 data DraftNews = NoNews | DraftSaved | DraftFailed Text
   deriving stock (Eq)
 
@@ -815,7 +817,6 @@ component =
                   <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
                 </label>
               {% end %}
-              <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
               {% if st.pendingChanges > 0 %}
                 <span class="editor-pending-note" role="status">{{ pendingNote st.pendingChanges }}</span>
               {% end %}
@@ -825,6 +826,7 @@ component =
             </div>
           </div>
           {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input} }}
+          {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
             {{ presenceView st }}
@@ -861,8 +863,24 @@ component =
           </div>
           {{ attachmentList work }}
           <div class="editor-assistant-holder">{{ assistantPane st work }}</div>
-          <div class="editor-saved-notice" role="status">{% if isJust st.notice %}Saved{% end %}</div>
         </form>
+      |]
+
+    -- The notices of saves: the green "Saved" after a save that stays in
+    -- the editor, and the grey line about the draft. They are the last
+    -- child of the editor's top, and the stylesheet hangs them under its
+    -- bottom right corner, out of the flow. So they cover none of the
+    -- top's controls, and a notice that appears moves none of its buttons.
+    -- Both elements are always there, empty when there is nothing to say:
+    -- "Saved" is a live region, and a screen reader has to know the region
+    -- before the word arrives in it.
+    cornerNotices :: State -> H.ComponentHTML Action Slots m
+    cornerNotices st =
+      [hh|
+        <div class="editor-corner">
+          <div class="editor-saved-notice" role="status">{% if isJust st.notice %}Saved{% end %}</div>
+          <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
+        </div>
       |]
 
     -- The home page's options, in the editor of its document, for an
@@ -2067,9 +2085,9 @@ component =
 
     -- Save the work as the author's draft, or, if it is back to what is
     -- saved, discard the existing draft (unless told to keep it); the
-    -- result says whether that was done. A failure is reported quietly
-    -- beside the buttons: the work is still in the editor, and the next
-    -- change tries again.
+    -- result says whether that was done. A failure is reported quietly,
+    -- in the draft's grey notice: the work is still in the editor, and the
+    -- next change tries again.
     --
     -- While an older draft is offered, the autosave leaves it alone, since
     -- writing the work would replace it before the author has decided what
@@ -2408,7 +2426,7 @@ attachable input = isNothing input.space.encryption
 editsHomeOptions :: Input -> Bool
 editsHomeOptions input = input.home && hasGlobalPermission (principalOf input.context) (grantsOf input.context) Administer
 
--- | What the line beside the buttons says about the draft.
+-- | What the grey notice under the editor's top bar says about the draft.
 draftStatus :: DraftNews -> Text
 draftStatus = \case
   NoNews -> ""
