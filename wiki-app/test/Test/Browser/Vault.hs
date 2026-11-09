@@ -272,7 +272,11 @@ signing m = describe "signing in with a passkey" $ do
     signedIn <- startServer m Home
     find signedIn ".account-toggle" >>= click
     find signedIn ".passkeys-unavailable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "served over HTTPS")
-    closedSignedIn signedIn
+    -- No key is made on such a page, and the count of keys left needs a
+    -- passkey, which it cannot have: the page is closed without it.
+    unmount signedIn
+    unsafeIOToPageM js_uninstall
+    serverStops
   where
     -- The wiki over the test's server with nobody signed in, the vault's
     -- server keeping one passkey of the editor's, which the stub has too:
@@ -298,6 +302,10 @@ signing m = describe "signing in with a passkey" $ do
       answerWith "GET" "api/v1/account/email" 200 (Aeson.object ["email" Aeson..= Aeson.Null, "verified" Aeson..= False, "mailing" Aeson..= False, "mailError" Aeson..= Aeson.Null, "asksPassword" Aeson..= True])
     closedSignedIn :: Mounted s Shell.Query Void m -> PageM s ()
     closedSignedIn ui = do
+      -- What the sign-in set going (the keys brought up to date, a vault
+      -- made) ends first: a step stopped halfway by the unmount would leave
+      -- its key in the page for the next test.
+      eventually $ unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
@@ -614,7 +622,7 @@ vault m = do
     -- As for the user's keys below: no test leaves a key in the page that
     -- can be exported.
     closed ui = do
-      exportable `shouldReturn` 0
+      eventually $ exportable `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
@@ -875,9 +883,11 @@ userKeys m = describe "the user's keys" $ do
       pure printed
     -- Every test ends with no key in the page that can be exported: the
     -- page shares its keys between the tests, so a key one leaves would
-    -- fail another's count.
+    -- fail another's count. A step still running (a vault being made after
+    -- a sign-in) is waited for: stopped halfway by the unmount, it would
+    -- leave its key behind.
     closed ui = do
-      unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
+      eventually $ unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
       unsafeIOToPageM js_uninstall
       serverStops
