@@ -2577,6 +2577,19 @@ job's scripts. On a pull request, `sqlite` also builds the base branch's wiki-se
 and rehearses the upgrade from it (`toolchain/rehearse-ci.sh`) on SQLite and then
 on a PostgreSQL it starts after its tests.
 
+The rehearsal drives the base branch's program only through what that
+program already has, so that much of it is stable: the options of
+`wiki-server serve` and of the database, `wiki-server users add` with the
+password on standard input, the admin listener's API answered as the
+administrator without a sign-in (`info`, the spaces, their pages and a page
+at a path, and making a space and a page, which `toolchain/rehearse-ci.sh`
+seeds the wiki with), the sign-in through a provider with its cookies, and
+`api/v1/session`. Each says so in its documentation, and
+`Wiki.Server.Rehearsal` lists them. A change to one of them keeps what the
+rehearsal sends working, since the next version's rehearsal drives this
+version with it; a new check that drives something else marks it the same
+way.
+
 Besides them, on a pull request only, the job `changelog` checks the pull
 request's changelog entry (`toolchain/check-changelog.sh`, [Changelog
 entries](#changelog-entries)), in a few seconds and without waiting for any

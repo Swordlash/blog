@@ -113,6 +113,11 @@ data UsersCommand
   | -- | Create a user: their login, their display name (the login if not
     -- given), whether they are an administrator, and whether they sign in
     -- with a password (asked for) or cannot sign in until given one.
+    --
+    -- Stable for the upgrade's rehearsal: a later version's rehearsal runs
+    -- @users add LOGIN --display-name NAME@ on the old program, with the
+    -- password on standard input and the place's options after it
+    -- ("Wiki.Server.Rehearsal"), so the command changes only compatibly.
     AddUser Text (Maybe Text) Bool Bool
   | -- | Give a user a new password (asked for), which signs them out.
     SetUserPassword Text

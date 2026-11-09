@@ -57,7 +57,8 @@ data CookieSettings = CookieSettings
   }
   deriving stock (Eq, Show)
 
--- | The cookie's name.
+-- | The cookie's name. Stable for the upgrade's rehearsal, which reads it
+-- on the old program ("Wiki.Server.Auth.authApplication").
 cookieName :: Text
 cookieName = "wiki_session"
 

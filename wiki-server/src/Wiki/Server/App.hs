@@ -12,7 +12,10 @@
 -- a disabled user's). The admin listener, at @\/admin\/@, treats everyone
 -- as the administrator, the local operator, and ignores cookies. A handler
 -- is given the caller the listener found and never knows which listener it
--- serves.
+-- serves. That the admin listener answers the API at @\/admin\/api\/v1\/@
+-- as the administrator, with no sign-in, is stable for the upgrade's
+-- rehearsal: a later version's rehearsal reads the old program's wiki
+-- through it ("Wiki.Server.Rehearsal"), so it changes only compatibly.
 --
 -- Each page is sent with the @\<base href>@ of its listener's path
 -- ("Wiki.Server.Static"), so the application loaded from @\/admin\/@ calls
