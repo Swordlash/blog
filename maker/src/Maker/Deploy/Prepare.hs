@@ -65,8 +65,17 @@ prepare p0 = do
     say "npm ci"
     orExit =<< runIn root "npm" ["ci", "--no-audit", "--no-fund"] []
     say "building the application (npm run build-wasm-opt)"
-    -- The wiki is served at the root of its own port.
-    orExit =<< runIn root "npm" ["run", "build-wasm-opt"] [("HALOGEN_BASE_PATH", "/"), ("WIKI_BACKEND", if server then "server" else "demo")]
+    -- The wiki is served at the root of its own port. For a server, the
+    -- page's prerender is built in the server's project and build
+    -- directory, with the server's constraint, so that wiki-app, which
+    -- both use, is compiled once (at -O2) rather than once at -O0 for the
+    -- prerender and again for the server.
+    let sharedNative =
+          [ ("NATIVE_PROJECT", "cabal-native-opt.project")
+          , ("NATIVE_BUILDDIR", "dist-newstyle/native-opt")
+          , ("NATIVE_CONSTRAINTS", serverConstraint p0)
+          ]
+    orExit =<< runIn root "npm" ["run", "build-wasm-opt"] ([("HALOGEN_BASE_PATH", "/"), ("WIKI_BACKEND", if server then "server" else "demo")] <> (if server then sharedNative else []))
     when server $ do
       say "building wiki-server at -O2 (cabal-native-opt.project)"
       serverBuildNative p0
@@ -353,7 +362,13 @@ buildVersion root =
 -- command's arguments and the extra ones.
 serverCabalArgs :: Plan -> String -> [String] -> [String]
 serverCabalArgs p command extra =
-  [command, "--project-file=cabal-native-opt.project", "--builddir=dist-newstyle/native-opt", "wiki-server:exe:wiki-server", "--constraint=wiki-server " <> (if get p "db" == "sqlite" then "-" else "+") <> "postgres"] <> extra
+  [command, "--project-file=cabal-native-opt.project", "--builddir=dist-newstyle/native-opt", "wiki-server:exe:wiki-server", "--constraint=" <> serverConstraint p] <> extra
+
+-- | The constraint the server's build is solved with: PostgreSQL support
+-- only for a PostgreSQL deployment, so that a SQLite machine needs no
+-- libpq.
+serverConstraint :: Plan -> String
+serverConstraint p = "wiki-server " <> (if get p "db" == "sqlite" then "-" else "+") <> "postgres"
 
 -- | Write the changelog's stamp for the build's version, which wiki-server
 -- embeds; 'Nothing' when the stamp fails.

@@ -402,7 +402,7 @@ case $name in
       *) printf 'uid=1000(tester)\n' ;;
     esac ;;
   npm)
-    printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s WIKI_TOOLCHAIN_HOME=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" "${WIKI_TOOLCHAIN_HOME:-}" >>"$EVENTS"
+    printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s WIKI_TOOLCHAIN_HOME=%s NATIVE_PROJECT=%s NATIVE_BUILDDIR=%s NATIVE_CONSTRAINTS=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" "${WIKI_TOOLCHAIN_HOME:-}" "${NATIVE_PROJECT:-}" "${NATIVE_BUILDDIR:-}" "${NATIVE_CONSTRAINTS:-}" >>"$EVENTS"
     [ -z "${NPM_CONFIG_REGISTRY:-}" ] || printf 'npm registry %s\n' "$NPM_CONFIG_REGISTRY" >>"$EVENTS"
     [ "${1:-}" != --version ] || printf '11.0.0\n'
     if [ "$1 $2" = "run build-wasm-opt" ]; then
@@ -776,6 +776,8 @@ deploy --static --port "$p1" >"$out" 2>&1 || fail 'first install failed'
 assert_contains "$EVENTS" 'bootstrap build WIKI_TOOLCHAIN_HOME='
 assert_contains "$EVENTS" 'npm ci --no-audit --no-fund'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=demo'
+# The demo has no server build to share the prerender's with.
+assert_contains "$EVENTS" 'NATIVE_PROJECT= NATIVE_BUILDDIR= NATIVE_CONSTRAINTS='
 assert_contains "$out" 'first -O2 build'
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/.wiki-toolchain/node/bin/node\" \"$HOME/wiki-demo/server.mjs\" --root \"$HOME/wiki-demo/app\" --port $p1 --bind 127.0.0.1"
 assert_lacks "$HOME/$unit" 'secure-cookies'
@@ -1193,6 +1195,9 @@ a=$(other_port "$p")
 out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
+# The page's prerender is built where the server is, with its constraint,
+# so that wiki-app is compiled once.
+assert_contains "$EVENTS" 'NATIVE_PROJECT=cabal-native-opt.project NATIVE_BUILDDIR=dist-newstyle/native-opt NATIVE_CONSTRAINTS=wiki-server +postgres'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 # A wiki in PostgreSQL: wiki-server is built with it, the bootstrap is not
 # told to leave libpq out, and libpq is checked.
@@ -1568,6 +1573,7 @@ data=$HOME/wiki-demo/data
 out=$case_dir/first
 deploy --server --sqlite --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
+assert_contains "$EVENTS" 'NATIVE_PROJECT=cabal-native-opt.project NATIVE_BUILDDIR=dist-newstyle/native-opt NATIVE_CONSTRAINTS=wiki-server -postgres'
 assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 assert_contains "$EVENTS" 'cabal list-bin --project-file=cabal-native-opt.project'
 # The probe found the semaphore usable, so the build uses it, and the probe

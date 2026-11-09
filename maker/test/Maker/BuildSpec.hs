@@ -10,10 +10,13 @@ spec = do
   describe "the wasm build's settings" $ do
     it "builds the everyday demo into dist-newstyle/wasm when nothing is set" $
       wasmBuildFrom False (const Nothing)
-        `shouldBe` Right (WasmBuild "cabal-wasm.project" "dist-newstyle/wasm" "dist-newstyle/wasm/public/app" Demo "cabal-native-fast.project" "dist-newstyle/native-fast")
+        `shouldBe` Right (WasmBuild "cabal-wasm.project" "dist-newstyle/wasm" "dist-newstyle/wasm/public/app" Demo "cabal-native-fast.project" "dist-newstyle/native-fast" [])
     it "takes the project, the build directory and the output from the environment, as the Dockerfile sets them" $
       wasmBuildFrom False (`lookup` [("WASM_PROJECT", "p"), ("WASM_BUILDDIR", "b"), ("WIKI_PUBLIC_DIR", "/out/app"), ("WIKI_BACKEND", "server")])
-        `shouldBe` Right (WasmBuild "p" "b" "/out/app" Server "cabal-native-fast.project" "dist-newstyle/native-fast")
+        `shouldBe` Right (WasmBuild "p" "b" "/out/app" Server "cabal-native-fast.project" "dist-newstyle/native-fast" [])
+    it "builds the prerender where a deploy says, with the constraints it gives, one per line" $
+      fmap (\wb -> (wb.nativeProject, wb.nativeBuildDir, wb.nativeConstraints)) (wasmBuildFrom True (`lookup` [("NATIVE_PROJECT", "cabal-native-opt.project"), ("NATIVE_BUILDDIR", "dist-newstyle/native-opt"), ("NATIVE_CONSTRAINTS", "wiki-server -postgres\n\nother +flag\n")]))
+        `shouldBe` Right ("cabal-native-opt.project", "dist-newstyle/native-opt", ["wiki-server -postgres", "other +flag"])
     it "puts the production build in a directory of its own, whatever WASM_PROJECT says" $
       fmap (\wb -> (wb.project, wb.buildDir, wb.publicDir)) (wasmBuildFrom True (`lookup` [("WASM_PROJECT", "p"), ("WASM_BUILDDIR", "b")]))
         `shouldBe` Right ("cabal-wasm-opt.project", "dist-newstyle/wasm-opt", "dist-newstyle/wasm-opt/public/app")

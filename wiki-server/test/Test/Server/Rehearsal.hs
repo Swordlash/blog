@@ -4,12 +4,17 @@
 -- tested end to end by toolchain/rehearse-ci.sh in CI.
 module Test.Server.Rehearsal (unitSpec, spec) where
 
+import Data.Aeson (encode)
 import Data.Text qualified as T
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Types (hContentType)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing, withConnectionTo, withPlace)
 import Test.Hspec
-import Wiki.Server.Rehearsal (PageRead (..), comparePages, isolateCopy)
+import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoRunning)
+import Wiki.Api.Types (PersonalSpaceSwitch (..))
+import Wiki.Server.Rehearsal (PageRead (..), Server (..), comparePages, isolateCopy, readPages)
 import Wiki.Server.Storage (migrateDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
@@ -40,7 +45,20 @@ unitSpec = describe "the upgrade's rehearsal, the pages check" $ do
 -- scheduled backup to the running wiki's destination, no notification
 -- mail through its mail server.
 spec :: Backing -> Spec
-spec backing = describe "the upgrade's rehearsal, its copy of the wiki" $
+spec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
+  it "reads every page an administrator may read, and leaves out the spaces nobody may" $ withDemoRunning backing identity $ \r -> do
+    manager <- newManager defaultManagerSettings
+    let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
+    withoutPersonal <- readPages manager server
+    withoutPersonal `shouldSatisfy` isRight
+    -- The editor's personal space makes the container of personal spaces,
+    -- which the list of spaces names and nobody may read.
+    givePassword r "user-editor" "editor's password"
+    token <- signInAs r "editor" "editor's password"
+    turnedOn <- send r "PUT" (r.public <> "/api/v1/account/personal-space") [(hContentType, "application/json"), cookie token] (encode PersonalSpaceSwitch {enabled = True})
+    turnedOn.status `shouldBe` 200
+    withPersonal <- readPages manager server
+    withPersonal `shouldSatisfy` isRight
   it "loses its backup and mail settings, and keeps the rest" $
     withSystemTempDirectory "wiki-rehearsal" $ \dir -> withPlace backing dir $ \place -> do
       _ <- migrateDatabase place
