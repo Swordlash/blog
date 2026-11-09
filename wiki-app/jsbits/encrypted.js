@@ -123,15 +123,25 @@ async function wiki_enc_space_key_open(identity, enc, sealed, info) {
   }
 }
 
+// A public key's id, as the wiki's directory of keys names it: the first
+// 16 bytes of the SHA-256 of its raw bytes, in base64url.
+async function wikiEncKeyId(publicKey) {
+  const digest = await crypto.subtle.digest("SHA-256", wikiEncFromBase64(publicKey));
+  return wikiEncToBase64(new Uint8Array(digest).slice(0, 16));
+}
+
 // Seal a space's key, opened from one's own grant, to each of the readers
 // waiting for it (JSON [{user, keyId, publicKey}]), with the info given:
 // JSON {grants: [{recipient, recipientKeyId, enc, sealed}]}, or {error}.
+// A reader whose public key is not the one its id names is left out: the
+// grant would name a key the reader does not hold.
 async function wiki_enc_space_key_share(identity, enc, sealed, info, recipients) {
   let raw = null;
   try {
     raw = await wikiEncOpenGrant(identity, enc, sealed, info);
     const grants = [];
     for (const r of JSON.parse(recipients)) {
+      if ((await wikiEncKeyId(r.publicKey)) !== r.keyId) continue;
       const grant = await wikiEncSealTo(r.publicKey, info, raw);
       grants.push({ recipient: r.user, recipientKeyId: r.keyId, enc: grant.enc, sealed: grant.sealed });
     }

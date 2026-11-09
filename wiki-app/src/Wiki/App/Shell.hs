@@ -307,7 +307,10 @@ data PartSlot
 data Here
   = NoSpace
   | LoadingSpace [Slug]
-  | SpaceFailed [Slug] WikiError
+  | -- | The space's record, when it was read before its pages failed: it
+    -- says whether the space is encrypted now, which the list of spaces
+    -- may not say yet.
+    SpaceFailed [Slug] (Maybe Space) WikiError
   | InSpace [Slug] Space [PageSummary]
 
 -- | Whether the context every route shows (who is signed in, the tree of
@@ -1120,10 +1123,10 @@ component =
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
-        SpaceFailed path e
+        SpaceFailed path read' e
           -- An encrypted space whose pages this browser cannot read now
           -- says why, and offers to unlock the user's keys.
-          | Just space <- findSpace (context st).spaces path >>= lastMay
+          | Just space <- read' <|> (findSpace (context st).spaces path >>= lastMay)
           , isJust space.encryption ->
               HH.slot "view" EncryptedSlot EncryptedView.component EncryptedView.Input {context = context st, space, problem = e} FromView
           | otherwise -> failureView e RetryHere
@@ -1184,7 +1187,7 @@ component =
                   InSpace _ space pages ->
                     let path = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
                      in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
-                  SpaceFailed _ e -> failureView e RetryHere
+                  SpaceFailed _ _ e -> failureView e RetryHere
                   _ -> loading
               ]
           , HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
@@ -1280,7 +1283,7 @@ component =
         st <- get
         case (st.world, st.here) of
           (WorldFailed (Unreachable _), _) -> handleAction RetryWorld
-          (WorldReady, SpaceFailed _ (Unreachable _)) -> handleAction RetryHere
+          (WorldReady, SpaceFailed _ _ (Unreachable _)) -> handleAction RetryHere
           _ -> pass
       InstallChanged -> do
         installable <- H.liftEffect installAvailable
@@ -1596,15 +1599,11 @@ fetchWorld demo = do
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
-fetchHere [] = either (SpaceFailed []) (\(space, page) -> InSpace [] space [summaryOf page]) <$> getHomeDocument
+fetchHere [] = either (SpaceFailed [] Nothing) (\(space, page) -> InSpace [] space [summaryOf page]) <$> getHomeDocument
 fetchHere path =
-  either (SpaceFailed path) identity
-    <$> runExceptT
-      ( do
-          space <- ExceptT (getSpace path)
-          pages <- ExceptT (listPages space.id)
-          pure (InSpace path space pages)
-      )
+  getSpace path >>= \case
+    Left e -> pure (SpaceFailed path Nothing e)
+    Right space -> either (SpaceFailed path (Just space)) (InSpace path space) <$> listPages space.id
 
 -- | Whether the wiki is reached over the network: true on the HTTP
 -- backend, which is the one people sign in to, and false on the demo's,
@@ -1682,7 +1681,7 @@ spaceOfRoute = \case
 hereIs :: [Slug] -> Here -> Bool
 hereIs path = \case
   InSpace p _ _ -> p == path
-  SpaceFailed p _ -> p == path
+  SpaceFailed p _ _ -> p == path
   LoadingSpace p -> p == path
   NoSpace -> False
 
@@ -1796,8 +1795,8 @@ documentTitle st = case reverse (map fst (crumbs st)) of
   -- A space that cannot be shown has no name to show either: the content
   -- in its place says why.
   [] -> case st.here of
-    SpaceFailed _ Forbidden -> "Private · Wiki"
-    SpaceFailed _ NotFound -> "Not found · Wiki"
+    SpaceFailed _ _ Forbidden -> "Private · Wiki"
+    SpaceFailed _ _ NotFound -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
 

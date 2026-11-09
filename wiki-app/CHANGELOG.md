@@ -13,7 +13,18 @@ this browser cannot read as locked, with an unlock (`Wiki.App.View.Encrypted`);
 the permissions offer "Encrypt this space…" and say what encryption does
 not yet do. The shell, the space's view and the permissions now need
 `MonadEncryption`. `Wiki.App.Assistant` gains `deviceKeyIO` and
-`heldHandle`. The editor keeps no server draft of an encrypted page.
+`heldHandle`. The editor keeps no draft of an encrypted page, offers no
+attachment and no "Keep the draft" there, and the page offers no comments.
+The backend sends nothing of an encrypted page by the plain routes: a
+save, draft, attachment or comment of such a page is refused in the
+browser, and a write that may carry a page's text fetches the list of
+spaces first, so that a tab whose list predates a space's encryption
+writes encrypted. Encrypting a space checks that the public key the server
+gives is the one this device holds; sharing the key leaves out a reader
+whose key id does not match their public key, and sends at most 500 grants
+a request; a member's tab shares a key it holds already with readers who
+came since, each time it lists the space's pages. A search limited to an
+encrypted space is not sent to the server.
 
 The account's keys (WP5.74b1). The security panel gains a Keys section
 (`Wiki.App.View.Security`, whose input is now the signed-in user's id): the

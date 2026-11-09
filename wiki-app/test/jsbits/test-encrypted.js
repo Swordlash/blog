@@ -101,6 +101,7 @@ function wikiTestEncServer(request) {
     if (rest === "/grants" && request.method === "POST") {
       const sent = JSON.parse(request.body);
       if (!wikiTestEncGrantOf(s, me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      if (sent.grants.length > 500) return wikiTestEncJson(400, { error: "Invalid", text: "At most 500 grants are made at once." });
       if (sent.keyId !== s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." });
       for (const g of sent.grants) {
         if (!s.readers.includes(g.recipient)) return wikiTestEncJson(400, { error: "Invalid", text: "A space's key is granted only to its readers." });
@@ -231,6 +232,38 @@ async function wikiTestEncRead(slot) {
   } finally {
     db.close();
   }
+}
+
+// Give a user a new key pair in the directory whose private half this
+// device does not hold: a public key the server would choose for them.
+async function wiki_test_encrypted_foreign_key(user) {
+  const pair = await crypto.subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]);
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const keyId = new Uint8Array(await crypto.subtle.digest("SHA-256", raw)).slice(0, 16).toBase64({ alphabet: "base64url", omitPadding: true });
+  wikiTestEncrypted.directory.set(user, { keyId, publicKey: raw.toBase64({ alphabet: "base64url", omitPadding: true }) });
+}
+
+// List a user's public key in the directory under an id that is not its
+// own, as a server that lies about which key a reader holds.
+function wiki_test_encrypted_misname_key(user) {
+  const k = wikiTestEncrypted.directory.get(user);
+  wikiTestEncrypted.directory.set(user, { keyId: "AAAAAAAAAAAAAAAAAAAAAA", publicKey: k.publicKey });
+}
+
+// So many more readers of the space, each with a key pair whose private
+// half nobody keeps: readers waiting for the key.
+async function wiki_test_encrypted_many_readers(n) {
+  const s = [...wikiTestEncrypted.spaces.values()][0];
+  for (let i = 0; i < n; i++) {
+    const user = `user-many-${i}`;
+    await wiki_test_encrypted_foreign_key(user);
+    s.readers.push(user);
+  }
+}
+
+// How many grants of the space's key the server holds.
+function wiki_test_encrypted_grants() {
+  return [...wikiTestEncrypted.spaces.values()][0].grants.length;
 }
 
 // The private key this device holds for a user, set aside, as a device

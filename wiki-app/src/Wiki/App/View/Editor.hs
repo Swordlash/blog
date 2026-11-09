@@ -809,10 +809,12 @@ component =
               <button type="submit" class="primary editor-save" disabled={{ st.saving }}>{{ if st.saving then "Saving…" else "Save" :: Text }}</button>
               <button type="button" class="editor-save-close" disabled={{ st.saving }} onClick={{ const SaveAndClose }}>Save and close</button>
               {{ cancelButton st }}
-              <label class="button editor-attach">
-                Attach files
-                <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
-              </label>
+              {% if attachable st.input %}
+                <label class="button editor-attach">
+                  Attach files
+                  <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
+                </label>
+              {% end %}
               <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
               {% if st.pendingChanges > 0 %}
                 <span class="editor-pending-note" role="status">{{ pendingNote st.pendingChanges }}</span>
@@ -822,7 +824,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input} }}
           </div>
           <div class="editor-notices">
             {{ presenceView st }}
@@ -900,6 +902,18 @@ component =
 
     cancelQuestion :: State -> Maybe (H.ComponentHTML Action Slots m)
     cancelQuestion st
+      -- In an encrypted space no draft is kept (the server would read it),
+      -- so the work is saved or lost.
+      | st.askingCancel
+      , isJust st.input.space.encryption =
+          Just
+            [hh|
+              <div class="confirm editor-cancel-confirm" role="alertdialog">
+                <p>Leave without saving? Drafts are not kept in an encrypted space: your unsaved changes will be lost.</p>
+                <button type="button" class="danger" onClick={{ const DiscardAndLeave }}>Discard my changes</button>
+                <button type="button" class="primary" onClick={{ const GoOnEditing }}>Go on editing</button>
+              </div>
+            |]
       | st.askingCancel =
           Just
             [hh|
@@ -1167,7 +1181,7 @@ component =
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
-          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{{ imageButton }}{{ toolButton tableTool }}</div>
+          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{% if bar.files %}{{ imageButton }}{% end %}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu bar }}{{ macrosButton bar }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
@@ -1495,7 +1509,7 @@ component =
       Picked ev -> H.liftEffect (chosenFiles ev >>= pickedFiles) >>= upload
       -- The listener has allowed the files to be dropped here, by
       -- preventing the drag's default.
-      DragOver -> unlessM (gets (\st -> st.dropping)) $ modify (\st -> st {dropping = True})
+      DragOver -> unlessM (gets (\st -> st.dropping || not (attachable st.input))) $ modify (\st -> st {dropping = True})
       DragLeave -> modify (\st -> st {dropping = False})
       -- The listener has stopped the browser from opening the file in
       -- place of the page, and taken its files.
@@ -1567,6 +1581,8 @@ component =
       GoOnEditing -> modify (\st -> st {askingCancel = False})
       -- The draft is the work as it is now, not as the last typing pause
       -- found it.
+      -- Not offered in an encrypted space, where no draft is kept: there the
+      -- author stays with the work rather than lose it.
       KeepDraftAndLeave -> do
         stopAutosave
         kept <- storeDraft True
@@ -2063,9 +2079,9 @@ component =
     storeDraft told = do
       st <- get
       case st.loaded of
-        -- A draft of a page of an encrypted space is not kept on the
-        -- server, which would read it: the work stays in the editor.
-        _ | isJust st.input.space.encryption -> pure True
+        -- A draft of a page of an encrypted space is not kept: the server
+        -- would read it. Nothing is done, and the work stays in the editor.
+        _ | isJust st.input.space.encryption -> pure False
         Ready _ | offering st, not told -> pure False
         Ready w
           | changed w ->
@@ -2177,7 +2193,12 @@ component =
       modify (\st -> st {notice = Just waiting})
 
     upload :: [PickedFile] -> H.HalogenM State Action Slots ViewOutput m ()
-    upload files = withPage (\pid -> for_ files (uploadTo pid))
+    upload files =
+      gets (\st -> attachable st.input) >>= \case
+        True -> withPage (\pid -> for_ files (uploadTo pid))
+        -- A file dropped or pasted in an encrypted space: refused here,
+        -- before its bytes are read, since the server would keep them.
+        False -> unless (null files) $ modify (\st -> st {problem = Just (Invalid "Files cannot be attached in an encrypted space yet: the server would keep them unencrypted.")})
 
     uploadTo :: PageId -> PickedFile -> H.HalogenM State Action Slots ViewOutput m ()
     uploadTo pid file
@@ -2375,6 +2396,13 @@ data HomeChoice = HomeChoice {withSpaces :: Bool, withRecent :: Bool, forVisitor
 homeChoiceOf :: HomePage -> HomeChoice
 homeChoiceOf h = HomeChoice {withSpaces = h.showSpaces, withRecent = h.showRecent, forVisitors = h.showAnonymous}
 
+-- | Whether files can be attached to the page: not in an encrypted space,
+-- whose attachments the server would keep unencrypted (they are not
+-- encrypted yet). The editor then offers no way to attach one, and refuses
+-- a file dropped or pasted on it.
+attachable :: Input -> Bool
+attachable input = isNothing input.space.encryption
+
 -- | Whether the editor shows the home page's options: on the home page's
 -- document, to an administrator, who alone may change them.
 editsHomeOptions :: Input -> Bool
@@ -2402,6 +2430,8 @@ data Bar = Bar
   -- administrator may use ('mayDefineKinds').
   , macrosShown :: Bool
   -- ^ Whether the math macros' panel is shown.
+  , files :: Bool
+  -- ^ Whether files can be attached to the page ('attachable').
   }
   deriving stock (Eq)
 
