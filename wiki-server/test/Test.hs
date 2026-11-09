@@ -104,6 +104,7 @@ main = secureMain $ do
           Observability.spec b
           Notifications.spec b
           WhatsNew.spec b
+          Rehearsal.spec b
         alone $ do
           Options.environmentSpec
           Export.environmentSpec b

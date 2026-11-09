@@ -34,6 +34,7 @@ module Wiki.Server.Rehearsal
   , rehearsalParser
   , RehearsalOutcome (..)
   , runRehearsal
+  , isolateCopy
 
     -- * Checks
   , Check (..)
@@ -69,9 +70,11 @@ import Wiki.App.Guide (guideSlug)
 import Wiki.Core.Slug (slugText)
 import Wiki.Server.Console (CheckOutcome (..), MigrateOutcome (..), runCheck, runMigrate)
 import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), placeOptions, resolvePlace)
-import Wiki.Server.Storage (Place (..))
+import Wiki.Server.Storage (Place (..), withDatabase)
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Rows (deleteSettingsLike)
 
 --------------------------------------------------------------------------------
 -- The command
@@ -150,6 +153,7 @@ rehearse o = either identity identity <$> runExceptT steps
       now <- liftIO getCurrentTime
       (copy, _) <- liftIO (backupInto livePlace.programs livePlace.database (o.scratch </> "copy") now) >>= either (broken . ("The running wiki could not be copied: " <>)) pure
       _ <- liftIO (restore Restore {backupFile = copy, dataDir = o.scratch, database = scratchPlace.database, programs = scratchPrograms, attachments = Nothing}) >>= either (broken . ("The copy could not be restored: " <>)) pure
+      liftIO (try (isolateCopy scratchPlace)) >>= either (\(e :: SomeException) -> broken ("The copy could not be cut off from the outside: " <> show e)) pure
       manager <- liftIO (newManager defaultManagerSettings)
       -- The old program on the copy, and what each check keeps of it.
       fixtures <- withServer (o.scratch </> "old.log") o.old (serveArgs scratchChoice []) (throwError . OldNotDriven) $ \server ->
@@ -182,6 +186,20 @@ rehearse o = either identity identity <$> runExceptT steps
       SqliteChosen file -> ["--sqlite", file]
       PostgresChosen url passwordFile -> ["--database", toS url] <> maybe [] (\f -> ["--database-password-file", f]) passwordFile
       InDataDirectory -> []
+
+-- | Turn off, in a copy of the wiki, what a server does outside its own
+-- data on its own: scheduled backups, which the scheduler copies to the
+-- backup destination, and notification mail, which the notifier sends
+-- through the mail server. The copy keeps the running wiki's settings, so
+-- a server started on it would otherwise back the copy up to the running
+-- wiki's destination and send mail the running wiki sends too. The rows go
+-- from the @settings@ table, whose shape every version of the server
+-- shares, so the old program finds them gone as well. The last backup's
+-- record stays: it is only read.
+isolateCopy :: Place -> IO ()
+isolateCopy place = withDatabase place $ \c -> runDb c $ do
+  deleteSettingsLike "backup-" ["backup-last"]
+  deleteSettingsLike "mail-" []
 
 (</>) :: FilePath -> FilePath -> FilePath
 a </> b = a <> "/" <> b
