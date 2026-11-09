@@ -962,6 +962,28 @@ confirms it against reality and the plan is amended if it does not hold.
     rather than the live Beam schema, and one that rewrites page syntax
     carries its own old-to-new rewriter rather than the live parser.
 
+59. **A password signs in through OPAQUE (WP5.74a, #184; the owner,
+    2026-11-06 to 2026-11-09).** OPAQUE-3DH (RFC 9807) with ristretto255,
+    SHA-512 and Argon2id. The server's side is a package of this repository,
+    `opaque/`, written over libsodium's primitives and kept apart so that it
+    can be published: the messages are newtypes over their wire bytes, read
+    through `HasField` slices, built with one `BS.concat`; secrets live in
+    memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
+    (opaque-ke compiled to wasm, audited), not this package built for wasm,
+    since there is no libsodium for wasm32-wasi (the owner, 2026-11-06); it
+    is pinned and loaded the first time a password is used. The context is
+    empty, because serenity-kit cannot set one. HKDF comes from libsodium
+    1.0.19 or later; the `older-libsodium` flag, on natively while CI and
+    Debian ship 1.0.18, uses a Haskell HKDF instead (WP5.74a2 turns it off).
+    Argon2id runs with 4 passes and 128 MiB, stored with each record so that
+    the defaults can change. An unknown login gets a fake record's answer. An
+    account from before OPAQUE signs in the old way once, through a
+    fallback the server offers only while such accounts exist, and the
+    browser then registers its record; a record is replaced only after a
+    proof by OPAQUE. The upgrade's rehearsal (decision 58) checks that an
+    account with a password from before OPAQUE, and one through a provider,
+    still sign in after the migration (the owner, 2026-11-09).
+
 ## Repository layout
 
 ```
@@ -1011,32 +1033,16 @@ In the order to do it, unless the owner says otherwise.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
-  - **Before a merges, its rehearsal check** (the owner, 2026-11-09, on #184;
-    decision 58). On the old program: an account with a password from before
-    OPAQUE, and one made through a fake OIDC provider. On the new program
-    after the migration: the first signs in through the fallback, which
-    registers its OPAQUE record, and then through OPAQUE; the second signs in
-    through the provider and is the same account.
-  - **a, login without the password leaving the browser: OPAQUE.** The
-    password logs in through OPAQUE (the CFRG's augmented PAKE, ristretto255
-    with SHA-512 and Argon2id): an OPRF and a triple Diffie-Hellman. The server
-    keeps a registration record. Neither the server nor anyone on the wire
-    learns the password or anything equivalent to it, and an eavesdropper has
-    nothing to replay or to attack offline. The protocol is written by hand
-    from libsodium's primitives (ristretto255, scalar multiplication,
-    hash-to-group, HKDF, HMAC-SHA512, Argon2id). The primitives are never
-    written by hand. The owner, the same day: no Rust toolchain; an audited C
-    library is acceptable when built from source. libsodium is built from
-    source for `wasm32-wasi` with the wasi-sdk of ghc-wasm-meta, so that one
-    Haskell implementation runs natively on the server and as wasm in the
-    browser. It is a small library of its own (a package such as
-    `opaque-hs`), written to be published upstream later, and tested against
-    the RFCs' test vectors (OPAQUE, and RFC 9497 for the OPRF) on both
-    targets. An existing account moves to OPAQUE at its next login: it logs in
-    the old way one last time and registers an OPAQUE record at once. The
-    session key OPAQUE agrees on is not used to encrypt traffic (no
-    transport layer of our own, the owner: "let's forget our own TLS"); TLS,
-    or Tailscale's WireGuard, carries the traffic.
+  - **a is done (decision 59, #184).** What remains of it is **a2**: build
+    libsodium 1.0.19 or later from source for the native build and link it
+    statically, so that the `older-libsodium` flag (HKDF written in
+    Haskell over libsodium's HMAC) can be off natively and its test against
+    libsodium's own HKDF runs; and an oracle test against libopaque and
+    liboprf, built from source, once their vectors are checked against the
+    RFCs' final ones.
+  - **b is cut in two** (the session, 2026-11-07): b1, each user's key pair
+    in the vault the assistant already had (#185), and b2, encrypted spaces
+    over it (#209).
   - **b, encrypted spaces, with a key per page.** Each user has a long-term
     key pair (X25519, for libsodium's sealed boxes). The server keeps every
     user's public key; the private key is stored on the server wrapped by the
