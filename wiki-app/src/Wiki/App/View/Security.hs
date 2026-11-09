@@ -14,7 +14,11 @@
 --   Then one code from the authenticator application turns it on. The
 --   recovery codes come with it, shown this once, until "I have kept
 --   them". When it is on, the section says how many recovery codes are
---   left, and it is turned off with a code.
+--   left, and it is turned off with a code. An account without a password
+--   cannot turn it on: a second factor protects the password, and a
+--   provider's sign-in uses the provider's own (decision 62 of
+--   docs/PLAN.md). Such an account that turned it on before still turns
+--   it off.
 -- * __Passkeys.__ The user's passkeys (WP5.30 of docs/PLAN.md), each
 --   with its name, when it was added and when it was last used, and
 --   "Remove"; "Add a passkey" makes one with the name typed beside it.
@@ -45,9 +49,9 @@
 --
 -- What the second factor and the address are said to do depends on
 -- whether the user has a password (the states' @asksPassword@). A user
--- without one signs in with a provider's account, which a second factor
--- follows as it follows a password, and has no password to reset (WP5.6 of
--- docs/PLAN.md); 'factorOffText' and 'addressText' word it accordingly.
+-- without one signs in with a provider's account, which asks for no code,
+-- and has no password to reset (WP5.6 of docs/PLAN.md); 'factorOffText',
+-- 'factorOnText' and 'addressText' word it accordingly.
 --
 -- In the demo there is one session, this browser's, and the second factor
 -- and the e-mail are shown disabled with a note, since only a server has
@@ -60,6 +64,7 @@ module Wiki.App.View.Security
   ( component
   , qrRuns
   , factorOffText
+  , factorOnText
   , addressText
   )
 where
@@ -467,7 +472,7 @@ component =
             | f.enabled ->
                 [hh|
                   <div>
-                    <p class="second-factor-on">On: a code from your authenticator application is asked for when you sign in. {{ codesLeft f.recoveryCodesLeft }}</p>
+                    <p class="second-factor-on">{{ factorOnText f.asksPassword }} {{ codesLeft f.recoveryCodesLeft }}</p>
                     {% if st.removing %}
                       {{ codeForm st "second-factor-remove-form" "Remove second factor" RemoveFactor CancelRemove }}
                     {% else %}
@@ -488,7 +493,10 @@ component =
                         </div>
                       </form>
                     {% else %}
-                      <button type="button" class="second-factor-start" disabled={{ st.busy }} onClick={{ const StartTotp }}>Set up a second factor…</button>
+                      <button type="button" class="second-factor-start" disabled={{ st.busy || not f.asksPassword }} onClick={{ const StartTotp }}>Set up a second factor…</button>
+                    {% end %}
+                    {% if not f.asksPassword %}
+                      <p class="account-note second-factor-no-password">A second factor protects a password, and you have none: signing in with your provider uses the provider's own.</p>
                     {% end %}
                     {{ factorProblemView st }}
                   </div>
@@ -850,12 +858,20 @@ qrCode rows =
 
 -- | What it means that the second factor is off, for a user with a
 -- password or without one. A user without a password signs in with a
--- provider's account, which asks for a code once a second factor is on,
--- as a password does ("Wiki.Server.Auth").
+-- provider's account, which never asks for a code ("Wiki.Server.Auth").
 factorOffText :: Bool -> Text
 factorOffText hasPassword
   | hasPassword = "Off: your password alone signs you in."
   | otherwise = "Off: signing in with your provider's account asks for no code."
+
+-- | What it means that the second factor is on, for a user with a password
+-- or without one. Only the password's sign-in asks for the code. A user
+-- without a password has one on only from before the server stopped
+-- asking after a provider's sign-in, and it does nothing for them.
+factorOnText :: Bool -> Text
+factorOnText hasPassword
+  | hasPassword = "On: a code from your authenticator application is asked for when you sign in with your password."
+  | otherwise = "On, but no sign-in asks for it: you have no password, and signing in with your provider asks for no code. You can remove it."
 
 -- | What a user's address is used for, as things are. Only a user with a
 -- password can forget one: a user without one signs in with a provider's

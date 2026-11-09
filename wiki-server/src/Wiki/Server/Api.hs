@@ -440,7 +440,7 @@ handlers env caller =
                 -- gives its own back before its second factor, so that the
                 -- code is not refused by the password's count.
                 for_ admitted $ \a -> liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
-                held <- liftIO (holdSignIn env.pending now user.id user.login "")
+                held <- liftIO (holdSignIn env.pending now user.id user.login)
                 liftIO (prove env.proofs now (pendingKey held) user.id ByOldPassword)
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
               Left _ -> do
@@ -486,7 +486,7 @@ handlers env caller =
             liftIO (Limiter.succeededAfter env.limiter a.startedAt a.login s.address)
             liftIO (Accounts.signInUser env.storage now s.address u) >>= \case
               Left (Accounts.SecondFactorWanted user) -> do
-                held <- liftIO (holdSignIn env.pending now user.id user.login "")
+                held <- liftIO (holdSignIn env.pending now user.id user.login)
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
               Left _ -> refuse ApiError.Unauthenticated
               Right (user, token) -> startedAs s user token

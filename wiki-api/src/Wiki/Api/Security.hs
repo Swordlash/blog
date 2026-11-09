@@ -24,6 +24,9 @@
 -- cookie, and a code sent to @session\/second-factor@ completes the
 -- sign-in. Removing the second factor also needs a code (or a recovery
 -- code); an administrator may remove it for a user who has lost both.
+-- Signing in through a provider asks for no code, since the provider has
+-- its own second factor, so an account without a password has nothing for
+-- a second factor to protect.
 --
 -- = An e-mail address
 --
@@ -124,6 +127,7 @@ data SecondFactorState = SecondFactorState
   -- ^ The number of their recovery codes not yet used.
   , asksPassword :: Bool
   -- ^ Whether starting a second factor needs their current password, that is whether they have one.
+  -- Without a password there is nothing for a second factor to protect, and the panel offers none.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

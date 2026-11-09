@@ -1,7 +1,8 @@
 -- | The second factor at sign-in (WP4.11 of docs/PLAN.md): a code from an
 -- authenticator application ("Wiki.Server.Totp"), asked for after the
--- password, or after a provider's sign-in, from a user who has turned it
--- on.
+-- password from a user who has turned it on. A sign-in through a provider
+-- asks for no code: the provider has its own second factor (decision 62
+-- of docs/PLAN.md, "Wiki.Server.Auth").
 --
 -- = Turning it on and off
 --
@@ -22,10 +23,10 @@
 --
 -- = Half-finished sign-ins
 --
--- When the password (or the provider) is right and a code is needed, the
--- server holds the half-finished sign-in in memory ('PendingSignIns'): the
--- user, and how many wrong codes it has had, under a random id that its
--- own cookie carries ('pendingCookie'), for 'pendingLifetime'. The right
+-- When the password is right and a code is needed, the server holds the
+-- half-finished sign-in in memory ('PendingSignIns'): the user, and how
+-- many wrong codes it has had, under a random id that its own cookie
+-- carries ('pendingCookie'), for 'pendingLifetime'. The right
 -- code completes it ('finishPending'); 'maxWrongCodes' wrong ones end it
 -- too, besides counting against the limit on failed sign-ins. A restart
 -- forgets them, which costs whoever was halfway through entering their
@@ -199,8 +200,6 @@ data PendingSignIn = PendingSignIn
   { user :: UserId
   , login :: Login
   -- ^ What the limit on failed sign-ins counts its wrong codes against.
-  , next :: Text
-  -- ^ Where a provider's sign-in continues to once it is done.
   , expires :: UTCTime
   , wrong :: Int
   -- ^ How many wrong codes it has had.
@@ -237,10 +236,10 @@ maxPending = 10000
 
 -- | Hold a sign-in waiting for its code. The result is the id its cookie
 -- is to carry.
-holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Login -> Text -> IO PendingToken
-holdSignIn (PendingSignIns ref) now user login next = do
+holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Login -> IO PendingToken
+holdSignIn (PendingSignIns ref) now user login = do
   token <- PendingToken <$> newToken
-  let held = PendingSignIn {user, login, next, expires = addUTCTime pendingLifetime now, wrong = 0}
+  let held = PendingSignIn {user, login, expires = addUTCTime pendingLifetime now, wrong = 0}
   atomicModifyIORef' ref $ \m ->
     let live = Map.filter (\p -> p.expires > now) m
         bounded = if Map.size live >= maxPending then Map.fromList (drop (Map.size live - maxPending + 1) (sortOn (\(_, p) -> p.expires) (Map.toList live))) else live
@@ -272,8 +271,7 @@ pendingCookieName = "wiki_pending"
 
 -- | The @Set-Cookie@ value that gives a browser a waiting sign-in's id,
 -- for as long as it waits, or (with none) deletes it. It covers the
--- wiki's whole path, since a password sign-in ends at the API and a
--- provider's at its own page, and it is as strict as the session cookie.
+-- wiki's whole path, as the session cookie does, and it is as strict.
 pendingCookie :: CookieSettings -> Maybe PendingToken -> Text
 pendingCookie s token =
   T.intercalate "; " $
