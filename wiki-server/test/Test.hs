@@ -29,6 +29,7 @@ import Test.Server.Observability qualified as Observability
 import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
 import Test.Server.Presence qualified as Presence
+import Test.Server.Rehearsal qualified as Rehearsal
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
@@ -68,6 +69,7 @@ main = secureMain $ do
         Compress.spec
         Tls.keySpec
         WhatsNew.unitSpec
+        Rehearsal.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
