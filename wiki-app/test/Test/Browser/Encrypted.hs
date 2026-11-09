@@ -100,7 +100,7 @@ spec m = do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Members only" "Shared with the reader.")
-    unsafeIOToPageM (js_key_pair "user-reader")
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
     -- The reader has a key pair, but no grant yet.
     waiting <- as "user-reader"
     run waiting (keyState secret.id) `shouldReturn` Right WaitingForKey
@@ -144,14 +144,14 @@ spec m = do
     void (ok =<< run env (encryptSpace secret.id))
     void (ok =<< run env (createPage secret.id Nothing "Behind the lock" "Read me once unlocked."))
     -- A device that never held the admin's private key.
-    unsafeIOToPageM (js_forget_device "user-admin")
+    unsafeIOToPageM (js_forget_device (toJSText ("user-admin" :: Text)))
     serveDemo
     answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
     ui <- startServer m (R.Space [secretSlug])
     eventually (find ui ".encrypted-space .encrypted-state" >>= (`shouldContainText` "does not hold your keys"))
     _ <- find ui ".encrypted-unlock-passkey"
     -- What an unlock of the vault puts on the device ("Wiki.App.Vault").
-    unsafeIOToPageM (js_unlock_device "user-admin")
+    unsafeIOToPageM (js_unlock_device (toJSText ("user-admin" :: Text)))
     find ui ".encrypted-retry" >>= click
     eventually (find ui "body" >>= (`shouldContainText` "Behind the lock"))
     length <$> findAll ui ".encrypted-space" `shouldReturn` 0
