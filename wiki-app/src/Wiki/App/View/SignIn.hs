@@ -571,23 +571,30 @@ component =
 
     handleAction :: Action -> H.HalogenM (State m) Action Slots Output m ()
     handleAction = \case
-      Receive session face here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, avatar = face, here, router = st.input.router}})
+      Receive session face here -> do
+        -- The offer to unlock the keys with the password is the signed-in
+        -- user's: another session (a sign-out, another user) drops it.
+        offered <- gets (\st -> fst <$> st.keysOffer)
+        when (isJust offered && offered /= ((\u -> u.id) <$> session.user)) dropKeysOffer
+        modify (\st -> st {input = Input {accounts = st.input.accounts, session, avatar = face, here, router = st.input.router}})
       Followed f -> do
         modify (\st -> st {accountOpen = False})
         gets (\st -> st.input.router) >>= (`Router.follow` f)
       FromPersonal -> H.raise SpacesChanged
-      AcceptKeysOffer ->
+      AcceptKeysOffer -> do
+        signedIn <- gets (\st -> (\u -> u.id) <$> st.input.session.user)
         gets (\st -> st.keysOffer)
           >>= traverse_
-            ( \(u, key) -> do
-                modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
-                lift (addPasswordUnlock u (Just key) Nothing) >>= \case
-                  Left why -> modify (\st -> st {keysProblem = Just why})
-                  Right _ -> pass
+            ( \(u, key) ->
+                if Just u /= signedIn
+                  then dropKeysOffer
+                  else do
+                    modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
+                    lift (addPasswordUnlock u (Just key) Nothing) >>= \case
+                      Left why -> modify (\st -> st {keysProblem = Just why})
+                      Right _ -> pass
             )
-      DeclineKeysOffer -> do
-        gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
-        modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
+      DeclineKeysOffer -> dropKeysOffer
       Toggle ->
         gets (\st -> st.open) >>= \case
           True -> close
@@ -780,6 +787,7 @@ component =
           modify (\s -> s {busy = True})
           result <- lift st.input.accounts.signOut
           modify (\s -> s {busy = False})
+          when (isRight result) dropKeysOffer
           -- A sign-out that failed leaves the session as it was; the next
           -- request shows whether it still is.
           traverse_ (H.raise . AccountChanged) (rightToMaybe result)
@@ -788,14 +796,23 @@ component =
     -- with the key the password gave, if any, and the offer to unlock the
     -- vault with the password too, when there is one to make.
     settleAfter :: Session -> H.HalogenM (State m) Action Slots Output m ()
-    settleAfter s = for_ s.user $ \u ->
-      lift (afterSignIn u.id) >>= \case
-        -- Nothing waits on the keys: the security panel shows them, and
-        -- why they could not be brought up to date, when it is opened.
-        Left _ -> pass
-        Right settled -> do
-          gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
-          modify (\st -> st {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})
+    settleAfter s = do
+      -- An earlier sign-in's offer is not this one's, even when bringing
+      -- this one's keys up to date fails.
+      dropKeysOffer
+      for_ s.user $ \u ->
+        lift (afterSignIn u.id) >>= \case
+          -- Nothing waits on the keys: the security panel shows them, and
+          -- why they could not be brought up to date, when it is opened.
+          Left _ -> pass
+          Right settled -> modify (\st -> st {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})
+
+    -- Withdraw the offer to unlock the keys with the password, and forget
+    -- the key it holds.
+    dropKeysOffer :: H.HalogenM (State m) Action Slots Output m ()
+    dropKeysOffer = do
+      gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
+      modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
 
     handleQuery :: Query a -> H.HalogenM (State m) Action Slots Output m (Maybe a)
     handleQuery (Prompt why next) = openForm (Just why) $> Just next

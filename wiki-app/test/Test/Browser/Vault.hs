@@ -821,6 +821,30 @@ userKeys m = describe "the user's keys" $ do
     (T.length before', before' /= after') `shouldBe` (79, True)
     closed again
 
+  it "offers to unlock the keys with the password after a sign-in, and withdraws the offer at the sign-out" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    -- The vault comes to open with a passkey alone: one added, the
+    -- password's wrap taken away.
+    find ui ".account-toggle" >>= click
+    find ui ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
+    find ui ".keys-passkey-add" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-passkey" `shouldReturn` 1
+    find ui ".keys-password-remove" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-password" `shouldReturn` 0
+    find ui ".account-toggle" >>= click
+    -- Signed out and in again with the password: the offer.
+    answerWith "DELETE" "api/v1/session" 200 nobody
+    find ui ".account .sign-out" >>= click
+    signIn ui "editor's password"
+    _ <- eventually $ find ui ".keys-offer"
+    -- Signed out: the offer was the editor's, and goes.
+    find ui ".account .sign-out" >>= click
+    _ <- find ui ".sign-in-toggle"
+    eventually $ length <$> findAll ui ".keys-offer" `shouldReturn` 0
+    closed ui
+
   it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runPage $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
