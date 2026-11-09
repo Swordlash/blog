@@ -49,6 +49,7 @@ deployArgs a = case a.action of
       , flag "--no-build" (a.noBuild)
       , if server && not (a.noBuild) then semaphoreArgs else []
       , flag "--no-firewall" (a.noFirewall)
+      , if server then flag "--no-rehearsal" (a.noRehearsal) else []
       , flag "--enable-linger" (a.enableLinger)
       ]
   where

@@ -30,6 +30,7 @@ import Test.Server.Oidc qualified as Oidc
 import Test.Server.Opaque qualified as Opaque
 import Test.Server.Options qualified as Options
 import Test.Server.Presence qualified as Presence
+import Test.Server.Rehearsal qualified as Rehearsal
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
@@ -70,6 +71,7 @@ main = secureMain $ do
         Tls.keySpec
         WhatsNew.unitSpec
         Opaque.unitSpec
+        Rehearsal.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
@@ -104,6 +106,7 @@ main = secureMain $ do
           Observability.spec b
           Notifications.spec b
           WhatsNew.spec b
+          Rehearsal.spec b
         alone $ do
           Options.environmentSpec
           Export.environmentSpec b

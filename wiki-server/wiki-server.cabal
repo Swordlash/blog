@@ -113,6 +113,7 @@ library
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Presence
+        Wiki.Server.Rehearsal
         Wiki.Server.Render
         Wiki.Server.Reset
         Wiki.Server.Routes
@@ -339,6 +340,7 @@ test-suite wiki-server-test
         Test.Server.Opaque
         Test.Server.Options
         Test.Server.Presence
+        Test.Server.Rehearsal
         Test.Server.Render
         Test.Server.Settings
         Test.Server.Static

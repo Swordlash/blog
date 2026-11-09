@@ -936,6 +936,32 @@ confirms it against reality and the plan is amended if it does not hold.
     `dev-test.sh` and `smoke-test.sh` stay scripts, and "the CI scripts as
     rules" is superseded.
 
+58. **An upgrade is rehearsed on a copy before the deploy switches (WP5.75,
+    #206; the owner, 2026-11-09; the design is issue #205).**
+    `wiki-server rehearse --old PROGRAM` backs the running wiki up online
+    into a scratch place (a directory, and on PostgreSQL a scratch database
+    in the same container, `wiki_rehearsal` for the deploy) and restores it
+    there. It then deletes the copy's `backup-*` (but `backup-last`) and
+    `mail-*` settings, so that neither server started on it backs up to the
+    running wiki's destination or sends its mail. The old program serves the
+    copy on loopback; each check's `before` reads it through the admin
+    listener (an administrator, no sign-in). This program then migrates and
+    checks the copy, serves it with `--no-guide`, and each check's `after`
+    runs. Exit 0 passed, 6 a check failed, 7 the old program could not be
+    driven, 1 the rehearsal broke. A check is a pair of functions in
+    `Wiki.Server.Rehearsal.checks`; the first, `pages`, compares every page's
+    title and source outside the guide. The maker runs it at the start of
+    `apply`, before the service stops, for a server-mode upgrade with an old
+    program; `--no-rehearsal` skips it (the wizard offers it). CI builds the
+    base branch's `wiki-server`, seeds a wiki with it through the admin API
+    (`toolchain/rehearse-ci.sh`) and rehearses the upgrade to the pull
+    request's build, on SQLite and on PostgreSQL. What follows, in order:
+    WP5.74a's check (below); then the API and console commands the checks
+    drive are documented as stable; then #202's migrations in code, each with
+    its own check. A migration in code pins the row shapes of its own version
+    rather than the live Beam schema, and one that rewrites page syntax
+    carries its own old-to-new rewriter rather than the live parser.
+
 ## Repository layout
 
 ```
@@ -985,6 +1011,12 @@ In the order to do it, unless the owner says otherwise.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
+  - **Before a merges, its rehearsal check** (the owner, 2026-11-09, on #184;
+    decision 58). On the old program: an account with a password from before
+    OPAQUE, and one made through a fake OIDC provider. On the new program
+    after the migration: the first signs in through the fallback, which
+    registers its OPAQUE record, and then through OPAQUE; the second signs in
+    through the provider and is the same account.
   - **a, login without the password leaving the browser: OPAQUE.** The
     password logs in through OPAQUE (the CFRG's augmented PAKE, ristretto255
     with SHA-512 and Argon2id): an OPRF and a triple Diffie-Hellman. The server
@@ -1041,7 +1073,7 @@ In the order to do it, unless the owner says otherwise.
     an administrator who changes the JavaScript the server sends, which then
     reads what the user decrypts.
 
-- **WP5.75 Presence updates checked only when permissions change** (the owner,
+- **WP5.76 Presence updates checked only when permissions change** (the owner,
   2026-11-06, on the question WP5.69 left). The live channel checks
   `mayReadPage` for every subscriber on each `Reading` and `Editing` update,
   which carry no page content and are frequent on a busy page. A subscriber's
