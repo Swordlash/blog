@@ -1045,6 +1045,16 @@ confirms it against reality and the plan is amended if it does not hold.
     server that rolls a page back to an older version is not detected (b3
     can chain each version's AAD to the previous one).
 
+62. **No second factor after a provider's sign-in (#199; the owner,
+    2026-11-09: "bez opcji").** A sign-in through an external provider
+    is complete when the provider confirms who signed in. The wiki asks
+    for no code, and there is no setting to make it ask: the provider has
+    its own second factor. The second factor stays for a password's
+    sign-in. The setting to turn it on is disabled, with a line saying
+    why, for an account without a password. Such an account that turned
+    it on before keeps the way to turn it off. A linked provider account
+    therefore signs in without the code the password asks for, by design.
+
 ## Repository layout
 
 ```
@@ -1090,6 +1100,21 @@ what is planned, not a log).
 ## Open work
 
 In the order to do it, unless the owner says otherwise.
+
+**The issues' order (the owner, 2026-11-09).** Stage 0, small and in
+parallel: #192 (menus close on a click away), #193 (the draft's "saved" as
+a notice that moves no button), #199 (decision 62), #214 (libsodium from a
+local file), WP5.76 below; #198 was closed as already done. Stage 1,
+foundations: #207 (compile times), #202 (migrations in code, with the
+rest of #205). Stage 2, the content's structure, on #202: #195 (one syntax
+for extensions and styles), #197 (comments), #201 (one home page per
+space, space administrators). Stage 3, the editor: #187 (autocompletion),
+#189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
+#196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
+(emojis), #190 (table views). Stage 5: #191 (presentations as a kind of
+page), #204 (calendars and TODO lists; the lists can come earlier).
+Alongside, when there is room: #213 (WP5.74b3, after #201), #212
+(WP5.74a2b), #203 (SQLite to PostgreSQL).
 
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
