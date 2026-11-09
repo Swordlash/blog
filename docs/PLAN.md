@@ -976,8 +976,15 @@ confirms it against reality and the plan is amended if it does not hold.
     since there is no libsodium for wasm32-wasi (the owner, 2026-11-06); it
     is pinned and loaded the first time a password is used. The context is
     empty, because serenity-kit cannot set one. HKDF comes from libsodium
-    1.0.19 or later; the `older-libsodium` flag, on natively while CI and
-    Debian ship 1.0.18, uses a Haskell HKDF instead (WP5.74a2 turns it off).
+    1.0.19 or later, built from source by the toolchain
+    (`toolchain/libsodium.sh`, the version and checksum in
+    `toolchain/pins.env`) and linked into the server statically, so the
+    machine it runs on needs no libsodium (WP5.74a2a, #211). Its `.pc` names
+    the library `libsodium-static`, which no system library is called, and
+    libsodium-bindings finds it through pkg-config, so that a system's
+    1.0.18 is never linked. The `older-libsodium` flag (a Haskell HKDF over
+    libsodium's HMAC) stays, off, for a build against an old system
+    library.
     Argon2id runs with 4 passes and 128 MiB, stored with each record so that
     the defaults can change. An unknown login gets a fake record's answer. An
     account from before OPAQUE signs in the old way once, through a
@@ -1087,13 +1094,12 @@ In the order to do it, unless the owner says otherwise.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
-  - **a is done (decision 59, #184).** What remains of it is **a2**: build
-    libsodium 1.0.19 or later from source for the native build and link it
-    statically, so that the `older-libsodium` flag (HKDF written in
-    Haskell over libsodium's HMAC) can be off natively and its test against
-    libsodium's own HKDF runs; and an oracle test against libopaque and
-    liboprf, built from source, once their vectors are checked against the
-    RFCs' final ones.
+  - **a is done (decision 59, #184; libsodium from source, #211).** What
+    remains of it is **a2b**: an oracle test against libopaque and liboprf,
+    built from source, once their vectors are checked against the RFCs'
+    final ones. A deploy with `--system-tools` still downloads libsodium's
+    release (checked by its checksum); a local source, as `--perl-source`
+    gives Perl, would be a follow-up.
   - **b is done**: b1, each user's key pair in the vault the assistant
     already had (decision 60, #185), and b2, encrypted spaces over it
     (decision 61, #209). What remains is **b3**: encrypted attachments and
