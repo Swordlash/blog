@@ -44,6 +44,7 @@ module Wiki.Core.Space
     -- * Its home page
   , homeTitle
   , homeBody
+  , isHomeBody
   )
 where
 
@@ -449,3 +450,11 @@ homeBody name =
     , ""
     , "This is the space's home page, the page it opens at. Edit it to say what the space is for and where to start reading."
     ]
+
+-- | Whether a page's Markdown is the home page a new space is created with
+-- ('homeBody'), for whatever name the space had then: the space may have
+-- been renamed since.
+isHomeBody :: Text -> Bool
+isHomeBody body = case T.stripPrefix "Welcome to **" body of
+  Just rest -> let (name, after) = T.breakOn "**." rest in not (T.null after) && body == homeBody name
+  Nothing -> False

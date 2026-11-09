@@ -273,7 +273,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isHomeBody, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
@@ -2806,7 +2806,14 @@ encryptSpaceTx sid req = do
       (versions, _) <- db (loadVersionsPage home.id Nothing 1)
       page <- findPage home.id
       comments <- Map.findWithDefault 0 home.id . Map.fromList <$> db (loadCommentCounts sid)
-      if versions == 1 && null page.attachments && comments == 0 then pure (Just home.id) else pure Nothing
+      -- The page the space was created with ('withHomePage'), never
+      -- edited: the starter's title and text, one version. Its version
+      -- names the space's creator as author, as a page they wrote would,
+      -- so the text is what tells the two apart. A page someone wrote and
+      -- made the home page is not deleted, even with one version: the
+      -- space is then refused, as one with content.
+      let generated = page.title == homeTitle && isHomeBody page.body
+      if generated && versions == 1 && null page.attachments && comments == 0 then pure (Just home.id) else pure Nothing
     _ -> pure Nothing
   unless (null nodes || isJust untouched) $
     failWith (Conflict "Only a space with nothing written in it can be encrypted: its pages are plain text, which the server has read. Make a new private space and encrypt it before writing.")

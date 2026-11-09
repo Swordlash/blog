@@ -74,6 +74,15 @@ spec backing = describe "encrypted spaces in the storage" $ do
     home <- ok =<< as p.ada (homeOf open.id)
     void (ok =<< as p.ada (savePage home.id home.updatedAt "Home" "A secret written in plain text."))
     as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
+    -- Its only page one someone wrote, made its home page in place of the
+    -- one it was created with: refused, and the page kept.
+    written <- privateSpace st p.ada "Written"
+    starter <- ok =<< as p.ada (homeOf written.id)
+    plan <- ok =<< as p.ada (createPage written.id Nothing "Plan" "What we will do.")
+    void (ok =<< as p.ada (setSpaceProfile written.id SpaceProfile {description = "", icon = Nothing, homePage = Just plan.id, blog = False, boxNumbering = written.boxNumbering}))
+    void (ok =<< as p.ada (deletePage starter.id))
+    as p.ada (encryptSpace written.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
+    void (ok =<< as p.ada (getPage written.id [plan.slug]))
     -- Sealed to someone else's key, or with a part of the wrong length.
     secret <- privateSpace st p.ada "Secret"
     as p.ada (encryptSpace secret.id (encryptAs p.ada p.bobKey)) >>= (`shouldSatisfy` invalid)
