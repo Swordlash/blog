@@ -99,6 +99,7 @@ library
         Wiki.Server.Export
         Wiki.Server.Export.Document
         Wiki.Server.Health
+        Wiki.Server.FakeProvider
         Wiki.Server.Feed
         Wiki.Server.Guide
         Wiki.Server.Import
@@ -325,7 +326,6 @@ test-suite wiki-server-test
         Test.Server.Comments
         Test.Server.Compress
         Test.Server.Export
-        Test.Server.FakeProvider
         Test.Server.Feed
         Test.Server.Fixture
         Test.Server.Http
@@ -371,7 +371,6 @@ test-suite wiki-server-test
         containers,
         crypton,
         crypton-connection,
-        cryptohash-sha256,
         directory,
         filepath,
         hspec >= 2,

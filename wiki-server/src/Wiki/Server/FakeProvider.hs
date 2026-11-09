@@ -1,8 +1,11 @@
--- | A provider to sign in with, for the tests (WP3.6 of docs/PLAN.md): a
--- small Warp server on a free port of 127.0.0.1 that plays an OpenID
--- Connect provider (discovery, authorization, token endpoint, user info)
--- at its root and GitHub (its OAuth app's addresses and its API) below
--- @\/gh@, over real HTTP.
+-- | A provider to sign in with, for the tests (WP3.6 of docs/PLAN.md) and
+-- for the upgrade's rehearsal ("Wiki.Server.Rehearsal"), which makes an
+-- account through it on the old program and signs in with it on the new
+-- one. It is in the library for the rehearsal, which runs in the deployed
+-- program. It is a small Warp server on a free port of 127.0.0.1 that
+-- plays an OpenID Connect provider (discovery, authorization, token
+-- endpoint, user info) at its root and GitHub (its OAuth app's addresses
+-- and its API) below @\/gh@, over real HTTP.
 --
 -- Its authorization endpoint signs in at once whoever the test says
 -- ('Fake.user'), redirecting straight back with a code (or, asked for
@@ -11,7 +14,7 @@
 -- secret, the redirect URI and the PKCE verifier as a provider does, and
 -- issues an ID token with the claims expected, or with the one the test
 -- spoils ('Fake.spoil').
-module Test.Server.FakeProvider
+module Wiki.Server.FakeProvider
   ( Fake (..)
   , Person (..)
   , Spoiled (..)
