@@ -64,10 +64,10 @@
 -- If the identity belongs to a user, that user is signed in, unless they
 -- are disabled. No second factor is asked for, even from a user who has
 -- one: the provider has its own, and the wiki's second factor protects
--- the password (decision 62 of docs/PLAN.md). If it belongs to nobody, it is connected to the signed-in
--- user who asked for that; or it creates an account in an open wiki, or
--- with an invitation in any wiki, which it uses up; otherwise a closed
--- wiki refuses it. An account created this way has no password, and a
+-- the password (decision 62 of docs/PLAN.md). If it belongs to nobody, it
+-- is connected to the signed-in user who asked for that; or it creates
+-- an account in an open wiki, or with an invitation in any wiki, which it
+-- uses up; otherwise a closed wiki refuses it. An account created this way has no password, and a
 -- login made from what the provider said ('loginCandidates').
 --
 -- A user may disconnect their identities ('unlinkIdentity'), but not
