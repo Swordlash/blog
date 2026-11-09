@@ -152,8 +152,33 @@ jobs:
         echo "$(ghcup whereis basedir)/ghc/wasm32-wasi-$WASM_GHC_VERSION/bin" >> "$GITHUB_PATH"
         echo "$(ghcup whereis basedir)/bin" >> "$GITHUB_PATH"
 
-    - name: Install libpq and libsodium
-      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
+    - name: Install libpq
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev
+
+    # As in build.yml's jobs, under the same cache key. libsodium, which
+    # every native build links statically:
+    # toolchain/libsodium.sh builds the release toolchain/pins.env pins into
+    # ~/.wiki-toolchain (under a minute), and the cache keeps the built
+    # library, keyed by the pinned version and checksum and by the script
+    # that builds it. Its env mode gives the later steps PKG_CONFIG_PATH,
+    # LIBRARY_PATH and C_INCLUDE_PATH, through which cabal finds it.
+    - name: Read the libsodium pin
+      id: libsodium
+      run: |
+        . toolchain/pins.env
+        echo "version=$LIBSODIUM_VERSION" >> "$GITHUB_OUTPUT"
+        echo "sha256=$LIBSODIUM_SHA256" >> "$GITHUB_OUTPUT"
+
+    - name: Cache libsodium
+      uses: actions/cache@v5
+      with:
+        path: ~/.wiki-toolchain/libsodium-${{ steps.libsodium.outputs.version }}
+        key: ${{ runner.os }}-libsodium-${{ steps.libsodium.outputs.version }}-${{ steps.libsodium.outputs.sha256 }}-${{ hashFiles('toolchain/libsodium.sh') }}
+
+    - name: Build libsodium
+      run: |
+        sh toolchain/libsodium.sh install
+        sh toolchain/libsodium.sh env >> "$GITHUB_ENV"
 
     - name: Install JavaScript dependencies
       run: npm ci

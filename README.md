@@ -1241,7 +1241,14 @@ prints `ok` or `missing` for each command and library, names the packages of wha
 missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or Ubuntu
 (`dpkg-query` on `PATH`) a missing package is only a warning, since the bootstrap
 installs it next, and the check runs again after the bootstrap; elsewhere the deploy
-stops there. SQLite needs nothing: the build compiles its own copy. libpq is needed
+stops there. SQLite needs nothing: the build compiles its own copy. Nor does
+libsodium: the bootstrap builds the release `toolchain/pins.env` pins
+(`LIBSODIUM_VERSION`) from source, with `toolchain/libsodium.sh`, as a static library
+under the toolchain's directory (`~/.wiki-toolchain/libsodium`, or
+`<prefix>/toolchain/.wiki-toolchain/libsodium`), and the build links it into
+`wiki-server`. Building it takes a C compiler and `make`, and under a minute. So the
+machine needs no libsodium package to build the server or to run it, and the check's
+line for libsodium says so and is not counted. libpq is needed
 only for a wiki in PostgreSQL: with `--sqlite` the deploy builds `wiki-server`
 without PostgreSQL (the cabal flag `postgres` off), which needs neither libpq nor
 `pg_config`, and the check, given `--without-postgres`, reports libpq as not
@@ -1263,7 +1270,6 @@ then reads `--` and "checked by the deploy's TeX step", and the check waits for 
 | GMP                     | `libgmp-dev`     | `gmp-devel`                                                                      |
 | libpq (PostgreSQL only) | `libpq-dev`      | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
 | zlib                    | `zlib1g-dev`     | `zlib-devel`                                                                     |
-| libsodium               | `libsodium-dev`  | `libsodium-devel` (EPEL)                                                         |
 | pkg-config              | `pkg-config`     | `pkgconf-pkg-config`                                                             |
 | terminfo (wizard only)  | `libncurses-dev` | `ncurses-devel`                                                                  |
 
@@ -1273,25 +1279,12 @@ environment the deploy is run in, which reaches cabal untouched: `LIBRARY_PATH`,
 through `PKG_CONFIG_PATH`, and libpq through `pg_config` on `PATH` alone: the build
 runs `pg_config`, and pkg-config's `libpq.pc` is not enough. PGDG's packages put
 `pg_config` in `/usr/pgsql-NN/bin`, off `PATH`, so run the deploy with
-`PATH=/usr/pgsql-NN/bin:$PATH`; the check names a `pg_config` it finds there. libsodium is
-found through neither: its Haskell bindings include `sodium.h` and link
-`-lsodium` without pkg-config, so the build finds it through `LIBRARY_PATH` and `C_INCLUDE_PATH`, and
-the check compiles and links a small program the same way. Built from source, where
-RHEL has no package:
-
-```sh
-./configure --prefix=$HOME/opt/libsodium --disable-shared --enable-static --with-pic && make install
-LIBRARY_PATH=$HOME/opt/libsodium/lib C_INCLUDE_PATH=$HOME/opt/libsodium/include \
-  PKG_CONFIG_PATH=$HOME/opt/libsodium/lib/pkgconfig sh toolchain/deploy-local.sh ... --backend-only
-```
-
-`PKG_CONFIG_PATH` is there for the check: when pkg-config finds a libsodium that the
-compiler does not, the check names the two directories to give the build.
+`PATH=/usr/pgsql-NN/bin:$PATH`; the check names a `pg_config` it finds there.
 
 A systemd unit does not inherit the shell's environment, so when the deploy runs
 with `LD_LIBRARY_PATH` set (a shared library in a directory of your own), it writes
-it into the unit, `Environment="LD_LIBRARY_PATH=..."`, and says so; a static build,
-as above, needs none.
+it into the unit, `Environment="LD_LIBRARY_PATH=..."`, and says so; a static
+library, as the bootstrap's libsodium is, needs none.
 
 The demo deploys the same way, from a page of its own: `--static --backend-only`
 downloads `app-demo-<commit>.zip` and builds nothing. On this machine alone, at
@@ -1349,7 +1342,10 @@ sh toolchain/deploy-local.sh --server --sqlite --prefix /srv/wiki --bind 0.0.0.0
   its own. The page is still downloaded from GitHub with `--backend-only`, since it
   is not the toolchain. The Debian packages a build links with still come through
   apt, from the machine's own package sources. `--no-system-tools` lets the bootstrap
-  install the toolchain again.
+  install the toolchain again. libsodium is not a tool: the bootstrap still builds the
+  pinned release from source (see above), downloading it from
+  `download.libsodium.org` or GitHub unless `~/.wiki-toolchain/libsodium` (under the
+  toolchain's directory) already holds it.
 - `--npm-registry URL`: the npm registry that `npm ci` and `npx` take every package
   from, as `NPM_CONFIG_REGISTRY` for every npm call of the deploy and of the
   bootstrap. `package-lock.json` names `https://registry.npmjs.org/` in each
@@ -2380,10 +2376,13 @@ It reuses the pinned GHC, cabal and wasm compiler found on `PATH`, and any Node
 24 or later with npm. When a compiler is missing, it installs ghcup into `~/.ghcup`
 (unless one is already on `PATH`) and through it the pinned compiler, making it
 ghcup's default. Missing tools go to: the wasm sysroot into `~/.ghc-wasm`; Node into
-`~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
+`~/.wiki-toolchain/node`; libsodium, which every native build links statically, built
+from the release `toolchain/pins.env` pins (its checksum checked) into
+`~/.wiki-toolchain/libsodium` by `toolchain/libsodium.sh`, since Debian's and Ubuntu's
+is too old for the `opaque` package; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
 release zip, checked against a pinned hash, or built from Hackage where GitHub's
-downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's, zlib's and libsodium's headers, `zstd`, `jq`
+downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's and zlib's headers, `zstd`, `jq`
 and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise: the shell script those GHC needs (`build-essential curl libgmp-dev
@@ -2395,7 +2394,9 @@ into the cabal store, so the first build compiles only this repository.
 cabal, npm and Playwright keep their files as well, through their own variables,
 which that directory's `.wiki-toolchain/env` exports along with `PATH`, so the npm
 commands and `. <that directory>/.wiki-toolchain/env` find everything with the
-variable set, and nothing lands in the home directory.
+variable set, and nothing lands in the home directory. The same file puts
+libsodium's directories first in `PKG_CONFIG_PATH`, `LIBRARY_PATH` and
+`C_INCLUDE_PATH`, where the build finds it.
 
 What it downloads, and from where, for a network that allows hosts one by one:
 ghcup from `downloads.haskell.org`, and through it the compilers and cabal from
@@ -2404,7 +2405,8 @@ there and from `github.com` (the wasm compiler's bindist is a release of
 where that host is refused (a proxy that answers 403), the same commit from its
 mirror `github.com/haskell-wasm/ghc-wasm-meta`, whose `setup.sh` then takes
 wasi-sdk, binaryen, wasmtime and its Node from releases on `github.com`; Node from
-`nodejs.org`; fourmolu from `github.com`, or Hackage; the package index and
+`nodejs.org`; libsodium from `download.libsodium.org`, or the same release on
+`github.com`; fourmolu from `github.com`, or Hackage; the package index and
 packages from `hackage.haskell.org`; npm packages from `registry.npmjs.org`; and
 Chromium from Playwright's CDN (`playwright.azureedge.net`, `cdn.playwright.dev`),
 which only the browser tests need.
@@ -2681,7 +2683,12 @@ each compiler's packages apart inside it): the native one, saved only by the `un
 and the wasm one, saved only by the wasm job. `server-page.yml` keeps a third, its
 own, since it compiles every dependency at `-O2` and those have unit ids of their
 own: it starts from the wasm one the first time, and its job `prune-caches` deletes
-its older copies as build.yml's does. The build directories are cached apart, per
+its older copies as build.yml's does. Every job that builds natively also caches
+libsodium, which `toolchain/libsodium.sh` builds from source into
+`~/.wiki-toolchain/libsodium-<version>`, under a key made of the pinned version, its
+checksum and the script's hash, and writes the variables that find it
+(`sh toolchain/libsodium.sh env`) into `$GITHUB_ENV`; a self-hosted runner's
+bootstrap builds it, and the same step writes the variables there. The build directories are cached apart, per
 compiler. When a store
 has grown too large, the workflow "Delete a cabal store" (Actions, Run workflow) deletes
 it, and the next run builds it again.
@@ -2760,7 +2767,8 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
 2. Install, once, the Debian packages the bootstrap and Chromium need, since the
    runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
-   xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config zlib1g-dev`. Chromium's are those `npx playwright install-deps
+   xz-utils zstd libgmp-dev libpq-dev pkg-config zlib1g-dev` (libsodium it builds from
+   source). Chromium's are those `npx playwright install-deps
    --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
    prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64
    libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64

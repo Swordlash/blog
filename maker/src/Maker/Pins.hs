@@ -28,6 +28,7 @@ data Pins = Pins
   , playwrightVersion :: String
   , fourmoluVersion :: String
   , fourmoluSha256 :: String
+  , libsodiumVersion :: String
   , ghcMinVersion :: String
   , cabalMinVersion :: String
   , nodeMinMajor :: Int
@@ -62,6 +63,7 @@ parsePins text = do
     <*> get "PLAYWRIGHT_VERSION"
     <*> get "FOURMOLU_VERSION"
     <*> get "FOURMOLU_SHA256"
+    <*> get "LIBSODIUM_VERSION"
     <*> get "GHC_MIN_VERSION"
     <*> get "CABAL_MIN_VERSION"
     <*> pure nodeMinMajor'

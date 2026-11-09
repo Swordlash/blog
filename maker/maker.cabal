@@ -64,6 +64,7 @@ library
     Maker.Toolchain.Debian
     Maker.Toolchain.Fourmolu
     Maker.Toolchain.Ghcup
+    Maker.Toolchain.Libsodium
     Maker.Toolchain.Node
     Maker.Toolchain.Wasm
     Maker.Version

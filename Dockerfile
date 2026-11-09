@@ -45,21 +45,29 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # bash for pipefail: the build pipes find into the compressor.
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 # The bootstrap and its maker install the Debian packages they need
-# themselves (the C toolchain, GMP's, libpq's and libsodium's development
-# files, and pkg-config, which finds libsodium for its bindings), but download
-# them with curl over HTTPS first, which needs the CA certificates; and git,
-# for cabal to fetch haskell-halogen at the commit cabal.project pins.
+# themselves (the C toolchain, GMP's and libpq's development files, and
+# pkg-config, which finds libsodium for its bindings), and the maker builds
+# libsodium from source (toolchain/libsodium.sh), but they download with
+# curl over HTTPS, which needs the CA certificates; and git, for cabal to
+# fetch haskell-halogen at the commit cabal.project pins.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates curl git \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-# The bootstrap, its pins, and its second stage, the maker, which it builds.
-COPY toolchain/bootstrap.sh toolchain/pins.env toolchain/
+# The bootstrap, its pins, the script that builds libsodium, and its second
+# stage, the maker, which it builds.
+COPY toolchain/bootstrap.sh toolchain/pins.env toolchain/libsodium.sh toolchain/
 COPY maker/ maker/
 RUN sh toolchain/bootstrap.sh build \
  && rm -rf /var/lib/apt/lists/* /root/.ghcup/cache /root/.ghcup/tmp /root/.ghcup/logs
-ENV PATH=/root/.wiki-toolchain/node/bin:/root/.ghcup/bin:$PATH
+# What the bootstrap's environment file says, for the RUN lines below, which
+# do not read it: its tools first on PATH, and the libsodium it built where
+# pkg-config, the C compiler and the linker look first.
+ENV PATH=/root/.wiki-toolchain/node/bin:/root/.ghcup/bin:$PATH \
+    PKG_CONFIG_PATH=/root/.wiki-toolchain/libsodium/lib/pkgconfig \
+    LIBRARY_PATH=/root/.wiki-toolchain/libsodium/lib \
+    C_INCLUDE_PATH=/root/.wiki-toolchain/libsodium/include
 
 FROM toolchain AS build
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
@@ -121,9 +129,9 @@ FROM scratch AS release
 COPY --from=build /out/ /
 
 FROM ${DEBIAN} AS runtime
-# libgmp, libpq (PostgreSQL's client library) and libsodium (the second
-# factor's codes) are the libraries the binary links beyond glibc (SQLite
-# is compiled into it); PostgreSQL's
+# libgmp and libpq (PostgreSQL's client library) are the libraries the
+# binary links beyond glibc (SQLite and libsodium are compiled into it);
+# PostgreSQL's
 # client programs, of the major version of docker-compose.yml's postgres:17,
 # are what a backup and a restore of a PostgreSQL database run (pg_dump
 # refuses a server newer than itself); curl is for the health check and for
@@ -134,7 +142,7 @@ FROM ${DEBIAN} AS runtime
 # docker-compose.yml).
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 libsodium23 postgresql-client-17 \
+ && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 postgresql-client-17 \
  && rm -rf /var/lib/apt/lists/*
 # The PDF exports, optionally: the server makes every other document with the
 # pandoc linked into it, and a PDF with xelatex where it finds one, which

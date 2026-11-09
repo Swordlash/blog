@@ -125,10 +125,12 @@ program-options
 package pandoc
   flags: +embed_data_files -http
 
--- The opaque package is built natively only (the browser's OPAQUE client is
--- @serenity-kit/opaque, from npm). The native build links the system's
--- libsodium, which is 1.0.18 on Debian 12 and Ubuntu 24.04 (and on CI's
--- runners): too old for libsodium's own HKDF, so opaque uses its Haskell
--- polyfill until the toolchain builds a newer libsodium (WP5.74a2).
-package opaque
-  flags: +older-libsodium
+-- libsodium comes from the toolchain: toolchain/libsodium.sh builds the
+-- release toolchain/pins.env pins as a static library, and its libsodium.pc
+-- names the library libsodium-static, which no system has. Both packages
+-- that link libsodium find it through pkg-config: opaque always, and
+-- libsodium-bindings (under sel) with this flag, without which it links
+-- -lsodium, which a machine with Debian's libsodium-dev resolves to the
+-- system's libsodium.so (see toolchain/libsodium.sh).
+package libsodium-bindings
+  flags: +pkg-config

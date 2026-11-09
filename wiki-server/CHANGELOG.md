@@ -52,6 +52,14 @@ version sends, as the assistant's settings alone, keeping the other items.
 when nothing else is left in it. `Wiki.Server.Vault` gains `storeVaultIn`,
 for a transaction of the caller's.
 
+libsodium is linked into the server statically, from a release the
+toolchain builds from source (`toolchain/libsodium.sh`, the version and
+checksum in `toolchain/pins.env`; 1.0.22 now): building the server no longer
+needs `libsodium-dev`, and running it no longer needs `libsodium23`. The
+`opaque` package is built without its flag `older-libsodium`, so its HKDF is
+libsodium's own. cabal.project turns on libsodium-bindings' flag
+`pkg-config`, so that sel's bindings find the same library.
+
 What's new (WP5.66). The server embeds, when it is compiled, the
 repository's changelog entries (`changelog/*.md`, reached through the
 symbolic link `wiki-server/changelog`, listed in `extra-source-files` so

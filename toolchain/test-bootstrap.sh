@@ -32,12 +32,27 @@ pass() { passed=$((passed + 1)); printf 'ok %s - %s\n' "$passed" "$*"; }
 # The line number of the first line containing a string, for order checks.
 line_of() { grep -n -F -- "$2" "$1" | head -n 1 | cut -d: -f1; }
 
+# A libsodium as toolchain/libsodium.sh leaves it, under the toolchain
+# directory of the base given: the files its readiness looks at, the
+# marker with the pinned version and checksum, and the link. With it there,
+# the maker's libsodium step does nothing; the case that builds it removes
+# it.
+libsodium_installed() {
+  sodium_version=$(sed -n 's/^LIBSODIUM_VERSION=//p' "$SOURCE_DIR/pins.env")
+  sodium_sha=$(sed -n 's/^LIBSODIUM_SHA256=//p' "$SOURCE_DIR/pins.env")
+  sodium_dir=$1/.wiki-toolchain/libsodium-$sodium_version
+  mkdir -p "$sodium_dir/lib/pkgconfig" "$sodium_dir/include"
+  touch "$sodium_dir/lib/libsodium.a" "$sodium_dir/lib/libsodium-static.a" "$sodium_dir/lib/pkgconfig/libsodium.pc" "$sodium_dir/include/sodium.h"
+  printf '%s %s\n' "$sodium_version" "$sodium_sha" >"$sodium_dir/.built"
+  ln -sfn "$sodium_dir" "$1/.wiki-toolchain/libsodium"
+}
+
 fixture() {
   case_dir=$TMP/$1
   mkdir -p "$case_dir/home" "$case_dir/bin" "$case_dir/repo/toolchain"
   cp "$SOURCE" "$case_dir/repo/toolchain/bootstrap.sh"
   cp "$SOURCE_DIR/pins.env" "$case_dir/repo/toolchain/pins.env"
-  cp "$SOURCE_DIR/check-native.sh" "$SOURCE_DIR/check-tex.sh" "$case_dir/repo/toolchain/"
+  cp "$SOURCE_DIR/check-native.sh" "$SOURCE_DIR/check-tex.sh" "$SOURCE_DIR/libsodium.sh" "$case_dir/repo/toolchain/"
   HOME=$case_dir/home
   EVENTS=$case_dir/events
   CACHE=$case_dir/cache/chromium_headless_shell-1234
@@ -48,6 +63,7 @@ fixture() {
   : >"$EVENTS"
   mkdir -p "$HOME/index/hackage.haskell.org"
   touch "$HOME/index/hackage.haskell.org/01-index.tar"
+  libsodium_installed "$HOME"
   cat >"$case_dir/bin/tool" <<'EOF'
 #!/bin/sh
 name=${0##*/}
@@ -203,6 +219,7 @@ assert_contains "$case_dir/check" 'reuse wasm sysroot'
 assert_contains "$case_dir/check" 'reuse Node v24.99.0'
 assert_contains "$case_dir/check" "reuse playwright-core 1.63.0 ($case_dir/repo)"
 assert_contains "$case_dir/check" 'reuse Chromium cache'
+assert_contains "$case_dir/check" "reuse libsodium 1.0.22 ($HOME/.wiki-toolchain/libsodium-1.0.22)"
 [ ! -s "$EVENTS" ] || fail 'check ran a mutation command'
 pass 'check is read-only and recognises pinned PATH tools and project Playwright'
 
@@ -292,28 +309,24 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # does not recognise alone, and writes the environment file. Then, on
 # Debian or not, it runs toolchain/check-native.sh. What that script checks
 # is faked, so that the result does not depend on the host: cc preprocesses
-# anything and links the libsodium probe unless SODIUM_MISSING is set (and
-# the terminfo probe unless TINFO_MISSING is),
-# pkg-config knows zlib and libpq, and make and pg_config answer.
+# anything and links the terminfo probe unless TINFO_MISSING is set,
+# pkg-config knows libpq, and zlib unless ZLIB_MISSING is set, and make and
+# pg_config answer. libsodium is the fixture's, as toolchain/libsodium.sh
+# leaves it, so the maker does not build it.
 fixture native
 rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" \
   "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
 cat >"$case_dir/bin/cc" <<'EOF'
 #!/bin/sh
-output= sodium= tinfo=
+output= tinfo=
 while [ $# -gt 0 ]; do
   case $1 in
     -o) output=$2; shift ;;
-    -lsodium) sodium=1 ;;
     -ltinfo) tinfo=1 ;;
   esac
   shift
 done
 if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
-if [ -n "$sodium" ] && [ -n "${SODIUM_MISSING:-}" ]; then
-  printf 'cannot find -lsodium\n' >&2
-  exit 1
-fi
 if [ -n "$tinfo" ] && [ -n "${TINFO_MISSING:-}" ]; then
   printf 'cannot find -ltinfo\n' >&2
   exit 1
@@ -321,7 +334,7 @@ fi
 printf '#!/bin/sh\n' >"$output"
 chmod +x "$output"
 EOF
-printf '#!/bin/sh\ncase $* in "--exists zlib" | "--exists libpq") exit 0 ;; esac\nexit 1\n' >"$case_dir/bin/pkg-config"
+printf '#!/bin/sh\ncase $* in "--exists libpq") exit 0 ;; "--exists zlib") [ -z "${ZLIB_MISSING:-}" ] ;; *) exit 1 ;; esac\n' >"$case_dir/bin/pkg-config"
 printf '#!/bin/sh\nprintf "/usr/lib/postgresql/17/bin\\n"\n' >"$case_dir/bin/pg_config"
 printf '#!/bin/sh\nexit 0\n' >"$case_dir/bin/make"
 chmod +x "$case_dir/bin/cc" "$case_dir/bin/pkg-config" "$case_dir/bin/pg_config" "$case_dir/bin/make"
@@ -333,12 +346,17 @@ assert_contains "$case_dir/native" 'no wasm toolchain, Node, Chromium or fourmol
 [ -f "$HOME/.wiki-toolchain/env" ] || fail 'native did not write the environment file'
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'native touched ~/.ghc-wasm'
 [ ! -e "$HOME/.wiki-toolchain/node" ] || fail 'native installed Node'
+assert_contains "$case_dir/native" 'GHC 9.14.1, cabal 3.16.1.0, libsodium 1.0.22; no wasm toolchain'
 # The Debian packages are all installed (the fake dpkg-query says so), but
-# the check still finds a library that does not link, and stops the run.
-if SODIUM_MISSING=1 bootstrap native >"$case_dir/native-no-sodium" 2>&1; then fail 'native without libsodium succeeded'; fi
-assert_contains "$case_dir/native-no-sodium" 'missing  libsodium'
-assert_contains "$case_dir/native-no-sodium" 'Debian, Ubuntu: sudo apt-get install libsodium-dev'
-assert_contains "$case_dir/native-no-sodium" 'the native build of wiki-server needs what is missing above'
+# the check still finds a library pkg-config does not know, and stops the
+# run. libsodium is not among the items: its line says the bootstrap builds
+# it, and Debian is not asked for it.
+if ZLIB_MISSING=1 bootstrap native >"$case_dir/native-no-zlib" 2>&1; then fail 'native without zlib succeeded'; fi
+assert_contains "$case_dir/native-no-zlib" 'missing  zlib'
+assert_contains "$case_dir/native-no-zlib" 'Debian, Ubuntu: sudo apt-get install zlib1g-dev'
+assert_contains "$case_dir/native-no-zlib" '--       libsodium   not needed from the system: the bootstrap builds libsodium 1.0.22 from source (toolchain/libsodium.sh; not counted)'
+assert_contains "$case_dir/native-no-zlib" 'the native build of wiki-server needs what is missing above'
+if grep -F 'libsodium-dev' "$case_dir/native-no-zlib" >/dev/null; then fail 'native named libsodium-dev'; fi
 # The machine without dpkg-query. Removing the fake one is not enough: on a
 # Debian host the PATH would still reach the host's /usr/bin/dpkg-query,
 # which reports the host's own packages (GitHub's runner has no
@@ -414,7 +432,7 @@ assert_contains "$case_dir/native-bad-option" 'native [--without-postgres]'
 # Debian without libpq-dev, and without root or a sudo that needs no
 # password: plain native stops at the Debian packages, naming libpq-dev;
 # native --without-postgres does not ask for it, installs nothing, and goes
-# on to the check (which a missing libsodium then stops, to show that it ran).
+# on to the check (which a missing zlib then stops, to show that it ran).
 debian_without_libpq
 status=0
 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native >"$case_dir/native-debian-no-libpq" 2>&1 || status=$?
@@ -425,9 +443,9 @@ WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$cas
 if grep -F 'missing Debian packages' "$case_dir/native-debian-without-postgres" >/dev/null; then fail 'native --without-postgres asked Debian for libpq-dev'; fi
 assert_contains "$case_dir/native-debian-without-postgres" 'no wasm toolchain, Node, Chromium or fourmolu (native)'
 status=0
-SODIUM_MISSING=1 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-debian-check" 2>&1 || status=$?
-[ "$status" = 1 ] || fail "native --without-postgres without libsodium exited $status, not 1"
-assert_contains "$case_dir/native-debian-check" 'missing  libsodium'
+ZLIB_MISSING=1 WIKI_PG_CONFIG_DIRS=$case_dir/nowhere env PATH="$case_dir/bin:$no_dpkg" sh "$case_dir/repo/toolchain/bootstrap.sh" native --without-postgres >"$case_dir/native-debian-check" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native --without-postgres without zlib exited $status, not 1"
+assert_contains "$case_dir/native-debian-check" 'missing  zlib'
 assert_contains "$case_dir/native-debian-check" 'skipped  libpq       not needed (built without PostgreSQL)'
 [ ! -s "$EVENTS" ] || fail "native on Debian without libpq-dev installed something: $(cat "$EVENTS")"
 no_debian_fakes
@@ -483,11 +501,11 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-plain
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check failed: $(cat "$out")"
   assert_contains "$out" 'skipped  terminfo    not needed (for the configuration wizard only: --with-wizard)'
-  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
   out=$case_dir/check-wizard
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --with-wizard >"$out" 2>&1 || fail "the check --with-wizard failed: $(cat "$out")"
   assert_contains "$out" 'ok       terminfo    -ltinfo, through cc (for the configuration wizard)'
-  assert_contains "$out" 'All 10 items the native build of wiki-server and the configuration wizard need are there.'
+  assert_contains "$out" 'All 9 items the native build of wiki-server and the configuration wizard need are there.'
   out=$case_dir/check-wizard-no-tinfo
   status=0
   TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-postgres --with-wizard >"$out" 2>&1 || status=$?
@@ -505,7 +523,7 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-tex-working
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a working xelatex failed: $(cat "$out")"
   assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
-  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
   if grep -F 'PDF exports need' "$out" >/dev/null; then fail 'the check with a working xelatex spoke of the PDF exports'; fi
   if [ "$(line_of "$out" 'pkg-config')" -gt "$(line_of "$out" 'xelatex')" ] || [ "$(line_of "$out" 'xelatex')" -gt "$(line_of "$out" 'GMP')" ]; then
     fail 'the xelatex line is not after the commands'
@@ -514,7 +532,7 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-tex-failing
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a failing xelatex failed: $(cat "$out")"
   assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex: It exited 1. (for the PDF exports; not counted)"
-  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
   assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails (sh toolchain/check-tex.sh says why), so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive)."
   rm "$case_dir/bin/xelatex"
   out=$case_dir/check-tex-none
@@ -554,6 +572,46 @@ assert_contains "$case_dir/node-old" 'downloading Node failed'
   fail "node with an old Node did more than download Node: $(cat "$EVENTS")"
 [ "$(ls -A "$HOME/.ghc-wasm")" = custom ] || fail 'node touched ~/.ghc-wasm'
 pass 'node installs Node alone, reusing a Node 24 on PATH, with no compilers, wasm toolchain, Chromium or fourmolu'
+
+# Without libsodium in the toolchain's directory, the maker's libsodium step
+# runs toolchain/libsodium.sh, which downloads the pinned release and checks
+# its checksum before building anything. The fake curl refuses
+# download.libsodium.org, as a proxy that blocks the host does, and gives a
+# file that is not the release from GitHub: the checksum refuses it, nothing
+# is built or installed, and the run stops naming the step.
+fixture libsodium
+rm -rf "$HOME/.wiki-toolchain"
+rm "$case_dir/bin/curl"
+cat >"$case_dir/bin/curl" <<'EOF'
+#!/bin/sh
+printf 'curl %s\n' "$*" >>"$EVENTS"
+output= url=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --output) output=$2; shift ;;
+    *) url=$1 ;;
+  esac
+  shift
+done
+case $url in
+  https://github.com/*) printf 'not the release\n' >"$output" ;;
+  *) exit 22 ;;
+esac
+EOF
+chmod +x "$case_dir/bin/curl"
+status=0
+bootstrap native >"$case_dir/native-libsodium" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "native with a libsodium download that is not the release exited $status, not 1"
+assert_contains "$case_dir/native-libsodium" 'building libsodium 1.0.22 from source'
+assert_contains "$case_dir/native-libsodium" 'download.libsodium.org did not give libsodium-1.0.22.tar.gz; fetching the same release from GitHub'
+assert_contains "$case_dir/native-libsodium" 'libsodium-1.0.22.tar.gz does not have the checksum toolchain/pins.env pins (LIBSODIUM_SHA256); nothing was built'
+assert_contains "$case_dir/native-libsodium" 'bootstrap: building libsodium failed'
+assert_contains "$EVENTS" 'https://download.libsodium.org/libsodium/releases/libsodium-1.0.22.tar.gz'
+assert_contains "$EVENTS" 'https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz'
+[ -z "$(find "$HOME/.wiki-toolchain" -name 'libsodium*' -print)" ] || fail "a refused libsodium left files: $(find "$HOME/.wiki-toolchain" -name 'libsodium*')"
+bootstrap check >"$case_dir/libsodium-check"
+assert_contains "$case_dir/libsodium-check" 'install libsodium 1.0.22 (built from source)'
+pass 'native builds libsodium from the pinned release, from GitHub where download.libsodium.org is refused, and refuses a download whose checksum is not the pinned one'
 
 # What toolchain/deploy-local.sh --static --backend-only needs: GHC and
 # cabal, which build the maker that does the rest of the deploy, and Node,
@@ -663,11 +721,13 @@ for kind in unknown incomplete wrong-revision; do
 done
 
 fixture missing
+rm -rf "$HOME/.wiki-toolchain"
 NODE_REPORT=v23.11.0
 export NODE_REPORT
 bootstrap check >"$case_dir/check"
 assert_contains "$case_dir/check" 'install Node 24.21.0'
 assert_contains "$case_dir/check" 'install wasm sysroot'
+assert_contains "$case_dir/check" 'install libsodium 1.0.22 (built from source)'
 [ ! -e "$HOME/.wiki-toolchain" ] || fail 'missing-tool inventory wrote state'
 pass 'check lists missing sysroot and incompatible Node without installing'
 
@@ -693,6 +753,8 @@ pass 'ghc-wasm-meta comes from its GitHub mirror when gitlab.haskell.org refuses
 fixture named-base
 base=$case_dir/srv/toolchain
 sysroot "$base"
+rm -rf "$HOME/.wiki-toolchain"
+libsodium_installed "$base"
 WIKI_TOOLCHAIN_HOME=$base
 export WIKI_TOOLCHAIN_HOME
 bootstrap check >"$case_dir/check"
@@ -1005,9 +1067,12 @@ assert_contains "$case_dir/new" "bootstrap: warning: the pinned GHC is 9.14.1; t
 assert_contains "$case_dir/new" "bootstrap: warning: the pinned cabal is 3.16.1.0; the build with 3.12.1.0 is untested here and may fail; a failure then is not this script's"
 assert_contains "$case_dir/new" "bootstrap: --system-tools: Node v24.3.0 ($case_dir/bin/node), npm 11.0.0 ($case_dir/bin/npm)"
 [ ! -e "$HOME/.wiki-toolchain" ] || fail 'system-tools, a check, wrote something'
+# libsodium is built with --system-tools too: the fixture's, as
+# toolchain/libsodium.sh leaves it, so that nothing is downloaded.
+libsodium_installed "$HOME"
 GHC_REPORT=9.10.3 bootstrap native --system-tools >"$case_dir/native" 2>&1 ||
   fail "native --system-tools with GHC 9.10.3 failed: $(cat "$case_dir/native")"
-assert_contains "$case_dir/native" "this machine's GHC 9.10.3 and cabal 3.16.1.0 (--system-tools); no wasm toolchain, Node, Chromium or fourmolu (native)"
+assert_contains "$case_dir/native" "this machine's GHC 9.10.3 and cabal 3.16.1.0 (--system-tools), libsodium 1.0.22; no wasm toolchain, Node, Chromium or fourmolu (native)"
 assert_contains "$case_dir/native" 'the pinned GHC is 9.14.1; the build with 9.10.3 is untested here'
 [ ! -e "$HOME/.ghcup" ] || fail 'native --system-tools installed ghcup'
 if grep -E '^(PATH=|export PATH)' "$HOME/.wiki-toolchain/env" >/dev/null; then fail "native --system-tools put its directories on PATH: $(cat "$HOME/.wiki-toolchain/env")"; fi
@@ -1052,6 +1117,7 @@ bootstrap native --hackage-mirror=https://hackage.example.org >"$case_dir/mirror
 [ "$status" = 2 ] || fail "--hackage-mirror without a toolchain directory exited $status, not 2"
 assert_contains "$case_dir/mirror-home" "bootstrap: --hackage-mirror writes the mirror into the toolchain's own cabal configuration, which exists only under a WIKI_TOOLCHAIN_HOME other than the home directory"
 tc=$case_dir/tc
+libsodium_installed "$tc"
 : >"$EVENTS"
 WIKI_TOOLCHAIN_HOME=$tc bootstrap native --system-tools --hackage-mirror=https://hackage.example.org >"$case_dir/mirror" 2>&1 ||
   fail "native --hackage-mirror failed: $(cat "$case_dir/mirror")"
