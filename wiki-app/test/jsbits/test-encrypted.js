@@ -66,6 +66,14 @@ function wikiTestEncServer(request) {
     const k = wikiTestEncrypted.directory.get(decodeURIComponent(m[1]));
     return k ? wikiTestEncJson(200, { user: decodeURIComponent(m[1]), keyId: k.keyId, publicKey: k.publicKey, createdAt: "2026-11-07T09:00:00Z" }) : wikiTestEncJson(404, { error: "NotFound" });
   }
+  // The plain routes of an encrypted space's pages refuse, as the server's
+  // do, so that the backend reads them through the encrypted routes.
+  const plain = path.match(/^spaces\/([^/]+)\/pages/) ?? path.match(/^pages\/([^/]+)/);
+  if (plain) {
+    const id = decodeURIComponent(plain[1]);
+    const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
+    if (s && s.space.encryption && s.readers.includes(me)) return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
+  }
   m = path.match(/^encrypted\/spaces\/([^/]+)(\/.*)?$/);
   if (m) {
     const s = wikiTestEncrypted.spaces.get(decodeURIComponent(m[1]));
@@ -233,6 +241,9 @@ const wikiTestEncAside = new Map();
 async function wiki_test_encrypted_forget_device(user) {
   wikiTestEncAside.set(user, await wikiTestEncRead(`identity:${user}`));
   await wikiTestEncKeep(`identity:${user}`, null);
+  // The page's own copy (jsbits/vault.js keeps one for its life), as a
+  // reload or another device has none.
+  globalThis.wikiVaultPageKeys?.delete(`identity:${user}`);
 }
 
 // The private key set aside, back on the device: what an unlock of the

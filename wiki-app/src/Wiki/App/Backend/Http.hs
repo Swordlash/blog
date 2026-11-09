@@ -1296,12 +1296,12 @@ inServer = "This space is encrypted: its pages are decrypted in your browser."
 -- shares it with the space's readers waiting for it.
 openKey :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError (Either KeyState SpaceKey))
 openKey sid current =
-  Map.lookup sid . (\h -> h.heldKeys) <$> readHeld >>= \case
-    Just (k, key) | k == current -> pure (Right (Right key))
-    _ ->
-      liftIO encryptionHere >>= \case
-        False -> pure (Right (Left NeedsHttps))
-        True ->
+  liftIO encryptionHere >>= \case
+    False -> pure (Right (Left NeedsHttps))
+    True ->
+      Map.lookup sid . (\h -> h.heldKeys) <$> readHeld >>= \case
+        Just (k, key) | k == current -> pure (Right (Right key))
+        _ ->
           ((\s -> s.user) <$> session) >>= \case
             Nothing -> pure (Right (Left SignInFirst))
             Just u ->
