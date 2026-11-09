@@ -1095,14 +1095,14 @@ In the order to do it, unless the owner says otherwise.
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
   - **a is done (decision 59, #184; libsodium from source, #211).** What
-    remains of it is **a2b**: an oracle test against libopaque and liboprf,
+    remains of it is **a2b** (#212): an oracle test against libopaque and liboprf,
     built from source, once their vectors are checked against the RFCs'
     final ones. A deploy with `--system-tools` still downloads libsodium's
     release (checked by its checksum); a local source, as `--perl-source`
-    gives Perl, would be a follow-up.
+    gives Perl, would be a follow-up (#214).
   - **b is done**: b1, each user's key pair in the vault the assistant
     already had (decision 60, #185), and b2, encrypted spaces over it
-    (decision 61, #209). What remains is **b3**: encrypted attachments and
+    (decision 61, #209). What remains is **b3** (#213): encrypted attachments and
     comments; rotating the key when a member is removed; an export
     decrypted in the browser; encrypting a space that already has pages,
     and turning encryption off; subspaces inside an encrypted space;
