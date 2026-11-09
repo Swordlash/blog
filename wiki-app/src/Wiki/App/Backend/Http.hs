@@ -716,7 +716,6 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
       Just _ -> pure (Right [])
       Nothing -> cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid)
 
-  --
   -- No comment write is sent for a page of an encrypted space: a new
   -- thread carries the quoted text of the page, and a comment is as
   -- private as the page it is on.
