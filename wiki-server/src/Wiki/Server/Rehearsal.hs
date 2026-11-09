@@ -495,11 +495,15 @@ comparePages was now
 -- * one through a fake OpenID Connect provider ("Wiki.Server.FakeProvider"),
 --   by signing in with it on the old program's server.
 --
--- After the migration, the first signs in on the new server as the
--- application does ("Wiki.App.Backend.Http"): an account from before
--- OPAQUE signs in the old way, which moves it to OPAQUE, so it then signs
--- in a second time, which must not use the old way. The second signs in
--- through the provider again and must be the same account.
+-- After the migration, the first signs in on the new server with its
+-- password as the application does ("Wiki.App.Backend.Http"), through the
+-- client of the @opaque@ package. Since OPAQUE (WP5.74a), @users add@
+-- registers the password through OPAQUE, so the check proves that an
+-- upgrade keeps the records it finds signing in. An old program from
+-- before OPAQUE stored a hash instead: its account signs in the old way
+-- once, which moves it to OPAQUE. So the canary signs in a second time,
+-- which must not use the old way. The second account signs in through the
+-- provider again and must be the same account.
 --
 -- For this the copy is opened to newcomers (its @access@ setting: a closed
 -- wiki makes no account for a provider's newcomer), the fake is added to

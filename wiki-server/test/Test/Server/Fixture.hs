@@ -9,6 +9,7 @@ module Test.Server.Fixture
   , withDemoRunning
   , withDemoRunningUsing
   , withDemoRestarted
+  , withDemoPlace
   , site
   , template
   , serverInfoOn
@@ -215,6 +216,17 @@ withDemoRestarted backing before after =
     staticDir <- prepared dir at demoPrepared
     x <- serveIn identity at staticDir before
     serveIn identity at staticDir (after x)
+
+-- | A place with the demo's wiki in it, not served yet, and a way to serve
+-- it: for a test that writes into the database before a server starts on
+-- it, or serves the same place more than once, one server after another.
+-- The upgrade's rehearsal does both: it prepares a copy of the wiki, has
+-- the old program serve it, then the new one.
+withDemoPlace :: Backing -> (Place -> (forall a. (Running -> IO a) -> IO a) -> IO b) -> IO b
+withDemoPlace backing act =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> withPlace backing (dir </> "data") $ \at -> do
+    staticDir <- prepared dir at demoPrepared
+    act at (serveIn identity at staticDir)
 
 -- | The static directory of a test's server in a directory, with the
 -- data directory and the database prepared as given.
