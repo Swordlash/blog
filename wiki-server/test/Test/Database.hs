@@ -168,8 +168,11 @@ withPostgresBackings selection act' = do
       restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
       let server = PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}, template}
       -- The server outlives the run, so the template is dropped at the
-      -- end. A cluster of the tests' own is deleted whole instead.
-      run (OnPostgres server) `finally` adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
+      -- end, if an example made it. A run that made none (one with
+      -- --dry-run, or with no PostgreSQL example matched) never connects,
+      -- so the server need not be up for it. A cluster of the tests' own
+      -- is deleted whole instead.
+      run (OnPostgres server) `finally` dropTemplate server
     Nothing ->
       findPostgres >>= \case
         Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
@@ -222,6 +225,13 @@ ensureTemplate server = modifyMVar_ server.template $ \ready -> do
     withPostgresConnection PgDatabase {url = encodeUtf8 (databaseUrl server.url templateName), password = Nothing} (void . migrate)
     adminStatement server ("ALTER DATABASE " <> templateName <> " WITH ALLOW_CONNECTIONS false")
   pure True
+
+-- | Drop the template database at the end of a run, if an example made
+-- it. A run that made none never connects to the server.
+dropTemplate :: PgServer -> IO ()
+dropTemplate server = do
+  made <- readMVar server.template
+  when made $ adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
 
 -- | Run one statement on the database of the server's URL, on a connection
 -- of its own: how databases are made and dropped.
