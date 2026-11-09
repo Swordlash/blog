@@ -3092,7 +3092,8 @@ body:has(.slides-view) {
    .editor-top below): the notices go to the bottom right corner of the
    window instead, above the help button. */
 @media (max-width: 760px) {
-  .editor-corner {
+  .editor-corner,
+  .editor-form.previewing .editor-corner {
     position: fixed;
     top: auto;
     right: 1rem;
