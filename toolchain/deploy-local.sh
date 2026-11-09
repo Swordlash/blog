@@ -22,7 +22,7 @@
 #                                [--texlive | --no-texlive] [--texlive-mirror URL]
 #                                [--texlive-installer URL|DIR] [--perl-source URL|DIR]
 #                                [--whats-new | --no-whats-new]
-#                                [--no-firewall] [--enable-linger]
+#                                [--no-firewall] [--no-rehearsal] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
 #
@@ -401,6 +401,14 @@
 #   --whats-new      --server: show the page again, after a run with --no-whats-new
 #                    (the first run's default)
 #   --no-firewall    leave the firewall alone
+#   --no-rehearsal   --server: deploy an upgrade without rehearsing it first. By
+#                    default the new wiki-server rehearses the upgrade on a copy of
+#                    the wiki's database before anything of the running deployment
+#                    changes (wiki-server rehearse): the program the wiki runs now
+#                    serves the copy, the new one migrates and serves it, and each
+#                    check compares what the two read (every page's title and source,
+#                    for one). A failure stops the deploy, the running wiki as it was.
+#                    For this run only
 #   --enable-linger  run `sudo loginctl enable-linger $USER`, so that the service
 #                    starts at boot and survives logging out
 #   --force          nothing any more (--prefix allows any directory but /, the home
@@ -538,6 +546,7 @@ while [ $# -gt 0 ]; do
     --perl-source) need_value $# "$1"; opt_perl_source=$2; shift ;;
     --perl-source=*) opt_perl_source=${1#*=} ;;
     --no-firewall) no_firewall=1 ;;
+    --no-rehearsal) ;;
     --enable-linger) enable_linger=1 ;;
     --force) force=1 ;;
     --stop) action=stop ;;

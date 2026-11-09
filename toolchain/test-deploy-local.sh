@@ -263,6 +263,12 @@ case \$command in
     [ -z "\${FAKE_MIGRATE_FAIL:-}" ] || { printf 'fake migration failure\n' >&2; exit 1; }
     [ -z "\$sqlite" ] || [ ! -f "\$sqlite" ] || printf 'migrated\n' >>"\$sqlite"
     printf 'The database is at version 9 of the schema.\n' ;;
+  rehearse)
+    # The upgrade's rehearsal (Maker.Deploy.Rehearse): FAKE_REHEARSE_EXIT
+    # ends it as wiki-server rehearse does, 6 for a failed check and 7 for
+    # an old program it cannot drive.
+    [ -z "\${FAKE_REHEARSE_EXIT:-}" ] || { printf 'fake rehearsal failure\n' >&2; exit "\$FAKE_REHEARSE_EXIT"; }
+    printf 'pages: passed\n' ;;
   check)
     [ -z "\${FAKE_CHECK_FAIL:-}" ] || { printf 'fake check failure: a row does not read\n' >&2; exit 5; }
     printf 'Read every table back.\n' ;;
@@ -663,6 +669,12 @@ case $name in
       'down --volumes') rm -f "$container" ;;
       'ps postgres') cat "$container" 2>/dev/null || true ;;
       'ps --status running --quiet postgres') ! grep -q '^started' "$container" 2>/dev/null || printf 'c0ffee\n' ;;
+      'exec -T postgres psql '*)
+        # The rehearsal's scratch database (Maker.Deploy.Rehearse): its
+        # statement goes to the events.
+        grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
+        shift 3
+        printf 'psql of %s: %s\n' "$project" "$*" >>"$EVENTS" ;;
       'exec -T postgres pg_dump '* | 'exec -T postgres pg_restore '*)
         grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
         shift 3
@@ -1244,6 +1256,12 @@ assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
 assert_lacks "$EVENTS" 'docker: created'
 [ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the redeploy made another password'
 assert_contains "$EVENTS" "wiki-server backup --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore"
+# The upgrade is rehearsed on a scratch database of the same container,
+# dropped before and after.
+assert_contains "$EVENTS" "wiki-server rehearse --old $HOME/wiki-demo/bin/wiki-server --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore --scratch $HOME/.config/wiki-demo/wiki-demo.rehearsal --scratch-database postgres://wiki@127.0.0.1:5433/wiki_rehearsal"
+assert_contains "$EVENTS" 'psql of wiki-demo: psql --quiet --username=wiki --dbname=wiki --command CREATE DATABASE wiki_rehearsal'
+[ "$(grep -c '^psql of wiki-demo: .*DROP DATABASE IF EXISTS wiki_rehearsal' "$EVENTS")" = 2 ] || fail 'the scratch database was not dropped before and after the rehearsal'
+[ ! -e "$HOME/.config/wiki-demo/wiki-demo.rehearsal-pg_restore" ] || fail 'the rehearsal left its pg_restore'
 # The upgrade's migration and check run on the same database, with the
 # same programs.
 for step in migrate check; do
@@ -1687,6 +1705,34 @@ assert_contains "$data/wiki.sqlite" 'written by the second'
   fail 'the restore did not come between the check and the restart'
 [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the rolled back server does not answer'
 pass 'a database that does not read back after the migration rolls the upgrade back, restoring the backup with the old binary, and names the commit'
+
+# The upgrade is rehearsed before anything of the running deployment
+# changes (Maker.Deploy.Rehearse): the new wiki-server, given the old one
+# and the running wiki's database, with a scratch directory in the state
+# directory. A failed check stops the deploy with the service running and
+# no backup taken, and the scratch directory gone; an old program the
+# rehearsal cannot drive says how to deploy without it; --no-rehearsal
+# skips it.
+: >"$EVENTS"
+out=$case_dir/rehearsal-fails
+if FAKE_REHEARSE_EXIT=6 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+assert_contains "$EVENTS" "wiki-server rehearse --old $HOME/wiki-demo/bin/wiki-server --data $HOME/wiki-demo/data --sqlite $HOME/wiki-demo/data/wiki.sqlite --scratch $HOME/.config/wiki-demo/wiki-demo.rehearsal"
+assert_contains "$out" 'the rehearsal of the upgrade failed'
+assert_contains "$out" 'The running wiki is as it was'
+assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+assert_lacks "$EVENTS" 'wiki-server backup'
+[ ! -e "$HOME/.config/wiki-demo/wiki-demo.rehearsal" ] || fail 'the rehearsal left its scratch directory'
+[ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the running server stopped answering'
+out=$case_dir/rehearsal-not-driven
+if FAKE_REHEARSE_EXIT=7 deploy --no-build >"$out" 2>&1; then fail 'an upgrade the rehearsal could not drive succeeded'; fi
+assert_contains "$out" 'run the deploy again with --no-rehearsal'
+: >"$EVENTS"
+out=$case_dir/no-rehearsal
+if FAKE_REHEARSE_EXIT=6 FAKE_BACKUP_FAIL=1 deploy --no-build --no-rehearsal >"$out" 2>&1; then fail 'deployed after a failed backup'; fi
+assert_lacks "$EVENTS" 'wiki-server rehearse'
+assert_contains "$out" '--no-rehearsal: the upgrade is not rehearsed'
+assert_contains "$EVENTS" 'wiki-server backup'
+pass 'an upgrade is rehearsed before the running deployment changes: a failed check stops it with the wiki untouched, and --no-rehearsal skips it'
 
 # A migration that fails rolls back the same way; when the restore of the
 # backup fails too, the rollback stops there, with the service stopped and

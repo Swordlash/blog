@@ -45,6 +45,7 @@ library
     Maker.Deploy.Page
     Maker.Deploy.Plan
     Maker.Deploy.Prepare
+    Maker.Deploy.Rehearse
     Maker.Deploy.State
     Maker.Deploy.Upgrade
     Maker.Deploy.Tailscale
