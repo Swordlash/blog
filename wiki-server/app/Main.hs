@@ -44,6 +44,7 @@ import Wiki.Server (ServerError (..), serve)
 import Wiki.Server.Compress (compressDirectory)
 import Wiki.Server.Console (BackupOutcome (..), CheckOutcome (..), GuideCommand, MigrateOutcome (..), OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runCheck, runGuide, runMigrate, runOidcCheck, runRestore, runUsers, usersParser)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
+import Wiki.Server.Rehearsal (RehearsalOptions, RehearsalOutcome (..), rehearsalParser, runRehearsal)
 import Wiki.Server.Storage.Backup (defaultKeep)
 import Wiki.Server.Version (serverVersion, versionReport)
 
@@ -67,6 +68,8 @@ data Command
     Migrate PlaceOptions
   | -- | Read the whole database, as the deploy does after a migration.
     Check PlaceOptions
+  | -- | Rehearse the upgrade on a copy of the running wiki.
+    Rehearse RehearsalOptions
 
 commands :: ParserInfo Command
 commands =
@@ -77,6 +80,7 @@ commands =
               <> command "restore" (info (Restore <$> restoreParser) (progDesc "Restore a backup into a data directory no server is running on"))
               <> command "migrate" (info (Migrate <$> placeOptions) (progDesc "Bring the database to this program's version of the schema, and do nothing else"))
               <> command "check" (info (Check <$> placeOptions) (progDesc "Read every row of every table as this program does, and change nothing"))
+              <> command "rehearse" (info (Rehearse <$> rehearsalParser) (progDesc "Rehearse the upgrade from the running wiki's program to this one, on a copy of its database, before a deploy"))
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
               <> command "guide" (info (Guide <$> guideParser) (progDesc "Install the guide, the wiki's documentation, or give its pages this version's text"))
@@ -152,6 +156,18 @@ main =
             traverse_ (putErrText . ("wiki-server: " <>)) lines'
             exitWith (ExitFailure 5)
           CheckFailed why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      Rehearse r ->
+        runRehearsal r >>= \case
+          Rehearsed lines' -> traverse_ putText lines'
+          ChecksFailed lines' -> do
+            traverse_ (putErrText . ("wiki-server: " <>)) lines'
+            exitWith (ExitFailure 6)
+          OldNotDriven why -> do
+            putErrText ("wiki-server: the old program could not be driven, so the upgrade was not rehearsed: " <> why)
+            exitWith (ExitFailure 7)
+          RehearsalBroken why -> do
             putErrText ("wiki-server: " <> why)
             exitWith (ExitFailure 1)
       Compress dir -> do

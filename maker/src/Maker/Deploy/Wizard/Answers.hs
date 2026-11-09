@@ -15,7 +15,7 @@
 -- >   texlive_installer=URL|DIR  perl_source=URL|DIR
 -- >   way=tailscale|cert|proxy|http tls_cert=FILE  tls_key=FILE  tls_ca=FILE
 -- >   port=N  bind=ADDRESS  admin_port=N  toolchain=DIR
--- >   fresh|refresh_page|no_build|no_firewall|enable_linger=yes|no
+-- >   fresh|refresh_page|no_build|no_firewall|no_rehearsal|enable_linger=yes|no
 -- >   whats_new=yes|no              semaphore=probe|on|off
 -- >   app_page=FILE  bundle_locally|system_tools=yes|no
 -- >   npm_registry=URL  hackage_mirror=URL
@@ -134,6 +134,7 @@ data Answers = Answers
   , noBuild :: Bool
   , semaphore :: Semaphore
   , noFirewall :: Bool
+  , noRehearsal :: Bool
   , enableLinger :: Bool
   , rememberedDownload :: Bool
   , rememberedCa :: Bool
@@ -181,6 +182,7 @@ defaultAnswers =
     , noBuild = False
     , semaphore = Probe
     , noFirewall = False
+    , noRehearsal = False
     , enableLinger = False
     , rememberedDownload = False
     , rememberedCa = False
@@ -293,6 +295,7 @@ applyAnswer a (key, v) = case key of
   "no_build" -> yesNo (\x -> a {noBuild = x})
   "semaphore" -> pick (\x -> a {semaphore = x}) [("probe", Probe), ("on", SemaphoreOn), ("off", SemaphoreOff)]
   "no_firewall" -> yesNo (\x -> a {noFirewall = x})
+  "no_rehearsal" -> yesNo (\x -> a {noRehearsal = x})
   "enable_linger" -> yesNo (\x -> a {enableLinger = x})
   _ -> Left ("unknown key " <> key)
   where

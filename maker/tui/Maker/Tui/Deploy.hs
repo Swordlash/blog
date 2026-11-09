@@ -152,6 +152,7 @@ data Name
   | NoBuildField
   | SemaphoreChoice Semaphore
   | NoFirewallField
+  | NoRehearsalField
   | LingerField
   | Scroll
   deriving (Eq, Ord, Show)
@@ -447,7 +448,15 @@ fieldsFor s a = case s of
              noFirewallL
              NoFirewallField
              "--no-firewall  leave the firewall alone"
-         , check
+         ]
+      ++ [ check
+             "An upgrade is rehearsed on a copy of the wiki before the running one changes: the old program serves the copy, the new one migrates it and checks it reads the same. This deploys without that, once."
+             noRehearsalL
+             NoRehearsalField
+             "--no-rehearsal  deploy without rehearsing the upgrade"
+         | a.mode == Server
+         ]
+      ++ [ check
              "Run sudo loginctl enable-linger, so the service starts at boot and keeps running after you log out."
              enableLingerL
              LingerField
@@ -523,12 +532,13 @@ wayL = lens (.way) (\a v -> a {way = v})
 semaphoreL :: Lens' Answers Semaphore
 semaphoreL = lens (.semaphore) (\a v -> a {semaphore = v})
 
-refreshPageL, freshL, noBuildL, noFirewallL, enableLingerL, whatsNewL :: Lens' Answers Bool
+refreshPageL, freshL, noBuildL, noFirewallL, noRehearsalL, enableLingerL, whatsNewL :: Lens' Answers Bool
 whatsNewL = lens (.whatsNew) (\a v -> a {whatsNew = v})
 refreshPageL = lens (.refreshPage) (\a v -> a {refreshPage = v})
 freshL = lens (.fresh) (\a v -> a {fresh = v})
 noBuildL = lens (.noBuild) (\a v -> a {noBuild = v})
 noFirewallL = lens (.noFirewall) (\a v -> a {noFirewall = v})
+noRehearsalL = lens (.noRehearsal) (\a v -> a {noRehearsal = v})
 enableLingerL = lens (.enableLinger) (\a v -> a {enableLinger = v})
 
 -- * The application

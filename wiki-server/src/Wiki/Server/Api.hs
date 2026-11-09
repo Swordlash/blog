@@ -445,7 +445,14 @@ handlers env caller =
                 unless counted $ liftIO (Limiter.failed env.limiter now credentials.login s.address)
                 refuse ApiError.Unauthenticated
               Right (user, token) -> do
-                liftIO (Limiter.succeeded env.limiter credentials.login s.address)
+                -- The attempt counted when its OPAQUE exchange started is
+                -- given back, as for a second factor above: a right
+                -- password was no failure, and an address with many such
+                -- sign-ins (an office behind one address) would otherwise
+                -- reach its limit.
+                liftIO $ case admitted of
+                  Just a -> Limiter.succeededAfter env.limiter a.startedAt a.login s.address
+                  Nothing -> Limiter.succeeded env.limiter credentials.login s.address
                 liftIO (prove env.proofs now (tokenHash token.text) user.id ByOldPassword)
                 startedAs s user token
     , startPasswordSignIn = \body -> do

@@ -16,7 +16,6 @@ import Network.HTTP.Types (Header)
 import Protolude
 import Test.Database (Backing)
 import Test.Hspec
-import Test.Server.FakeProvider (Fake (..), clientSecret, withFakeProvider)
 import Test.Server.Fixture
 import Web.HttpApiData (toUrlPiece)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -37,6 +36,7 @@ import Wiki.Core.Permission (Grants (access))
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), SignInProvider (..))
+import Wiki.Server.FakeProvider (Fake (..), clientSecret, withFakeProvider)
 import Wiki.Server.Mail (Message (..))
 
 spec :: Backing -> Spec

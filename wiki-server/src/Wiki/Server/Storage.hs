@@ -115,6 +115,7 @@ module Wiki.Server.Storage
     -- * Migrating and checking the database by hand
   , Migrated (..)
   , migrateDatabase
+  , withDatabase
   , CheckProblem (..)
   , TableRead (..)
   , checkDatabase
