@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The editor's notices of saves (issue #193). "Draft saved" is no longer a
+span among the buttons of `.editor-actions`, whose appearing moved them: it
+and the green "Saved" are now in `.editor-corner`, the last child of
+`.editor-top`, which the stylesheet hangs under the top's bottom right
+corner, out of the flow (on a phone, fixed in the bottom right corner of
+the window). The selectors `.editor-draft-status` and `.editor-saved-notice`
+and their texts are unchanged.
+
 Encrypted spaces (WP5.74b2). The HTTP backend reads and writes the pages of
 an encrypted space through the encrypted routes, encrypting and decrypting
 in the browser (`Wiki.App.Encrypted`, `jsbits/encrypted.js`), and searches

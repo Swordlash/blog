@@ -1,6 +1,6 @@
 // Where things are in the window, for the browser tests of what sticks
-// under the header (Test.Browser.Spaces): scroll the window, and read an
-// element's box.
+// under the header (Test.Browser.Spaces) and of what must not move
+// (Test.Browser.Editor): scroll the window, and read an element's box.
 
 // Scroll the window to a height (or as far as it goes), and wait for two
 // frames, so that the scroll's listeners have run and the page is drawn.
@@ -17,6 +17,17 @@ function wiki_test_box(selector) {
   if (!element) return "";
   const box = element.getBoundingClientRect();
   return box.top + " " + box.bottom + " " + window.innerHeight;
+}
+
+// The whole box of the first element a selector finds, in the window's
+// coordinates: "left top right bottom", or "" when there is none. The
+// editor's tests (Test.Browser.Editor) compare it before and after a notice
+// appears, to see that the notice moved nothing.
+function wiki_test_rect(selector) {
+  const element = document.querySelector(selector);
+  if (!element) return "";
+  const box = element.getBoundingClientRect();
+  return box.left + " " + box.top + " " + box.right + " " + box.bottom;
 }
 
 // Scroll the window so that the element a selector finds is at the top,

@@ -42,9 +42,10 @@ import Wiki.Core.User (Login (..), User (..))
 -- editor a file the way the browser would: test/jsbits/test-files.js.
 -- Whether a key reached the browser is read by a listener of its own:
 -- test/jsbits/test-keys.js. The colour the style sheet gives an element:
--- test/jsbits/test-style.js.
+-- test/jsbits/test-style.js. Where an element is in the window:
+-- test/jsbits/test-layout.js.
 $( browserJS
-     ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js"]
+     ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js", "jsbits/test-layout.js"]
      [ ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
      , ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
@@ -52,6 +53,7 @@ $( browserJS
      , ("js_last_key_prevented", "wiki_test_last_key_prevented", Safe, [t|IO Bool|])
      , ("js_computed_colour", "wiki_test_computed_colour", Safe, [t|JSText -> IO JSText|])
      , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_rect", "wiki_test_rect", Safe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -222,6 +224,35 @@ spec m = do
     find ui ".page-view .actions a[href$='/edit/']" >>= click
     markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# Hello, world")
     length <$> findAll ui ".editor-draft-found" `shouldReturn` 0
+
+  -- Issue #193: "Draft saved" beside the buttons pushed them along as it
+  -- appeared, so that a click meant for Save could land on Cancel.
+  it "shows Draft saved and Saved under the top bar, without moving the buttons" $ runPage $ do
+    let buttons = [".editor-save", ".editor-save-close", ".editor-cancel"]
+        -- A notice's top edge is at or below the bottom of the editor's
+        -- top, so that the notice covers none of the top's controls.
+        belowTheTop notice = do
+          box <- edges notice
+          top <- edges ".editor-top"
+          case (box, top) of
+            ([_, noticeTop, _, _], [_, _, _, topBottom]) -> noticeTop `shouldSatisfy` (>= topBottom)
+            _ -> expectationFailure ("no box for " <> notice <> " or .editor-top")
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    text <- editorText ui
+    typeText text " More."
+    -- Typing turns Cancel from a link into a button that asks first, so
+    -- the boxes are read after the typing, before the draft is saved.
+    find ui ".editor-draft-status" >>= (`shouldHaveText` "")
+    before <- traverse rectOf buttons
+    eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
+    traverse rectOf buttons `shouldReturn` before
+    belowTheTop ".editor-draft-status"
+    -- "Saved" shows in the same place. Saving drops the draft, which turns
+    -- Cancel back into a link, so only the two save buttons are compared.
+    find ui ".editor-save" >>= click
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    eventually (traverse rectOf (take 2 buttons) `shouldReturn` take 2 before)
+    belowTheTop ".editor-saved-notice"
 
   it "goes back to the page on Cancel when nothing has changed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
@@ -993,6 +1024,15 @@ previewHas ui selector expected =
 -- | A property the style sheet gives the first element a selector finds.
 computedStyle :: Text -> Text -> PageM s Text
 computedStyle selector property = unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText selector) (toJSText property))
+
+-- | Where the first element a selector finds is drawn in the window, as
+-- "left top right bottom", or "" when there is none.
+rectOf :: Text -> PageM s Text
+rectOf selector = unsafeIOToPageM (fromJSText <$> js_rect (toJSText selector))
+
+-- | The edges of 'rectOf', as numbers: left, top, right and bottom.
+edges :: Text -> PageM s [Double]
+edges selector = mapMaybe (readMaybe . T.unpack) . T.words <$> rectOf selector
 
 -- | The colour the style sheet gives the first element a selector finds.
 computedColour :: Text -> PageM s Text
