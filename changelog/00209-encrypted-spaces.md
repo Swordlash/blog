@@ -29,8 +29,12 @@ encrypted spaces whose key you hold, after decrypting their pages.
 ## Other changes
 
 What needs the server to read a page cannot be done in an encrypted space
-yet, and says why: comments, attachments, exports, feeds, link previews,
-templates, moving pages in or out, importing into it, and subspaces. The
+yet, and is not offered there: comments, attachments, drafts, exports,
+feeds, link previews, templates, moving pages in or out (a page moves
+within the space as usual), importing into it, and subspaces. Leaving the
+editor with unsaved changes offers to discard them or go on editing, since
+no draft is kept. The writing assistant works there as in any page, and
+what you ask it about goes to its provider. The
 space's name stays readable. Removing a member does not yet change the
 space's key, and the permissions say so. Encrypted spaces need the wiki's
 HTTPS address.

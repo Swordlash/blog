@@ -765,11 +765,16 @@ How it works:
 
 - The space has a key of its own, made in the browser that encrypts it.
   Each member gets the key sealed to their public key (see **Your keys**).
-  Who is a member is decided by the permissions, as for any space: a
-  reader granted on the space waits for the key until another member's
-  browser opens the space, which seals the key to them at once. A reader
-  without a key pair yet (who has not signed in since keys came) waits
-  until their first sign-in makes one.
+  Who is a member is decided by the server's permissions, as for any
+  space: a reader granted on the space waits for the key until another
+  member's browser opens the space, which seals the key to them at once,
+  without asking (the owner's decision, 2026-11-09). So a space's
+  administrator, and a global administrator who grants themselves the
+  space in its permissions, receive the key the next time a member opens
+  the space. Checking a member's key by its fingerprint, and confirming
+  each new member before the key is shared, are planned. A reader without
+  a key pair yet (who has not signed in since keys came) waits until their
+  first sign-in makes one.
 - Each page has a key of its own, encrypted with the space's key, so that
   a single page can be shared later.
 - On a device that does not hold your keys, the space shows as locked and
@@ -778,16 +783,27 @@ How it works:
   the title.
 - Search runs in your browser: the first search after the page opens
   fetches every page of each encrypted space whose key you hold and
-  decrypts it in memory, until the next change. That suits small spaces,
-  the kind encrypted spaces are for; a space of thousands of pages makes
-  that first search slow.
+  decrypts it in memory, until a change: one you make, a save the page
+  hears of, or a list of the space's pages that shows pages added or saved
+  since. A search limited to an encrypted space is not sent to the server
+  at all. That suits small spaces, the kind encrypted spaces are for; a
+  space of thousands of pages makes that first search slow.
+- The writing assistant works in encrypted pages as in any other (the
+  owner's decision, 2026-11-09): what you ask it about, the page or the
+  selection, is sent to the assistant's provider, as in any page. It is
+  not sent to the wiki's server.
 
 What the server does with a page's text cannot be done in an encrypted
 space, and is refused there with the reason: the server's search, PDF and
-Word exports, feeds and link previews, comments and attachments, drafts
-kept on the server (the editor keeps your work instead), templates, moving
-a page in or out, importing an archive into it, subspaces, and making it
-public. A whole-wiki export leaves encrypted spaces out. Notifications of
+Word exports, feeds and link previews, comments and attachments, drafts,
+templates, moving a page in or out (a page moves within the space as
+usual), importing an archive into it, subspaces, and making it public.
+The page and the editor do not offer comments, attachments or exports
+there, and your browser sends none of them, nor a page's text by the
+plain routes, even to be refused. No draft is kept, on the server or in
+your browser: **Cancel** with unsaved changes offers to discard them or
+to go on editing. A whole-wiki export leaves encrypted spaces out, and a
+whole-wiki archive is imported with every space plain. Notifications of
 a change in an encrypted space carry no title and no excerpt, and mentions
 there notify nobody: the server cannot read them.
 

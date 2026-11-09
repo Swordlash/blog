@@ -10,7 +10,10 @@ storage serves the encrypted routes (`spaceEncryption`, `encryptSpace`,
 and refuses with 409, after its permission checks, every plain path that
 reads or writes a page's text in an encrypted space; the search leaves
 encrypted spaces out, and a whole-wiki export leaves them and their pages
-out. An import into an encrypted space is refused.
+out. An import into an encrypted space is refused, and a whole-wiki
+archive is imported with every space plain, whatever it says of their
+encryption. A page moves within its encrypted space; a move to or from
+another space is refused. A grant named twice in one request is made once.
 
 The password unlocks the vault, and a reset says what it costs
 (WP5.74b1). `PUT account/password` takes the vault key wrapped for the new

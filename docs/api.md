@@ -1033,13 +1033,16 @@ and written as ciphertext, under `encrypted/`; every title and text below is
 `{"nonce", "ciphertext"}` in base64url, made in a member's browser. The
 plain routes of pages (`spaces/<space>/pages…`, `pages/<page>…`, drafts,
 history, comments, attachments, exports, post details) answer 409 for an
-encrypted space or a page in one, after their permission checks.
+encrypted space or a page in one, after their permission checks. A page's
+`move` is the exception within one encrypted space: its key and versions
+name the space and the page, not the parent, so a page moves there as in
+any space; a move to or from another space answers 409.
 
 | Method | Path | Body | Response | Errors |
 | ------ | ---- | ---- | -------- | ------ |
 | GET | `api/v1/encrypted/spaces/<space>` | | `SpaceEncryption` `{"keyId", "grant": KeyGrant or null, "pending": [{"user", "keyId", "publicKey"}], "waiting": [user id]}`; `pending` and `waiting` only for a caller holding a grant | 404, 409 (not encrypted) |
 | POST | `api/v1/encrypted/spaces/<space>` | `EncryptSpace` `{"keyId", "grant": {"recipient", "recipientKeyId", "enc", "sealed"}}`, the new key sealed to the caller's current public key | `Space`, with `encryption` | 404, 403, 400 (a part of the wrong length, another key), 409 (public, not private, has subspaces or written pages, a personal space or a blog, encrypted already) |
-| POST | `api/v1/encrypted/spaces/<space>/grants` | `NewGrants` `{"keyId", "grants": [NewGrant]}`, at most 500 | 204 | 404, 403 (no grant of the key), 400 (not a reader, a wrong length), 409 (an older key, a public key not current) |
+| POST | `api/v1/encrypted/spaces/<space>/grants` | `NewGrants` `{"keyId", "grants": [NewGrant]}`, at most 500 (a browser sends more in parts); a grant named twice is made once | 204 | 404, 403 (no grant of the key), 400 (not a reader, a wrong length), 409 (an older key, a public key not current) |
 | GET | `api/v1/encrypted/spaces/<space>/pages` | | `[SealedSummary]`: a `PageSummary` without `title` and `template`, with `pageKey` `{"keyId", "spaceKeyId", "wrapped": {"nonce", "key"}}` and `heading` `{"tag", "keyId", "title"}` | 404, 409 |
 | GET | `api/v1/encrypted/spaces/<space>/contents` | | `[SealedPage]`, each page with its latest version: what the browser's search reads | 404, 409 |
 | GET | `api/v1/encrypted/spaces/<space>/pages/at/<slug>…` | | `SealedPage` `{…, "pageKey", "content": {"tag", "keyId", "title", "body"}, "createdBy", "updatedBy"}`, with `ETag` | 404, 409 |
