@@ -877,6 +877,9 @@ userKeys m = describe "the user's keys" $ do
   -- The page's crypto is put back even when the test fails, since the
   -- tests after it share the page.
   it "signs in and changes the password on a page served over plain HTTP, without crypto.subtle, and makes no keys there" $ (`finally` js_plain_http_end) $ runPage $ do
+    -- A device that holds no key of an earlier test's, so that none is
+    -- found on it at the end unless this test made one.
+    unsafeIOToPageM (evaluate =<< js_new_device)
     unsafeIOToPageM js_plain_http
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
