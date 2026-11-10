@@ -1093,9 +1093,38 @@ confirms it against reality and the plan is amended if it does not hold.
     row shapes of its own number, in its own module, and never changes. A
     step that rewrites page syntax carries its own old-to-new rewriter,
     not the live parser. A step whose effect can be checked adds a check
-    to `Wiki.Server.Rehearsal.checks`. None exists yet; the first come
-    with #195 and #201. `knownVersion` (the last step of either kind) is
+    to `Wiki.Server.Rehearsal.checks`. None exists yet; the first comes
+    with #201 (WP5.78), since #195 as built rewrote no page. `knownVersion` (the last step of either kind) is
     the program's schema version for the open check and restore's.
+
+65. **One marker pair for the wiki's own blocks (WP5.77, #224; the owner,
+    2026-11-10, reducing #195).** A block of the wiki's own is
+    `[[!name]]{attributes}(Title)` on a line of its own, its blocks, then
+    `[[/name]]`: `spoiler` (the only one with a description in
+    parentheses), `notes`, `incremental` and `div`. Three are one line
+    with no end marker: `[[!slides]]{theme=dark aspect=4:3}`, `[[!pause]]`
+    and `[[!toc]]`. The exclamation mark keeps a block apart from a wiki
+    link (the owner: every name added later, a plugin's too, would
+    otherwise take a page's name from `[[page]]`): a page's address cannot
+    hold one, so `[[!notes]]` is never a link and `[[notes]]` always is.
+    It reads as a box's marker does, `> [!NOTE]`. Braces hold pandoc's
+    attributes (`#id`, `.class`, `key=value`), read by
+    commonmark-extensions' own reader, as a fence's and a heading's are. A
+    spoiler's name is `{answer}` or `{#answer}`, a name and not an HTML
+    id; the name in an end marker is optional. An end marker ends the
+    innermost open block of its name; with no block of that name open it
+    is the text it is. `:::`, `. . .`, `[[spoiler]]` and `[[toc]]` without
+    the mark are no longer read, on the page or in an export, and no
+    stored page was rewritten: nobody used them in production. The AST
+    keeps `Div`, `Pause` and `TableOfContents`; `markerOpening`,
+    `openingMarker` and `closingMarker` in `Wiki.Core.Markdown.Ast` are
+    the one place that spells a marker. In the export pandoc reads no
+    fenced div: each marker line is a placeholder paragraph that
+    `markedBlocks` folds into a div or a pause after pandoc has read the
+    page. Boxes stay `> [!KIND]`. Left for later: `[[!box]]{.warning}`
+    and kinds of box with a look given on the page, and completion after
+    `[[`, `[[!` and `{` (#187). Comments (`<!-- … -->`) already worked
+    (#197); the reference has a section on them.
 
 ## Repository layout
 
@@ -1163,13 +1192,10 @@ done. Stage 1,
 foundations, is done: #207 (compile times, #220, decision 63), #202
 (migrations in code, with the rest of #205: #222, decisions 58 and 64),
 and the PostgreSQL tests copying a migrated template (#221). Stage 2,
-the content's structure, on #202, is next: #195 (one marker pair,
-`[[!name]]` … `[[/name]]`, for every block of the wiki's own, reduced by the owner on 2026-11-10 from
-"one syntax for extensions and styles": WP5.77 below), #197 (comments:
-they work already, so the owner closed it on 2026-11-10; the guide's
-section on them comes with WP5.77), #201
-(one home page per space, space administrators; it brings the first step
-of the schema in code, since WP5.77 rewrites no page). Stage 3, the editor: #187 (autocompletion),
+the content's structure, on #202: #195 is done (decision 65, #224) and
+#197 was closed, since comments worked already; #201 (one home page per
+space; WP5.78 below, which brings the first step of the schema in code)
+is next. Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
 (emojis), #190 (table views). Stage 5: #191 (presentations as a kind of
@@ -1177,87 +1203,6 @@ page), #204 (calendars and TODO lists; the lists can come earlier).
 Alongside, when there is room: #213 (WP5.74b3, after #201), #212
 (WP5.74a2b), #203 (SQLite to PostgreSQL).
 
-- **WP5.77 One marker pair for the wiki's own blocks; `:::` and `. . .` go**
-  (#195; the owner, 2026-11-10). The issue asked for every
-  extension, boxes and code blocks included, in one new syntax, with a
-  rewrite of the existing pages. The owner reduced it: what annoyed was
-  `:::` in presentations. So the spoiler's marker pair, with an
-  exclamation mark in its start, becomes the form of every block of the
-  wiki's own, the fenced div and pandoc's pause are removed, and nothing
-  else changes: boxes stay `> [!KIND]` (GitHub's syntax, exported as
-  pandoc's alerts), code fences and headings keep their attributes.
-  - **The form.** `[[!name]]{attributes}(Title)` on a line of its own, the
-    blocks, then `[[/name]]` on a line of its own, for a fixed list of
-    names. The braces hold pandoc's attributes, the ones a code fence and
-    a heading take: `#id`, `.class`, `key=value`. The names: `spoiler`
-    (with its description in the parentheses, and on a heading as today:
-    `## [[!spoiler]] Question`); `notes` and `incremental` (a deck's
-    speaker notes and its lists shown item by item); `div` (a box with the
-    classes its braces give, what `::: summary` was: `[[!div]]{.summary}`);
-    and three that are one line, with no end marker:
-    `[[!slides]]{theme=dark aspect=4:3}` (the deck's look), `[[!pause]]`
-    (the next step of a slide) and `[[!toc]]` (the page's contents, in
-    place of `[[toc]]`). Only a spoiler takes parentheses.
-  - **The exclamation mark keeps blocks apart from wiki links** (the
-    owner, 2026-11-10: every name added later, a plugin's too, would
-    otherwise take a page's name from `[[page]]`). A page's address cannot
-    hold `!`, so `[[!name]]` is never a link that worked, and `[[notes]]`
-    is always a link. It reads as a box's marker does: `> [!NOTE]`,
-    `[[!notes]]`. At the start of a line `[[!…]]` is always a marker, and
-    one with a name the wiki does not have (names are lower case) is an
-    error line; in the middle of a line it is what the inline parser makes
-    of it, a link that leads nowhere. An end marker has no exclamation
-    mark: `[[/name]]` ends the innermost open block when it is of that
-    name, is an error when another block is open inside one of that name,
-    and is the wiki link it always was when no block of that name is open.
-    The forms without the mark, `[[spoiler]]…`, `[[toc]]` and `[[TOC]]`,
-    are no longer read: nobody uses them yet (the owner), so they are wiki
-    links like any other.
-  - **A spoiler's name stays its name.** `{answer}` as today, and
-    `{#answer}` reads as the same: the name the browser remembers the
-    spoiler by (`data-spoiler`), not an HTML id, so two spoilers may share
-    one and no link leads to it. The heading's form takes both spellings
-    too. A spoiler takes no class and no other attribute. The name in an
-    end marker's braces is optional (`[[/spoiler]]`); when written, it
-    must be the open spoiler's, as today.
-  - **What goes.** `:::` fenced divs and `. . .` as a pause are no longer
-    read: nobody has a presentation in production (the owner), so no page
-    is rewritten, there is no step of the schema, and the old forms show
-    as the text they are. The AST keeps `Div` and `Pause`; only what is
-    written for them changes, so the deck, the search, the contents and
-    the renderer read what they read. The export hands pandoc the same
-    divs and pauses as before, written into the text pandoc reads as the
-    spoiler's markers are; pandoc itself still reads `:::` and `. . .`, so
-    the export also keeps the ones an author wrote from being read as a
-    div or a pause: they are text in a document as on the page.
-  - **Errors** show in red where they are, with the reason, in the page
-    and through the editor's problems (decision 49), as a spoiler's do: a
-    marker that is not a whole one, parentheses on a name that takes none,
-    a name the wiki does not have, an end marker that crosses another
-    block or carries another spoiler's name, a block never closed, a pause
-    where none is read.
-  - **Everything that writes the old forms**: the guide and the Markdown
-    reference, the demo's pages, the README's examples (`Test.Readme`),
-    the built-in templates, the toolbar if it writes any, the tests, the
-    screenshots if a page they show changed.
-  - **Comments (#197, closed).** `<!-- … -->` is left out of a page already. The
-    guide gets a section of its own on comments (one line, several lines,
-    among a paragraph's text, around blocks to keep them out of the page;
-    hidden from the page, not from its readers, since "View source" shows
-    it), and tests that a comment's text is in no search hit, excerpt,
-    contents entry or exported document (the source of an HTML or EPUB
-    export included: fixed where it is found there). Completing `-->` in
-    the editor is #187's.
-  - Acceptance: the gate of `AGENTS.md`; parser tests for each name, the
-    nesting, the errors and that `:::` and `. . .` are text; the deck's
-    tests on the new forms, steps counted as before; the export's tests
-    (Beamer's `\pause` and `[<+->]`, notes, the deck's options) passing on
-    the new forms; the guide's and the README's tests.
-  - Left for later, when wanted: `[[!box]]{.warning}(Title)` beside
-    `> [!WARNING]` and kinds of box with a look given on the page (the
-    issue's `color`, `title`, `numbering`); completion of pages after
-    `[[`, of blocks after `[[!` and of attributes after `{` (#187); the
-    rest of #191.
 - **WP5.78 One home page per space, the root of its pages** (#201; the
   owner, 2026-11-10). Today a space's home page is optional
   (`Space.homePage :: Maybe PageId`), may be any of its pages at any
@@ -1591,6 +1536,17 @@ needs. Each was true when its package merged; check before relying on one.
   identity). The browser test "counts a notification
   the live channel tells of, with no page shown" failed once on #221's
   wasm job, whose change touched no application code.
+- **Marker blocks (WP5.77, #224).** A block other than a spoiler that is
+  never closed is a `MarkerError` line and then a `Div` with the class
+  `spoiler-unclosed`, so a stylesheet class is in the tree; the classes
+  `.spoiler-error` and `.spoiler-unclosed` serve every block's errors now.
+  `[[!toc]]` is read in a quotation or a list item too, where `[[toc]]`
+  was read at the top level only. `[[!div]]{.notes}` and
+  `[[!div]]{.slides}` act as notes and the deck's look. An end marker
+  indented inside a list item closes its block on the page, but the
+  export may then find the two placeholders in different lists and write
+  both lines as written; not tested. `docs/screenshots/page.png` shows
+  the Markdown guide before its contents panel gained two headings.
 - **The rehearsal and encrypted spaces (found 2026-11-10, by reading the
   code; not run).** The `pages` check lists every space's pages through
   the admin listener and leaves a space out only on 404. Listing the
