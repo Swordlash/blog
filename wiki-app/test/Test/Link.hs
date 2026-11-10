@@ -126,6 +126,15 @@ spec = describe "resolvePageLink" $ do
     let blogPost = fromMaybe (panic "no post") (head (pagesOf "blog"))
     fromDocs [] ("/l/" <> blogPost.id.text <> "/") `shouldBe` Just (PageLink (PermanentLink blogPost.id) "")
 
+  it "reads /l/ and a segment as a permanent address, even where a top-level space has the slug l" $ do
+    let docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
+        el = docs {S.id = SpaceId "space-l", S.name = "L", S.slug = mkSlug' "l", S.parent = Nothing}
+        resolve = resolvePageLink (el : spaces) (slugs ["docs"]) (rootOf "docs") (pagesOf "docs") []
+    resolve "/l/notes" `shouldBe` Just (PageLink (PermanentLink (PageId "notes")) "")
+    -- Its pages are reached by the space's own address, or by a longer path.
+    resolve "/s/l/p/notes/" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes"])) "")
+    resolve "/l/notes/more" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes", "more"])) "")
+
   it "resolves every link between the demo's pages" $
     for_ (Map.elems demo.pages) $ \p -> do
       let space = fromMaybe (panic "no space") (find (\s -> s.id == p.space) spaces)

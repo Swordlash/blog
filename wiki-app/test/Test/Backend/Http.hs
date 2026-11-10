@@ -579,6 +579,20 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
 
+  -- A permanent address the server prerendered for someone not signed in
+  -- carries its refusal; once they sign in, where the page is is asked
+  -- again, so that they arrive at the page (WP5.81).
+  it "asks again where a page is after signing in, though the page it started from carried a refusal" $ do
+    let there = PageLocation {space = slugs "team", page = slugs "on-call"}
+        locationOf r = if requestUrl r == "api/v1/pages/page-9/location" then ok there else ok (Map.elems demo.spaces)
+    (transport, asked) <- scripted (opaqueServer False signedIn locationOf)
+    env <- newHttpEnvWith transport (withPageLocation (PageId "page-9") (Left NotFound) emptyCache)
+    runHttpWiki env (atOnce (pageLocation (PageId "page-9"))) `shouldReturn` Just (Left NotFound)
+    readIORef asked `shouldReturn` []
+    _ <- runHttpWiki env (signIn "admin" (Password "correct horse"))
+    runHttpWiki env (pageLocation (PageId "page-9")) `shouldReturn` Right there
+    (\rs -> [requestUrl r | r <- rs, "location" `T.isSuffixOf` requestUrl r]) <$> readIORef asked `shouldReturn` ["api/v1/pages/page-9/location"]
+
   it "answers a wrong password without sending it, once no account from before OPAQUE is left" $ do
     (env, asked) <- backend (opaqueServer False signedIn (const (status 500 "")))
     runHttpWiki env (signIn "admin" (Password "battery staple")) `shouldReturn` Left WrongCredentials
