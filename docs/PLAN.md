@@ -983,8 +983,11 @@ confirms it against reality and the plan is amended if it does not hold.
     sign in through its client. The messages are newtypes over their wire
     bytes, read through `HasField` slices, built with one `BS.concat`;
     secrets live in memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
-    (opaque-ke compiled to wasm, audited), not this package built for wasm,
-    since there is no libsodium for wasm32-wasi (the owner, 2026-11-06); it
+    (opaque-ke compiled to wasm, audited), not this package built for wasm
+    (the owner, 2026-11-06: libsodium publishes no build for wasm32-wasi;
+    opaque-hs can since be built over one compiled for it, with its flag
+    `wasm-libsodium`, which the wiki does not use: there a secret is
+    zeroed but never locked); it
     is pinned and loaded the first time a password is used. The context is
     empty, because serenity-kit cannot set one. HKDF comes from libsodium
     1.0.19 or later, built from source by the toolchain
@@ -1658,6 +1661,13 @@ needs. Each was true when its package merged; check before relying on one.
   reported upstream yet (WP5.37).
 - Known flake: `Test.Server.Api` "logs each request…" races the log line written after
   the response under full-suite load.
+- Under load: `Test.Browser.Vault`'s check that no WebCrypto key can still be
+  exported when an example ends ("expected: 0 but got: 1") failed in 30 of
+  the file's examples in one local `npm run test-wasm` while CI's wasm job
+  ran on the same machine, and in none in the rerun on the same tree
+  (#227, 2026-11-10). CI passed on that head. Not looked into: whether the
+  check reads the page before a step that makes a key non-exportable has
+  finished.
 - The smoke tests open pages with `serviceWorkers: "block"` (their Playwright routes do
   not see a worker's traffic); new parts need the same or a context of their own.
 - The demo's address is in the README's links and in `Test.Readme.demoAddress`, and the
