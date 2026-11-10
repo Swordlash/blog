@@ -6,8 +6,10 @@
 -- from two sources.
 --
 -- * The parser's own, found here at once from the tree
---   ("Wiki.Core.Markdown.Ast"): a spoiler's marker line the page shows in
---   red, a spoiler that is not closed or that cuts a section, and a
+--   ("Wiki.Core.Markdown.Ast"): a marker line the page shows in red (a
+--   spoiler's or another block's, a block of the wiki's own not closed, a
+--   pause where none is read), a spoiler that is not closed or that cuts
+--   a section, and a
 --   quotation that starts like a box's marker but is not one (@> [!]@,
 --   @> [!Two words]@, @> [!TIP]Title@).
 -- * The islands', found later by the libraries that draw them in the
@@ -75,6 +77,10 @@ data ProblemKind
     Picture
   | -- | A block spoiler's marker, or the spoiler it starts.
     Spoiler
+  | -- | The marker of another of the wiki's own blocks
+    -- (@[[!notes]]@, @[[!pause]]@ and the others), or the block it
+    -- starts.
+    Marker
   | -- | A box's marker, @> [!KIND]@.
     Box
   deriving stock (Eq, Ord, Show, Enum, Bounded)
@@ -86,6 +92,7 @@ kindName = \case
   Diagram -> "diagram"
   Picture -> "picture"
   Spoiler -> "spoiler"
+  Marker -> "block"
   Box -> "box"
 
 -- | 'IslandPlace' is where an island that can fail is written in the
@@ -126,7 +133,7 @@ checkText source = Checked {problems = parserProblems source, islands = islandPl
 -- the spoilers' broken marker lines, the spoilers not closed or cutting a
 -- section, and the quotations that start like a box's marker but are not
 -- boxes. None when the text cannot be parsed, which CommonMark never
--- refuses. A heading spoiler (@## [[spoiler]] Question@) has no end marker
+-- refuses. A heading spoiler (@## [[!spoiler]] Question@) has no end marker
 -- and is never wrong: the parser gives it no problem. A marker pair that
 -- crosses the end of its section cuts a section, and is marked as any
 -- other pair that does.
@@ -137,9 +144,13 @@ parserProblems source = sort (spoilerLines <> spoilerHeads <> boxes)
       Right (bs, _, ms, _) -> (bs, ms)
       Left _ -> ([], [])
     spoilerLines =
-      [ Problem {from = line, to = line, kind = Spoiler, message = sentence why}
-      | A.SpoilerMarker line _ (A.Faulty _ why) <- markers
+      [ Problem {from = line, to = line, kind = if spoilerLine written then Spoiler else Marker, message = sentence why}
+      | A.MarkerLine line _ (A.Faulty written why) <- markers
       ]
+    spoilerLine written = case A.markerAt written of
+      Just (A.Opening A.SpoilerName) -> True
+      Just (A.Closing A.SpoilerName) -> True
+      _ -> False
     spoilerHeads =
       [ Problem {from = h.line, to = h.line, kind = Spoiler, message = A.spoilerProblemText h problem}
       | A.Spoiler h _ <- concatMap everyBlock tree

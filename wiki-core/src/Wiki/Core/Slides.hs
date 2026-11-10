@@ -9,28 +9,31 @@
 --   its body (a slide whose title is a level-one heading is a title slide,
 --   which a theme lays out as Beamer lays out a title page or a section
 --   page);
--- * a fenced div with the class @notes@ (@::: notes@) holds the speaker's
---   notes, removed from the body and shown to the speaker only;
+-- * a box with the class @notes@ (@[[!notes]]@ … @[[/notes]]@) holds the
+--   speaker's notes, removed from the body and shown to the speaker only;
 -- * the footnotes the slide refers to are placed at its end, rather than
 --   all at the end of the last slide;
 -- * the slide is shown in steps ('steps'), as pandoc's slide writers show
---   it. A pause, @. . .@ alone in a paragraph ('Pause'), starts the next
---   step: the content after it is shown from that step on. A box with the
---   class @incremental@ (@::: incremental@) shows the items of the lists
+--   it. A pause, @[[!pause]]@ on a line of its own ('Pause'), starts the
+--   next step: the content after it is shown from that step on. A box
+--   with the class @incremental@ (@[[!incremental]]@ … @[[/incremental]]@)
+--   shows the items of the lists
 --   in it one at a time: the first item with what comes before the list,
 --   each further item in a step of its own. A slide without either is one
 --   step.
 --
--- A heading spoiler at a slide's top level (@## [[spoiler]] Question@)
+-- A heading spoiler at a slide's top level (@## [[!spoiler]] Question@)
 -- is its heading and its section as written, in a deck: its section
 -- would otherwise take in the breaks after it and the next slides'
 -- titles, and a slide cannot show half a section.
 --
--- The deck's look is set once, anywhere in the page, by a fenced div with
--- the class @slides@ and attributes: @::: {.slides theme=dark aspect=4:3}@
--- then @:::@ (themes: @beamer@, the default, @light@ and @dark@; aspects:
--- @16:9@, the default, and @4:3@). The div shows nothing, on the page or on
--- a slide. A page with neither a break nor such a div is one slide, and
+-- The deck's look is set once, at the top level of the page, by a box
+-- with the class @slides@ and attributes, written as the line
+-- @[[!slides]]{theme=dark aspect=4:3}@ (themes: @beamer@, the default,
+-- @light@ and @dark@; aspects: @16:9@, the default, and @4:3@). The box
+-- shows nothing, on the page or on a slide. A @[[!div]]@ with the class
+-- @slides@ is read the same, its blocks left out. A page with neither a
+-- break nor such a box is one slide, and
 -- not a deck ('isDeck'): it can still be presented, but no button offers
 -- it.
 --

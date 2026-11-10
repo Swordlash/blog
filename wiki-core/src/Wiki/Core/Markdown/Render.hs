@@ -39,7 +39,7 @@
 --
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
--- on hover. @[[toc]]@ is the document's table of contents
+-- on hover. @[[!toc]]@ is the document's table of contents
 -- ("Wiki.Core.Markdown.Toc"), a @\<nav class=\"toc\">@. Task list items start with a
 -- disabled checkbox. Footnote references are @\<sup class=\"footnote-ref\">@
 -- links to @#fn-N@, titled with the note's text, which the browser shows
@@ -93,12 +93,14 @@
 -- spoiler is @\<details class=\"spoiler\" data-spoiler=\"name\">@, closed,
 -- its @\<summary>@ the description; the islands' script opens again the
 -- ones a reader left open, by their name and page. A spoiler the parser
--- found wrong ('SpoilerProblem'), and a broken marker line
--- ('SpoilerError'), show a @\<p class=\"spoiler-error\">@ with the line as
--- written and the reason; the wrong spoiler's blocks follow, as they are,
--- in a @\<div class=\"spoiler-unclosed\">@, which the stylesheet draws in
--- red. So the editor's preview shows the mistake as it is typed. A
--- heading spoiler (@## [[spoiler]] Question@) is
+-- found wrong ('SpoilerProblem'), and a marker line of any of the wiki's
+-- blocks that the parser cannot read ('MarkerError'), show a
+-- @\<p class=\"spoiler-error\">@ with the line as written and the reason;
+-- the wrong spoiler's blocks follow, as they are, in a
+-- @\<div class=\"spoiler-unclosed\">@, which the stylesheet draws in red.
+-- The parser puts the blocks of any other unclosed block in such a div
+-- itself. So the editor's preview shows the mistake as it is typed. A
+-- heading spoiler (@## [[!spoiler]] Question@) is
 -- @\<details class=\"spoiler spoiler-section\" data-spoiler=\"name\">@
 -- whose @\<summary>@ holds the heading itself, rendered as any heading
 -- is (its @id@, its link to itself), and whose other blocks are the
@@ -298,7 +300,7 @@ renderSections opts = renderSectionsWithIds opts . map ("",)
 -- footnotes, and a link in one leads to its own heading. A section with
 -- the prefix @""@ is rendered as 'renderSections' renders it.
 --
--- Raw HTML is left as written, and @[[toc]]@ lists the ids without their
+-- Raw HTML is left as written, and @[[!toc]]@ lists the ids without their
 -- prefixes: neither is in a changelog's entry.
 renderSectionsWithIds :: forall page w i. Options page w i -> [(Text, [Block])] -> [[HH.HTML w i]]
 renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "")
@@ -391,7 +393,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         Just problem -> do
           inner <- renderBlocks' bs
           pure [spoilerError h.marker (spoilerProblemText h problem), HH.div [classesProp ["spoiler-unclosed"]] inner]
-      SpoilerError written why -> pure [spoilerError written why]
+      MarkerError written why -> pure [spoilerError written why]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -399,7 +401,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       RawHtmlBlock raw -> pure (renderRawHtml opts raw)
       TableOfContents -> pure (contentsNav contents)
 
-    -- The table of contents a @[[toc]]@ shows: of the whole document, every
+    -- The table of contents a @[[!toc]]@ shows: of the whole document, every
     -- section of it.
     contents = tableOfContents (concat sections)
 
@@ -663,7 +665,7 @@ noteText = T.unwords . T.words . T.unwords . map blockText
       Div _ bs -> noteText bs
       Alert _ box bs -> T.unwords (maybe [] (pure . plainText) box.title <> [noteText bs])
       Spoiler h bs -> T.unwords [plainText h.description, noteText bs]
-      SpoilerError written _ -> written
+      MarkerError written _ -> written
       RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
       _ -> ""
 

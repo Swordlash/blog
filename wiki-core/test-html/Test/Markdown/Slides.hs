@@ -17,7 +17,7 @@ rendered opts source = either (panic . show) (renderDeck opts . deckOf) (parseMa
 spec :: Spec
 spec = describe "Slides.renderDeck" $ do
   it "renders each slide's title as its heading, its body and its notes apart" $ do
-    let slides = rendered defaultOptions "## One\n\nFirst.\n\n::: notes\nSay it.\n:::\n\n---\n\n# Two\n\nSecond."
+    let slides = rendered defaultOptions "## One\n\nFirst.\n\n[[!notes]]\nSay it.\n[[/notes]]\n\n---\n\n# Two\n\nSecond."
     length slides `shouldBe` 2
     for slides (\s -> (,,) <$> renderHtml s.title <*> renderHtml s.body <*> renderHtml s.notes)
       `shouldReturn` [ ("<h2 id=\"one\">One<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#one\"></a></h2>", "<p>First.</p>", "<p>Say it.</p>")
@@ -27,7 +27,7 @@ spec = describe "Slides.renderDeck" $ do
   it "gives the islands of every slide keys unique in the deck" $ do
     let keyed k = HH.i_ [HH.text (T.strip k.source <> show k.occurrence)]
         opts = defaultOptions {codeBlock = \k _ _ _ _ -> keyed k, mathInline = \k _ _ -> keyed k}
-        slides = rendered opts "$x$\n\n```\ncode\n```\n\n---\n\n$x$ and $x$\n\n::: notes\n```\ncode\n```\n:::"
+        slides = rendered opts "$x$\n\n```\ncode\n```\n\n---\n\n$x$ and $x$\n\n[[!notes]]\n```\ncode\n```\n[[/notes]]"
     for slides (\s -> (,) <$> renderHtml s.body <*> renderHtml s.notes)
       `shouldReturn` [ ("<p><i>x0</i></p><i>code0</i>", "")
                      , ("<p><i>x1</i> and <i>x2</i></p>", "<i>code1</i>")
@@ -50,12 +50,12 @@ spec = describe "Slides.renderDeck" $ do
                  ]
 
   it "titles a reference with its note when a pause puts the notes in a later step" $ do
-    let slides = rendered defaultOptions "A[^a].\n\n. . .\n\nB.\n\n[^a]: Note a.\n"
+    let slides = rendered defaultOptions "A[^a].\n\n[[!pause]]\n\nB.\n\n[^a]: Note a.\n"
     bodies <- traverse (\s -> renderHtml s.body) slides
     bodies `shouldSatisfy` any (T.isInfixOf "title=\"Note a.\"")
 
   it "renders a slide's steps in place, the later ones in the class that hides them" $ do
-    let deck = either (panic . show) deckOf (parseMarkdown "One\n\n. . .\n\n::: incremental\n- a\n- b\n:::\n")
+    let deck = either (panic . show) deckOf (parseMarkdown "One\n\n[[!pause]]\n\n[[!incremental]]\n- a\n- b\n[[/incremental]]\n")
         shown k = deck {slides = map (showingStep k) deck.slides}
     traverse (\s -> renderHtml s.body) (renderDeck defaultOptions (shown 1))
       `shouldReturn` [ "<p>One</p><div class=\"slide-step slide-step-later\"><div class=\"incremental\"><ul>"

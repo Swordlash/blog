@@ -1,4 +1,4 @@
--- | Headings' ids, @[[toc]]@ and the table of contents made from a page's
+-- | Headings' ids, @[[!toc]]@ and the table of contents made from a page's
 -- headings (WP4.15 of docs/PLAN.md). These run on both backends: the
 -- browser parses and lists as the server does.
 module Test.Markdown.Toc (spec) where
@@ -74,13 +74,13 @@ spec = describe "Markdown.Toc" $ do
       ids "# Intro {#start}\n\n# Start" `shouldBe` ["start", "start-2"]
     it "stay clear of an id written in braces later in the page" $
       ids "# Setup\n\n# Install {#setup}" `shouldBe` ["setup-2", "setup"]
-    it "stay clear of a fenced div's id" $
-      ids "# Box\n\n::: {#box}\nInside.\n:::" `shouldBe` ["box-2"]
+    it "stay clear of a div's id" $
+      ids "# Box\n\n[[!div]]{#box}\nInside.\n[[/div]]" `shouldBe` ["box-2"]
     it "are given to headings inside other blocks too, in document order" $
       ids "# A\n\n> # A\n\n- # A" `shouldBe` ["a", "a-2", "a-3"]
     it "are given to the export as written, with the headings that have one, footnotes last" $
       (\(_, _, _, w) -> w)
-        <$> parseWithAllMarkers "Ref[^n].\n\n## A {#x}\n\n## B\n\n::: {#d}\nIn.\n:::\n\n```haskell {#c}\nx\n```\n\n## Answer {#answer-2}\n\n[^n]: Note.\n\n    ## Inside {#in}\n"
+        <$> parseWithAllMarkers "Ref[^n].\n\n## A {#x}\n\n## B\n\n[[!div]]{#d}\nIn.\n[[/div]]\n\n```haskell {#c}\nx\n```\n\n## Answer {#answer-2}\n\n[^n]: Note.\n\n    ## Inside {#in}\n"
         `shouldBe` Right WrittenIds {headings = [Just "x", Nothing, Just "answer-2", Just "in"], taken = ["x", "d", "c", "answer-2", "in"]}
     it "are made from the text without its markup" $
       ids "# The *big* `run` [now](x)" `shouldBe` ["the-big-run-now"]
@@ -120,20 +120,18 @@ spec = describe "Markdown.Toc" $ do
     it "lists the ids the rendered page has" $
       map (\a -> a.id) (anchors (parsed "# A\n\n# A {#b}\n\n# B")) `shouldBe` ["a", "b", "b-2"]
 
-  describe "[[toc]]" $ do
+  describe "[[!toc]]" $ do
     it "on a line of its own is the table of contents" $
-      parsed "# A\n\n[[toc]]\n\nText." `shouldBe` [Heading 1 [("id", "a")] [Str "A"], TableOfContents, Para [Str "Text."]]
-    it "may be written in capitals" $
-      parsed "[[TOC]]" `shouldBe` [TableOfContents]
-    it "among other text is a wiki link to a page named toc" $
+      parsed "# A\n\n[[!toc]]\n\nText." `shouldBe` [Heading 1 [("id", "a")] [Str "A"], TableOfContents, Para [Str "Text."]]
+    it "without the exclamation mark, in capitals or not, is a wiki link to a page named toc" $ do
+      parsed "[[toc]]" `shouldBe` [Para [Link [("class", "wikilink")] "toc" "" [Str "toc"]]]
+      parsed "[[TOC]]" `shouldBe` [Para [Link [("class", "wikilink")] "TOC" "" [Str "TOC"]]]
       parsed "See [[toc]] here." `shouldBe` [Para [Str "See ", Link [("class", "wikilink")] "toc" "" [Str "toc"], Str " here."]]
-    it "with another label is a link" $
-      parsed "[[toc|the contents]]" `shouldBe` [Para [Link [("class", "wikilink")] "toc" "" [Str "the contents"]]]
     it "in code is code" $
-      parsed "`[[toc]]`" `shouldBe` [Para [Code [] "[[toc]]"]]
+      parsed "`[[!toc]]`" `shouldBe` [Para [Code [] "[[!toc]]"]]
     it "is found by hasContentsMarker" $ do
-      hasContentsMarker (parsed "# A\n\n[[toc]]") `shouldBe` True
-      hasContentsMarker (parsed "# A\n\nSee [[toc]].") `shouldBe` False
+      hasContentsMarker (parsed "# A\n\n[[!toc]]") `shouldBe` True
+      hasContentsMarker (parsed "# A\n\n[[toc]]") `shouldBe` False
 
   describe "tableOfContents" $ do
     it "nests headings by level" $
@@ -160,8 +158,8 @@ spec = describe "Markdown.Toc" $ do
     it "is not shown for fewer" $
       contentsPanel (parsed "# A\n\n## B\n\nText.") `shouldBe` Nothing
     it "is not shown when the page places the list itself" $
-      contentsPanel (parsed "[[toc]]\n\n# A\n\n## B\n\n## C") `shouldBe` Nothing
-    it "lists what [[toc]] would" $
+      contentsPanel (parsed "[[!toc]]\n\n# A\n\n## B\n\n## C") `shouldBe` Nothing
+    it "lists what [[!toc]] would" $
       contentsPanel (parsed "# A\n\n## B\n\n## C") `shouldBe` Just (tableOfContents (parsed "# A\n\n## B\n\n## C"))
 
   describe "slugs and lists" $

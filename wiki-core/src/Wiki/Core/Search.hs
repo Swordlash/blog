@@ -258,7 +258,7 @@ bodyText source =
       Div _ bs -> blocks bs
       Alert _ box bs -> foldMap ((<> "\n") . plainText) box.title <> blocks bs
       Spoiler h bs -> plainText h.description <> "\n" <> blocks bs
-      SpoilerError written _ -> written
+      MarkerError written _ -> written
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
       -- The list it stands for is the headings' text, already included.

@@ -103,7 +103,7 @@ kind = \case
   Div {} -> "div"
   Alert {} -> "alert"
   Spoiler {} -> "spoiler"
-  SpoilerError {} -> "spoiler error"
+  MarkerError {} -> "marker error"
   Footnotes _ -> "footnotes"
   RawHtmlBlock _ -> "raw"
   TableOfContents -> "toc"

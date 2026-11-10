@@ -15,13 +15,21 @@
 --
 -- * GitHub's: pipe tables, task lists, footnotes, strikethrough, autolinks
 --   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@);
+-- * the wiki's own blocks, each between two marker lines,
+--   @[[!name]]{attributes}(Title)@ and @[[/name]]@, read by the wiki's own
+--   block syntax ('markerSpec'): block spoilers,
+--   @[[!spoiler]]{name}(Description)@ … @[[/spoiler]]@ ('Spoiler'); a
+--   deck's speaker notes and its lists shown item by item, @[[!notes]]@
+--   and @[[!incremental]]@; and a box styled by its classes,
+--   @[[!div]]{.summary}@ (each a 'Div'). Three markers are one line with
+--   no end marker: @[[!slides]]{theme=dark aspect=4:3}@, the deck's look
+--   (an empty 'Div' of the class @slides@), @[[!pause]]@, which cuts a
+--   slide into steps ('Pause'), and @[[!toc]]@, where the table of
+--   contents goes ('TableOfContents');
 -- * spoilers: @||hidden||@ inline, read as the strikethrough's @~~@ is
---   read ('Hidden'), and block spoilers between two marker lines,
---   @[[spoiler]]{name}(Description)@ and @[[/spoiler]]{name}@, read by
---   the wiki's own block syntax ('spoilerSpec'; 'Spoiler'); and heading
---   spoilers, @## [[spoiler]] Question@ or @## [[spoiler]]{name} Question@,
---   which hide the heading's section ('spoilerHeadingSpec',
---   'withHeadingSections');
+--   read ('Hidden'), and heading spoilers, @## [[!spoiler]] Question@ or
+--   @## [[!spoiler]]{name} Question@, which hide the heading's section
+--   ('spoilerHeadingSpec', 'withHeadingSections');
 -- * a fence's @rows=N@ attribute, the number of lines its code shows
 --   before it scrolls ('codeRows'), and its class @numbered@, a number
 --   before each line ('codeNumbered');
@@ -41,12 +49,8 @@
 --   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
--- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
--- * pandoc's pause, @. . .@ alone in a paragraph ('Pause'), which cuts a
---   slide into steps;
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
---   @page@, except @[[toc]]@ alone in a paragraph, which marks where the
---   page's table of contents goes ('TableOfContents');
+--   @page@;
 -- * mentions, @\@login@, in text outside code, links and embeds
 --   ("Wiki.Core.Markdown.Mention" says what counts as one).
 --
@@ -80,9 +84,17 @@ module Wiki.Core.Markdown.Ast
   , parseMarkdown
   , BoxMarker (..)
   , boxMarkers
-  , SpoilerMarker (..)
-  , SpoilerRole (..)
+  , MarkerLine (..)
+  , MarkerRole (..)
   , WrittenIds (..)
+
+    -- * Markers
+  , MarkerName (..)
+  , MarkerStart (..)
+  , markerNameText
+  , openingMarker
+  , closingMarker
+  , markerAt
   , parseWithMarkers
   , parseWithAllMarkers
   , parseWithLines
@@ -141,12 +153,12 @@ data Block
     -- text.
     Heading Int Attributes [Inline]
   | ThematicBreak
-  | -- | A pause, @. . .@: a paragraph of three dots separated by spaces,
-    -- alone. A deck ("Wiki.Core.Slides") shows a slide in steps, and a
-    -- pause starts the next step; a page shows nothing for it. It is
-    -- read at the top level of the page, in boxes, in alerts and in list
-    -- items. In a quotation or a footnote the three dots stay text: there
-    -- they are more likely an omission than a pause.
+  | -- | A pause, @[[!pause]]@ on a line of its own. A deck
+    -- ("Wiki.Core.Slides") shows a slide in steps, and a pause starts the
+    -- next step; a page shows nothing for it. It is read at the top level
+    -- of the page, in boxes, in alerts, in spoilers and in list items. In
+    -- a quotation or a footnote the line is a 'MarkerError': a deck shows
+    -- a quotation and a footnote whole.
     Pause
   | BlockQuote [Block]
   | -- | Fenced or indented code: attributes, the language (the first word
@@ -164,8 +176,15 @@ data Block
   | -- | A pipe table: each column's alignment, the header's cells (none
     -- when the table has no header), and the rows' cells.
     Table [Alignment] [[Inline]] [[[Inline]]]
-  | -- | A fenced div, with its attributes (@::: warning@ gives the class
-    -- @warning@).
+  | -- | A box of blocks, with its attributes. @[[!div]]{.summary}@ …
+    -- @[[/div]]@ gives the attributes in its braces; @[[!notes]]@ and
+    -- @[[!incremental]]@ give their name as a class too (@notes@,
+    -- @incremental@), which a deck reads ("Wiki.Core.Slides"). The one
+    -- line @[[!slides]]{theme=dark}@ is an empty 'Div' of the class
+    -- @slides@: the deck's look. A block of these three names that is not
+    -- closed is a 'MarkerError' line, then a 'Div' of the class
+    -- @spoiler-unclosed@ that holds its blocks, which the page shows in
+    -- red as it shows an unclosed spoiler's.
     Div Attributes [Block]
   | -- | A box, @> [!KIND]@: its kind, its title and whether it has a
     -- number ('BoxHead'), and its blocks. GitHub's five kinds are its
@@ -174,32 +193,36 @@ data Block
     Alert AlertKind BoxHead [Block]
   | -- | A block spoiler: blocks a reader sees only once they open it,
     -- written between two lines of their own,
-    -- @[[spoiler]]{name}(Description)@ and @[[/spoiler]]{name}@. Its
-    -- head says its name, its description and whether something is
-    -- wrong with it ('SpoilerHead'). Spoilers nest: an end marker ends
-    -- the innermost open spoiler, and only when the names agree.
+    -- @[[!spoiler]]{name}(Description)@ and @[[/spoiler]]@ (or
+    -- @[[/spoiler]]{name}@). Its head says its name, its description and
+    -- whether something is wrong with it ('SpoilerHead'). Spoilers nest:
+    -- an end marker ends the innermost open block, and only when it is a
+    -- spoiler and the end marker's name, if it has one, is the
+    -- spoiler's.
     --
-    -- A heading spoiler (@## [[spoiler]] Question@) is a 'Spoiler' too,
+    -- A heading spoiler (@## [[!spoiler]] Question@) is a 'Spoiler' too,
     -- of the kind 'OnHeading': its first block is the heading, without
     -- the marker, and its other blocks are the heading's section. So
     -- everything that reads a spoiler's blocks (the contents, the
     -- headings' ids, search, the section rule) reads the heading as a
     -- heading, where it is.
     Spoiler SpoilerHead [Block]
-  | -- | A line that starts as a spoiler's marker but is not a whole one
-    -- (@[[spoiler]]@ without its name or its description), or an end
-    -- marker that ends no open spoiler: the line as written, and what is
-    -- wrong with it. The page shows it in red, so that the author sees
-    -- the mistake as they type.
-    SpoilerError Text Text
+  | -- | A marker line the page cannot read as one: a line that starts as
+    -- a marker but is not a whole one (@[[!spoiler]]@ without its name or
+    -- its description), an end marker that ends no open block, a pause
+    -- where none is read, or the start of a @notes@, @incremental@ or
+    -- @div@ block that is never closed. It holds the line as written, and
+    -- what is wrong with it. The page shows it in red, so that the author
+    -- sees the mistake as they type.
+    MarkerError Text Text
   | -- | The footnotes, in the order they were defined. Comes once, last in
     -- the document, when it has any.
     Footnotes [Footnote]
   | -- | A block of raw HTML, as written: rendered through the allowlist of
     -- "Wiki.Core.Markdown.Html", parsed as one document.
     RawHtmlBlock Text
-  | -- | @[[toc]]@ (or @[[TOC]]@) alone in a paragraph: where the page's
-    -- table of contents goes ("Wiki.Core.Markdown.Toc").
+  | -- | @[[!toc]]@ on a line of its own: where the page's table of
+    -- contents goes ("Wiki.Core.Markdown.Toc").
     TableOfContents
   deriving stock (Eq, Show)
 
@@ -268,13 +291,14 @@ data BoxHead = BoxHead
   deriving stock (Eq, Show)
 
 -- | 'SpoilerHead' is what a block spoiler's start marker,
--- @[[spoiler]]{name}(Description)@, says, and what the parser found
+-- @[[!spoiler]]{name}(Description)@, says, and what the parser found
 -- wrong with the spoiler, if anything.
 data SpoilerHead = SpoilerHead
   { name :: Text
-  -- ^ The name in braces ('validSpoilerName'). The end marker repeats
-  -- it, and the reader's browser remembers whether a spoiler is open by
-  -- its name and its page.
+  -- ^ The name in braces, @{name}@ or @{#name}@ ('validSpoilerName'). The
+  -- end marker may repeat it, and the reader's browser remembers whether
+  -- a spoiler is open by its name and its page. It is no HTML @id@: two
+  -- spoilers may share one.
   , description :: [Inline]
   -- ^ The text in parentheses, read as Markdown text: what the reader
   -- clicks to open the spoiler.
@@ -296,16 +320,16 @@ data SpoilerKind
   = -- | Between two marker lines: the summary is the start marker's
     -- description.
     BetweenMarkers
-  | -- | On a heading, @## [[spoiler]] Question@ or
-    -- @## [[spoiler]]{name} Question@: the summary is the heading, the
+  | -- | On a heading, @## [[!spoiler]] Question@ or
+    -- @## [[!spoiler]]{name} Question@: the summary is the heading, the
     -- spoiler's first block, and the rest is the heading's section, up
     -- to the next heading of the same or a higher level, or the end of
     -- the document or of the block the heading is in
     -- ('withHeadingSections'). The description is empty. The name is the
     -- one written in braces, or else the heading's @id@
     -- ('withHeadingIds'), so the reader's browser remembers a spoiler
-    -- without a name by its heading. The marker is @[[spoiler]]@ or
-    -- @[[spoiler]]{name}@ as written, and the line the heading's. Such a
+    -- without a name by its heading. The marker is @[[!spoiler]]@ or
+    -- @[[!spoiler]]{name}@ as written, and the line the heading's. Such a
     -- spoiler has no problem: it is a whole section by how it is made.
     OnHeading
   deriving stock (Eq, Show)
@@ -327,7 +351,7 @@ data SpoilerProblem
 -- marker.
 spoilerProblemText :: SpoilerHead -> SpoilerProblem -> Text
 spoilerProblemText h = \case
-  NotClosed -> "Spoiler “" <> h.name <> "” is not closed: add [[/spoiler]]{" <> h.name <> "}"
+  NotClosed -> "Spoiler “" <> h.name <> "” is not closed: add " <> closingMarker SpoilerName <> "{" <> h.name <> "}"
   CutsSection ->
     "Spoiler “"
       <> h.name
@@ -391,19 +415,19 @@ parseMarkdown = fmap fst . parseWithMarkers
 parseWithMarkers :: Text -> Either ParseError ([Block], [BoxMarker])
 parseWithMarkers = fmap (\(bs, ms, _, _) -> (bs, ms)) . parseWithAllMarkers
 
--- | Parse a page's Markdown, with the markers of its boxes and the marker
--- lines of its spoilers, each in the order of the source, and the
--- identifiers written in it ('WrittenIds'). The export rewrites the
--- source at these lines before pandoc reads it, and gives the document's
--- headings the identifiers the wiki gives them
--- ("Wiki.Server.Export.Document").
-parseWithAllMarkers :: Text -> Either ParseError ([Block], [BoxMarker], [SpoilerMarker], WrittenIds)
+-- | Parse a page's Markdown, with the markers of its boxes and its marker
+-- lines (those of spoilers and of the wiki's other blocks, and the bars of
+-- inline spoilers), each in the order of the source, and the identifiers
+-- written in it ('WrittenIds'). The export rewrites the source at these
+-- lines before pandoc reads it, and gives the document's headings the
+-- identifiers the wiki gives them ("Wiki.Server.Export.Document").
+parseWithAllMarkers :: Text -> Either ParseError ([Block], [BoxMarker], [MarkerLine], WrittenIds)
 parseWithAllMarkers source =
   ( \(Blocks bs (Markers ms ss)) ->
       let read' = map snd (toList bs)
        in ( finished read'
           , sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)
-          , sortOn (\s -> (s.spoilerLine, s.spoilerColumn)) (ordNub ss)
+          , sortOn (\s -> (s.lineAt, s.columnAt)) (ordNub ss)
           , WrittenIds {headings = writtenHeadings read', taken = concatMap writtenIds read'}
           )
   )
@@ -476,7 +500,7 @@ finished = map snd . finishedWith . map ((),)
 -- the spoiler keeps what its heading carried.
 finishedWith :: [(a, Block)] -> [(a, Block)]
 finishedWith located =
-  let grouped = withHeadingSections (map (second (withPauses . contentsMarker . withMentions)) located)
+  let grouped = withHeadingSections (map (second withMentions) located)
    in zip (map fst grouped) (withHeadingIds (withSpoilerSections (map snd grouped)))
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
@@ -495,29 +519,39 @@ data BoxMarker = BoxMarker
   }
   deriving stock (Eq, Ord, Show)
 
--- | 'SpoilerMarker' is a line of a page's source that is a spoiler's
--- marker, or starts as one: its line and the column its text starts at
--- (from 1, counted as 'BoxMarker''s are), and what the line is.
-data SpoilerMarker = SpoilerMarker
-  { spoilerLine :: Int
-  , spoilerColumn :: Int
-  , role :: SpoilerRole
+-- | 'MarkerLine' is a line of a page's source that is a marker of one of
+-- the wiki's blocks, or starts as one, or a place the bars of an inline
+-- spoiler are at: its line and the column its text starts at (from 1,
+-- counted as 'BoxMarker''s are), and what is there.
+data MarkerLine = MarkerLine
+  { lineAt :: Int
+  , columnAt :: Int
+  , role :: MarkerRole
   }
   deriving stock (Eq, Ord, Show)
 
--- | What a spoiler's marker line is, as the parser read it.
-data SpoilerRole
+-- | What a marker line is, as the parser read it.
+data MarkerRole
   = -- | The start of a spoiler: its name, and its description as
     -- written. The tree's 'Spoiler' with this line ('SpoilerHead''s
     -- @line@) says whether the spoiler is right.
     Starts Text Text
-  | -- | The end of the spoiler that starts on this line.
+  | -- | The start of a @notes@, @incremental@ or @div@ block that is
+    -- closed: the attributes of the 'Div' it makes.
+    Opens Attributes
+  | -- | The end of the block that starts on this line.
     Ends Int
-  | -- | A line the page shows in red ('SpoilerError'): the line as
+  | -- | A pause, @[[!pause]]@, read as one ('Pause').
+    Pauses
+  | -- | The deck's look, @[[!slides]]{…}@.
+    SetsSlides
+  | -- | Where the table of contents goes, @[[!toc]]@.
+    PlacesContents
+  | -- | A line the page shows in red ('MarkerError'): the line as
     -- written, and what is wrong with it.
     Faulty Text Text
-  | -- | A heading spoiler's marker, @[[spoiler]]@ or
-    -- @[[spoiler]]{name}@, starts here, and the heading's own text at
+  | -- | A heading spoiler's marker, @[[!spoiler]]@ or
+    -- @[[!spoiler]]{name}@, starts here, and the heading's own text at
     -- this column, after the marker and the spaces after it. The export
     -- removes what lies between, so a document shows the heading's text
     -- alone.
@@ -564,12 +598,11 @@ syntax =
     <> CME.taskListSpec
     <> CME.footnoteSpec
     <> alertSpec
-    <> spoilerSpec
+    <> markerSpec
     <> spoilerHeadingSpec
     <> CME.mathSpec
     <> texMathSpec
     <> CME.wikilinksSpec CME.TitleAfterPipe
-    <> CME.fencedDivSpec
     <> CME.attributesSpec
     <> CM.defaultSyntaxSpec
     <> CME.pipeTableSpec
@@ -738,29 +771,6 @@ withHeadingIds doc = evalState (traverse assign doc) (written, mempty)
       modify (first (Set.insert ident))
       pure ident
 
--- | A paragraph that is nothing but the wiki link @[[toc]]@ marks where
--- the table of contents goes. Any other link to @toc@ stays a link, to a
--- page of that name.
-contentsMarker :: Block -> Block
-contentsMarker = \case
-  Para [Link attrs dest _ [Str label]]
-    | "wikilink" `elem` classes attrs
-    , T.toLower dest == "toc"
-    , T.toLower label == "toc" ->
-        TableOfContents
-  other -> other
-
--- | A block with its pauses ('Pause') read: each paragraph of three dots
--- separated by spaces, where a pause is read.
-withPauses :: Block -> Block
-withPauses = \case
-  Para [Str t] | T.words t == [".", ".", "."] -> Pause
-  Div attrs bs -> Div attrs (map withPauses bs)
-  Alert kind title bs -> Alert kind title (map withPauses bs)
-  Spoiler h bs -> Spoiler h (map withPauses bs)
-  List kind items -> List kind [ListItem task (map withPauses bs) | ListItem task bs <- items]
-  other -> other
-
 ----------------------------------------------------------------------
 -- Mentions
 
@@ -899,7 +909,7 @@ sectionLevels = concatMap $ \case
 -- of the inline spoilers among them are in the source ('InlineBars'), for
 -- the export, and whether they are an inline spoiler just made, whose
 -- place the parser gives next ('CM.Rangeable').
-data Inlines = Inlines (Seq Inline) [SpoilerMarker] Bool
+data Inlines = Inlines (Seq Inline) [MarkerLine] Bool
   deriving stock (Show)
 
 instance Semigroup Inlines where
@@ -916,7 +926,7 @@ wrapping :: ([Inline] -> Inline) -> Inlines -> Inlines
 wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) False
 
 -- | Where the bars of the inline spoilers among some inlines are.
-barsOf :: Inlines -> [SpoilerMarker]
+barsOf :: Inlines -> [MarkerLine]
 barsOf (Inlines _ bs _) = bs
 
 -- | Blocks made of some inlines, with the bars of their inline spoilers.
@@ -932,7 +942,7 @@ data Blocks = Blocks (Seq (Maybe Int, Block)) Markers
 
 -- | The markers of boxes and of spoilers among some blocks, nested ones
 -- too.
-data Markers = Markers [BoxMarker] [SpoilerMarker]
+data Markers = Markers [BoxMarker] [MarkerLine]
   deriving stock (Show)
 
 instance Semigroup Markers where
@@ -974,7 +984,7 @@ instance CM.Rangeable Inlines where
     Inlines xs bs True
       | Just (start, _) <- head ranges
       , Just (_, end) <- lastMay ranges ->
-          Inlines xs (bs <> [SpoilerMarker (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) False
+          Inlines xs (bs <> [MarkerLine (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) False
     Inlines xs bs _ -> Inlines xs bs False
 
 -- | The parser says where each block is once it has made it, innermost
@@ -1001,7 +1011,7 @@ instance CM.HasAttributes Blocks where
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
         -- A heading spoiler's attributes are its heading's
-        -- (@## [[spoiler]] Question {#q}@).
+        -- (@## [[!spoiler]] Question {#q}@).
         Spoiler h (Heading l attrs xs' : rest) | h.kind == OnHeading -> Spoiler h (Heading l (attrs <> new) xs' : rest)
         CodeBlock attrs lang t -> codeBlockWith (attrs <> new) lang t
         Div attrs xs' -> Div (attrs <> new) xs'
@@ -1077,9 +1087,6 @@ instance CME.HasFootnote Inlines Blocks where
   -- is referenced; here they are shown once, in 'Footnotes'.
   footnoteRef number label _ = inline (FootnoteRef (fromMaybe 0 (readMaybe number)) label)
 
-instance CME.HasDiv Blocks where
-  div_ = around (Div [])
-
 -- | Boxes, @> [!KIND]@ with an optional title after the marker: GitHub's
 -- alerts and the wiki's own kinds ("Wiki.Core.Markdown.Box").
 --
@@ -1097,9 +1104,9 @@ instance CME.HasDiv Blocks where
 alertSpec :: CM.SyntaxSpec Identity Inlines Blocks
 alertSpec = mempty {CM.syntaxBlockSpecs = [alertBlockSpec]}
 
--- | What 'alertBlockSpec' keeps of a box's marker line until the box is
+-- | 'AlertLine' is what 'alertBlockSpec' keeps of a box's marker line until the box is
 -- made: the marker, and the tokens of the title.
-data MarkerLine = MarkerLine BoxMarker [CM.Tok]
+data AlertLine = AlertLine BoxMarker [CM.Tok]
 
 alertBlockSpec :: CM.BlockSpec Identity Inlines Blocks
 alertBlockSpec =
@@ -1126,7 +1133,7 @@ alertBlockSpec =
             title = mfilter (not . T.null) (Just (T.strip (CM.untokenize rest)))
             marker = BoxMarker {markerLine = Parsec.sourceLine at, markerColumn = Parsec.sourceColumn at, boxKind = kind, boxTitle = title, boxNumbered = not starred}
         CM.addNodeToStack $
-          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn (MarkerLine marker titleToks), CM.blockStartPos = [pos]} []
+          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn (AlertLine marker titleToks), CM.blockStartPos = [pos]} []
         pure CM.BlockStartMatch
     , CM.blockCanContain = const True
     , CM.blockContainsLines = False
@@ -1138,9 +1145,9 @@ alertBlockSpec =
         _ <- CM.gobbleUpToSpaces 1
         pure (pos, n)
     , CM.blockConstructor = \node -> do
-        let MarkerLine marker titleToks =
+        let AlertLine marker titleToks =
               fromMaybe
-                (MarkerLine BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing, boxNumbered = True} [])
+                (AlertLine BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing, boxNumbered = True} [])
                 (fromDynamic (CM.blockData (rootLabel node)))
         written <- if null titleToks then pure Nothing else Just <$> CM.runInlineParser titleToks
         inside <- mconcat <$> CM.renderChildren node
@@ -1162,196 +1169,440 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
     -- next, is kept as its bars'.
     hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs True
 
--- | Block spoilers: the blocks between @[[spoiler]]{name}(Description)@
--- and @[[/spoiler]]{name}@, each marker a line of its own (indented by at
--- most three spaces, as other blocks may be). The blocks inside need no
--- prefix: code, lists, tables and other spoilers go in as they are. The
--- spoiler is a container on the block parser's stack, as a fenced div is,
--- so spoilers nest, and the inline parser never sees a marker: a line
--- that starts with @[[spoiler]]@ is never a wiki link.
+-- | The wiki's own blocks, each written between two marker lines of its
+-- own, @[[!name]]{attributes}(Title)@ and @[[/name]]@, indented by at most
+-- three spaces, as other blocks may be. The names are those of
+-- 'MarkerName':
 --
--- An end marker ends the innermost open spoiler, and only when its name is
--- that spoiler's. Any other end marker, and a start marker without its
--- name in braces or its description in parentheses, is a 'SpoilerError'
--- line, which opens and ends nothing. A spoiler whose container (the
--- document, a quotation, a list item) ends before its end marker is
--- 'NotClosed'. An end marker in code, in a block of HTML or in a
--- paragraph's lazy line is not read as one, as a fenced div's end is not.
-spoilerSpec :: CM.SyntaxSpec Identity Inlines Blocks
-spoilerSpec = mempty {CM.syntaxBlockSpecs = [spoilerBlockSpec]}
+-- * @[[!spoiler]]{name}(Description)@ starts a block spoiler
+--   ('Spoiler'). Its braces hold its name alone, @{name}@ or @{#name}@.
+--   It is the one marker that takes a description in parentheses.
+-- * @[[!notes]]@, @[[!incremental]]@ and @[[!div]]@, with attributes in
+--   braces or none, start a 'Div' with those attributes, the first two
+--   with their name as a class too.
+-- * @[[!slides]]@, with the deck's options in braces or none,
+--   @[[!pause]]@ and @[[!toc]]@ are one line each, with no end marker.
+--
+-- The braces hold pandoc's attributes, @#id@, @.class@ and @key=value@,
+-- read by commonmark-extensions' reader of a fence's and a heading's
+-- attributes ('CME.pAttributes').
+--
+-- The exclamation mark keeps the blocks apart from wiki links: a page's
+-- address cannot hold one. So a line that starts with @[[!@ and a name
+-- in brackets is always a marker, and one with a name the wiki does not
+-- have is a 'MarkerError' line. In the middle of a line, @[[!notes]]@ is
+-- what the inline parser makes of it.
+--
+-- The blocks inside need no prefix: code, lists, tables and other marked
+-- blocks go in as they are. An open block is a container on the block
+-- parser's stack, so blocks nest, and the inline parser never sees a
+-- marker.
+--
+-- An end marker has no exclamation mark. It ends the innermost open
+-- block when the block has its name and, for a spoiler, when the name in
+-- its braces, if it has one, is the spoiler's. When no block of its name
+-- is open, the line is not a marker but the text it is (a wiki link to
+-- @/name@). When one is open but the end marker cannot end it (another
+-- block is open inside it, the names differ, something follows the
+-- marker), the line is a 'MarkerError', which ends nothing. So is a line
+-- that starts as a start marker and is not a whole one, and a pause in a
+-- quotation or a footnote. A block whose container (the document, a
+-- quotation, a list item) ends before its end marker is not closed: a
+-- spoiler is 'NotClosed', and any other block is a 'MarkerError' line
+-- followed by its blocks. An end marker in code, in a block of HTML or in
+-- a paragraph's lazy line is not read as one.
+markerSpec :: CM.SyntaxSpec Identity Inlines Blocks
+markerSpec = mempty {CM.syntaxBlockSpecs = [markerBlockSpec]}
 
--- | A marker line as 'readSpoilerMarker' reads it.
-data MarkerText
-  = -- | @[[spoiler]]{name}(Description)@: the name and the description.
-    StartText Text Text
-  | -- | @[[/spoiler]]{name}@: the name.
-    EndText Text
-  | -- | A line that starts as a marker and is not a whole one: why.
-    BrokenText Text
+-- | 'MarkerName' is the name of one of the wiki's own blocks, as its
+-- markers write it between their brackets, in lower case.
+data MarkerName
+  = -- | A block spoiler.
+    SpoilerName
+  | -- | A deck's speaker notes.
+    NotesName
+  | -- | Lists a deck shows item by item.
+    IncrementalName
+  | -- | A box styled by its classes.
+    DivName
+  | -- | The deck's look, one line.
+    SlidesName
+  | -- | The next step of a slide, one line.
+    PauseName
+  | -- | Where the page's table of contents goes, one line.
+    TocName
+  deriving stock (Eq, Show, Enum, Bounded)
+
+-- | A marker's name as its markers write it.
+markerNameText :: MarkerName -> Text
+markerNameText = \case
+  SpoilerName -> "spoiler"
+  NotesName -> "notes"
+  IncrementalName -> "incremental"
+  DivName -> "div"
+  SlidesName -> "slides"
+  PauseName -> "pause"
+  TocName -> "toc"
+
+-- | The text a start marker begins with, @[[!notes]]@: what
+-- 'markerOpening' reads, and what the toolbar and the messages write.
+openingMarker :: MarkerName -> Text
+openingMarker name = "[[!" <> markerNameText name <> "]]"
+
+-- | An end marker without a name, @[[/notes]]@.
+closingMarker :: MarkerName -> Text
+closingMarker name = "[[/" <> markerNameText name <> "]]"
+
+-- | 'MarkerStart' is what a line that starts as a marker starts with.
+data MarkerStart
+  = -- | A start marker of one of the wiki's names, @[[!notes]]@.
+    Opening MarkerName
+  | -- | An end marker of one of the names of a block that holds
+    -- others, @[[/notes]]@.
+    Closing MarkerName
+  | -- | A start marker of a name the wiki does not have, as written
+    -- between @[[!@ and @]]@.
+    UnknownName Text
   deriving stock (Eq, Show)
 
--- | What a line is, if it starts as a spoiler's marker: its text from the
--- first non-space, without the white space at its end.
-readSpoilerMarker :: Text -> Maybe MarkerText
-readSpoilerMarker written
-  | Just rest <- T.stripPrefix "[[spoiler]]" written = Just (start (T.stripStart rest))
-  | Just rest <- T.stripPrefix "[[/spoiler]]" written = Just (end (T.stripStart rest))
-  | otherwise = Nothing
+-- | The marker at the start of some tokens, if they start with one, and
+-- the tokens after it. This, with 'openingMarker' and 'closingMarker', is
+-- the one place that says how a marker is spelled and so how it is told
+-- from a wiki link.
+markerOpening :: [CM.Tok] -> Maybe (MarkerStart, [CM.Tok])
+markerOpening = either (const Nothing) Just . Parsec.parse (try opening <|> closing) "marker"
   where
-    start rest = case braced rest of
-      Nothing -> BrokenText "a spoiler needs its name in braces after [[spoiler]], as in [[spoiler]]{name}(Description)"
-      Just (name, after)
-        | not (validSpoilerName name) -> BrokenText badName
-        | otherwise -> case T.uncons (T.stripStart after) of
-            -- From the parenthesis after the name to the last one.
-            Just ('(', inside) | (described, trailing) <- T.breakOnEnd ")" inside, not (T.null described) -> described' name (T.strip (T.dropEnd 1 described)) trailing
-            _ -> BrokenText "a spoiler needs a description in parentheses after its name, as in [[spoiler]]{name}(Description)"
-    described' name description trailing
-      | not (T.null (T.strip trailing)) = BrokenText "nothing may follow the description's closing parenthesis"
-      | T.null description = BrokenText "a spoiler needs a description in its parentheses, as in [[spoiler]]{name}(Description)"
-      | otherwise = StartText name description
-    end rest = case braced rest of
-      Nothing -> BrokenText "an end marker needs the spoiler's name in braces, as in [[/spoiler]]{name}"
-      Just (name, after)
-        | not (validSpoilerName name) -> BrokenText badName
-        | not (T.null (T.strip after)) -> BrokenText "nothing may follow an end marker's name"
-        | otherwise -> EndText name
-    badName = "a spoiler's name is one word of letters, digits, - and _"
-    braced t = case T.uncons t of
-      Just ('{', rest) | (inside, close) <- T.breakOn "}" rest, not (T.null close) -> Just (inside, T.drop 1 close)
-      _ -> Nothing
+    opening = do
+      _ <- CM.symbol '['
+      _ <- CM.symbol '['
+      _ <- CM.symbol '!'
+      written <- many (CM.satisfyTok (\t -> not (CM.hasType (CM.Symbol ']') t || CM.hasType CM.LineEnd t)))
+      brackets
+      let text = CM.untokenize written
+      (maybe (UnknownName text) Opening (named text),) <$> Parsec.getInput
+    closing = do
+      _ <- CM.symbol '['
+      _ <- CM.symbol '['
+      _ <- CM.symbol '/'
+      word <- CM.satisfyWord (const True)
+      name <- maybe mzero pure (mfilter holdsBlocks (named (CM.tokContents word)))
+      brackets
+      (Closing name,) <$> Parsec.getInput
+    brackets = CM.symbol ']' *> void (CM.symbol ']')
+    named text = find (\n -> markerNameText n == text) [minBound .. maxBound]
 
--- | What the parser keeps of an open spoiler until it is made: what its
--- start marker said, where the marker is, and where its end marker was
--- once one has ended it.
-data OpenSpoiler = OpenSpoiler
-  { openName :: Text
+-- | Whether a block of this name holds other blocks, and so has an end
+-- marker.
+holdsBlocks :: MarkerName -> Bool
+holdsBlocks = (`elem` [SpoilerName, NotesName, IncrementalName, DivName])
+
+-- | The marker a text starts with, if any ('markerOpening'), for a caller
+-- that has a line as text.
+markerAt :: Text -> Maybe MarkerStart
+markerAt t = fst <$> markerOpening (CM.tokenize "marker" t)
+
+-- | A marker line as 'readMarker' reads it.
+data MarkerText
+  = -- | @[[!spoiler]]{name}(Description)@: the name, the description,
+    -- and the description's tokens.
+    SpoilerText Text Text [CM.Tok]
+  | -- | The start of a @notes@, @incremental@ or @div@ block, with the
+    -- attributes in its braces.
+    OpenText MarkerName Attributes
+  | -- | A whole end marker, with the name in its braces if it has one.
+    EndText MarkerName (Maybe Text)
+  | -- | An end marker that is not a whole one: why.
+    BrokenEnd MarkerName Text
+  | -- | A marker of one line, and the block it makes: @[[!slides]]@ and
+    -- its attributes, @[[!pause]]@ or @[[!toc]]@.
+    LineText MarkerName Block
+  | -- | A line that starts as a start marker and is not a whole one: why.
+    BrokenText Text
+  deriving stock (Show)
+
+-- | What braces hold, as 'bracedAt' reads them.
+data Braced
+  = -- | Attributes, @{#id .class key=value}@.
+    Attributed Attributes
+  | -- | Anything else up to the first closing brace, as written.
+    Bare Text
+  | -- | An opening brace that no brace closes.
+    Unclosed
+
+-- | The braces at the start of some tokens, if they start with one: what
+-- they hold, and the tokens after them. Attributes are read by
+-- commonmark-extensions' own reader, as a fence's are.
+bracedAt :: [CM.Tok] -> Maybe (Braced, [CM.Tok])
+bracedAt toks = case toks of
+  brace : rest
+    | CM.hasType (CM.Symbol '{') brace -> Just $ case Parsec.parse ((,) <$> CME.pAttributes <*> Parsec.getInput) "attributes" toks of
+        Right (attrs, after) -> (Attributed attrs, after)
+        Left _ -> case break (CM.hasType (CM.Symbol '}')) rest of
+          (inside, _ : after) -> (Bare (CM.untokenize inside), after)
+          (_, []) -> (Unclosed, [])
+  _ -> Nothing
+
+-- | A spoiler's name from its braces: @{name}@, or @{#name}@, which is
+-- the same name and no HTML @id@. Or why the braces hold no name.
+spoilerNameIn :: Braced -> Either Text Text
+spoilerNameIn = \case
+  Bare name | validSpoilerName name -> Right name
+  Attributed [("id", name)]
+    | validSpoilerName name -> Right name
+    | otherwise -> Left badSpoilerName
+  Attributed _ -> Left ("a spoiler's braces hold its name alone, with no class or other attribute, as in " <> openingMarker SpoilerName <> "{name}(Description)")
+  _ -> Left badSpoilerName
+
+badSpoilerName :: Text
+badSpoilerName = "a spoiler's name is one word of letters, digits, - and _"
+
+-- | Whether some tokens are only white space.
+blankToks :: [CM.Tok] -> Bool
+blankToks = all spaceTok
+
+spaceTok :: CM.Tok -> Bool
+spaceTok t = CM.hasType CM.Spaces t || CM.hasType CM.UnicodeSpace t
+
+-- | What a line is, if it starts as a marker: its tokens from the first
+-- non-space.
+readMarker :: [CM.Tok] -> Maybe MarkerText
+readMarker toks = do
+  (marker, rest) <- markerOpening toks
+  pure $ case marker of
+    Opening name -> start name (dropWhile spaceTok rest)
+    Closing name -> end name (dropWhile spaceTok rest)
+    UnknownName written ->
+      BrokenText
+        ( "“"
+            <> written
+            <> "” is not a name of the wiki's blocks, which are "
+            <> T.intercalate ", " (map markerNameText [minBound .. maxBound])
+            <> ", in lower case"
+        )
+  where
+    start name rest = case name of
+      SpoilerName -> spoiler rest
+      SlidesName -> case bracedAt rest of
+        Nothing | blankToks rest -> LineText SlidesName (Div [("class", "slides")] [])
+        Just (Attributed attrs, after) | blankToks after -> LineText SlidesName (Div (("class", "slides") : attrs) [])
+        Just (Attributed _, _) -> BrokenText (nothingAfter name)
+        _ -> BrokenText ("the braces after " <> openingMarker SlidesName <> " hold the deck's options, as in " <> openingMarker SlidesName <> "{theme=dark aspect=4:3}")
+      PauseName -> alone name Pause rest
+      TocName -> alone name TableOfContents rest
+      _ -> case bracedAt rest of
+        Nothing -> box name [] rest
+        Just (Attributed attrs, after) -> box name attrs (dropWhile spaceTok after)
+        Just _ -> BrokenText ("the braces after " <> openingMarker name <> " hold attributes, #id, .class or key=value, as in " <> openingMarker DivName <> "{.summary}")
+    alone name b rest
+      | blankToks rest = LineText name b
+      | otherwise = BrokenText ("nothing may follow " <> openingMarker name <> " on its line")
+    box name attrs after
+      | blankToks after = OpenText name attrs
+      | (t : _) <- after, CM.hasType (CM.Symbol '(') t = BrokenText ("only a spoiler takes a description in parentheses, as in " <> openingMarker SpoilerName <> "{name}(Description)")
+      | otherwise = BrokenText (nothingAfter name)
+    nothingAfter name = "nothing may follow " <> openingMarker name <> " and its braces on its line"
+    spoiler rest = case bracedAt rest of
+      Just (braced, after) | not (isUnclosed braced) -> case spoilerNameIn braced of
+        Left why -> BrokenText why
+        Right name -> case dropWhile spaceTok after of
+          -- From the parenthesis after the name to the last one.
+          open : inside
+            | CM.hasType (CM.Symbol '(') open
+            , (trailing, _ : described) <- break (CM.hasType (CM.Symbol ')')) (reverse inside) ->
+                described' name (trim (reverse described)) (reverse trailing)
+          _ -> BrokenText ("a spoiler needs a description in parentheses after its name, as in " <> openingMarker SpoilerName <> "{name}(Description)")
+      _ -> BrokenText ("a spoiler needs its name in braces after " <> openingMarker SpoilerName <> ", as in " <> openingMarker SpoilerName <> "{name}(Description)")
+    isUnclosed = \case
+      Unclosed -> True
+      _ -> False
+    described' name descriptionToks trailing
+      | not (blankToks trailing) = BrokenText "nothing may follow the description's closing parenthesis"
+      | T.null description = BrokenText ("a spoiler needs a description in its parentheses, as in " <> openingMarker SpoilerName <> "{name}(Description)")
+      | otherwise = SpoilerText name description descriptionToks
+      where
+        description = T.strip (CM.untokenize descriptionToks)
+    trim = reverse . dropWhile spaceTok . reverse . dropWhile spaceTok
+    -- Only a spoiler's end marker may name it.
+    end name rest = case bracedAt rest of
+      Nothing
+        | blankToks rest -> EndText name Nothing
+        | otherwise -> BrokenEnd name ("nothing may follow " <> closingMarker name <> " on its line")
+      Just (braced, after)
+        | name /= SpoilerName -> BrokenEnd name ("nothing may follow " <> closingMarker name <> " on its line")
+        | otherwise -> case spoilerNameIn braced of
+            Left why -> BrokenEnd name why
+            Right named
+              | blankToks after -> EndText name (Just named)
+              | otherwise -> BrokenEnd name "nothing may follow an end marker's name"
+
+-- | What the parser keeps of an open block until it is made: its name,
+-- what its start marker said, where the marker is, and where its end
+-- marker was once one has ended it.
+data OpenBlock = OpenBlock
+  { openKind :: MarkerName
+  , openName :: Maybe Text
+  -- ^ A spoiler's name, which its end marker may repeat.
+  , openAttributes :: Attributes
+  -- ^ The attributes of the 'Div' a block other than a spoiler makes.
   , openDescription :: Text
   , openDescriptionToks :: [CM.Tok]
-  -- ^ The description's tokens, where the source has them, so that the
-  -- places of the inline spoilers in it are the source's.
+  -- ^ A spoiler's description, and its tokens, which are the source's,
+  -- so that the places of the inline spoilers in it are the source's.
   , openMarker :: Text
   , openLine :: Int
   , openColumn :: Int
   , ended :: Maybe (Int, Int)
   }
 
-spoilerBlockSpec :: CM.BlockSpec Identity Inlines Blocks
-spoilerBlockSpec =
+-- | The attributes of the 'Div' a block makes: its braces', after the
+-- block's name as a class for @notes@ and @incremental@.
+divAttributes :: MarkerName -> Attributes -> Attributes
+divAttributes name attrs = case name of
+  NotesName -> ("class", "notes") : attrs
+  IncrementalName -> ("class", "incremental") : attrs
+  _ -> attrs
+
+-- | Why a whole end marker ends no block, given the blocks open where it
+-- is, the innermost first, by their names; one of them has the end
+-- marker's name.
+endProblem :: MarkerName -> Maybe Text -> [(MarkerName, Maybe Text)] -> Text
+endProblem name named open = case open of
+  innermost : outer
+    | fits innermost -> "an end marker ends its block only outside the quotations and boxes inside the block"
+    | any fits outer -> case innermost of
+        (SpoilerName, n) -> "the innermost open spoiler is “" <> fromMaybe "" n <> "”: end it first"
+        (other, _) -> "the innermost open block is " <> openingMarker other <> ": end it first with " <> closingMarker other
+  _ -> "no open spoiler of this name"
+  where
+    fits (k, n) = k == name && maybe True (\w -> n == Just w) named
+
+-- | Why a block other than a spoiler is not closed.
+notClosed :: MarkerName -> Text
+notClosed name = "the " <> openingMarker name <> " block is not closed: add " <> closingMarker name <> " after its last line"
+
+markerBlockSpec :: CM.BlockSpec Identity Inlines Blocks
+markerBlockSpec =
   CM.BlockSpec
-    { CM.blockType = "Spoiler"
+    { CM.blockType = "Marker"
     , CM.blockStart = do
         CM.nonindentSpaces
         pos <- getPosition
         toks <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
+        stack <- CM.nodeStack <$> getState
         let written = T.stripEnd (CM.untokenize toks)
             line = Parsec.sourceLine pos
             column = Parsec.sourceColumn pos
-            broken why = CM.addNodeToStack (Node (CM.defBlockData spoilerErrorSpec) {CM.blockData = toDyn (SpoilerMarker line column (Faulty written why)), CM.blockStartPos = [pos]} [])
-        case readSpoilerMarker written of
+            oneLine b role = CM.addNodeToStack (Node (CM.defBlockData markerLineSpec) {CM.blockData = toDyn (b, MarkerLine line column role), CM.blockStartPos = [pos]} [])
+            broken why = oneLine (MarkerError written why) (Faulty written why)
+            opened o = CM.addNodeToStack (Node (CM.defBlockData markerBlockSpec) {CM.blockData = toDyn o, CM.blockStartPos = [pos]} [])
+            block' kind name attributes description descriptionToks =
+              OpenBlock {openKind = kind, openName = name, openAttributes = attributes, openDescription = description, openDescriptionToks = descriptionToks, openMarker = written, openLine = line, openColumn = column, ended = Nothing}
+            specOf n = CM.blockType (CM.blockSpec (rootLabel n))
+            open = [(o.openKind, o.openName) | n <- stack, Just o <- [openOf n]]
+            -- An end marker is one only where a block of its name is open;
+            -- elsewhere it is the text it is.
+            ending kind why = do
+              guard (any ((== kind) . fst) open)
+              broken why
+        case readMarker toks of
           Nothing -> mzero
-          Just (StartText name description) ->
-            CM.addNodeToStack $
-              Node (CM.defBlockData spoilerBlockSpec) {CM.blockData = toDyn OpenSpoiler {openName = name, openDescription = description, openDescriptionToks = descriptionToks toks, openMarker = written, openLine = line, openColumn = column, ended = Nothing}, CM.blockStartPos = [pos]} []
-          -- An end marker that ended its spoiler was taken by the
-          -- spoiler's continuation ('closesSpoiler'), so this one ends
-          -- none.
-          Just (EndText name) -> do
-            open <- openSpoilers
-            broken $ case open of
-              [] -> "no spoiler is open here"
-              innermost : outer
-                | name `elem` outer -> "the innermost open spoiler is “" <> innermost <> "”: end it first"
-                | otherwise -> "no open spoiler of this name"
+          Just (SpoilerText name description descriptionToks) -> opened (block' SpoilerName (Just name) [] description descriptionToks)
+          Just (OpenText kind attrs) -> opened (block' kind Nothing (divAttributes kind attrs) "" [])
+          -- An end marker that ended its block was taken by the block's
+          -- continuation ('closesBlock'), so this one ends none.
+          Just (EndText kind named) -> ending kind (endProblem kind named open)
+          Just (BrokenEnd kind why) -> ending kind why
+          Just (LineText PauseName _)
+            | any ((`elem` ["BlockQuote", "Footnote"]) . specOf) stack -> broken "a pause is not read in a quotation or a footnote, which a deck shows whole"
+          Just (LineText name b) -> oneLine b (lineRole name)
           Just (BrokenText why) -> broken why
         pure CM.BlockStartMatch
     , CM.blockCanContain = const True
     , CM.blockContainsLines = False
     , CM.blockParagraph = False
     , CM.blockContinue = \node -> do
-        ending <- optionMaybe (try (closesSpoiler node))
+        ending <- optionMaybe (try (closesBlock node))
         pos <- getPosition
         case ending of
           Nothing -> pure (pos, node)
           Just at -> do
             CM.endOfBlock
-            let ended = maybe (CM.blockData (rootLabel node)) (\o -> toDyn o {ended = Just at}) (spoilerOf node)
+            let ended = maybe (CM.blockData (rootLabel node)) (\o -> toDyn o {ended = Just at}) (openOf node)
             pure (pos, node {rootLabel = (rootLabel node) {CM.blockData = ended}})
     , CM.blockConstructor = \node -> do
         inside <- mconcat <$> CM.renderChildren node
-        case spoilerOf node of
+        case openOf node of
           Nothing -> pure inside
-          Just o -> do
-            -- The description's own tokens, or, should they not be the
-            -- description as read, its text tokenized again.
-            let toks
-                  | T.strip (CM.untokenize o.openDescriptionToks) == o.openDescription = o.openDescriptionToks
-                  | otherwise = CM.tokenize "spoiler" o.openDescription
-            parsedDescription <- CM.runInlineParser toks
-            let h = SpoilerHead {name = o.openName, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended), kind = BetweenMarkers}
-                found = Markers [] ([SpoilerMarker o.openLine o.openColumn (Starts o.openName o.openDescription)] <> [SpoilerMarker l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription)
+          Just o | o.openKind == SpoilerName -> do
+            parsedDescription <- CM.runInlineParser o.openDescriptionToks
+            let name = fromMaybe "" o.openName
+                h = SpoilerHead {name, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended), kind = BetweenMarkers}
+                found = Markers [] ([MarkerLine o.openLine o.openColumn (Starts name o.openDescription)] <> [MarkerLine l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription)
             pure (Blocks (Seq.singleton (Nothing, Spoiler h (blocks inside))) (found <> markersOf inside))
+          Just o -> pure $ case o.ended of
+            Just (l, c) ->
+              Blocks
+                (Seq.singleton (Nothing, Div o.openAttributes (blocks inside)))
+                (Markers [] [MarkerLine o.openLine o.openColumn (Opens o.openAttributes), MarkerLine l c (Ends o.openLine)] <> markersOf inside)
+            -- Shown as an unclosed spoiler is: the marker and the reason
+            -- in red, then the blocks in red.
+            Nothing ->
+              let why = notClosed o.openKind
+               in Blocks
+                    (Seq.fromList [(Nothing, MarkerError o.openMarker why), (Nothing, Div [("class", "spoiler-unclosed")] (blocks inside))])
+                    (Markers [] [MarkerLine o.openLine o.openColumn (Faulty o.openMarker why)] <> markersOf inside)
     , CM.blockFinalize = CM.defaultFinalizer
     }
   where
-    -- The names of the spoilers open where the parser is, the innermost
-    -- first.
-    openSpoilers = do
-      stack <- CM.nodeStack <$> getState
-      pure [o.openName | n <- stack, Just o <- [spoilerOf n]]
-    spoilerOf :: CM.BlockNode Identity Inlines Blocks -> Maybe OpenSpoiler
-    spoilerOf n
-      | CM.blockType (CM.blockSpec (rootLabel n)) == "Spoiler" = fromDynamic (CM.blockData (rootLabel n))
-      | otherwise = Nothing
-    -- The line is the end marker of this spoiler: it names it, the
-    -- spoiler is the innermost open one, and nothing above it on the
+    lineRole = \case
+      PauseName -> Pauses
+      SlidesName -> SetsSlides
+      _ -> PlacesContents
+    -- The line is the end marker of this block: it has the block's name,
+    -- the block is the innermost open one, and nothing above it on the
     -- stack takes its lines as they are (code, HTML). Where the marker's
     -- text starts, if so.
-    closesSpoiler node = do
+    closesBlock node = do
       CM.nonindentSpaces
       at <- getPosition
-      written <- T.stripEnd . CM.untokenize <$> many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
-      own <- maybe mzero pure (spoilerOf node)
-      guard (readSpoilerMarker written == Just (EndText own.openName))
+      toks <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
+      own <- maybe mzero pure (openOf node)
+      case readMarker toks of
+        Just (EndText kind named) | kind == own.openKind, maybe True (\n -> own.openName == Just n) named -> pass
+        _ -> mzero
       stack <- CM.nodeStack <$> getState
-      let above = takeWhile (\n -> CM.blockStartPos (rootLabel n) /= CM.blockStartPos (rootLabel node) || isNothing (spoilerOf n)) stack
+      let above = takeWhile (\n -> CM.blockStartPos (rootLabel n) /= CM.blockStartPos (rootLabel node) || isNothing (openOf n)) stack
           verbatim n = let s = CM.blockSpec (rootLabel n) in CM.blockContainsLines s && not (CM.blockParagraph s)
-      guard (not (any (\n -> isJust (spoilerOf n) || verbatim n) above))
+      guard (not (any (\n -> isJust (openOf n) || verbatim n) above))
       pure (Parsec.sourceLine at, Parsec.sourceColumn at)
 
--- | The tokens of a start marker's description: after the name's closing
--- brace and the opening parenthesis, up to the last closing parenthesis,
--- without the spaces at either end.
-descriptionToks :: [CM.Tok] -> [CM.Tok]
-descriptionToks toks = case dropWhile spaces (drop 1 (dropWhile (not . CM.hasType (CM.Symbol '}')) toks)) of
-  open : rest
-    | CM.hasType (CM.Symbol '(') open ->
-        trim (reverse (drop 1 (dropWhile (not . CM.hasType (CM.Symbol ')')) (reverse rest))))
-  _ -> []
-  where
-    spaces = CM.hasType CM.Spaces
-    trim = reverse . dropWhile spaces . reverse . dropWhile spaces
+-- | The open block a node of the parser's stack is, if it is one.
+openOf :: CM.BlockNode Identity Inlines Blocks -> Maybe OpenBlock
+openOf n
+  | CM.blockType (CM.blockSpec (rootLabel n)) == "Marker" = fromDynamic (CM.blockData (rootLabel n))
+  | otherwise = Nothing
 
--- | A 'SpoilerError' line: made at once, and holding nothing, so the next
--- line is read afresh.
-spoilerErrorSpec :: CM.BlockSpec Identity Inlines Blocks
-spoilerErrorSpec =
+-- | A marker that is one line and holds nothing: a 'MarkerError', the
+-- deck's look, a pause or the table of contents. It is made at once, so
+-- the next line is read afresh.
+markerLineSpec :: CM.BlockSpec Identity Inlines Blocks
+markerLineSpec =
   CM.BlockSpec
-    { CM.blockType = "SpoilerError"
+    { CM.blockType = "MarkerLine"
     , CM.blockStart = mzero
     , CM.blockCanContain = const False
     , CM.blockContainsLines = False
     , CM.blockParagraph = False
     , CM.blockContinue = const mzero
     , CM.blockConstructor = \node -> pure $ case fromDynamic (CM.blockData (rootLabel node)) of
-        Just m@(SpoilerMarker _ _ (Faulty written why)) -> Blocks (Seq.singleton (Nothing, SpoilerError written why)) (Markers [] [m])
-        _ -> mempty
+        Just (b, m) -> Blocks (Seq.singleton (Nothing, b)) (Markers [] [m :: MarkerLine])
+        Nothing -> mempty
     , CM.blockFinalize = CM.defaultFinalizer
     }
 
 -- | Heading spoilers: an ATX heading whose text starts with
--- @[[spoiler]]@, or @[[spoiler]]{name}@, then a space and the heading's
--- own text (@## [[spoiler]] Question@). The heading is read as
+-- @[[!spoiler]]@, or @[[!spoiler]]{name}@, then a space and the heading's
+-- own text (@## [[!spoiler]] Question@). The heading is read as
 -- commonmark reads any ATX heading (its closing hashes and its
 -- attributes in braces taken off); this spec takes the heading's node
 -- only when its text starts with the marker, and makes a 'Spoiler' of the
@@ -1360,11 +1611,11 @@ spoilerErrorSpec =
 --
 -- The marker is read from the heading's tokens, so it counts only as
 -- written, at the start of the text: escaped, spelled otherwise
--- (@[[ spoiler ]]@), with a name that is not one ('validSpoilerName'),
+-- (@[[! spoiler ]]@), with a name that is not one ('validSpoilerName'),
 -- without a space and text after it, or anywhere later in the heading,
--- it is the wiki link to a page named @spoiler@ that it was before. A
--- setext heading has no marker: its first line, starting with
--- @[[spoiler]]@, is a marker pair's line ('spoilerSpec').
+-- it is what the inline parser makes of it, a link. A setext heading has
+-- no marker: its first line, starting with @[[!spoiler]]@, is a marker
+-- line ('markerSpec').
 spoilerHeadingSpec :: CM.SyntaxSpec Identity Inlines Blocks
 spoilerHeadingSpec = mempty {CM.syntaxBlockSpecs = [spoilerHeadingBlockSpec]}
 
@@ -1372,45 +1623,32 @@ spoilerHeadingSpec = mempty {CM.syntaxBlockSpecs = [spoilerHeadingBlockSpec]}
 data HeadingMarkerAt = HeadingMarkerAt
   { markerName :: Maybe Text
   , markerWritten :: Text
-  , markerAt :: Parsec.SourcePos
+  , markerPos :: Parsec.SourcePos
   , textAt :: Parsec.SourcePos
   , textToks :: [CM.Tok]
   }
 
--- | The marker at the start of a heading's text, if there is one.
+-- | The marker at the start of a heading's text, if there is one. It is
+-- read as a marker line's start is ('markerOpening', 'bracedAt',
+-- 'spoilerNameIn').
 headingMarker :: [CM.Tok] -> Maybe HeadingMarkerAt
-headingMarker = \case
-  open : open' : word : close : close' : rest
-    | CM.hasType (CM.Symbol '[') open
-    , CM.hasType (CM.Symbol '[') open'
-    , CM.hasType CM.WordChars word
-    , CM.tokContents word == "spoiler"
-    , CM.hasType (CM.Symbol ']') close
-    , CM.hasType (CM.Symbol ']') close' -> do
-        (name, named, afterName) <- case rest of
-          brace : more | CM.hasType (CM.Symbol '{') brace -> do
-            let (inside, closing) = break (CM.hasType (CM.Symbol '}')) more
-                name = CM.untokenize inside
-            guard (validSpoilerName name)
-            after <- tail' closing
-            pure (Just name, [brace] <> inside <> take 1 closing, after)
-          _ -> pure (Nothing, [], rest)
-        let (spaces, text) = span (\t -> CM.hasType CM.Spaces t || CM.hasType CM.UnicodeSpace t) afterName
-        first' <- head text
-        guard (not (null spaces))
-        pure
-          HeadingMarkerAt
-            { markerName = name
-            , markerWritten = CM.untokenize ([open, open', word, close, close'] <> named)
-            , markerAt = CM.tokPos open
-            , textAt = CM.tokPos first'
-            , textToks = text
-            }
-  _ -> Nothing
-  where
-    tail' = \case
-      _ : after -> Just after
-      [] -> Nothing
+headingMarker toks = do
+  open <- head toks
+  (Opening SpoilerName, rest) <- markerOpening toks
+  (name, afterName) <- case bracedAt rest of
+    Just (braced, after) -> (\n -> (Just n, after)) <$> rightToMaybe (spoilerNameIn braced)
+    Nothing -> pure (Nothing, rest)
+  let (spaces, text) = span spaceTok afterName
+  first' <- head text
+  guard (not (null spaces))
+  pure
+    HeadingMarkerAt
+      { markerName = name
+      , markerWritten = CM.untokenize (take (length toks - length afterName) toks)
+      , markerPos = CM.tokPos open
+      , textAt = CM.tokPos first'
+      , textToks = text
+      }
 
 spoilerHeadingBlockSpec :: CM.BlockSpec Identity Inlines Blocks
 spoilerHeadingBlockSpec =
@@ -1436,9 +1674,9 @@ spoilerHeadingBlockSpec =
         case headingMarker toks of
           Just m -> do
             text <- CM.runInlineParser m.textToks
-            let line = Parsec.sourceLine m.markerAt
+            let line = Parsec.sourceLine m.markerPos
                 h = SpoilerHead {name = fromMaybe "" m.markerName, description = [], marker = m.markerWritten, line, problem = Nothing, kind = OnHeading}
-                found = SpoilerMarker line (Parsec.sourceColumn m.markerAt) (HeadingMarker (Parsec.sourceColumn m.textAt))
+                found = MarkerLine line (Parsec.sourceColumn m.markerPos) (HeadingMarker (Parsec.sourceColumn m.textAt))
             pure (Blocks (Seq.singleton (Nothing, Spoiler h [Heading level [] (inlines text)])) (Markers [] (found : barsOf text)))
           Nothing -> CM.heading level <$> CM.runInlineParser toks
     }
