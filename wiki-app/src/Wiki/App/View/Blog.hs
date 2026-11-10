@@ -235,7 +235,7 @@ fetch input =
     <$> runExceptT
       ( do
           details <- ExceptT (postDetails input.space.id)
-          home <- mfilter (\h -> not (isHomeBody h.body)) <$> for (homeOf input.space input.pages) (\h -> ExceptT (getPage input.space.id (pagePathOf input.pages h.id)))
+          home <- mfilter (\h -> not (isHomeBody h.body)) <$> for (homeOf input.space input.pages) (\h -> ExceptT (getPage input.space.id (fromMaybe [] (pagePathOf input.space input.pages h.id))))
           let attachments = foldMap (\h -> h.attachments) home
           urls <- lift (Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments)
           pure (Ready details home urls)
@@ -252,7 +252,7 @@ pageRoute path n
 -- space's pages, as the page view resolves them.
 placeOf :: Context -> Space -> [PageSummary] -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
 placeOf ctx space pages home urls people =
-  Body.Place {context = ctx, space, pages, path = pagePathOf pages home.id, attachments = home.attachments, urls, people}
+  Body.Place {context = ctx, space, pages, path = fromMaybe [] (pagePathOf space pages home.id), attachments = home.attachments, urls, people}
 
 -- | A number of comments, in words.
 comments :: Int -> Text

@@ -86,7 +86,7 @@ import Wiki.Core.Notification (mentionedIn)
 import Wiki.Core.Page (PageSummary, pageNumber)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (boxNumbering, id, pageOrder))
+import Wiki.Core.Space (Space (boxNumbering, id, pageOrder), rootPage)
 import Wiki.Core.User (User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -290,7 +290,7 @@ optionsWith island place =
     , Md.resolveMention = \login ->
         (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
           <$> Map.lookup login place.people
-    , Md.numbering = Numbering {form = place.space.boxNumbering, number = pageNumber place.space.pageOrder place.pages place.path}
+    , Md.numbering = Numbering {form = place.space.boxNumbering, number = pageNumber (rootPage place.space) place.space.pageOrder place.pages place.path}
     }
 
 -- | Renderer options shared by page bodies, previews and the front page.
@@ -350,5 +350,5 @@ resolve place destination = case Md.classifyDestination destination of
   Md.ToPath _ ->
     maybe Md.Unresolved Md.Page $
       if homeSpace place.context place.space.id
-        then resolvePageLink (filter (not . homeSpace place.context . (\s -> s.id)) place.context.spaces) [] ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination)
-        else resolvePageLink place.context.spaces (spacePathOf place.context.spaces place.space.id) place.pages place.path destination
+        then resolvePageLink (filter (not . homeSpace place.context . (\s -> s.id)) place.context.spaces) [] Nothing ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination)
+        else resolvePageLink place.context.spaces (spacePathOf place.context.spaces place.space.id) (rootPage place.space) place.pages place.path destination

@@ -841,12 +841,13 @@ loadFirstVersions :: (Backend be) => SpaceId -> Db be [(PageId, VersionRow)]
 loadFirstVersions space = firstVersionsWhere (\p -> p.space_id ==. val_ space.text)
 
 -- | The bodies of the pages of a space that can be posts of a blog: the
--- pages at its top level that are not templates ("Wiki.Core.Blog"'s
--- 'isPost' decides the rest). A blog's list shows an excerpt of each.
-loadPostBodies :: (Backend be) => SpaceId -> Db be [(PageId, Text)]
-loadPostBodies space =
+-- pages under its root, its home page ('Wiki.Core.Space.rootPage'), that
+-- are not templates ("Wiki.Core.Blog"'s 'isPost' decides the rest). A
+-- blog's list shows an excerpt of each.
+loadPostBodies :: (Backend be) => SpaceId -> Maybe PageId -> Db be [(PageId, Text)]
+loadPostBodies space root =
   map (first PageId)
-    <$> runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ space.text &&. isNothing_ p.parent &&. p.template ==. val_ False) (all_ wikiDb.pages)))
+    <$> runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ space.text &&. under root p &&. p.template ==. val_ False) (all_ wikiDb.pages)))
 
 -- | How many comments each page of a space has, in all its threads; a page
 -- with none is left out.

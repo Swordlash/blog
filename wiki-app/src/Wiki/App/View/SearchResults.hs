@@ -19,7 +19,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.App.View.SearchHit (hitContents, spaceNamesOf)
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
@@ -96,7 +96,7 @@ component =
               {% if not (null hits) %}
                 <ol class="search-hits">
                   {% for hit in hits %}
-                    <li>{{ Router.link input.context.router Followed (Page hit.spacePath hit.pagePath) [HP.class_ "search-hit"] (hitContents input.context.spaces hit) }}</li>
+                    <li>{{ Router.link input.context.router Followed (pageRoute hit.spacePath hit.pagePath) [HP.class_ "search-hit"] (hitContents input.context.spaces hit) }}</li>
                   {% end %}
                 </ol>
               {% end %}

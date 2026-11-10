@@ -42,7 +42,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), getCurrentTime, timeToTimeOfDay, todHour, utctDay)
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
-import Wiki.App.Route (Route (..), route)
+import Wiki.App.Route (pageRoute, route)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Notification (MailMode (..), Notification (..), PageLocation (..), digest, effectiveMailMode)
 import Wiki.Core.User (User (..))
@@ -134,7 +134,7 @@ mailRound n now = do
         then writing n.storage (clearPending ids)
         else do
           token <- writing n.storage (unsubscribeToken p.user.id)
-          let pathOf l = Duplex.print route (Page l.space l.page)
+          let pathOf l = Duplex.print route (pageRoute l.space l.page)
               message = notificationMessage m.publicUrl email token isDigest (dropSlash . pathOf) (digest readable)
           m.deliver message >>= \case
             Right () -> do

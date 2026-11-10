@@ -37,14 +37,13 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Page (Page (body), PageSummary, templatePages)
 import Wiki.Core.Page qualified as P
-import Wiki.Core.Path (findChild, resolvePath)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, name))
+import Wiki.Core.Space (Space (id, name), pageAt)
 import Wiki.Core.Template (Placeholders (Placeholders), builtinTemplates, fillTemplate)
 import Wiki.Core.Template qualified as Template
 import Wiki.Core.User (User (displayName))
@@ -169,7 +168,7 @@ startingBody st = case st.start of
   Blank -> pure ""
   SpaceTemplate pid
     | Just _ <- find (\p -> p.id == pid) st.input.pages ->
-        getPage st.input.space.id (pagePathOf st.input.pages pid) >>= filled . either (const "") (\p -> p.body)
+        getPage st.input.space.id (fromMaybe [] (pagePathOf st.input.space st.input.pages pid)) >>= filled . either (const "") (\p -> p.body)
     | otherwise -> filled ""
   BuiltIn key -> filled (maybe "" (\t -> t.body) (find (\t -> t.key == key) builtinTemplates))
   where
@@ -179,24 +178,23 @@ startingBody st = case st.start of
       pure (fillTemplate Placeholders {Template.title = T.strip st.title, Template.date = today, Template.author = author} body)
 
 -- | The page the new one goes under, if the route names one; 'Nothing'
--- for the space's top level; 'NotFound' for a path that names no page.
+-- for the space's top level, which the backend reads as under the space's
+-- home page ('Wiki.Core.Space.parentOrRoot'); 'NotFound' for a path that
+-- names no page.
 under :: Input -> Either WikiError (Maybe PageSummary)
 under input = case input.parent of
   Nothing -> Right Nothing
-  Just path -> maybe (Left NotFound) (Right . Just) (pageAt input.pages path)
-
-pageAt :: [PageSummary] -> [Slug] -> Maybe PageSummary
-pageAt pages path = rightToMaybe (resolvePath (findChild pages) path) >>= lastMay
+  Just path -> maybe (Left NotFound) (Right . Just) (pageAt input.space input.pages path)
 
 headingOf :: Input -> Text
 headingOf input = case input.parent of
   Nothing -> "New page in " <> input.space.name
-  Just parent -> "New page under " <> maybe "a page" (\p -> p.title) (pageAt input.pages parent)
+  Just parent -> "New page under " <> maybe "a page" (\p -> p.title) (pageAt input.space input.pages parent)
 
 -- | Where Cancel navigates to: where the page would have been created.
 leaving :: Input -> Route
 leaving input = case input.parent of
-  Just parent -> Page spacePath parent
+  Just parent -> pageRoute spacePath parent
   Nothing -> Space spacePath
   where
     spacePath = spacePathOf input.context.spaces input.space.id

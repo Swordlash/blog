@@ -135,8 +135,9 @@ import Text.Pandoc.Extensions (Extension (..), Extensions, disableExtension, ext
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinitions)
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
+import Wiki.App.Route qualified as R
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
-import Wiki.Core.Id (AttachmentId (..))
+import Wiki.Core.Id (AttachmentId (..), PageId)
 import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), markerAt, parseWithAllMarkers, spoilerProblemText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
@@ -154,10 +155,13 @@ data Place = Place
   -- ^ The spaces the reader may view, for links to them and their pages.
   , spacePath :: [Slug]
   -- ^ The path of the page's space.
+  , root :: Maybe PageId
+  -- ^ The root of its space's pages, the space's home page
+  -- ('Wiki.Core.Space.rootPage'), which paths start under.
   , pages :: [Page]
   -- ^ The pages of its space.
   , pagePath :: [Slug]
-  -- ^ The page's own path in its space.
+  -- ^ The page's own path in its space ('Wiki.Core.Space.pagePath').
   , attachments :: [Attachment]
   -- ^ The page's attachments.
   , stored :: AttachmentId -> Bool
@@ -1079,9 +1083,11 @@ linkTarget place dest = case classifyDestination dest of
   ToAnchor fragment -> Just ("#" <> fragment)
   ToAttachment name -> absolute place . place.attachmentAddress =<< findAttachment name place.attachments
   ToPath _ -> do
-    PageLink r fragment <- resolvePageLink place.spaces place.spacePath place.pages place.pagePath (if null place.spacePath then "/" <> T.dropWhile (== '/') dest else dest)
+    PageLink r fragment <- resolvePageLink place.spaces place.spacePath place.root place.pages place.pagePath (if null place.spacePath then "/" <> T.dropWhile (== '/') dest else dest)
     case r of
       Page s p | Just anchor <- place.inDocument s p -> Just ("#" <> anchor)
+      -- A space's own route is its home page's.
+      R.Space s | Just anchor <- place.inDocument s [] -> Just ("#" <> anchor)
       _ -> absolute place (Duplex.print route r <> fragment)
 
 -- | An address in the wiki, under its public address.

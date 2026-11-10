@@ -25,6 +25,7 @@ module Wiki.App.View.Common
     -- * Paths
   , spacePathOf
   , pagePathOf
+  , pageRouteOf
   , findSpace
   , descendsFrom
 
@@ -66,17 +67,17 @@ import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.App.Backend (MonadWiki (avatarUrl), Session (grants, homePage, mathMacros, standing, user), WikiError (..), sessionPrincipal)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.Core.HomePage (HomePage (showAnonymous))
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Math (Macros (..), wikiMacros)
-import Wiki.Core.Order (ChildOrder, Shift (..))
+import Wiki.Core.Order (Shift (..))
 import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
-import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
+import Wiki.Core.Path (TreeNode (..), childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canEditPage, canView, hasGlobalPermission, spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (active, homePage, icon, id, name, owner, personalContainer, slug), colourFor, colourOf, iconLetter, isPersonal)
+import Wiki.Core.Space (Icon (..), Space (active, homePage, icon, id, name, owner, pageOrder, personalContainer, slug), colourFor, colourOf, iconLetter, isPersonal, pagePath, rootPage)
 import Wiki.Core.User (Avatar, Standing (..), User (id))
 import Wiki.Core.Version (Author (..))
 
@@ -184,9 +185,16 @@ spacePathOf :: [Space] -> SpaceId -> [Slug]
 spacePathOf spaces sid = map (\s -> s.slug) (spaceChain spaces sid)
 
 -- | A page's path, among the pages of its space (their summaries, or the
--- pages themselves); empty if it is not there.
-pagePathOf :: (TreeNode page, NodeId page ~ PageId) => [page] -> PageId -> [Slug]
-pagePathOf pages pid = maybe [] (map nodeSlug) (ancestry (\i -> find (\p -> nodeId p == i) pages) pid)
+-- pages themselves): 'Wiki.Core.Space.pagePath', from under the space's
+-- home page, whose own path is empty. 'Nothing' if it is not there.
+pagePathOf :: (TreeNode page, NodeId page ~ PageId) => Space -> [page] -> PageId -> Maybe [Slug]
+pagePathOf space pages = pagePath space (\i -> find (\p -> nodeId p == i) pages)
+
+-- | The route of a page of a space, among its pages ('pagePathOf',
+-- 'Wiki.App.Route.pageRoute'): the space's own route for its home page.
+-- 'Unknown' for a page that is not among them.
+pageRouteOf :: (TreeNode page, NodeId page ~ PageId) => [Space] -> Space -> [page] -> PageId -> Route
+pageRouteOf spaces space pages pid = maybe Unknown (pageRoute (spacePathOf spaces space.id)) (pagePathOf space pages pid)
 
 -- | The space at a path, with its chain, if there is one.
 findSpace :: [Space] -> [Slug] -> Maybe [Space]
@@ -235,18 +243,22 @@ errorMessage = \case
 -- | The pages of a space as a tree of links, in the space's page order,
 -- with the current page marked. After each link comes what the function
 -- returns for the page, given whether it is the first and the last of its
--- siblings (the space's view puts buttons there that move it).
+-- siblings (the space's view puts buttons there that move it). The tree
+-- starts under the space's home page, the root of its pages
+-- ('Wiki.Core.Space.rootPage'), which the space's own link stands for; in
+-- a space with no home page it starts at the top level.
 pageTree
   :: Router Route
   -> (Follow Route -> action)
   -> [Slug]
-  -> ChildOrder
+  -> Space
   -> [PageSummary]
   -> Maybe PageId
   -> (PageSummary -> Bool -> Bool -> [HH.HTML w action])
   -> HH.HTML w action
-pageTree router onFollow spacePath order pages current controls = level Nothing
+pageTree router onFollow spacePath space pages current controls = level (rootPage space)
   where
+    order = space.pageOrder
     level parent =
       let siblings = childPages order pages parent
           count = length siblings
@@ -257,7 +269,7 @@ pageTree router onFollow spacePath order pages current controls = level Nothing
               {% end %}
             </ul>
           |]
-    pageLink p here = Router.link router onFollow (Page spacePath (pagePathOf pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
+    pageLink p here = Router.link router onFollow (maybe Unknown (pageRoute spacePath) (pagePathOf space pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
     below p = [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
 
 -- | A space's icon beside its name ('Wiki.Core.Space.Icon'): its emoji,

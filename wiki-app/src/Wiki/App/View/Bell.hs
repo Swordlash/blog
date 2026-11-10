@@ -43,7 +43,7 @@ import Wiki.App.Backend (MonadLoad (..), WikiError)
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common
 import Wiki.App.View.Popup (watchPopup)
@@ -168,7 +168,7 @@ component =
       where
         -- The router's link, except for its address, which also names the
         -- thread, for a link opened in a new tab.
-        props l = HP.href (Router.href st.input.context.router (Page l.space l.page) <> maybe "" (\t -> "#" <> threadElementId t) n.thread) : drop 1 (Router.linkProps st.input.context.router (Follow n.id) (Page l.space l.page))
+        props l = HP.href (Router.href st.input.context.router (pageRoute l.space l.page) <> maybe "" (\t -> "#" <> threadElementId t) n.thread) : drop 1 (Router.linkProps st.input.context.router (Follow n.id) (pageRoute l.space l.page))
         inner =
           [hhs|
             <span class="notification-what">{{ notificationText n }}</span>

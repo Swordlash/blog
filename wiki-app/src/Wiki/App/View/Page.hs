@@ -719,7 +719,7 @@ component =
               savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done (const Nothing)
             Moving chosen ps parent -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
               movePage page.id target.id parent
-                >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (pagePathOf ps) parent <> [moved.slug])))
+                >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
       FromComments out -> case out of
         CommentsView.Did event -> do

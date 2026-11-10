@@ -22,6 +22,11 @@
 -- > /s/docs/p/presentations/slides/ PageSlides [docs] [presentations] 1 1
 -- > /s/docs/p/presentations/slides/?slide=3&step=2
 -- >                                PageSlides [docs] [presentations] 3 2
+-- > /s/docs/edit/                  EditPage [docs] []
+-- > /s/docs/source/                PageSource [docs] []
+-- > /s/docs/history/               PageHistory [docs] [] Nothing AgainstPrevious
+-- > /s/docs/slides/                PageSlides [docs] [] 1 1
+-- > /s/docs/live-preview/          LivePreview [docs] []
 -- > /s/docs/new-page/              NewPage [docs] Nothing
 -- > /s/docs/new-page/tour/         NewPage [docs] (Just [tour])
 -- > /new-space/                    NewSpace Nothing
@@ -48,7 +53,12 @@
 -- @\/s\/docs\/@. An address without the slash is read as the same route,
 -- so a typed or pasted one works too.
 --
--- A space's path and a page's path are separated by the segment @p@. An
+-- A space's path and a page's path are separated by the segment @p@. A
+-- page's path starts under its space's home page, the root of the space's
+-- pages ('Wiki.Core.Space.pagePath'), and the home page's path is empty:
+-- the home page is the space's own address ('Space'), and its editor,
+-- source, history, slides and live preview are under that address with no
+-- @p@, as the front page's are under the top. An
 -- edit route ends in @edit@, a page's source in @source@, its history in
 -- @history@, its slides in @slides@, and a space's list of pages in
 -- @pages@. A new page's route has @new-page@ after the space's path. A slug
@@ -70,6 +80,7 @@ module Wiki.App.Route
   , route
   , routeOfHref
   , spaceRouteOf
+  , pageRoute
 
     -- * Links in pages
   , PageLink (..)
@@ -88,7 +99,7 @@ import Protolude
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Core.Id (SpaceId)
-import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath)
+import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath, resolveUnder)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (slug))
@@ -102,8 +113,8 @@ data Route
   | HomeHistory (Maybe UTCTime) Against
   | HomeSlides Int Int
   | -- | A space, by its path from the top level. Entering it shows its home
-    -- page ('Wiki.Core.Space.homePage'), or, for a space without one, its
-    -- list of pages ('SpacePages').
+    -- page ('Wiki.Core.Space.homePage'), whose address it is, or, for a
+    -- space without one, its list of pages ('SpacePages').
     Space [Slug]
   | -- | A later page of a blog's posts ("Wiki.Core.Blog"): the space's
     -- path, and the page number, counted from 1. The page number is a
@@ -114,7 +125,10 @@ data Route
   | -- | A space's pages and subspaces, with the actions on the space (its
     -- settings among them), by its path.
     SpacePages [Slug]
-  | -- | A page: its space's path, and its own path among the space's pages.
+  | -- | A page: its space's path, and its own path among the space's pages
+    -- ('Wiki.Core.Space.pagePath'). The home page's path is empty, and its
+    -- route is 'Space' ('pageRoute'): a 'Page' with the empty path is
+    -- written as the space's address.
     Page [Slug] [Slug]
   | -- | The editor for a page: its space's path, and its own path there.
     EditPage [Slug] [Slug]
@@ -296,19 +310,19 @@ route =
       , alternative
           (\case Page s p -> Just (s, p); _ -> Nothing)
           (uncurry Page)
-          (prefix "s" (directory (spaceAndPage identity)))
+          (prefix "s" (directory (spaceAndPage Nothing)))
       , alternative
           (\case EditPage s p -> Just (s, p); _ -> Nothing)
           (uncurry EditPage)
-          (prefix "s" (directory (spaceAndPage (`suffix` "edit"))))
+          (prefix "s" (directory (spaceAndPage (Just "edit"))))
       , alternative
           (\case PageSource s p -> Just (s, p); _ -> Nothing)
           (uncurry PageSource)
-          (prefix "s" (directory (spaceAndPage (`suffix` "source"))))
+          (prefix "s" (directory (spaceAndPage (Just "source"))))
       , alternative
           (\case LivePreview s p -> Just (s, p); _ -> Nothing)
           (uncurry LivePreview)
-          (prefix "s" (directory (spaceAndPage (`suffix` "live-preview"))))
+          (prefix "s" (directory (spaceAndPage (Just "live-preview"))))
       , alternative
           (\case NewSpace parent -> Just parent; _ -> Nothing)
           NewSpace
@@ -331,12 +345,12 @@ route =
           (\((s, p), (v, a)) -> PageHistory s p v a)
           ( prefix
               "s"
-              (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "history")) <*> Duplex.lmap snd historyParams))
+              (directory ((,) <$> Duplex.lmap fst (spaceAndPage (Just "history")) <*> Duplex.lmap snd historyParams))
           )
       , alternative
           (\case PageSlides s p n k -> Just ((s, p), (n, k)); _ -> Nothing)
           (\((s, p), (n, k)) -> PageSlides s p n k)
-          (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "slides")) <*> Duplex.lmap snd slideParams)))
+          (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (Just "slides")) <*> Duplex.lmap snd slideParams)))
       , alternative
           (\case Invite t -> Just t; _ -> Nothing)
           Invite
@@ -355,8 +369,23 @@ route =
           (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . UnsubscribeToken) segment)))
       ]
   where
-    spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])
-    spaceAndPage after = (,) <$> Duplex.lmap fst slugs <*> Duplex.lmap snd (prefix "p" (after slugs))
+    -- A space's path and a page's path, then the route's own word, if it
+    -- has one. A page under the space's home page is written after @p@.
+    -- The home page's own path is empty: its routes are written under the
+    -- space's address with no @p@ (@\/s\/docs\/edit\/@), as the front page's
+    -- are under the top (@\/edit\/@). The home page itself is the space's
+    -- own route, 'Space': a 'Page' with the empty path is written as the
+    -- space's address, and that address reads back as 'Space'.
+    spaceAndPage :: Maybe Text -> RouteDuplex' ([Slug], [Slug])
+    spaceAndPage word = RouteDuplex printer parser
+      where
+        after = maybe identity (flip suffix) word
+        nested = (,) <$> Duplex.lmap fst slugs <*> Duplex.lmap snd (prefix "p" (after slugs))
+        atHome = (,[]) <$> Duplex.lmap fst (after slugs)
+        printer = \case
+          (sp, []) -> atHome.printer (sp, [])
+          sp -> nested.printer sp
+        parser = nested.parser <|> (if isJust word then atHome.parser else empty)
     optionalSlugs :: RouteDuplex' (Maybe [Slug])
     optionalSlugs = RouteDuplex (maybe mempty slugs.printer) ((Just <$> slugs.parser) <|> pure Nothing)
     searchParams :: RouteDuplex' (Maybe Text, Maybe [Slug], Bool)
@@ -495,6 +524,14 @@ spaceRouteOf spaces sid = case spaceChain spaces sid of
   [] -> Unknown
   chain -> Space (map (\s -> s.slug) chain)
 
+-- | 'pageRoute' is the route of a page, from its space's path and its own
+-- path ('Wiki.Core.Space.pagePath'): 'Page', or the space's own route,
+-- 'Space', for the home page, whose path is empty.
+pageRoute :: [Slug] -> [Slug] -> Route
+pageRoute sp = \case
+  [] -> Space sp
+  path -> Page sp path
+
 -- | A link in a page to another place in the wiki: the route, and the
 -- fragment the link names there (with its @#@, or empty).
 data PageLink = PageLink Route Text
@@ -508,9 +545,15 @@ data PageLink = PageLink Route Text
 -- (@\/s\/docs\/p\/markdown-guide\/diagrams@ without a slash at the end):
 -- against the page's parent, so that from @markdown-guide@ the link
 -- @diagrams@ is a sibling and @markdown-guide\/diagrams@ is a child, @.@
--- is the parent and @..@ goes one level further up. Going above the space's
--- top-level pages leads nowhere. The page has to be among the space's pages;
--- the empty path is the space itself.
+-- is the parent and @..@ goes one level further up. Paths start under the
+-- space's home page, the root of its pages, as the page's own path does
+-- ('Wiki.Core.Space.pagePath'); going above the pages under it leads
+-- nowhere, and the empty path is the space itself, the home page's
+-- address. The page has to be among the space's pages. A path that starts
+-- with the home page's own slug, as a page's address did before the home
+-- page lost its segment, is read again without it
+-- ('Wiki.Core.Path.resolveUnder'), and the link leads to the page's
+-- address as it is now.
 --
 -- A path starting with @\/@ is from the top of the wiki. A page's own
 -- address, as the route codec writes it without the deployment's prefix
@@ -531,6 +574,8 @@ resolvePageLink
   -- ^ Every space the reader can see the path of.
   -> [Slug]
   -- ^ The path of the page's space.
+  -> Maybe (NodeId node)
+  -- ^ The space's root, its home page ('Wiki.Core.Space.rootPage').
   -> [node]
   -- ^ The pages of that space: their summaries, or the pages themselves.
   -> [Slug]
@@ -538,7 +583,7 @@ resolvePageLink
   -> Text
   -- ^ The destination, as written.
   -> Maybe PageLink
-resolvePageLink spaces spacePath pages pagePath destination = do
+resolvePageLink spaces spacePath home pages pagePath destination = do
   let (beforeFragment, fragment) = T.breakOn "#" destination
       pathPart = T.takeWhile (/= '?') beforeFragment
       segments = T.splitOn "/" pathPart
@@ -554,14 +599,14 @@ resolvePageLink spaces spacePath pages pagePath destination = do
     addressed sp pp = do
       _ <- rightToMaybe (resolvePath (findChild spaces) sp)
       if sp == spacePath
-        then Page sp pp <$ rightToMaybe (resolvePath (findChild pages) pp)
-        else pure (Page sp pp)
+        then here pp
+        else pure (pageRoute sp pp)
 
     relative segments = do
       path <- foldM step (take (length pagePath - 1) pagePath) segments
       if null path
         then pure (Space spacePath)
-        else Page spacePath path <$ rightToMaybe (resolvePath (findChild pages) path)
+        else here path
 
     step path = \case
       "" -> Just path
@@ -577,7 +622,16 @@ resolvePageLink spaces spacePath pages pagePath destination = do
       case drop (length spaceSlugs) wanted of
         [] -> pure (Space spaceSlugs)
         rest
-          | spaceSlugs == spacePath -> Page spaceSlugs rest <$ rightToMaybe (resolvePath (findChild pages) rest)
+          | spaceSlugs == spacePath -> here rest
           | otherwise -> pure (Page spaceSlugs rest)
+
+    -- A page of this space by its path, at its address as it is now.
+    here path = do
+      chain <- rightToMaybe (resolveUnder rootNode (findChild pages) path)
+      pure (pageRoute spacePath (map nodeSlug (withoutRoot chain)))
+    rootNode = home >>= \r -> find (\n -> nodeId n == r) pages
+    withoutRoot = \case
+      top : rest | Just (nodeId top) == home -> rest
+      chain -> chain
 
     asSlug s = rightToMaybe (mkSlug s) <|> slugify s

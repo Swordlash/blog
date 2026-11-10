@@ -209,7 +209,8 @@ import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Noti
 import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary, childPages, pageTreeOrder, positionPage, summaryOf)
-import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
+import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
   , GlobalPermission (Administer, CreateSpaces)
@@ -585,12 +586,20 @@ giveHomePage author now space st0 =
       )
 
 -- | Give every space that has no home page, and should have one
--- ('hasHome'), its default one, made at this time with no author. The
+-- ('hasHome'), its default one, made at this time with no author, and make
+-- each space's home page the root of its pages
+-- ('Wiki.Core.Space.rootedPages'): the only one with no parent. The
 -- demo's content gets them this way, and so does a wiki read from the
 -- browser's storage or an archive that was written before every space had
--- a home page.
+-- a home page, or before the home page was the root.
 ensureHomePages :: UTCTime -> MemState -> MemState
-ensureHomePages now st = foldl' (\acc s -> fst (giveHomePage Nothing now s acc)) st [s | s <- Map.elems st.spaces, hasHome s, isNothing s.homePage]
+ensureHomePages now st = rootAll (foldl' (\acc s -> fst (giveHomePage Nothing now s acc)) st [s | s <- Map.elems st.spaces, hasHome s, isNothing s.homePage])
+
+-- | Every space's pages with its home page as their root
+-- ('Wiki.Core.Space.rootedPages'), as step 13 of the server's schema
+-- makes them.
+rootAll :: MemState -> MemState
+rootAll st = st {pages = Map.fromList [(p.id, p) | p <- foldl' (flip Space.rootedPages) (Map.elems st.pages) (Map.elems st.spaces)]}
 
 -- | Choose the order a space lists one kind of its children in, without
 -- checks. When the order switches to 'ByHand' from another order, the
@@ -924,14 +933,14 @@ postDetailsIn sid st = do
         , excerpt = if isPost s (summaryOf p) then Blog.excerptOf p.body else ""
         }
 
--- | The page at a path in a space.
+-- | The page at a path in a space, from under its home page
+-- ('Wiki.Core.Space.pageAt'): the empty path is the home page, and an old
+-- address that starts with the home page's slug is read without it.
 getPageIn :: SpaceId -> [Slug] -> MemState -> Either WikiError Page
 getPageIn sid path st = do
-  (_, c) <- findSpace st sid
+  (s, c) <- findSpace st sid
   requireView st c
-  case resolvePath (findChild (pagesOf sid st)) path of
-    Right ps | Just p <- lastMay ps -> pure (withWriters st p)
-    _ -> Left NotFound
+  maybe (Left NotFound) (pure . withWriters st) (Space.pageAt s (pagesOf sid st) path)
 
 -- | A page with who wrote it ('Page.createdBy', 'Page.updatedBy'): the
 -- authors of its first version and of the version it is now, as the
@@ -947,14 +956,15 @@ searchPagesIn :: SearchQuery -> MemState -> [SearchHit]
 searchPagesIn q st =
   searchPlain
     q
-    [ searchCandidate st p (map (\s -> s.slug) c) pagePath
+    [ searchCandidate st p (map (\x -> x.slug) c) pagePath
     | (sid, c) <- Map.toList chains
     , not (Home.isHomeSpace st.server.homePage sid)
     , wanted c
     , canView (currentPrincipal st) st.grants c
+    , Just s <- [Map.lookup sid st.spaces]
     , p <- pagesOf sid st
     , q.templates || not p.template
-    , Just pagePath <- [pathOf (`Map.lookup` st.pages) p.id]
+    , Just pagePath <- [Space.pagePath s (`Map.lookup` st.pages) p.id]
     ]
   where
     chains = Map.mapWithKey (\sid _ -> chainOf st sid) st.spaces
@@ -1304,10 +1314,12 @@ setPageTemplateIn pid template st = do
   let p' = p {template}
   pure (st {pages = Map.insert pid p' st.pages}, p')
 
--- | Create a page.
+-- | Create a page. A page with no parent goes under the space's home page
+-- ('Wiki.Core.Space.parentOrRoot').
 createPageIn :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> Write Page
-createPageIn sid parent title body now st = do
-  (_, c) <- findSpace st sid
+createPageIn sid asked title body now st = do
+  (s, c) <- findSpace st sid
+  let parent = Space.parentOrRoot s asked
   parentPage <- traverse (findPage st) parent
   requireEdit st c
   requireOrdinary st sid
@@ -1349,11 +1361,13 @@ subtreeOf st pid =
     , maybe False (any (\p -> p.id == pid)) (ancestry (`Map.lookup` st.pages) i)
     ]
 
--- | Move a page, with the pages under it.
+-- | Move a page, with the pages under it. A page moved to no parent goes
+-- under the space's home page ('Wiki.Core.Space.parentOrRoot').
 movePageIn :: PageId -> SpaceId -> Maybe PageId -> Write Page
-movePageIn pid destination parent st = do
+movePageIn pid destination asked st = do
   p <- findPage st pid
-  (_, target) <- findSpace st destination
+  (targetSpace, target) <- findSpace st destination
+  let parent = Space.parentOrRoot targetSpace asked
   parentPage <- traverse (findPage st) parent
   let source = chainOf st p.space
   requireView st source
@@ -2158,7 +2172,8 @@ notificationsIn st = do
       p <- Map.lookup n.page st.pages
       let c = chainOf st p.space
       guard (canView (currentPrincipal st) st.grants c)
-      pagePath <- pathOf (`Map.lookup` st.pages) p.id
+      s <- Map.lookup p.space st.spaces
+      pagePath <- Space.pagePath s (`Map.lookup` st.pages) p.id
       pure (withLocation (Just PageLocation {space = map (\x -> x.slug) c, page = pagePath}) n)
 
 -- | Mark some of the current user's notifications read, or all of them.
@@ -2218,7 +2233,8 @@ starredIn st = do
       p <- Map.lookup pid st.pages
       let c = chainOf st p.space
       guard (isRight (requireView st c))
-      pagePath <- pathOf (`Map.lookup` st.pages) p.id
+      s <- Map.lookup p.space st.spaces
+      pagePath <- Space.pagePath s (`Map.lookup` st.pages) p.id
       pure StarredPage {Star.page = p.id, Star.space = p.space, Star.title = p.title, Star.location = PageLocation {space = map (\x -> x.slug) c, page = pagePath}}
 
 -- | Star a page the current user may view, or take its star away. A page
