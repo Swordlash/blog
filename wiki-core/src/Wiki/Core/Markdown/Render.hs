@@ -359,7 +359,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       MathBlock tex
         | onlyDefinitions tex -> [] <$ formula tex
         | otherwise -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
-      List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
+      List kind items -> single . listOf kind (any isTask items) <$> traverse (renderItem kind) items
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div written bs -> do
         attrs <- ownAttrs written
@@ -408,8 +408,22 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     renderBlocks' :: [Block] -> R [HH.HTML w i]
     renderBlocks' bs = concat <$> traverse renderBlock bs
 
-    renderItem :: ListItem -> R (HH.HTML w i)
-    renderItem (ListItem task bs) = case task of
+    -- An item of a list. A task's checkbox goes before its first
+    -- paragraph's text. An item of a bulleted list whose text starts with
+    -- an emoji shows the emoji in the bullet's place (WP5.86 of
+    -- docs/PLAN.md): the item gets the class @emoji-item@, which hides the
+    -- bullet, and the emoji the class @emoji-bullet@, which moves it to
+    -- where the bullet was. The emoji stays in the item's text, so the
+    -- text a search, a comment's quote or a slide's steps read is the same.
+    renderItem :: ListKind -> ListItem -> R (HH.HTML w i)
+    renderItem kind (ListItem task bs) = case task of
+      Nothing | Just (keyword, emoji) <- emojiBullet kind bs -> do
+        let bullet = [PNode (emojiSpan ["emoji", "emoji-bullet"] keyword emoji)]
+        inner <- case bs of
+          Para (_ : xs) : rest -> (:) . HH.p_ <$> withPieces bullet xs [] <*> renderBlocks' rest
+          Plain (_ : xs) : rest -> (<>) <$> withPieces bullet xs [] <*> renderBlocks' rest
+          _ -> renderBlocks' bs
+        pure (HH.li [classesProp ["emoji-item"]] inner)
       Nothing -> HH.li_ <$> renderBlocks' bs
       Just done -> do
         let checkbox = [PNode (HH.input [HP.type_ I.InputCheckbox, HP.checked done, HP.disabled True]), PText " "]
@@ -514,7 +528,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         own <- gets (.sectionNotes)
         let noteTitle = fromMaybe "" (M.lookup n own <|> M.lookup n allNotes)
         pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a ([HP.href ("#" <> noteId), HP.id ident] <> titleProp noteTitle) [HH.text (show n)]])]
-      Emoji keyword emoji -> pure [PNode (HH.span [classesProp ["emoji"], HP.title (":" <> keyword <> ":")] [HH.text emoji])]
+      Emoji keyword emoji -> pure [PNode (emojiSpan ["emoji"] keyword emoji)]
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
       RawHtml raw -> htmlPieces inLink (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw])
@@ -691,6 +705,19 @@ headingAnchor attrs =
 
 isTask :: ListItem -> Bool
 isTask (ListItem task _) = isJust task
+
+-- | The emoji an item of a list shows as its bullet: its first inline, when
+-- the list is bulleted and the item's text starts with an emoji. A task's
+-- checkbox is its own mark, and a numbered list keeps its numbers, so the
+-- caller asks only for an item that is not a task.
+emojiBullet :: ListKind -> [Block] -> Maybe (Text, Text)
+emojiBullet BulletList (Para (Emoji keyword emoji : _) : _) = Just (keyword, emoji)
+emojiBullet BulletList (Plain (Emoji keyword emoji : _) : _) = Just (keyword, emoji)
+emojiBullet _ _ = Nothing
+
+-- | An emoji, with its shortcode as its title, which a pointer shows.
+emojiSpan :: [Text] -> Text -> Text -> HH.HTML w i
+emojiSpan names keyword emoji = HH.span [classesProp names, HP.title (":" <> keyword <> ":")] [HH.text emoji]
 
 headingOf :: Int -> [HP.IProp I.HTMLh1 i] -> [HH.HTML w i] -> HH.HTML w i
 headingOf level = case level of

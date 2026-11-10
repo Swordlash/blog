@@ -3,7 +3,7 @@
 -- | The menus closing when the reader turns away from them
 -- ("Wiki.App.View.Popup"), in a browser, over the demo: the header's
 -- Starred list, the bell and the demo's menu of users, the sidebar's space
--- switcher, and the editor's toolbar menus. Each closes on a press outside
+-- switcher, and the editor's toolbar menus (the emoji's among them). Each closes on a press outside
 -- it and on Escape, and its own button closes it once, without opening it
 -- again. A click inside a menu leaves it open.
 module Test.Browser.Menus (spec) where
@@ -31,7 +31,7 @@ data Menu = Menu
   , popup :: Text
   }
 
-starred, bell, users, switcher, box, html, colour :: Menu
+starred, bell, users, switcher, box, html, colour, emoji :: Menu
 starred = Menu {toggle = ".starred-toggle", popup = ".starred-panel"}
 bell = Menu {toggle = ".notifications-toggle", popup = ".notifications-panel"}
 users = Menu {toggle = ".user-switcher-toggle", popup = ".user-menu"}
@@ -39,6 +39,7 @@ switcher = Menu {toggle = ".space-switcher-toggle", popup = ".space-switcher-men
 box = Menu {toggle = ".editor-toolbar button[aria-label='Box']", popup = ".box-menu"}
 html = Menu {toggle = ".editor-toolbar button[aria-label='HTML']", popup = ".toolbar-menu[aria-label='HTML']"}
 colour = Menu {toggle = ".editor-toolbar button[aria-label='Colour']", popup = ".colour-menu"}
+emoji = Menu {toggle = ".editor-toolbar button[aria-label='Emoji']", popup = ".emoji-menu"}
 
 hello :: Route
 hello = Page (slugs ["blog"]) (slugs ["hello-world"])
@@ -79,7 +80,7 @@ spec m = do
 
   it "closes the editor's toolbar menus on a press outside, on Escape and on their buttons, and on a click in the text" $ runPage $ do
     ui <- start m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    traverse_ (closesAway ui) [box, html, colour]
+    traverse_ (closesAway ui) [box, html, colour, emoji]
     -- A click inside the palette, on a row's name, leaves it open; another
     -- menu's button closes it and opens that menu.
     opened ui colour
@@ -90,6 +91,12 @@ spec m = do
     -- A click in the text is a press outside.
     editorText ui >>= click
     shut ui html
+    -- A click in the emoji's field leaves their menu open.
+    opened ui emoji
+    find ui ".emoji-menu .emoji-search" >>= click
+    stillOpen ui emoji
+    editorText ui >>= click
+    shut ui emoji
 
 -- | Open the menu, and close it with a press outside it, with Escape, and
 -- with its own button.

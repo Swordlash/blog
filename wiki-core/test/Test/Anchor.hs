@@ -192,6 +192,17 @@ spec = describe "Anchor" $ do
       renderedText doc `shouldNotSatisfy` T.isInfixOf "Copy"
       renderedBlocks doc `shouldBe` blocksOf source
 
+    it "has an emoji shown as an item's bullet as the item's first character, where a quote over it is found" $ do
+      let source = "Plans:\n\n- :tada: Launch day\n- :bug: Fix the crash\n- Write it up"
+          text = renderedText (either (panic . show) identity (renderMarkdown defaultOptions source))
+      text `shouldBe` "Plans:🎉 Launch day🐛 Fix the crashWrite it up"
+      let a = quoting "day🐛 Fix" text
+      foundText text (locate text a) `shouldBe` Just "day🐛 Fix"
+      -- The same text as the page had before the emoji became bullets: a
+      -- numbered list never shows them so.
+      renderedText (either (panic . show) identity (renderMarkdown defaultOptions "Plans:\n\n1. :tada: Launch day\n2. :bug: Fix the crash\n3. Write it up"))
+        `shouldBe` text
+
     it "has no line numbers of a numbered listing" $ do
       let doc = either (panic . show) identity (renderMarkdown defaultOptions "Before.\n\n```haskell {.numbered}\nx = 1\ny = 2\n```\n\nAfter.")
       renderedText doc `shouldBe` "Before.x = 1\ny = 2\nAfter."

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+The editor completes emoji (WP5.86, #188). A colon that starts a word, or
+`-:` at the start of a line, opens a list of emoji in CodeMirror's one
+completion, beside the mentions' source; the source asks the component
+with a `wiki-emoji` event, read by `Wiki.App.Editor.Browser.emojiAsked`,
+and the component answers with `answerEmoji` from
+`Wiki.Core.Markdown.Emoji.emojiMatches`. Enter chooses an emoji once two
+letters are typed (or an entry was chosen with the arrows), Tab and a
+click at once; Escape on the emoji's list writes a backslash before its
+colon, as one step of the undo. The toolbar has a fourth menu, "Emoji"
+(`EmojiMenu`): a field to search, focused when it opens, and a grid of the
+emoji found, which the arrows move through (`gridKey`); the one chosen is
+written at the cursor as `:name:`. The guide's "Emoji" section, and so the
+help's, says how to type them.
+
 The help dialog has a section "Emoji" (WP5.83): `helpSections` takes the
 Markdown guide's `### Emoji` after "Tables".
 

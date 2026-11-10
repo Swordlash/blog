@@ -1598,6 +1598,24 @@ pre.numbered > code {
   margin: 0 0.4rem 0 -1.2rem;
 }
 
+/* An item of a bulleted list whose text starts with an emoji shows the
+   emoji in the bullet's place (Wiki.Core.Markdown.Render's renderItem):
+   no bullet, the emoji in a box just left of the text, where the bullet
+   was, and the text where the other items' text is. The emoji is still
+   the first character of the item's text; its negative right margin takes
+   back the space written after it. */
+.page-body li.emoji-item {
+  list-style: none;
+}
+
+.page-body li.emoji-item .emoji-bullet {
+  display: inline-block;
+  width: 1.5em;
+  margin-left: -1.5em;
+  margin-right: -0.25em;
+  text-align: center;
+}
+
 .page-body .footnotes {
   margin-top: 2.5rem;
   border-top: 1px solid var(--border);
@@ -3361,6 +3379,72 @@ body:has(.slides-view) {
   font-weight: 700;
   line-height: 1.4;
   text-align: center;
+}
+
+/* The emoji: a field to search, and a grid of the emoji found, eight to a
+   row (the arrows move by eight up and down: emojiColumns in
+   Wiki.App.View.Editor). */
+.emoji-menu {
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: calc(100vw - 2rem);
+}
+
+.emoji-menu .emoji-search {
+  width: 100%;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(1.8rem, 2.1rem));
+  gap: 0.1rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.toolbar-menu .emoji-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.1rem;
+  padding: 0;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 1.25rem;
+}
+
+.emoji-none {
+  margin: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* On a narrow toolbar (a phone, or a narrow editor) a menu that opens
+   under a button far from the left would run past the screen's right
+   edge, and the page would scroll sideways. There every menu opens under
+   the whole toolbar instead, as wide as it. The toolbar is the container
+   the width is read from, and the positioned box the menus are placed in:
+   sticky on a phone (above), relative elsewhere. */
+.editor-toolbar {
+  container: editor-toolbar / inline-size;
+}
+
+@media not all and (max-width: 760px) {
+  .editor-toolbar {
+    position: relative;
+  }
+}
+
+@container editor-toolbar (max-width: 40rem) {
+  .toolbar-menu-holder {
+    position: static;
+  }
+
+  .toolbar-menu {
+    right: 0.25rem;
+    left: 0.25rem;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 .swatch-none .icon {
@@ -7411,9 +7495,10 @@ a.mention {
   color: var(--caution);
 }
 
-/* The list that completes a mention (@codemirror/autocomplete, in
-   web/src/editor.js): a menu like the application's others, each user's
-   display name and then their login, dimmed, and the one Enter or Tab
+/* The list that completes a mention or an emoji (@codemirror/autocomplete,
+   in web/src/editor.js): a menu like the application's others, each user's
+   display name and then their login, dimmed, or each emoji and its
+   shortcode, and the one Enter or Tab
    would choose on the accent's tint. The rules name .editor-cm .cm-tooltip
    to outweigh CodeMirror's own theme, which has colours of its own for
    light and dark. */
@@ -7450,6 +7535,14 @@ a.mention {
 .editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 16%, var(--background));
+}
+
+/* An emoji's entry: the emoji, then its shortcode. */
+.editor-cm .cm-tooltip-autocomplete .cm-completionEmoji {
+  width: 1.4em;
+  margin-right: -0.6rem;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  text-align: center;
 }
 
 .editor-cm .cm-tooltip-autocomplete .cm-completionDetail {

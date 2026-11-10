@@ -395,6 +395,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Contents
       Test.Browser.CopyCode
       Test.Browser.Editor
+      Test.Browser.Emoji
       Test.Browser.Entries
       Test.Browser.Export
       Test.Browser.Favicon

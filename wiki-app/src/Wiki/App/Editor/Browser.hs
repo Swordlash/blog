@@ -7,7 +7,7 @@
 -- which of the editor's keys was pressed; the browser's warning before a
 -- reload or a close loses unsaved changes; the writing assistant's
 -- edits, as changes the author accepts or rejects; and the questions
--- CodeMirror asks to complete a mention, with their answers. The files,
+-- CodeMirror asks to complete a mention or an emoji, with their answers. The files,
 -- the keys and the events CodeMirror sends are read through the Web
 -- types' fields; what works on the text itself (CodeMirror, or the
 -- textarea's selection in UTF-16 code units) is @jsbits/editor.js@, and
@@ -41,6 +41,7 @@ module Wiki.App.Editor.Browser
   , focusText
   , goToTitleLine
   , focusElement
+  , focusInView
   , LiveFeed
   , listenLive
   , stopLive
@@ -59,6 +60,8 @@ module Wiki.App.Editor.Browser
   , clickElement
   , EditorKey (..)
   , editorKey
+  , GridKey (..)
+  , gridKey
 
     -- * The assistant's edits
   , currentText
@@ -76,6 +79,10 @@ module Wiki.App.Editor.Browser
     -- * Mentions
   , mentionAsked
   , answerMention
+
+    -- * Emoji
+  , emojiAsked
+  , answerEmoji
 
     -- * Leaving the page
   , guardUnload
@@ -137,6 +144,7 @@ $( browserJS
      , ("js_propose", "wiki_editor_propose", Safe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
      , ("js_settle", "wiki_editor_settle", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
+     , ("js_emojied", "wiki_editor_emojied", Safe, [t|Element -> Int -> JSText -> IO ()|])
      , ("js_title_line", "wiki_editor_title_line", Safe, [t|Element -> IO ()|])
      , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_next_problem", "wiki_editor_next_problem", Safe, [t|Element -> IO ()|])
@@ -190,8 +198,9 @@ newtype SelectionDetail = SelectionDetail JSVal
 newtype DecisionDetail = DecisionDetail JSVal
   deriving newtype (Inert)
 
--- | The detail of a @wiki-mention@ event: a question about a mention.
-newtype MentionDetail = MentionDetail JSVal
+-- | The detail of a @wiki-mention@ or @wiki-emoji@ event: a question
+-- about the letters typed of a mention or of an emoji's name.
+newtype QuestionDetail = QuestionDetail JSVal
   deriving newtype (Inert)
 
 $( jsFields
@@ -209,7 +218,7 @@ $( jsFields
  )
 
 $( jsFields
-     ''MentionDetail
+     ''QuestionDetail
      [ Fixed "id" ''Int
      , Fixed "letters" ''Text
      ]
@@ -344,6 +353,15 @@ goToTitleLine = liftIO . js_title_line
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
 focusElement = liftIO . HTMLElement.focusWithoutScrolling . coerce
+
+-- | Give an element the focus, and scroll it into view by the least
+-- amount, in the box that scrolls it and in the window, only where it is
+-- not already seen: an entry of a grid that scrolls (the "Emoji" menu's),
+-- reached with the arrow keys, which do not scroll the way Tab does.
+focusInView :: (MonadIO m) => Element -> m ()
+focusInView element = liftIO $ do
+  HTMLElement.focusWithoutScrolling (coerce element)
+  Element.scrollIntoViewBlock element Element.ToNearest
 
 -- | 'LiveFeed' is a window's subscription to what the editor of a page
 -- sends on the browser's channel between the wiki's windows (WP5.36 of
@@ -482,6 +500,33 @@ editorKey event
     key = if T.length pressed.key == 1 then T.toLower pressed.key else pressed.key
     inText = isJust (Event.target event >>= Element.fromEventTarget >>= (`Element.closestNow` "textarea.editor-text, .cm-content"))
 
+-- | 'GridKey' is a key pressed in a menu with a grid of entries (the
+-- toolbar's "Emoji" menu), as 'gridKey' reads it.
+data GridKey = GridKey
+  { key :: Text
+  -- ^ The key's name: @ArrowDown@, @Enter@, @a@.
+  , plain :: Bool
+  -- ^ Whether no modifier (Shift, Ctrl, Alt, Meta) was held.
+  , entry :: Maybe Int
+  -- ^ The number of the entry the key was pressed on, from the entry's
+  -- @data-index@, or 'Nothing' when it was pressed elsewhere in the menu
+  -- (its field).
+  }
+
+-- | The key a keydown in a menu with a grid of entries is, or 'Nothing'
+-- while an input method composes text: that key (an Enter that ends the
+-- composition, too) is the input method's, and the menu leaves it alone.
+-- Pure, so that the listener can decide whether the browser's own action
+-- is to be stopped.
+gridKey :: Event -> Maybe GridKey
+gridKey event
+  | pressed.isComposing || pressed.key == "Process" = Nothing
+  | otherwise = Just GridKey {key = pressed.key, plain, entry}
+  where
+    pressed = KeyboardEvent event
+    plain = not (pressed.ctrlKey || pressed.metaKey || pressed.altKey || pressed.shiftKey)
+    entry = Event.target event >>= Element.fromEventTarget >>= (`Element.getAttributeNow` "data-index") >>= readMaybe . T.unpack
+
 -- | The editor's current text: CodeMirror's, or the textarea's.
 currentText :: (MonadIO m) => Element -> m Text
 currentText host =
@@ -564,8 +609,13 @@ jsonText = toJSText . decodeUtf8 . BSL.toStrict . encode
 -- (@web/src/editor.js@), and waits for 'answerMention'. Pure, since the
 -- event does not change.
 mentionAsked :: Event -> Maybe (Int, Text)
-mentionAsked event = do
-  detail <- MentionDetail <$> detailOf event
+mentionAsked = questionOf
+
+-- | The question a @wiki-mention@ or @wiki-emoji@ event asks: its number,
+-- and the letters typed.
+questionOf :: Event -> Maybe (Int, Text)
+questionOf event = do
+  detail <- QuestionDetail <$> detailOf event
   guard (detail.id > 0)
   Just (detail.id, detail.letters)
 
@@ -578,6 +628,23 @@ answerMention :: (MonadIO m) => Element -> Int -> Maybe [User] -> m ()
 answerMention host i people =
   liftIO . js_mentioned host i $
     maybe (toJSText "") (\us -> jsonText [object ["login" .= u.login.text, "name" .= u.displayName] | u <- us]) people
+
+-- | The question a @wiki-emoji@ event asks: its number, and the letters
+-- typed of an emoji's name after a colon (none, for a colon alone).
+-- CodeMirror asks it a moment after the letters are typed
+-- (@web/src/editor.js@), and waits for 'answerEmoji'. Pure, since the
+-- event does not change.
+emojiAsked :: Event -> Maybe (Int, Text)
+emojiAsked = questionOf
+
+-- | Answer the question with this number: the emoji whose names match its
+-- letters, as (name, emoji) pairs, best first
+-- ("Wiki.Core.Markdown.Emoji"'s 'Wiki.Core.Markdown.Emoji.emojiMatches').
+-- CodeMirror shows them as a list to choose from, and keeps the answer for
+-- the same letters until the editor goes.
+answerEmoji :: (MonadIO m) => Element -> Int -> [(Text, Text)] -> m ()
+answerEmoji host i found =
+  liftIO . js_emojied host i $ jsonText [object ["name" .= name, "emoji" .= emoji] | (name, emoji) <- found]
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.

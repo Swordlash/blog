@@ -65,6 +65,20 @@ function wiki_test_one_column(selector) {
   return "";
 }
 
+// Give the first element a selector finds a style of its own, as a narrow
+// screen would leave it narrow (Test.Browser.Emoji: the editor 375 pixels
+// wide). An empty value takes the style away again.
+function wiki_test_set_style(selector, property, value) {
+  document.querySelector(selector)?.style.setProperty(property, value);
+}
+
+// How far the document scrolls sideways, in pixels: 0 when it is no wider
+// than the window.
+function wiki_test_sideways() {
+  const root = document.documentElement;
+  return Math.max(0, root.scrollWidth - root.clientWidth);
+}
+
 // How a code block that scrolls is drawn (Test.Browser.Spoilers): the height
 // of its content box, its line height, and its scrollHeight and clientHeight,
 // as "content line scroll client", or "" when the selector finds nothing.

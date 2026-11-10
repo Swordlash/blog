@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+`Wiki.Core.Markdown.Emoji` searches the names of emoji for the editor
+(WP5.86, #188): `emojiMatches` gives the emoji whose name is the letters,
+then those whose name starts with them, then those with a later word that
+does, at most `emojiLimit` (50), and `commonEmoji` for no letters. The
+names are the `emojis` package's, now a direct dependency, which
+commonmark-extensions parses `:name:` with, and a test parses each one.
+An item of a bulleted list whose text starts with an emoji is rendered
+with the class `emoji-item`, and the emoji with `emoji-bullet`, which the
+stylesheet shows in the bullet's place; the item's text is unchanged.
+
 A space's home page is the root of its pages (WP5.78b, #201).
 `Wiki.Core.Space` has `rootPage` (the home page, or none for the container
 of personal spaces and an encrypted space), `pagePath` and `pagesAt` and

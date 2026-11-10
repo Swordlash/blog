@@ -22,6 +22,18 @@ A name between colons is an emoji: `:tada:` is :tada:, `:rocket:` is :rocket:, `
 
 A name in the list is an emoji wherever it is, even between digits: `1:100:2` is 1:100:2. To keep it text, put a backslash before its first colon: `1\:100:2` is 1\:100:2, and `\:tada:` is \:tada:. In inline code and in code blocks, colons are always text: `` `:tada:` `` is `:tada:`.
 
+The editor completes emoji. A colon that starts a word (at the start of a line, or after a space) opens a list of emoji, the common ones first; the letters of a name typed after it narrow the list to the names that start with them, then those with a later word that does (`:roc` offers :rocket:, `:check` offers :white_check_mark:). Tab or a click writes the one chosen as `:name:`, and so does Enter once two letters are typed or an entry was chosen with the arrows; before that Enter is a new line, so a colon or a smiley such as `:p` at the end of a line stays as typed. A character that no name has (`:)`, a space) closes the list, and a colon after a letter or a digit (`10:30`, `Note:`) opens none. Escape closes the list and writes a backslash before the colon, `\:`, which keeps it text; one undo takes the backslash back. In code, in a link, in HTML and in math nothing opens. The toolbar's "Emoji" button opens a field to search the same names and a grid of the emoji found; a click, or Enter, writes the one chosen at the cursor.
+
+An item of a bulleted list that starts with an emoji shows the emoji in place of its bullet:
+
+```markdown
+- :white_check_mark: Written
+- :construction: Being reviewed
+- Not started
+```
+
+The emoji is still the item's first character, for search, comments and slides. A task keeps its box (`- [ ] :tada:`), a numbered list its numbers, and an item whose name is escaped (`- \:tada:`) its bullet. The PDF and Word exports keep the bullet before the emoji. In the editor, `-:` at the start of a line, after any indentation, opens the same list and writes such an item: `-:tada` and Tab give `- :tada: `. It is the editor's shorthand, not Markdown: `-:` left alone stays as typed, and on a table's line it opens nothing. Escape there writes `-\:`.
+
 ## Headings
 
 Every heading gets an `id` made from its text, so that a link can point at it: this section is `#headings`, and a link to it is [Headings](#headings). The `id` is the text in lower case, with spaces made dashes and punctuation left out; letters of every alphabet stay as they are, so `## Zażółć gęślą` is `#zażółć-gęślą`. A second heading with the same text gets `-2` added, a third `-3`, and so on down the page. To choose the `id` yourself, put it in braces after the heading: `## Setup {#install}`. Pointing at a heading shows a `#` after it, a link to it: follow it, and the address bar has the heading's address, to copy and pass on.

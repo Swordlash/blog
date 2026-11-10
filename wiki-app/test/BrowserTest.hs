@@ -13,6 +13,7 @@ import Test.Browser.Comments qualified as Comments
 import Test.Browser.Contents qualified as Contents
 import Test.Browser.CopyCode qualified as CopyCode
 import Test.Browser.Editor qualified as Editor
+import Test.Browser.Emoji qualified as Emoji
 import Test.Browser.Entries qualified as Entries
 import Test.Browser.Export qualified as Export
 import Test.Browser.Favicon qualified as Favicon
@@ -85,6 +86,7 @@ spec = do
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Menus closing on a press outside" (Menus.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
+  describe "Emoji in the editor" (Emoji.spec BrowserDOM)
   describe "Problems marked in the editor" (Problems.spec BrowserDOM)
   describe "Wiki.App.Browser" Entries.spec
   describe "Room to write in" (Workspace.spec BrowserDOM)

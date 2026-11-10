@@ -141,6 +141,22 @@ spec = describe "Markdown.Render" $ do
     it "puts a loose task's checkbox in its paragraph" $
       "- [x] done\n\n  more"
         `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><p><input checked disabled type=\"checkbox\"> done</p><p>more</p></li></ul>"
+    it "shows a bulleted item's leading emoji in the bullet's place, beside ordinary items" $ do
+      "- :tada: Launch\n- plain"
+        `shows'` ( "<ul>"
+                     <> "<li class=\"emoji-item\"><span class=\"emoji emoji-bullet\" title=\":tada:\">🎉</span> Launch</li>"
+                     <> "<li>plain</li>"
+                     <> "</ul>"
+                 )
+      "- :bug: one\n\n  more"
+        `shows'` "<ul><li class=\"emoji-item\"><p><span class=\"emoji emoji-bullet\" title=\":bug:\">🐛</span> one</p><p>more</p></li></ul>"
+      "- :x:" `shows'` "<ul><li class=\"emoji-item\"><span class=\"emoji emoji-bullet\" title=\":x:\">❌</span></li></ul>"
+    it "keeps the bullet or the number of an item whose emoji is not its first, of a task, of a numbered list, and of an escaped name" $ do
+      "- a :tada:" `shows'` "<ul><li>a <span class=\"emoji\" title=\":tada:\">🎉</span></li></ul>"
+      "- [ ] :tada: todo"
+        `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><input disabled type=\"checkbox\"> <span class=\"emoji\" title=\":tada:\">🎉</span> todo</li></ul>"
+      "1. :tada: first" `shows'` "<ol><li><span class=\"emoji\" title=\":tada:\">🎉</span> first</li></ol>"
+      "- \\:tada: text" `shows'` "<ul><li>:tada: text</li></ul>"
 
   describe "tables"
     $ it "writes the header, the rows and each column's alignment"
