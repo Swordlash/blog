@@ -12,6 +12,30 @@ link by id as they read one by path; a link to a version goes out at the
 wiki's address, since the document holds the page's text now. A version the
 page does not have is prerendered as not found.
 
+`wiki-server check` looks at how the accounts sign in (WP5.85, #205).
+`Storage.Rows.readPasswordColumns` is the one reading of a users row's
+three password columns (`PasswordColumns`): the password the sign-in
+uses (`storedPassword`) and the half of an OPAQUE record kept without its
+other half (`HalfRecord`); `accountOf` and the page of users take
+`hasPassword` from it too. `Opaque.decodeStored` says why a stored
+record or stretch does not decode (`recordFromStored` is it without the
+reason), and `Password.hashReadable` whether `verifyPassword` can check
+a hash (both through `readHash`). `Wiki.Server.WaysIn` holds the rule,
+`credentialProblem` and `brokenCredentials`, whose lines join the roots'
+in `BrokenRecords` (exit 5): a half record, a record or a stretch that
+does not decode, and a hash the verifier does not read, disabled
+accounts included; a hash beside a whole record is not read. It also
+holds the summary of a check that passes, `waysIn` and `waysInLines`:
+`checkDatabase` and `checkConnection` return `Checked` (the tables and
+`WaysIn`), and `runCheck` prints the summary after "Every table and
+every record read.". The rehearsal has a fifth check, `ways in`: before
+and after, the program's `users list` on the database its server serves
+(`Server` gains `console`, `withServer` the place's options), read by
+`readUsersList` and compared by `compareWaysIn`, which fails for each
+login whose SIGNS IN was `yes` and is not any more. `users list` and its
+table are stable for the rehearsal. `Test.Storage.Fixture.decodableRecord`
+is a record the sign-in decodes, for tests.
+
 Each space's home page is the root of its pages (WP5.78b, #201). Step 13
 of the schema, `Wiki.Server.Storage.Migrate.Code.Step0013`, puts every
 other top-level page under the home page, before the pages it had, takes
