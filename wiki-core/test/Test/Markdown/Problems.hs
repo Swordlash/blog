@@ -24,30 +24,30 @@ spec :: Spec
 spec = describe "Wiki.Core.Markdown.Problems" $ do
   describe "the parser's problems" $ do
     it "finds nothing in a page without mistakes" $
-      parserProblems "# Title\n\n[[spoiler]]{a}(A)\nText.\n[[/spoiler]]{a}\n\n> [!TIP] Title\n> Text.\n\n> A quotation." `shouldBe` []
+      parserProblems "# Title\n\n[[!spoiler]]{a}(A)\nText.\n[[/spoiler]]{a}\n\n> [!TIP] Title\n> Text.\n\n> A quotation." `shouldBe` []
 
     it "marks a spoiler's broken marker line, with its reason" $ do
-      placed "# Title\n\nText.\n\n[[spoiler]]\nMore." `shouldBe` [(5, 5, Spoiler)]
-      map (.message) (parserProblems "[[spoiler]]{a}\nText.")
-        `shouldBe` ["A spoiler needs a description in parentheses after its name, as in [[spoiler]]{name}(Description)"]
+      placed "# Title\n\nText.\n\n[[!spoiler]]\nMore." `shouldBe` [(5, 5, Spoiler)]
+      map (.message) (parserProblems "[[!spoiler]]{a}\nText.")
+        `shouldBe` ["A spoiler needs a description in parentheses after its name, as in [[!spoiler]]{name}(Description)"]
 
-    it "marks an end marker that ends no spoiler, inside another spoiler too" $ do
-      let source = "[[spoiler]]{a}(A)\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n[[/spoiler]]{c}"
-      placed source `shouldBe` [(2, 2, Spoiler), (5, 5, Spoiler)]
-      map (.message) (parserProblems source) `shouldBe` ["No open spoiler of this name", "No spoiler is open here"]
+    it "marks an end marker that ends no spoiler inside another spoiler, and leaves one with none open text" $ do
+      let source = "[[!spoiler]]{a}(A)\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n[[/spoiler]]{c}"
+      placed source `shouldBe` [(2, 2, Spoiler)]
+      map (.message) (parserProblems source) `shouldBe` ["No open spoiler of this name"]
 
     it "marks a spoiler that is not closed at its start marker" $ do
-      let source = "# Title\n\n[[spoiler]]{answer}(The answer)\nForty-two.\n\nMore."
+      let source = "# Title\n\n[[!spoiler]]{answer}(The answer)\nForty-two.\n\nMore."
       placed source `shouldBe` [(3, 3, Spoiler)]
       map (.message) (parserProblems source) `shouldBe` ["Spoiler “answer” is not closed: add [[/spoiler]]{answer}"]
 
     it "marks a spoiler that cuts a section at its start marker" $ do
-      let source = "## One\n\nText.\n\n[[spoiler]]{s}(S)\nHidden.\n\n## Two\n\nMore.\n[[/spoiler]]{s}\n"
+      let source = "## One\n\nText.\n\n[[!spoiler]]{s}(S)\nHidden.\n\n## Two\n\nMore.\n[[/spoiler]]{s}\n"
       placed source `shouldBe` [(5, 5, Spoiler)]
       map (T.take 26 . (.message)) (parserProblems source) `shouldBe` ["Spoiler “s” cuts a section"]
 
     it "marks a spoiler not closed inside a quotation, at its own line" $
-      placed "Text.\n\n> Quoted.\n>\n> [[spoiler]]{q}(Q)\n> Inside." `shouldBe` [(5, 5, Spoiler)]
+      placed "Text.\n\n> Quoted.\n>\n> [[!spoiler]]{q}(Q)\n> Inside." `shouldBe` [(5, 5, Spoiler)]
 
     it "marks a quotation that starts like a box's marker but is not a box" $ do
       placed "Text.\n\n> [!]\n> Body." `shouldBe` [(3, 3, Box)]
@@ -58,15 +58,15 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       placed "> [!NOTE]\n> Body.\n\n> [!TIP*] Title\n\n> [link](x)\n\n> [x] and [!y]" `shouldBe` []
 
     it "takes a heading spoiler, which has no end marker, as closed, and marks a marker pair that crosses its end" $ do
-      parserProblems "# Title\n\n## [[spoiler]] Question\n\nAnswer.\n\n## [[spoiler]]{named} Another\n\nText.\n\n## Next\n\nMore." `shouldBe` []
+      parserProblems "# Title\n\n## [[!spoiler]] Question\n\nAnswer.\n\n## [[!spoiler]]{named} Another\n\nText.\n\n## Next\n\nMore." `shouldBe` []
       -- A pair that starts in a heading spoiler's section and ends after
       -- it cuts that section.
-      placed "## One\n\n### [[spoiler]] Q\n\n[[spoiler]]{s}(S)\nHidden.\n\n### Two\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(5, 5, Spoiler)]
+      placed "## One\n\n### [[!spoiler]] Q\n\n[[!spoiler]]{s}(S)\nHidden.\n\n### Two\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(5, 5, Spoiler)]
       -- A pair that holds a heading spoiler and the text after its section.
-      placed "[[spoiler]]{s}(S)\n## [[spoiler]] Q\n\nAnswer.\n\n# Top\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(1, 1, Spoiler)]
+      placed "[[!spoiler]]{s}(S)\n## [[!spoiler]] Q\n\nAnswer.\n\n# Top\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(1, 1, Spoiler)]
 
     it "lists the problems in the order of their lines" $
-      placed "> [!]\n\n[[/spoiler]]{a}\n\n[[spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Spoiler), (5, 5, Spoiler)]
+      placed "> [!]\n\n[[!pause]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]
 
   describe "the islands' places" $ do
     it "places a fence of the page at its lines, the fences included" $ do
@@ -78,7 +78,7 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       places source `shouldBe` [(("x^", 0), (2, 2, Formula)), (("y +", 0), (3, 3, Formula))]
 
     it "places islands inside a spoiler, a box's title and a list at their lines" $ do
-      let source = "[[spoiler]]{s}(Show $z$)\nInside:\n\n```tikz\n\\draw (0,0);\n```\n[[/spoiler]]{s}\n\n> [!TIP] About $t$\n> Text.\n\n- item\n- with $u$"
+      let source = "[[!spoiler]]{s}(Show $z$)\nInside:\n\n```tikz\n\\draw (0,0);\n```\n[[/spoiler]]{s}\n\n> [!TIP] About $t$\n> Text.\n\n- item\n- with $u$"
       places source
         `shouldBe` [ (("\\draw (0,0);", 0), (5, 5, Picture))
                    , (("t", 0), (9, 9, Formula))
@@ -87,7 +87,7 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
                    ]
 
     it "places islands in a heading spoiler's heading and section at their lines" $ do
-      let source = "# T\n\n## [[spoiler]] About $q$\n\nAnswer:\n\n```mermaid\ngraph LR\n```\n\n## Next\n\n$r$"
+      let source = "# T\n\n## [[!spoiler]] About $q$\n\nAnswer:\n\n```mermaid\ngraph LR\n```\n\n## Next\n\n$r$"
       places source
         `shouldBe` [ (("graph LR", 0), (8, 8, Diagram))
                    , (("q", 0), (3, 3, Formula))
@@ -132,7 +132,7 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 
     it "turns an island's failure into a problem at its place, and drops one no longer in the text" $ do
-      let checked = checkText "# T\n\n```mermaid\nbad\n```\n\n[[spoiler]]{a}(A)"
+      let checked = checkText "# T\n\n```mermaid\nbad\n```\n\n[[!spoiler]]{a}(A)"
           gone = IslandKey "old\n" 0
           failed = Map.fromList [(IslandKey "bad\n" 0, "Parse error on line 1"), (gone, "Parse error")]
       [(p.from, p.to, p.kind, p.message) | p <- allProblems checked failed]

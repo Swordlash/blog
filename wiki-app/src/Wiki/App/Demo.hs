@@ -250,7 +250,7 @@ teamHandbook =
   , "Private to the team: only people granted a permission on this space, or"
   , "on the wiki as a whole, can read it."
   , ""
-  , "[[toc]]"
+  , "[[!toc]]"
   , ""
   , "## The week"
   , ""

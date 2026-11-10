@@ -91,6 +91,7 @@ import Data.List (findIndex, lookup, span, zip3)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
+import Wiki.Core.Markdown.Ast (MarkerName (..), closingMarker, openingMarker)
 import Wiki.Core.Markdown.Link (labelText)
 import Wiki.Core.Math (onlyDefinitions)
 
@@ -136,8 +137,8 @@ data Command
     Image
   | -- | A table of three columns.
     Table
-  | -- | A block spoiler, @[[spoiler]]{name}(Description)@ to
-    -- @[[/spoiler]]{name}@.
+  | -- | A block spoiler, @[[!spoiler]]{name}(Description)@ to
+    -- @[[/spoiler]]@.
     SpoilerBlock
   | HorizontalRule
   | Html HtmlTag
@@ -676,14 +677,14 @@ details text sel@(Selection s e)
     sectionTemplate = "<details>\n<summary>" <> summary <> "</summary>\nWhat opens on a click.\n</details>"
 
 -- | A block spoiler around the lines the selection touches: its start
--- marker, @[[spoiler]]{name}(Description)@, on a line above them, and
--- its end marker, @[[/spoiler]]{name}@, on a line below. The name in the
--- start marker is selected, to be typed over; the end marker must then
--- be given the same name. With nothing selected, a spoiler with an empty
--- line in it goes after the cursor's line.
+-- marker, @[[!spoiler]]{name}(Description)@, on a line above them, and
+-- its end marker, @[[/spoiler]]@, on a line below. The name in the start
+-- marker is selected, to be typed over; the end marker needs none. With
+-- nothing selected, a spoiler with an empty line in it goes after the
+-- cursor's line.
 spoilerBlock :: Text -> Selection -> (Text, Selection)
 spoilerBlock text sel@(Selection s e)
-  | s == e = template (opening <> "\n\n" <> closing) (Just (T.length "[[spoiler]]{", T.length name)) text sel
+  | s == e = template (opening <> "\n\n" <> closing) (Just (T.length beforeName, T.length name)) text sel
   | otherwise = case touched text sel of
       [] -> (text, sel)
       ls@(firstLine : _) ->
@@ -692,13 +693,14 @@ spoilerBlock text sel@(Selection s e)
             hi = lastLine.at + T.length lastLine.line
             content = T.take (hi - lo) (T.drop lo text)
             (pre, post) = blockSeparators (T.take lo text) (T.drop hi text)
-            begin = lo + T.length pre + T.length "[[spoiler]]{"
+            begin = lo + T.length pre + T.length beforeName
             new = pre <> opening <> "\n" <> content <> "\n" <> closing <> post
          in (replace [Replacement lo (hi - lo) new] text, Selection begin (begin + T.length name))
   where
     name = "name"
-    opening = "[[spoiler]]{" <> name <> "}(Description)"
-    closing = "[[/spoiler]]{" <> name <> "}"
+    beforeName = openingMarker SpoilerName <> "{"
+    opening = beforeName <> name <> "}(Description)"
+    closing = closingMarker SpoilerName
 
 -- Links
 

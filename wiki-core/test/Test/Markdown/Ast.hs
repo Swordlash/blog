@@ -25,7 +25,7 @@ spec = describe "Markdown.Ast" $ do
       (map fst <$> parseWithLines "# Title\n\nA paragraph\nover two lines.\n\n- one\n- two\n\n> quoted\n> more\n\n```\ncode\n```\n")
         `shouldBe` Right [Just 1, Just 3, Just 6, Just 9, Just 12]
     it "gives the same blocks as parseMarkdown, heading ids and all" $ do
-      let source = "# Intro\n\n# Intro\n\n. . .\n\n[[toc]]\n\nAsk @ada.\n"
+      let source = "# Intro\n\n# Intro\n\n[[!pause]]\n\n[[!toc]]\n\nAsk @ada.\n"
       (map snd <$> parseWithLines source) `shouldBe` parseMarkdown source
     it "starts each piece of a paragraph split around display math on the paragraph's line" $
       (parseWithLines "intro\n\nbefore\n$$x$$\nafter\n")
@@ -95,18 +95,20 @@ spec = describe "Markdown.Ast" $ do
       "> quoted" `parses` [BlockQuote (para [Str "quoted"])]
     it "reads a thematic break" $
       "a\n\n---\n\nb" `parses` [Para [Str "a"], ThematicBreak, Para [Str "b"]]
-    it "reads a pause, three dots alone in a paragraph, where a slide can have one" $ do
-      "a\n\n. . .\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
-      "::: incremental\n. . .\n:::" `parses` [Div [("class", "incremental")] [Pause]]
-      "> [!TIP]\n> . . ." `parses` [Alert Tip (titled Tip Nothing) [Pause]]
-      "- a\n\n  . . .\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
-    it "leaves three dots text in a quotation, after other text, or written closer" $ do
+    it "reads a pause, [[!pause]] on a line of its own, where a slide can have one" $ do
+      "a\n\n[[!pause]]\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
+      "[[!incremental]]\n[[!pause]]\n[[/incremental]]" `parses` [Div [("class", "incremental")] [Pause]]
+      "> [!TIP]\n> [[!pause]]" `parses` [Alert Tip (titled Tip Nothing) [Pause]]
+      "- a\n\n  [[!pause]]\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
+    it "leaves three dots text, alone or not" $ do
+      "a\n\n. . .\n\nb" `parses` [Para [Str "a"], Para [Str ". . ."], Para [Str "b"]]
       "> . . ." `parses` [BlockQuote (para [Str ". . ."])]
       "a\n. . ." `parses` para [Str "a", SoftBreak, Str ". . ."]
       "..." `parses` para [Str "..."]
-      ". . . ." `parses` para [Str ". . . ."]
-    it "reads a fenced div with its class" $
-      "::: warning\nCareful.\n:::" `parses` [Div [("class", "warning")] (para [Str "Careful."])]
+    it "reads a div with its class" $
+      "[[!div]]{.warning}\nCareful.\n[[/div]]" `parses` [Div [("class", "warning")] (para [Str "Careful."])]
+    it "leaves a fenced div's colons text" $
+      "::: warning\nCareful.\n:::" `parses` para [Str "::: warning", SoftBreak, Str "Careful.", SoftBreak, Str ":::"]
     it "reads a GitHub alert" $
       "> [!NOTE]\n> Read this." `parses` [Alert Note (titled Note Nothing) (para [Str "Read this."])]
     it "reads a box of any kind, in any case, as that kind in lower case" $ do

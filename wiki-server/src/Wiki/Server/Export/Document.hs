@@ -8,9 +8,12 @@
 -- The input is the page's own Markdown, read by pandoc's Markdown reader
 -- with the extensions that match the syntax the wiki reads
 -- ("Wiki.Core.Markdown.Ast", 'wikiExtensions'): pipe tables, footnotes,
--- fenced divs, @$…$@ and @\\(…\\)@ math, GitHub's task lists,
--- strikethrough, bare links, emoji and wiki links, and attributes in
--- braces. Boxes, @> [!KIND]@, are found by the wiki's own parser, not by
+-- @$…$@ and @\\(…\\)@ math, GitHub's task lists, strikethrough, bare
+-- links, emoji and wiki links, and attributes in braces. The wiki's own
+-- blocks, @[[!name]]@ … @[[/name]]@, are found by the wiki's own parser,
+-- and pandoc reads placeholders in their place ('withBoxes'); it reads no
+-- fenced div (@:::@) and no pause (@. . .@) of its own, which the wiki
+-- does not read either. Boxes, @> [!KIND]@, are found by the wiki's own parser, not by
 -- pandoc's, whose reader knows only GitHub's five kinds and no title
 -- after the marker ('withBoxes'), so a document has a box exactly where
 -- the page has one, with the same title. Raw HTML is read as raw, and goes through the wiki's
@@ -36,11 +39,11 @@
 -- * __Spoilers__ ("Wiki.Core.Markdown.Ast"): a document cannot hide
 --   anything, so a block spoiler is a box with the class @alert-spoiler@,
 --   titled with its description, its content shown; the wiki's parser
---   finds its marker lines, and they are rewritten as a fenced div before
---   pandoc reads the page ('withBoxes'). A spoiler the page shows in red
---   (not closed, or cutting a section) is its blocks as they are, after
---   its marker line and the reason as text, and so is a broken marker
---   line. A heading spoiler (@## [[spoiler]] Question@) is its heading
+--   finds its marker lines, and they are rewritten as placeholders before
+--   pandoc reads the page ('withBoxes', 'markedBlocks'). A spoiler the
+--   page shows in red (not closed, or cutting a section) is its blocks as
+--   they are, after its marker line and the reason as text, and so is a
+--   broken marker line. A heading spoiler (@## [[!spoiler]] Question@) is its heading
 --   and its section as they are: its marker is taken out of the
 --   heading's line in the same pass, so pandoc reads an ordinary heading.
 --   An inline spoiler, @||text||@, is its text in a @spoiler@ span
@@ -74,18 +77,19 @@
 --   becomes a section's title slide, any other a slide's title (a
 --   level-two heading at pandoc's slide level 2), and a slide without one
 --   gets an untitled one. The other headings on a slide are kept below the
---   slide level. The @notes@ divs are what pandoc writes as the speaker's
---   notes (@\\note{}@ in Beamer).
--- * __Steps__ ("Wiki.Core.Slides"): a pause, @. . .@ alone in a paragraph,
---   and a box with the class @incremental@ are pandoc's own markers, so its
---   Beamer writer makes overlays of them (@\\pause@, and @[\<+->]@ on the
---   lists), one PDF page for each step the wiki shows ('slideSteps'). Its
---   PowerPoint writer animates an incremental list, but has no pauses. A
---   pause is read where the wiki reads one, and only there; everywhere else
---   in a deck the three dots stay text, and a quotation's lists are never
---   incremental, since the wiki shows a quotation whole. In any other
---   document a pause is left out ('withoutPauses'), and an incremental box
---   is an ordinary one.
+--   slide level. The @notes@ divs (@[[!notes]]@) are what pandoc writes
+--   as the speaker's notes (@\\note{}@ in Beamer). The deck's look,
+--   @[[!slides]]{…}@, is read from the wiki's parse ("Wiki.Server.Export").
+-- * __Steps__ ("Wiki.Core.Slides"): a pause, @[[!pause]]@, becomes
+--   pandoc's own, a paragraph of three dots, and a box with the class
+--   @incremental@ is pandoc's own marker too, so its Beamer writer makes
+--   overlays of them (@\\pause@, and @[\<+->]@ on the lists), one PDF page
+--   for each step the wiki shows ('slideSteps'). Its PowerPoint writer
+--   animates an incremental list, but has no pauses. A pause is made only
+--   where the wiki reads one; three dots an author wrote stay text
+--   ('dotsAsText'), and a quotation's lists are never incremental, since
+--   the wiki shows a quotation whole. In any other document a pause is
+--   left out ('withoutPauses'), and an incremental box is an ordinary one.
 module Wiki.Server.Export.Document
   ( -- * Reading a page
     Place (..)
@@ -133,7 +137,7 @@ import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinition
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
-import Wiki.Core.Markdown.Ast (Block (..), BoxMarker (..), Footnote (..), ListItem (..), ParseError, SpoilerHead (..), SpoilerMarker (..), SpoilerRole (..), WrittenIds (..), parseWithAllMarkers, spoilerProblemText)
+import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), markerAt, parseWithAllMarkers, spoilerProblemText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
@@ -211,7 +215,6 @@ wikiExtensions =
     , Ext_escaped_line_breaks
     , Ext_fenced_code_attributes
     , Ext_fenced_code_blocks
-    , Ext_fenced_divs
     , Ext_footnotes
     , Ext_gfm_auto_identifiers
     , Ext_auto_identifiers
@@ -253,22 +256,12 @@ pageBlocks output place page = do
     . walk (concatMap dropOptions)
     . walk htmlInlines
     . walk (concatMap htmlBlock)
-    . steps
-    $ filter (not . contentsMarker) read'
+    $ steps read'
   where
     steps = case output of
       ToBeamer -> slideSteps True
       ToPowerPoint -> slideSteps False
       _ -> withoutPauses
-
--- | Whether a block is @[[toc]]@ alone in a paragraph, where the page
--- shows its table of contents ("Wiki.Core.Markdown.Toc"). Pandoc reads it
--- as a wiki link to a page called @toc@, and a document gets a table of
--- contents from the writer, so it is left out.
-contentsMarker :: P.Block -> Bool
-contentsMarker = \case
-  P.Para [P.Link _ [P.Str label] (target, _)] -> T.toLower label == "toc" && T.toLower target == "toc"
-  _ -> False
 
 -- | A page, as a document of its own, titled as the page shows it
 -- ('titled').
@@ -351,9 +344,10 @@ data PageRead = PageRead
   { source :: Text
   , blocks :: Either ParseError [Block]
   , markers :: [BoxMarker]
-  , spoilers :: Map Int (Int, SpoilerEdit)
-  -- ^ What becomes of each of the page's spoiler marker lines, by its
-  -- line, with the column its marker starts at ('spoilerEdits').
+  , lineEdits :: Map Int (Int, MarkerEdit)
+  -- ^ What becomes of each of the page's marker lines (those of its
+  -- spoilers and of its other blocks of the wiki's own), by its line, with
+  -- the column its marker starts at ('markerEdits').
   , written :: WrittenIds
   -- ^ The identifiers written in the page's source, and which of its
   -- headings have one written ('reidentified').
@@ -369,37 +363,47 @@ readPage raw =
     { source
     , blocks = (\(bs, _, _, _) -> bs) <$> parsedPage
     , markers = either (const []) (\(_, ms, _, _) -> ms) parsedPage
-    , spoilers = either (const mempty) (\(bs, _, ss, _) -> spoilerEdits bs ss) parsedPage
+    , lineEdits = either (const mempty) (\(bs, _, ss, _) -> markerEdits bs ss) parsedPage
     , written = either (const (WrittenIds [] [])) (\(_, _, _, w) -> w) parsedPage
-    , bars = either (const []) (\(_, _, ss, _) -> [((s.spoilerLine, s.spoilerColumn), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
+    , bars = either (const []) (\(_, _, ss, _) -> [((s.lineAt, s.columnAt), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
     }
   where
     source = normalLines raw
     parsedPage = parseWithAllMarkers source
 
--- | 'SpoilerEdit' is what the export writes in place of a spoiler's
--- marker line ('withBoxes').
-data SpoilerEdit
-  = -- | The start of a box with this description as its title.
+-- | 'MarkerEdit' is what the export writes in place of a marker line of
+-- one of the wiki's own blocks ('withBoxes').
+data MarkerEdit
+  = -- | The start of a spoiler's box with this description as its title.
     OpenBox Text
-  | -- | The end of the box that starts on this line.
+  | -- | The start of a div with these attributes (a @notes@,
+    -- @incremental@ or @div@ block).
+    OpenDiv Attributes
+  | -- | The end of the box or div that starts on this line.
     CloseBox Int
+  | -- | A pause, which pandoc's slide writers read.
+    PauseHere
   | -- | A line of text, as the page shows it in red.
     ShowLine Text
-  | -- | Nothing: the end marker of a spoiler shown as its blocks.
+  | -- | Nothing: the end marker of a spoiler shown as its blocks, the
+    -- deck's look and the table of contents' place, which a document
+    -- gets from the writer.
     DropLine
   | -- | A heading spoiler's marker, from its column up to this one,
     -- where the heading's text starts, taken out of the line.
     DropMarker Int
   deriving stock (Eq, Show)
 
--- | What becomes of each spoiler marker line of a page, by its line: a
--- spoiler the page shows as one is a box; one the page shows in red
+-- | What becomes of each marker line of a page, by its line: a spoiler
+-- the page shows as one is a box; one the page shows in red
 -- ('SpoilerHead''s @problem@) is its blocks, after its marker and the
--- reason as text; a broken marker line is its text and the reason.
-spoilerEdits :: [Block] -> [SpoilerMarker] -> Map Int (Int, SpoilerEdit)
-spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, e)) | m <- markers, Just e <- [edit m]]
+-- reason as text; another block is a div, a pause a pause, and a broken
+-- marker line is its text and the reason.
+markerEdits :: [Block] -> [MarkerLine] -> Map Int (Int, MarkerEdit)
+markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- markers, Just e <- [edit m]]
   where
+    -- The lines of the blocks other than spoilers that are closed.
+    divs = Set.fromList [m.lineAt | m <- markers, Opens _ <- [m.role]]
     heads = Map.fromList [(h.line, h) | h <- concatMap headsOf doc]
     headsOf = \case
       Spoiler h bs -> h : concatMap headsOf bs
@@ -410,12 +414,17 @@ spoilerEdits doc markers = Map.fromList [(m.spoilerLine, (m.spoilerColumn, e)) |
       Footnotes notes -> concat [concatMap headsOf bs | Footnote _ _ bs <- notes]
       _ -> []
     edit m = case m.role of
-      Starts _ description -> Just $ case Map.lookup m.spoilerLine heads of
+      Starts _ description -> Just $ case Map.lookup m.lineAt heads of
         Just h | Just problem <- h.problem -> ShowLine (h.marker <> " — " <> spoilerProblemText h problem)
         _ -> OpenBox description
+      Opens attrs -> Just (OpenDiv attrs)
       Ends start -> Just $ case Map.lookup start heads of
         Just h | isNothing h.problem -> CloseBox start
+        _ | start `Set.member` divs -> CloseBox start
         _ -> DropLine
+      Pauses -> Just PauseHere
+      SetsSlides -> Just DropLine
+      PlacesContents -> Just DropLine
       Faulty written why -> Just (ShowLine (written <> " — " <> why))
       HeadingMarker end -> Just (DropMarker end)
       -- An inline spoiler's bars are rewritten apart ('withBoxes').
@@ -434,22 +443,27 @@ normalLines = T.replace "\r" "\n" . T.replace "\r\n" "\n"
 -- again without it, so the document shows the marker as written, and no
 -- placeholder.
 withBoxesRead :: [BoxKind] -> Numbering -> PageRead -> Either PandocError [P.Block]
-withBoxesRead defined numbering page = go page.markers page.spoilers
+withBoxesRead defined numbering page = go page.markers page.lineEdits
   where
-    go markers spoilers = do
-      let (marked, boxes, spoilerBoxes, bars) = withBoxes page.source markers spoilers page.bars
+    go markers edits = do
+      let (marked, boxes, markedLines, bars) = withBoxes page.source markers edits page.bars
       -- Without pandoc's automatic identifiers, so that a heading's
       -- identifier is one written in the source ('reidentified').
       P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = disableExtension Ext_auto_identifiers wikiExtensions} marked)
-      let boxed = walk (spoilersOf spoilerBoxes) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) read')
+      -- The three dots an author wrote are text before the pauses are
+      -- made, so that only the wiki's pauses are pandoc's.
+      let boxed = walk (markedBlocks markedLines) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) (walk dotsAsText read'))
           found = texts boxed
           stray = Set.fromList (concatMap (\t -> [m | (placeholder, (m, _)) <- Map.toList boxes, placeholder `T.isInfixOf` t]) found)
-          -- A spoiler whose box pandoc did not read keeps its marker
-          -- lines as written, and so does a line shown as text that
-          -- pandoc did not read as a paragraph of its own.
-          straySpoilers = Set.fromList [line | (placeholder, (line, _)) <- Map.toList spoilerBoxes, any (placeholder `T.isInfixOf`) found]
-          unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` straySpoilers && (case e of CloseBox start -> start `Set.notMember` straySpoilers; _ -> True)) spoilers
-      if Set.null stray && Set.null straySpoilers
+          -- A block whose start or end pandoc did not read as a paragraph
+          -- of its own, in the same list of blocks as the other, keeps
+          -- both marker lines as written, and so does a line shown as
+          -- text or a pause that pandoc did not read as a paragraph of
+          -- its own.
+          strayLines = [(line, e) | (placeholder, (line, e)) <- Map.toList markedLines, any (placeholder `T.isInfixOf`) found]
+          strayMarked = Set.fromList (map fst strayLines <> [start | (_, CloseBox start) <- strayLines])
+          unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` strayMarked && (case e of CloseBox start -> start `Set.notMember` strayMarked; _ -> True)) edits
+      if Set.null stray && Set.null strayMarked
         then pure (reidentified page.written (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
         else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
@@ -488,27 +502,32 @@ type Boxes = Map Text (BoxMarker, Text)
 -- documentation), more of the digest is taken, and with all 64 digits
 -- there the boxes are left as pandoc reads them.
 --
--- A spoiler's marker lines are rewritten at the same time
--- ('SpoilerEdit'): the start of a spoiler shown as one becomes a fenced
--- div of the class @wikispoiler@ whose first paragraph is a placeholder
--- (@wikibox@, the digits, @s@, a number and @z@) and the description,
--- which 'spoilersOf' makes the box's title; its end marker ends the div.
--- A line the page shows in red becomes a paragraph of a placeholder
--- alone, which 'spoilersOf' replaces with the line's text, so that
--- nothing in the text is read as Markdown. Pandoc wants a fenced div
--- apart from the blocks around it, so each of these lines has an empty
--- line (of the prefix's quotation marks) before and after it. A heading
--- spoiler's marker is taken out of its heading's line, with the spaces
--- after it, and nothing else of the line changes. The third result is
--- each spoiler line's placeholder, with its line and what it becomes.
+-- The marker lines of the wiki's own blocks are rewritten at the same
+-- time ('MarkerEdit'). Each becomes a paragraph of a placeholder
+-- (@wikibox@, the digits, @s@, a number and @z@), which 'markedBlocks'
+-- makes what the line stands for once pandoc has read the page: the
+-- start of a block and its end the two ends of a div (the start of a
+-- spoiler's with its description after the placeholder, as the box's
+-- title), a pause pandoc's pause, a line the page shows in red the line's
+-- text, so that nothing in it is read as Markdown. So pandoc reads no
+-- fenced div and no pause of its own: what an author wrote as @:::@ or
+-- @. . .@ is text in a document, as on the page ('wikiExtensions',
+-- 'dotsAsText'). Each placeholder is a paragraph of its own, so each of
+-- these lines has an empty line (of the prefix's quotation marks)
+-- before and after it. The deck's look, the table of contents' place and
+-- the end marker of a spoiler shown in red become an empty line. A
+-- heading spoiler's marker is taken out of its heading's line, with the
+-- spaces after it, and nothing else of the line changes. The third
+-- result is each marker line's placeholder, with its line and what it
+-- becomes.
 --
 -- The bars of each inline spoiler the wiki's parser found are replaced
 -- too, each pair by a placeholder ('Bars', the fourth result), which
 -- 'hiddenSpans' pairs again once pandoc has read the page. So pandoc
 -- never decides what is a spoiler either: bars it would read as text
 -- once it has decoded them (@\\|@, @&#124;@) stay text.
-withBoxes :: Text -> [BoxMarker] -> Map Int (Int, SpoilerEdit) -> [((Int, Int), (Int, Int))] -> (Text, Boxes, Map Text (Int, SpoilerEdit), Maybe Bars)
-withBoxes source markers spoilers bars = case family of
+withBoxes :: Text -> [BoxMarker] -> Map Int (Int, MarkerEdit) -> [((Int, Int), (Int, Int))] -> (Text, Boxes, Map Text (Int, MarkerEdit), Maybe Bars)
+withBoxes source markers edits bars = case family of
   Nothing -> (source, mempty, mempty, Nothing)
   Just prefix ->
     let placed =
@@ -518,7 +537,7 @@ withBoxes source markers spoilers bars = case family of
             , Just text <- [atMay lines' (m.markerLine - 1)]
             , Just start <- [markerStart m text]
             ]
-        spoilerPlaceholders = Map.fromList [(line, prefix <> "s" <> show n <> "z") | (n, line) <- zip [1 :: Int ..] (Map.keys spoilers)]
+        linePlaceholders = Map.fromList [(line, prefix <> "s" <> show n <> "z") | (n, line) <- zip [1 :: Int ..] (Map.keys edits)]
         -- Each pair of bars, by its line, with its column and its
         -- placeholder.
         barPlaceholders =
@@ -535,26 +554,23 @@ withBoxes source markers spoilers bars = case family of
         place text (i, placeholder) = T.take i text <> placeholder <> T.drop (i + 2) text
         rewrite n written =
           let text = withPlaceholders n written
-           in case (Map.lookup n placed, Map.lookup n spoilers) of
+           in case (Map.lookup n placed, Map.lookup n edits) of
                 (Just (placeholder, m, start, _), _) -> [T.take start text <> placeholder <> maybe "" (const (" " <> titleIn (T.drop start text))) m.boxTitle, quoteOnly (T.take start text)]
                 (Nothing, Just (column, e)) ->
                   let before = T.take (column - 1) text
-                      -- The prefix as the lines after the marker's continue it.
-                      indent = T.map (\c -> if c == '>' || c == '\t' then c else ' ') before
-                      placeholder = fromMaybe "" (Map.lookup n spoilerPlaceholders)
+                      placeholder = fromMaybe "" (Map.lookup n linePlaceholders)
                       around ls = [quoteOnly before] <> ls <> [quoteOnly before]
                    in case e of
-                        OpenBox _ -> around [before <> "::: wikispoiler", quoteOnly before, indent <> placeholder <> " " <> descriptionIn (T.drop (column - 1) text)]
-                        CloseBox _ -> around [before <> ":::"]
-                        ShowLine _ -> around [before <> placeholder]
+                        OpenBox _ -> around [before <> placeholder <> " " <> descriptionIn (T.drop (column - 1) text)]
                         DropLine -> [quoteOnly before]
                         DropMarker end -> case (indexAt text column, indexAt text end) of
-                          (Just i, Just j) | "[[spoiler]]" `T.isPrefixOf` T.drop i text -> [T.take i text <> T.drop j text]
+                          (Just i, Just j) | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [T.take i text <> T.drop j text]
                           _ -> [text]
+                        _ -> around [before <> placeholder]
                 (Nothing, Nothing) -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
-        , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList spoilerPlaceholders, Just (_, e) <- [Map.lookup line spoilers]]
+        , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList linePlaceholders, Just (_, e) <- [Map.lookup line edits]]
         , Bars (prefix <> "h") <$ guard (not (null bars))
         )
   where
@@ -598,19 +614,66 @@ withBoxes source markers spoilers bars = case family of
           (_, "") -> Nothing
           (before, _) -> Just (T.length before)
 
--- | A fenced div that 'withBoxes' made of a spoiler as a box with the
--- class @alert-spoiler@, titled with the spoiler's description, as the
--- other kinds' boxes are ('boxesOf'); and a paragraph of a placeholder
--- alone as the text of the line it stands for. Any other block is left as
--- it is, a div of that class the page wrote itself too.
-spoilersOf :: Map Text (Int, SpoilerEdit) -> P.Block -> P.Block
-spoilersOf placeholders = \case
-  P.Div (_, ["wikispoiler"], _) (P.Para (P.Str placeholder : title) : rest)
-    | Just (_, OpenBox _) <- Map.lookup placeholder placeholders ->
-        P.Div ("", ["alert-spoiler"], []) (P.Div ("", ["title"], []) [P.Para (dropWhile (== P.Space) title)] : rest)
-  P.Para [P.Str placeholder]
-    | Just (_, ShowLine shown) <- Map.lookup placeholder placeholders -> P.Para (B.toList (B.text shown))
-  b -> b
+-- | Some blocks with the paragraphs of the placeholders 'withBoxes' wrote
+-- for marker lines made what the lines stand for. The blocks between the
+-- placeholders of a block's start and its end, in the same list of
+-- blocks, become a div: a spoiler's a box with the class
+-- @alert-spoiler@, titled with its description, as the other kinds'
+-- boxes are ('boxesOf'), and any other the div of the attributes the
+-- wiki's parser read. A pause's placeholder becomes pandoc's pause, and a
+-- line shown in red its text. A start whose end is not in the same list
+-- is left as it is; 'withBoxesRead' then reads the page again with both
+-- lines as written.
+markedBlocks :: Map Text (Int, MarkerEdit) -> [P.Block] -> [P.Block]
+markedBlocks placeholders = go
+  where
+    go = \case
+      [] -> []
+      b : more
+        | Just (placeholder, title) <- placed b
+        , Just (line, e) <- Map.lookup placeholder placeholders
+        , Just made <- opened e title
+        , (inside, _ : after) <- break (closes line) more ->
+            made (go inside) : go after
+      b : more
+        | Just (placeholder, []) <- placed b
+        , Just (_, e) <- Map.lookup placeholder placeholders
+        , Just made <- alone e ->
+            made : go more
+      b : more -> b : go more
+    -- A placeholder and what follows it on its line: a paragraph, or the
+    -- text of a tight list's item, which pandoc reads as plain text.
+    placed = \case
+      P.Para (P.Str placeholder : rest) -> Just (placeholder, rest)
+      P.Plain (P.Str placeholder : rest) -> Just (placeholder, rest)
+      _ -> Nothing
+    opened e title = case e of
+      OpenBox _ -> Just (P.Div ("", ["alert-spoiler"], []) . (P.Div ("", ["title"], []) [P.Para (dropWhile (== P.Space) title)] :))
+      OpenDiv attrs | null title -> Just (P.Div (pandocAttributes attrs))
+      _ -> Nothing
+    alone = \case
+      PauseHere -> Just (P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."])
+      ShowLine shown -> Just (P.Para (B.toList (B.text shown)))
+      _ -> Nothing
+    closes line b = case placed b of
+      Just (placeholder, []) | Just (_, CloseBox start) <- Map.lookup placeholder placeholders -> start == line
+      _ -> False
+
+-- | The wiki's attributes as pandoc's: the identifier, the classes and
+-- the other attributes.
+pandocAttributes :: Attributes -> P.Attr
+pandocAttributes attrs =
+  ( fromMaybe "" (lookup "id" attrs)
+  , concatMap T.words [v | ("class", v) <- attrs]
+  , [(k, v) | (k, v) <- attrs, k /= "id", k /= "class"]
+  )
+
+-- | A paragraph of three dots alone, which pandoc's slide writers read as
+-- a pause, as the text it is on the page: one 'P.Str', which no writer
+-- reads as a pause. The wiki's own pauses are made after this
+-- ('markedBlocks').
+dotsAsText :: P.Block -> P.Block
+dotsAsText b = if isPause b then P.Para [P.Str ". . ."] else b
 
 -- | 'Bars' are the placeholders 'withBoxes' put in place of the bars of
 -- the page's inline spoilers: each starts with this text, then @o@ for an
@@ -833,11 +896,12 @@ htmlBlock = \case
   P.RawBlock f raw | isHtml f -> htmlBlocks raw
   b -> [b]
 
--- | Raw HTML, reduced to what the allowlist keeps, as pandoc's blocks.
+-- | Raw HTML, reduced to what the allowlist keeps, as pandoc's blocks. A
+-- paragraph of three dots in it stays text ('dotsAsText').
 htmlBlocks :: Text -> [P.Block]
 htmlBlocks raw = case Html.parseHtml raw of
   [] -> []
-  nodes -> either (const [P.Para (B.toList (B.text (Html.htmlText nodes)))]) (\(P.Pandoc _ bs) -> bs) (runPure (readHtml def (writeHtmlNodes nodes)))
+  nodes -> either (const [P.Para (B.toList (B.text (Html.htmlText nodes)))]) (\(P.Pandoc _ bs) -> walk dotsAsText bs) (runPure (readHtml def (writeHtmlNodes nodes)))
 
 -- | Inlines with tags among them, read together with the text between the
 -- tags, as the page's renderer reads them: the tags the allowlist keeps,
@@ -920,8 +984,10 @@ writeHtmlNodes = foldMap node
 ----------------------------------------------------------------------
 -- What the wiki adds
 
--- | Remove the @slides@ div, which only says how a deck looks and shows
--- nothing.
+-- | Remove a div of the class @slides@, which a deck reads as how it
+-- looks and does not show ("Wiki.Core.Slides"). The line
+-- @[[!slides]]{…}@ is taken out before pandoc reads the page
+-- ('withBoxes'); this is for a @[[!div]]@ with that class.
 dropOptions :: P.Block -> [P.Block]
 dropOptions = \case
   P.Div (_, cls, _) _ | "slides" `elem` cls -> []
@@ -1070,15 +1136,17 @@ slideBlocks = concatMap slide . filter (not . null) . splitAtRules
       b -> b
     nullAttr' = ("", [], [])
 
--- | Whether a block is a pause, as pandoc reads @. . .@ alone in a
--- paragraph and its slide writers recognise it.
+-- | Whether a block is a pause, as pandoc's slide writers recognise one:
+-- a paragraph of three dots and the spaces between them. Only the wiki's
+-- own pauses are such a paragraph in a page's blocks ('markedBlocks',
+-- 'dotsAsText').
 isPause :: P.Block -> Bool
 isPause = (== P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."])
 
 -- | A page's blocks without the pauses the wiki reads ('Wiki.Core.Markdown.Ast.Pause'):
--- at the top level, in boxes and alerts, and in list items. A document
--- that is not a presentation shows its content once, and would otherwise
--- print the three dots.
+-- at the top level, in boxes, alerts and spoilers, and in list items. A
+-- document that is not a presentation shows its content once, and would
+-- otherwise print the three dots.
 withoutPauses :: [P.Block] -> [P.Block]
 withoutPauses = concatMap $ \case
   b | isPause b -> []
@@ -1090,11 +1158,10 @@ withoutPauses = concatMap $ \case
 -- | A deck's steps as a slide writer reads them, Beamer's when the flag
 -- says so, PowerPoint's otherwise. The pauses the wiki reads are kept for
 -- Beamer and left out for PowerPoint, which has none, and those in the
--- speaker's notes are left out for both. Three dots anywhere else (a
--- quotation, a footnote) are made text that no writer reads as a pause,
--- and a quotation's lists are made not incremental, which pandoc would
--- otherwise make them, so that both writers show a quotation as the wiki
--- does: whole.
+-- speaker's notes are left out for both. A quotation's lists are made not
+-- incremental, which pandoc would otherwise make them, so that both
+-- writers show a quotation as the wiki does: whole. (The wiki reads no
+-- pause in a quotation or a footnote, so none is there.)
 --
 -- Beamer counts a pause after the items of an incremental list from after
 -- the last item, and then one more: @\\pause@ would add a page that shows
@@ -1102,7 +1169,7 @@ withoutPauses = concatMap $ \case
 -- which starts the step right after the last item, as the wiki does. The
 -- count starts again at each slide, at each top-level break.
 slideSteps :: Bool -> [P.Block] -> [P.Block]
-slideSteps beamer = walk inNotes . concat . (`evalState` False) . traverse topLevel
+slideSteps beamer = concat . (`evalState` False) . traverse topLevel
   where
     topLevel :: P.Block -> State Bool [P.Block]
     topLevel = \case
@@ -1127,7 +1194,7 @@ slideSteps beamer = walk inNotes . concat . (`evalState` False) . traverse topLe
         | otherwise -> pure . P.Div attr <$> blocks (incrementalIn cls incremental) bs
       P.BulletList items -> pure . P.BulletList <$> traverse (item incremental) items
       P.OrderedList attrs items -> pure . P.OrderedList attrs <$> traverse (item incremental) items
-      P.BlockQuote bs -> pure [P.BlockQuote [P.Div ("", ["nonincremental"], []) (walk asText bs)]]
+      P.BlockQuote bs -> pure [P.BlockQuote [P.Div ("", ["nonincremental"], []) bs]]
       b -> pure [b]
     item incremental bs = do
       when incremental (put True)
@@ -1136,11 +1203,6 @@ slideSteps beamer = walk inNotes . concat . (`evalState` False) . traverse topLe
       | "incremental" `elem` cls = True
       | "nonincremental" `elem` cls = False
       | otherwise = incremental
-    asText b = if isPause b then P.Para [P.Str ". . ."] else b
-    -- A footnote's pause is text too.
-    inNotes = \case
-      P.Note bs -> P.Note (walk asText bs)
-      x -> x
 
 -- | What the preamble needs for the TikZ pictures among some blocks: TikZ
 -- itself and the libraries each picture loads, once each; nothing when

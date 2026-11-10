@@ -179,7 +179,7 @@ slug lower-case words joined by hyphens, such as changelog/00160-heading-spoiler
     language, with an example in a fenced code block:
 
     \`\`\`markdown
-    ### [[spoiler]] What is X?
+    ### [[!spoiler]] What is X?
     \`\`\`
 
   ## Bug fixes

@@ -158,8 +158,10 @@ test-suite wiki-core-test
       Test.Markdown.Allowlist
       Test.Markdown.Ast
       Test.Markdown.Box
+      Test.Markdown.Comments
       Test.Markdown.Edit
       Test.Markdown.Link
+      Test.Markdown.Markers
       Test.Markdown.Mention
       Test.Markdown.Problems
       Test.Markdown.Spoiler

@@ -69,7 +69,8 @@ spec = describe "docs/markdown.md" $ do
       , "<details>\n<summary>A part of the page that opens on a click</summary>\nWritten in HTML, so <b>this is bold</b> and **this is not**.\n</details>"
       ]
       $ \fragment -> html `shouldSatisfy` T.isInfixOf fragment
-    html `shouldNotSatisfy` T.isInfixOf "Like this one. -->"
+    for_ ["like this one,", "A note for the next author", "until they are checked"] $ \comment ->
+      html `shouldNotSatisfy` T.isInfixOf comment
 
 -- | Every block of a document, nested ones too.
 universe :: [Block] -> [Block]
@@ -103,7 +104,7 @@ kind = \case
   Div {} -> "div"
   Alert {} -> "alert"
   Spoiler {} -> "spoiler"
-  SpoilerError {} -> "spoiler error"
+  MarkerError {} -> "marker error"
   Footnotes _ -> "footnotes"
   RawHtmlBlock _ -> "raw"
   TableOfContents -> "toc"

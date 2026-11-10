@@ -2,7 +2,7 @@
 -- the heading's @id@ ("Wiki.Core.Markdown.Ast" gives every heading one).
 --
 -- The table is built from the parsed document, never read from the
--- rendered page, so the page view's "Contents" panel, a @[[toc]]@ in the
+-- rendered page, so the page view's "Contents" panel, a @[[!toc]]@ in the
 -- page, the prerender and the server's render list the same headings with
 -- the same links. Only headings at the top level of the document are
 -- listed: a heading in a block quote, a list, a box or a footnote is part
@@ -122,9 +122,18 @@ entryCount :: [Entry] -> Int
 entryCount = sum . map (\e -> 1 + entryCount e.below)
 
 -- | Whether the document places its table of contents itself, with
--- @[[toc]]@.
+-- @[[!toc]]@: at its top level, or in a quotation, a list, a box, a spoiler
+-- or a footnote, where the line is read too.
 hasContentsMarker :: [Block] -> Bool
-hasContentsMarker = elem TableOfContents
+hasContentsMarker = any $ \case
+  TableOfContents -> True
+  BlockQuote bs -> hasContentsMarker bs
+  List _ items -> or [hasContentsMarker bs | ListItem _ bs <- items]
+  Div _ bs -> hasContentsMarker bs
+  Alert _ _ bs -> hasContentsMarker bs
+  Spoiler _ bs -> hasContentsMarker bs
+  Footnotes notes -> or [hasContentsMarker bs | Footnote _ _ bs <- notes]
+  _ -> False
 
 -- | The minimum number of headings for the page view to show its
 -- "Contents" panel: a page of one or two sections is easy to scan.
@@ -133,7 +142,7 @@ minimumHeadings = 3
 
 -- | The entries of the page view's "Contents" panel, if it shows one: the
 -- table of contents of a page that has at least 'minimumHeadings' headings
--- and does not place the table itself with @[[toc]]@ (in that case the
+-- and does not place the table itself with @[[!toc]]@ (in that case the
 -- table is in the page, and a panel would repeat it).
 contentsPanel :: [Block] -> Maybe [Entry]
 contentsPanel doc
@@ -156,7 +165,7 @@ contentsList entries =
     | e <- entries
     ]
 
--- | The table of contents where @[[toc]]@ places it in a page: with a
+-- | The table of contents where @[[!toc]]@ places it in a page: with a
 -- title, as a @\<nav class="toc">@. Empty for a document with no headings.
 contentsNav :: [Entry] -> [HH.HTML w i]
 contentsNav = \case

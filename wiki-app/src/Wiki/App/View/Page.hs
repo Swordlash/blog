@@ -24,7 +24,7 @@
 -- is open, and above the text on a narrow one. It can be folded (a
 -- @\<details>@ whose state this browser remembers), and @jsbits/toc.js@
 -- highlights the section being read in it, without the program. A page
--- that places the list itself with @[[toc]]@ shows no panel. If the
+-- that places the list itself with @[[!toc]]@ shows no panel. If the
 -- address's fragment names a heading, the page scrolls to it once it is
 -- first shown.
 --

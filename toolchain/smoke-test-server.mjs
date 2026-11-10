@@ -545,7 +545,7 @@ async function migrateTheDemo() {
   await page.context().close();
   console.log("ok: imported again from the demo's data in this browser, everything is merged and nothing is there twice");
 
-  // A long page with its "Contents" panel, and a page with [[toc]], as the
+  // A long page with its "Contents" panel, and a page with [[!toc]], as the
   // server renders them: adopted with nothing to repair or ask, while the
   // section being read is marked by the script alone.
   const reader = await newPage();
@@ -559,12 +559,12 @@ async function migrateTheDemo() {
     assert.deepEqual(loaded.repairs, [], `${path}: adopting it repaired it`);
     assert.deepEqual(loaded.asked, [], `${path}: the program asked the API for what the page carries`);
   }
-  assert.equal(await reader.locator("#app .page-body nav.toc").count(), 1, "the handbook's [[toc]]");
-  assert.equal(await reader.locator("#app .page-contents").count(), 0, "a panel beside a page with [[toc]]");
+  assert.equal(await reader.locator("#app .page-body nav.toc").count(), 1, "the handbook's [[!toc]]");
+  assert.equal(await reader.locator("#app .page-contents").count(), 0, "a panel beside a page with [[!toc]]");
   await reader.goto(url("/s/docs/p/markdown-guide/#mathematics"));
   await reader.locator("#app .page-contents .toc-list a[href='#mathematics'][data-current]").waitFor({ timeout });
   await reader.context().close();
-  console.log("ok: the server renders a page's contents and [[toc]], adopted with nothing to repair, and an address's #heading is scrolled to and marked");
+  console.log("ok: the server renders a page's contents and [[!toc]], adopted with nothing to repair, and an address's #heading is scrolled to and marked");
 }
 
 const editorText = "#app .editor-cm .cm-content";

@@ -20,7 +20,7 @@ A line of three dashes is a thematic break:
 
 Every heading gets an `id` made from its text, so that a link can point at it: this section is `#headings`, and a link to it is [Headings](#headings). The `id` is the text in lower case, with spaces made dashes and punctuation left out; letters of every alphabet stay as they are, so `## Zażółć gęślą` is `#zażółć-gęślą`. A second heading with the same text gets `-2` added, a third `-3`, and so on down the page. To choose the `id` yourself, put it in braces after the heading: `## Setup {#install}`. Pointing at a heading shows a `#` after it, a link to it: follow it, and the address bar has the heading's address, to copy and pass on.
 
-A page with three headings or more has a "Contents" panel beside it (above it on a narrow screen), which lists them and marks the section being read. To put the list in the page instead, write `[[toc]]` where it should go, as a paragraph of its own: a blank line before it and after it, and nothing else on its line; the panel is then not shown. Anywhere else, inside a sentence for instance, `[[toc]]` is a wiki link to a page named `toc`, which shows as a broken link in red, like any `[[page]]` whose path leads nowhere.
+A page with three headings or more has a "Contents" panel beside it (above it on a narrow screen), which lists them and marks the section being read. To put the list in the page instead, write `[[!toc]]` on a line of its own where it should go; the panel is then not shown. Without the exclamation mark, `[[toc]]` is a wiki link to a page named `toc`, like any `[[page]]`.
 
 ## Lists
 
@@ -323,57 +323,72 @@ Text after the kind, on the same line, after a space, is that box's title, for a
 
 Exported, the five are pandoc's own alerts, and any other kind a box with its title and number, so a Word document, a web page or a PDF shows it as a box. A box in a footnote has no number in a document.
 
-A box of any other sort is a fenced div with a class, which the wiki's style sheet may give a look:
+A box of any other sort is a `div` block with a class, which the wiki's style sheet may give a look:
 
-::: summary
-Three colons, a class, the content, three colons.
-:::
+[[!div]]{.summary}
+A start marker with the class in braces, the content, an end marker.
+[[/div]]
+
+## Blocks of the wiki's own
+
+The wiki's own blocks are written between two lines of their own: a start marker, `[[!name]]`, then the blocks, then an end marker, `[[/name]]`. The exclamation mark keeps a marker apart from a link to a page: a page's address cannot hold one.
+
+- `[[!spoiler]]{name}(Description)` … `[[/spoiler]]`: a block spoiler ([Spoilers](#spoilers)).
+- `[[!notes]]` … `[[/notes]]`: a deck's speaker notes ([Presentations](#presentations)).
+- `[[!incremental]]` … `[[/incremental]]`: lists a deck shows item by item.
+- `[[!div]]{.class}` … `[[/div]]`: a box with the classes its braces give.
+
+Three are one line each, with no end marker: `[[!slides]]{theme=dark aspect=4:3}`, the deck's look; `[[!pause]]`, the next step of a slide; and `[[!toc]]`, the page's contents ([Headings](#headings)).
+
+Braces after the name hold attributes, as after a code fence or a heading: `#id`, `.class` and `key=value`, as in `[[!div]]{#summary .wide}`. Only a spoiler takes a description in parentheses. A marker is a marker only at the start of a line; in the middle of one, `[[!notes]]` is a link that leads nowhere. Between the markers goes any Markdown, without a prefix on its lines, other blocks of the wiki's own among it, so blocks nest. An end marker ends the innermost open block when it has the block's name. Where no block of its name is open, `[[/notes]]` is the text it is, a wiki link to a page `/notes`.
+
+What is wrong shows in red where it is, in the page and in the editor's preview, with the reason under it: a start marker of a name the wiki does not have (names are in lower case), parentheses or text after a marker that takes none, braces that hold no attributes, an end marker that crosses another block open inside its own, a block never closed (its blocks follow in red, as they are), and a pause in a quotation or a footnote.
 
 ## Spoilers
 
 Text between two pairs of bars is an inline spoiler: the culprit is ||the butler||. It is blurred until the reader clicks it, or presses Enter or Space on it, and a second click hides it again. It may hold emphasis, code and math, as `||**bold** and $x$||`. A single bar, and a table's bars, stay what they were. The toolbar's **Inline spoiler** button (an eye struck through) puts the bars around the selected words.
 
-A block spoiler hides whole blocks until the reader opens it. It starts with a line of its own, `[[spoiler]]{name}(Description)`, and ends with another, `[[/spoiler]]{name}`:
+A block spoiler hides whole blocks until the reader opens it. It starts with a line of its own, `[[!spoiler]]{name}(Description)`, and ends with another, `[[/spoiler]]`:
 
-[[spoiler]]{answer}(The answer, and how to *find* it)
+[[!spoiler]]{answer}(The answer, and how to *find* it)
 Forty-two, by this program:
 
 ```python
 print(6 * 7)
 ```
-[[/spoiler]]{answer}
+[[/spoiler]]
 
-The name, in braces, is one word of letters, digits, `-` and `_`, as a name in code is; the end marker repeats it. The description, in parentheses, is what the reader sees and clicks, and may hold emphasis, code and math. Spaces between the three parts are allowed, and nothing else on the line. Between the markers goes any Markdown, without a prefix on its lines: paragraphs, lists, code, tables, boxes, and other spoilers. An end marker ends the innermost open spoiler, and only when the names agree, so spoilers nest:
+The name, in braces, is one word of letters, digits, `-` and `_`, as a name in code is; `{#answer}` is the same name as `{answer}`. It is not an `id`: two spoilers may share one, and no link leads to it. A spoiler takes no class or other attribute. The description, in parentheses, is what the reader sees and clicks, and may hold emphasis, code and math. Spaces between the three parts are allowed, and nothing else on the line. Between the markers goes any Markdown, without a prefix on its lines: paragraphs, lists, code, tables, boxes, and other spoilers. The end marker may repeat the name, `[[/spoiler]]{answer}`; then it ends the innermost open spoiler only when the names agree:
 
-[[spoiler]]{hint}(A hint first)
+[[!spoiler]]{hint}(A hint first)
 Think of what six times seven is.
 
-[[spoiler]]{solution}(Then the solution)
+[[!spoiler]]{solution}(Then the solution)
 Forty-two.
 [[/spoiler]]{solution}
 [[/spoiler]]{hint}
 
-The toolbar's **Block spoiler** button puts the two markers around the selected lines, with `name` selected for you to type over; the end marker's `name` is then changed to match.
+The toolbar's **Block spoiler** button puts the two markers around the selected lines, with `name` selected for you to type over.
 
 A spoiler lies within one section, or wraps a whole one: either it holds no heading, or its first line is a heading, every other heading in it is deeper, and the next block after it is a heading of the same or a higher level, or nothing. The section's entry stays in the page's contents, and following it, or any link to the heading, opens the spoiler. Section spoilers nest the same way, a subsection's inside its section's.
 
-A heading can hide its own section, with no end marker: start its text with `[[spoiler]]` and a space.
+A heading can hide its own section, with no end marker: start its text with `[[!spoiler]]` and a space.
 
 ```markdown
-### [[spoiler]] What is X?
+### [[!spoiler]] What is X?
 
 X is what this page is about.
 
-#### [[spoiler]]{x-why} Why does it matter?
+#### [[!spoiler]]{x-why} Why does it matter?
 
 Because the rest depends on it.
 ```
 
-The heading is shown, in its level's size, with its anchor and its entry in the contents, and a click on it opens the section: from the heading to just before the next heading of the same or a higher level, or to the end of the page, or of the quotation, box, fenced div or spoiler the heading is in. A deeper heading spoiler inside is a spoiler of its own subsection, as `x-why` is above. A name in braces right after the marker (`[[spoiler]]{x-why}`, one word as for the marker pair) is what the reader's browser remembers the spoiler by; without one, it is remembered by the heading's anchor, so renaming the heading forgets it. The marker counts only at the very start of the heading's text, written as here: `[[spoiler]]` anywhere else in a heading, or without a space and text after it, is a wiki link to a page named `spoiler`, shown in red as a page that does not exist. The contents, search and links read the heading without the marker. A marker pair that starts inside a heading spoiler's section and ends after it, or the other way round, cuts a section and shows in red.
+The heading is shown, in its level's size, with its anchor and its entry in the contents, and a click on it opens the section: from the heading to just before the next heading of the same or a higher level, or to the end of the page, or of the quotation, box, `div` or spoiler the heading is in. A deeper heading spoiler inside is a spoiler of its own subsection, as `x-why` is above. A name in braces right after the marker (`[[!spoiler]]{x-why}` or `[[!spoiler]]{#x-why}`, one word as for the marker pair) is what the reader's browser remembers the spoiler by; without one, it is remembered by the heading's anchor, so renaming the heading forgets it. The marker counts only at the very start of the heading's text, written as here: `[[!spoiler]]` anywhere else in a heading, or without a space and text after it, is a link that leads nowhere. The contents, search and links read the heading without the marker. A marker pair that starts inside a heading spoiler's section and ends after it, or the other way round, cuts a section and shows in red.
 
 What is wrong shows in red where it is, in the page and in the editor's preview as you type: a start marker without its name in braces or its description in parentheses, an end marker whose name is not that of the innermost open spoiler, or that has more after it, and the marker of a spoiler that is never closed or that cuts a section, with the reason under it. A spoiler that is not closed, or cuts a section, has its blocks shown in red after its marker, as they are, so that nothing is lost while you fix it.
 
-A spoiler starts closed. Whether a reader left it open is kept in their browser, for each page and each name, and it opens again when they come back; a reader not signed in is one reader. Two spoilers with one name on one page open and close together. The state is kept in that browser only: on another device the spoilers start closed again. `[[spoiler]]` and `[[/spoiler]]` at the start of a line are always markers, so they are never a wiki link to a page of that name.
+A spoiler starts closed. Whether a reader left it open is kept in their browser, for each page and each name, and it opens again when they come back; a reader not signed in is one reader. Two spoilers with one name on one page open and close together. The state is kept in that browser only: on another device the spoilers start closed again.
 
 Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, a heading spoiler is its heading (without the marker) and its section as they are, with no box, and an inline spoiler is its text. A blog's feed shows a heading spoiler's section the same way, and a deck shows it on its slide as written. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
 
@@ -383,33 +398,32 @@ Any page can be shown as slides: "Present", above a page written as a deck, open
 
 - A thematic break, `---` on a line of its own after a blank line, starts the next slide. (Under a line of text, with no blank line between, `---` makes that line a heading instead, as anywhere in Markdown.) A break inside a list, a quotation or a box stays a rule on its slide.
 - The first heading on a slide is its title, shown in the slide's title bar. A slide titled with a level-one heading (`#`) is a title slide: the title large in the middle, the rest under it, as for a talk's first slide or a section's.
-- A box with the class `notes` holds the speaker's notes for its slide. They are not on the slide: "Notes" (or the key **n**) shows them under it. On the page they show as a box marked "Speaker notes".
+- `[[!notes]]` … `[[/notes]]` holds the speaker's notes for its slide. They are not on the slide: "Notes" (or the key **n**) shows them under it. On the page they show as a box marked "Speaker notes".
 - A footnote is shown at the foot of the first slide that refers to it.
-- A box with the class `slides` and attributes says how the deck looks, anywhere in the page; it shows nothing. The theme is `beamer` (the default: a title bar, and a footer with the page's title and the slide's number), `light` or `dark`; the aspect `16:9` (the default) or `4:3`:
+- `[[!slides]]` with attributes, a line of its own at the top level of the page, says how the deck looks; it shows nothing. The theme is `beamer` (the default: a title bar, and a footer with the page's title and the slide's number), `light` or `dark`; the aspect `16:9` (the default) or `4:3`. Without braces it marks the page as a deck with the default look:
 
 ```markdown
-::: {.slides theme=dark aspect=4:3}
-:::
+[[!slides]]{theme=dark aspect=4:3}
 ```
 
-A slide can show its content in steps, with pandoc's own markers:
+A slide can show its content in steps:
 
-- Three dots separated by spaces, `. . .`, alone on a line between blank lines, are a pause: what follows it on the slide is shown one step later. A pause is read on the slide itself, in a box and in a list item; in a quotation, a footnote or code the three dots stay text.
-- A box with the class `incremental` shows the items of the lists in it one at a time: the first with what comes before the list, each further one a step later, nested lists' items in their turn. What follows the list without a pause shows with its first item, as in Beamer; a pause after the list waits for its last item.
+- `[[!pause]]`, a line of its own, is a pause: what follows it on the slide is shown one step later. A pause is read on the slide itself, in a box, a spoiler and a list item; in a quotation or a footnote it shows in red, since a deck shows those whole. Three dots, `. . .`, are text.
+- `[[!incremental]]` … `[[/incremental]]` shows the items of the lists in it one at a time: the first with what comes before the list, each further one a step later, nested lists' items in their turn. What follows the list without a pause shows with its first item, as in Beamer; a pause after the list waits for its last item.
 
 ```markdown
 ## Plan
 
 First this.
 
-. . .
+[[!pause]]
 
 Then this.
 
-::: incremental
+[[!incremental]]
 - one
 - two
-:::
+[[/incremental]]
 ```
 
 On the page, where nothing is presented, a pause shows nothing and an `incremental` box is an ordinary box.
@@ -445,7 +459,21 @@ The attributes: `class`, `id` and `title` on any element, and where they mean so
 
 An address in `href`, `src` or `poster` is a URL starting with `http:` or `https:` (or `mailto:`, for a link), or a path. A path is read as in a Markdown link, and failing that as the name of one of the page's attachments, so `<img src="team.jpg">` shows the attachment `team.jpg`; a source is looked for among the attachments first. `attachment:name` works as in Markdown. Any other address, such as `javascript:` or `data:`, is left out, and a link that leads nowhere is shown as broken.
 
-An HTML comment is left out. <!-- Like this one. -->
+## Comments
+
+A comment is text in a page's source that the page does not show: `<!--`, the text, `-->`. It may be among a paragraph's text, <!-- like this one, --> on a line of its own, or over several lines:
+
+<!-- A note for the next author: the dates below come from the release notes. -->
+
+<!--
+This paragraph and the list after it are kept out of the page
+until they are checked.
+
+- one
+- two
+-->
+
+Between `<!--` and `-->` nothing is read as Markdown, so a comment around blocks keeps them out of the page, headings and all; the page's contents, its search and its exports leave them out too. A comment is hidden from the page, not from its readers: anyone who may read the page may read its source with "View source", comments and all. Write nothing in one that a reader must not see.
 
 ### Colours
 

@@ -231,10 +231,10 @@ click hides them again. A block spoiler hides whole blocks, between two marker
 lines of their own, and spoilers nest:
 
 ````markdown
-[[spoiler]]{hint}(A hint, if you are *stuck*)
+[[!spoiler]]{hint}(A hint, if you are *stuck*)
 Think of what six times seven is.
 
-[[spoiler]]{answer}(The answer)
+[[!spoiler]]{answer}(The answer)
 Forty-two, as this program prints:
 
 ```python
@@ -250,7 +250,8 @@ The name in braces is one word of letters, digits, `-` and `_`; the
 description in parentheses, which may hold Markdown, is what the reader clicks
 to open it. Any blocks go between the markers, with no prefix on their lines:
 code, lists, tables, boxes and other spoilers, since an end marker ends the
-innermost open spoiler, and only when the names agree. A spoiler lies within one
+innermost open spoiler, and, when it repeats a name, only the spoiler of that
+name; `[[/spoiler]]` alone ends the innermost one. A spoiler lies within one
 section, or wraps a whole one: its heading first, up to the next heading of the
 same or a higher level; the section stays in the page's contents, and following
 its entry, or a link to its heading, opens it.
@@ -258,15 +259,15 @@ its entry, or a link to its heading, opens it.
 A heading can also hide its own section, with no end marker, which suits a FAQ:
 
 ```markdown
-### [[spoiler]] Does a heading spoiler need an end marker?
+### [[!spoiler]] Does a heading spoiler need an end marker?
 
 No: its section ends where the next heading of its level, or a higher one, starts.
 
-### [[spoiler]]{faq-nesting} Can heading spoilers nest?
+### [[!spoiler]]{faq-nesting} Can heading spoilers nest?
 
 Yes. The question below is a spoiler inside this one.
 
-#### [[spoiler]] How deep can they go?
+#### [[!spoiler]] How deep can they go?
 
 As deep as headings go, down to `######`.
 ```
@@ -277,8 +278,8 @@ The heading shows, with its anchor and its entry in the contents, and a click
 on it opens the section, up to the next heading of the same or a higher level
 or the end of the quotation, box or spoiler the heading is in. A name in braces
 after the marker keys what the browser remembers; without one, the heading's
-anchor does. Only `[[spoiler]]` at the very start of a heading's text is a
-marker; anywhere else it is a wiki link, as in any text. A document exported,
+anchor does. Only `[[!spoiler]]` at the very start of a heading's text is a
+marker; anywhere else it is a link that leads nowhere. A document exported,
 and a feed, show the section as written.
 
 Mistakes show in red where they are, on the page and in the editor's preview as
@@ -286,9 +287,13 @@ they are typed: a start marker without its name or description, an end marker
 that names no open spoiler, a spoiler never closed or one that cuts a section
 (its blocks in red below its marker, with the reason). The reader's browser
 remembers which spoilers they left open, per reader, page and name, and opens
-them again; another browser or device starts with them closed. The markers are
-lines of their own, so `[[spoiler]]` at the start of a line is never a wiki
-link (there is no page of that name to link to). The toolbar's **Inline
+them again; another browser or device starts with them closed. The start
+marker's exclamation mark keeps it apart from a wiki link: `[[spoiler]]`
+without it is a link to a page named `spoiler`. The other blocks of the wiki's
+own are written the same way, `[[!notes]]`, `[[!incremental]]` and
+`[[!div]]{.summary}` … `[[/name]]`, with `[[!slides]]`, `[[!pause]]` and
+`[[!toc]]` one line each (see [Presentations](#presentations) and
+[docs/markdown.md](docs/markdown.md)). The toolbar's **Inline
 spoiler** and **Block spoiler** buttons write both kinds. Exported, a document
 shows everything: a block spoiler is a box titled with its description, an
 inline one its text.
@@ -296,23 +301,21 @@ inline one its text.
 ### A table of contents
 
 Every heading gets an `id` to link to. A page with three headings or more has a
-"Contents" panel beside it; `[[toc]]` puts the list in the page instead, but
-only as a paragraph of its own, a blank line before and after it and nothing
-else on its line. Anywhere else it is read as a wiki link to a page named `toc`,
-which shows as a broken link in red, like any `[[page]]` whose path leads
-nowhere:
+"Contents" panel beside it; `[[!toc]]` on a line of its own puts the list in
+the page instead. Without the exclamation mark, `[[toc]]` is a wiki link to a
+page named `toc`, like any `[[page]]`:
 
 ```markdown
 # Team handbook
 
 Private to the team: only people granted a permission on this space, or on the wiki as a whole, can read it.
 
-[[toc]]
+[[!toc]]
 
 ## The week
 ```
 
-The page's headings, listed where `[[toc]]` is, each a link to its section:
+The page's headings, listed where `[[!toc]]` is, each a link to its section:
 [Team handbook](https://swordlash.github.io/blog/s/team/p/team-handbook/) (in
 the private `Team` space, which the demo's `admin`, whom it starts as, may read).
 
@@ -383,14 +386,13 @@ whole:
 ````markdown
 # Presentations
 
-::: {.slides theme=beamer aspect=16:9}
-:::
+[[!slides]]{theme=beamer aspect=16:9}
 
 Any page can be a slide deck. Press **Present** above the page: this one is a deck, and its slides tell you how it is written.
 
-::: notes
+[[!notes]]
 These are the speaker's notes: on the page they are a box like this one; on the slides they are hidden until you press **n**.
-:::
+[[/notes]]
 
 ---
 
@@ -398,12 +400,12 @@ These are the speaker's notes: on the page they are a box like this one; on the 
 
 - A line with `---` alone on it, after a blank line, starts the next slide.
 - The first heading on a slide is its title; a `#` heading makes a title slide, like this deck's first.
-- A `::: notes` box holds what only the speaker sees.
+- `[[!notes]]`, the notes, then `[[/notes]]` hold what only the speaker sees.
 - Everything a page shows, a slide shows: tables, code, formulas, diagrams.
 
-::: notes
+[[!notes]]
 Mention that a page with no `---` is one slide, and is not offered as a deck.
-:::
+[[/notes]]
 
 ---
 
@@ -415,9 +417,9 @@ $$
 \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
 $$
 
-::: notes
+[[!notes]]
 The macros a page defines hold on every slide after the one that defines them.
-:::
+[[/notes]]
 
 ---
 
@@ -458,41 +460,40 @@ On a touch screen, swipe. **Print** puts one slide on each page: choose "Save as
 
 ## Steps
 
-A slide can show its content a step at a time. Three dots, `. . .`, alone on a line between blank lines, are a pause: what follows waits for the next press of → or Space.
+A slide can show its content a step at a time. `[[!pause]]`, on a line of its own, is a pause: what follows waits for the next press of → or Space.
 
-. . .
+[[!pause]]
 
 Like this line, which waited for you. ← hides it again.
 
-. . .
+[[!pause]]
 
 On the page itself a pause shows nothing. Printed, each slide is whole, unless you tick "each step on its own page"; a Beamer PDF has a page for each step.
 
-::: notes
-The pauses are pandoc's, so the Beamer export shows the same steps.
-:::
+[[!notes]]
+A pause is pandoc's in an export, so the Beamer export shows the same steps.
+[[/notes]]
 
 ---
 
 ## One item at a time
 
-A list in a box with the class `incremental` shows its items one by one:
+A list between `[[!incremental]]` and `[[/incremental]]` shows its items one by one:
 
-::: incremental
-- the box is written `::: incremental`, the list, then `:::`;
+[[!incremental]]
 - each press of → or Space shows the next item;
+- the items of nested lists come in their turn;
 - off the slides, it is an ordinary list.
-:::
+[[/incremental]]
 
 ---
 
 ## Themes
 
-A `slides` box anywhere in the page says how the slides look:
+A `[[!slides]]` line at the top level of the page says how the slides look:
 
 ```markdown
-::: {.slides theme=dark aspect=4:3}
-:::
+[[!slides]]{theme=dark aspect=4:3}
 ```
 
 Themes are `beamer` (the default), `light` and `dark`; slides are `16:9` (the default) or `4:3`.
@@ -502,22 +503,22 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 (`Wiki.Core.Slides` cuts them):
 
 - **What makes it a deck.** There is no front matter: a page with a `---` at
-  its top level is a deck, and so is one with a box of the class `slides`,
-  which, anywhere in the page, says how the deck looks and shows nothing
-  itself: `theme=beamer` (the default: a title bar, and a footer with the
-  page's title and the slide's number), `light` or `dark`, and `aspect=16:9`
-  (the default) or `4:3`.
+  its top level is a deck, and so is one with a `[[!slides]]` line, which
+  says how the deck looks and shows nothing itself: `theme=beamer` (the
+  default: a title bar, and a footer with the page's title and the slide's
+  number), `light` or `dark`, and `aspect=16:9` (the default) or `4:3`.
 - **Slides.** A `---` on a line of its own, after a blank line, starts the next
   slide (inside a list, a quotation or a box it stays a rule). The first heading
   on a slide is its title; a slide titled with a `#` heading is a title slide.
   Formulas, diagrams, pictures, code, tables and images are on a slide as on a
   page, with the macros defined on the slides before.
-- **Notes.** A `::: notes` box holds the speaker's notes of its slide: a box on
-  the page, hidden on the slide until **n** shows them under it.
-- **Steps.** Three dots, `. . .`, alone between blank lines, are a pause, as in
-  pandoc: the slide shows what comes after it one press later. A list in a
-  `::: incremental` box shows one item at a time. On the page, a pause shows
-  nothing and the box is an ordinary one. The Beamer export makes the same
+- **Notes.** `[[!notes]]` … `[[/notes]]` holds the speaker's notes of its
+  slide: a box on the page, hidden on the slide until **n** shows them under
+  it.
+- **Steps.** `[[!pause]]`, a line of its own, is a pause: the slide shows what
+  comes after it one press later. A list between `[[!incremental]]` and
+  `[[/incremental]]` shows one item at a time. On the page, a pause shows
+  nothing and the list is an ordinary one. The Beamer export makes the same
   steps, one PDF page each.
 - **Showing it.** "Present", above a page that is a deck, opens it full screen:
   the arrow keys, Space, PageUp and PageDown move, Home and End go to the ends,
@@ -2320,11 +2321,11 @@ title: Section spoilers on the heading
 
 ## New features
 
-- A heading that starts with `[[spoiler]]` hides its whole section until the
+- A heading that starts with `[[!spoiler]]` hides its whole section until the
   reader opens it, with the heading as what they click:
 
   ```markdown
-  ### [[spoiler]] What is X?
+  ### [[!spoiler]] What is X?
 
   X is the answer.
   ```

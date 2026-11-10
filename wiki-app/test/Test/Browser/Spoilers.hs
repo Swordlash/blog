@@ -72,7 +72,7 @@ spec m = describe "spoilers and listings in a page" $ do
     eventually $ getAttribute spoiler "class" `shouldReturn` Just "spoiler"
 
   it "keeps a block spoiler closed until its summary is clicked, nested ones each on their own, and remembers the open ones" $ runPage $ do
-    let body = "[[spoiler]]{answer}(The answer)\nForty-two.\n[[/spoiler]]{answer}\n\n[[spoiler]]{outer}(Outer)\nAround.\n[[spoiler]]{inner}(Inner)\nDeep.\n[[/spoiler]]{inner}\n[[/spoiler]]{outer}\n"
+    let body = "[[!spoiler]]{answer}(The answer)\nForty-two.\n[[/spoiler]]{answer}\n\n[[!spoiler]]{outer}(Outer)\nAround.\n[[!spoiler]]{inner}(Inner)\nDeep.\n[[/spoiler]]{inner}\n[[/spoiler]]{outer}\n"
         opened ui name = find ui (".page-body details.spoiler[data-spoiler='" <> name <> "']") >>= (`getAttribute` "open")
         summary ui name = find ui (".page-body details.spoiler[data-spoiler='" <> name <> "'] > summary")
     ui <- page m body
@@ -98,7 +98,7 @@ spec m = describe "spoilers and listings in a page" $ do
     opened third "answer" `shouldReturn` Nothing
 
   it "opens a spoiler that wraps a section for its entry in the contents, and for a link to its heading" $ runPage $ do
-    let body = "## Intro\n\nText.\n\n[[spoiler]]{solutions}(The solutions)\n## Solutions\n\nThe answer.\n\n### Details\n\nMore.\n[[/spoiler]]{solutions}\n\n## After\n\nSee [the solutions](#solutions)."
+    let body = "## Intro\n\nText.\n\n[[!spoiler]]{solutions}(The solutions)\n## Solutions\n\nThe answer.\n\n### Details\n\nMore.\n[[/spoiler]]{solutions}\n\n## After\n\nSee [the solutions](#solutions)."
         opened ui = find ui ".page-body details.spoiler[data-spoiler='solutions']" >>= (`getAttribute` "open")
     ui <- page m body
     opened ui `shouldReturn` Nothing
@@ -118,7 +118,7 @@ spec m = describe "spoilers and listings in a page" $ do
         -- The spoiler's summary near the top of the window, where it is
         -- clicked; enough after it for its heading to be scrolled to the
         -- top.
-        body = "## Intro\n\nA short introduction.\n\n[[spoiler]]{results}(The results)\n## Results\n\n" <> long <> "\n[[/spoiler]]{results}\n\n## After\n\n" <> long
+        body = "## Intro\n\nA short introduction.\n\n[[!spoiler]]{results}(The results)\n## Results\n\n" <> long <> "\n[[/spoiler]]{results}\n\n## After\n\n" <> long
         current ui = do
           marked <- findAll ui ".toc-list a[data-current]"
           ordNub . catMaybes <$> traverse (`getAttribute` "href") marked
@@ -138,7 +138,7 @@ spec m = describe "spoilers and listings in a page" $ do
     eventually $ current ui `shouldReturn` ["#after"]
 
   it "keeps a heading spoiler closed under its heading, nested ones each on their own, and remembers the open ones by name or by heading" $ runPage $ do
-    let body = "## [[spoiler]]{q1} What is X?\n\nAn answer.\n\n### [[spoiler]] Why?\n\nBecause.\n\n## [[spoiler]] Unnamed\n\nHidden too.\n\n## After\n\nThe end."
+    let body = "## [[!spoiler]]{q1} What is X?\n\nAn answer.\n\n### [[!spoiler]] Why?\n\nBecause.\n\n## [[!spoiler]] Unnamed\n\nHidden too.\n\n## After\n\nThe end."
         spoiler key = ".page-body details.spoiler.spoiler-section[data-spoiler='" <> key <> "']"
         opened ui key = find ui (spoiler key) >>= (`getAttribute` "open")
         summary ui key = find ui (spoiler key <> " > summary")
@@ -168,7 +168,7 @@ spec m = describe "spoilers and listings in a page" $ do
     opened third "unnamed" `shouldReturn` Nothing
 
   it "opens a heading spoiler for its entry in the contents, and for a link to its heading" $ runPage $ do
-    let body = "## Intro\n\nText.\n\n## [[spoiler]] Answers\n\nThe answer.\n\n### Details\n\nMore.\n\n## After\n\nSee [the answers](#answers)."
+    let body = "## Intro\n\nText.\n\n## [[!spoiler]] Answers\n\nThe answer.\n\n### Details\n\nMore.\n\n## After\n\nSee [the answers](#answers)."
         opened ui = find ui ".page-body details.spoiler-section[data-spoiler='answers']" >>= (`getAttribute` "open")
     ui <- page m body
     opened ui `shouldReturn` Nothing
@@ -184,7 +184,7 @@ spec m = describe "spoilers and listings in a page" $ do
 
   it "marks a heading spoiler's section as the one read while it is closed, and the headings inside only once it is open" $ runPage $ do
     let long = T.intercalate "\n\n" (replicate 30 "A paragraph of text, to take room on the page.")
-        body = "## Intro\n\n" <> long <> "\n\n## [[spoiler]]{findings} Findings\n\nHidden.\n\n### Details\n\nMore.\n\n## After\n\n" <> long
+        body = "## Intro\n\n" <> long <> "\n\n## [[!spoiler]]{findings} Findings\n\nHidden.\n\n### Details\n\nMore.\n\n## After\n\n" <> long
         current ui = do
           marked <- findAll ui ".toc-list a[data-current]"
           ordNub . catMaybes <$> traverse (`getAttribute` "href") marked

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The export of the wiki's own blocks (WP5.77). `Wiki.Server.Export.Document`
+no longer reads pandoc's fenced divs (`Ext_fenced_divs` is out of
+`wikiExtensions`): every marker line of a block of the wiki's own becomes a
+placeholder paragraph before pandoc reads the page, and `markedBlocks`
+makes the blocks between a start and its end a div with the attributes the
+wiki read, a pause's placeholder pandoc's pause, and a line in red its
+text. A paragraph of three dots from the Markdown or from raw HTML is made
+one string (`dotsAsText`), so no slide writer reads it as a pause. The
+`[[!slides]]` and `[[!toc]]` lines are taken out of the text pandoc reads.
+
 Steps of the schema in code (#202). A step may now be Haskell as well as
 an SQL file: a `CodeStep` of the new `Wiki.Server.Storage.Migrate.Code`
 (listed in its `codeSteps`, empty for now), numbered in the same sequence

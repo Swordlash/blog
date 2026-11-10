@@ -3,7 +3,7 @@
 -- | Tables of contents and templates (WP4.15 of docs/PLAN.md) in a browser,
 -- over the demo's wiki: the "Contents" panel beside a long page, which
 -- marks the section being read as the page scrolls and stays folded once
--- folded; @[[toc]]@ placing the list in the page instead; a heading's link
+-- folded; @[[!toc]]@ placing the list in the page instead; a heading's link
 -- to itself; a page made a template, listed apart from the tree; and "New
 -- page" from a template, the space's and a built-in one, with its
 -- placeholders filled in. And a footnote's number, titled with its note,
@@ -84,7 +84,7 @@ spec m = do
     find again ".page-contents-title" >>= click
     eventually $ find again ".page-contents .toc-list" >>= shouldBeVisible
 
-  it "shows no panel for a page with few headings, and the list where [[toc]] is" $ runPage $ do
+  it "shows no panel for a page with few headings, and the list where [[!toc]] is" $ runPage $ do
     ui <- start m (Just "user-admin") (Page (slugs ["team"]) (slugs ["team-handbook", "on-call"]))
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "On-call")
     length <$> findAll ui ".page-contents" `shouldReturn` 0

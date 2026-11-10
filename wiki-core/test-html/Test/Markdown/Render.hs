@@ -43,8 +43,8 @@ spec = describe "Markdown.Render" $ do
     it "writes a block quote and a thematic break" $
       "> q\n\n---" `shows'` "<blockquote><p>q</p></blockquote><hr>"
     it "writes nothing for a pause, and an incremental box as a plain box, on a page" $ do
-      "a\n\n. . .\n\nb" `shows'` "<p>a</p><p>b</p>"
-      "::: incremental\n- a\n\n. . .\n:::" `shows'` "<div class=\"incremental\"><ul><li>a</li></ul></div>"
+      "a\n\n[[!pause]]\n\nb" `shows'` "<p>a</p><p>b</p>"
+      "[[!incremental]]\n- a\n\n[[!pause]]\n[[/incremental]]" `shows'` "<div class=\"incremental\"><ul><li>a</li></ul></div>"
       "> . . ." `shows'` "<blockquote><p>. . .</p></blockquote>"
 
   describe "line breaks (issue #120: a line broken on purpose is meant)" $ do
@@ -102,25 +102,25 @@ spec = describe "Markdown.Render" $ do
       "# Zażółć gęślą" `shows'` "<h1 id=\"zażółć-gęślą\">Zażółć gęślą<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#zażółć-gęślą\"></a></h1>"
 
   describe "the table of contents" $ do
-    it "is [[toc]] as a nested list of links to the headings, where it is written" $
-      "[[toc]]\n\n# A\n\n## B\n\n# A"
+    it "is [[!toc]] as a nested list of links to the headings, where it is written" $
+      "[[!toc]]\n\n# A\n\n## B\n\n# A"
         `shows'` ( "<nav aria-label=\"Contents\" class=\"toc\"><p class=\"toc-title\">Contents</p>"
                      <> "<ul class=\"toc-list\"><li><a href=\"#a\">A</a><ul class=\"toc-list\"><li><a href=\"#b\">B</a></li></ul></li>"
                      <> "<li><a href=\"#a-2\">A</a></li></ul></nav>"
                      <> "<h1 id=\"a\">A<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a\"></a></h1><h2 id=\"b\">B<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#b\"></a></h2><h1 id=\"a-2\">A<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a-2\"></a></h1>"
                  )
     it "lists a heading by its text without markup" $
-      "# The *big* run\n\n[[toc]]"
+      "# The *big* run\n\n[[!toc]]"
         `shows'` ( "<h1 id=\"the-big-run\">The <em>big</em> run<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#the-big-run\"></a></h1>"
                      <> "<nav aria-label=\"Contents\" class=\"toc\"><p class=\"toc-title\">Contents</p>"
                      <> "<ul class=\"toc-list\"><li><a href=\"#the-big-run\">The big run</a></li></ul></nav>"
                  )
     it "is nothing in a page without headings" $
-      "Text.\n\n[[toc]]" `shows'` "<p>Text.</p>"
+      "Text.\n\n[[!toc]]" `shows'` "<p>Text.</p>"
     it "is the same list as the panel's" $ do
       let doc = either (panic . show) identity (parseMarkdown "# A\n\n## B\n\n## C")
       panel <- renderHtml @Empty [maybe (HH.text "") contentsList (contentsPanel doc)]
-      inline <- markdown "# A\n\n## B\n\n## C\n\n[[toc]]"
+      inline <- markdown "# A\n\n## B\n\n## C\n\n[[!toc]]"
       (panel `T.isInfixOf` inline) `shouldBe` True
 
   describe "lists" $ do
@@ -393,41 +393,44 @@ spec = describe "Markdown.Render" $ do
     it "keeps the five kinds' own look whatever is defined"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
       $ "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>x</p></div>"
-    it "writes a fenced div with its class" $
-      "::: summary\nShort.\n:::" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
+    it "writes a div with its class" $
+      "[[!div]]{.summary}\nShort.\n[[/div]]" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
 
   describe "spoilers" $ do
     it "writes an inline spoiler as a span the reader focuses and clicks, with its formatting" $
       "a ||secret **word**|| b"
         `shows'` "<p>a <span aria-label=\"Spoiler: click to reveal\" class=\"spoiler\" role=\"button\" tabindex=\"0\">secret <strong>word</strong></span> b</p>"
     it "writes a block spoiler as a closed details, its summary the description, its name in data-spoiler" $
-      "[[spoiler]]{answer}(The *answer*)\nForty-two.\n[[/spoiler]]{answer}"
+      "[[!spoiler]]{answer}(The *answer*)\nForty-two.\n[[/spoiler]]{answer}"
         `shows'` "<details class=\"spoiler\" data-spoiler=\"answer\"><summary>The <em>answer</em></summary><p>Forty-two.</p></details>"
     it "nests spoilers, and keeps a section spoiler's heading and its link inside" $ do
-      "[[spoiler]]{a}(A)\n[[spoiler]]{b}(B)\nx\n[[/spoiler]]{b}\n[[/spoiler]]{a}"
+      "[[!spoiler]]{a}(A)\n[[!spoiler]]{b}(B)\nx\n[[/spoiler]]{b}\n[[/spoiler]]{a}"
         `shows'` "<details class=\"spoiler\" data-spoiler=\"a\"><summary>A</summary><details class=\"spoiler\" data-spoiler=\"b\"><summary>B</summary><p>x</p></details></details>"
-      "[[spoiler]]{s}(Solutions)\n## Solutions\n\nx\n[[/spoiler]]{s}"
+      "[[!spoiler]]{s}(Solutions)\n## Solutions\n\nx\n[[/spoiler]]{s}"
         `shows'` "<details class=\"spoiler\" data-spoiler=\"s\"><summary>Solutions</summary><h2 id=\"solutions\">Solutions<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#solutions\"></a></h2><p>x</p></details>"
     it "writes a heading spoiler as a closed details whose summary is the heading, with its id and its link, and its section inside" $ do
-      "## [[spoiler]]{q1} What is *X*?\n\nAn answer.\n\n## Next"
+      "## [[!spoiler]]{q1} What is *X*?\n\nAn answer.\n\n## Next"
         `shows'` ( "<details class=\"spoiler spoiler-section\" data-spoiler=\"q1\"><summary><h2 id=\"what-is-x\">What is <em>X</em>?<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#what-is-x\"></a></h2></summary><p>An answer.</p></details>"
                      <> "<h2 id=\"next\">Next<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#next\"></a></h2>"
                  )
       -- Without a name, the spoiler is known by its heading's id.
-      "### [[spoiler]] Why?\n\nBecause."
+      "### [[!spoiler]] Why?\n\nBecause."
         `shows'` "<details class=\"spoiler spoiler-section\" data-spoiler=\"why\"><summary><h3 id=\"why\">Why?<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#why\"></a></h3></summary><p>Because.</p></details>"
     it "nests heading spoilers, and shows the section as written where sections are not hidden (a feed)" $ do
-      showsWith defaultOptions {headingAnchors = False} "## [[spoiler]]{a} A\n\nx\n\n### [[spoiler]]{b} B\n\ny" $
+      showsWith defaultOptions {headingAnchors = False} "## [[!spoiler]]{a} A\n\nx\n\n### [[!spoiler]]{b} B\n\ny" $
         "<details class=\"spoiler spoiler-section\" data-spoiler=\"a\"><summary><h2 id=\"a\">A</h2></summary><p>x</p><details class=\"spoiler spoiler-section\" data-spoiler=\"b\"><summary><h3 id=\"b\">B</h3></summary><p>y</p></details></details>"
-      showsWith defaultOptions {headingAnchors = False, hiddenSections = False} "## [[spoiler]]{a} A\n\nx\n\n### [[spoiler]] B\n\ny" "<h2 id=\"a\">A</h2><p>x</p><h3 id=\"b\">B</h3><p>y</p>"
+      showsWith defaultOptions {headingAnchors = False, hiddenSections = False} "## [[!spoiler]]{a} A\n\nx\n\n### [[!spoiler]] B\n\ny" "<h2 id=\"a\">A</h2><p>x</p><h3 id=\"b\">B</h3><p>y</p>"
     it "writes a broken marker line in red, with the reason as its title" $
-      "[[/spoiler]]{x}"
-        `shows'` "<p class=\"spoiler-error\" title=\"no spoiler is open here\">[[/spoiler]]{x}<span class=\"spoiler-error-reason\">no spoiler is open here</span></p>"
+      "[[!nope]]"
+        `shows'` "<p class=\"spoiler-error\" title=\"“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case\">[[!nope]]<span class=\"spoiler-error-reason\">“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case</span></p>"
+    it "writes an unclosed block's marker in red, then its blocks as they are in the unclosed div, as an unclosed spoiler's" $
+      "[[!notes]]\nSay it."
+        `shows'` "<p class=\"spoiler-error\" title=\"the [[!notes]] block is not closed: add [[/notes]] after its last line\">[[!notes]]<span class=\"spoiler-error-reason\">the [[!notes]] block is not closed: add [[/notes]] after its last line</span></p><div class=\"spoiler-unclosed\"><p>Say it.</p></div>"
     it "writes an unclosed spoiler's marker in red, then its blocks as they are in the unclosed div" $
-      "[[spoiler]]{x}(D)\na\n\n```\ncode\n```"
-        `shows'` "<p class=\"spoiler-error\" title=\"Spoiler “x” is not closed: add [[/spoiler]]{x}\">[[spoiler]]{x}(D)<span class=\"spoiler-error-reason\">Spoiler “x” is not closed: add [[/spoiler]]{x}</span></p><div class=\"spoiler-unclosed\"><p>a</p><pre><code>code\n</code></pre></div>"
+      "[[!spoiler]]{x}(D)\na\n\n```\ncode\n```"
+        `shows'` "<p class=\"spoiler-error\" title=\"Spoiler “x” is not closed: add [[/spoiler]]{x}\">[[!spoiler]]{x}(D)<span class=\"spoiler-error-reason\">Spoiler “x” is not closed: add [[/spoiler]]{x}</span></p><div class=\"spoiler-unclosed\"><p>a</p><pre><code>code\n</code></pre></div>"
     it "writes a spoiler that cuts a section as an unclosed one, with its own reason" $ do
-      html <- markdown "[[spoiler]]{x}(D)\ntext\n\n## Heading\n[[/spoiler]]{x}"
+      html <- markdown "[[!spoiler]]{x}(D)\ntext\n\n## Heading\n[[/spoiler]]{x}"
       html `shouldSatisfy` T.isInfixOf "cuts a section: a spoiler lies within one section, or wraps a whole one"
       html `shouldSatisfy` T.isInfixOf "<div class=\"spoiler-unclosed\"><p>text</p><h2 id=\"heading\">"
 

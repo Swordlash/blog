@@ -1,6 +1,6 @@
 // A page's table of contents (WP4.15 of docs/PLAN.md): which section is
 // being read, marked in every list of the page's headings (the "Contents"
-// panel and a [[toc]] in the page) as the attribute data-current on the
+// panel and a [[!toc]] in the page) as the attribute data-current on the
 // link to it; whether the panel is folded, kept in this browser; and the
 // heading the address names, scrolled to once a page is shown.
 //
