@@ -94,11 +94,12 @@ import Wiki.Server.Guide (installGuide, updateGuide, updateLines)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Secret (Kept, revealed)
-import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
+import Wiki.Server.Storage (CheckProblem (..), Checked (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress, operator)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 import Wiki.Server.Storage.Migrate (OldSchema)
 import Wiki.Server.Storage.Migrate qualified as Migrate
+import Wiki.Server.WaysIn (waysInLines)
 
 -- | A @wiki-server users@ command, on a data directory.
 data Users = Users
@@ -452,7 +453,9 @@ runMigrate options =
 -- everything read, 4 for a database not at this program's version of the
 -- schema, 5 for one that does not read, 1 when it could not be opened.
 data CheckOutcome
-  = -- | Everything read: a line per table, with its rows.
+  = -- | Everything read: a line per table, with its rows, then how the
+    -- accounts sign in ('Wiki.Server.WaysIn.waysInLines'). An account
+    -- with no way in is said here, and is not a failure.
     CheckPassed [Text]
   | -- | The database is at another version of the schema.
     CheckNotMigrated Text
@@ -468,7 +471,7 @@ runCheck options =
   outcome <$> try @SomeException ((`onPlace` options) (fmap Right . checkDatabase))
   where
     outcome = \case
-      Right (Right (Right tables)) -> CheckPassed (map line tables <> ["Every table and every record read."])
+      Right (Right (Right checked)) -> CheckPassed (map line checked.tables <> ["Every table and every record read."] <> waysInLines checked.ways)
       Right (Right (Left (NotMigrated at known))) ->
         CheckNotMigrated ("The database is at version " <> show at <> " of the schema, and this program reads version " <> show known <> ": run wiki-server migrate first.")
       Right (Right (Left (UnreadableTables tables))) -> CheckUnreadable (map line tables <> ["Some tables did not read (above): this program cannot read the database as it is."])

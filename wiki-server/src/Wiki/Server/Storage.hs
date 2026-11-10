@@ -117,6 +117,7 @@ module Wiki.Server.Storage
   , migrateDatabase
   , withDatabase
   , CheckProblem (..)
+  , Checked (..)
   , TableRead (..)
   , checkDatabase
   , checkConnection
@@ -299,6 +300,7 @@ import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
+import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, waysIn)
 import Wiki.Server.WebAuthn (fromBase64Url)
 #ifdef WIKI_POSTGRES
 import Wiki.Server.Storage.Postgres (holdDatabaseShared, openPostgres)
@@ -585,27 +587,38 @@ data CheckProblem
     UnreadableRecords Text
   | -- | Every record read, but some break a rule the wiki keeps: a line
     -- for each. A space whose pages have a second root, a page with no
-    -- parent beside the space's home page (WP5.78 of docs/PLAN.md), is one.
+    -- parent beside the space's home page (WP5.78 of docs/PLAN.md), is one;
+    -- an account whose stored password no sign-in can use (WP5.85,
+    -- 'Wiki.Server.WaysIn.brokenCredentials') is another.
     BrokenRecords [Text]
+  deriving stock (Eq, Show)
+
+-- | 'Checked' is what a check that passed found: every table with the
+-- rows it read, and how the accounts sign in ("Wiki.Server.WaysIn").
+data Checked = Checked
+  { tables :: [TableRead]
+  , ways :: WaysIn
+  }
   deriving stock (Eq, Show)
 
 -- | Read the whole database as this program reads it, and change nothing:
 -- every row of every table through the storage's row decoders
 -- ('readEveryTable'), then the wiki's records an export builds from them
 -- (users, groups, grants, spaces, pages and their versions, comments, the
--- audit log, the settings). The result is every table with the rows it
--- read; a database not at this program's version of the schema is not
--- read at all. What the deploy runs after 'migrateDatabase': a row the
+-- audit log, the settings), and the accounts' passwords, identities and
+-- passkeys. The result is every table with the rows it read, and how the
+-- accounts sign in ('Checked'); a database not at this program's version of the schema is
+-- not read at all. What the deploy runs after 'migrateDatabase': a row the
 -- migration left that the new program cannot read is found then, not by
 -- the first reader to open the page that holds it.
-checkDatabase :: Place -> IO (Either CheckProblem [TableRead])
+checkDatabase :: Place -> IO (Either CheckProblem Checked)
 checkDatabase place = withDatabase place checkConnection
 
 -- | 'checkConnection' is 'checkDatabase' on a connection the caller has
 -- open, in the caller's transaction if it has begun one. The copy of a
 -- database to another one ("Wiki.Server.Storage.Copy") checks its target
 -- this way before it commits, and its source before it copies.
-checkConnection :: (Backend be) => Connection be -> IO (Either CheckProblem [TableRead])
+checkConnection :: (Backend be) => Connection be -> IO (Either CheckProblem Checked)
 checkConnection c = do
   at <- databaseVersion c
   let known = knownVersion (schemaSuffix c)
@@ -618,8 +631,8 @@ checkConnection c = do
         else
           try @SomeException (runDb c records) <&> \case
             Left e -> Left (UnreadableRecords (toS (displayException e)))
-            Right [] -> Right tables
-            Right broken -> Left (BrokenRecords broken)
+            Right ([], ways) -> Right Checked {tables, ways}
+            Right (broken, _) -> Left (BrokenRecords broken)
   where
     -- Each record forced whole (through its Show), so that a value the
     -- conversion from a row cannot make fails here and not later. The
@@ -627,8 +640,10 @@ checkConnection c = do
     -- memory as an export holds them, and no more.
     --
     -- What is read is then checked against the rules the wiki keeps, and a
-    -- line says what breaks each.
-    records :: (Backend be) => Db be [Text]
+    -- line says what breaks each. The accounts' password columns, their
+    -- identities and passkeys, and the providers the settings name give
+    -- the accounts' rule and how they sign in.
+    records :: (Backend be) => Db be ([Text], WaysIn)
     records = do
       forced =<< loadUsers
       forced =<< loadGroups
@@ -641,8 +656,16 @@ checkConnection c = do
       forced =<< Comments.loadAllThreads commentAuthor
       forced =<< loadAuditLog
       forced =<< loadSettings
-      forced . (\s -> s.homePage) =<< loadServerSettings
-      pure (rootProblems spaces pages)
+      kept <- loadServerSettings
+      forced kept.homePage
+      identities <- loadIdentityProviders
+      passkeys <- loadPasskeyOwners
+      columns <- loadPasswordColumns
+      let accounts =
+            [ AccountWays {id = u, login, disabled, password, providers = Map.findWithDefault [] u identities, passkey = Set.member u passkeys}
+            | (u, login, disabled, password) <- columns
+            ]
+      pure (rootProblems spaces pages <> brokenCredentials accounts, waysIn (providerNames kept) accounts)
     -- Each space with a home page has that page as the only one with no
     -- parent.
     rootProblems spaces pages =

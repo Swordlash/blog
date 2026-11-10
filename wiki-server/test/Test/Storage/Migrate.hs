@@ -16,7 +16,7 @@ import Test.Storage.Fixture (demoArchive, ok, withEmptyPlaceIn)
 import Wiki.Api.Vault (StoredVault (..))
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place, TableRead (..), checkDatabase, closeStorage, defaultConfig, importArchive, migrateDatabase, openStorage, withStorage)
+import Wiki.Server.Storage (CheckProblem (..), Checked (..), Migrated (..), Place, TableRead (..), checkDatabase, closeStorage, defaultConfig, importArchive, migrateDatabase, openStorage, withStorage)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Rows (micro)
@@ -210,7 +210,7 @@ spec backing = describe "the schema's versions" $ do
         checked <- checkDatabase at
         case checked of
           Left problem -> panic ("the check failed: " <> show problem)
-          Right tables -> do
+          Right Checked {tables} -> do
             sort (map (\t -> t.table) tables) `shouldBe` filter (/= "wiki_schema") wikiTables
             all (isRight . (\t -> t.rows)) tables `shouldBe` True
             [n | TableRead "users" (Right n) <- tables] `shouldSatisfy` all (> 0)

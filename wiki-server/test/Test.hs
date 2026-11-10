@@ -37,6 +37,7 @@ import Test.Server.Static qualified as Static
 import Test.Server.Tls qualified as Tls
 import Test.Server.Totp qualified as Totp
 import Test.Server.Vault qualified as Vault
+import Test.Server.WaysIn qualified as WaysIn
 import Test.Server.WebAuthn qualified as WebAuthn
 import Test.Server.WhatsNew qualified as WhatsNew
 import Test.Storage qualified as Storage
@@ -76,6 +77,7 @@ main = secureMain $ do
         WhatsNew.unitSpec
         Opaque.unitSpec
         Rehearsal.unitSpec
+        WaysIn.unitSpec
         CodeSteps.unitSpec
         Copy.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
@@ -117,6 +119,7 @@ main = secureMain $ do
           Notifications.spec b
           WhatsNew.spec b
           Rehearsal.spec b
+          WaysIn.spec b
         alone $ do
           Options.environmentSpec
           Export.environmentSpec b

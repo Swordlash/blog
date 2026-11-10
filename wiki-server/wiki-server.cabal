@@ -147,6 +147,7 @@ library
         Wiki.Server.Tls
         Wiki.Server.Totp
         Wiki.Server.Vault
+        Wiki.Server.WaysIn
         Wiki.Server.WebAuthn
         Wiki.Server.WhatsNew
         Wiki.Server.WhatsNew.Version
@@ -354,6 +355,7 @@ test-suite wiki-server-test
         Test.Server.Tls
         Test.Server.Totp
         Test.Server.Vault
+        Test.Server.WaysIn
         Test.Server.WebAuthn
         Test.Server.WhatsNew
         Test.Storage
