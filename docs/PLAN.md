@@ -1175,6 +1175,40 @@ confirms it against reality and the plan is amended if it does not hold.
     was. CPP sits only in `Wiki.Server.CopyDatabase`, where it opens
     PostgreSQL (decision 34).
 
+67. **The deploy moves a wiki from SQLite to PostgreSQL, and a move that
+    fails loses nothing (WP5.80b, #203, #233; the owner, 2026-11-10).**
+    `sh toolchain/deploy-local.sh --move-to-postgres` (`Maker.Deploy.Move`,
+    offered by the wizard) works on a server this script deployed in
+    SQLite, at the checkout's commit. It builds the server with the
+    `postgres` flag, looks at PostgreSQL before it writes anything (a
+    container on another port than `--db-port`, or a database that holds a
+    wiki, is refused untouched), stops the service, backs up, runs
+    `wiki-server copy-database` (decision 66), compares the wiki before and
+    after with the rehearsal's checks, switches and starts. The comparison
+    is `wiki-server rehearse --move-to-database`, on scratch copies and not
+    on the database the move filled, since the checks write; the copy
+    verifies the filled database itself. The invariant: after a move that
+    did not succeed, either the service runs on exactly the SQLite
+    database the move began with, or it is stopped and every copy is
+    still there (the SQLite files, in `data/` or set aside in
+    `data/replaced/<time>/`; the deployment in `previous/`; the copy in
+    PostgreSQL), and `--rollback --yes` finishes. Five rounds of review
+    each found one more way a failure broke that, so it now holds by
+    construction, and a package that changes the move keeps these: the
+    journal notes each step of the switch before its first operation, and
+    each undo is right for none, some or all of the step; the switch back
+    restores in one phase and deletes what it saved in a second, in one
+    function (`discardSaved`), only when all of the first succeeded; it
+    starts SQLite and empties PostgreSQL only when `data/` holds the bytes
+    recorded by SHA-256 at the switch; it puts nothing back until systemd
+    says the service is inactive; from its first write to its end the move
+    is one guarded stretch; and every file operation and command goes
+    through `Maker.Deploy.Operations`, whose counter the tests drive
+    (`WIKI_TEST_MOVE_FAILPOINT`): `toolchain/test-deploy-local.sh` fails
+    each operation once, 76 of them, asserts the invariant, and checks
+    `Move.hs`'s source for an operation done any other way. The SQLite
+    file is never deleted.
+
 ## Repository layout
 
 ```
@@ -1263,8 +1297,8 @@ commonmark-extensions; what is left is the editor's part, a toolbar
 button, completion after a colon and lists with an emoji for a bullet,
 which waits for #187 and #186), #190 (table views). Stage 5: #191 (presentations as a kind of
 page), #204 (calendars and TODO lists; the lists can come earlier).
-Alongside, when there is room: #213 (WP5.74b3, after #201), #203
-(SQLite to PostgreSQL, WP5.80). WP5.79, the browser's OPAQUE client from
+Alongside, when there is room: #213 (WP5.74b3, after #201). #203
+(SQLite to PostgreSQL, WP5.80) is done: decisions 66 and 67. WP5.79, the browser's OPAQUE client from
 opaque-hs, is done (#230, decision 59). #212 (WP5.74a2b) was closed in opaque-hs's own
 repository, which the wiki pins since #227.
 
@@ -1341,26 +1375,6 @@ repository, which the wiki pins since #227.
     that rewrites an old address in the address bar; a database
     constraint on one root per space, which the two exceptions rule out
     for now.
-- **WP5.80 A wiki in SQLite moves to PostgreSQL** (#203; the owner,
-  2026-11-10). A wiki starts in SQLite, a file beside the server; once it
-  has grown, its administrator may want PostgreSQL. Today the only way
-  across is an export and an import of archives, which carry pages and not
-  accounts, passwords, sessions, permissions or settings. Two pull
-  requests, a then b.
-  - **a is done (#232, decision 66):** `wiki-server copy-database`.
-  - **b, the maker moves a deployed wiki.** A command of the maker, for an
-    instance deployed at the maker's own version: it builds the server
-    with the `postgres` flag (a SQLite deployment is built without it,
-    decision 34), brings up the PostgreSQL the deploy uses for a wiki in
-    PostgreSQL, backs the wiki up, stops the service, runs a's command
-    (`wiki-server copy-database --data DIR --to-database URL
-    --to-database-password-file FILE`, and acts on its exit codes),
-    compares the wiki before and after with the rehearsal's checks
-    (decision 58: `pages`, `accounts`, `home pages`, with this program as
-    old and new, the old on SQLite and the new on PostgreSQL), switches
-    the deployment to PostgreSQL and starts it. Any failure before the
-    switch leaves the deployment as it was and starts it again on SQLite;
-    a failure after it switches back. The SQLite file is never deleted.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
@@ -1653,6 +1667,24 @@ needs. Each was true when its package merged; check before relying on one.
   account, started by its systemd session, and
   `toolchain/ci-postgres.sh start` for the container CI uses. One
   container and one port are shared by every agent that runs them.
+- **The move to PostgreSQL (WP5.80b, #233).** It was not run end to end
+  against a real unit and compose project: its parts ran for real (the
+  copy, the comparison, the questions it asks Docker), the switch and its
+  failures against the deploy's fakes. The maker reads two variables for
+  its tests in the program that is deployed with
+  (`WIKI_TEST_MOVE_FAILPOINT`, `WIKI_TEST_MOVE_OPERATIONS`). The tests
+  fail one operation in each run, not two. A move killed during the
+  switch needs a person, and the next move refuses until then. Nothing
+  locks a move against a deploy that rehearses at the same moment (both
+  use `<state>/<name>.rehearsal` and the database `wiki_rehearsal`). After
+  a switch back that stopped part way with the state back on SQLite,
+  `--rollback` leaves PostgreSQL's container running with the copy. The
+  guard needs `sha256sum`.
+- **The wizard's screen test is not in CI.** `toolchain/test-configure.sh`
+  builds brick and vty and drives the screens through `script(1)` with
+  timed keys (decision 35 keeps it out), so CI passed on #233 while its
+  last case was broken by the new action. It runs locally, 23 cases; one
+  line in the unit job would run it, if its timed case holds on a runner.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
