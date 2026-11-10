@@ -9,7 +9,8 @@ title: Permanent links to a version of a page
   as it is at that moment. The link keeps showing that version, the same
   text, after the page is edited, and keeps working after the page is moved,
   under another page or to another space. The notice says "Link to this
-  version copied":
+  version copied". The wiki's front page, which has no address of a
+  version, does not offer it:
 
   ```text
   https://wiki.example.org/l/4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e/?version=2026-11-10T09%3A30%3A12Z

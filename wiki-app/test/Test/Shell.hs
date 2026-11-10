@@ -469,6 +469,22 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     asReader `contains` "The first version"
     asReader `lacks` "Restore this version"
 
+  it "offers no permanent link on the wiki's front page, which has no address of a version" $ do
+    Rendered {html} <- render (as Nothing) Home
+    html `contains` "<h1"
+    html `lacks` "copy-permanent-link"
+    -- A blog's home page, shown above its posts once written, has one,
+    -- which leads to its version, shown as a page.
+    let st = as (Just "user-admin")
+        blogHome = head [h | sp <- Map.elems st.spaces, [sp.slug] == slugs ["blog"], Just h <- [sp.homePage]]
+        written = st {pages = Map.adjust (\p -> p {P.body = "# Our blog\n\nWhat we write."}) (fromMaybe (panic "no blog") blogHome) st.pages}
+    Rendered {html = blog} <- render written (Space (slugs ["blog"]))
+    blog `contains` "What we write."
+    blog `contains` "Copy permanent link</button>"
+    let homeSaved = maybe (panic "no blog home") (\p -> p.updatedAt) (Map.lookup (fromMaybe (panic "no blog") blogHome) st.pages)
+    Rendered {html = pinned} <- render written (PageAtVersion (slugs ["blog"]) [] homeSaved)
+    pinned `contains` "This is the page as it was saved on"
+
   it "shows a version as the page showed it, saying which, with its permanent link, and no version the page does not have" $ do
     (st, [v1, _, v3]) <- savedTwice
     Rendered {html, title} <- render st (PageAtVersion (slugs ["blog"]) (slugs ["hello-world"]) v1)

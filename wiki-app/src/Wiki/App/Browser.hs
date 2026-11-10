@@ -220,11 +220,20 @@ clickedLink event = do
 -- A link to a route with a fragment (@\/l\/17\/#setup@,
 -- @\/s\/docs\/p\/guide\/#setup@) keeps the fragment in the address it
 -- goes to, since the router writes the route's address alone: the page
--- shown scrolls to it ('revealFragment'), and a permanent address passes
--- it on to the page's own ('redirectKeepingFragment').
+-- shown scrolls to it once loaded ('revealFragment', in the page view's
+-- start and when it is given another page), and a permanent address passes
+-- it on to the page's own ('redirectKeepingFragment'). A link to a place
+-- on the page shown is scrolled to at once.
 followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
-  ToRoute r fragment -> liftIO (Router.navigate router r >> keepFragment fragment)
+  ToRoute r fragment -> liftIO $ do
+    -- A place on the page shown, by its full address: scrolled to, as a
+    -- link to @#place@ is, since the router goes nowhere for the route
+    -- the page is at already.
+    now <- Router.current router
+    if now == r && T.length fragment > 1
+      then scrollTo (decodeComponent (T.drop 1 fragment))
+      else Router.navigate router r >> keepFragment fragment
   ToFragment fragment -> liftIO (scrollTo fragment)
   CopyAnchor fragment -> liftIO (scrollTo fragment)
   ToNote footnote reference -> liftIO (followNote footnote reference)

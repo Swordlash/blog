@@ -373,7 +373,8 @@ of that section, and a box's address has its kind and number, `#box-tip-2`.
 it is at that moment, by the page's id and the version's time
 (`/l/<page id>/?version=…`): it keeps showing that version after the page is
 edited, and keeps working after the page is moved. The page it opens says
-which version it is, and links to the page as it is now.
+which version it is, and links to the page as it is now. The wiki's front
+page, which has no address of a version, does not offer it.
 Text selected in a page gets **Copy link** beside **Comment**: its address
 ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
 Safari and Firefox open it scrolled to that text, highlighted.

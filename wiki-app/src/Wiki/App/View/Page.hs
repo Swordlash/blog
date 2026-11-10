@@ -376,12 +376,13 @@ component =
     actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
     actions input page deck comments
       -- A version is only read: its history, and its permanent link.
-      | isJust input.version = [history, copyPermanent]
+      | isJust input.version = history : copyPermanent
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           | changes
           ]
-            <> [viewSource, history, copyPermanent]
+            <> [viewSource, history]
+            <> copyPermanent
             <> present
             <> export
             <> [comments | commentsHere input]
@@ -397,13 +398,18 @@ component =
                               else [button "Move" StartMove, button "Delete" (Open ConfirmingDelete)] <> useAsTemplate
                           )
                )
-      | otherwise = [viewSource, history, copyPermanent] <> present <> export <> [comments | commentsHere input]
+      | otherwise = [viewSource, history] <> copyPermanent <> present <> export <> [comments | commentsHere input]
       where
         -- For every reader: the permanent address of the version shown,
         -- by the page's id and the version's time, which keeps showing
         -- this text after the page is edited, and keeps working after it
-        -- is moved.
-        copyPermanent = [hh|<button type="button" class="button copy-permanent-link" title="Copy a link to this version of the page: it keeps showing this text after the page is edited or moved" onClick={{ const CopyPermanentLink }}>Copy permanent link</button>|]
+        -- is moved. Not on the wiki's front page, which has no address
+        -- of a version ('Wiki.App.Route.locationRoute'): its link would
+        -- show the latest text.
+        copyPermanent =
+          [ [hh|<button type="button" class="button copy-permanent-link" title="Copy a link to this version of the page: it keeps showing this text after the page is edited or moved" onClick={{ const CopyPermanentLink }}>Copy permanent link</button>|]
+          | not home
+          ]
         home = homeSpace input.context input.space.id
         -- Whether this page is the space's home page, which only the
         -- space's administrators change ('mayEditPage').
@@ -695,6 +701,10 @@ component =
           -- be someone else now.
           modify (\st -> st {mode = Viewing, problem = Nothing, changed = False, people = Body.noPeople})
           load
+        -- Another page, or another version, in the same view, as a link
+        -- followed from a page of the same space shows it: scroll to the
+        -- place its address names, as 'Initialize' does for the first.
+        when elsewhere (H.liftEffect revealFragment)
         when gainedFeed watch
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       -- A click on a heading's or a box's #: the section's address goes
@@ -828,10 +838,10 @@ component =
     load = do
       input <- gets (\st -> st.input)
       loaded <- fetch input
-      -- Only if the requested page is still the one to show: another
-      -- navigation may have overtaken this load.
+      -- Only if the requested page, and its version, is still the one to
+      -- show: another navigation may have overtaken this load.
       now <- gets (\st -> st.input)
-      when (now.space.id == input.space.id && now.path == input.path) $ do
+      when (now.space.id == input.space.id && now.path == input.path && now.version == input.version) $ do
         modify (\st -> st {loaded})
         resolvePeople
         for_ (pageOf loaded) (H.raise . Showing)

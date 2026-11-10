@@ -442,6 +442,7 @@ markdownGuide =
   , "which version it is, and links to the page as it is now. Its address is"
   , "`/l/`, the page's id and the version, `/l/4f1c9a2e/?version=…`; written"
   , "without the version, it leads to the page as it is now, wherever it is."
+  , "The wiki's front page has no versions to link to, and no such button."
   , ""
   , "A page with three headings or more has a **Contents** panel beside it,"
   , "listing them. `[[!toc]]` on a line of its own puts the list in the page"
