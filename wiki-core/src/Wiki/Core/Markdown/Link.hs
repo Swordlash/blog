@@ -32,6 +32,7 @@ module Wiki.Core.Markdown.Link
     -- * A page's permanent address
   , pageIdSegment
   , readPageIdSegment
+  , destinationVersion
 
     -- * Writing a reference
   , attachmentReference
@@ -107,18 +108,27 @@ classifyDestination dest
   | Just name <- T.stripPrefix "attachment:" stripped = ToAttachment (percentDecode name)
   | isJust (urlScheme dest) || "//" `T.isPrefixOf` stripped = ToUrl dest
   | Just fragment <- T.stripPrefix "#" stripped = ToAnchor fragment
-  | Just pid <- permanent = ToPageId pid version fragmentPart
+  | Just pid <- permanent = ToPageId pid (destinationVersion dest) fragmentPart
   | otherwise = ToPath dest
   where
     stripped = T.strip dest
     (beforeFragment, fragmentPart) = T.breakOn "#" stripped
-    (pathPart, query) = T.breakOn "?" beforeFragment
-    -- Of the query, only the version is read: the route ignores the rest.
-    version = head [t | pair <- T.splitOn "&" (T.drop 1 query), Just v <- [T.stripPrefix "version=" pair], Just t <- [iso8601ParseM (toS (percentDecode v))]]
+    pathPart = fst (T.breakOn "?" beforeFragment)
     permanent = case T.splitOn "/" pathPart of
       ["", "l", segment] -> readPageIdSegment (percentDecode segment)
       ["", "l", segment, ""] -> readPageIdSegment (percentDecode segment)
       _ -> Nothing
+
+-- | 'destinationVersion' is the version of a page a destination names in
+-- its query (@?version=\<time>@, the time it was saved, as a history's
+-- address writes it), after a permanent address or a page's own address:
+-- the only parameter a link to a page keeps. 'Nothing' for none, and for
+-- a value that is not a time, as the application's route reads it.
+destinationVersion :: Text -> Maybe UTCTime
+destinationVersion dest =
+  head [t | pair <- T.splitOn "&" (T.drop 1 query), Just v <- [T.stripPrefix "version=" pair], Just t <- [iso8601ParseM (toS (percentDecode v))]]
+  where
+    query = snd (T.breakOn "?" (fst (T.breakOn "#" (T.strip dest))))
 
 -- | 'pageIdSegment' is a page's id as the segment of its permanent address
 -- (@\/l\/\<segment>\/@), before percent-encoding. An id is any text, but a

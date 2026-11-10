@@ -74,6 +74,17 @@ spec = describe "resolvePageLink" $ do
   it "keeps the fragment, and drops the query" $
     fromDocs [] "markdown-guide?x=1#links" `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
 
+  it "keeps a version after a page's address or path, and leads to that version" $ do
+    let at = UTCTime (fromGregorian 2026 10 24) 34212
+        version = "?version=2026-10-24T09%3A30%3A12Z"
+    fromDocs [] ("/s/docs/p/markdown-guide/" <> version <> "#links") `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "#links")
+    fromDocs [] ("markdown-guide/" <> version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "")
+    fromDocs [] ("markdown-guide?x=1&" <> T.drop 1 version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "")
+    -- A space's own address is its home page's.
+    fromDocs [] ("/s/docs/" <> version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) [] at) "")
+    -- A version that is not a time is dropped, as the route drops it.
+    fromDocs [] "markdown-guide?version=yesterday" `shouldBe` docsPage ["markdown-guide"]
+
   it "reads a title as a slug, for a wiki link" $ do
     fromDocs [] "Markdown guide" `shouldBe` docsPage ["markdown-guide"]
     fromDocs ["markdown-guide"] "Tour" `shouldBe` docsSpace

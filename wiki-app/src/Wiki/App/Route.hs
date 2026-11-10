@@ -113,7 +113,7 @@ import Protolude
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Core.Id (PageId (..), SpaceId)
-import Wiki.Core.Markdown.Link (Destination (..), classifyDestination, pageIdSegment, readPageIdSegment)
+import Wiki.Core.Markdown.Link (Destination (..), classifyDestination, destinationVersion, pageIdSegment, readPageIdSegment)
 import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath, resolveUnder)
 import Wiki.Core.Permission (spaceChain)
@@ -694,8 +694,17 @@ resolvePageLink spaces spacePath home pages pagePath destination
           | Right (Space sp) <- Duplex.parse route pathPart -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
           | otherwise -> absolute (filter (not . T.null) segments)
         _ -> relative segments
-      pure (PageLink target fragment)
+      -- A version after a page's address or path
+      -- ('Wiki.Core.Markdown.Link.destinationVersion'), which a followed
+      -- permanent address leaves in the address bar, is kept: the link
+      -- leads to that version ('PageAtVersion'). Any other parameter is
+      -- dropped.
+      pure (PageLink (maybe target (atVersion target) (destinationVersion destination)) fragment)
   where
+    atVersion target t = case target of
+      Page sp pp -> PageAtVersion sp pp t
+      Space sp -> PageAtVersion sp [] t
+      other -> other
     -- A page by its id: at its address ('Wiki.Core.Space.pagePath'), if
     -- it is one of this space's pages, and otherwise at its permanent
     -- address. The wiki's front page has no space path, and its links by

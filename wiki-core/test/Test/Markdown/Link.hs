@@ -46,6 +46,11 @@ spec = describe "Markdown.Link" $ do
         `shouldBe` ToPageId (PageId "17") (Just (UTCTime (fromGregorian 2026 10 24) 34212.5)) "#setup"
       classifyDestination "/l/17/?x=1&version=2026-10-24T09:30:12Z" `shouldBe` ToPageId (PageId "17") (Just (UTCTime (fromGregorian 2026 10 24) 34212)) ""
       classifyDestination "/l/17/?version=yesterday" `shouldBe` ToPageId (PageId "17") Nothing ""
+    it "reads the version a page's own address names too" $ do
+      destinationVersion "/s/docs/p/tour/?x=1&version=2026-10-24T09%3A30%3A12Z#a" `shouldBe` Just (UTCTime (fromGregorian 2026 10 24) 34212)
+      destinationVersion "tour?version=2026-10-24T09:30:12Z" `shouldBe` Just (UTCTime (fromGregorian 2026 10 24) 34212)
+      destinationVersion "tour#version=2026-10-24T09:30:12Z" `shouldBe` Nothing
+      destinationVersion "tour?version=never" `shouldBe` Nothing
     it "reads anything else under /l/ as a path" $ do
       classifyDestination "/l/" `shouldBe` ToPath "/l/"
       classifyDestination "/l//" `shouldBe` ToPath "/l//"
