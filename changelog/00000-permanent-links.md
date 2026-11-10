@@ -46,6 +46,13 @@ title: Permanent links: an address that follows a page when it moves
   [[/l/4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e/|the setup]]
   ```
 
+## Bug fixes
+
+- A link in a page to a section of another page, such as
+  `[the macros](/s/docs/p/markdown-guide/mathematics/#macros)`, now opens
+  that page at the section, and the address shows the section. Before, it
+  opened the page at its top.
+
 ## Other changes
 
 - A permanent link to a page you may not see, or to one that has been
@@ -58,6 +65,8 @@ title: Permanent links: an address that follows a page when it moves
 - The PDF and Word exports treat a permanent link as they treat an ordinary
   link to the same page: a link inside the document when the page is in it,
   and the wiki's address otherwise.
-- An archive imported into a wiki that already has content gives its pages
-  new ids, so a permanent link in the imported text still leads to the page
-  that had the id where the archive came from.
+- A permanent link in an imported archive is kept as it was written. An
+  import into a wiki that already has content gives the pages it brings new
+  ids, so such a link still names the page it named where the archive came
+  from: on that wiki it leads there, and on another one most likely to
+  nothing.
