@@ -1184,7 +1184,7 @@ component =
                 _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
         pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
-        blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
+        blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page, feed = if shutOut st.session then Nothing else st.feed} FromView
 
     -- The front page: its page, and under it the spaces and the ones
     -- visited last ("Wiki.App.View.Directory"). The directory stays mounted

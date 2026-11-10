@@ -9,20 +9,24 @@
 module Test.Browser.Notifications (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (serveDemo, serverStarts, serverStops, startServer, tellServer)
-import Test.Browser.Mount (clickButton, slugs, start)
+import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Events (ServerMessage (..))
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Space (Space (homePage, name))
 import Wiki.Core.Version (Author (..))
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
@@ -70,6 +74,29 @@ demo m = describe "over the demo" $ do
     clickButton ui ".notification-list .notification-read" "Mark read"
     eventually (length <$> findAll ui ".notifications-count" `shouldReturn` 0)
     length <$> findAll ui ".notification-list .notification.unread" `shouldReturn` 0
+    unmount ui
+
+  it "leads a notification about a comment on a blog's home page to the comment, on the blog" $ runPage $ do
+    -- The blog's home page, written: the blog shows it above its posts,
+    -- with its page view, comments and all (WP5.78 of docs/PLAN.md).
+    let written st =
+          let blogHome = (\s -> s.homePage) =<< head (filter (\s -> s.name == "Blog") (Map.elems st.spaces))
+           in st {pages = Map.mapWithKey (\k p -> if Just k == blogHome then p {P.body = "# About\n\nWhat this blog is about."} else p) st.pages}
+    ui <- startChanged m written (Just "user-admin") (Space (slugs ["blog"]))
+    text <- find ui ".blog-home .page-comments .comment-new textarea"
+    typeText text "Have a look at the about, @editor."
+    clickButton ui ".blog-home .page-comments .comment-new button" "Comment"
+    _ <- find ui ".blog-home .page-comments a.mention"
+    switchTo ui "editor"
+    find ui ".notifications-count" >>= (`shouldHaveText` "1")
+    find ui ".notifications-toggle" >>= click
+    linked <- find ui ".notification-list a.notification-link"
+    -- The home page's address is the blog's.
+    getAttribute linked "href" >>= (`shouldSatisfy` maybe False (T.isInfixOf "/s/blog/#comment-thread-"))
+    click linked
+    _ <- find ui ".blog-view .post-list"
+    thread <- find ui ".blog-view .blog-home [id^='comment-thread-']"
+    thread `shouldContainText` "Have a look at the about"
     unmount ui
 
   it "writes a mention of nobody, and every mention to someone not signed in, as text" $ runPage $ do

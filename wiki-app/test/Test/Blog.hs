@@ -17,6 +17,7 @@ import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..), Si
 import Wiki.App.Route (Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
+import Wiki.Core.Comment qualified as C
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -131,13 +132,33 @@ spec = describe "a space shown as a blog, rendered" $ do
 
   it "shows its home page above its posts, and not among them" $ do
     Rendered {html} <- render (withHome (as Nothing)) (Space blogPath)
-    -- The article carries the key its spoilers are remembered by
+    -- The home page is shown by the page view, with its toolbar: the
+    -- article carries the key its spoilers are remembered by
     -- ("Wiki.App.View.Body"'s spoilerScope), the reader's and the page's.
-    html `contains` "<div class=\"blog-home\"><article class=\"page-body\" data-spoilers=\"anonymous:blog/p/"
+    html `contains` "<div class=\"blog-home\"><div class=\"page-view"
+    html `contains` "<article class=\"page-body\" data-spoilers=\"anonymous:blog/p/\""
+    html `contains` "<a class=\"button\" href=\"/s/blog/source/\">View source</a>"
+    -- Its actions are the page view's, not the blog's own for it.
+    html `lacks` "blog-intro-source"
     html `contains` "\"><h1 id=\"notes-on-haskell\">Notes on Haskell"
     html `lacks` "Notes on Haskell</span></a>"
     html `contains` "Hello, world</span></a>"
     comesBefore html "class=\"blog-home\"" "class=\"space-cards post-list\""
+
+  it "shows its home page, untouched, when it has comments, with them and with what a page has" $ do
+    -- The first post's comments, on the blog's home page instead: a
+    -- notification about one of them leads to the blog's address.
+    let st = as Nothing
+        home = fromMaybe (panic "the blog has no home page") (blogOf st).homePage
+        hello = find (\p -> p.title == "Hello, world") (Map.elems st.pages) :: Maybe P.Page
+        moved = case hello >>= \h -> Map.lookup h.id st.threads of
+          Just ts -> st {threads = Map.insert home [t {C.page = home} | t <- ts] (maybe identity (\h -> Map.delete h.id) hello st.threads)}
+          Nothing -> panic "the first post has no threads"
+    Rendered {html} <- render moved (Space blogPath)
+    html `contains` "<div class=\"blog-home\"><div class=\"page-view"
+    html `contains` "<section aria-label=\"Comments on the page\" class=\"page-comments\"><h2>Comments</h2>"
+    html `contains` "<p>Welcome! Comments here are about the whole post; select some of its text to comment on that.</p>"
+    html `lacks` "blog-intro-source"
 
   it "leaves out a home page whose text is still the one the space was made with" $ do
     -- The demo's blog has the home page every space is given, untouched.
