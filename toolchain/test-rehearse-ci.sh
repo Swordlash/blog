@@ -3,8 +3,9 @@
 # wiki-server and a fake NEW one: the two ports the old server listens on
 # are below 32768, where Linux never hands out a port for an outgoing
 # connection; a pair that is taken ("Address already in use") makes the
-# script try another pair rather than fail; and a server that fails for
-# another reason still fails the script.
+# script try another pair rather than fail, in every mode, the move to
+# PostgreSQL (--move) too; and a server that fails for another reason
+# still fails the script.
 #
 #   sh toolchain/test-rehearse-ci.sh
 #
@@ -111,6 +112,24 @@ else
   else
     fail 'a server that fails for another reason: tried again'
   fi
+fi
+
+# The move from SQLite to PostgreSQL (--move): the old server, on SQLite,
+# starts on the same ports, and NEW is asked to move the copy into a
+# database of the PostgreSQL the variables name, which a fake psql makes.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$FAKE_DIR/psql.log"\n' >"$work/psql"
+chmod +x "$work/psql"
+rm -f "$work/ports" "$work/new.args" "$work/psql.log"
+if env FAKE_DIR="$work" FAKE_BUSY=1 WIKI_TEST_DATABASE_URL=postgres://wiki@127.0.0.1:1/postgres WIKI_TEST_PSQL="$work/psql" \
+  sh "$script" "$work/old" "$work/new" --move >"$work/out" 2>&1 \
+  && [ "$(wc -l <"$work/ports")" -eq 2 ] && below \
+  && grep -q -- '--sqlite' "$work/new.args" \
+  && grep -q -- '--move-to-database postgres://wiki@127.0.0.1:1/rehearsal_move' "$work/new.args" \
+  && grep -q 'CREATE DATABASE rehearsal_move' "$work/psql.log"; then
+  pass 'the move rehearsal (--move) starts the old server on SQLite, on another pair when one is taken, and asks NEW to move it'
+else
+  fail 'the move rehearsal'
+  cat "$work/out" >&2
 fi
 
 [ "$failures" -eq 0 ] || exit 1
