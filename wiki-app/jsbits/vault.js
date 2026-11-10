@@ -25,9 +25,9 @@
 // {cancelled: true} when the person closed the browser's passkey dialog
 // or it timed out.
 
-// The page's keys by handle. The registry is a global so that the OPAQUE
-// client (jsbits/opaque.js), declared in another module, can hand over the
-// key OPAQUE's export key gives without its bytes leaving JavaScript.
+// The page's keys by handle. The registry is a global so that the
+// JavaScript of another module (jsbits/encrypted.js, declared in
+// Wiki.App.Encrypted) can use a key this file holds by its handle.
 function wikiVaultRegistry() {
   // Written out rather than with the nullish assignment operator: the file
   // is embedded in C, where that operator's characters are a trigraph.
@@ -145,8 +145,18 @@ function wiki_vault_forget_key(handle) {
   wikiVaultRegistry().keys.delete(handle);
 }
 
+// Hold a CryptoKey made outside this file: the key OPAQUE's export key
+// gives, which opaque-hs's client (Crypto.OPAQUE.Client.WebCrypto) imports
+// into WebCrypto for deriveKey only, so that its bytes never reach the
+// program (Wiki.App.Backend.Opaque). Its handle, or 0 for anything that is
+// not a CryptoKey.
+function wiki_vault_hold_key(key) {
+  if (typeof CryptoKey !== "function" || !(key instanceof CryptoKey)) return 0;
+  return wikiVaultHandle(key);
+}
+
 // The key that wraps the vault key for the password: HKDF-SHA256 over the
-// key OPAQUE's export key gave (jsbits/opaque.js), with the vault's salt
+// key OPAQUE's export key gave (wiki_vault_hold_key), with the vault's salt
 // and the format's info, to an AES-GCM key that only wraps and unwraps.
 // JSON {handle}, or {error}.
 async function wiki_vault_password_key(base, salt, info) {

@@ -64,6 +64,7 @@ module Wiki.App.Assistant
   , passwordKeyIO
   , wrapForPassword
   , forgetHeld
+  , holdKey
   , deviceKeyIO
   , heldHandle
   , PasskeyTicket
@@ -128,6 +129,7 @@ $( browserJS
      , ("js_sealPromise", "wiki_vault_seal", Safe, [t|Int -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_open_sealedPromise", "wiki_vault_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_forget_key", "wiki_vault_forget_key", Safe, [t|Int -> IO ()|])
+     , ("js_hold_key", "wiki_vault_hold_key", Safe, [t|JSVal -> IO Int|])
      , ("js_salt", "wiki_vault_salt", Safe, [t|IO JSText|])
      , ("js_keep_keyPromise", "wiki_vault_keep_key", Safe, [t|JSText -> Int -> Bool -> IO (Promise JSText)|])
      , ("js_device_keyPromise", "wiki_vault_device_key", Safe, [t|JSText -> IO (Promise Int)|])
@@ -765,6 +767,16 @@ wrapForPassword base salt (KeyRef vault)
 -- | Let the page forget a key, in IO, for the HTTP backend.
 forgetHeld :: KeyRef -> IO ()
 forgetHeld (KeyRef k) = when inBrowser (js_forget_key k)
+
+-- | 'holdKey' puts a WebCrypto key made outside @jsbits\/vault.js@ into the
+-- page's registry of keys, and gives its 'KeyRef'. It is for the key
+-- OPAQUE's export key gives, which opaque-hs's client imports into
+-- WebCrypto ("Wiki.App.Backend.Opaque"). 'Nothing' for a value that is not
+-- a @CryptoKey@, and natively.
+holdKey :: JSVal -> IO (Maybe KeyRef)
+holdKey key
+  | not inBrowser = pure Nothing
+  | otherwise = keyRefOf <$> (evaluate =<< js_hold_key key)
 
 -- | A key's handle in the page's registry of keys, which every module of
 -- JavaScript that holds keys shares (@globalThis.wikiKeyRegistry@): for
