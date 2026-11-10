@@ -1120,7 +1120,9 @@ component =
     -- the focus, and Enter on an emoji is its click.
     emojiKey :: [(Text, Text)] -> Event -> Maybe Action
     emojiKey found ev = case gridKey ev of
-      Just ("Enter", Nothing) -> PickEmoji . fst <$> head found
+      -- With nothing found, Enter is still stopped, so that it does not
+      -- save the page, and does nothing ('PanelSubmitted').
+      Just ("Enter", Nothing) -> Just (maybe PanelSubmitted (PickEmoji . fst) (head found))
       Just ("ArrowDown", Nothing) | not (null found) -> Just (EmojiFocus 0)
       Just ("ArrowRight", Just i) -> step i 1
       Just ("ArrowLeft", Just i) -> step i (-1)
@@ -1653,6 +1655,8 @@ component =
       FromMacros MacrosPanel.SpaceMacrosSaved -> H.raise (Changed Nothing)
       -- A panel's own form was submitted: the panel has handled it, and
       -- the event goes no further, to the page's form, which would save.
+      -- Enter in the "Emoji" menu's field, with no emoji found, is
+      -- stopped the same way.
       PanelSubmitted -> pass
       NewKind -> closeMenu >> modify (\st -> st {kindDialogOpen = True})
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})

@@ -222,6 +222,11 @@ spec m = do
     find ui emojiButton >>= click
     find ui ".emoji-search" >>= (`typeText` "qqq")
     find ui ".emoji-none" >>= (`shouldHaveText` "No emoji has that name.")
+    -- Enter there neither writes anything nor saves the page.
+    press "Enter"
+    find ui ".emoji-none" >>= (`shouldHaveText` "No emoji has that name.")
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "")
+    markdown ui `shouldReturn` "# Hello, world\n\nLaunch :rocket::tada::tada:"
 
   it "shows a bulleted item that starts with an emoji with the emoji in the bullet's place, and the others with their bullets" $ runPage $ do
     ui <- startChanged m identity (Just "user-editor") helloEditor
