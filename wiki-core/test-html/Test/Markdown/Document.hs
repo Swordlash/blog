@@ -45,6 +45,8 @@ spec = describe "docs/markdown.md" $ do
       , "<span class=\"math inline\">a^2 + b^2 = c^2</span>"
       , "<div class=\"math display\">\n\\sum_{k=1}^{n} k"
       , "A bracket needs no backslash in text, [like this]"
+      , "<code>:tada:</code> is <span class=\"emoji\" title=\":tada:\">🎉</span>"
+      , "<code>1\\:100:2</code> is 1:100:2, and"
       , "in quotations and boxes too:<br>\nso this sentence is on a line of its own,<br>\nand so is this one."
       , "<span class=\"math inline\">\\ce{2 H2 + O2 -&gt; 2 H2O}</span>"
       , "<td><span class=\"math inline\">\\abs{x}</span>, <span class=\"math inline\">\\norm{x}</span></td>"
