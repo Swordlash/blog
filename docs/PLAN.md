@@ -1178,9 +1178,20 @@ something serious, or the same kind of mistake in another place, the rounds go o
 A session on Fable reviews the subagent's branch itself first, before the pull
 request is opened, so each package has two reviews, the session's and Codex's (the
 owner, the same day). The owner merges; the session
-merges only when asked ("nie merguj sam, chyba że poproszę"). The session may hand a
-commit it has good reason to trust to CI rather than run the whole gate locally first,
-when nothing else is waiting on CI (the owner, 2026-10-31).
+merges only when asked ("nie merguj sam, chyba że poproszę"). When the owner says to
+merge a pull request as it is, without waiting for its checks, the session merges it
+past the branch's rules (`gh pr merge --admin`; the owner, 2026-11-10).
+
+The gate runs on CI, not on the machine (the owner, 2026-11-10; before that a
+package's whole gate was run locally first). All of CI runs on GitHub's runners
+since #228: the repository variable `WASM_RUNNER` is `hosted`, so the wasm job no
+longer shares the owner's machine with the sessions, where the two slowed each
+other down. Locally a package owes the type-check (`npm run build-native`, and
+`npm run build-wasm` where it changed code only wasm compiles), the formatter, and
+whichever test suites its author judges worth running before the push; the pull
+request is opened then, and CI's run on its head is the gate. A package's local
+gate, run one suite after another on a machine other builds share, took 30 to 40
+minutes; CI's jobs run side by side in about 12.
 
 A work package starts from its text under "Open work", the decisions it builds on and
 the haskell-halogen modules it uses, and ends with the verification gate of `AGENTS.md`
@@ -1209,11 +1220,14 @@ space; WP5.78 below) is half done: part a (#225), with the first step of
 the schema in code, is merged, and part b is next. Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
-(emojis), #190 (table views). Stage 5: #191 (presentations as a kind of
+(emojis: shortcodes such as `:tada:` render already, through
+commonmark-extensions; what is left is the editor's part, a toolbar
+button, completion after a colon and lists with an emoji for a bullet,
+which waits for #187 and #186), #190 (table views). Stage 5: #191 (presentations as a kind of
 page), #204 (calendars and TODO lists; the lists can come earlier).
 Alongside, when there is room: WP5.79 (the browser's OPAQUE client from
 opaque-hs), #213 (WP5.74b3, after #201), #203
-(SQLite to PostgreSQL). #212 (WP5.74a2b) was closed in opaque-hs's own
+(SQLite to PostgreSQL, WP5.80). #212 (WP5.74a2b) was closed in opaque-hs's own
 repository, which the wiki pins since #227.
 
 - **WP5.78 One home page per space, the root of its pages** (#201; the
@@ -1341,6 +1355,42 @@ repository, which the wiki pins since #227.
     and of the native client against the server (`Test.Backend.Opaque`)
     are the package's gate: they pass unchanged, or change only where they
     named the old binding.
+- **WP5.80 A wiki in SQLite moves to PostgreSQL** (#203; the owner,
+  2026-11-10). A wiki starts in SQLite, a file beside the server; once it
+  has grown, its administrator may want PostgreSQL. Today the only way
+  across is an export and an import of archives, which carry pages and not
+  accounts, passwords, sessions, permissions or settings. Two pull
+  requests, a then b.
+  - **a, `wiki-server` copies a database to another backend.** A command
+    of the server copies every table of a SQLite database into an empty
+    PostgreSQL one. The source must be at this program's schema version
+    (the command migrates nothing; it says to migrate first). The target
+    gets the schema from this program's own migrations and then the rows,
+    in one transaction, so that a failure leaves it as it was. Every table
+    is copied: the list comes from the schema itself, or a test fails when
+    a table of the schema is not in the copy. What the two databases keep
+    differently is handled where it differs and named in the report:
+    PostgreSQL's generated search column, counters behind generated ids,
+    times to the microsecond, booleans, and a row SQLite accepted that
+    PostgreSQL's constraints refuse (the copy stops and names the table
+    and the row). Afterwards the command verifies the copy: each table's
+    row count and content against the source, and the database check
+    (`wiki-server check`) on the target. Attachments are files in the data
+    directory and stay where they are. The server serves neither database
+    while the command runs; it refuses a source a server is running on.
+    The other direction, PostgreSQL to SQLite, is the same code if it
+    comes at no cost, and is not required.
+  - **b, the maker moves a deployed wiki.** A command of the maker, for an
+    instance deployed at the maker's own version: it builds the server
+    with the `postgres` flag (a SQLite deployment is built without it,
+    decision 34), brings up the PostgreSQL the deploy uses for a wiki in
+    PostgreSQL, backs the wiki up, stops the service, runs a's command,
+    compares the wiki before and after with the rehearsal's checks
+    (decision 58: `pages`, `accounts`, `home pages`, with this program as
+    old and new, the old on SQLite and the new on PostgreSQL), switches
+    the deployment to PostgreSQL and starts it. Any failure before the
+    switch leaves the deployment as it was and starts it again on SQLite;
+    a failure after it switches back. The SQLite file is never deleted.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
