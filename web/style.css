@@ -1598,6 +1598,24 @@ pre.numbered > code {
   margin: 0 0.4rem 0 -1.2rem;
 }
 
+/* An item of a bulleted list whose text starts with an emoji shows the
+   emoji in the bullet's place (Wiki.Core.Markdown.Render's renderItem):
+   no bullet, the emoji in a box just left of the text, where the bullet
+   was, and the text where the other items' text is. The emoji is still
+   the first character of the item's text; its negative right margin takes
+   back the space written after it. */
+.page-body li.emoji-item {
+  list-style: none;
+}
+
+.page-body li.emoji-item .emoji-bullet {
+  display: inline-block;
+  width: 1.5em;
+  margin-left: -1.5em;
+  margin-right: -0.25em;
+  text-align: center;
+}
+
 .page-body .footnotes {
   margin-top: 2.5rem;
   border-top: 1px solid var(--border);
