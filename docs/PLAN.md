@@ -1452,18 +1452,19 @@ which the wiki pins since #227.
   whose files it changes).** A new login has had to be ASCII since
   2026-11-06 (`parseLogin`), and a login made before that was kept. The
   owner: there are probably none, and if there are, migrate them and
-  enforce the rule. A code step rewrites each login that breaks the rule
-  into one that keeps it (its letters transliterated; when nothing usable
-  is left, `user-` and a piece of the user's id; a suffix when the result
-  is taken) and says whom it renamed and to what, in its output and in the
-  audit log. `wiki-server check` then refuses a login that breaks the rule,
-  and the sentence "a login made before the rule is kept" goes from the
-  code. A renamed user signs in with the same password under the new
-  login: the OPAQUE record is bound to the user's id, not to the login, and
-  a hash from before OPAQUE knows no login. To settle in the package: what
-  the user's personal space's slug does (it spells the login), and how the
-  renamed person learns of it (the sign-in form cannot tell them; the
-  administrator can, from the step's output).
+  enforce the rule; and, asked how, to decide as if there were none. So
+  the step is a safety net and is kept small: a login that breaks the rule
+  becomes `user-` and the first eight characters of the user's id (with a
+  suffix if that is taken), with no transliteration and no new dependency;
+  the step says whom it renamed and to what, in its output and in the
+  audit log, and that is how the person learns of it, through the
+  administrator. The user's personal space keeps its slug, as a space
+  does when it is renamed, so no address changes. `wiki-server check` then
+  refuses a login that breaks the rule, and the sentence "a login made
+  before the rule is kept" goes from the code. A renamed user signs in
+  with the same password under the new login: the OPAQUE record is bound
+  to the user's id, not to the login, and a hash from before OPAQUE knows
+  no login.
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
