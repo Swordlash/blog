@@ -184,12 +184,9 @@ library
     exposed-modules:
         Wiki.App.Static
 
-  -- The client's half of OPAQUE (Wiki.App.Backend.Opaque) is the opaque-hs
-  -- package natively and @serenity-kit/opaque in the browser: opaque-hs is
-  -- not built for wasm32.
-  if !arch(wasm32)
-    build-depends: opaque-hs
-
+  -- opaque-hs is the client's half of OPAQUE (Wiki.App.Backend.Opaque) on
+  -- both targets: natively over libsodium, and on wasm32 the package's
+  -- client alone, which calls @serenity-kit/opaque.
   build-depends:
       aeson,
       base,
@@ -218,6 +215,7 @@ library
       haskell-halogen-net,
       haskell-halogen-router,
       haskell-halogen-th,
+      opaque-hs,
       wiki-api,
       wiki-core
 

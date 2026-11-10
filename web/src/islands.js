@@ -47,12 +47,13 @@
 // the editor's assistant is used, for wiki-app/jsbits/assistant.js. Nor is
 // cropAvatar: it puts Cropper.js in the account's avatar dialog (avatar.js,
 // bundled into islands/avatar.js and fetched the first time the dialog
-// opens), for wiki-app/jsbits/avatar.js. Nor is opaque: it loads the
-// browser's OPAQUE client, @serenity-kit/opaque (opaque.js, bundled into
-// islands/opaque.js), the first time a password is used, for
-// wiki-app/jsbits/opaque.js. Nor is hpke: it loads HPKE, @hpke/core (hpke.js,
-// bundled into islands/hpke.js), the first time a key is sealed to someone
-// or opened.
+// opens), for wiki-app/jsbits/avatar.js. Nor is opaque: it loads
+// @serenity-kit/opaque (opaque.js, bundled into islands/opaque.js), which
+// the browser's OPAQUE client, opaque-hs's, calls the first time a password
+// is used; the client finds it through globalThis.opaqueHsSerenity, which
+// is the same loader (at the end of this file). Nor is hpke: it loads
+// HPKE, @hpke/core (hpke.js, bundled into islands/hpke.js), the first time
+// a key is sealed to someone or opened.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -637,3 +638,9 @@ globalThis.wikiIslands = Object.freeze({
   opaque: loadOpaque,
   hpke: loadHpke,
 });
+
+// opaque-hs's client (Crypto.OPAQUE.Client, in Wiki.App.Backend.Opaque)
+// takes @serenity-kit/opaque from this global. A function is called only
+// when the first sign-in or registration starts, so the page fetches the
+// library then, not with the page.
+globalThis.opaqueHsSerenity = loadOpaque;

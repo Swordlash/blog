@@ -32,6 +32,9 @@ const wikiTestPasskeys = {
   offered: null,
   offers: 0,
   insecure: null,
+  // The window's own crypto, kept while wiki_test_plain_http has replaced
+  // it (false when the window had none of its own).
+  crypto: null,
 };
 
 // The user handle the stub's passkeys were made for: the test's user.
@@ -137,11 +140,7 @@ function wiki_test_passkeys_uninstall() {
   delete PublicKeyCredential.isConditionalMediationAvailable;
   if (wikiTestPasskeys.conditional) Object.defineProperty(PublicKeyCredential, "isConditionalMediationAvailable", wikiTestPasskeys.conditional);
   if (wikiTestPasskeys.original) Object.defineProperty(navigator, "credentials", wikiTestPasskeys.original);
-  if (wikiTestPasskeys.insecure !== null) {
-    delete globalThis.isSecureContext;
-    if (wikiTestPasskeys.insecure) Object.defineProperty(globalThis, "isSecureContext", wikiTestPasskeys.insecure);
-    wikiTestPasskeys.insecure = null;
-  }
+  wiki_test_plain_http_end();
 }
 
 // A passkey the stub already has, as on a device where one was made
@@ -177,6 +176,33 @@ function wiki_test_passkeys_pick() {
 function wiki_test_passkeys_insecure() {
   wikiTestPasskeys.insecure = Object.getOwnPropertyDescriptor(globalThis, "isSecureContext") ?? false;
   Object.defineProperty(globalThis, "isSecureContext", { value: false, configurable: true });
+}
+
+// The page as one served over plain HTTP in full: not a secure context,
+// and without crypto.subtle, which a browser gives only to a secure one
+// (the owner's wiki at work is served so). crypto.getRandomValues stays:
+// a browser gives it to every page, and serenity-kit needs it. Put back by
+// wiki_test_plain_http_end, and by wiki_test_passkeys_uninstall.
+function wiki_test_plain_http() {
+  if (wikiTestPasskeys.insecure === null) wiki_test_passkeys_insecure();
+  if (wikiTestPasskeys.crypto !== null) return;
+  const real = globalThis.crypto;
+  wikiTestPasskeys.crypto = Object.getOwnPropertyDescriptor(globalThis, "crypto") ?? false;
+  Object.defineProperty(globalThis, "crypto", { value: { getRandomValues: real.getRandomValues.bind(real) }, configurable: true });
+}
+
+// The window's own crypto and isSecureContext back, if they were taken.
+function wiki_test_plain_http_end() {
+  if (wikiTestPasskeys.crypto !== null) {
+    delete globalThis.crypto;
+    if (wikiTestPasskeys.crypto) Object.defineProperty(globalThis, "crypto", wikiTestPasskeys.crypto);
+    wikiTestPasskeys.crypto = null;
+  }
+  if (wikiTestPasskeys.insecure !== null) {
+    delete globalThis.isSecureContext;
+    if (wikiTestPasskeys.insecure) Object.defineProperty(globalThis, "isSecureContext", wikiTestPasskeys.insecure);
+    wikiTestPasskeys.insecure = null;
+  }
 }
 
 // How many times a passkey was made or used: the person's touches.

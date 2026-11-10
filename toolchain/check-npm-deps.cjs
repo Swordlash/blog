@@ -32,8 +32,8 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   // The writing assistant's providers (web/src/assistant.js).
   ["@anthropic-ai/sdk", ["@anthropic-ai/sdk"]],
   ["openai", ["openai"]],
-  // The browser's OPAQUE client (web/src/opaque.js), bundled as
-  // islands/opaque.js.
+  // OPAQUE's library, which opaque-hs's client calls in the browser
+  // (web/src/opaque.js), bundled as islands/opaque.js.
   ["@serenity-kit/opaque", ["@serenity-kit/opaque"]],
   // HPKE over WebCrypto for the keys sealed to a user (web/src/hpke.js),
   // bundled as islands/hpke.js.

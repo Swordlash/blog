@@ -80,6 +80,8 @@ $( browserJS
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
      , ("js_offers", "wiki_test_passkeys_offers", Safe, [t|IO Int|])
      , ("js_insecure", "wiki_test_passkeys_insecure", Safe, [t|IO ()|])
+     , ("js_plain_http", "wiki_test_plain_http", Safe, [t|IO ()|])
+     , ("js_plain_http_end", "wiki_test_plain_http_end", Safe, [t|IO ()|])
      , ("js_opaque_server", "wiki_test_opaque_server_start", Safe, [t|JSText -> IO ()|])
      , ("js_opaque_registerPromise", "wiki_test_opaque_register", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_identity_exportPromise", "wiki_test_identity_export", Safe, [t|JSText -> IO (Promise JSText)|])
@@ -689,6 +691,8 @@ signedInAs uid = unsafeIOToPageM $ do
 -- on a second device, the same key pair; carried through a change of
 -- password; made anew after a reset of a password that alone unlocked
 -- them, after the reset page's warning; and unlocked with a passkey. Over
+-- plain HTTP, where the browser has no WebCrypto, the sign-in and a change
+-- of password still go through, and make no keys. Over
 -- a real OPAQUE exchange, with serenity-kit's server functions playing the
 -- server's side (@jsbits\/test-passkeys.js@), so that the export key is
 -- the one each sign-in with the same password gives.
@@ -865,6 +869,36 @@ userKeys m = describe "the user's keys" $ do
     identityExport `shouldReturn` "refused"
     field ["publicKey", "keyId"] <$> vaultState `shouldReturn` field ["publicKey", "keyId"] made
     closed again
+
+  -- The owner's wiki at work is served over plain HTTP, where the browser
+  -- gives no crypto.subtle (WP5.79 of docs/PLAN.md). OPAQUE's client needs
+  -- none: the sign-in and the change of password go through, and give no
+  -- key. What needs WebCrypto, the user's keys, says why it is not there.
+  -- The page's crypto is put back even when the test fails, since the
+  -- tests after it share the page.
+  it "signs in and changes the password on a page served over plain HTTP, without crypto.subtle, and makes no keys there" $ (`finally` js_plain_http_end) $ runPage $ do
+    unsafeIOToPageM js_plain_http
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    find ui ".account-toggle" >>= click
+    find ui ".keys-unavailable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "plain HTTP")
+    find ui ".password-change-toggle" >>= click
+    find ui ".password-change input[name=current]" >>= (`typeText` "editor's password")
+    find ui ".password-change input[name=new]" >>= (`typeText` "a password of the editor's")
+    find ui ".password-change input[name=repeat]" >>= (`typeText` "a password of the editor's")
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".account-told" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Your password is changed")
+    find ui ".account-toggle" >>= click
+    -- Signed out and in again with the new password: the record made
+    -- without WebCrypto is the one the server checks.
+    answerWith "DELETE" "api/v1/session" 200 nobody
+    find ui ".account .sign-out" >>= click
+    signIn ui "a password of the editor's"
+    field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
+    identityExport `shouldReturn` "none"
+    -- The count of keys left in the page needs WebCrypto back.
+    unsafeIOToPageM js_plain_http_end
+    closed ui
   where
     -- The wiki with nobody signed in, the editor's password registered
     -- with the OPAQUE server, and the vault's server empty.

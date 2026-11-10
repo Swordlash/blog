@@ -1,33 +1,37 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 -- | 'Wiki.App.Backend.Opaque' is the client's half of OPAQUE (WP5.74a of
 -- docs/PLAN.md, "Wiki.Api.Opaque"): the four steps the HTTP backend signs
 -- in and sets passwords with, over the messages as the API carries them.
 --
--- In the browser the steps are @\@serenity-kit\/opaque@ (opaque-ke
--- compiled to wasm), bundled by web/bundle.sh and called through
--- @jsbits\/opaque.js@. Natively they are the @opaque-hs@ package's client,
--- which the server's tests sign in through, so that every native run of
--- those tests is also a test of that client against the server. The two
--- speak the same protocol (opaque-hs's own tests run one against the
--- other).
+-- The steps are the client of the @opaque-hs@ package,
+-- "Crypto.OPAQUE.Client", on both targets (WP5.79). Natively the package
+-- is its own protocol code over libsodium, and the server's tests sign in
+-- through it, so that every native run of those tests is also a test of
+-- this module against the server. In the browser the same module calls
+-- @\@serenity-kit\/opaque@ (opaque-ke compiled to wasm). web/bundle.sh
+-- bundles that library into islands/opaque.js, and web/src/islands.js
+-- sets @globalThis.opaqueHsSerenity@ to its loader, so the page fetches it
+-- the first time a password is used. The two clients speak the same
+-- protocol (opaque-hs's own tests run one against the other).
 --
--- The choice is made with CPP, in this module only, rather than with
--- 'inBrowser': the dependency itself differs by target. The @opaque-hs@
--- package is not built for wasm32, so that nothing in the browser can
--- depend on it, and is in this package's dependencies natively only.
+-- A finished sign-in or registration also gives OPAQUE's export key. The
+-- user's vault derives its password's key from it ("Wiki.App.Vault"). The
+-- finishing steps differ by target in that one place, under CPP below. In
+-- the browser they are "Crypto.OPAQUE.Client.WebCrypto"'s: the export key
+-- goes from serenity-kit straight into WebCrypto, as a key that cannot be
+-- exported and serves @deriveKey@ only, and its bytes never reach this
+-- program. This module puts that key in the page's registry of keys and
+-- gives its 'KeyRef'. A page with no WebCrypto (one served over plain
+-- HTTP) still signs in and sets passwords, and gets no key. Natively there
+-- is no WebCrypto: the export key is zeroed, and no key is given.
 --
--- A finished sign-in or registration also gives OPAQUE's export key, in
--- the browser as a handle of the page's keys (@jsbits\/opaque.js@), which
--- the user's vault derives its password's key from ("Wiki.App.Vault").
--- Natively it is zeroed with the rest, and none is given.
---
--- A step's state is the client's secret between two messages: serenity-kit's
--- state as text in the browser, and natively the package's state, kept in
--- memory it zeroes. The native steps zero their states, and the keys a
--- sign-in agrees on, as soon as they are done: the application does not use
--- the keys (the session is the server's cookie).
+-- A step's state is the client's secret between two messages. The steps
+-- zero or drop their states, and the keys a sign-in agrees on, as soon as
+-- they are done: the application does not use the session key (the
+-- session is the server's cookie). Natively the package keeps them in
+-- memory it zeroes. In the browser they are JavaScript strings, which
+-- can only be dropped.
 module Wiki.App.Backend.Opaque
   ( LoginState
   , RegistrationState
@@ -38,88 +42,16 @@ module Wiki.App.Backend.Opaque
   )
 where
 
+import Crypto.OPAQUE.Client qualified as O
 import Protolude
-import Wiki.Api.Opaque (Message (..), Stretch (..))
+import Wiki.Api.Opaque (Message (..), Stretch (..), bytesOf, messageOf)
 import Wiki.App.Assistant (KeyRef)
+import Wiki.App.Browser (consoleWarn)
 import Wiki.Core.User (Password (..))
 #if defined(wasm32_HOST_ARCH)
-import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
-import Halogen.JSBits.Promise (Promise)
-import Halogen.JSBits.Promise qualified as Promise
-import Wiki.App.Assistant (keyRefOf)
-#else
-import Crypto.OPAQUE qualified as O
-import Wiki.Api.Opaque (bytesOf, messageOf)
+import Crypto.OPAQUE.Client.WebCrypto (ExportCryptoKey (..), KeyUsage (..), clientFinishWebCrypto, finalizeRegistrationWebCrypto)
+import Wiki.App.Assistant (holdKey)
 #endif
-
-#if defined(wasm32_HOST_ARCH)
-
-$( browserJS
-     ["jsbits/opaque.js"]
-     [ ("js_start_login", "wiki_opaque_start_login", Safe, [t|JSText -> IO (Promise JSText)|])
-     , ("js_finish_login", "wiki_opaque_finish_login", Safe, [t|JSText -> JSText -> Int -> Int -> JSText -> IO (Promise JSText)|])
-     , ("js_start_registration", "wiki_opaque_start_registration", Safe, [t|JSText -> IO (Promise JSText)|])
-     , ("js_finish_registration", "wiki_opaque_finish_registration", Safe, [t|JSText -> JSText -> Int -> Int -> JSText -> IO (Promise JSText)|])
-     ]
- )
-
--- | A sign-in between its first message and its last: serenity-kit's
--- state.
-newtype LoginState = LoginState Text
-
--- | A registration between its request and its record: serenity-kit's
--- state.
-newtype RegistrationState = RegistrationState Text
-
--- | The words of a step's answer, none when it failed.
-answered :: IO (Promise JSText) -> IO [Text]
-answered step = T.words . fromJSText <$> (Promise.wait =<< step)
-
--- | Memory in KiB, as Argon2 and serenity-kit count it.
-kib :: Stretch -> Int
-kib s = s.memLimit `div` 1024
-
--- | 'startLogin' is a sign-in's first step: the state to keep and KE1,
--- the first message. 'Nothing' when the password cannot be used.
-startLogin :: Password -> IO (Maybe (LoginState, Message))
-startLogin (Password password) =
-  answered (js_start_login (toJSText password)) <&> \case
-    [kept, ke1] -> Just (LoginState kept, Message ke1)
-    _ -> Nothing
-
--- | 'finishLogin' is a sign-in's last step, with the server's KE2 and the
--- stretching it named: KE3, the last message, or 'Nothing' for a wrong
--- password (and for an account without a record).
-finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
-finishLogin (LoginState kept) (Password password) stretch ke2 =
-  answered (js_finish_login (toJSText kept) (toJSText password) stretch.opsLimit (kib stretch) (toJSText ke2.text)) <&> \case
-    [ke3, held] -> Just (Message ke3, heldKey held)
-    _ -> Nothing
-
--- | 'startRegistration' is a registration's first step: the state to keep
--- and the request. 'Nothing' when the password cannot be used.
-startRegistration :: Password -> IO (Maybe (RegistrationState, Message))
-startRegistration (Password password) =
-  answered (js_start_registration (toJSText password)) <&> \case
-    [kept, request] -> Just (RegistrationState kept, Message request)
-    _ -> Nothing
-
--- | 'finishRegistration' is a registration's last step, with the server's
--- response and the stretching it named: the record to send, or 'Nothing'
--- when the response is not valid.
-finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
-finishRegistration (RegistrationState kept) (Password password) stretch response =
-  answered (js_finish_registration (toJSText kept) (toJSText password) stretch.opsLimit (kib stretch) (toJSText response.text)) <&> \case
-    [record, held] -> Just (Message record, heldKey held)
-    _ -> Nothing
-
--- | The page's key a step's answer names by its handle, if any (0 is
--- none).
-heldKey :: Text -> Maybe KeyRef
-heldKey t = keyRefOf =<< readMaybe t
-
-#else
 
 -- | A sign-in between its first message and its last: the package's
 -- state, which holds the password.
@@ -130,10 +62,11 @@ newtype LoginState = LoginState O.ClientLoginState
 newtype RegistrationState = RegistrationState O.ClientRegState
 
 -- | The wiki's OPAQUE configuration for a record stretched with 'Stretch':
--- no context (the browser's serenity-kit passes none) and Argon2id with the
--- record's passes and memory. wiki-server's "Wiki.Server.Opaque" states the
--- same for the server's side, and the server's tests, which sign in through
--- this client, fail when the two differ.
+-- no context (serenity-kit takes none) and Argon2id with the record's
+-- passes and memory. The least values are Argon2id's own, one pass and
+-- 8 KiB, as wiki-server's "Wiki.Server.Opaque" states for the server's
+-- side; the server's tests, which sign in through this client, fail when
+-- the two differ. The server stores no record with less.
 opaqueConfig :: Stretch -> O.Config
 opaqueConfig s = O.Config {context = "", ksf = O.Argon2id {opsLimit = fromIntegral (max 1 s.opsLimit), memLimit = fromIntegral (max 8192 s.memLimit)}}
 
@@ -142,49 +75,104 @@ opaqueConfig s = O.Config {context = "", ksf = O.Argon2id {opsLimit = fromIntegr
 passwordBytes :: Password -> ByteString
 passwordBytes (Password p) = encodeUtf8 p
 
+-- | Say on the browser's console why a step failed, as the wiki's own
+-- binding to serenity-kit did. A wrong password is not said: it is the
+-- usual failure, and the sign-in form says it.
+failed :: Text -> O.Error -> IO ()
+failed step = \case
+  O.EnvelopeRecoveryError -> pass
+  e -> consoleWarn ("OPAQUE: " <> step <> ": " <> show e)
+
 -- | 'startLogin' is a sign-in's first step: the state to keep and KE1,
 -- the first message. 'Nothing' when the password cannot be used.
 startLogin :: Password -> IO (Maybe (LoginState, Message))
 startLogin password =
-  O.clientStart (passwordBytes password) <&> \case
-    Right (st, ke1) -> Just (LoginState st, messageOf (O.encode ke1))
-    Left _ -> Nothing
+  O.clientStart (passwordBytes password) >>= \case
+    Right (st, ke1) -> pure (Just (LoginState st, messageOf (O.encode ke1)))
+    Left e -> failed "the sign-in could not start" e $> Nothing
 
 -- | 'finishLogin' is a sign-in's last step, with the server's KE2 and the
--- stretching it named: KE3, the last message, or 'Nothing' for a wrong
--- password (and for an account without a record).
+-- stretching it named: KE3, the last message, and the page's key of the
+-- export key, if any; or 'Nothing' for a wrong password (and for an
+-- account without a record).
 finishLogin :: LoginState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishLogin (LoginState st) _ stretch ke2 = do
-  let result = do
-        ke2' <- bytesOf ke2 >>= rightToMaybe . O.decode
-        rightToMaybe (O.clientFinish (opaqueConfig stretch) st ke2' O.defaultIdentities)
-  message <- case result of
-    Nothing -> pure Nothing
-    Just (ke3, key, exportKey) -> do
-      O.scrub key
-      O.scrub exportKey
-      pure (Just (messageOf (O.encode ke3), Nothing))
+  result <- case bytesOf ke2 >>= rightToMaybe . O.decode of
+    Nothing -> pure (Left O.DeserializeError)
+    Just ke2' -> loginFinished (opaqueConfig stretch) st ke2'
+  finished <- case result of
+    Left e -> failed "the sign-in could not finish" e $> Nothing
+    Right (ke3, sessionKey, exported) -> do
+      O.scrub sessionKey
+      ke3' <- evaluate (messageOf (O.encode ke3))
+      key <- held exported
+      pure (Just (ke3', key))
   O.scrub st
-  pure message
+  pure finished
 
 -- | 'startRegistration' is a registration's first step: the state to keep
 -- and the request. 'Nothing' when the password cannot be used.
 startRegistration :: Password -> IO (Maybe (RegistrationState, Message))
 startRegistration password =
-  O.registrationRequest (passwordBytes password) <&> \case
-    Right (st, request) -> Just (RegistrationState st, messageOf (O.encode request))
-    Left _ -> Nothing
+  O.registrationRequest (passwordBytes password) >>= \case
+    Right (st, request) -> pure (Just (RegistrationState st, messageOf (O.encode request)))
+    Left e -> failed "the registration could not start" e $> Nothing
 
 -- | 'finishRegistration' is a registration's last step, with the server's
--- response and the stretching it named: the record to send, or 'Nothing'
--- when the response is not valid.
+-- response and the stretching it named: the record to send, and the
+-- page's key of the export key, if any; or 'Nothing' when the response is
+-- not valid.
 finishRegistration :: RegistrationState -> Password -> Stretch -> Message -> IO (Maybe (Message, Maybe KeyRef))
 finishRegistration (RegistrationState st) _ stretch response = do
-  made <- case bytesOf response >>= rightToMaybe . O.decode of
-    Nothing -> pure Nothing
-    Just response' -> rightToMaybe <$> O.finalizeRegistration (opaqueConfig stretch) st response' O.defaultIdentities
-  for_ made (O.scrub . snd)
+  result <- case bytesOf response >>= rightToMaybe . O.decode of
+    Nothing -> pure (Left O.DeserializeError)
+    Just response' -> registrationFinished (opaqueConfig stretch) st response'
+  made <- case result of
+    Left e -> failed "the registration could not finish" e $> Nothing
+    Right (record, exported) -> do
+      record' <- evaluate (messageOf (O.encode record))
+      key <- held exported
+      pure (Just (record', key))
   O.scrub st
-  pure ((\m -> (messageOf (O.encode (fst m)), Nothing)) <$> made)
+  pure made
+
+-- | 'loginFinished' is the login's last step of the package, with no
+-- identities (the RFC's default, the parties' public keys).
+loginFinished :: O.Config -> O.ClientLoginState -> O.KE2 -> IO (Either O.Error (O.KE3, O.SessionKey, Exported))
+
+-- | 'registrationFinished' is the registration's last step of the
+-- package, with no identities.
+registrationFinished :: O.Config -> O.ClientRegState -> O.RegistrationResponse -> IO (Either O.Error (O.RegistrationRecord, Exported))
+
+-- | 'held' is the page's key of an export key a finishing step gave, if
+-- any. The export key itself is not kept.
+held :: Exported -> IO (Maybe KeyRef)
+
+#if defined(wasm32_HOST_ARCH)
+
+-- | 'Exported' is the export key as the browser's finishing steps give
+-- it: a WebCrypto key, imported for @deriveKey@ only and not extractable,
+-- or none where the page has no WebCrypto.
+type Exported = Maybe ExportCryptoKey
+
+loginFinished config st ke2 = clientFinishWebCrypto (DeriveKey :| []) config st ke2 O.defaultIdentities
+
+registrationFinished config st response = finalizeRegistrationWebCrypto (DeriveKey :| []) config st response O.defaultIdentities
+
+held = \case
+  Nothing -> pure Nothing
+  Just (ExportCryptoKey key) -> holdKey key
+
+#else
+
+-- | 'Exported' is the export key as the native finishing steps give it:
+-- bytes in memory the package zeroes.
+type Exported = O.ExportKey
+
+loginFinished config st ke2 = pure (O.clientFinish config st ke2 O.defaultIdentities)
+
+registrationFinished config st response = O.finalizeRegistration config st response O.defaultIdentities
+
+held exportKey = O.scrub exportKey $> Nothing
 
 #endif
