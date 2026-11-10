@@ -76,6 +76,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
+import System.IO.Error (userError)
 import Wiki.Api.Import
 import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -88,7 +89,6 @@ import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
-import System.IO.Error (userError)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, pageAt, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)

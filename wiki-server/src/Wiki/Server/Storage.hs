@@ -276,7 +276,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, strayRoots, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)

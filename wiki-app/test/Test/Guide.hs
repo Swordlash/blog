@@ -23,7 +23,6 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Code, Emoji, Emph, Hidden, Link, SoftBreak, Str, Strikeout, Strong), ListItem (..), SpoilerHead (..), SpoilerKind (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
-
 import Wiki.Core.Space (Space (..), SpaceProfile (..), pageAt, pagePath, rootPage)
 
 guide :: MemState

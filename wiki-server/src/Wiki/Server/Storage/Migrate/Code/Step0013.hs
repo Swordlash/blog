@@ -43,7 +43,7 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, all_, defaultDbSettings, filter_, isNothing_, isJust_, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
+import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, all_, defaultDbSettings, filter_, isJust_, isNothing_, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Protolude
 import System.IO.Error (userError)
 import Wiki.Server.Storage.Backend (Backend (..))
@@ -131,7 +131,7 @@ rooting homeId pages = case find (\p -> p.page == homeId) pages of
   Nothing -> []
   Just home
     | null others && isNothing home.parent -> []
-    | otherwise -> [q | p <- below, let q = moved p, q /= p] <> [at p (Just homeId) p.slug p.position | p <- others] <> [at home Nothing home.slug home.position | isJust home.parent]
+    | otherwise -> [q | p <- below, let { q = moved p }, q /= p] <> [at p (Just homeId) p.slug p.position | p <- others] <> [at home Nothing home.slug home.position | isJust home.parent]
   where
     others = [p | p <- pages, isNothing p.parent, p.page /= homeId]
     below = [p | p <- pages, p.parent == Just homeId]

@@ -210,7 +210,6 @@ import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary, childPages, pageTreeOrder, positionPage, summaryOf)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
-import Wiki.Core.Space qualified as Space
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
   , GlobalPermission (Administer, CreateSpaces)
@@ -237,6 +236,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, defaultHomePage, hasHome, homeDeleteRefusal, homeMoveRefusal, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)

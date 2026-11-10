@@ -125,9 +125,9 @@ import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), databaseUrl,
 import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
+import Wiki.Server.Storage.Layout (PgPrograms (..))
 import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
-import Wiki.Server.Storage.Layout (PgPrograms (..))
 import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
 
 --------------------------------------------------------------------------------
