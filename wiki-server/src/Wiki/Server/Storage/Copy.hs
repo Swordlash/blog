@@ -179,6 +179,9 @@ copyDatabase source target =
       Left (NotMigrated at known) -> throwError (SourceNotMigrated at known)
       Left (UnreadableTables tables) -> throwError (SourceUnreadable [t.table <> ": " <> why | t <- tables, Left why <- [t.rows]])
       Left (UnreadableRecords why) -> throwError (SourceUnreadable [why])
+      -- A rule of the wiki's broken in the source (a space with a second
+      -- page at the top of its pages) is refused as the check refuses it.
+      Left (BrokenRecords broken) -> throwError (SourceUnreadable broken)
       Right _ -> pass
     held <- liftIO (runDb source tableNames)
     let unknown = held \\ ("wiki_schema" : map copiedName copiedTables)
@@ -210,6 +213,7 @@ copyDatabase source target =
         Left (NotMigrated at known) -> throwError (TargetUnreadable ["The copy is at version " <> show at <> " of the schema, and this program reads version " <> show known <> "."])
         Left (UnreadableTables tables) -> throwError (TargetUnreadable [t.table <> ": " <> why | t <- tables, Left why <- [t.rows]])
         Left (UnreadableRecords why) -> throwError (TargetUnreadable [why])
+        Left (BrokenRecords broken) -> throwError (TargetUnreadable broken)
         Right _ -> pass
       pure (map (\(w, _) -> TableCopied {table = w.name, rows = w.count, timesCut = w.cut}) copied)
 
