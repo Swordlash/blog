@@ -194,7 +194,8 @@ pass 'the page from the state: whats_new=no is --no-whats-new, and on again is -
 expect "sh toolchain/deploy-local.sh --status --prefix $TMP/srv/wiki" action=status "prefix=$TMP/srv/wiki"
 expect "sh toolchain/deploy-local.sh --stop --name team" action=stop name=team
 expect "sh toolchain/deploy-local.sh --rollback --prefix $TMP/srv/wiki" action=rollback "prefix=$TMP/srv/wiki"
-pass '--status, --stop and --rollback name the deployment alone'
+expect "sh toolchain/deploy-local.sh --move-to-postgres --prefix $TMP/srv/wiki --name team" action=move-to-postgres "prefix=$TMP/srv/wiki" name=team
+pass '--status, --stop, --rollback and --move-to-postgres name the deployment alone'
 
 # A deployment in the home directory, its state in ~/.config/wiki-demo,
 # with an address the deploy chose itself (not an answer) and a demo of a

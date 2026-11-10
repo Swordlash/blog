@@ -8,6 +8,7 @@ module Maker.Deploy.State
   , writeState
   , stateGet
   , stateSet
+  , stateReplace
   )
 where
 
@@ -93,3 +94,23 @@ stateSet key value file = do
   text <- either (\(_ :: IOException) -> "") id <$> try (readFile file)
   let others = [l | l <- lines text, (key <> "=") /= take (length key + 1) l]
   length text `seq` writeState file (unlines (others <> [key <> "=" <> value]))
+
+-- | Replace values of a state file in place, keeping the order of its
+-- lines: each key's lines become one line with the new value, where the
+-- first of them was. A key the file lacks is added at the end. The move to
+-- PostgreSQL changes the database's kind and port this way, and leaves
+-- every other value as the deploy wrote it.
+stateReplace :: [(String, String)] -> FilePath -> IO ()
+stateReplace values file = do
+  text <- either (\(_ :: IOException) -> "") id <$> try (readFile file)
+  let keyOf l = takeWhile (/= '=') l
+      isKey k l = (k <> "=") == take (length k + 1) l
+      go _ [] = []
+      go seen (l : rest) = case [(k, v) | (k, v) <- values, isKey k l] of
+        (k, v) : _
+          | k `elem` seen -> go seen rest
+          | otherwise -> (k <> "=" <> v) : go (k : seen) rest
+        [] -> l : go seen rest
+      kept = go [] (lines text)
+      missing = [k <> "=" <> v | (k, v) <- values, not (any (\l -> keyOf l == k) kept)]
+  length text `seq` writeState file (unlines (kept <> missing))

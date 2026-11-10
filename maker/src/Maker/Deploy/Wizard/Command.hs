@@ -32,6 +32,7 @@ deployArgs a = case a.action of
   Status -> "--status" : which
   Stop -> "--stop" : which
   Rollback -> "--rollback" : which
+  MoveToPostgres -> "--move-to-postgres" : which
   Deploy ->
     concat
       [ [if server then "--server" else "--static"]

@@ -25,6 +25,8 @@
 #                                [--no-firewall] [--no-rehearsal] [--enable-linger]
 #   sh toolchain/deploy-local.sh --stop [--prefix DIR] [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--prefix DIR] [--name NAME]
+#   sh toolchain/deploy-local.sh --move-to-postgres [--prefix DIR] [--name NAME] [--db-port N]
+#                                [--semaphore | --no-semaphore]
 #
 # It is meant for a Linux machine of one's own reached over Tailscale (x86_64
 # Debian or Ubuntu, as CI's runner), and does, in order:
@@ -119,9 +121,10 @@
 #      wiki-server from before the schema of PostgreSQL and SQLite alike, or a
 #      SQLite wiki when PostgreSQL is chosen) stops the deploy before anything
 #      changes, with a warning: its content moves by an export with the
-#      running server and an import into the new one. --fresh (or "yes" at
-#      the question, on a terminal) goes on, moving the file aside into
-#      data/replaced/<time>/, never deleting it.
+#      running server and an import into the new one, or, from SQLite to
+#      PostgreSQL, whole (accounts, settings and all) with --move-to-postgres
+#      below. --fresh (or "yes" at the question, on a terminal) goes on,
+#      moving the file aside into data/replaced/<time>/, never deleting it.
 #   2. Install: stop the running service; with --server, back its database up
 #      (`wiki-server backup`, into data/backups/: VACUUM INTO on SQLite,
 #      pg_dump on PostgreSQL, the container's own) with the new binary, and if
@@ -436,6 +439,34 @@
 #                    from the backup made before the upgrade: what was written
 #                    since is lost); asks first, or --yes
 #   --yes            answer --rollback's question without a terminal
+#   --move-to-postgres
+#                    move the wiki of a server deployment on SQLite into PostgreSQL in
+#                    Docker, as a deploy on PostgreSQL keeps it (--db-port as there), and
+#                    switch the deployment to it. The deployment must be at this
+#                    checkout's commit (deploy it from here first), have its unit (not
+#                    taken down with --stop) and Docker; a PostgreSQL whose database
+#                    holds a wiki already is left alone and refused. In order, with what
+#                    a failure at each step leaves:
+#                      1. check all that, build wiki-server with PostgreSQL, start
+#                         PostgreSQL and check that its database is empty: the running
+#                         wiki is not touched, and the container is left as it was found
+#                      2. stop the service, back the wiki up into data/backups, copy it
+#                         (wiki-server copy-database, one transaction that checks every
+#                         table), and compare the two with the upgrade's checks
+#                         (wiki-server rehearse --move-to-database, on scratch copies):
+#                         the service starts again on SQLite, and PostgreSQL's database is
+#                         emptied again when the copy had filled it
+#                      3. set data/wiki.sqlite aside into data/replaced/<time>/, keep the
+#                         deployment on SQLite in previous/ (in place of the one kept
+#                         there), and switch the binary, the console, the unit and the
+#                         state to PostgreSQL; start the service, which must answer:
+#                         switched back to SQLite (the file, the binary, the unit and the
+#                         state, and the deployment previous/ held), PostgreSQL emptied,
+#                         and the service started again
+#                    data/wiki.sqlite is only read, and never deleted. Afterwards every
+#                    deploy builds and runs the server with PostgreSQL, and --rollback goes
+#                    back to the wiki on SQLite, without what was written in PostgreSQL
+#                    since (which stays in the volume)
 #
 # The public address serves whoever signs in there, and anyone else as an
 # anonymous reader. The first administrator is made on this machine, with the
@@ -569,6 +600,7 @@ while [ $# -gt 0 ]; do
     --stop) action=stop ;;
     --status) action=status ;;
     --rollback) action=rollback ;;
+    --move-to-postgres) action=move ;;
     --yes) yes=1 ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
@@ -1146,6 +1178,10 @@ if [ -z "${WIKI_MAKER:-}" ]; then
   # The maker refuses root (a systemd user service is installed under the
   # user who runs this); refusing it here first keeps root from installing
   # and compiling the toolchain for a deploy that cannot go on.
+  # A move to PostgreSQL builds wiki-server, as a deploy does.
+  if [ "$action" = move ] && [ "$(id -u)" = 0 ]; then
+    die "run this as the user the wiki runs as, not root: its service is a systemd user service of that user"
+  fi
   if [ -n "$build" ] && [ "$action" = deploy ] && [ "$(id -u)" = 0 ]; then
     die "run this as the user the wiki should run as, not root: it installs a systemd user service under that user"
   fi
@@ -1169,7 +1205,7 @@ if [ -z "${WIKI_MAKER:-}" ]; then
     mkdir -p "$prefix"
     [ -f "$prefix/$MARKER" ] || printf 'name=%s\ncreated-by=toolchain/deploy-local.sh\n' "$name" >"$prefix/$MARKER"
   fi
-  if [ -n "$build" ] && [ "$action" = deploy ]; then
+  if { [ -n "$build" ] && [ "$action" = deploy ]; } || [ "$action" = move ]; then
     say "installing or checking GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh maker)${toolchain_home:+, under $toolchain_home}"
     sh "$ROOT/toolchain/bootstrap.sh" maker ${system_tools:+--system-tools} ${hackage_mirror:+"--hackage-mirror=$hackage_mirror"}
     load_toolchain_env

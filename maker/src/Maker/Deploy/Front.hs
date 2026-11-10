@@ -9,7 +9,9 @@
 -- the rest of the deploy in this process: the page, the TeX step, the
 -- builds and checks, and the change of the running deployment
 -- ("Maker.Deploy.Page", "Maker.Deploy.Tex", "Maker.Deploy.Prepare",
--- "Maker.Deploy.Apply"). @--rollback@ goes back to the kept deployment.
+-- "Maker.Deploy.Apply"). @--rollback@ goes back to the kept deployment,
+-- and @--move-to-postgres@ moves a deployment's wiki from SQLite into
+-- PostgreSQL ("Maker.Deploy.Move").
 --
 -- Everything that can be checked is checked before the build, which takes
 -- minutes (over an hour the first time), and the build before the running
@@ -31,10 +33,11 @@ import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isJust)
 import Maker.Deploy.Apply (apply, rollbackByHand)
 import Maker.Deploy.Layout
+import Maker.Deploy.Move (Move (..), moveToPostgres)
 import Maker.Deploy.Options
 import Maker.Deploy.Page (pageStep)
 import Maker.Deploy.Plan
-import Maker.Deploy.Prepare (prepare)
+import Maker.Deploy.Prepare (dockerReady, prepare)
 import Maker.Deploy.State (stateGet)
 import Maker.Deploy.Tailscale (tailscaleIp)
 import Maker.Deploy.Tex (texStep)
@@ -99,6 +102,11 @@ portProblem option v
 -- | The front itself, in the shell's order.
 front :: FilePath -> Options -> IO ()
 front root o0 = do
+  -- The move to PostgreSQL takes the deployment as its last deploy left
+  -- it: only which deployment, PostgreSQL's port and the build's
+  -- semaphore are given.
+  when (o0.action == MoveToPostgres && o0 {name = defaultOptions.name, optPrefix = "", optDbPort = "", optSemaphore = "", action = Deploy} /= defaultOptions) $
+    die "--move-to-postgres takes only --name, --prefix, --db-port and --semaphore or --no-semaphore: the deployment's other settings stay as its last deploy left them"
   -- The ways to serve exclude each other: one may be given, and a later
   -- run moves to another by naming it.
   let given = ways o0
@@ -239,6 +247,46 @@ front root o0 = do
   systemd <- succeeds "systemctl" ["--user", "show-environment"]
   unless systemd $
     die ("cannot reach your systemd user instance (systemctl --user). Log in to a normal session (ssh as " <> user <> " works; su and sudo -u do not), or check that XDG_RUNTIME_DIR is set (it is usually /run/user/" <> uid <> ").")
+
+  -- The move to PostgreSQL ("Maker.Deploy.Move"): PostgreSQL's port is
+  -- the one given, the one the deployment had before, or the default, and
+  -- the toolchain is made ready as a deploy on PostgreSQL makes it, once
+  -- the move's checks have passed.
+  when (o.action == MoveToPostgres) $ do
+    let dbPort = firstOf [o.optDbPort, prevDbPort, "5433"]
+    mapM_ die (portProblem "--db-port" dbPort)
+    when (dbPort `elem` [prevPort, prevAdminPort]) (die ("--db-port " <> dbPort <> " is the port of a listener: choose another"))
+    let systemTools = not (null prevSystemTools)
+        prepareToolchain = do
+          when systemTools $ do
+            say "--system-tools: checking this machine's own toolchain (toolchain/bootstrap.sh system-tools native)"
+            code <- runInherit "sh" [root </> "toolchain" </> "bootstrap.sh", "system-tools", "native"]
+            unless (code == ExitSuccess) $
+              die "--system-tools: this machine's own toolchain will not do (see above), so nothing was changed; without --system-tools (--no-system-tools, at a deploy) toolchain/bootstrap.sh installs it"
+          recheck <- checkNative root ["--without-tex"]
+          say ("installing or checking the toolchain wiki-server's build with PostgreSQL needs (toolchain/bootstrap.sh native)" <> (if null toolchainHome then "" else ", under " <> toolchainHome))
+          code <- runInherit "sh" ([root </> "toolchain" </> "bootstrap.sh", "native"] <> ["--system-tools" | systemTools] <> ["--hackage-mirror=" <> prevHackageMirror | not (null prevHackageMirror)])
+          unless (code == ExitSuccess) (exitWith code)
+          when recheck $ do
+            say "checking again what the native build of wiki-server needs, after the bootstrap"
+            again <- runInherit "sh" [root </> "toolchain" </> "check-native.sh", "--without-tex"]
+            unless (again == ExitSuccess) (die "the native build of wiki-server still needs what is missing above; nothing was changed")
+          loadEnvironment root systemTools toolchainBase
+    moveToPostgres
+      Move
+        { root
+        , name = n
+        , prefix = l.prefix
+        , adoptable = l.adoptable
+        , stateDir = l.stateDir
+        , stateFile = l.stateFile
+        , unitFile = l.unitFile
+        , checkout = gitCommit
+        , dbPort
+        , semaphore = o.optSemaphore
+        , toolchain = prepareToolchain
+        }
+    exitWith ExitSuccess
 
   let port = firstOf [o.optPort, prevPort, "8080"]
   mapM_ die (portProblem "--port" port)
@@ -489,21 +537,7 @@ front root o0 = do
       code <- runInherit "sh" ((root </> "toolchain" </> "bootstrap.sh") : "system-tools" : needs)
       unless (code == ExitSuccess) $
         die "--system-tools: this machine's own toolchain will not do (see above), so nothing was changed; without --system-tools (--no-system-tools) toolchain/bootstrap.sh installs it"
-    recheck <-
-      if not server
-        then pure False
-        else do
-          say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
-          (ok, report) <- interleaved "sh" ((root </> "toolchain" </> "check-native.sh") : checkFlags)
-          putStrLn (chomp report)
-          if ok
-            then pure False
-            else do
-              debian <- found "dpkg-query"
-              unless debian (die "the native build of wiki-server needs what is missing above; nothing was changed")
-              let missing = intercalate "\n" [rest | ln <- lines report, Just rest <- [stripMissing ln]]
-              warn ("missing for the native build of wiki-server: " <> (if null missing then "see above" else missing) <> "; the bootstrap installs the Debian packages next, and the check runs again after it")
-              pure True
+    recheck <- if server then checkNative root checkFlags else pure False
     if not (null prebuilt) && not server
       then do
         say ("installing or checking Node, which serves the demo, and GHC and cabal, which build the deploy's maker (toolchain/bootstrap.sh static)" <> under)
@@ -619,6 +653,25 @@ front root o0 = do
       there <- doesDirectoryExist v
       unless there (die ("--" <> option <> " " <> v <> ": no such directory here, and not a git repository's http:// or https:// URL"))
       realpath [] v
+
+-- | Run toolchain/check-native.sh with these flags, its report on the
+-- terminal. The answer is whether it must run again after the bootstrap:
+-- on Debian (dpkg-query on PATH) a missing package is a warning, since the
+-- bootstrap installs it; elsewhere the deploy stops here.
+checkNative :: FilePath -> [String] -> IO Bool
+checkNative root flags = do
+  say "checking what the native build of wiki-server needs (toolchain/check-native.sh)"
+  (ok, report) <- interleaved "sh" ((root </> "toolchain" </> "check-native.sh") : flags)
+  putStrLn (chomp report)
+  if ok
+    then pure False
+    else do
+      debian <- found "dpkg-query"
+      unless debian (die "the native build of wiki-server needs what is missing above; nothing was changed")
+      let missing = intercalate "\n" [rest | ln <- lines report, Just rest <- [stripMissing ln]]
+      warn ("missing for the native build of wiki-server: " <> (if null missing then "see above" else missing) <> "; the bootstrap installs the Debian packages next, and the check runs again after it")
+      pure True
+  where
     stripMissing ln = do
       rest <- stripPrefixOf "Missing for the native build of wiki-server: " ln
       if "." `isSuffixOf` rest then Just (take (length rest - 1) rest) else Nothing
@@ -652,12 +705,6 @@ isReadableFile file = do
   if not isFile
     then pure False
     else either (\(_ :: IOException) -> False) readable <$> try (getPermissions file)
-
--- | Whether Docker and its compose plugin answer.
-dockerReady :: IO Bool
-dockerReady = do
-  docker <- found "docker"
-  if not docker then pure False else (&&) <$> succeeds "docker" ["compose", "version"] <*> succeeds "docker" ["info"]
 
 -- | Whether a zip holds app.wasm at its root, as the pages CI builds do:
 -- read with python3, or unzip where there is none.

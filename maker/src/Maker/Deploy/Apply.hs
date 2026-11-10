@@ -16,6 +16,17 @@ module Maker.Deploy.Apply
   , rollbackByHand
   , compressible
   , sanName
+
+    -- * For the move to PostgreSQL ("Maker.Deploy.Move")
+  , Place (..)
+  , Settings (..)
+  , settingsOf
+  , rollBackDeployment
+  , startAgain
+  , answersWithin
+  , deploymentUrl
+  , urlAnswers
+  , pgDown
   )
 where
 
@@ -299,10 +310,7 @@ apply p = do
               | not (null httpsHost) || way == "proxy" = " --secure-cookies"
               | way == "cert" = " --tls-cert " <> unitWord (v "tls_cert") <> " --tls-key " <> unitWord (v "tls_key")
               | otherwise = ""
-            database
-              | db == "postgres" =
-                  " --database " <> dbUrl dbPort <> " --database-password-file " <> unitWord (pgDir </> "db-password") <> " --pg-dump " <> unitWord (pgDir </> "pg_dump") <> " --pg-restore " <> unitWord (pgDir </> "pg_restore")
-              | otherwise = " --sqlite " <> unitWord (dir </> "data" </> "wiki.sqlite")
+            database = databaseWords db dir dbPort pgDir
             pdf = if v "pdf" == "yes" then "" else " --no-pdf"
             whatsNew = if v "whats_new" == "no" then " --no-whats-new" else ""
         -- A systemd user unit does not inherit the shell's environment, so
@@ -859,6 +867,8 @@ rollbackByHand p = do
       | not (null k.backup) -> do
           say ("its database goes back to the backup " <> k.backup <> ": everything written since is lost, unless exported first (Export in the administration)")
           unless (null k.aside) (say ("and the file the upgrade set aside in " <> k.aside <> " goes back into " <> dir </> "data"))
+      | not (null k.aside) && kindOf nowDb == "postgres" ->
+          say ("its wiki comes back from " <> k.aside <> ", where the move to PostgreSQL (or the upgrade) set it aside; what was written since stays in PostgreSQL, the volume " <> name <> "_wiki-db, whose container stops")
       | not (null k.aside) ->
           say ("its wiki comes back from " <> k.aside <> ", where the upgrade set it aside; the wiki written since is set aside in its place, in " <> dir </> "data" </> "replaced")
       | kindOf oldDb /= kindOf nowDb && kindOf oldDb == "postgres" ->
