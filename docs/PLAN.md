@@ -971,6 +971,23 @@ confirms it against reality and the plan is amended if it does not hold.
     What a check writes into the copy goes through row types of its own,
     not the live schema, since the copy is at the old program's schema.
     #202's migrations in code are decision 64; each brings its own check.
+    **The real accounts (WP5.85, #237, the last part of #205).** The
+    check `ways in` compares the old program's `users list` with the new
+    one's, and fails for each login that signed in with a password before
+    the upgrade and does not after it; `users list` and its table (columns
+    padded to their widths in characters, two spaces between, a line break
+    in a name counted in the width) are stable for it. Beside it,
+    `wiki-server check` refuses a stored password no sign-in can use (half
+    an OPAQUE record, a record or stretch that does not decode, a hash the
+    verifier does not read), read by the one function the sign-in reads
+    the columns with, and a passing check ends by saying how the accounts
+    sign in and which enabled ones have no way in (the first twenty by
+    login). An account with no way in is never refused: one without a
+    password, one from an import and one whose provider was removed are
+    legitimate. `wiki-server` writes and reads UTF-8 whatever the locale,
+    and the rehearsal gives the old program `LC_ALL=C.UTF-8` when the
+    environment has no UTF-8 locale, since a GHC program under `C` dies on
+    the first character outside ASCII it prints, a display name included.
 
 59. **A password signs in through OPAQUE (WP5.74a, #184; the owner,
     2026-11-06 to 2026-11-09).** OPAQUE-3DH (RFC 9807) with ristretto255,
@@ -1387,7 +1404,8 @@ stage 2 is done.
 **The smaller issues first (the owner, 2026-11-10, in the evening):** the
 smaller issues are closed before plugins (#186), autocompletion (#187)
 and presentations (#191) are started. In this order: #194 (persistent
-links, done: decision 70, #235); #205's last part (WP5.85); #188 (emojis: the
+links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
+decision 58); #188 (emojis: the
 editor's part is done, WP5.86, #236; the issue stays open only for
 Slack's names that GitHub's list does not have, until the owner says
 whether they are wanted); #189 (backlinks, on decision 70's reading of a
@@ -1404,31 +1422,6 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.85 `check` looks at how the real accounts sign in (#205, its
-  last part).** The rehearsal's "accounts" check signs in two accounts it
-  made itself; nothing looks at the accounts people have. Three things.
-  First, `wiki-server check` refuses (as it refuses a second root) a
-  stored credential this program cannot use: an OPAQUE record without its
-  stretch, or the other way round, which today reads silently as no
-  password; a record or a stretch that does not decode; a hash from before
-  OPAQUE that the verifier does not read. Second, a passing check says how
-  the accounts sign in: how many with a password (and how many of those
-  still with a hash from before OPAQUE), how many through a provider the
-  settings still name, how many with a passkey alone, and the enabled
-  accounts with no way in, by login. Those are lines of a check that
-  passes, never a refusal: an account made without a password, one from
-  an import and one whose provider was removed are all legitimate, and a
-  refusal would roll back a deploy and refuse a copy on a wiki that has
-  them. Third, a check "ways in" in `Rehearsal.checks`, since the first two
-  cannot see a migration that loses every hash: before, the old program's
-  `users list`; after, the new one's; it fails for each login that signed
-  in before and does not after, and for nothing else. Old output it cannot
-  read is "the old program cannot be driven" (exit 7), not a failed check.
-  `users list` is marked stable for it. The column it reads knows of
-  passwords alone, not of providers or passkeys, which the canaries of
-  "accounts" cover; the pull request says so. Tests: each refusal and each
-  line, on both backends; the rehearsal failing on a copy with real
-  accounts whose hashes a step removed.
 - **WP5.88 Backlinks (#189; the owner, 2026-11-11: a list in the left
   panel, counted when a page is saved, no graph).** Each page shows the
   pages that link to it, "Linked from", as a section of the left panel.
@@ -1720,11 +1713,7 @@ needs. Each was true when its package merged; check before relying on one.
   `Test.Storage.Migrate`'s "numbered from 1 with no gaps" checks the SQL
   files only (`migrationsFor`), and other examples there take their count
   as the program's version: they move to `stepsFor` and `knownVersion`
-  with the first real code step. Issue #205 stays open for its part 4:
-  `wiki-server check` does not yet check per-feature invariants on the
-  real accounts (for OPAQUE, that every account has a way in the new
-  version can sign it in: a hash, an OPAQUE record or a provider's
-  identity). The browser test "counts a notification
+  with the first real code step. The browser test "counts a notification
   the live channel tells of, with no page shown" failed once on #221's
   wasm job, whose change touched no application code.
 - **Marker blocks (WP5.77, #224).** A block other than a spoiler that is
@@ -1820,6 +1809,19 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **`check` and the accounts (WP5.85, #237).** `ways in` reads a column
+  that knows of passwords alone: an account that signs in through a
+  provider or with a passkey only reads "no (no password)" before and
+  after, and nothing in the rehearsal covers a passkey-only account (the
+  `accounts` canaries cover a password and a provider). On a machine with
+  no UTF-8 locale at all the rehearsal cannot drive a program from before
+  #237 and says so; the deploy then goes on with `--no-rehearsal`. A data
+  directory whose path is not UTF-8 fails to open, as before. Three
+  places still read the password columns in SQL rather than through
+  `readPasswordColumns`: `Rows.loadAccountFlags`, `legacyPasswordCount`
+  (which counts a hash left beside a record) and `SecondFactor.hs`. A
+  wiki that has a broken credential now stops its deploy's rehearsal at
+  the check, as a broken rehearsal (exit 1), not a failed check.
 - **Permanent links (WP5.81, #235).** Not tested: a pinned link to a
   version of an encrypted page, and the page view's guard against an
   older load finishing last (nothing orders two answers cheaply). The
