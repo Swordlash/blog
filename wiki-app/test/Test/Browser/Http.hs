@@ -758,7 +758,9 @@ views m = describe "the application over it" $ do
     find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
     -- The list of the space's pages has no bodies: the page is asked for
     -- by itself, once.
-    let pagesAsked = map (\r -> r.url) . filter (\r -> "/pages/at/" `T.isInfixOf` r.url) <$> asked
+    -- (The tour is Docs' home page, asked for at the empty path, which
+    -- has no slash after it.)
+    let pagesAsked = map (\r -> r.url) . filter (\r -> "/pages/at" `T.isInfixOf` r.url) <$> asked
     pagesAsked >>= (`shouldSatisfy` ((== 1) . length))
     unmount ui
     serverStops
@@ -1016,7 +1018,7 @@ views m = describe "the application over it" $ do
     after <- findAll ui adoptable
     length after `shouldBe` length before
     zipWithM_ shouldBeSameElement after before
-    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Docs")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     asked `shouldReturn` []
     -- The page shown from the first render listens for its comments (the

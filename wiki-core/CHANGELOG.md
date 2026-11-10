@@ -8,8 +8,11 @@ of personal spaces and an encrypted space), `pagePath` and `pagesAt` and
 `pageAt` (a page's path from under the root, the home page's empty, and an
 old path with the root's slug first read again without it),
 `parentOrRoot`, `strayRoots`, and `rootedPages` and `rootedPagesOf`, which
-apply the upgrade's rule to pages written before it. `Wiki.Core.Path` has
-the generic `pathUnder`, `resolveUnder` and `resolveUnderM`.
+apply the upgrade's rule to pages written before it; `pageAtExactly` reads
+a path as written, without the rule for old addresses, for what matches
+pages by path. `Wiki.Core.Path` has the generic `pathUnder`,
+`resolveUnder`, `resolveUnderM` and `resolveFromRoot`, and
+`Wiki.Core.Page.placedPage` puts a page under another parent.
 `Wiki.Core.Export.rootedArchive` roots an archive's pages. A blog's posts
 are the home page's children (`Wiki.Core.Blog.posts`), and
 `Wiki.Core.Page.pageNumber` takes the root and numbers it 0.

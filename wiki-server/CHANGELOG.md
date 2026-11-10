@@ -19,7 +19,8 @@ reports such a space (`BrokenRecords`, exit 5 through `CheckUnreadable`).
 `insertHomePage` puts the space's top-level pages under the page it makes.
 The full import and the merge import read an archive through
 `rootedArchive`; the merge import matches pages by their paths from under
-the home pages, puts a page with no parent under the wiki's home page, and
+the home pages, read exactly as written (`pageAtExactly`, never through
+the rule for old addresses), puts a page with no parent under the wiki's home page, and
 skips every page of a space whose home page is skipped. The guide is built
 with the tour as its root, records its pages' paths from under it, reads a
 record written before with the tour at the empty path (`rootedRecord`),
