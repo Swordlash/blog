@@ -510,7 +510,10 @@ async function migrateTheDemo() {
   console.log("ok: the demo's export is imported through the dialog, a page left out and a conflict taking the imported page, and its summary shown");
 
   // Again, from the demo's data in this browser: everything is merged, and
-  // nothing is there twice; the page left out comes in now.
+  // nothing is there twice; the page left out comes in now. The pages kept
+  // are the ten the first import brought, and the Blog's home page: the
+  // demo's and the server's are both the one a new Blog is made with, the
+  // same title and text at the same path.
   await page.locator("#app .wiki-header a.admin-link").click();
   await page.locator("#app .admin-nav-link[data-section=backups]").click();
   await page.locator("#app .admin-view .import-demo").click();
@@ -522,7 +525,7 @@ async function migrateTheDemo() {
   await dialog.locator(".import-apply").click();
   await summary.waitFor({ timeout });
   const again = await summary.textContent();
-  for (const line of ["4 spaces merged with the server's", "1 page created", "10 pages kept as the server had them"]) {
+  for (const line of ["4 spaces merged with the server's", "1 page created", "11 pages kept as the server had them"]) {
     assert.ok(again.includes(line), `the second summary does not say "${line}": ${again}`);
   }
   const spaces = (await api("spaces")).body;
@@ -535,7 +538,7 @@ async function migrateTheDemo() {
     assert.deepEqual(slugs, [...new Set(slugs)], `a page of ${space} is there twice`);
     total += slugs.length;
   }
-  assert.equal(total, 12, "the demo's eleven pages, once each, and the server's Blog's home page");
+  assert.equal(total, 12, "the demo's twelve pages, once each, its Blog's home page the server's");
   // The team's template came in as one: listed apart, and offered.
   assert.deepEqual(
     (await pagesOf("team")).filter((p) => p.template).map((p) => p.slug),

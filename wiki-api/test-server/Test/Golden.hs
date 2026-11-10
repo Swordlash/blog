@@ -151,8 +151,8 @@ spec = describe "golden JSON" $ do
     golden "space-sealed" SpaceSealed {sealed = True}
     golden "personal-space-switch" PersonalSpaceSwitch {enabled = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
-    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = False, boxNumbering = InPage}
-    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True, boxNumbering = WithSection}
+    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), blog = False, boxNumbering = InPage}
+    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), blog = True, boxNumbering = WithSection}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}

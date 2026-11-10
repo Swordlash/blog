@@ -167,9 +167,9 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Space (slugs ["team", "projects"]))
     asReader `lacks` "sidebar-up"
 
-  it "opens a space without a home page at its pages" $ do
+  it "opens a space without a home page (an encrypted one, here) at its pages" $ do
     let st = as (Just "user-admin")
-        withoutHome = st {spaces = Map.map (\x -> if x.name == "Docs" then S.withProfile S.SpaceProfile {S.description = x.description, S.icon = x.icon, S.homePage = Nothing, S.blog = x.blog, S.boxNumbering = x.boxNumbering} x else x) st.spaces}
+        withoutHome = st {spaces = Map.map (\x -> if x.name == "Docs" then S.withHome Nothing x else x) st.spaces}
     Rendered {html} <- render withoutHome (Space (slugs ["docs"]))
     html `contains` "<h1>Docs</h1>"
     html `contains` ">Space settings</button>"
@@ -220,7 +220,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `lacks` ">Space settings</button>"
     html `lacks` ">New page</a>"
     Rendered {html = home} <- render (as Nothing) (Space (slugs ["docs"]))
-    home `lacks` ">Set as home page</button>"
+    home `lacks` ">Edit</a>"
 
   it "shows that an address is nothing" $ do
     Rendered {html, title} <- render (as Nothing) Unknown
@@ -253,6 +253,29 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- render (as (Just "user-reader")) (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     html `contains` "class=\"error error-forbidden\""
     html `lacks` "<textarea"
+
+  it "says in place that someone who edits a space but does not administer it may not edit its home page" $ do
+    Rendered {html} <- render (as (Just "user-editor")) (EditPage (slugs ["blog"]) (slugs ["home"]))
+    html `contains` "class=\"error error-forbidden\""
+    html `lacks` "<textarea"
+    Rendered {html = asAdmin} <- render (as (Just "user-admin")) (EditPage (slugs ["blog"]) (slugs ["home"]))
+    asAdmin `contains` "<textarea"
+
+  it "offers to restore a version of a space's home page to whoever administers the space alone" $ do
+    -- The blog's home page, saved once by its administrator.
+    ref <- newMemWiki (as (Just "user-admin"))
+    first' <- runMemWiki ref $ do
+      blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
+      home <- either (panic . show) identity <$> getPage blog.id (slugs ["home"])
+      _ <- either (panic . show) identity <$> savePage home.id home.updatedAt "Home" "Posts on writing."
+      pure home.updatedAt
+    st <- readIORef ref
+    let history = PageHistory (slugs ["blog"]) (slugs ["home"]) (Just first') AgainstPrevious
+    Rendered {html = asAdmin} <- render st history
+    asAdmin `contains` "Restore this version"
+    Rendered {html = asEditor} <- render st {current = Just (UserId "user-editor")} history
+    asEditor `contains` "The first version"
+    asEditor `lacks` "Restore this version"
 
   it "asks a new page's title first, under a page or at the space's top level" $ do
     Rendered {html, title} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) Nothing)
@@ -330,6 +353,21 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     asReader `lacks` ">Edit</a>"
     Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
+
+  it "offers a space's home page to whoever administers the space to change, and a page under it to whoever edits the space" $ do
+    -- The editor is one of the blog's writers, and does not administer it.
+    Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["home"]))
+    asEditor `contains` "href=\"/s/blog/new-page/home/\">New subpage</a>"
+    asEditor `contains` "href=\"/s/blog/p/home/history/\">History</a>"
+    for_ [">Edit</a>", ">Rename</button>", ">Move</button>", ">Delete</button>", ">Use as template</button>"] (asEditor `lacks`)
+    Rendered {html = asAdmin} <- render (as (Just "user-admin")) (Page (slugs ["blog"]) (slugs ["home"]))
+    asAdmin `contains` "href=\"/s/blog/p/home/edit/\">Edit</a>"
+    asAdmin `contains` ">Rename</button>"
+    -- It stays where it is, and stays the space's.
+    for_ [">Move</button>", ">Delete</button>", ">Use as template</button>", "Set as home page"] (asAdmin `lacks`)
+    -- Another page of the blog is the editor's to change.
+    Rendered {html = post} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    for_ [">Edit</a>", ">Rename</button>", ">Move</button>", ">Delete</button>"] (post `contains`)
 
   it "marks a page's quotes that are found, shows its page threads under it, and keeps the panel closed" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["blog"]) (slugs ["hello-world"]))

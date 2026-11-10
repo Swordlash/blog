@@ -788,7 +788,10 @@ component =
           _ | not (mayEdit ctx st.input.space.id) -> [errorView Forbidden]
           Loading -> [[hh|<p class="loading">Loading…</p>|]]
           Failed e -> [failureView e Retry]
-          Ready work -> [editing st work]
+          -- The space's home page is its administrators' to change.
+          Ready work
+            | not (mayEditPage ctx st.input.space.id work.page.id) -> [errorView Forbidden]
+            | otherwise -> [editing st work]
 
     signInHint :: H.ComponentHTML Action Slots m
     signInHint = [hh|<p class="error sign-in-hint" role="alert">You are not signed in. To edit pages, choose who you are at the top right.</p>|]

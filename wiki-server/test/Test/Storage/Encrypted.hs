@@ -74,14 +74,14 @@ spec backing = describe "encrypted spaces in the storage" $ do
     home <- ok =<< as p.ada (homeOf open.id)
     void (ok =<< as p.ada (savePage home.id home.updatedAt "Home" "A secret written in plain text."))
     as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
-    -- Its only page one someone wrote, made its home page in place of the
-    -- one it was created with: refused, and the page kept.
+    -- A page someone wrote beside the home page it was created with:
+    -- refused, and both pages kept.
     written <- privateSpace st p.ada "Written"
     starter <- ok =<< as p.ada (homeOf written.id)
     plan <- ok =<< as p.ada (createPage written.id Nothing "Plan" "What we will do.")
-    void (ok =<< as p.ada (setSpaceProfile written.id SpaceProfile {description = "", icon = Nothing, homePage = Just plan.id, blog = False, boxNumbering = written.boxNumbering}))
-    void (ok =<< as p.ada (deletePage starter.id))
+    as p.ada (deletePage starter.id) >>= (`shouldSatisfy` invalid)
     as p.ada (encryptSpace written.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
+    void (ok =<< as p.ada (getPage written.id [starter.slug]))
     void (ok =<< as p.ada (getPage written.id [plan.slug]))
     -- Sealed to someone else's key, or with a part of the wrong length.
     secret <- privateSpace st p.ada "Secret"
@@ -101,7 +101,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     as p.ada (setSpaceSealed secret.id False) >>= (`shouldSatisfy` refusedAsEncrypted)
     as p.ada (setSpacePublic secret.id True) >>= (`shouldSatisfy` refusedAsEncrypted)
     as p.ada (createSpace (Just secret.id) "Inside") >>= (`shouldSatisfy` refusedAsEncrypted)
-    as p.ada (setSpaceProfile secret.id SpaceProfile {description = "", icon = Nothing, homePage = Nothing, blog = True, boxNumbering = encrypted.boxNumbering}) >>= (`shouldSatisfy` refusedAsEncrypted)
+    as p.ada (setSpaceProfile secret.id SpaceProfile {description = "", icon = Nothing, blog = True, boxNumbering = encrypted.boxNumbering}) >>= (`shouldSatisfy` refusedAsEncrypted)
 
   it "lists the readers waiting for the key, and lets only a holder of the key grant it to them" $ withEncrypted backing $ \st p secret -> do
     let as :: UserId -> StoredWiki IO a -> IO a
@@ -191,7 +191,8 @@ spec backing = describe "encrypted spaces in the storage" $ do
         pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
     made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
     plain <- ok =<< as p.ada (createSpace Nothing "Plain")
-    plainHome <- ok =<< as p.ada (homeOf plain.id)
+    -- A page of it other than its home page, which never moves.
+    plainPage <- ok =<< as p.ada (createPage plain.id Nothing "Plain page" "Plain text.")
     let refused :: Text -> Either WikiError b -> (Text, Text)
         refused what result = (what, either (\e -> if refusedAsEncrypted (Left e :: Either WikiError ()) then "refused" else show e) (const "done") result)
     results <-
@@ -201,7 +202,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
         , refused "create page" <$> as p.ada (createPage secret.id Nothing "A title" "A text")
         , refused "save page" <$> as p.ada (savePage pid made.updatedAt "A title" "A text")
         , refused "move out" <$> as p.ada (movePage pid plain.id Nothing)
-        , refused "move in" <$> as p.ada (movePage plainHome.id secret.id Nothing)
+        , refused "move in" <$> as p.ada (movePage plainPage.id secret.id Nothing)
         , refused "template" <$> as p.ada (setPageTemplate pid True)
         , refused "attachment" <$> as p.ada (uploadAttachment pid "a.txt" "text/plain" "bytes")
         , refused "get draft" <$> as p.ada (getDraft pid)

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Every space has a home page (WP5.78a, #201). `SpaceProfile` no longer has
+`homePage`: a space keeps the home page it was made with, and a profile
+that still names one in JSON has it ignored. `checkProfile` no longer takes
+the space's pages. `Wiki.Core.Space` gains `hasHome` (every space but the
+container of personal spaces and an encrypted space), `withHome`,
+`defaultHomePage` (the home page a space is given, at the next free slug
+among its top-level pages and before them), `homeDeleteRefusal` and
+`homeMoveRefusal`. `Wiki.Core.Permission` gains `canEditPage`: changing a
+space's home page needs `AdministerSpace`.
+
 An end marker after indented code, after a block of HTML of one line, or
 on the line that ends a list item holding another open block, ends its
 block again. The marker parser runs the continuation of each block inside

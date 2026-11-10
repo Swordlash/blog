@@ -4,7 +4,7 @@
 -- administration's people, and every refusal as an 'ApiError'.
 module Test.Server.Api (spec) where
 
-import Data.Aeson (ToJSON, encode)
+import Data.Aeson (ToJSON, Value (Null), encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
@@ -38,7 +38,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Avatar (..), Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Storage (Who (..), administratorUser, avatarFile, runStoredWiki, withStorageAside)
 
@@ -695,7 +695,7 @@ profiles backing = describe "a space's profile and icon over HTTP" $ do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     blog :: Space <- spaceNamed r [session] "blog"
-    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage, blog = blog.blog, boxNumbering = blog.boxNumbering}
+    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), blog = blog.blog, boxNumbering = blog.boxNumbering}
     -- The editor edits the blog, and does not administer it.
     (.status) <$> setProfile r [editor] blog.id profile `shouldReturn` 403
     (.status) <$> setProfile r [] blog.id profile `shouldReturn` 403
@@ -704,9 +704,10 @@ profiles backing = describe "a space's profile and icon over HTTP" $ do
     (set.description, set.icon) `shouldBe` ("Posts.", Just (IconEmoji "📝"))
     seen :: Space <- spaceNamed r [] "blog"
     (seen.description, seen.icon, seen.homePage) `shouldBe` ("Posts.", Just (IconEmoji "📝"), blog.homePage)
-    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere"), blog = False, boxNumbering = InPage} >>= jsonAs 400 >>= \case
-      Invalid _ -> pass
-      other -> expectationFailure ("not invalid: " <> show other)
+    -- A body that still names a home page, as a client from before every
+    -- space had its own sent it, has it ignored: the space keeps its own.
+    named :: Space <- setProfile r [session] blog.id (object ["description" .= ("" :: Text), "icon" .= Null, "homePage" .= ("elsewhere" :: Text), "blog" .= blog.blog, "boxNumbering" .= ("in-page" :: Text)]) >>= jsonAs 200
+    named.homePage `shouldBe` blog.homePage
 
   it "serves an uploaded icon to whoever may view the space, as an image and nothing else" $
     withDemoRestarted backing icons $ \uploaded again -> do
@@ -718,6 +719,6 @@ profiles backing = describe "a space's profile and icon over HTTP" $ do
   it "counts the pages of the spaces the asker may view" $ withDemoRunning backing identity $ \r -> do
     counts <- getUrl r (onPublic r links.spaces.pageCounts) >>= jsonAs 200
     spaces :: [Space] <- getUrl r (onPublic r links.spaces.list) >>= jsonAs 200
-    sort [(s.name, n) | s <- spaces, Just n <- [Map.lookup s.id (counts :: Map SpaceId Int)]] `shouldBe` [("Blog", 2), ("Docs", 5)]
+    sort [(s.name, n) | s <- spaces, Just n <- [Map.lookup s.id (counts :: Map SpaceId Int)]] `shouldBe` [("Blog", 3), ("Docs", 5)]
     everything :: Map SpaceId Int <- getUrl r (onAdmin r links.spaces.pageCounts) >>= jsonAs 200
     Map.size everything `shouldBe` 4

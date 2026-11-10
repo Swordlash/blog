@@ -14,7 +14,7 @@ import System.Directory (doesFileExist)
 import System.Directory qualified as Directory
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing)
+import Test.Database (Backing, withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
@@ -37,12 +37,15 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), bodyText, foldText, searchQuery)
+import Wiki.Core.Slug (mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space qualified as S
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Storage
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows qualified as Rows
@@ -456,6 +459,59 @@ wholeWikis backing = describe "importArchive and exportArchive" $ do
       original <- tableRows st
       importArchive st demoArchive >>= (`shouldSatisfy` isLeft)
       tableRows st `shouldReturn` original
+
+  it "give a space the archive gives no home page the default one, as an older wiki's archive may hold, but the container of personal spaces" $
+    withStorageIn backing $ \_ st -> do
+      let teamless = [if s.name == "Team" then S.withHome Nothing s else s | s <- demoArchive.spaces]
+          container = (fromMaybe (panic "the demo has no Blog") (find (\s -> s.name == "Blog") demoArchive.spaces)) {S.id = SpaceId "the-container", S.name = "User subspaces", S.slug = either (panic . show) identity (mkSlug "users"), S.personalContainer = True, S.public = False}
+          older = demoArchive {Export.spaces = S.withHome Nothing container : teamless}
+      importArchive st older >>= ok
+      team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
+      pages <- runStoredWiki st Administrator (listPages team.id) >>= ok
+      -- The handbook, which was its home page, is a page of it still, and
+      -- the default one goes before it.
+      case [p | p <- pages, Just p.id == team.homePage] of
+        [home] -> do
+          (home.title, slugText home.slug, home.parent) `shouldBe` ("Home", "home", Nothing)
+          page <- runStoredWiki st Administrator (getPage team.id [home.slug]) >>= ok
+          S.isHomeBody page.body `shouldBe` True
+          versions <- runStoredWiki st Administrator (listVersions home.id latestVersions) >>= ok
+          map (\v -> v.author) versions `shouldBe` [Nothing]
+        other -> expectationFailure ("not one home page: " <> show other)
+      map (\p -> p.title) pages `shouldContain` ["Team handbook"]
+      -- Every other space keeps the archive's own.
+      docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
+      tour <- runStoredWiki st Administrator (getPage docs.id (path "tour")) >>= ok
+      docs.homePage `shouldBe` Just tour.id
+      stored <- reading st Rows.loadSpaces
+      (\s -> s.homePage) <$> Map.lookup (SpaceId "the-container") stored `shouldBe` Just Nothing
+
+  it "refuse to delete a page with its space's home page under it, or to move it to another space, and move it within the space" $
+    withPlaceIn backing $ \at -> do
+      withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
+      -- A home page under another page, as a space may have one from
+      -- before every space had its own; no write of the storage makes one.
+      withConnectionTo at $ \c -> do
+        begin True c
+        runScript c "UPDATE spaces SET home_page = (SELECT id FROM pages WHERE slug = 'diagrams') WHERE slug = 'docs';"
+        commitTransaction c
+      withStorage defaultConfig at $ \st -> do
+        let asAdministrator :: StoredWiki IO a -> IO a
+            asAdministrator = runStoredWiki st Administrator
+            invalid = \case
+              Left (Invalid _) -> pass
+              other -> expectationFailure ("expected Invalid, got " <> show (void other))
+        docs <- asAdministrator (getSpace (path "docs")) >>= ok
+        blog <- asAdministrator (getSpace (path "blog")) >>= ok
+        guide <- asAdministrator (getPage docs.id (path "markdown-guide")) >>= ok
+        diagrams <- asAdministrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
+        tour <- asAdministrator (getPage docs.id (path "tour")) >>= ok
+        docs.homePage `shouldBe` Just diagrams.id
+        asAdministrator (deletePage guide.id) >>= invalid
+        asAdministrator (movePage guide.id blog.id Nothing) >>= invalid
+        void (asAdministrator (movePage guide.id docs.id (Just tour.id)) >>= ok)
+        (\s -> s.homePage) <$> (asAdministrator (getSpace (path "docs")) >>= ok) `shouldReturn` Just diagrams.id
+        void (asAdministrator (getPage docs.id (path "tour/markdown-guide/diagrams")) >>= ok)
 
   it "refuse an archive without the bytes of an attachment, writing nothing" $
     withStorageIn backing $ \_ st -> do

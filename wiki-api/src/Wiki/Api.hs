@@ -356,8 +356,9 @@ data AssistantApi mode = AssistantApi
 -- | 'SpacesApi': spaces, and the pages of each.
 data SpacesApi form mode = SpacesApi
   { list :: mode :- Get '[JSON] [Space]
-  -- ^ @listSpaces@. The rehearsal reads each space's @id@, @parent@ and
-  -- @slug@.
+  -- ^ @listSpaces@. The rehearsal reads each space's @id@, @name@, @parent@,
+  -- @slug@, @homePage@, @personalContainer@ and @encryption@ (the last two
+  -- missing from a program older than them).
   -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
   -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
   -- so it changes only compatibly.
@@ -381,7 +382,15 @@ data SpacesApi form mode = SpacesApi
   , setMathMacros :: mode :- Capture "space" SpaceId :> "math-macros" :> ReqBody '[JSON] SpaceMathMacros :> Put '[JSON] Space
   -- ^ @setSpaceMathMacros@.
   , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
-  -- ^ @setSpaceProfile@: its description, icon and home page.
+  -- ^ @setSpaceProfile@: its description, icon, whether it is a blog and
+  -- how its boxes are numbered. A body that also names a @homePage@ has it
+  -- ignored: the space keeps the home page it was made with. CI seeds the
+  -- wiki it rehearses with it (@toolchain/rehearse-ci.sh@), with a
+  -- @description@, an @icon@, a @homePage@ of @null@, a @blog@ and a
+  -- @boxNumbering@, which made a space with no home page before WP5.78.
+  -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
+  -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
+  -- so it changes only compatibly.
   , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm form (AttachmentUpload form) :> Post '[JSON] Space
   -- ^ @uploadSpaceIcon@: an image for the space's icon, as a form's file
   -- part, as for an attachment ("Wiki.Api.Upload"). The part's file name
@@ -410,7 +419,8 @@ data SpacesApi form mode = SpacesApi
   , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [PageSummary]
   -- ^ @listPages@: summaries of the space's pages, without their bodies,
   -- in the space's page order. The rehearsal reads each page's @id@,
-  -- @parent@ and @slug@; a space nobody may read answers 404.
+  -- @parent@ and @slug@; a space nobody may read answers 404, and an
+  -- encrypted space 409.
   -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
   -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
   -- so it changes only compatibly.

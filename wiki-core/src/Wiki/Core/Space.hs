@@ -42,6 +42,11 @@ module Wiki.Core.Space
   , maxDescriptionLength
 
     -- * Its home page
+  , hasHome
+  , withHome
+  , defaultHomePage
+  , homeDeleteRefusal
+  , homeMoveRefusal
   , homeTitle
   , homeBody
   , isHomeBody
@@ -58,6 +63,7 @@ import Wiki.Core.Attachment (MimeType (..), mimeEssence)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
+import Wiki.Core.Page qualified as Page
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
@@ -119,9 +125,12 @@ data Space = Space
   , pageOrder :: ChildOrder
   -- ^ The order its pages are listed in, and the pages under each page.
   , homePage :: Maybe PageId
-  -- ^ The page the space opens at, one of its own; 'Nothing' for none, in
-  -- which case the space opens at the list of its pages. A space created
-  -- by 'Wiki.App.Backend.createSpace' starts with one ('homeTitle').
+  -- ^ The page the space opens at, one of its own. Every space has one
+  -- ('hasHome') except two kinds, which have 'Nothing' and open at the
+  -- list of their pages: the container of personal spaces, which has no
+  -- pages, and an encrypted space, where the server cannot write a page.
+  -- A space is made with one ('defaultHomePage'). Nobody chooses another
+  -- page for it, and the page cannot be deleted or moved.
   , icon :: Maybe Icon
   -- ^ The icon shown beside its name; 'Nothing' for the default, a square
   -- of a colour picked from its id ('defaultColour') with its name's first
@@ -337,7 +346,7 @@ checkImageUpload what mediaType size
 -- the avatar again. Any other space is as it is.
 withOwnerAvatar :: Maybe Avatar -> Space -> Space
 withOwnerAvatar avatar s = case (s.owner, s.icon, avatar) of
-  (Just _, Nothing, Just a) -> withProfile SpaceProfile {description = s.description, icon = Just (IconImage a.blob a.mediaType), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
+  (Just _, Nothing, Just a) -> withProfile SpaceProfile {description = s.description, icon = Just (IconImage a.blob a.mediaType), blog = s.blog, boxNumbering = s.boxNumbering} s
   _ -> s
 
 -- | A profile for a personal space as the space keeps it, given its
@@ -347,7 +356,7 @@ withOwnerAvatar avatar s = case (s.owner, s.icon, avatar) of
 -- goes on showing the avatar as it changes.
 ownProfile :: Maybe Avatar -> SpaceProfile -> SpaceProfile
 ownProfile avatar p = case (p.icon, avatar) of
-  (Just (IconImage b _), Just a) | b == a.blob -> SpaceProfile {description = p.description, icon = Nothing, homePage = p.homePage, blog = p.blog, boxNumbering = p.boxNumbering}
+  (Just (IconImage b _), Just a) | b == a.blob -> SpaceProfile {description = p.description, icon = Nothing, blog = p.blog, boxNumbering = p.boxNumbering}
   _ -> p
 
 --------------------------------------------------------------------------------
@@ -355,14 +364,15 @@ ownProfile avatar p = case (p.icon, avatar) of
 
 -- | 'SpaceProfile': what a space's administrator sets in its settings
 -- besides its name, its permissions and its orders: its description, its
--- icon, its home page, whether it is shown as a blog and how its boxes are
--- numbered ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
+-- icon, whether it is shown as a blog and how its boxes are numbered
+-- ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
 -- uploaded ('Wiki.App.Backend.uploadSpaceIcon'): a profile names an image
--- only to keep the one the space has.
+-- only to keep the one the space has. The home page is not part of it:
+-- a space keeps the one it was made with. A request that still names one
+-- (@homePage@, from a client of before WP5.78) has it ignored.
 data SpaceProfile = SpaceProfile
   { description :: Text
   , icon :: Maybe Icon
-  , homePage :: Maybe PageId
   , blog :: Bool
   , boxNumbering :: BoxNumbering
   }
@@ -371,11 +381,11 @@ data SpaceProfile = SpaceProfile
 
 -- | A space's current profile.
 profileOf :: Space -> SpaceProfile
-profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering}
+profileOf s = SpaceProfile {description = s.description, icon = s.icon, blog = s.blog, boxNumbering = s.boxNumbering}
 
 -- | A space with another profile. (A function, since a record update of
--- @icon@, @description@, @homePage@, @blog@ or @boxNumbering@ cannot tell
--- a space's field from a profile's where both are in scope.)
+-- @icon@, @description@, @blog@ or @boxNumbering@ cannot tell a space's
+-- field from a profile's where both are in scope.)
 withProfile :: SpaceProfile -> Space -> Space
 withProfile p s =
   Space
@@ -394,7 +404,7 @@ withProfile p s =
     , position = s.position
     , subspaceOrder = s.subspaceOrder
     , pageOrder = s.pageOrder
-    , homePage = p.homePage
+    , homePage = s.homePage
     , icon = p.icon
     , description = p.description
     , blog = p.blog
@@ -405,21 +415,18 @@ withProfile p s =
 maxDescriptionLength :: Int
 maxDescriptionLength = 500
 
--- | Check a profile for a space, against the space as it is and the ids of
--- its pages: the description trimmed and not too long, an emoji trimmed,
--- short and without spaces, a colour one of 'iconColours', an image the
--- one the space already has, and the home page one of its pages. The
--- result is the profile as the space will store it, or why it is invalid.
-checkProfile :: Space -> [PageId] -> SpaceProfile -> Either Text SpaceProfile
-checkProfile space pages p = do
+-- | Check a profile for a space, against the space as it is: the
+-- description trimmed and not too long, an emoji trimmed, short and
+-- without spaces, a colour one of 'iconColours', and an image the one the
+-- space already has. The result is the profile as the space will store
+-- it, or why it is invalid.
+checkProfile :: Space -> SpaceProfile -> Either Text SpaceProfile
+checkProfile space p = do
   let description = T.strip p.description
   when (T.length description > maxDescriptionLength) $
     Left ("A space's description can be at most " <> show maxDescriptionLength <> " characters.")
   icon <- traverse checkIcon p.icon
-  for_ p.homePage $ \h ->
-    unless (h `elem` pages) $
-      Left "A space's home page has to be one of its own pages."
-  pure SpaceProfile {description, icon, homePage = p.homePage, blog = p.blog, boxNumbering = p.boxNumbering}
+  pure SpaceProfile {description, icon, blog = p.blog, boxNumbering = p.boxNumbering}
   where
     checkIcon = \case
       IconEmoji e -> do
@@ -436,6 +443,88 @@ checkProfile space pages p = do
 
 --------------------------------------------------------------------------------
 -- Home pages
+
+-- | Whether a space has a home page: every space but the container of
+-- personal spaces ('personalContainer') and an encrypted space
+-- ('encryption'). Every way a space is made gives one of the others its
+-- home page ('defaultHomePage').
+hasHome :: Space -> Bool
+hasHome s = not s.personalContainer && isNothing s.encryption
+
+-- | A space with this page as its home page, or with none. (A function,
+-- since a record update of @homePage@ cannot tell a space's field from
+-- another record's where both are in scope, such as the server settings'.)
+withHome :: Maybe PageId -> Space -> Space
+withHome h s =
+  Space
+    { id = s.id
+    , name = s.name
+    , slug = s.slug
+    , parent = s.parent
+    , public = s.public
+    , sealed = s.sealed
+    , encryption = s.encryption
+    , owner = s.owner
+    , active = s.active
+    , personalContainer = s.personalContainer
+    , mathMacros = s.mathMacros
+    , createdAt = s.createdAt
+    , position = s.position
+    , subspaceOrder = s.subspaceOrder
+    , pageOrder = s.pageOrder
+    , homePage = h
+    , icon = s.icon
+    , description = s.description
+    , blog = s.blog
+    , boxNumbering = s.boxNumbering
+    }
+
+-- | The home page a space is given when it is made, or when it has none:
+-- a top-level page with this id, titled 'homeTitle', whose text is
+-- 'homeBody' of the space's name, made at this time. The space's
+-- top-level pages, by their slugs and positions, decide where it goes:
+-- its slug is @home@, or the next free one (@home-2@, and so on), and its
+-- position comes before theirs, so that a space listed by hand shows it
+-- first. A space that once had no home page may still hold a page with
+-- the slug @home@: the one it was made with.
+defaultHomePage :: PageId -> UTCTime -> [(Slug, Int)] -> Space -> Page.Page
+defaultHomePage pid time siblings space =
+  Page.Page
+    { id = pid
+    , space = space.id
+    , parent = Nothing
+    , title = homeTitle
+    , slug = freshSlug (`elem` map fst siblings) homeSlug
+    , body = homeBody space.name
+    , attachments = []
+    , createdAt = time
+    , updatedAt = time
+    , position = maybe 0 (subtract 1) (minimumMay (map snd siblings))
+    , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
+    }
+  where
+    homeSlug = fromMaybe (panic "the home page's title gives no slug") (slugify homeTitle)
+
+-- | Why a page of this space cannot be deleted, if it cannot: it is the
+-- space's home page, or the home page is under it, among the pages that
+-- would go with it (the page itself and the pages under it).
+homeDeleteRefusal :: Space -> PageId -> [PageId] -> Maybe Text
+homeDeleteRefusal space page gone
+  | space.homePage == Just page = Just "A space's home page cannot be deleted: the space opens at it."
+  | any (`elem` gone) space.homePage = Just "This page cannot be deleted: its space's home page is under it, and the space opens at that page."
+  | otherwise = Nothing
+
+-- | Why a page of this space cannot be moved, if it cannot: it is the
+-- space's home page, which stays where it is; or the home page is among
+-- the pages that would go with it (the page itself and the pages under
+-- it) to another space, as the last argument says.
+homeMoveRefusal :: Space -> PageId -> [PageId] -> Bool -> Maybe Text
+homeMoveRefusal space page moving toAnother
+  | space.homePage == Just page = Just "A space's home page cannot be moved: the space opens at it, where it is."
+  | toAnother && any (`elem` moving) space.homePage = Just "This page cannot be moved to another space: its space's home page is under it, and the space opens at that page."
+  | otherwise = Nothing
 
 -- | The title of the home page a new space is created with.
 homeTitle :: Text

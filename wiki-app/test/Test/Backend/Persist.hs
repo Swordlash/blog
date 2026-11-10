@@ -51,7 +51,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), isHomeBody, withHome)
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Version (..), VersionInfo (..), latestVersions)
 
@@ -196,6 +196,32 @@ spec = describe "MemWiki kept in IndexedDB" $ do
     case restore older of
       Stored st -> st.server.homePage `shouldBe` defaultHomePage
       other -> expectationFailure (show other)
+  it "gives a space kept without a home page its default one, and keeps it" $ withFreshDatabase $ \db -> do
+    -- The demo as a build from before every space had a home page kept
+    -- it: the blog without one.
+    let blogOf st = fromMaybe (panic "the demo has no blog") (find (\s -> s.name == "Blog") (Map.elems st.spaces))
+        blogHome = fromMaybe (panic "the blog has no home page") (blogOf seed).homePage
+        older =
+          seed
+            { spaces = Map.adjust (withHome Nothing) (blogOf seed).id seed.spaces
+            , pages = Map.delete blogHome seed.pages
+            , versions = Map.delete blogHome seed.versions
+            , searchText = Map.delete blogHome seed.searchText
+            }
+    runMemDOM (IDB.writeMany db (changes mempty (records older)))
+    upgraded <- open db
+    upgraded.found `shouldBe` Restored
+    st <- readIORef upgraded.wiki
+    case (blogOf st).homePage >>= (`Map.lookup` st.pages) of
+      Nothing -> expectationFailure "the blog has no home page"
+      Just home -> do
+        (home.title, isHomeBody home.body, home.parent) `shouldBe` ("Home", True, Nothing)
+        -- Written back, so that the next start finds the same page.
+        again <- open db
+        againSt <- readIORef again.wiki
+        (blogOf againSt).homePage `shouldBe` Just home.id
+        shouldReload db upgraded
+
   describe "records" $ do
     it "read back as the wiki they were made from" $
       case restore (records seed) of

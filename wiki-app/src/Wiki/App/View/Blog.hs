@@ -1,8 +1,12 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The blog view: a space shown as a blog ("Wiki.Core.Blog"), as it
--- opens. It shows the space's icon, name and description, its home page if
--- it has one, and then its posts, the newest first, ten per page. Each post
+-- opens. It shows the space's icon, name and description, its home page,
+-- and then its posts, the newest first, ten per page. A home page whose
+-- text is still the one the space was made with
+-- ('Wiki.Core.Space.isHomeBody') is left out: it says nothing of the blog,
+-- and a blog that had no home page before every space had one would
+-- otherwise show it above its posts. Each post
 -- is a card (like the cards of the directory of spaces,
 -- "Wiki.App.View.Directory") with its title, its date, its author, its
 -- number of comments and its first paragraph. Links lead to newer and
@@ -50,7 +54,7 @@ import Wiki.Core.Id (AttachmentId, PageId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (attachments, body, id), PageSummary (createdAt, id, slug, title))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (description, id, name, public))
+import Wiki.Core.Space (Space (description, id, name, public), isHomeBody)
 import Wiki.Core.Version (Author (..))
 
 -- | The blog view's input: the space, as the shell has loaded it, with its
@@ -231,7 +235,7 @@ fetch input =
     <$> runExceptT
       ( do
           details <- ExceptT (postDetails input.space.id)
-          home <- for (homeOf input.space input.pages) $ \h -> ExceptT (getPage input.space.id (pagePathOf input.pages h.id))
+          home <- mfilter (\h -> not (isHomeBody h.body)) <$> for (homeOf input.space input.pages) (\h -> ExceptT (getPage input.space.id (pagePathOf input.pages h.id)))
           let attachments = foldMap (\h -> h.attachments) home
           urls <- lift (Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments)
           pure (Ready details home urls)

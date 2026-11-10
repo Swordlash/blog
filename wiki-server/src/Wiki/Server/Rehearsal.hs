@@ -28,7 +28,8 @@
 -- So what the checks drive on the old program is stable: the options of
 -- @serve@ and of the database, @users add@, the admin listener's API
 -- (@info@, the spaces, their pages and a page at a path, and the routes
--- toolchain/rehearse-ci.sh seeds a wiki with), the sign-in through a
+-- toolchain/rehearse-ci.sh seeds a wiki with: making a space and a page,
+-- and a space's profile), the sign-in through a
 -- provider with its cookies, and @session@. Each says so in its
 -- documentation, and changes only compatibly: a later version's rehearsal
 -- drives it as it is now. A new check that drives something else marks it
@@ -56,8 +57,14 @@ module Wiki.Server.Rehearsal
 
     -- * The pages check, for its tests
   , PageRead (..)
+  , PagesRead (..)
   , readPages
   , comparePages
+
+    -- * The home pages check, for its tests
+  , SpaceRead (..)
+  , readSpaces
+  , compareHomes
   )
 where
 
@@ -388,7 +395,7 @@ runConsole program placeArgs args input =
 
 -- | Every check, in the order they run.
 checks :: [Check]
-checks = [pagesCheck, accountsCheck]
+checks = [pagesCheck, accountsCheck, homesCheck]
 
 -- | A check that holds nothing and makes nothing before the old program
 -- serves the copy.
@@ -415,19 +422,32 @@ data PageRead = PageRead
   }
   deriving stock (Eq, Show)
 
+-- | 'PagesRead' is what the pages check reads of a server: every page it
+-- reads, and the home page of each space whose pages it reads ('Nothing'
+-- for a space with none), by the space's id.
+data PagesRead = PagesRead
+  { pages :: [PageRead]
+  , homes :: Map Text (Maybe Text)
+  }
+  deriving stock (Eq, Show)
+
 -- | The pages check: every page of every space reads the same after the
 -- migration, its title and its source. The guide's space is left out: its
--- pages are the program's own, and change with its version.
+-- pages are the program's own, and change with its version. The only page
+-- the migration may add is the home page step 12 of the schema gives a
+-- space that had none ("Wiki.Server.Storage.Migrate.Code.Step0012").
 pagesCheck :: Check
 pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages manager server <&> (>>= comparePages was))
 
 -- | Every page of every space but the guide's, read through a server's
--- administration API. A space whose pages answer 404 is left out: the list
--- of spaces names some that nobody may read, administrators included (the
--- container of personal spaces, and a personal space its owner hid;
--- "Wiki.Core.Permission"). A space read before the migration and not after
--- still shows: its pages are then gone.
-readPages :: Manager -> Server -> IO (Either Text [PageRead])
+-- administration API, with each space's home page. A space whose pages
+-- answer 404 is left out: the list of spaces names some that nobody may
+-- read, administrators included (the container of personal spaces, and a
+-- personal space its owner hid; "Wiki.Core.Permission"). So is a space
+-- whose pages answer 409: an encrypted space, whose pages the server keeps
+-- only as ciphertext and does not list as plain text. A space read before
+-- the migration and not after still shows: its pages are then gone.
+readPages :: Manager -> Server -> IO (Either Text PagesRead)
 readPages manager server = runExceptT $ do
   spaces <- ExceptT (getJson manager (server.adminApi <> "/spaces")) >>= asList "the spaces"
   let byId = Map.fromList [(i, s) | s <- spaces, Just i <- [field "id" s]]
@@ -435,12 +455,14 @@ readPages manager server = runExceptT $ do
         (Nothing, Just slug) -> slug == slugText guideSlug
         (Just p, _) -> maybe False inGuide (Map.lookup p byId)
         _ -> False
-  concat <$> for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s)] (\(i, _) -> pagesOf i)
+  read' <- for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s)] $ \(i, s) ->
+    fmap (\ps -> (i, field "homePage" s, ps)) <$> pagesOf i
+  pure PagesRead {pages = concat [ps | Just (_, _, ps) <- read'], homes = Map.fromList [(i, h) | Just (i, h, _) <- read']}
   where
     pagesOf spaceId =
-      ExceptT (getJsonUnless404 manager (server.adminApi <> "/spaces/" <> spaceId <> "/pages")) >>= \case
-        Nothing -> pure []
-        Just listed -> asList ("the pages of space " <> spaceId) listed >>= pagesIn spaceId
+      ExceptT (getJsonUnless [404, 409] manager (server.adminApi <> "/spaces/" <> spaceId <> "/pages")) >>= \case
+        Nothing -> pure Nothing
+        Just listed -> Just <$> (asList ("the pages of space " <> spaceId) listed >>= pagesIn spaceId)
     pagesIn spaceId summaries = do
       let byId = Map.fromList [(i, p) | p <- summaries, Just i <- [field "id" p]]
           pathOf p = maybe [] pathOf (field "parent" p >>= (`Map.lookup` byId)) <> toList (field "slug" p)
@@ -455,13 +477,14 @@ readPages manager server = runExceptT $ do
       Array xs -> pure (toList xs)
       _ -> throwError (what <> " are not a list")
 
--- | A GET of JSON, as 'getJson', with 'Nothing' for an answer of 404.
-getJsonUnless404 :: Manager -> Text -> IO (Either Text (Maybe Value))
-getJsonUnless404 manager url =
+-- | A GET of JSON, as 'getJson', with 'Nothing' for an answer of one of
+-- these statuses.
+getJsonUnless :: [Int] -> Manager -> Text -> IO (Either Text (Maybe Value))
+getJsonUnless statuses manager url =
   try @SomeException (parseRequest (toS url) >>= \r -> httpLbs r manager) <&> \case
     Left e -> Left (show e)
     Right response
-      | statusCode (responseStatus response) == 404 -> Right Nothing
+      | statusCode (responseStatus response) `elem` statuses -> Right Nothing
       | statusCode (responseStatus response) /= 200 -> Left ("GET " <> url <> " answered " <> show (statusCode (responseStatus response)))
       | otherwise -> bimap (\why -> "GET " <> url <> ": " <> toS why) Just (eitherDecode (responseBody response))
 
@@ -474,16 +497,16 @@ field k = \case
   _ -> Nothing
 
 -- | Whether the pages read after the migration are those read before:
--- each page by its id, with its title and source. Why not names the first
--- few differences.
-comparePages :: [PageRead] -> [PageRead] -> Either Text ()
-comparePages was now
-  | null problems = Right ()
-  | otherwise = Left (T.intercalate "; " (take 5 problems) <> (if length problems > 5 then "; and " <> show (length problems - 5) <> " more" else ""))
+-- each page by its id, with its title and source. A page that is new is
+-- accepted only as the home page of a space that had none before. Why
+-- not names the first few differences.
+comparePages :: PagesRead -> PagesRead -> Either Text ()
+comparePages was now = listProblems problems
   where
     key p = (p.space, p.page)
-    before' = Map.fromList [(key p, p) | p <- was]
-    after' = Map.fromList [(key p, p) | p <- now]
+    before' = Map.fromList [(key p, p) | p <- was.pages]
+    after' = Map.fromList [(key p, p) | p <- now.pages]
+    givenHome q = Map.lookup q.space was.homes == Just Nothing && Map.lookup q.space now.homes == Just (Just q.page)
     problems =
       ["page " <> p.page <> " (" <> p.title <> ") is gone" | (k, p) <- Map.toList before', not (Map.member k after')]
         <> [ "page " <> p.page <> " (" <> p.title <> ") " <> what
@@ -491,7 +514,74 @@ comparePages was now
            , Just q <- [Map.lookup k after']
            , what <- ["has another title: " <> q.title | q.title /= p.title] <> ["has another source" | q.body /= p.body]
            ]
-        <> ["page " <> q.page <> " (" <> q.title <> ") is new" | (k, q) <- Map.toList after', not (Map.member k before')]
+        <> ["page " <> q.page <> " (" <> q.title <> ") is new" | (k, q) <- Map.toList after', not (Map.member k before'), not (givenHome q)]
+
+-- | 'Right' for no problems, or the first five and how many more.
+listProblems :: [Text] -> Either Text ()
+listProblems problems
+  | null problems = Right ()
+  | otherwise = Left (T.intercalate "; " (take 5 problems) <> (if length problems > 5 then "; and " <> show (length problems - 5) <> " more" else ""))
+
+--------------------------------------------------------------------------------
+-- The home pages check
+
+-- | 'SpaceRead' is a space as the home pages check reads it: its id, its
+-- name, its home page if it has one, and whether it is one of the two
+-- kinds that have none (the container of personal spaces, an encrypted
+-- space).
+data SpaceRead = SpaceRead
+  { space :: Text
+  , name :: Text
+  , homePage :: Maybe Text
+  , withoutHome :: Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | The home pages check, step 12 of the schema's
+-- ("Wiki.Server.Storage.Migrate.Code.Step0012", WP5.78 of docs/PLAN.md):
+-- after the migration, every space has a home page but the two kinds that
+-- have none, and a space that had one keeps it. The pages check makes sure
+-- the page a space is given is the only page the migration adds.
+homesCheck :: Check
+homesCheck = simpleCheck "home pages" readSpaces (\was manager server -> readSpaces manager server <&> (>>= compareHomes was))
+
+-- | Every space a server lists, read through its administration API. A
+-- program older than personal spaces or encrypted spaces lists spaces
+-- without @personalContainer@ or @encryption@: none of its spaces is
+-- either kind.
+readSpaces :: Manager -> Server -> IO (Either Text [SpaceRead])
+readSpaces manager server = runExceptT $ do
+  listed <- ExceptT (getJson manager (server.adminApi <> "/spaces"))
+  spaces <- case listed of
+    Array xs -> pure (toList xs)
+    _ -> throwError "the spaces are not a list"
+  pure
+    [ SpaceRead {space = i, name = fromMaybe i (field "name" s), homePage = field "homePage" s, withoutHome = isTrue "personalContainer" s || present "encryption" s}
+    | s <- spaces
+    , Just i <- [field "id" s]
+    ]
+  where
+    isTrue k = \case
+      Object o -> KeyMap.lookup (Key.fromText k) o == Just (Bool True)
+      _ -> False
+    present k = \case
+      Object o -> maybe False (/= Null) (KeyMap.lookup (Key.fromText k) o)
+      _ -> False
+
+-- | Whether the spaces read after the migration have the home pages they
+-- should: every space but the two kinds has one, and one that had a home
+-- page before has the same one. Why not names the first few spaces that
+-- do not.
+compareHomes :: [SpaceRead] -> [SpaceRead] -> Either Text ()
+compareHomes was now =
+  listProblems $
+    ["space " <> s.space <> " (" <> s.name <> ") has no home page" | s <- now, not s.withoutHome, isNothing s.homePage]
+      <> [ "space " <> s.space <> " (" <> s.name <> ") has another home page"
+         | s <- now
+         , Just old <- [find (\o -> o.space == s.space) was]
+         , isJust old.homePage
+         , old.homePage /= s.homePage
+         ]
 
 --------------------------------------------------------------------------------
 -- The accounts check

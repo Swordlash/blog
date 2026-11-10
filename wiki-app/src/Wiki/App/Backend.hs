@@ -95,10 +95,18 @@
 -- A space opens at its home page ('Wiki.Core.Space.homePage'), one of its
 -- own pages. 'createSpace' makes the space with one, titled "Home", from a
 -- template ('Wiki.Core.Space.homeBody'), whose first version is its
--- creator's; its administrator may choose any other of its pages later
--- ('setSpaceProfile'), or none. A space's home page is always one of its
--- own pages: deleting the page, or moving it to another space, leaves the
--- space without a home page.
+-- creator's, and the space keeps it: nobody chooses another
+-- ('setSpaceProfile' does not name one). Every space has one but the
+-- container of personal spaces and an encrypted space
+-- ('Wiki.Core.Space.hasHome'). Deleting the home page, and moving it, to
+-- another space or within its own, are 'Invalid'; so are deleting a page
+-- with the home page under it and moving such a page to another space.
+-- Moving it up or down among its siblings ('shiftPage') needs 'Edit', as
+-- for any page. Changing it needs 'AdministerSpace' on its space
+-- ('Wiki.Core.Permission.canEditPage'): saving it, which renames it too,
+-- restoring a version of it, its drafts, and its attachments' upload and
+-- deletion. Someone who only edits the space gets 'Forbidden' for those,
+-- and may still create a page under it.
 --
 -- = Loading
 --

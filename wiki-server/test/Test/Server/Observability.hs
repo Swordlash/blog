@@ -28,7 +28,7 @@ import Wiki.Core.User (Group, Login (..))
 import Wiki.Server.Storage (Place (..), withStorageAside, writing)
 import Wiki.Server.Storage.Backup (backupNow)
 import Wiki.Server.Storage.Layout (attachmentsDir)
-import Wiki.Server.Storage.Migrate (Migration (..), migrationsFor)
+import Wiki.Server.Storage.Migrate (knownVersion)
 import Wiki.Server.Storage.Rows (chunksOf)
 import Wiki.Server.Storage.Schema (Attachments (..), Pages (..), WikiDb (..), wikiDb)
 
@@ -154,4 +154,4 @@ activityLog backing = describe "the activity" $
 -- | The schema's version this program migrates to, the same on both
 -- databases.
 latest :: Int
-latest = maybe 0 (\m -> m.version) (lastMay (migrationsFor "sqlite"))
+latest = knownVersion "sqlite"

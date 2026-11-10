@@ -135,7 +135,7 @@ module Wiki.Server.Storage.Rows
   , updateSpace
   , setSpacePosition
   , deleteSpaceRow
-  , clearHomePage
+  , insertHomePage
   , insertPage
   , updatePageText
   , setPagePosition
@@ -1567,10 +1567,21 @@ setSpacePosition sid n = runUpdate (update wikiDb.spaces (\x -> x.position <-. v
 deleteSpaceRow :: (Backend be) => SpaceId -> Db be ()
 deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text))
 
--- | Make the spaces whose home page is one of these pages have none.
-clearHomePage :: (Backend be) => [PageId] -> Db be ()
-clearHomePage pids =
-  for_ (chunksOf 500 pids) $ \chunk -> runUpdate (update wikiDb.spaces (\x -> x.home_page <-. val_ Nothing) (\x -> x.home_page `in_` map (\p -> just_ (val_ p.text)) chunk))
+-- | Give a space its default home page ('Space.defaultHomePage'), made at
+-- this time among the space's top-level pages, with its first version by
+-- this author ('Nothing' for nobody's), and make it the space's home page.
+-- The result is the space with it. A space is made with one this way, and
+-- so is a space an import brings in without one.
+insertHomePage :: (Backend be) => Maybe UserId -> UTCTime -> Space -> Db be Space
+insertHomePage author time space = do
+  pid <- liftIO (PageId . UUID.toText <$> generateV4)
+  topLevel <- childPages space.id Nothing
+  let home = Space.defaultHomePage pid (micro time) [(n.slug, n.position) | n <- topLevel] space
+      space' = Space.withHome (Just home.id) space
+  insertPage home
+  insertVersion home author
+  updateSpace space'
+  pure space'
 
 -- | The fold a search matches a page against: its title and its search
 -- text ('bodyText' of its body), each folded as the search folds them

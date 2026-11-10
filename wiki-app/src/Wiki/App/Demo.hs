@@ -109,13 +109,18 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
 
   -- Each space's profile: what the directory of spaces shows of it, and
   -- the page it opens at. The blog is shown as a blog, and opens at its
-  -- posts. Projects has a colour for its icon, as a space whose
-  -- administrator chose no emoji does.
+  -- posts, under the default home page it was made with, which its view
+  -- leaves out until someone writes it. Projects has a colour for its
+  -- icon, as a space whose administrator chose no emoji does.
   modify $
-    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Nothing, blog = True, boxNumbering = InPage}
-      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False, boxNumbering = InPage}
-      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki, blog = False, boxNumbering = InPage}
-      . setProfile docs (guideProfile tourPage)
+    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), blog = True, boxNumbering = InPage}
+      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), blog = False, boxNumbering = InPage}
+      . setHome team handbook
+      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), blog = False, boxNumbering = InPage}
+      . setHome projects wiki
+      . setProfile docs guideProfile
+      . setHome docs tourPage
+  modify (ensureHomePages (ago 45))
   -- The kind of box the Markdown guide shows, as an administrator would
   -- define it.
   modify (\st -> st {server = st.server {boxes = [exerciseBox]}})

@@ -52,6 +52,7 @@ module Wiki.Core.Permission
   , canView
   , canEdit
   , canAdministerSpace
+  , canEditPage
 
     -- * Rules for writes
     -- $writes
@@ -290,9 +291,11 @@ canAdministerSpace who grants chain = hasSpacePermission who grants chain Admini
 -- one rule each. Renaming, deleting and making a space public or private,
 -- and choosing the order it lists its subspaces and pages in, need
 -- 'canAdministerSpace' on it. Everything done to pages and attachments
--- needs 'canEdit' on their space, and so does moving a child of a space up
--- or down its list by hand (a page, or a subspace: 'canEdit' on the space
--- whose list it is, which for a subspace is its parent). The server
+-- needs 'canEdit' on their space, and changing a space's home page needs
+-- 'canAdministerSpace' ('canEditPage'). Moving a child of a space up
+-- or down its list by hand needs 'canEdit' (a page, the home page
+-- included, or a subspace: 'canEdit' on the space whose list it is, which
+-- for a subspace is its parent). The server
 -- enforces these and the client hides what they forbid, so they live here
 -- rather than in either.
 
@@ -324,6 +327,19 @@ mayMoveSpace who grants space destination =
   canAdministerSpace who grants space && case destination of
     Nothing -> canCreateSpaces who grants
     Just parent -> canAdministerSpace who grants parent
+
+-- | Whether someone may change a page of the space at the end of the chain:
+-- save it (which renames it too), restore a version of it, keep a draft
+-- of it, attach files to it or take them away. For most pages that is
+-- 'canEdit'. The space's home page is the page the space opens at, so it
+-- is its administrators' to change: for it, the rule is
+-- 'canAdministerSpace'. Writes around the page that leave it as it is
+-- (a new page under it, a comment, a move up or down its list) need only
+-- 'canEdit'.
+canEditPage :: Maybe Principal -> Grants -> [Space] -> PageId -> Bool
+canEditPage who grants chain page
+  | any (\s -> s.homePage == Just page) (lastMay chain) = canAdministerSpace who grants chain
+  | otherwise = canEdit who grants chain
 
 -- | Whether someone may move a page from the space at the end of the first
 -- chain to the space at the end of the second (the same one, for a move

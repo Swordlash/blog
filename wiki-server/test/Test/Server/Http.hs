@@ -84,10 +84,10 @@ importing backing = describe "importing an archive" $
       [(s.path, s.status) | s <- plan.spaces]
         `shouldBe` [(path "blog", SpaceMerged), (path "docs", SpaceMerged), (path "crew", SpaceNew), (path "crew/projects", SpaceNew)]
       [(x.path, (\c -> c.sameContent) <$> x.conflict) | s <- plan.spaces, s.path == path "blog", x <- s.pages]
-        `shouldBe` [(path "hello-world", Just False), (path "notes-on-haskell", Just True)]
+        `shouldBe` [(path "hello-world", Just False), (path "home", Just True), (path "notes-on-haskell", Just True)]
       let choices = ImportChoices {skipSpaces = [], skipPages = [handbook], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
       run (applyImport zipped choices)
-        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 2, pagesReplaced = 1, pagesKept = 6, pagesSkipped = 2, attachments = 1}
+        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 2, pagesReplaced = 1, pagesKept = 7, pagesSkipped = 2, attachments = 1}
       blog <- ok =<< run (getSpace (path "blog"))
       page <- ok =<< run (getPage blog.id (path "hello-world"))
       page.body `shouldBe` "Brought in from the demo."

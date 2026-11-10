@@ -7,9 +7,11 @@
 -- history, present it as slides if it is written as a deck
 -- ("Wiki.Core.Slides"), and export it as a document
 -- ("Wiki.App.View.Export"). Someone who may edit it may also edit it, add
--- a page under it, and rename, move or delete it. Someone who may
--- administer its space may make it the page the space opens at ("Set as
--- home page"). The URLs of its attachments are fetched from the backend
+-- a page under it, and rename, move or delete it. The space's home page,
+-- the page the space opens at, is edited and renamed only by whoever
+-- administers the space ('mayEditPage'), and is never moved or deleted;
+-- anyone who may edit the space may still add a page under it. The URLs
+-- of its attachments are fetched from the backend
 -- ('attachmentUrl') once per load. A post in a space shown as a blog
 -- ("Wiki.Core.Blog") says when it was posted, and links to the posts
 -- before and after it.
@@ -138,7 +140,7 @@ import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (blog, boxNumbering, description, encryption, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Space (Space (blog, encryption, homePage, id, name))
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (Avatar, User (id))
 import Wiki.Core.Version (Author (..))
@@ -250,7 +252,6 @@ data Action
   | CommentOnSelection
   | ToggleComments
   | ClickedQuote CommentThreadId
-  | SetAsHome
   | SetTemplate Bool
   | ShowChanged
   | CopySelection BlockText
@@ -364,26 +365,32 @@ component =
     actions input page deck comments
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
-          , viewSource
-          , history
+          | changes
           ]
+            <> [viewSource, history]
             <> present
             <> export
             <> [comments | commentsHere input]
             <> ( if home
-                   then [button "Rename" (Open (Renaming page.title))]
+                   then rename
                    else
-                     [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
-                     , button "Rename" (Open (Renaming page.title))
-                     , button "Move" StartMove
-                     , button "Delete" (Open ConfirmingDelete)
-                     ]
-                       <> useAsTemplate
-                       <> setHome
+                     [Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]]
+                       <> rename
+                       -- The space's home page stays where it is, and
+                       -- stays the space's.
+                       <> ( if spaceHome
+                              then []
+                              else [button "Move" StartMove, button "Delete" (Open ConfirmingDelete)] <> useAsTemplate
+                          )
                )
-      | otherwise = [viewSource, history] <> present <> export <> [comments | commentsHere input] <> setHome
+      | otherwise = [viewSource, history] <> present <> export <> [comments | commentsHere input]
       where
         home = homeSpace input.context input.space.id
+        -- Whether this page is the space's home page, which only the
+        -- space's administrators change ('mayEditPage').
+        spaceHome = input.space.homePage == Just page.id
+        changes = mayEditPage input.context page.space page.id
+        rename = [button "Rename" (Open (Renaming page.title)) | changes]
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source may be read by anyone who may read
         -- the page.
@@ -397,21 +404,11 @@ component =
         -- a deck as a presentation too.
         -- The server cannot export a page it cannot read.
         export = if isJust input.space.encryption then [] else exportMenu (pageFormats deck input.context.session.exports) (ExportPage page.id)
-        -- Make it the page the space opens at, for an administrator of the
-        -- space: offered on every page except the current home page.
-        setHome =
-          [ [hh|<button type="button" class="set-home" onClick={{ const SetAsHome }}>Set as home page</button>|]
-          | mayAdminister input.context input.space.id
-          , input.space.homePage /= Just page.id
-          , not page.template
-          ]
         -- Make it one of the space's templates, which "New page" offers,
         -- or an ordinary page again: for someone who may edit it, on every
         -- page except the space's home page.
         useAsTemplate =
-          [ [hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]
-          | input.space.homePage /= Just page.id
-          ]
+          [[hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]]
 
     -- A note on a template saying what it is, since it is not in the tree.
     templateNote :: Page -> Maybe (H.ComponentHTML Action Slots m)
@@ -783,9 +780,6 @@ component =
       -- The shell reloads what it shows, including the page and its tree.
       ShowChanged -> H.raise (Changed Nothing)
       ChooseWidth width -> H.raise (ChoseWidth width)
-      SetAsHome -> withPage $ \page -> do
-        space <- gets (\st -> st.input.space)
-        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog, boxNumbering = space.boxNumbering} >>= done (const Nothing)
       SetTemplate template -> withPage $ \page -> setPageTemplate page.id template >>= done (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)

@@ -25,7 +25,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (fromArchive, nextCounter, toArchive)
 import Wiki.App.Backend.Mem.Persist (memDatabase, spacesStore)
-import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions)
+import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, insertSpace)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor)
@@ -88,7 +88,7 @@ edited = do
     _ <- ok' =<< uploadAttachment tour.id "bytes.bin" "application/octet-stream" (BS.pack [0 .. 255])
     space <- ok' =<< createSpace (Just docs.id) "Exported"
     -- Profiles: a description and an emoji, and an image.
-    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage, blog = False, boxNumbering = InPage}
+    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), blog = False, boxNumbering = InPage}
     _ <- ok' =<< uploadSpaceIcon space.id "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"
@@ -108,13 +108,13 @@ edited = do
 ordered :: IO MemState
 ordered = do
   st <- edited
-  ref <- newMemWiki st {current = Just (UserId "user-admin")}
+  -- A space with no page at all, which a space made through the backend
+  -- is not (it has its home page): made without the backend's checks.
+  let teamId = maybe (panic "the demo has no Team") (\x -> x.id) (find (\x -> x.name == "Team") (Map.elems st.spaces))
+      (withEmpty, _) = insertSpace (Just teamId) "Empty" False demoNow st
+  ref <- newMemWiki withEmpty {current = Just (UserId "user-admin")}
   runMemWiki ref $ do
     team <- either (panic . show) pure =<< getSpace (path "team")
-    hollow <- either (panic . show) pure =<< createSpace (Just team.id) "Empty"
-    -- A space with no page at all, which a new one is not: its home page
-    -- goes.
-    for_ hollow.homePage $ \h -> either (panic . show) pure =<< deletePage h
     _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildSpaces NewestFirst
     _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildPages ByHand
     made <- either (panic . show) pure =<< createPage team.id Nothing "Second" ""

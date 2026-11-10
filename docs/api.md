@@ -196,7 +196,7 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | PUT | `api/v1/spaces/<space>/public` | `SpacePublic` `{"public": bool}` | `Space` | 404, 403 | `setSpacePublic` |
 | PUT | `api/v1/spaces/<space>/sealed` | `SpaceSealed` `{"sealed": bool}`: private from its parent, inheriting no grant and no public flag from above | `Space`; whoever seals it and would no longer administer it is granted administer on it | 404, 403 | `setSpaceSealed` |
 | PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 (for whoever may not edit the whole space, WP5.41) | `setSpaceMathMacros` |
-| PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "homePage": page id or null}` | `Space` | 404, 403, 400 | `setSpaceProfile` |
+| PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "blog": bool, "boxNumbering"}`; a `"homePage"` in it, which a client from before every space had its own sent, is ignored | `Space` | 404, 403, 400 | `setSpaceProfile` |
 | POST | `api/v1/spaces/<space>/icon` | multipart form, one file part named `file`: its `Content-Type` the image's media type, its file name not looked at | `Space`, its icon the image | 404, 403, 400 (not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `uploadSpaceIcon` |
 | GET, HEAD | `api/v1/spaces/<space>/icon/<blob>` | | the image's bytes, with its media type | 404 | `spaceIconUrl` gives this address |
 | PUT | `api/v1/spaces/<space>/order` | `SpaceOrder` `{"children": "ChildSpaces" or "ChildPages", "order": "ByName", "NewestFirst", "OldestFirst" or "ByHand"}` | `Space` | 404, 403 | `setSpaceOrder` |
@@ -218,9 +218,15 @@ is then shown; `personalContainer` marks "User subspaces", the space that
 holds the personal spaces and that nobody may view itself. A personal
 space's `name` is "Space of " and its owner's display name, and cannot be
 changed (400), nor can the space be moved (400). Its `homePage` is the id of the page it opens at, one of its
-own, or `null`; a space made through the API comes with one, a page titled
-"Home" whose first version is its creator's, and a page that is deleted, or
-moved to another space, leaves its space without one. Its `icon` is `null`
+own: a space made through the API comes with one, a page titled "Home"
+whose first version is its creator's, and keeps it. Only two kinds of space
+have `null`: the container of personal spaces and an encrypted space. The
+home page cannot be deleted (400) or moved, within its space too (400);
+nor can a page with the home page under it be deleted, or moved to another
+space (400). Moving it up or down among its siblings is allowed. Saving it
+(which renames it too), restoring a version of it, its drafts and its
+attachments need administer on the space (403 for someone who only edits
+it); a page under it is anyone's who edits the space. Its `icon` is `null`
 for the default (the first letter of its name on a colour picked from its
 id), `{"emoji": "📘"}`, `{"colour": "teal"}` (one of
 `Wiki.Core.Space.iconColours`: blue, teal, green, olive, orange, red, pink,
@@ -234,8 +240,8 @@ which names the blob so that a new image is at a new address. Its
 a space or a profile without it reads as `"in-page"`.
 
 A space's profile and icon are set by whoever administers it, checked as
-`Wiki.Core.Space.checkProfile` checks them, after the permission: a home page
-that is not one of the space's pages, a colour not in the palette, an emoji
+`Wiki.Core.Space.checkProfile` checks them, after the permission: a colour
+not in the palette, an emoji
 that is blank, longer than 16 characters or has a space in it, and an image
 the space does not have already are 400. An image is uploaded, never named:
 a profile names one only to keep the image the space has, and one that names
@@ -247,7 +253,7 @@ The space behind the wiki's home page (`api/v1/home`'s) takes an icon too:
 the wiki's own, which the application shows as the browser tab's icon away
 from the spaces (WP5.45 of the plan). Only an administrator of the wiki sets
 it (403 for anyone else), and its profile takes the icon alone: the
-description, home page and blog given are ignored.
+description and blog given are ignored.
 
 A space's grants are read and changed by whoever administers it
 (`AdministerSpace` on it or an ancestor, or the global `administer`). A
@@ -268,10 +274,10 @@ take that from themself, which the space's view does not offer.
 | GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, with `ETag` | 404 | `getPage` |
 | POST | `api/v1/spaces/<space>/pages` | `NewPage` `{"parent": id or null, "title", "body"}` | 201 `Page`, with `ETag` | 404, 403, 400 | `createPage` |
 | PUT | `api/v1/pages/<page>` | `PageEdit` `{"title", "body"}`, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `savePage` |
-| POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}` | `Page` | 404, 403, 400 | `movePage` |
+| POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}` | `Page` | 404, 403, 400 (among others, its space's home page, or a page with it under it moved to another space) | `movePage` |
 | POST | `api/v1/pages/<page>/shift` | `ShiftBy` `{"shift"}` | `Page`, with its new position | 404, 403, 400 | `shiftPage` |
 | PUT | `api/v1/pages/<page>/template` | `PageTemplate` `{"template": bool}` | `Page`; not a save, its `updatedAt` stays | 404, 403, 400 (a space's home page) | `setPageTemplate` |
-| DELETE | `api/v1/pages/<page>` | | 204 | 404, 403 | `deletePage` |
+| DELETE | `api/v1/pages/<page>` | | 204 | 404, 403, 400 (its space's home page, or a page with it under it) | `deletePage` |
 
 A `Page` is a `PageSummary` with its `body`, its `attachments`, and who
 wrote it (WP5.55): `createdBy`, the `Author` of its first version, and

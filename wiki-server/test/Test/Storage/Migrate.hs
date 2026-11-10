@@ -92,21 +92,22 @@ refusedWith at =
 
 spec :: Backing -> Spec
 spec backing = describe "the schema's versions" $ do
-  it "are numbered from 1 with no gaps, the same for both databases, as their files are" $ do
-    let numbers suffix = map (\m -> m.version) (migrationsFor suffix)
-    numbers "sqlite" `shouldBe` [1 .. length (migrationsFor "sqlite")]
+  it "are numbered from 1 with no gaps, files and steps in code together, the same for both databases" $ do
+    let numbers suffix = map stepNumber (stepsFor suffix)
+    numbers "sqlite" `shouldBe` [1 .. knownVersion "sqlite"]
     numbers "postgres" `shouldBe` numbers "sqlite"
+    knownVersion "postgres" `shouldBe` knownVersion "sqlite"
     map (\m -> m.name) (take 1 (migrationsFor "sqlite")) `shouldBe` ["0001-initial.sqlite.sql"]
     map (\m -> m.name) (take 1 (migrationsFor "postgres")) `shouldBe` ["0001-initial.postgres.sql"]
 
   it "make the whole schema in an empty database, and say which they applied" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
-      let steps = migrationsFor (schemaSuffix c)
+      let known = knownVersion (schemaSuffix c)
       schemaVersion c `shouldReturn` 0
-      migrate c `shouldReturn` [1 .. length steps]
-      schemaVersion c `shouldReturn` length steps
+      migrate c `shouldReturn` [1 .. known]
+      schemaVersion c `shouldReturn` known
       tablesOf c `shouldReturn` wikiTables
-      versionsOf c `shouldReturn` [1 .. length steps]
+      versionsOf c `shouldReturn` [1 .. known]
 
   it "apply nothing a second time, and change nothing" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
@@ -122,9 +123,9 @@ spec backing = describe "the schema's versions" $ do
       withStorage defaultConfig at (const pass)
       withStorage defaultConfig at (const pass)
       withConnectionTo at $ \c -> do
-        let steps = migrationsFor (schemaSuffix c)
-        schemaVersion c `shouldReturn` length steps
-        versionsOf c `shouldReturn` [1 .. length steps]
+        let known = knownVersion (schemaSuffix c)
+        schemaVersion c `shouldReturn` known
+        versionsOf c `shouldReturn` [1 .. known]
 
   it "move each vault of the assistant to the user's vault, its settings as its assistant item, at the same tag" $
     withEmptyPlaceIn backing $ \at -> do
@@ -198,7 +199,7 @@ spec backing = describe "the schema's versions" $ do
   describe "by hand (wiki-server migrate, wiki-server check)" $ do
     it "migrate an empty database to this program's version, then find nothing to do" $
       withEmptyPlaceIn backing $ \at -> do
-        known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
+        known <- withConnectionTo at (\c -> pure (knownVersion (schemaSuffix c)))
         migrateDatabase at `shouldReturn` Migrated {from = 0, to = known}
         migrateDatabase at `shouldReturn` Migrated {from = known, to = known}
 
@@ -217,7 +218,7 @@ spec backing = describe "the schema's versions" $ do
 
     it "refuse to check a database not at this program's version, which it does not migrate" $
       withEmptyPlaceIn backing $ \at -> do
-        known <- withConnectionTo at (\c -> pure (length (migrationsFor (schemaSuffix c))))
+        known <- withConnectionTo at (\c -> pure (knownVersion (schemaSuffix c)))
         checkDatabase at `shouldReturn` Left (NotMigrated 0 known)
         withConnectionTo at tablesOf `shouldReturn` []
 

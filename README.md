@@ -2586,10 +2586,10 @@ program already has, so that much of it is stable: the options of
 `wiki-server serve` and of the database, `wiki-server users add` with the
 password on standard input, the admin listener's API answered as the
 administrator without a sign-in (`info`, the spaces, their pages and a page
-at a path, and making a space and a page, which `toolchain/rehearse-ci.sh`
-seeds the wiki with), the sign-in through a provider with its cookies, and
-`api/v1/session`. Each says so in its documentation, and
-`Wiki.Server.Rehearsal` lists them. A change to one of them keeps what the
+at a path, and making a space and a page and setting a space's profile,
+which `toolchain/rehearse-ci.sh` seeds the wiki with), the sign-in through a
+provider with its cookies, and `api/v1/session`. Each says so in its
+documentation, and `Wiki.Server.Rehearsal` lists them. A change to one of them keeps what the
 rehearsal sends working, since the next version's rehearsal drives this
 version with it; a new check that drives something else marks it the same
 way.

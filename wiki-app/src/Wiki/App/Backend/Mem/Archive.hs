@@ -16,7 +16,7 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.ServerSettings (ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.ServerSettings qualified as SS
-import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, prepareSearch, versionOf)
+import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, ensureHomePages, prepareSearch, versionOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Attachment qualified as A
 import Wiki.Core.Comment (Comment (..), Thread (..))
@@ -121,7 +121,9 @@ replaceFromArchive time old a = do
   for_ root.attachments $ \attachment -> case attachment.source of
     SourceBlob b | Map.notMember b sourceBlobs -> Left ("The home attachment " <> attachment.name.text <> " has no stored bytes.")
     _ -> pure ()
-  pure (completeVersions (prepareSearch finished))
+  -- A space the archive gives no home page gets its default one, as a
+  -- space made here would.
+  pure (ensureHomePages time (completeVersions (prepareSearch finished)))
   where
     base = fromArchive (withoutHomeDocument a)
     counter = max (nextCounter old) (nextCounter base)

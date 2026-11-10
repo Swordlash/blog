@@ -33,6 +33,9 @@ module Wiki.App.Backend.Mem.State
   , setMathMacros
   , setOrder
   , setProfile
+  , setHome
+  , giveHomePage
+  , ensureHomePages
   , insertPage
   , attachBytes
   , attachUrl
@@ -218,6 +221,7 @@ import Wiki.Core.Permission
   , Subject (..)
   , canAdministerSpace
   , canEdit
+  , canEditPage
   , canView
   , hasGlobalPermission
   , isFor
@@ -231,7 +235,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, defaultHomePage, hasHome, homeDeleteRefusal, homeMoveRefusal, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
@@ -561,6 +565,33 @@ setMathMacros sid macros st = st {spaces = Map.adjust (withMathMacros macros) si
 setProfile :: SpaceId -> SpaceProfile -> MemState -> MemState
 setProfile sid p st = st {spaces = Map.adjust (withProfile p) sid st.spaces}
 
+-- | Make one of a space's pages its home page, checking nothing: for the
+-- demo's content and the guide, whose spaces open at a page of their own
+-- rather than at the default one.
+setHome :: SpaceId -> PageId -> MemState -> MemState
+setHome sid pid st = st {spaces = Map.adjust (withHome (Just pid)) sid st.spaces}
+
+-- | Give a space its default home page ('defaultHomePage'), made at this
+-- time, with its first version by this author, and make it the space's
+-- home page. The result is the space with it.
+giveHomePage :: Maybe UserId -> UTCTime -> Space -> MemState -> (MemState, Space)
+giveHomePage author now space st0 =
+  let (i, st) = newId "page" st0
+      topLevel = [(p.slug, p.position) | p <- pagesOf space.id st, isNothing p.parent]
+      home = defaultHomePage (PageId i) now topLevel space
+      space' = withHome (Just home.id) space
+   in ( recordVersion author home st {pages = Map.insert home.id home st.pages, searchText = Map.insert home.id (prepare home) st.searchText, spaces = Map.insert space'.id space' st.spaces}
+      , space'
+      )
+
+-- | Give every space that has no home page, and should have one
+-- ('hasHome'), its default one, made at this time with no author. The
+-- demo's content gets them this way, and so does a wiki read from the
+-- browser's storage or an archive that was written before every space had
+-- a home page.
+ensureHomePages :: UTCTime -> MemState -> MemState
+ensureHomePages now st = foldl' (\acc s -> fst (giveHomePage Nothing now s acc)) st [s | s <- Map.elems st.spaces, hasHome s, isNothing s.homePage]
+
 -- | Choose the order a space lists one kind of its children in, without
 -- checks. When the order switches to 'ByHand' from another order, the
 -- children first get positions in the order they were shown in, so that
@@ -672,15 +703,6 @@ dropIcon s = case s.icon of
   Just (IconImage b _) -> dropSource (SourceBlob b)
   _ -> identity
 
--- | Remove the home page of every space whose home page is one of these
--- pages: for pages that are deleted, or moved to another space.
-clearHomes :: Set PageId -> MemState -> MemState
-clearHomes gone st = st {spaces = Map.map clear st.spaces}
-  where
-    clear s
-      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing, blog = s.blog, boxNumbering = s.boxNumbering} s
-      | otherwise = s
-
 -- | Delete the bytes behind every attachment of these pages.
 dropAttachments :: [Page] -> MemState -> MemState
 dropAttachments ps st = foldr dropSource st [a.source | p <- ps, a <- p.attachments]
@@ -741,6 +763,16 @@ requireOrdinary st sid =
   when
     (Home.isHomeSpace st.server.homePage sid)
     (Left (Invalid "The wiki home is a singleton; its space and page cannot be restructured."))
+
+-- | The current user may change this page of the space at the end of the
+-- chain: as 'requireEdit', and for the space's home page, they administer
+-- the space ('canEditPage'). The wiki's front page keeps its own rule, a
+-- wiki administrator, which 'requireEdit' checks.
+requireEditPage :: MemState -> [Space] -> PageId -> Either WikiError ()
+requireEditPage st c pid = do
+  requireEdit st c
+  unless (any (\s -> Home.isHomeSpace st.server.homePage s.id) c) $
+    require (canEditPage (currentPrincipal st) st.grants c pid)
 
 -- | The current user administers the space at the end of the chain.
 requireAdminister :: MemState -> [Space] -> Either WikiError ()
@@ -951,11 +983,9 @@ createSpaceIn parent name now st = do
       st2 = case who of
         Just p -> grantSpace made.id (SubjectUser p.user) AdministerSpace st1
         Nothing -> st1
-      -- Its home page, whose first version is its creator's, as for a page
-      -- they created.
-      (st3, home) = insertPage made.id Nothing homeTitle (homeBody n) now st2
-      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} made
-  pure (recordVersion (currentUserId st) home st3 {spaces = Map.insert space.id space st3.spaces}, space)
+  -- Its home page, whose first version is its creator's, as for a page
+  -- they created.
+  pure (giveHomePage (currentUserId st) now made st2)
   where
     who = currentPrincipal st
 
@@ -1098,10 +1128,8 @@ setPersonalSpaceIn now enabled st = do
               slug = freshSlug (isJust . findChild others (Just container.id)) (fromMaybe (fallbackSlug "user") (slugify u.login.text))
               personal = (respace (Just container.id) slug made.position made) {owner = Just uid}
               st3 = grantSpace personal.id (SubjectUser uid) AdministerSpace st2 {spaces = Map.insert personal.id personal st2.spaces}
-              -- Its home page, as 'createSpaceIn' makes one.
-              (st4, home) = insertPage personal.id Nothing homeTitle (homeBody personal.name) now st3
-              space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} personal
-          pure (recordVersion (Just uid) home st4 {spaces = Map.insert space.id space st4.spaces}, space)
+          -- Its home page, as 'createSpaceIn' makes one.
+          pure (giveHomePage (Just uid) now personal st3)
 
 -- | Give a space new math macros: the text as it is, without blank lines
 -- at its ends, and nothing when it is blank. Whether KaTeX can parse it is
@@ -1127,8 +1155,8 @@ setSpaceProfileIn sid given st = do
   (s, c) <- findSpace st sid
   home <- requireIconAdminister st sid c
   -- The wiki home's space takes only an icon: the rest is its own.
-  let p = ownProfile (s.owner >>= (`Map.lookup` st.users) >>= \u -> u.avatar) (if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given)
-  checked <- first Invalid (checkProfile s (map (\x -> x.id) (pagesOf sid st)) p)
+  let p = ownProfile (s.owner >>= (`Map.lookup` st.users) >>= \u -> u.avatar) (if home then SpaceProfile {description = s.description, icon = given.icon, blog = s.blog, boxNumbering = s.boxNumbering} else given)
+  checked <- first Invalid (checkProfile s p)
   let s' = withProfile checked s
       st1 = if s'.icon == s.icon then st else dropIcon s st
   pure (st1 {spaces = Map.insert sid s' st1.spaces}, s')
@@ -1142,7 +1170,7 @@ uploadSpaceIconIn sid mediaType bytes st = do
   mt <- first Invalid (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
   let (b, st1) = newId "blob" (dropIcon s st)
       blob = BlobId b
-      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
+      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), blog = s.blog, boxNumbering = s.boxNumbering} s
   pure (st1 {blobs = Map.insert blob bytes st1.blobs, spaces = Map.insert sid s' st1.spaces}, s')
 
 -- | Move a space under another or to the top level.
@@ -1296,7 +1324,7 @@ createPageIn sid parent title body now st = do
 savePageIn :: PageId -> UTCTime -> Text -> Text -> UTCTime -> Write Page
 savePageIn pid base title body now st = do
   p <- findPage st pid
-  requireEdit st (chainOf st p.space)
+  requireEditPage st (chainOf st p.space) pid
   t <- nonBlank "A page's title" title
   when (p.updatedAt /= base) $
     Left (Conflict "The page has been saved by someone else since this edit began.")
@@ -1335,9 +1363,11 @@ movePageIn pid destination parent st = do
   requireEdit st target
   requireOrdinary st p.space
   requireOrdinary st destination
+  let subtree = subtreeOf st pid
+  (s, _) <- findSpace st p.space
+  for_ (homeMoveRefusal s pid (Set.toList subtree) (destination /= p.space)) (Left . Invalid)
   when (any (\q -> q.space /= destination) parentPage) $
     Left (Invalid "A page's parent has to be in the same space.")
-  let subtree = subtreeOf st pid
   when (any (`Set.member` subtree) parent) $
     Left (Invalid "A page cannot be moved under itself or a page under it.")
   let others = filter (\q -> q.id /= pid) (pagesOf destination st)
@@ -1349,9 +1379,7 @@ movePageIn pid destination parent st = do
         | q.id == pid = p'
         | q.id `Set.member` subtree = repage destination q.parent q.slug q.position q
         | otherwise = q
-      -- A page that leaves its space is no longer its home page.
-      homes = if destination == p.space then identity else clearHomes subtree
-  pure (homes st {pages = Map.map relocate st.pages}, p')
+  pure (st {pages = Map.map relocate st.pages}, p')
 
 -- | Delete a page with the pages under it.
 deletePageIn :: PageId -> Write ()
@@ -1360,7 +1388,9 @@ deletePageIn pid st = do
   requireEdit st (chainOf st p.space)
   requireOrdinary st p.space
   let gone = subtreeOf st pid
-      st1 = clearHomes gone (dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st)
+  (s, _) <- findSpace st p.space
+  for_ (homeDeleteRefusal s pid (Set.toList gone)) (Left . Invalid)
+  let st1 = dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st
   pure
     ( st1
         { pages = Map.withoutKeys st.pages gone
@@ -1377,7 +1407,7 @@ deletePageIn pid st = do
 uploadAttachmentIn :: PageId -> Text -> Text -> ByteString -> Write Attachment
 uploadAttachmentIn pid name mediaType bytes st = do
   p <- findPage st pid
-  requireEdit st (chainOf st p.space)
+  requireEditPage st (chainOf st p.space) pid
   n <- first Invalid (parseFileName name)
   when (fromIntegral (BS.length bytes) > maxAttachmentSize) $
     Left (Invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB."))
@@ -1391,7 +1421,7 @@ deleteAttachmentIn aid st = do
   (p, a) <-
     maybe (Left NotFound) Right . head $
       [(p, a) | p <- Map.elems st.pages, a <- p.attachments, a.id == aid]
-  requireEdit st (chainOf st p.space)
+  requireEditPage st (chainOf st p.space) p.id
   let url = case a.source of
         SourceBlob b -> Map.lookup b st.objectUrls
         SourceUrl _ -> Nothing
@@ -1410,7 +1440,7 @@ currentUserId st = (\p -> p.user) <$> currentPrincipal st
 draftable :: MemState -> PageId -> Either WikiError (Page, UserId)
 draftable st pid = do
   p <- findPage st pid
-  requireEdit st (chainOf st p.space)
+  requireEditPage st (chainOf st p.space) pid
   u <- maybe (Left Forbidden) Right (currentUserId st)
   pure (p, u)
 
@@ -1476,7 +1506,7 @@ getVersionIn pid at st = do
 restoreVersionIn :: PageId -> UTCTime -> UTCTime -> UTCTime -> Write Page
 restoreVersionIn pid at base now st = do
   p <- findPage st pid
-  requireEdit st (chainOf st p.space)
+  requireEditPage st (chainOf st p.space) pid
   v <- findVersion st pid at
   savePageIn pid base v.title v.body now st
 

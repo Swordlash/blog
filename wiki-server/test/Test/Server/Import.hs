@@ -41,7 +41,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), isHomeBody, withHome, withProfile)
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
@@ -209,8 +209,15 @@ intoAnEmptyWiki backing = describe "into an empty wiki" $ do
       other -> expectationFailure ("not one attachment: " <> show other)
     more <- pageAt r ["docs"] ["tour", "more"]
     more.parent `shouldBe` Just tour.id
+    -- Each space the archive gives no home page gets the default one, as
+    -- a space made here would.
+    for_ [["docs"], ["docs", "notes"]] $ \at -> do
+      made <- spaceAt r at
+      home <- pageAt r at ["home"]
+      made.homePage `shouldBe` Just home.id
+      (home.title, isHomeBody home.body, home.parent) `shouldBe` ("Home", True, Nothing)
     s <- ok200 (getUrl r (admin r links.admin.status))
-    ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 3, 4, 1)
+    ((s :: ServerStatus).users, s.spaces, s.pages, s.attachments) `shouldBe` (0, 3, 6, 1)
 
 personalSpaces :: Backing -> Spec
 personalSpaces backing = describe "a personal space" $ do
@@ -341,8 +348,11 @@ choices backing = describe "what is left unchecked" $ do
     let skipped = importEverything {skipSpaces = [[slug "docs", slug "notes"]], skipPages = [PageRef {space = [slug "docs"], page = [slug "tour"]}]}
     apply r docs skipped `shouldReturn` summary {spacesCreated = 1, pagesSkipped = 3}
     (.status) <$> getUrl r (admin r (links.spaces.atPath [slug "docs", slug "notes"])) `shouldReturn` 404
+    -- The space comes in with none of its pages, and so with the home
+    -- page a new space is given.
     kept <- spaceAt r ["docs"]
-    ok200 (getUrl r (admin r (links.spaces.listPages kept.id))) `shouldReturn` ([] :: [PageSummary])
+    listed :: [PageSummary] <- ok200 (getUrl r (admin r (links.spaces.listPages kept.id)))
+    [(p.title, Just p.id == kept.homePage) | p <- listed] `shouldBe` [("Home", True)]
 
   it "of a whole archive is nothing" $ withRunning backing $ \r -> do
     apply r docs importEverything {skipSpaces = [[slug "docs"]]} `shouldReturn` summary {pagesSkipped = 3}
@@ -368,7 +378,9 @@ roundTrip backing = describe "an export" $ do
       header "Content-Disposition" reply `shouldSatisfy` maybe False (BS.isPrefixOf "attachment; filename=\"wiki-")
       exported <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict reply.body) >>= readArchive)
       exported.app `shouldSatisfy` T.isPrefixOf "wiki-server "
-      apply copy exported importEverything `shouldReturn` summary {spacesCreated = 2, pagesCreated = 3, attachments = 1}
+      -- The home pages the first import gave the two spaces come with
+      -- them, as pages of the archive.
+      apply copy exported importEverything `shouldReturn` summary {spacesCreated = 2, pagesCreated = 5, attachments = 1}
       let shape :: Running -> IO [(Text, Slug, [(Text, Slug, Text, [(Text, Source)])])]
           shape r = do
             spaces <- ok200 (getUrl r (admin r links.spaces.list))
@@ -385,7 +397,7 @@ roundTrip backing = describe "an export" $ do
 profiled :: Archive
 profiled =
   docs
-    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = True, boxNumbering = WithSection} s else s | s <- docs.spaces]
+    { spaces = [if s.id == SpaceId "s1" then withHome (Just (PageId "p1")) (withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") (MimeType "image/png")), blog = True, boxNumbering = WithSection} s) else s | s <- docs.spaces]
     , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
     }
 
@@ -415,11 +427,10 @@ profiles backing = describe "a space's profile" $ do
     -- A space's numbering has no "none of its own": the server's stays.
     (merged.homePage, merged.description, merged.blog, merged.boxNumbering) `shouldBe` (ours.homePage, "Guides.", True, InPage)
     (\case Just (IconImage _ _) -> True; _ -> False) merged.icon `shouldBe` True
-    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing, blog = False, boxNumbering = InPage})
+    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), blog = False, boxNumbering = InPage})
     _ <- apply r profiled importEverything
     again <- spaceAt r ["docs"]
-    tour <- pageAt r ["docs"] ["tour"]
-    (again.description, again.icon, again.homePage) `shouldBe` ("Ours.", Just (IconEmoji "🦉"), Just tour.id)
+    (again.description, again.icon, again.homePage) `shouldBe` ("Ours.", Just (IconEmoji "🦉"), ours.homePage)
 
 -- | The docs of the tests with comments on the tour: a thread about the
 -- whole page, opened by Alice (one of the archive's users) and answered by
