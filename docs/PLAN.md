@@ -1738,10 +1738,20 @@ needs. Each was true when its package merged; check before relying on one.
   account, started by its systemd session, and
   `toolchain/ci-postgres.sh start` for the container CI uses. One
   container and one port are shared by every agent that runs them.
-- **The move to PostgreSQL (WP5.80b, #233).** It was not run end to end
-  against a real unit and compose project: its parts ran for real (the
-  copy, the comparison, the questions it asks Docker), the switch and its
-  failures against the deploy's fakes. The maker reads two variables for
+- **The move to PostgreSQL (WP5.80b, #233).** It ran end to end once, on
+  2026-11-10, on a scratch deployment under the session's account (a real
+  unit, rootless Docker, a wiki with an account, pages, an attachment and
+  a comment): the move, with the same password signing in after it and
+  the wiki reading the same but for the search's kind; a page written on
+  PostgreSQL and then `--rollback --yes`, which brought back the wiki
+  exactly as it was before the move; a second move, refused because
+  PostgreSQL still held the first one's wiki, with nothing changed. The
+  failures in the switch have run against the deploy's fakes only. Two
+  trifles seen there: that refusal prints the container's id on a line of
+  its own (Docker's answer to stopping it), and `undeploy-local.sh
+  --purge-data` says it deleted "the state and the toolchain under it"
+  when the toolchain was elsewhere (`--toolchain`) and was not touched.
+  The maker reads two variables for
   its tests in the program that is deployed with
   (`WIKI_TEST_MOVE_FAILPOINT`, `WIKI_TEST_MOVE_OPERATIONS`). The tests
   fail one operation in each run, not two. A move killed during the
