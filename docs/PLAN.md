@@ -1125,10 +1125,12 @@ code depends on the session's model, as `AGENTS.md` says (the owner, 2026-11-03,
 confirmed 2026-11-10; before that the session implemented everything itself): a
 session on Fable plans, briefs and reviews, and one Opus subagent in a worktree of
 its own implements each package; a session on another model implements itself.
-Before a pull request merges, it is reviewed by Codex: the session asks with a
-comment of `@codex review` on the pull request and waits for the answer (the owner,
-2026-11-10: "prosimy o @codex review pod PR"; the local run with the owner's key is
-not used). The session fixes the real findings and pushes, for three rounds at
+Before a pull request merges, it is reviewed by Codex, as `AGENTS.md` says: the
+session runs the Codex CLI on the pushed head, `gpt-6.1-sol` at high reasoning
+effort, and when its quota has run out asks the GitHub Codex bot instead, with a
+comment of `@codex review` on the pull request (the owner, 2026-11-10: the CLI is
+the default; on the owner's machine it is signed in with the owner's account, so
+there is no key to give and no credential to remove). The session fixes the real findings and pushes, for three rounds at
 most (the owner, 2026-11-02: "Zmniejsz max liczbe przebiegów do 3"; four before). The owner merges; the session
 merges only when asked ("nie merguj sam, chyba że poproszę"). The session may hand a
 commit it has good reason to trust to CI rather than run the whole gate locally first,
