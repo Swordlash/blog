@@ -10,9 +10,10 @@ module Wiki.Server.Storage.Migrate.Code
 where
 
 import Wiki.Server.Storage.Migrate.Code.Step0012 (step0012)
+import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 
 -- | Every step of the schema written in Haskell, in any order: each one in
 -- a module of its own under this one, named by its number.
 codeSteps :: [CodeStep]
-codeSteps = [step0012]
+codeSteps = [step0012, step0013]
