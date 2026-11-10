@@ -43,7 +43,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
-import Wiki.Core.Markdown.Ast (Block (Footnotes, Heading), Footnote (..), parseMarkdown, parseWithAllMarkers)
+import Wiki.Core.Markdown.Ast (Block (Div, Footnotes, Heading, List, Para, Pause, Spoiler), Footnote (..), Inline (Str), ListItem (..), ListKind (BulletList), SpoilerHead (..), parseMarkdown, parseWithAllMarkers)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -279,6 +279,14 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     cr <- blocksOf ToOther place "> [!NOTE] T\r> x\r\r> [!NOTE] U\r> y\r"
     boxTitles cr `shouldBe` [[P.Str "T"], [P.Str "U"]]
 
+  it "finds a box whose marker a tab indents, where the page has it" $ do
+    let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+    tabbed <- blocksOf ToOther place "-\t> [!NOTE] T\n\t> x\n"
+    boxClasses tabbed `shouldBe` [["note", "alert"]]
+    query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) tabbed `shouldBe` [[P.Str "T"]]
+    show tabbed `shouldNotSatisfy` T.isInfixOf "wikibox"
+    show tabbed `shouldNotSatisfy` T.isInfixOf "[!"
+
   it "shows a marker as written where pandoc does not read a quotation, and no placeholder" $ do
     let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
     -- A tab after the first quotation mark: the wiki reads a box, pandoc
@@ -325,6 +333,30 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       length (query pauses bs) `shouldBe` 1
       show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
       paragraphs bs `shouldSatisfy` any (T.isPrefixOf "[[!oops]] — ")
+    it "finds a div whose markers a tab indents, where the page has it" $ do
+      -- A tab after a list item's marker and before its lines: the
+      -- markers are at the fifth column, and the third or the second
+      -- character. (After a quotation mark, pandoc reads a tab as code,
+      -- so a marker there is kept as written, as a box's is.)
+      let cases =
+            [ ("-\t[[!div]]{.a}\n\tx\n\t[[/div]]\n", \inside -> [List BulletList [ListItem Nothing [inside]]])
+            , ("- item\n\n\t[[!div]]{.a}\n\tx\n\t[[/div]]\n", \inside -> [List BulletList [ListItem Nothing [Para [Str "item"], inside]]])
+            ]
+      for_ cases $ \(boxed, page) -> do
+        parseMarkdown boxed `shouldBe` Right (page (Div [("class", "a")] [Para [Str "x"]]))
+        divs <- blocksOf ToOther place boxed
+        (boxed, [(cls, paragraphs inner) | P.Div (_, cls, _) inner <- query (\case b@P.Div {} -> [b]; _ -> []) divs]) `shouldBe` (boxed, [(["a"], ["x"])])
+        (boxed, show divs) `shouldNotSatisfy` (T.isInfixOf "div]]" . snd)
+        (boxed, show divs) `shouldNotSatisfy` (T.isInfixOf "wikibox" . snd)
+    it "finds a pause whose marker a tab indents, where the page has it" $ do
+      let paused = "## A\n\n-\tone\n\n\t[[!pause]]\n\n\ttwo\n"
+      parseMarkdown paused `shouldBe` Right [Heading 2 [("id", "a")] [Str "A"], List BulletList [ListItem Nothing [Para [Str "one"], Pause, Para [Str "two"]]]]
+      deck <- blocksOf ToBeamer place paused
+      length (query pauses deck) `shouldBe` 1
+      -- Pandoc's pause is a paragraph of three dots.
+      paragraphs deck `shouldBe` ["one", ". . .", "two"]
+      show deck `shouldNotSatisfy` T.isInfixOf "pause]]"
+      show deck `shouldNotSatisfy` T.isInfixOf "wikibox"
     it "leaves the forms without the exclamation mark, an end marker with nothing open and a link written with its text as the links they are" $ do
       bs <- blocksOf ToOther place "[[notes|Notes]]\n\n[[spoiler]]{a}(b)\n\n[[/div]]\n"
       divClasses bs `shouldBe` []
@@ -422,6 +454,15 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       take 1 (paragraphs cut) `shouldSatisfy` all (T.isInfixOf "cuts a section")
       paragraphs cut `shouldSatisfy` elem "after"
       length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
+    it "finds a spoiler whose markers a tab indents, where the page has it" $ do
+      let source = "-\t[[!spoiler]]{s}(The *answer*)\n\tx\n\t[[/spoiler]]{s}\n"
+      [() | Right [List BulletList [ListItem Nothing [Spoiler h [Para [Str "x"]]]]] <- [parseMarkdown source], isNothing h.problem] `shouldBe` [()]
+      shown <- blocksOf ToOther place source
+      boxClasses shown `shouldBe` [["alert-spoiler"]]
+      titles shown `shouldBe` [[P.Str "The", P.Space, P.Emph [P.Str "answer"]]]
+      paragraphs shown `shouldBe` ["The answer", "x"]
+      show shown `shouldNotSatisfy` T.isInfixOf "spoiler]]"
+      show shown `shouldNotSatisfy` T.isInfixOf "wikibox"
 
     it "shows a heading spoiler's section as written: its heading without the marker, with the wiki's identifier, and its content" $ do
       let source = "## Intro\n\nx\n\n## [[!spoiler]]{q1} What is *X*?\n\nAn answer.\n\n### [[!spoiler]] Intro\n\nDeeper.\n\n> ## [[!spoiler]]\tQuoted ||y||\n\n## After\n\nSee [the question](#what-is-x) and [the second intro](#intro-2).\n"
