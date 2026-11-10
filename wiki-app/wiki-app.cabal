@@ -245,6 +245,7 @@ library contract
     exposed-modules:
         Wiki.App.Backend.Contract
         Wiki.App.Backend.Contract.Admin
+        Wiki.App.Backend.Contract.Backlinks
         Wiki.App.Backend.Contract.Comments
         Wiki.App.Backend.Contract.Notifications
         Wiki.App.Backend.Contract.Stars

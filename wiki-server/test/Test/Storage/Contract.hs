@@ -11,6 +11,7 @@ import Test.Storage.Fixture (whoFor, withDemo)
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
+import Wiki.App.Backend.Contract.Backlinks qualified as Backlinks
 import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Contract.Notifications qualified as Notifications
 import Wiki.App.Backend.Contract.Stars qualified as Stars
@@ -24,6 +25,7 @@ spec backing =
     Comments.spec (type (StoredWiki IO)) fixture
     Notifications.spec (type (StoredWiki IO)) fixture
     Stars.spec (type (StoredWiki IO)) fixture
+    Backlinks.spec (type (StoredWiki IO)) fixture
   where
     fixture example =
       withDemo backing $ \st ->
