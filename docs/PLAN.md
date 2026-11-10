@@ -1354,20 +1354,26 @@ and the PostgreSQL tests copying a migrated template (#221). Stage 2,
 the content's structure, on #202: #195 is done (decision 65, #224) and
 #197 was closed, since comments worked already; #201 (one home page per
 space, the root of its pages) is done (decision 68, #225 and #229). So
-stage 2 is done. Stage 3, the editor, is next: #194 (persistent links)
-first, WP5.81 and WP5.82, since what a link names is what #187
-(autocompletion) completes and #189 (backlinks) records. Stage 4,
-plugins: #186 (decision 69, WP5.84 first), then
-#196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
-(emojis: shortcodes such as `:tada:` render already, through
-commonmark-extensions; what is left is the editor's part, a toolbar
-button, completion after a colon and lists with an emoji for a bullet,
-which waits for #187 and #186), #190 (table views). Stage 5: #191 (presentations as a kind of
-page), #204 (calendars and TODO lists; the lists can come earlier).
-Alongside, when there is room: #213 (WP5.74b3, after #201). #203
-(SQLite to PostgreSQL, WP5.80) is done: decisions 66 and 67. WP5.79, the browser's OPAQUE client from
-opaque-hs, is done (#230, decision 59). #212 (WP5.74a2b) was closed in opaque-hs's own
-repository, which the wiki pins since #227.
+stage 2 is done.
+
+**The smaller issues first (the owner, 2026-11-10, in the evening):** the
+smaller issues are closed before plugins (#186), autocompletion (#187)
+and presentations (#191) are started. In this order: #194 (persistent
+links, WP5.81 and WP5.82: what a link names is what #189 records and
+#187 later completes); #205's last part (WP5.85); #188 (emojis: the
+editor's part, WP5.86); #189 (backlinks, on WP5.81's reading of a link by
+id); #196 and #200 (an `html` block and an interactive SVG, each in a
+frame the page's scripts and keys cannot be reached from, which is also
+the frame the plugins will run in); #204 (TODO lists first, then the
+calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
+WP5.84 first), with #190 (table views) after it, since the issue asks for
+it as a plugin; #187; #191. Which of #204 and #213 count as smaller is
+the session's reading, not the owner's word.
+
+Done beside the stages: #203 (SQLite to PostgreSQL, WP5.80; decisions 66
+and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
+decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
+which the wiki pins since #227.
 
 - **WP5.81 Persistent links: a page's address by its id (#194, the first
   of two).** A page's id never changes, and every answer of the API
@@ -1401,7 +1407,9 @@ repository, which the wiki pins since #227.
   link by id after a move to another parent and to another space; the
   three ways of copying, in the browser.
 - **WP5.82 Persistent links: a place on the page that survives edits
-  (#194, the second of two; to be confirmed by the owner).** A heading's
+  (#194, the second of two; the session's proposal, taken as wanted since
+  the owner said on 2026-11-10 to close the smaller issues, #194 among
+  them, and his to change).** A heading's
   generated id changes when the heading is renamed or one with the same
   text is written above it, and a box's number when a box is added above;
   the selection's "Copy link" writes the browser's text fragment, which
@@ -1414,6 +1422,54 @@ repository, which the wiki pins since #227.
   id, and an id written by hand (`## Title {#setup}`) is the one that
   survives a rename; the guide says so. #194 stays open until this is
   built or the owner drops it.
+- **WP5.85 `check` looks at how the real accounts sign in (#205, its
+  last part).** The rehearsal's "accounts" check signs in two accounts it
+  made itself; nothing looks at the accounts people have. Three things.
+  First, `wiki-server check` refuses (as it refuses a second root) a
+  stored credential this program cannot use: an OPAQUE record without its
+  stretch, or the other way round, which today reads silently as no
+  password; a record or a stretch that does not decode; a hash from before
+  OPAQUE that the verifier does not read. Second, a passing check says how
+  the accounts sign in: how many with a password (and how many of those
+  still with a hash from before OPAQUE), how many through a provider the
+  settings still name, how many with a passkey alone, and the enabled
+  accounts with no way in, by login. Those are lines of a check that
+  passes, never a refusal: an account made without a password, one from
+  an import and one whose provider was removed are all legitimate, and a
+  refusal would roll back a deploy and refuse a copy on a wiki that has
+  them. Third, a check "ways in" in `Rehearsal.checks`, since the first two
+  cannot see a migration that loses every hash: before, the old program's
+  `users list`; after, the new one's; it fails for each login that signed
+  in before and does not after, and for nothing else. Old output it cannot
+  read is "the old program cannot be driven" (exit 7), not a failed check.
+  `users list` is marked stable for it. The column it reads knows of
+  passwords alone, not of providers or passkeys, which the canaries of
+  "accounts" cover; the pull request says so. Tests: each refusal and each
+  line, on both backends; the rehearsal failing on a copy with real
+  accounts whose hashes a step removed.
+- **WP5.86 Emoji in the editor (#188, what is left of it).** Shortcodes
+  render already. The names come from one place, the `emojis` package
+  that commonmark-extensions reads them from, on the Haskell side; the
+  editor asks for them as it asks for people to mention. (1) Completion:
+  a colon typed after a space or at the start of a line opens a list of
+  emoji that narrows as the name is typed, in the editor's one
+  `autocompletion`, beside the mentions' source; accepting writes
+  `:name:`; Enter on a colon with nothing typed after it is a new line,
+  not an emoji; Escape closes the list and writes a backslash before the
+  colon (the issue: "hitting escape should escape it"), as one step to
+  undo; not in code, mathematics, links or HTML. (2) `-:` at the start of
+  a line opens the same list and writes `- :name: `: it is the editor's
+  shorthand, not Markdown. (3) An item of a bulleted list that starts
+  with an emoji shows the emoji in the bullet's place, the emoji still
+  part of the item's text (for search, comment quotes and the slides'
+  steps), as a task's box is; a task item and a numbered list are
+  unchanged; `- \:name:` keeps the bullet. This changes how a page that
+  has such items already looks. The PDF and Word exports keep their
+  bullet before the emoji: a known difference. (4) A toolbar button
+  "Emoji" opens a menu with a field to search and the emoji to pick; it is
+  a plain button, which can become a built-in plugin with #186. Not in
+  the package: Slack's names that GitHub's list does not have. The guide
+  and the help say all of it.
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
