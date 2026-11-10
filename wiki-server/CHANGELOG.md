@@ -12,6 +12,18 @@ link by id as they read one by path; a link to a version goes out at the
 wiki's address, since the document holds the page's text now. A version the
 page does not have is prerendered as not found.
 
+`wiki-server` sets UTF-8 (with ROUNDTRIP) for its handles, files, paths,
+arguments and the programs it runs, as the maker does, so that the
+console writes names beyond ASCII in the C or POSIX locale instead of
+failing. The rehearsal runs the old program's console and servers with
+`LC_ALL=C.UTF-8` when the environment names no UTF-8 locale
+(`Rehearsal.consoleEnvironment`), and reads the console's output as UTF-8
+bytes (`runConsoleIn`); a console that still cannot write a name says so,
+with what to do. `WaysIn.printable` escapes control characters in the
+logins and providers' names the check and the rehearsal print. The test
+suite runs the program itself as a child (`build-tool-depends`,
+`Test.Server.Program`).
+
 `wiki-server check` looks at how the accounts sign in (WP5.85, #205).
 `Storage.Rows.readPasswordColumns` is the one reading of a users row's
 three password columns (`PasswordColumns`): the password the sign-in

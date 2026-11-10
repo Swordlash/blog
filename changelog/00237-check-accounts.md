@@ -44,3 +44,11 @@ title: The upgrade's check looks at how people sign in
   ```text
   wiki-server: ways in: failed: the login anna signed in with a password before the upgrade, and after it users list says no (no password)
   ```
+
+## Other changes
+
+- The server's console (`wiki-server users list`, `wiki-server check` and
+  the rest) prints names and logins with letters beyond ASCII, such as
+  "Zażółć", whatever the locale it runs in. Before, under `LANG=C` (a deploy
+  over a bare `ssh` command, or from a systemd unit), it stopped with
+  "cannot encode character" at the first such name.

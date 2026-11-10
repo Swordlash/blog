@@ -1921,7 +1921,12 @@ to the demo, keeping `data/`.
       gwen: only a provider the settings no longer name (gitlab)
   ```
 
-  Both run on a directory no server is running on. The
+  `wiki-server` writes UTF-8 whatever the locale, so names and logins beyond
+  ASCII print under `LANG=C` too. The upgrade's rehearsal runs the old
+  program's console and server with `LC_ALL=C.UTF-8` when the environment
+  names no UTF-8 locale; on a machine that has none at all, the rehearsal
+  says it cannot drive the old program, and the deploy goes on with
+  `--no-rehearsal`. Both run on a directory no server is running on. The
   check ends with 4 when the database is not at the program's version of the
   schema (migrate it first), 5 when something does not read or breaks a rule (it says what), and
   1 when the database cannot be opened. The deploy runs both (see the next
