@@ -80,6 +80,7 @@ library
       Wiki.Core.Markdown.Ast
       Wiki.Core.Markdown.Box
       Wiki.Core.Markdown.Edit
+      Wiki.Core.Markdown.Emoji
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Mention
@@ -113,6 +114,9 @@ library
       commonmark >= 0.3.1 && < 0.4,
       commonmark-extensions >= 0.2.7.3 && < 0.3,
       containers,
+      -- The names of emoji, the list commonmark-extensions parses them
+      -- with, for the editor's search (Wiki.Core.Markdown.Emoji).
+      emojis >= 0.1.6 && < 0.2,
       haskell-halogen-core,
       http-api-data >= 0.6 && < 0.8,
       parsec,
@@ -160,6 +164,7 @@ test-suite wiki-core-test
       Test.Markdown.Box
       Test.Markdown.Comments
       Test.Markdown.Edit
+      Test.Markdown.Emoji
       Test.Markdown.Link
       Test.Markdown.Markers
       Test.Markdown.Mention
