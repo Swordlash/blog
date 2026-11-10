@@ -1709,7 +1709,7 @@ In order, and what a failure at each step leaves:
 | PostgreSQL looked at first: a container of the compose project `<name>` set up on another port than `--db-port` is refused untouched, and one that runs is asked whether its database `wiki` is empty before anything is written. Otherwise its files are written and it is started as a deploy on PostgreSQL starts it, and the database checked to be empty | The wiki untouched; PostgreSQL put back exactly as it was found (its files' bytes, a container stopped again or removed, a volume removed when the move made it); a database that holds a wiki is left as it is, and refused |
 | The service stopped (it must stop), and the wiki backed up into `data/backups` | The service started again on SQLite, and PostgreSQL put back as it was found; so too for any other error in this and the next two steps |
 | `wiki-server copy-database` into PostgreSQL | The service started again on SQLite; PostgreSQL empty, as the copy left it |
-| `wiki-server rehearse --move-to-database`: the upgrade's checks (pages, accounts, home pages) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
+| `wiki-server rehearse --move-to-database`: the upgrade's checks (pages, accounts, home pages, roots, ways in) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
 | The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and put back as it was found, and the service started on SQLite. A deployment kept by an earlier deploy is never restored. The switch back puts back by copies first and deletes what the move saved only once all of it is back: a step that fails stops it there, the service stopped, everything saved is where the move says, and `--rollback --yes` finishes |
 | The service started, and must answer | Switched back, as above |
 
@@ -1901,8 +1901,32 @@ to the demo, keeping `data/`.
   `wiki-server check --data DIR` reads every row of every table, and the wiki's
   records built from them, as the program does, changes nothing, and lists the
   tables with their rows. It also says which records break a rule the wiki
-  keeps: a space with a page beside its home page at the top of its pages.
-  Both run on a directory no server is running on. The
+  keeps: a space with a page beside its home page at the top of its pages, and
+  an account whose stored password no sign-in can use (an OPAQUE record
+  without its stretch or the other way round, a record or a stretch that does
+  not decode, a hash from before OPAQUE the server cannot read). When everything
+  reads, it ends by saying how the enabled accounts sign in, and names those
+  with no way in (the first twenty by login, then how many more); that is not a
+  failure, since an account made without a password, an imported one and one
+  whose provider was removed are all normal:
+
+  ```text
+  Every table and every record read.
+  Accounts: 7 (6 enabled, 1 disabled). How the enabled ones sign in:
+    with a password: 2, of which 1 with a hash from before OPAQUE until its next sign-in
+    through a provider the settings name, with no password: 1
+    with a passkey alone: 1
+    no way in: 2
+      finn: no password set
+      gwen: only a provider the settings no longer name (gitlab)
+  ```
+
+  `wiki-server` writes UTF-8 whatever the locale, so names and logins beyond
+  ASCII print under `LANG=C` too. The upgrade's rehearsal runs the old
+  program's console and server with `LC_ALL=C.UTF-8` when the environment
+  names no UTF-8 locale; on a machine that has none at all, the rehearsal
+  says it cannot drive the old program, and the deploy goes on with
+  `--no-rehearsal`. Both run on a directory no server is running on. The
   check ends with 4 when the database is not at the program's version of the
   schema (migrate it first), 5 when something does not read or breaks a rule (it says what), and
   1 when the database cannot be opened. The deploy runs both (see the next
@@ -2694,7 +2718,8 @@ on a PostgreSQL it starts after its tests.
 The rehearsal drives the base branch's program only through what that
 program already has, so that much of it is stable: the options of
 `wiki-server serve` and of the database, `wiki-server users add` with the
-password on standard input, the admin listener's API answered as the
+password on standard input, `wiki-server users list` and its table (the check
+"ways in" reads SIGNS IN of each login before and after), the admin listener's API answered as the
 administrator without a sign-in (`info`, the spaces, their pages and a page
 at a path, and making a space and a page and setting a space's profile,
 which `toolchain/rehearse-ci.sh` seeds the wiki with), the sign-in through a

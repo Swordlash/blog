@@ -147,6 +147,7 @@ library
         Wiki.Server.Tls
         Wiki.Server.Totp
         Wiki.Server.Vault
+        Wiki.Server.WaysIn
         Wiki.Server.WebAuthn
         Wiki.Server.WhatsNew
         Wiki.Server.WhatsNew.Version
@@ -243,6 +244,7 @@ executable wiki-server
     buildable: False
   else
     build-depends:
+        base,
         directory,
         optparse-applicative,
         protolude,
@@ -324,6 +326,9 @@ test-suite wiki-server-test
   if arch(wasm32)
     buildable: False
   else
+    -- The program itself, on PATH while the tests run: the tests of its
+    -- console in a C locale run it as a child, as the rehearsal does.
+    build-tool-depends: wiki-server:wiki-server
     other-modules:
         Test.Database
         Test.Server.Access
@@ -347,6 +352,7 @@ test-suite wiki-server-test
         Test.Server.Opaque
         Test.Server.Options
         Test.Server.Presence
+        Test.Server.Program
         Test.Server.Rehearsal
         Test.Server.Render
         Test.Server.Settings
@@ -354,6 +360,7 @@ test-suite wiki-server-test
         Test.Server.Tls
         Test.Server.Totp
         Test.Server.Vault
+        Test.Server.WaysIn
         Test.Server.WebAuthn
         Test.Server.WhatsNew
         Test.Storage

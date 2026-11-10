@@ -22,15 +22,16 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace, withPlace)
 import Test.Hspec
-import Test.Storage.Fixture (demoArchive, ok)
+import Test.Storage.Fixture (decodableRecord, demoArchive, ok)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), release, reserve, runCopy)
-import Wiki.Server.Storage (Place (..), checkDatabase, defaultConfig, importArchive, inDataDir, withStorage, writing)
+import Wiki.Server.Storage (Checked (..), Place (..), checkDatabase, defaultConfig, importArchive, inDataDir, withStorage, writing)
 import Wiki.Server.Storage.Backend (Backend (..), Sqlite)
 import Wiki.Server.Storage.Backup (lockDataDir, unlockDataDir)
 import Wiki.Server.Storage.Copy (copiedName, copiedTables, parentsFirst)
 import Wiki.Server.Storage.Layout (Database (..))
 import Wiki.Server.Storage.Migrate (applySteps, migrate, stepsFor)
 import Wiki.Server.Storage.Schema
+import Wiki.Server.WaysIn (WaysIn (..))
 
 -- | What needs no database: the order of a tree's rows, and the list of
 -- tables.
@@ -65,6 +66,16 @@ spec backing = describe "copy-database" $ do
         (t, rows') `shouldBe` (t, rows)
       withConnectionTo source (\c -> runDb c everyRow) `shouldReturn` original
       checkDatabase target >>= either (\p -> expectationFailure ("the copy does not check: " <> show p)) (const pass)
+
+  -- An account with no way in (the demo's, which have no password) is
+  -- what the check says of a wiki, never why it refuses one (WP5.85).
+  it "copies a wiki whose accounts have no way in, and the copy's check says the same of them" $
+    withSqliteWiki $ \source -> withTarget $ \target -> do
+      fromSource <- checkDatabase source >>= either (\p -> panic ("the source does not check: " <> show p)) pure
+      fromSource.ways.none `shouldSatisfy` (not . null)
+      runCopy (copying source target) >>= (`shouldSatisfy` isCopied)
+      inCopy <- checkDatabase target >>= either (\p -> panic ("the copy does not check: " <> show p)) pure
+      inCopy.ways `shouldBe` fromSource.ways
 
   it "gives a row made after the copy an id past the copied ones" $
     withSqliteWiki $ \source -> withTarget $ \target -> do
@@ -274,7 +285,7 @@ everyTable = do
   let row entity rows = runInsert (insert entity (insertValues rows))
   row
     wikiDb.users
-    [ UserRow {id = "copy-u1", login = "copy.one", display_name = "Copy Ünë", password_hash = Just "$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA", disabled = False, email = Just "one@example.org", email_verified_at = Just (time 1), notification_mail = Just "daily", watch_own = True, feed_token = Just "copy-feed", avatar_blob = Nothing, avatar_media_type = Nothing, opaque_record = Just "copy-opaque-record", opaque_stretch = Just "t=3,m=65536"}
+    [ UserRow {id = "copy-u1", login = "copy.one", display_name = "Copy Ünë", password_hash = Just "$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA", disabled = False, email = Just "one@example.org", email_verified_at = Just (time 1), notification_mail = Just "daily", watch_own = True, feed_token = Just "copy-feed", avatar_blob = Nothing, avatar_media_type = Nothing, opaque_record = Just decodableRecord, opaque_stretch = Just "t=3,m=65536"}
     , UserRow {id = "copy-u2", login = "copy.two", display_name = "Copy Two", password_hash = Nothing, disabled = True, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = False, feed_token = Nothing, avatar_blob = Just "0123abcd", avatar_media_type = Just "image/png", opaque_record = Nothing, opaque_stretch = Nothing}
     ]
   row wikiDb.groups [GroupRow {id = "copy-g1", name = "Copiers"}]

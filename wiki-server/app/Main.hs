@@ -39,10 +39,12 @@
 -- ("Wiki.Server.Compress").
 module Main (main) where
 
+import GHC.IO.Encoding (mkTextEncoding, setFileSystemEncoding, setForeignEncoding, setLocaleEncoding)
 import Options.Applicative
 import Protolude
 import Sel (secureMain)
 import System.Directory (doesDirectoryExist)
+import System.IO (hSetEncoding)
 import Wiki.Server (ServerError (..), serve)
 import Wiki.Server.Compress (compressDirectory)
 import Wiki.Server.Console (BackupOutcome (..), CheckOutcome (..), GuideCommand, MigrateOutcome (..), OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runCheck, runGuide, runMigrate, runOidcCheck, runRestore, runUsers, usersParser)
@@ -108,7 +110,21 @@ commands =
       Compress <$> strArgument (metavar "DIR" <> help "The application's directory, as --static names it")
 
 main :: IO ()
-main =
+main = do
+  -- One encoding for everything, whatever the locale says: UTF-8 with
+  -- ROUNDTRIP for the terminal, files, paths, arguments and the programs
+  -- this one runs, as the maker's entry point sets it. A handle in the C
+  -- or POSIX locale cannot write a character beyond ASCII, and the console
+  -- writes people's names and logins (users list, check), which a deploy
+  -- over a bare ssh command or from a systemd unit runs in such a locale.
+  -- ROUNDTRIP decodes a byte that is not UTF-8 to a character that encodes
+  -- back to the same byte, so a path or an argument in another encoding
+  -- still names the same file.
+  utf8 <- mkTextEncoding "UTF-8//ROUNDTRIP"
+  setFileSystemEncoding utf8
+  setForeignEncoding utf8
+  setLocaleEncoding utf8
+  traverse_ (`hSetEncoding` utf8) [stdin, stdout, stderr]
   -- libsodium is initialised first: the second factor's codes need it
   -- (Wiki.Server.Totp, over one-time-password and sel).
   secureMain $

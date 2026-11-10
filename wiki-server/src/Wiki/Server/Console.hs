@@ -47,6 +47,7 @@ module Wiki.Server.Console
   , UsersCommand (..)
   , usersParser
   , runUsers
+  , listing
 
     -- * Passwords
   , readPassword
@@ -94,11 +95,12 @@ import Wiki.Server.Guide (installGuide, updateGuide, updateLines)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Secret (Kept, revealed)
-import Wiki.Server.Storage (CheckProblem (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
+import Wiki.Server.Storage (CheckProblem (..), Checked (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress, operator)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 import Wiki.Server.Storage.Migrate (OldSchema)
 import Wiki.Server.Storage.Migrate qualified as Migrate
+import Wiki.Server.WaysIn (waysInLines)
 
 -- | A @wiki-server users@ command, on a data directory.
 data Users = Users
@@ -108,7 +110,15 @@ data Users = Users
   deriving stock (Eq, Show)
 
 data UsersCommand
-  = -- | Every user, with what they may do.
+  = -- | Every user, with what they may do: the table 'listing' writes.
+    --
+    -- Stable for the upgrade's rehearsal: its check "ways in" runs
+    -- @users list@ with the place's options after it on the old program and
+    -- on the new one ("Wiki.Server.Rehearsal"), and reads the table. So the
+    -- command changes only compatibly: the heading line, the columns each
+    -- padded to its width in characters with two spaces between, the login
+    -- first and SIGNS IN last with one of its three values, as 'listing'
+    -- says, and the first line of a wiki with no users.
     ListUsers
   | -- | Create a user: their login, their display name (the login if not
     -- given), whether they are an administrator, and whether they sign in
@@ -216,7 +226,21 @@ found st login = maybe (throwError ("There is no user with the login " <> login 
 describe :: User -> Text
 describe user = user.login.text <> " (" <> user.displayName <> ")"
 
--- | The users as a table: login, name, and what they may do.
+-- | The users as a table: login, name, and what they may do. The first line
+-- is the heading, LOGIN, NAME, ADMINISTRATOR and SIGNS IN; each other line
+-- is a user, their login first and SIGNS IN last: @yes@, @no (disabled)@
+-- or @no (no password)@. SIGNS IN knows of passwords alone: an account
+-- that signs in only through a provider or with a passkey reads
+-- @no (no password)@.
+--
+-- Each column is padded to its width, the length in characters of its
+-- longest value or heading, and a name's line breaks count as characters:
+-- the row of a name with a line break spans several lines, its columns
+-- still at their widths.
+--
+-- Stable for the upgrade's rehearsal (see 'ListUsers'): its check "ways
+-- in" reads each row by the heading's columns, and fails for a login that
+-- read @yes@ before an upgrade and does not after it.
 listing :: [(Account, Bool)] -> [Text]
 listing accounts = row heading : map (row . cells) accounts
   where
@@ -450,9 +474,13 @@ runMigrate options =
 
 -- | What @wiki-server check@ found, and how the program ends: 0 when
 -- everything read, 4 for a database not at this program's version of the
--- schema, 5 for one that does not read, 1 when it could not be opened.
+-- schema, 5 for one that does not read or breaks a rule the wiki keeps (a
+-- second root in a space, a password no sign-in can use), 1 when it could
+-- not be opened.
 data CheckOutcome
-  = -- | Everything read: a line per table, with its rows.
+  = -- | Everything read: a line per table, with its rows, then how the
+    -- accounts sign in ('Wiki.Server.WaysIn.waysInLines'). An account
+    -- with no way in is said here, and is not a failure.
     CheckPassed [Text]
   | -- | The database is at another version of the schema.
     CheckNotMigrated Text
@@ -468,7 +496,7 @@ runCheck options =
   outcome <$> try @SomeException ((`onPlace` options) (fmap Right . checkDatabase))
   where
     outcome = \case
-      Right (Right (Right tables)) -> CheckPassed (map line tables <> ["Every table and every record read."])
+      Right (Right (Right checked)) -> CheckPassed (map line checked.tables <> ["Every table and every record read."] <> waysInLines checked.ways)
       Right (Right (Left (NotMigrated at known))) ->
         CheckNotMigrated ("The database is at version " <> show at <> " of the schema, and this program reads version " <> show known <> ": run wiki-server migrate first.")
       Right (Right (Left (UnreadableTables tables))) -> CheckUnreadable (map line tables <> ["Some tables did not read (above): this program cannot read the database as it is."])

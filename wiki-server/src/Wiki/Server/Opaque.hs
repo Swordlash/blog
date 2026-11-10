@@ -69,6 +69,7 @@ module Wiki.Server.Opaque
     -- * Records
   , storedRecordOf
   , recordFromStored
+  , decodeStored
   , registerHere
   , registrationChallenge
 
@@ -183,12 +184,21 @@ storedRecordOf u r
       when (isNothing (readStretch (stretchText r.stretch))) (Left "The password's record was stretched too little or too much.")
       pure StoredRecord {record = (messageOf (encode record)).text, stretch = stretchText r.stretch}
 
--- | The record a 'StoredRecord' holds, with its stretching, if it decodes.
+-- | The record a 'StoredRecord' holds, with its stretching, if it decodes
+-- ('decodeStored'): what a sign-in runs against.
 recordFromStored :: StoredRecord -> Maybe (RegistrationRecord, Stretch)
-recordFromStored s = do
-  bytes <- bytesOf (Message s.record)
-  record <- rightToMaybe (decode bytes)
-  stretch <- readStretch s.stretch
+recordFromStored = rightToMaybe . decodeStored
+
+-- | The record a 'StoredRecord' holds, with its stretching, or which of
+-- the two does not decode: the record (not base64url, or not an OPAQUE
+-- record) or the stretching (not @t=\<passes>,m=\<bytes>@ within what
+-- 'readStretch' accepts). A sign-in uses it through 'recordFromStored';
+-- @wiki-server check@ says why ("Wiki.Server.WaysIn").
+decodeStored :: StoredRecord -> Either Text (RegistrationRecord, Stretch)
+decodeStored s = do
+  bytes <- maybe (Left "its OPAQUE record is not base64url") Right (bytesOf (Message s.record))
+  record <- first (const "its OPAQUE record is not a valid one") (decode bytes)
+  stretch <- maybe (Left ("its stretch " <> show s.stretch <> " is not one a sign-in accepts")) Right (readStretch s.stretch)
   pure (record, stretch)
 
 -- | Register a password for a user with both sides in this process: what

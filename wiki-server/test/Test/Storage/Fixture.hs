@@ -7,6 +7,7 @@ module Test.Storage.Fixture
   , withEmptyPlaceIn
   , withDemo
   , demoArchive
+  , decodableRecord
   , whoFor
   , ok
   , path
@@ -15,11 +16,14 @@ module Test.Storage.Fixture
   )
 where
 
+import Data.ByteArray.Encoding (Base (..), convertFromBase)
+import Data.ByteString qualified as BS
 import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, QExpr, TableEntity, aggregate_, all_, as_, countAll_, filter_, runSelectReturningList, runSelectReturningOne, select)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing, withEmptyPlace, withPlace)
 import Test.HUnit (assertFailure)
+import Wiki.Api.Opaque (Message (..), messageOf)
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Mem.Archive (toArchive)
@@ -62,6 +66,17 @@ withDemo backing action = withStorageIn backing $ \_ st -> do
 -- | The demo's wiki, as the export writes it.
 demoArchive :: Archive
 demoArchive = toArchive demoNow "wiki-server-test" (demoState demoNow)
+
+-- | 'decodableRecord' is an OPAQUE record as the users table stores it
+-- (unpadded base64url) that a sign-in decodes: ristretto255's generator as
+-- the client's public key, then zeros for the masking key and the
+-- envelope. No password signs in with it. For a test that needs a record
+-- @wiki-server check@ accepts without registering a password.
+decodableRecord :: Text
+decodableRecord = (messageOf (generator <> BS.replicate 160 0)).text
+  where
+    -- The generator as RFC 9496 encodes it, in its list of multiples.
+    generator = either (\(e :: [Char]) -> panic (toS e)) identity (convertFromBase Base16 ("e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76" :: ByteString))
 
 -- | Who someone of the contract is in a storage: nobody, or the user with
 -- that login, who must be there.
