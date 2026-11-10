@@ -176,7 +176,7 @@ stubs =
           , pageCounts = pure (Map.fromList [(Sample.space.id, 5)])
           , setProfile = \s body -> pure (Space.withProfile body Sample.space {Space.id = s})
           , uploadIcon = \s u ->
-              pure (Space.withProfile Space.SpaceProfile {description = "", icon = Just (Space.IconImage (BlobId "b1") (Attachment.MimeType u.mediaType)), homePage = Nothing, blog = False, boxNumbering = Space.InPage} Sample.space {Space.id = s})
+              pure (Space.withProfile Space.SpaceProfile {description = "", icon = Just (Space.IconImage (BlobId "b1") (Attachment.MimeType u.mediaType)), blog = False, boxNumbering = Space.InPage} Sample.space {Space.id = s})
           , icon = \s b req respond ->
               liftIO . respond $
                 if s == Sample.space.id && b == BlobId "b1" && requestMethod req == methodGet
@@ -511,7 +511,7 @@ spec = describe "a server of the API's type" $ do
       answers (getAt (links.spaces.postDetails (SpaceId "s2"))) 403 Forbidden
 
     it "sets a space's profile" $ do
-      let profile = Space.SpaceProfile {description = "Guides.", icon = Just (Space.IconColour "teal"), homePage = Nothing, blog = True, boxNumbering = Space.InPage}
+      let profile = Space.SpaceProfile {description = "Guides.", icon = Just (Space.IconColour "teal"), blog = True, boxNumbering = Space.InPage}
       answers (sendJson methodPut (links.spaces.setProfile s) profile) 200 (Space.withProfile profile Sample.space)
 
     it "uploads a space's icon as a multipart form, its type from its part, and serves it at the address its space names" $ do

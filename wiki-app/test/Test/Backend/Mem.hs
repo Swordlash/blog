@@ -23,7 +23,7 @@ import Wiki.App.Backend.Contract.Stars qualified as Stars
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Backend.Mem.Persist (records)
-import Wiki.App.Backend.Mem.State (MemState (..), Prepared (..))
+import Wiki.App.Backend.Mem.State (MemState (..), Prepared (..), setHome)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Id (UserId (..))
@@ -68,6 +68,30 @@ spec = do
       s.boxes `shouldBe` (demoState demoNow).server.boxes
       names <- runMemWiki ref (map (\sp -> sp.name) <$> listSpaces)
       names `shouldBe` ["Blog", "Docs"]
+
+    it "refuses to delete a page with its space's home page under it, or to move it to another space, and moves it within the space" $ do
+      -- A home page under another page, as a space may have one from
+      -- before every space had its own: made without the backend's
+      -- checks, which would not make it.
+      let demo = demoState demoNow
+          docs = fromMaybe (panic "the demo has no Docs") (find (\s -> s.name == "Docs") (Map.elems demo.spaces))
+          diagrams = fromMaybe (panic "the demo has no Diagrams") (find (\p -> p.title == "Diagrams") (Map.elems demo.pages))
+      ref <- newMemWiki (setHome docs.id diagrams.id demo)
+      let run :: MemWiki IO x -> IO x
+          run = runMemWiki ref
+          at t = either (panic . show) identity (parsePath t)
+          invalid = \case
+            Left (Invalid _) -> pass
+            other -> expectationFailure ("expected Invalid, got " <> show (void other))
+      run (switchUser (Just (UserId "user-admin")))
+      guide <- run (getPage docs.id (at "markdown-guide")) >>= either (panic . show) pure
+      blog <- run (getSpace (at "blog")) >>= either (panic . show) pure
+      tour <- run (getPage docs.id (at "tour")) >>= either (panic . show) pure
+      run (deletePage guide.id) >>= invalid
+      run (movePage guide.id blog.id Nothing) >>= invalid
+      run (movePage guide.id docs.id (Just tour.id)) >>= either (panic . show) (const pass)
+      (\s -> s.homePage) <$> (run (getSpace (at "docs")) >>= either (panic . show) pure) `shouldReturn` Just diagrams.id
+      void (run (getPage docs.id (at "tour/markdown-guide/diagrams")) >>= either (panic . show) pure)
 
     it "makes ids from a counter, the same on every run" $ do
       let ids st = (Map.keys st.spaces, Map.keys st.pages)

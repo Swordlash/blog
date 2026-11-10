@@ -565,10 +565,12 @@ openMemWiki db source = withRunInIO $ \run -> do
       Right held -> case restore held of
         -- Signed in as the demo starts, with its server settings except
         -- for the shared home page, which is kept in IndexedDB, and with
-        -- the changelog this build carries.
+        -- the changelog this build carries. A space kept from before
+        -- every space had a home page gets its default one, which is then
+        -- kept with the rest.
         Stored restored ->
           do
-            let start = ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}, whatsNew = seed.whatsNew}
+            let start = ensureHomePages time (ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}, whatsNew = seed.whatsNew})
             kept <- storeHolding start held
             let updates = changes held (records start)
             written <- tried (unless (null updates) (writeAll updates))

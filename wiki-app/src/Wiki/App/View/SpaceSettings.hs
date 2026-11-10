@@ -3,7 +3,7 @@
 -- | The space settings view, for someone who may administer the space,
 -- opened from the space's list of pages ("Wiki.App.View.Space"). It edits
 -- the space's name, description and icon, which the directory of spaces
--- shows; the page it opens at; whether it is shown as a blog
+-- shows; whether it is shown as a blog
 -- ("Wiki.Core.Blog"); how the boxes of its pages are numbered
 -- ("Wiki.Core.Markdown.Box"); and, below them, its permissions
 -- ("Wiki.App.View.Permissions", which has the public switch).
@@ -17,7 +17,9 @@
 -- uploaded as soon as it is chosen ('uploadSpaceIcon'), and the profile
 -- then keeps it until another kind of icon is saved. After each change the
 -- shell reloads the wiki, and the form then shows the space as it is,
--- unless it holds unsaved input, which it keeps.
+-- unless it holds unsaved input, which it keeps. The page the space opens
+-- at is not chosen here: it is the home page the space was made with
+-- ('Wiki.Core.Space.homePage').
 module Wiki.App.View.SpaceSettings
   ( Input (..)
   , component
@@ -39,13 +41,11 @@ import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readP
 import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
 import Wiki.Core.Attachment (MimeType (..))
-import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown.Box (numberingLabel, numberings)
-import Wiki.Core.Page (PageSummary (id, title), pageTreeOrder)
 import Wiki.Core.Space
   ( BoxNumbering (..)
   , Icon (..)
-  , Space (blog, boxNumbering, description, homePage, icon, id, name, pageOrder)
+  , Space (blog, boxNumbering, description, icon, id, name)
   , SpaceProfile (..)
   , defaultColour
   , iconColourName
@@ -56,12 +56,10 @@ import Wiki.Core.Space
   , withProfile
   )
 
--- | The view's input: the space, as the space view has it, with its pages,
--- from which the home page is chosen.
+-- | The view's input: the space, as the space view has it.
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [PageSummary]
   }
 
 -- | The kinds of icon the form chooses between.
@@ -75,7 +73,6 @@ data Fields = Fields
   , kind :: Kind
   , colour :: Text
   , emoji :: Text
-  , home :: Maybe PageId
   , blog :: Bool
   , boxNumbering :: BoxNumbering
   }
@@ -100,7 +97,6 @@ data Action
   | ChoseKind Kind
   | ChoseColour Int
   | TypedEmoji Text
-  | ChoseHome Int
   | ShowAsBlog Bool
   | ChoseNumbering Int
   | ImageChosen Event
@@ -165,13 +161,6 @@ component =
               </label>
               <p class="field-hint">A PNG, JPEG, GIF, WebP or AVIF image of at most 1 MB, shown small and square. It is used as soon as it is uploaded.</p>
             </fieldset>
-            <label class="field">
-              <span>Home page</span>
-              <select class="space-home-field" onSelectedIndexChange={{ ChoseHome }}>
-                {% for (p, label) in homeChoices st.input %}<option selected={{ p == f.home }}>{{ label }}</option>{% end %}
-              </select>
-            </label>
-            <p class="field-hint">The page the space opens at. Without one, it opens at the list of its pages.</p>
             <label class="check space-blog-field">
               <input type="checkbox" class="space-blog" checked={{ f.blog }} onChecked={{ ShowAsBlog }}>
               <span>Show as a blog</span>
@@ -227,9 +216,6 @@ component =
       TypedEmoji emoji -> edit (\f -> f {emoji})
       ShowAsBlog blog -> edit (asBlog blog)
       ChoseNumbering n -> for_ (atMay numberings n) $ \numbering -> edit (numberedAs numbering)
-      ChoseHome n -> do
-        input <- gets (\st -> st.input)
-        for_ (atMay (homeChoices input) n) $ \(home, _) -> edit (\f -> f {home})
       ImageChosen ev -> do
         picked <- H.liftEffect (chosenFiles ev >>= pickedFiles)
         for_ (head picked) $ \file -> do
@@ -253,7 +239,7 @@ component =
             modify (\s -> s {busy = True, problem = Nothing, saved = False})
             result <- runExceptT $ do
               when (T.strip f.typedName /= space.name && not (isPersonal space)) $ void (ExceptT (renameSpace space.id f.typedName))
-              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home, blog = f.blog, boxNumbering = f.boxNumbering})
+              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, blog = f.blog, boxNumbering = f.boxNumbering})
             case result of
               Left e -> modify (\s -> s {busy = False, problem = Just e})
               Right updated -> do
@@ -283,7 +269,6 @@ fieldsOf s =
     , emoji = case s.icon of
         Just (IconEmoji e) -> e
         _ -> ""
-    , home = s.homePage
     , blog = s.blog
     , boxNumbering = s.boxNumbering
     }
@@ -291,12 +276,12 @@ fieldsOf s =
 -- | The form with the blog switch set as given. (A function, since a
 -- record update of @blog@ cannot tell the form's field from a space's.)
 asBlog :: Bool -> Fields -> Fields
-asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog, boxNumbering = f.boxNumbering}
+asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, blog, boxNumbering = f.boxNumbering}
 
 -- | The form with the way of numbering boxes set as given, for the same
 -- reason as 'asBlog'.
 numberedAs :: BoxNumbering -> Fields -> Fields
-numberedAs boxNumbering f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog = f.blog, boxNumbering}
+numberedAs boxNumbering f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, blog = f.blog, boxNumbering}
 
 -- | The icon the form chooses, or why it chooses none that can be saved:
 -- an image must be the one the space has, already uploaded.
@@ -317,24 +302,13 @@ isImage = \case
 -- | The space with the icon the form chooses, for the preview; an emoji
 -- not typed yet is shown as the default icon.
 previewed :: State -> Space
-previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage, blog = space.blog, boxNumbering = space.boxNumbering} space
+previewed st = withProfile SpaceProfile {description = space.description, icon, blog = space.blog, boxNumbering = space.boxNumbering} space
   where
     space = st.input.space
     icon = case iconOf space st.fields of
       Right (Just (IconEmoji e)) | T.null (T.strip e) -> Nothing
       Right i -> i
       Left _ -> Nothing
-
--- | The pages the home page can be chosen from, in the order the space
--- lists them, each under the pages above it, with "none" first.
-homeChoices :: Input -> [(Maybe PageId, Text)]
-homeChoices input =
-  (Nothing, "None: the list of its pages")
-    : [ (Just p.id, T.replicate (depth p) "   " <> p.title)
-      | p <- pageTreeOrder input.space.pageOrder input.pages
-      ]
-  where
-    depth p = length (pagePathOf input.pages p.id) - 1
 
 kindLabel :: Kind -> Text
 kindLabel = \case

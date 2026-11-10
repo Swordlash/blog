@@ -224,7 +224,7 @@ component =
     -- the editor's Cancel asks.
     restoreView :: State -> Viewed -> [H.ComponentHTML Action Slots m]
     restoreView st shown
-      | isLatest shown shown.chosen || not (mayEdit st.input.context st.input.space.id) = []
+      | isLatest shown shown.chosen || not (mayEditPage st.input.context st.input.space.id shown.page.id) = []
       | st.confirming =
           [ [hh|
               <div class="confirm restore-confirm" role="alertdialog">

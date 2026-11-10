@@ -139,7 +139,7 @@ component =
           </header>
           {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
           <div class="actions">{{ actions ctx space mode }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
-          {{ form ctx space pages mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
+          {{ form ctx space mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
           <h2>Pages</h2>
           {{ pageList }}{{ templateList }}{{ subspaces ctx space }}
         </section>
@@ -191,10 +191,10 @@ component =
         path = spacePathOf ctx.spaces space.id
         managing = mode == ManagingSettings
 
-    form :: Context -> Space -> [PageSummary] -> Mode -> Maybe (H.ComponentHTML Action Slots m)
-    form ctx space pages = \case
+    form :: Context -> Space -> Mode -> Maybe (H.ComponentHTML Action Slots m)
+    form ctx space = \case
       Viewing -> Nothing
-      ManagingSettings -> Just (HH.slot "settings" () SpaceSettings.component SpaceSettings.Input {context = ctx, space, pages} FromSettings)
+      ManagingSettings -> Just (HH.slot "settings" () SpaceSettings.component SpaceSettings.Input {context = ctx, space} FromSettings)
       Moving chosen ->
         Just $
           inForm

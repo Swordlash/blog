@@ -50,7 +50,7 @@ spec m = do
     names `shouldBe` ["Blog", "Docs", "Team"]
     find ui ".space-card[data-space] .space-card-description" >>= (`shouldHaveText` "Posts about this wiki and about writing it in Haskell.")
     metas <- traverse textContent =<< findAll ui ".space-card-meta"
-    metas `shouldBe` ["2 pages Public", "5 pages Public", "2 pages · 1 subspace Private"]
+    metas `shouldBe` ["3 pages Public", "5 pages Public", "2 pages · 1 subspace Private"]
     -- Nothing visited yet: the section is there, hidden.
     find ui ".recent-spaces" >>= shouldBeHidden
     find ui ".space-card-link[href$='#/s/docs/']" >>= click
@@ -98,18 +98,21 @@ spec m = do
     find ui ".sidebar-space-name" >>= (`shouldHaveText` "Team")
     length <$> findAll ui ".sidebar-up" `shouldReturn` 0
 
-  it "makes a page the space's home page, which the space then opens at" $ runPage $ do
-    ui <- start m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
-    find ui ".page-view .set-home" >>= click
-    eventually (length <$> findAll ui ".page-view .set-home" `shouldReturn` 0)
-    find ui ".wiki-sidebar .sidebar-space" >>= click
-    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
-    find ui ".space-home-link" >>= (`shouldHaveText` "Markdown guide")
-    -- Nobody who does not administer the space is offered it.
+  it "offers a space's home page to its administrators alone to edit, and no other page for it" $ runPage $ do
+    -- The editor writes the blog's posts and does not administer the blog.
+    ui <- start m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["home"]))
+    _ <- find ui ".page-view .actions a[href$='/new-page/home/']"
+    length <$> findAll ui ".page-view .actions a[href$='/edit/']" `shouldReturn` 0
     unmount ui
-    visitor <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
-    _ <- find visitor ".page-view .actions"
-    length <$> findAll visitor ".set-home" `shouldReturn` 0
+    admin <- start m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["home"]))
+    _ <- find admin ".page-view .actions a[href$='/edit/']"
+    length <$> findAll admin ".page-view .set-home" `shouldReturn` 0
+    unmount admin
+    -- The space's settings choose no home page.
+    settings <- start m (Just "user-admin") (SpacePages (slugs ["blog"]))
+    find settings ".space-settings-toggle" >>= click
+    _ <- find settings ".space-settings .space-description-field"
+    length <$> findAll settings ".space-home-field" `shouldReturn` 0
 
   it "sets a space's description and emoji, and an uploaded image for its icon" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["blog"]))

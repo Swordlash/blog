@@ -317,7 +317,7 @@ served backing = describe "served" $ do
       ((.status) <$> getUrl r (r.public <> path)) `shouldReturn` 404
 
 asBlog :: SpaceProfile -> SpaceProfile
-asBlog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog = True, boxNumbering = InPage}
+asBlog p = SpaceProfile {description = p.description, icon = p.icon, blog = True, boxNumbering = InPage}
 
 --------------------------------------------------------------------------------
 -- Heads

@@ -56,9 +56,9 @@ withTwelve st = foldl' add st [1 .. 12 :: Int]
   where
     add s n = fst (insertPage (blogOf st).id Nothing ("Post " <> show n) ("The text of post " <> show n <> ".") (addUTCTime (fromIntegral n * 3600) demoNow) s)
 
--- | The demo's blog with a home page: its second post.
+-- | The demo's blog with a home page someone wrote: its second post.
 withHome :: MemState -> MemState
-withHome st = st {spaces = Map.adjust (\s -> S.withProfile S.SpaceProfile {S.description = s.description, S.icon = s.icon, S.homePage = (\p -> p.id) <$> notes, S.blog = s.blog, S.boxNumbering = s.boxNumbering} s) (blogOf st).id st.spaces}
+withHome st = st {spaces = Map.adjust (S.withHome ((\p -> p.id) <$> notes)) (blogOf st).id st.spaces}
   where
     notes = find (\p -> p.title == "Notes on Haskell") (Map.elems st.pages) :: Maybe P.Page
 
@@ -120,6 +120,23 @@ spec = describe "a space shown as a blog, rendered" $ do
     html `lacks` "Notes on Haskell</span></a>"
     html `contains` "Hello, world</span></a>"
     comesBefore html "class=\"blog-home\"" "class=\"space-cards post-list\""
+
+  it "leaves out a home page whose text is still the one the space was made with" $ do
+    -- The demo's blog has the home page every space is given, untouched.
+    let st = as Nothing
+        home = find (\p -> p.space == (blogOf st).id && p.title == "Home") (Map.elems st.pages) :: Maybe P.Page
+    (\p -> S.isHomeBody p.body) <$> home `shouldBe` Just True
+    (blogOf st).homePage `shouldBe` (\p -> p.id) <$> home
+    Rendered {html} <- render st (Space blogPath)
+    html `lacks` "blog-home"
+    html `lacks` "Welcome to"
+    html `lacks` "Home</span></a>"
+    html `contains` "Hello, world</span></a>"
+    -- Once someone writes it, it is shown.
+    let written = st {pages = Map.map (\p -> if Just p.id == ((\h -> h.id) <$> home) then p {P.body = "Posts on writing."} else p) st.pages}
+    Rendered {html = shown} <- render written (Space blogPath)
+    shown `contains` "<div class=\"blog-home\">"
+    shown `contains` "Posts on writing."
 
   it "says when a post was posted, and links to the posts before and after it" $ do
     Rendered {html = hello} <- render (as Nothing) (Page blogPath (slugs ["hello-world"]))

@@ -285,6 +285,18 @@ spec = describe "Permission" $ do
       for_ [minBound .. maxBound] $ \p ->
         hasSpacePermission (as "alice") grants apiC p `shouldBe` (p `Set.member` perms (as "alice") apiC)
 
+  describe "canEditPage" $ do
+    let homed = [eng, withHome (Just (PageId "home")) backend]
+    it "is canEdit for a page that is not its space's home page" $ do
+      canEditPage (as "alice") grants homed (PageId "other") `shouldBe` True
+      canEditPage (as "bob") grants homed (PageId "other") `shouldBe` False
+    it "is canAdministerSpace for the space's home page" $ do
+      canEditPage (as "alice") grants homed (PageId "home") `shouldBe` False
+      canEditPage (as "carol") grants homed (PageId "home") `shouldBe` True
+      canEditPage (as "dave") grants homed (PageId "home") `shouldBe` True
+    it "looks at the home page of the page's own space only, not of the spaces above" $
+      canEditPage (as "alice") grants [withHome (Just (PageId "home")) eng, backend] (PageId "home") `shouldBe` True
+
   describe "keepsAdministering" $ do
     let carols = SpaceGrant {space = backend.id, subject = SubjectUser (usr "carol"), permission = AdministerSpace}
         alices = SpaceGrant {space = eng.id, subject = SubjectUser (usr "alice"), permission = Edit}

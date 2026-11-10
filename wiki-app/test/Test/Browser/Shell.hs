@@ -109,7 +109,7 @@ spec m = do
       posts `shouldBe` ["Notes on Haskell", "Hello, world"]
     eventually $ do
       links <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
-      links `shouldBe` ["Hello, world", "Notes on Haskell"]
+      links `shouldBe` ["Hello, world", "Home", "Notes on Haskell"]
 
   it "lets admin move a subspace to the top level" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["team", "projects"]))

@@ -262,6 +262,7 @@ import Wiki.Core.Permission
   , Subject (..)
   , canAdministerSpace
   , canEdit
+  , canEditPage
   , canView
   , hasGlobalPermission
   , isFor
@@ -273,7 +274,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, homeBody, homeTitle, isHomeBody, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
@@ -1210,6 +1211,18 @@ requireEdit c = do
         else canEdit x.principal x.grants c
     )
 
+-- | 'requireEdit' for a write that changes this page: saving it (which
+-- renames it too), restoring a version, its drafts, its attachments, and
+-- saying on the live channel that one edits it. The space's home page is
+-- its administrators' to change ('canEditPage'). The wiki's front page
+-- keeps its own rule, a wiki administrator, which 'requireEdit' checks.
+requireEditPage :: [Space] -> PageId -> Tx ()
+requireEditPage c pid = do
+  requireEdit c
+  x <- ask
+  unless (any (\s -> Home.isHomeSpace x.server.homePage s.id) c) $
+    require (canEditPage x.principal x.grants c pid)
+
 -- | Root documents cannot be restructured through the ordinary space APIs.
 requireOrdinary :: SpaceId -> Tx ()
 requireOrdinary sid =
@@ -1559,7 +1572,8 @@ editorOf st who pid =
       Reads
       ( do
           p <- findNode pid
-          requireEdit =<< chainOfPage p
+          c <- chainOfPage p
+          requireEditPage c pid
           asks (\x -> x.user) >>= maybe (failWith Forbidden) (pure . authorOf)
       )
 
@@ -2005,34 +2019,15 @@ createSpaceTx parent name = do
     db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
   withHomePage time space
 
--- | Give a space just inserted its home page, created as if the space's
--- creator had created it, and then set as the space's home page, which
--- requires the page to exist.
+-- | Give a space just inserted its home page ('insertHomePage'), created
+-- as if the space's creator had created it.
 withHomePage :: UTCTime -> Space -> Tx Space
 withHomePage time space = do
-  j <- newId
-  let home =
-        Page
-          { id = PageId j
-          , space = space.id
-          , parent = Nothing
-          , title = homeTitle
-          , slug = fromMaybe (fallbackSlug "page") (slugify homeTitle)
-          , body = homeBody space.name
-          , attachments = []
-          , createdAt = time
-          , updatedAt = time
-          , position = 0
-          , template = False
-          , createdBy = Nothing
-          , updatedBy = Nothing
-          }
-      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False, boxNumbering = InPage} space
   author <- asks (\x -> x.author)
-  db (insertPage home >> insertVersion home author >> updateSpace withHome)
-  pure withHome
+  db (insertHomePage author time space)
 
--- | Give a space a profile, checked against its pages.
+-- | Give a space a profile, checked. The profile has no home page: the
+-- space keeps the one it has.
 setSpaceProfileTx :: SpaceId -> SpaceProfile -> Tx Space
 setSpaceProfileTx sid given = do
   (s, c) <- findSpace sid
@@ -2041,26 +2036,24 @@ setSpaceProfileTx sid given = do
   -- The owner's avatar, which the settings show as the icon of a personal
   -- space with none of its own, is not taken for one ('ownProfile').
   avatar <- asks (\x -> s.owner >>= (`Map.lookup` x.avatars))
-  let p = ownProfile avatar (if home then SpaceProfile {description = s.description, icon = given.icon, homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} else given)
-  nodes <- db (pageNodes sid)
-  checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
+  let p = ownProfile avatar (if home then SpaceProfile {description = s.description, icon = given.icon, blog = s.blog, boxNumbering = s.boxNumbering} else given)
+  checked <- either invalid pure (checkProfile s p)
   when (checked.blog && not s.blog) (requirePlain "A blog" c)
   let s' = withProfile checked s
   db (updateSpace s')
   -- The space's settings save the whole profile at once, so a save that
   -- changed nothing is not recorded in the audit log.
-  let changed = profileChanges nodes s s'
+  let changed = profileChanges s s'
   unless (null changed) (record "space.profile" (spaceSubject s') changed)
   pure s'
 
 -- | What a change of a space's profile changed, in words: the description
--- as it is now, the icon as what it is, the home page by its title, the
--- numbering of boxes by its name (@with-section@).
-profileChanges :: [PageNode] -> Space -> Space -> [(Text, Text)]
-profileChanges nodes old new =
+-- as it is now, the icon as what it is, the numbering of boxes by its name
+-- (@with-section@).
+profileChanges :: Space -> Space -> [(Text, Text)]
+profileChanges old new =
   [("description", if T.null new.description then "none" else new.description) | old.description /= new.description]
     <> [("icon", maybe "the default" iconText new.icon) | old.icon /= new.icon]
-    <> [("home page", maybe "none" titleOf new.homePage) | old.homePage /= new.homePage]
     <> [("blog", yesNo new.blog) | old.blog /= new.blog]
     <> [("numbers of boxes", numberingName new.boxNumbering) | old.boxNumbering /= new.boxNumbering]
   where
@@ -2068,7 +2061,6 @@ profileChanges nodes old new =
       IconEmoji e -> e
       IconColour c -> "colour " <> c
       IconImage _ _ -> "an uploaded image"
-    titleOf pid = maybe pid.text (\n -> n.title) (find (\n -> n.id == pid) nodes)
 
 -- | Set a space's icon to an image, its bytes stored under their hash as
 -- an attachment's are. The previous image's file is left for the deletion
@@ -2082,7 +2074,7 @@ uploadSpaceIconTx sid mediaType size store = do
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
-  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
+  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), blog = s.blog, boxNumbering = s.boxNumbering} s
   db (updateSpace s')
   -- The icon is part of the profile; it has its own operation only
   -- because it carries bytes.
@@ -2563,7 +2555,7 @@ savePageTx :: PageId -> UTCTime -> Text -> Text -> Tx Page
 savePageTx pid base title body = do
   p <- findPage pid
   c <- asks (`chainOf` p.space)
-  requireEdit c
+  requireEditPage c pid
   requirePlain "Writing a page as plain text" c
   t <- nonBlank "A page's title" title
   when (p.updatedAt /= base) $
@@ -2597,6 +2589,11 @@ movePageTx pid destination parent = do
   requireEdit target
   requireOrdinary p.space
   requireOrdinary destination
+  -- The space's home page stays where it is, and stays the space's: so
+  -- does a page that holds it, moved to another space.
+  subtree <- db (subtreeIds pid)
+  (s, _) <- findSpace p.space
+  for_ (homeMoveRefusal s pid (Set.toList subtree) (destination /= p.space)) invalid
   -- A page moves within an encrypted space as it moves within a plain one:
   -- its key and ciphertexts name its space and its own id, not its parent
   -- ("Wiki.Core.Encrypted"), so they stay valid. Moving it to another
@@ -2607,7 +2604,6 @@ movePageTx pid destination parent = do
     requirePlain "Moving a page in or out of an encrypted space" target
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
-  subtree <- db (subtreeIds pid)
   when (any (`Set.member` subtree) parent) $
     invalid "A page cannot be moved under itself or a page under it."
   -- Its siblings at the destination: what a new slug and position are
@@ -2619,8 +2615,6 @@ movePageTx pid destination parent = do
   db $ do
     placePage pid destination parent slug position
     setPageSpace destination (Set.toList (Set.delete pid subtree))
-    -- A page that leaves its space is no longer its home page.
-    when (destination /= p.space) $ clearHomePage (Set.toList subtree)
   when (destination /= p.space) pagesMoved
   findPage pid
 
@@ -2646,7 +2640,10 @@ deletePageTx pid = do
   c <- chainOfPage p
   requireEdit c
   requireOrdinary p.space
-  under <- subtract 1 . Set.size <$> db (subtreeIds pid)
+  gone <- db (subtreeIds pid)
+  (s, _) <- findSpace p.space
+  for_ (homeDeleteRefusal s pid (Set.toList gone)) invalid
+  let under = Set.size gone - 1
   above <- lineageOf pid
   let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
   db (deletePageRow pid)
@@ -2670,7 +2667,7 @@ uploadAttachmentTx :: PageId -> Text -> Text -> Integer -> (FilePath -> IO BlobI
 uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEdit c
+  requireEditPage c pid
   requirePlain "An attachment" c
   n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
@@ -2688,7 +2685,8 @@ deleteAttachmentTx :: AttachmentId -> Tx ()
 deleteAttachmentTx aid = do
   (pid, _) <- db (loadAttachment aid) >>= maybe (failWith NotFound) pure
   p <- findNode pid
-  requireEdit =<< chainOfPage p
+  c <- chainOfPage p
+  requireEditPage c pid
   db (deleteAttachmentRow aid)
 
 --------------------------------------------------------------------------------
@@ -2700,7 +2698,7 @@ draftable :: PageId -> Tx UserId
 draftable pid = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEdit c
+  requireEditPage c pid
   requirePlain "A draft kept on the server" c
   asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
 
@@ -2767,7 +2765,7 @@ restoreVersionTx :: PageId -> UTCTime -> UTCTime -> Tx Page
 restoreVersionTx pid at base = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEdit c
+  requireEditPage c pid
   requirePlain "Restoring a version on the server" c
   v <- findVersion pid at
   savePageTx pid base v.title v.body
@@ -4073,11 +4071,11 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- mark would make the server refuse to read them.
           let spaces =
                 [ (\x -> x {encryption = Nothing}) $ case sp.icon of
-                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog, boxNumbering = sp.boxNumbering} sp
+                    Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), blog = sp.blog, boxNumbering = sp.boxNumbering} sp
                     _ -> sp
                 | sp <- parentsFirst (\x -> x.id) (\x -> x.parent) a.spaces
                 ]
-          insertSpaces [withProfile SpaceProfile {description = sp.description, icon = sp.icon, homePage = Nothing, blog = sp.blog, boxNumbering = sp.boxNumbering} sp | sp <- spaces]
+          insertSpaces [withHome Nothing sp | sp <- spaces]
           -- A grant on a space names the space, so the grants come after.
           insertGrants a.grants
           for_ (parentsFirst (\x -> x.id) (\x -> x.parent) a.pages) $ \p -> do
@@ -4089,6 +4087,11 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
                     url -> url
                in insertAttachment p.id ordinal x {source}
           traverse_ updateSpace [sp | sp <- spaces, isJust sp.homePage]
+          -- A space the archive gives no home page gets its default one,
+          -- as a space made here would, with no author: an archive of an
+          -- older wiki, where a space could have none.
+          time <- liftIO (micro <$> getCurrentTime)
+          traverse_ (insertHomePage Nothing time) [sp | sp <- spaces, hasHome sp, isNothing sp.homePage]
           traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
           importHomeDocument (attachmentsDir st.place.dataDir) incoming
           restoreAudit a.audit

@@ -111,12 +111,10 @@ eachWrite backing = describe "has one entry for each write of the administration
 
   it "a space's profile changed in its settings, and an icon uploaded; a save that changes nothing, none" $ withDemo backing $ \st -> do
     docs <- spaceNamed st "Docs"
-    pages <- as st "admin" (listPages docs.id) >>= ok
-    guide <- maybe (assertFailure "the docs have no Markdown guide") pure (find (\p -> slugText p.slug == "markdown-guide") pages)
-    let numberedAs n b = SpaceProfile {description = "How to write here, and why.", icon = Just (IconColour "teal"), homePage = Just guide.id, blog = b, boxNumbering = n}
+    let numberedAs n b = SpaceProfile {description = "How to write here, and why.", icon = Just (IconColour "teal"), blog = b, boxNumbering = n}
         profile = numberedAs InPage
     changed <- recordsOne st (as st "admin" (setSpaceProfile docs.id (profile docs.blog)))
-    summary changed `shouldBe` ("space.profile", "space", "Docs", [("description", "How to write here, and why."), ("home page", guide.title), ("icon", "colour teal")])
+    summary changed `shouldBe` ("space.profile", "space", "Docs", [("description", "How to write here, and why."), ("icon", "colour teal")])
     blog <- recordsOne st (as st "admin" (setSpaceProfile docs.id (profile (not docs.blog))))
     summary blog `shouldBe` ("space.profile", "space", "Docs", [("blog", if docs.blog then "no" else "yes")])
     numbered <- recordsOne st (as st "admin" (setSpaceProfile docs.id (numberedAs WithSection (not docs.blog))))

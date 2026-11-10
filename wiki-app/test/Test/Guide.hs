@@ -139,7 +139,7 @@ spec = describe "Wiki.App.Guide" $ do
     (\s -> s.homePage) <$> docs `shouldBe` Just ((\p -> p.id) <$> tour)
     for_ ["Markdown guide", "Diagrams", "Mathematics", "Presentations"] $ \t ->
       ((\p -> p.body) <$> titled demo t) `shouldBe` ((\p -> p.body) <$> titled guide t)
-    (\s -> (guideProfile (maybe (panic "no tour") (\p -> p.id) tour)).description == s.description) <$> docs `shouldBe` Just True
+    (\s -> guideProfile.description == s.description) <$> docs `shouldBe` Just True
 
   it "shows the boxes in the Markdown guide: the five, a kind of its own, one without a number and a title with math" $ do
     let parsed = either (const []) identity . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")

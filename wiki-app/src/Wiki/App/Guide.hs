@@ -88,16 +88,15 @@ guideState now = flip execState emptyState $ do
   sid <- state $ \st -> let (st', s) = insertSpace Nothing guideSpaceName True now st in (s.id, st')
   modify (setMathMacros sid (T.intercalate "\n" guideMacros))
   tourPage <- insertGuide ServerTour sid (const now)
-  modify (setProfile sid (guideProfile tourPage))
+  modify (setProfile sid guideProfile . setHome sid tourPage)
 
 -- | The profile of the space that holds the guide: the demo's Docs and a
--- server's Guide alike, opening at the tour.
-guideProfile :: PageId -> SpaceProfile
-guideProfile tourPage =
+-- server's Guide alike. Both open at the tour, their home page.
+guideProfile :: SpaceProfile
+guideProfile =
   SpaceProfile
     { description = "How to use this wiki: a guided tour, and everything its Markdown can do."
     , icon = Just (IconEmoji "📘")
-    , homePage = Just tourPage
     , blog = False
     , boxNumbering = InPage
     }
@@ -196,8 +195,8 @@ demoTour =
   , ""
   , "A space opens at its home page, which is this one for Docs. **Pages and"
   , "settings**, in the sidebar, lists all of a space's pages, and there"
-  , "whoever administers the space gives it a description, an icon (an"
-  , "emoji, a colour, or an image) and another home page. The icon is the"
+  , "whoever administers the space gives it a description and an icon (an"
+  , "emoji, a colour, or an image), and edits its home page. The icon is the"
   , "browser tab's on the space's pages; an administrator gives the wiki an"
   , "icon of its own on the front page, for the tab everywhere else."
   , ""
@@ -299,8 +298,8 @@ serverTour =
   , "Inside a space, the sidebar shows its pages and its subspaces, and a menu"
   , "to switch to another space. A space is private until whoever administers"
   , "it makes it public; **Space settings**, in the sidebar, is where they"
-  , "choose who may view, edit or administer it, and give it a description, an"
-  , "icon and a home page. The icon is the browser tab's on the space's pages;"
+  , "choose who may view, edit or administer it, and give it a description and"
+  , "an icon; they alone edit its home page. The icon is the browser tab's on the space's pages;"
   , "an administrator gives the wiki an icon of its own on the front page, for"
   , "the tab everywhere else. **New space**, on the front page, is there for"
   , "whoever may create spaces. **Make private**, in a subspace's"

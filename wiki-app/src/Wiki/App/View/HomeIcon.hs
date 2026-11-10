@@ -134,7 +134,7 @@ component =
                 ImageKind -> h.icon
           modify (\s -> s {busy = True, problem = Nothing, saved = False})
           -- The home takes only the icon of a profile.
-          setSpaceProfile h.id SpaceProfile {description = "", icon, homePage = Nothing, blog = False, boxNumbering = h.boxNumbering} >>= \case
+          setSpaceProfile h.id SpaceProfile {description = "", icon, blog = False, boxNumbering = h.boxNumbering} >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just e})
             Right _ -> do
               modify (\s -> s {busy = False, saved = True})

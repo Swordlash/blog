@@ -15,6 +15,7 @@ module Wiki.App.View.Common
   , chainOf
   , mayView
   , mayEdit
+  , mayEditPage
   , mayAdminister
   , notified
   , homeSpace
@@ -73,7 +74,7 @@ import Wiki.Core.Math (Macros (..), wikiMacros)
 import Wiki.Core.Order (ChildOrder, Shift (..))
 import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
-import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canView, hasGlobalPermission, spaceChain)
+import Wiki.Core.Permission (GlobalPermission (Administer), Grants, Principal, canAdministerSpace, canEdit, canEditPage, canView, hasGlobalPermission, spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (active, homePage, icon, id, name, owner, personalContainer, slug), colourFor, colourOf, iconLetter, isPersonal)
 import Wiki.Core.User (Avatar, Standing (..), User (id))
@@ -148,6 +149,15 @@ mayView ctx sid = canView (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayEdit ctx sid | homeSpace ctx sid = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
 mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
+
+-- | Whether the user may change this page of the space: save it, rename
+-- it, restore a version, keep a draft, attach files. That is 'mayEdit',
+-- except for the space's home page, which only the space's administrators
+-- change ('canEditPage'). The wiki's front page keeps its own rule, a
+-- wiki administrator.
+mayEditPage :: Context -> SpaceId -> PageId -> Bool
+mayEditPage ctx sid _ | homeSpace ctx sid = mayEdit ctx sid
+mayEditPage ctx sid pid = canEditPage (principalOf ctx) (grantsOf ctx) (chainOf ctx sid) pid
 
 -- | Whether this is the real backing space of the wiki root.
 homeSpace :: Context -> SpaceId -> Bool

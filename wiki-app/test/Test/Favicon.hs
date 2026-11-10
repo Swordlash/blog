@@ -99,7 +99,7 @@ spec = describe "Wiki.App.Favicon" $ do
     home.icon `shouldBe` defaultFavicon
     -- The home given an emoji: the home's page and the search show it.
     let homeSpace = (\d -> d.space) <$> st.server.homePage.document
-        emojied s = withProfile SpaceProfile {description = s.description, icon = Just (IconEmoji "🏠"), homePage = s.homePage, blog = s.blog, boxNumbering = s.boxNumbering} s
+        emojied s = withProfile SpaceProfile {description = s.description, icon = Just (IconEmoji "🏠"), blog = s.blog, boxNumbering = s.boxNumbering} s
         withIcon = st {spaces = Map.adjust emojied (fromMaybe (SpaceId "none") homeSpace) st.spaces}
     Rendered {meta = home'} <- renderRoute withIcon "/" Home
     svgOf home'.icon `shouldSatisfy` T.isInfixOf "🏠"

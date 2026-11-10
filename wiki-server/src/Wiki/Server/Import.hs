@@ -90,7 +90,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, spaceTreeOrder, withHome, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -385,7 +385,8 @@ importSpace blobs a discussions choices progress m
 
 -- | Fill a space's description, icon and home page from the archive's,
 -- where the server's space has none of its own (a space the import created
--- has none yet). The home page is the page the archive's became, and an
+-- has none yet). The home page is the page the archive's became, or the
+-- default one where there is no such page ('insertHomePage'), and an
 -- image is stored under its hash, as an attachment's bytes are. A space the
 -- archive shows as a blog is shown as one (a flag has no "none of its own"
 -- to keep: a space already shown as a blog stays one).
@@ -403,8 +404,14 @@ fillProfile blobs a m target progress =
             (own, _) -> pure own
           let description = if T.null theirs.description then m.archived.description else theirs.description
               homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
-              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog, boxNumbering = theirs.boxNumbering} theirs
+              filled = withHome homePage (withProfile SpaceProfile {description, icon, blog = theirs.blog || m.archived.blog, boxNumbering = theirs.boxNumbering} theirs)
           when (filled /= theirs) (updateSpace filled)
+          -- A space that still has none, since the archive gives it none or
+          -- its home page was skipped, gets its default one, as a space
+          -- made here would, with no author, as the imported pages have.
+          when (hasHome filled && isNothing filled.homePage) $ do
+            time <- micro <$> liftIO getCurrentTime
+            void (insertHomePage Nothing time filled)
       )
 
 importPage :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> Db be Progress
