@@ -3381,6 +3381,43 @@ body:has(.slides-view) {
   text-align: center;
 }
 
+/* The emoji: a field to search, and a grid of the emoji found, eight to a
+   row (the arrows move by eight up and down: emojiColumns in
+   Wiki.App.View.Editor). */
+.emoji-menu {
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: calc(100vw - 2rem);
+}
+
+.emoji-menu .emoji-search {
+  width: 100%;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(1.8rem, 2.1rem));
+  gap: 0.1rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.toolbar-menu .emoji-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.1rem;
+  padding: 0;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 1.25rem;
+}
+
+.emoji-none {
+  margin: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .swatch-none .icon {
   width: 16px;
   height: 16px;
@@ -7429,9 +7466,10 @@ a.mention {
   color: var(--caution);
 }
 
-/* The list that completes a mention (@codemirror/autocomplete, in
-   web/src/editor.js): a menu like the application's others, each user's
-   display name and then their login, dimmed, and the one Enter or Tab
+/* The list that completes a mention or an emoji (@codemirror/autocomplete,
+   in web/src/editor.js): a menu like the application's others, each user's
+   display name and then their login, dimmed, or each emoji and its
+   shortcode, and the one Enter or Tab
    would choose on the accent's tint. The rules name .editor-cm .cm-tooltip
    to outweigh CodeMirror's own theme, which has colours of its own for
    light and dark. */
@@ -7468,6 +7506,14 @@ a.mention {
 .editor-cm .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 16%, var(--background));
+}
+
+/* An emoji's entry: the emoji, then its shortcode. */
+.editor-cm .cm-tooltip-autocomplete .cm-completionEmoji {
+  width: 1.4em;
+  margin-right: -0.6rem;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  text-align: center;
 }
 
 .editor-cm .cm-tooltip-autocomplete .cm-completionDetail {

@@ -85,6 +85,15 @@
 -- ('answerMention'). The textarea before CodeMirror has loaded completes
 -- nothing.
 --
+-- It completes emoji the same way (WP5.86 of docs/PLAN.md). A colon that
+-- starts a word, or @-:@ at the start of a line, followed by the letters of
+-- a name, opens a list of the emoji whose names match, and choosing one
+-- writes @:name:@ (or @- :name: @, an item of a bulleted list). CodeMirror
+-- asks with an event of its own (@wiki-emoji@), and the component answers
+-- from the names the Markdown parser knows ('emojiMatches', 'answerEmoji').
+-- The toolbar's "Emoji" menu searches the same names, in a field of its
+-- own, and writes the one chosen at the cursor.
+--
 -- The toolbar's commands are pure functions ("Wiki.Core.Markdown.Edit"). A
 -- button or a shortcut reads the text and the selection, applies the
 -- command, and writes the change back as one edit that undo reverts in one
@@ -261,6 +270,7 @@ import Wiki.App.Editor.Browser
   , Files
   , PickedFile (..)
   , announceUpload
+  , answerEmoji
   , answerMention
   , applyCommand
   , attachEditor
@@ -271,10 +281,12 @@ import Wiki.App.Editor.Browser
   , detachEditor
   , droppedFiles
   , editorKey
+  , emojiAsked
   , focusElement
   , focusText
   , forgetPreviewEntry
   , goToTitleLine
+  , gridKey
   , guardUnload
   , historyBack
   , insertAtCursor
@@ -353,6 +365,7 @@ import Wiki.Core.Markdown.Edit
   , textColourClass
   , textColours
   )
+import Wiki.Core.Markdown.Emoji (emojiMatches)
 import Wiki.Core.Markdown.Problems qualified as Problems
 import Wiki.Core.Markdown.Render (IslandKey)
 import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
@@ -526,6 +539,9 @@ data State = State
   -- only.
   , menuWatch :: Maybe H.SubscriptionId
   -- ^ The watch for a press outside the open menu or Escape.
+  , emojiQuery :: Text
+  -- ^ What is typed in the "Emoji" menu's field: the menu shows the emoji
+  -- whose names match it ('emojiMatches').
   , host :: H.RefLabel
   -- ^ The element where CodeMirror goes, in the textarea's place; the
   -- text is reached through it ("Wiki.App.Editor.Browser").
@@ -640,6 +656,10 @@ data Action
   | ChangesLeft Int
   | Decide Decision Int
   | MentionAsked Int Text
+  | EmojiAsked Int Text
+  | SearchEmoji Text
+  | PickEmoji Text
+  | EmojiFocus Int
   | FromPreview Preview.Output
   | NextProblem
 
@@ -737,6 +757,7 @@ component =
               , menu = Nothing
               , menuHolder
               , menuWatch = Nothing
+              , emojiQuery = ""
               , host
               , fileInput
               , backButton
@@ -839,7 +860,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input, emojiSearch = st.emojiQuery} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1089,6 +1110,29 @@ component =
       Just key -> Just (Key key)
       Nothing -> Nothing
 
+    -- The keys of the "Emoji" menu, read in the keydown's listener, which
+    -- stops the browser's own action for them (Enter in the field would
+    -- submit the form, an arrow would scroll). In the field, Enter chooses
+    -- the first emoji found and the down arrow goes to it. On an emoji, the
+    -- arrows move through the grid, a row of 'emojiColumns' at a time up
+    -- and down, and up from the first row (or left from the first emoji)
+    -- back to the field. Any other key is left to the browser: Tab moves
+    -- the focus, and Enter on an emoji is its click.
+    emojiKey :: [(Text, Text)] -> Event -> Maybe Action
+    emojiKey found ev = case gridKey ev of
+      Just ("Enter", Nothing) -> PickEmoji . fst <$> head found
+      Just ("ArrowDown", Nothing) | not (null found) -> Just (EmojiFocus 0)
+      Just ("ArrowRight", Just i) -> step i 1
+      Just ("ArrowLeft", Just i) -> step i (-1)
+      Just ("ArrowDown", Just i) -> step i emojiColumns
+      Just ("ArrowUp", Just i) -> step i (-emojiColumns)
+      _ -> Nothing
+      where
+        step i by
+          | i + by < 0 = Just (EmojiFocus (-1))
+          | i + by >= length found = Just (EmojiFocus i)
+          | otherwise = Just (EmojiFocus (i + by))
+
     -- The providers' buttons: each opens the assistant with its provider,
     -- or closes it if it is open with that provider. A provider gets a
     -- button once the user has a key for it (OpenAI's API at another
@@ -1216,7 +1260,7 @@ component =
     toolbarOf holder bar =
       [hh|
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
-          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu holder bar }}</div>
+          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu holder bar }}{{ emojiMenu holder bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{% if bar.files %}{{ imageButton }}{% end %}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
@@ -1319,6 +1363,35 @@ component =
         </div>
       |]
 
+    -- The emoji: a field to search their names, focused when the menu
+    -- opens, and a grid of the emoji that match (the common ones before
+    -- anything is typed), each writing its shortcode at the cursor. The
+    -- arrows move between the field and the emoji, as Tab does, Enter on an
+    -- emoji chooses it, and Enter in the field chooses the first.
+    emojiMenu :: H.RefLabel -> Bar -> H.ComponentHTML Action Slots m
+    emojiMenu holder bar =
+      [hh|
+        <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just EmojiMenu] }}>
+          <button type="button" class="tool" title="Emoji" aria-label="Emoji" aria-haspopup="dialog" aria-expanded={{ ariaBool (bar.menuOpen == Just EmojiMenu) }} onClick={{ const (ToggleMenu EmojiMenu) }}>{{ icon emojiIcon }}</button>
+          {% if bar.menuOpen == Just EmojiMenu %}
+            <div class="toolbar-menu emoji-menu" role="dialog" aria-label="Emoji" {{ HE.preventingDefault (HE.handler' (EventType "keydown") (emojiKey found)) }}>
+              <input type="text" class="emoji-search" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off" spellcheck="false" onValueInput={{ SearchEmoji }}>
+              {% if null found %}
+                <p class="emoji-none">No emoji has that name.</p>
+              {% else %}
+                <div class="emoji-grid" role="group" aria-label="Emoji found">
+                  {% for (n, (name, emoji)) in zip [0 :: Int ..] found %}
+                    <button type="button" class="emoji-choice" title={{ ":" <> name <> ":" }} aria-label={{ name }} {{ attr "data-index" (show n) }} onClick={{ const (PickEmoji name) }}>{{ emoji }}</button>
+                  {% end %}
+                </div>
+              {% end %}
+            </div>
+          {% end %}
+        </div>
+      |]
+      where
+        found = emojiMatches bar.emojiSearch
+
     -- The title, keyed by the load (see the module's comment). A page's
     -- title is read from the text's first line (WP5.39 of docs/PLAN.md), so
     -- it is shown as text, styled as a heading, and not as a field (WP5.55):
@@ -1379,6 +1452,7 @@ component =
                 {{ HE.handler' (EventType "wiki-changes") (\ev -> Just $! ChangesLeft (changesLeft ev)) }}
                 {{ HE.handler' (EventType "wiki-decide") (\ev -> uncurry Decide <$> decision ev) }}
                 {{ HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev) }}
+                {{ HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev) }}
               ></div>
             |]
           )
@@ -1565,9 +1639,10 @@ component =
         was <- gets (\st -> st.menu)
         closeMenu
         unless (was == Just which) $ do
-          modify (\st -> st {menu = Just which})
+          modify (\st -> st {menu = Just which, emojiQuery = ""})
           watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
           modify (\st -> st {menuWatch = watch})
+          when (which == EmojiMenu) $ handleAction (EmojiFocus (-1))
       CloseMenu -> closeMenu
       ToggleMacros -> closeMenu >> modify (\st -> st {macrosOpen = not st.macrosOpen})
       -- The page's block is written into the text as a toolbar command
@@ -1758,6 +1833,22 @@ component =
         found <- mentionCandidates letters
         host <- gets (\st -> st.hostElement)
         for_ host $ \h -> H.liftEffect (answerMention h i (rightToMaybe found))
+      -- CodeMirror asks which emoji a name may be, as a colon and letters
+      -- are typed: those whose names match, from the parser's own list.
+      EmojiAsked i letters -> do
+        host <- gets (\st -> st.hostElement)
+        for_ host $ \h -> H.liftEffect (answerEmoji h i (emojiMatches letters))
+      SearchEmoji emojiQuery -> modify (\st -> st {emojiQuery})
+      -- The emoji chosen in the menu, as its shortcode, at the cursor; the
+      -- text has the focus again.
+      PickEmoji name -> do
+        closeMenu
+        whenM (gets (\st -> st.mode == Editing)) $ insert (":" <> name <> ":")
+      -- The focus to the menu's field (-1) or to one of its emoji.
+      EmojiFocus n -> do
+        holder <- gets (\st -> st.menuHolder) >>= H.getRef
+        let selector = if n < 0 then ".emoji-search" else ".emoji-choice[data-index=\"" <> show n <> "\"]"
+        for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector selector >>= traverse_ focusElement))
       -- An island of the preview failed, or was drawn after failing. The
       -- failure is kept even for a key the last check has not seen (the
       -- preview may have drawn a text the check has not read yet); only
@@ -2482,13 +2573,21 @@ data Bar = Bar
   -- ^ Whether the math macros' panel is shown.
   , files :: Bool
   -- ^ Whether files can be attached to the page ('attachable').
+  , emojiSearch :: Text
+  -- ^ What is typed in the "Emoji" menu's field.
   }
   deriving stock (Eq)
 
--- | The toolbar's menus: the HTML elements, the palette and the kinds of
--- box.
-data Menu = HtmlMenu | ColourMenu | BoxMenu
+-- | The toolbar's menus: the HTML elements, the palette, the kinds of
+-- box and the emoji.
+data Menu = HtmlMenu | ColourMenu | BoxMenu | EmojiMenu
   deriving stock (Eq)
+
+-- | How many emoji a row of the "Emoji" menu's grid holds, as the
+-- stylesheet lays it out (@.emoji-grid@): the up and down arrows move by
+-- this many.
+emojiColumns :: Int
+emojiColumns = 8
 
 -- | The kinds of box the toolbar offers, each as its marker writes it
 -- (@TIP@) and as its boxes are titled: GitHub's five, then the kinds the
@@ -2556,7 +2655,7 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, linkPageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon :: Text
+imageIcon, linkPageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, sideBySideIcon, boxIcon, macrosIcon, emojiIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 -- A page with a corner folded, and a link's chain over it.
 linkPageIcon = "M3 1.5h6l3.5 3.5v3M3 1.5v13h4.5M9 1.5v3.5h3.5M10.2 13.6a1.6 1.6 0 0 0 2.3 0l1.3-1.3a1.6 1.6 0 0 0-2.3-2.3l-.5.5M12.4 11.4a1.6 1.6 0 0 0-2.3 0l-1.3 1.3a1.6 1.6 0 0 0 2.3 2.3l.5-.5"
@@ -2568,6 +2667,8 @@ previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 sideBySideIcon = "M1.5 2.5h13v11h-13zM8 2.5v11"
 -- A box with a bar down its left side and a title line, as a page draws one.
 boxIcon = "M2.5 2.5h11v11h-11zM2.5 2.5v11M5 5.5h6M5 8.5h6M5 11h4"
+-- A smiling face.
+emojiIcon = "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 1 0 0-13zM5.2 9.6c.6 1.1 1.6 1.7 2.8 1.7s2.2-.6 2.8-1.7M6 6.3h.01M10 6.3h.01"
 -- A backslash and braces, as a macro's definition is written.
 macrosIcon = "M2 3l4 10M9.5 3c-1.5 0-1.5 1-1.5 2.5S7 8 6.5 8c.5 0 1.5.5 1.5 2.5S8 13 9.5 13M12 3c1.5 0 1.5 1 1.5 2.5S14.5 8 15 8c-.5 0-1.5.5-1.5 2.5S13.5 13 12 13"
 

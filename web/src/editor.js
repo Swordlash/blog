@@ -3,7 +3,7 @@
 // larger, their markers kept but dimmed; code in its own background, fenced
 // code highlighted by highlight.js as the page will be; links, quotes and
 // lists set off), and nothing else of CodeMirror's but the completion of
-// mentions and the marks of the page's problems: no line numbers, no keys of
+// mentions and emoji and the marks of the page's problems: no line numbers, no keys of
 // its own but moving, selecting, deleting, undoing and choosing a
 // completion.
 //
@@ -48,6 +48,12 @@
 //   backend through the component: a "wiki-mention" event on the host asks
 //   for them ({id, letters}), and the component answers through
 //   wikiEditor.mentioned(id, people).
+// - a colon that starts a word, or "-:" at the start of a line, followed by
+//   the letters of an emoji's name, opens a list of emoji in the same
+//   completion (see the completion of emoji below). The names come from
+//   Haskell (Wiki.Core.Markdown.Emoji), as the users do: a "wiki-emoji"
+//   event asks ({id, letters}), and the component answers through
+//   wikiEditor.emojied(id, found).
 // - the page's problems (WP5.65 of docs/PLAN.md: a formula, a diagram or a
 //   picture that cannot be drawn, a broken spoiler or box marker) are
 //   diagnostics of @codemirror/lint, set by the component
@@ -58,7 +64,17 @@
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { acceptCompletion, autocompletion, closeCompletion, completionKeymap, completionStatus, insertCompletionText, pickedCompletion } from "@codemirror/autocomplete";
+import {
+  acceptCompletion,
+  autocompletion,
+  closeCompletion,
+  completionKeymap,
+  completionStatus,
+  currentCompletions,
+  insertCompletionText,
+  pickedCompletion,
+  selectedCompletionIndex,
+} from "@codemirror/autocomplete";
 import { ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
@@ -591,19 +607,20 @@ const answerTime = 10_000;
 // was loaded again) is not taken for an answer to a new one.
 let questions = 0;
 
-// The completion source of one editor, and how the component answers it.
-// `answers` keeps the users the component answered, by the letters asked
-// about as they were typed (a server on SQLite tells "Łu" from "łu"), for
-// as long as the editor lives, so that typing a letter and deleting it
+// The questions one editor asks the component by an event on the host
+// (`eventName`, with the detail {id, letters}), and the answers, by the
+// letters asked about. `answers` keeps what the component answered, by
+// the letters as they were typed (a server on SQLite tells "Łu" from "łu"),
+// for as long as the editor lives, so that typing a letter and deleting it
 // asks nothing again. An answer of null (the backend failed) is not kept.
 // `asking` holds the questions not yet answered, so that the same letters
 // typed again while the first question is out wait for it rather than ask
 // again; a question leaves it when it is answered, or after answerTime,
 // when it is asked again the next time. `waiting` holds each question's
 // answer until it comes, even after answerTime. The library waits a
-// moment after the last key before it asks the source (its
+// moment after the last key before it asks a source (its
 // activateOnTypingDelay), so a name typed quickly is asked about once.
-const mentions = (host) => {
+const asker = (host, eventName) => {
   const answers = new Map();
   const asking = new Map();
   const waiting = new Map();
@@ -617,61 +634,209 @@ const mentions = (host) => {
           if (asking.get(letters) === question) asking.delete(letters);
           resolve(null);
         }, answerTime);
-        waiting.set(id, (people) => {
+        waiting.set(id, (found) => {
           clearTimeout(timer);
           waiting.delete(id);
           if (asking.get(letters) === question) asking.delete(letters);
-          if (people !== null) answers.set(letters, people);
-          resolve(people);
+          if (found !== null) answers.set(letters, found);
+          resolve(found);
         });
       });
       asking.set(letters, question);
-      host.dispatchEvent(new CustomEvent("wiki-mention", { detail: { id, letters } }));
+      host.dispatchEvent(new CustomEvent(eventName, { detail: { id, letters } }));
     }
     return question;
   };
+  return { ask, answer: (id, found) => waiting.get(id)?.(found) };
+};
+
+// The answer to a source's question, or null once the library has given up
+// on the list it was for (more was typed). The question stays out for the
+// next time the same letters are typed.
+const unlessAborted = (context, asked) =>
+  Promise.race([asked, new Promise((resolve) => context.addEventListener("abort", () => resolve(null)))]);
+
+// The completion source of mentions, asking the component through
+// `people`.
+const mentionSource = (people) => {
   // "@login", and a space unless one follows already.
   const choose = (login) => (view, completion, from, to) => {
     const next = view.state.sliceDoc(to, to + 1);
     const text = `@${login}${next === " " || next === "\t" ? "" : " "}`;
     view.dispatch({ ...insertCompletionText(view.state, text, from, to), annotations: pickedCompletion.of(completion) });
   };
-  const source = async (context) => {
+  return async (context) => {
     const typed = context.matchBefore(typedMention);
     if (typed === null) return null;
     if (wordBefore.test(context.state.sliceDoc(Math.max(0, typed.from - 2), typed.from))) return null;
     if (!mentionCounts(context.state, context.pos)) return null;
-    // The question stays out for the next time these letters are typed;
-    // a completion the library has given up on (more was typed) does not
-    // wait for it.
-    const people = await Promise.race([
-      ask(typed.text.slice(1)),
-      new Promise((resolve) => context.addEventListener("abort", () => resolve(null))),
-    ]);
-    if (people === null || people.length === 0) return null;
+    const found = await unlessAborted(context, people.ask(typed.text.slice(1)));
+    if (found === null || found.length === 0) return null;
     return {
       from: typed.from,
       // The server has chosen and ordered them: the library is not to
       // filter them again by the display name it shows.
       filter: false,
-      options: people.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: choose(person.login) })),
+      options: found.map((person) => ({ label: person.name, detail: `@${person.login}`, apply: choose(person.login) })),
     };
   };
-  // The list's keys: the library's, and Tab, which chooses as Enter does.
-  // A key the list acts on goes no further, so that the form's keydown
-  // (wiki-app/jsbits/editor.js) does not act on it too: Tab does not
-  // indent and Escape does not close a menu. A key the list does not act
-  // on goes on as before. Escape acts only on a list that is shown: the
-  // library's closes a completion still being asked for too, which would
-  // keep Escape from the form while nothing is shown.
-  const escape = (view) => completionStatus(view.state) === "active" && closeCompletion(view);
-  const keys = [...completionKeymap.filter((binding) => binding.key !== "Escape"), { key: "Escape", run: escape }, { key: "Tab", run: acceptCompletion }];
+};
+
+// The completion of emoji (WP5.86 of docs/PLAN.md). Two things open its
+// list:
+//
+// - a colon that starts a word (at the start of a line, or after white
+//   space), and the letters of a name after it; choosing an emoji writes
+//   ":name:", the shortcode, which the page shows as the emoji. A colon
+//   after a letter or a digit (10:30, "Note:") opens nothing, and a
+//   character no name has (":)", ": ") closes the list.
+// - "-:" at the start of a line, after any indentation, and the letters of
+//   a name after it; choosing writes "- :name: ", an item of a bulleted
+//   list that starts with the emoji, which the page shows in the bullet's
+//   place. It is the editor's shorthand, not Markdown: "-:" left alone
+//   stays as typed. It opens nothing on a table's line, or on one that may
+//   become a table's delimiter row (-: | :-).
+//
+// The letters of a name are those of Wiki.Core.Markdown.Emoji's
+// isEmojiNameChar: small letters, digits, "_", "+" and "-" (":+1:"). The
+// names, and which of them match the letters, are Haskell's: the source
+// asks the component, which answers with emojiMatches. Neither opens in
+// code, math, a link or HTML, where a mention does not count either.
+//
+// Enter chooses an emoji only once two letters of a name are typed, or
+// once an entry was chosen with the arrows: a colon, or a smiley such as
+// ":p", at the end of a line, then Enter, is a new line. Tab and a click
+// choose at once. Escape closes the list and writes a backslash before its
+// colon ("\:", "-\:"), as one step of the undo: the colon is then text,
+// and the list does not open there again.
+const emojiChars = "[a-z0-9_+-]";
+const typedEmoji = new RegExp(`:${emojiChars}*$`);
+const typedBullet = new RegExp(`^([ \\t]*)-:(${emojiChars}*)$`);
+const enterAfter = 2;
+
+// Whether "-:" on this line may be a table's: the line before it or the
+// rest of this one has a "|", or the tree has a table here.
+const nearTable = (state, line, pos) => {
+  if (state.sliceDoc(pos, line.to).includes("|")) return true;
+  if (line.number > 1 && state.doc.line(line.number - 1).text.includes("|")) return true;
+  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+    if (node.name === "Table") return true;
+    if (node.type.isTop) break;
+  }
+  return false;
+};
+
+// What the emoji's list completes before `pos`, or null: where it starts
+// (the colon, or the "-" of "-:"), the letters typed of the name, and
+// whether it is the "-:" of a bullet.
+const emojiTyped = (state, pos) => {
+  const line = state.doc.lineAt(pos);
+  const before = state.sliceDoc(line.from, pos);
+  const bullet = typedBullet.exec(before);
+  if (bullet !== null) {
+    return nearTable(state, line, pos) ? null : { from: line.from + bullet[1].length, letters: bullet[2], bullet: true };
+  }
+  const colon = typedEmoji.exec(before);
+  if (colon === null || (colon.index > 0 && !/\s/.test(before[colon.index - 1]))) return null;
+  return { from: line.from + colon.index, letters: colon[0].slice(1), bullet: false };
+};
+
+// Whether the list shown is the emoji's: its entries carry their emoji.
+const emojiShown = (state) => completionStatus(state) === "active" && currentCompletions(state)[0]?.emoji !== undefined;
+
+// The completion source of emoji, asking the component through `names`.
+const emojiSource = (names) => {
+  // ":name:", or for "-:" the item "- :name: ", with no second space where
+  // one follows already.
+  const choose = (name, bullet) => (view, completion, from, to) => {
+    const next = view.state.sliceDoc(to, to + 1);
+    const text = bullet ? `- :${name}:${next === " " || next === "\t" ? "" : " "}` : `:${name}:`;
+    view.dispatch({ ...insertCompletionText(view.state, text, from, to), annotations: pickedCompletion.of(completion) });
+  };
+  return async (context) => {
+    const typed = emojiTyped(context.state, context.pos);
+    if (typed === null || !mentionCounts(context.state, context.pos)) return null;
+    const found = await unlessAborted(context, names.ask(typed.letters));
+    if (found === null || found.length === 0) return null;
+    return {
+      from: typed.from,
+      // Haskell has chosen and ordered them.
+      filter: false,
+      options: found.map(({ name, emoji }) => ({ label: `:${name}:`, emoji, apply: choose(name, typed.bullet) })),
+    };
+  };
+};
+
+// An entry of the emoji's list shows its emoji before its name; a
+// mention's shows nothing more.
+const emojiOfOption = {
+  position: 30,
+  render: (completion) => {
+    if (completion.emoji === undefined) return null;
+    const shown = document.createElement("span");
+    shown.className = "cm-completionEmoji";
+    shown.setAttribute("aria-hidden", "true");
+    shown.textContent = completion.emoji;
+    return shown;
+  },
+};
+
+// The completion of one editor, of mentions and of emoji, in one of the
+// library's completions (two would fight over the keys and the list), and
+// how the component answers it.
+const completions = (host) => {
+  const people = asker(host, "wiki-mention");
+  const names = asker(host, "wiki-emoji");
+  // Enter chooses a mention at once, and an emoji as said above; when it
+  // chooses nothing, it is a new line.
+  const enter = (view) => {
+    if (!emojiShown(view.state)) return acceptCompletion(view);
+    const typed = emojiTyped(view.state, view.state.selection.main.head);
+    if (typed === null) return false;
+    if (typed.letters.length < enterAfter && (selectedCompletionIndex(view.state) ?? 0) === 0) return false;
+    return acceptCompletion(view);
+  };
+  // Escape acts only on a list that is shown: the library's closes a
+  // completion still being asked for too, which would keep Escape from the
+  // form while nothing is shown. On a mention's list it closes the list
+  // and leaves the text; on the emoji's it also escapes the colon.
+  const escape = (view) => {
+    if (completionStatus(view.state) !== "active") return false;
+    const typed = emojiShown(view.state) ? emojiTyped(view.state, view.state.selection.main.head) : null;
+    closeCompletion(view);
+    if (typed !== null) {
+      view.dispatch({
+        changes: { from: typed.bullet ? typed.from + 1 : typed.from, insert: "\\" },
+        annotations: isolateHistory.of("full"),
+        userEvent: "input.escape",
+      });
+    }
+    return true;
+  };
+  // The list's keys: the library's, Enter and Escape as above, and Tab,
+  // which chooses at once. A key the list acts on goes no further, so that
+  // the form's keydown (wiki-app/jsbits/editor.js) does not act on it too:
+  // Tab does not indent and Escape does not close a menu. A key the list
+  // does not act on goes on as before.
+  const own = new Set(["Enter", "Escape"]);
+  const keys = [
+    ...completionKeymap.filter((binding) => !own.has(binding.key)),
+    { key: "Enter", run: enter },
+    { key: "Escape", run: escape },
+    { key: "Tab", run: acceptCompletion },
+  ];
   return {
     extension: [
-      autocompletion({ override: [source], icons: false, defaultKeymap: false }),
+      autocompletion({
+        override: [mentionSource(people), emojiSource(names)],
+        icons: false,
+        defaultKeymap: false,
+        addToOptions: [emojiOfOption],
+      }),
       Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true })))),
     ],
-    answer: (id, people) => waiting.get(id)?.(people),
+    mentioned: people.answer,
+    emojied: names.answer,
     status: (state) => completionStatus(state) ?? "",
   };
 };
@@ -914,7 +1079,7 @@ export function attach(textarea, host, original, codeTokens) {
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
-  const completion = mentions(host);
+  const completion = completions(host);
   const follow = following(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
@@ -942,7 +1107,7 @@ export function attach(textarea, host, original, codeTokens) {
       changes.extensions,
       completion.extension,
       // Enter is a line break and nothing more, as in the textarea, except
-      // while the completion's list is open, when it chooses (the
+      // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
       // the component's (the form's keydown).
       keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...textKeys]),
@@ -1039,9 +1204,13 @@ export function attach(textarea, host, original, codeTokens) {
     },
     // The component's answer to the question `id` about a mention: the
     // users, as [{login, name}], or null when they could not be found.
-    mentioned: (id, people) => completion.answer(id, people),
-    // Whether the list of a mention's completion is open ("active"), being
-    // asked for ("pending"), or neither (""), for the browser tests.
+    mentioned: (id, people) => completion.mentioned(id, people),
+    // The component's answer to the question `id` about an emoji's name:
+    // the emoji, as [{name, emoji}], best first.
+    emojied: (id, found) => completion.emojied(id, found),
+    // Whether the list of a mention's or an emoji's completion is open
+    // ("active"), being asked for ("pending"), or neither (""), for the
+    // browser tests.
     completing: () => completion.status(view.state),
     // The text of each node of a kind in the syntax tree, the whole text
     // parsed, for the browser tests (TeXMath against the wiki's parser).
