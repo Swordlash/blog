@@ -1132,17 +1132,20 @@ try {
   console.log("ok: 404.html stands in for an address with no file, and the program shows its route");
   // A page's permanent address, as "Copy permanent link" gives it (the
   // notice shows it whether the clipboard took it or not), has no file
-  // either: the program asks where the page is and puts the page's own
-  // address in its place, the fragment kept (WP5.81).
+  // either: the program asks where the page is and puts the address of the
+  // version it names in its place, the fragment kept (WP5.81).
   await load(page, "/s/docs/p/markdown-guide/mathematics/");
   await check({ path: "/s/docs/p/markdown-guide/mathematics/", view: "page-view", crumb: "Mathematics" }, "Mathematics");
   await page.locator("#app .page-actions .copy-permanent-link").click();
   const permanent = (await page.locator("#app .link-copied-address").textContent()).trim();
   assert.ok(new URL(permanent).pathname.startsWith(at("/l/")), `not a permanent address: ${permanent}`);
-  await load(page, local(new URL(permanent).pathname) + "#macros");
-  await check({ path: "/s/docs/p/markdown-guide/mathematics/", view: "page-view", crumb: "Mathematics" }, "a permanent address");
+  const version = new URL(permanent).search;
+  assert.ok(version.startsWith("?version="), `no version in ${permanent}`);
+  await load(page, local(new URL(permanent).pathname) + version + "#macros");
+  await check({ path: `/s/docs/p/markdown-guide/mathematics/${version}`, view: "page-view", crumb: "Version" }, "a permanent address");
   assert.equal(new URL(page.url()).hash, "#macros", "the permanent address's fragment");
-  console.log("ok: a page's permanent address leads to the page's own, its fragment kept");
+  await page.locator("#app .version-note").waitFor({ timeout });
+  console.log("ok: a page's permanent address leads to the version it was copied from, its fragment kept");
   await page.context().close();
 
   // ---- 3. A dark scheme, and a phone -----------------------------------------

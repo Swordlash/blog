@@ -917,6 +917,10 @@ try {
   assert.ok(hidden, "a page of the private space");
   const redirected = await fetch(url(`/l/${encodeURIComponent(post.body.id)}/`), { redirect: "manual" });
   assert.deepEqual([redirected.status, redirected.headers.get("location")], [302, "/s/smoke-public/p/smoke-post/"], "the post's permanent address");
+  // With the version "Copy permanent link" names, to that version.
+  const pinned = await fetch(url(`/l/${encodeURIComponent(post.body.id)}/?version=${encodeURIComponent(post.body.updatedAt)}`), { redirect: "manual" });
+  assert.equal(pinned.status, 302, "the post's permanent address with its version");
+  assert.ok(pinned.headers.get("location").startsWith("/s/smoke-public/p/smoke-post/?version="), `not to the version: ${pinned.headers.get("location")}`);
   await visitor.goto(url(`/l/${encodeURIComponent(post.body.id)}/#first`));
   await eventually(async () => assert.equal(here(visitor), "/s/smoke-public/p/smoke-post/", "the post's address"), "a permanent address followed");
   assert.equal(new URL(visitor.url()).hash, "#first", "the permanent address's fragment");

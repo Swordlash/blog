@@ -20,17 +20,20 @@ The help dialog has a section "Emoji" (WP5.83): `helpSections` takes the
 Markdown guide's `### Emoji` after "Tables".
 
 A page's permanent address (WP5.81, #194): the route `PermanentLink`, at
-`/l/<page id>/`, which the shell follows to the page's address of the
-moment through `MonadWiki`'s new `pageLocation`, in place of the permanent
-address and with its fragment (`locationRoute`,
+`/l/<page id>/` with an optional `?version=`, which the shell follows to
+the page's address of the moment through `MonadWiki`'s new `pageLocation`,
+or to the version's (`PageAtVersion`, the page's address with `?version=`),
+in place of the permanent address and with its fragment (`locationRoute`,
 `Wiki.App.Browser.redirectKeepingFragment`); not found, the address stays,
-so that signing in asks again. The HTTP backend keeps the answer as page
-content (`Cache.pageLocations`, in the preload as `pageLocations`).
-`resolvePageLink` reads a permanent address: a page of the space being read
-at its address, any other id at the permanent one, never broken. The page's
-actions have "Copy permanent link", a heading's and a box's `#` copy the
-permanent address with the section, and the editor's "Link to a page" has
-"Permanent link".
+so that signing in asks again. The page view shows a version as the page
+is, with a note saying which and linking to the page now, and no comments;
+the history links to it ("Read this version"). The HTTP backend keeps the
+answer of `pageLocation` as page content (`Cache.pageLocations`, in the
+preload as `pageLocations`). `resolvePageLink` reads a permanent address: a
+page of the space being read at its address, any other id at the permanent
+one, never broken. The page's actions have "Copy permanent link", which
+copies the permanent address of the version shown. A link followed in a
+page keeps its fragment (`ArticleLink`'s `ToRoute` carries it).
 
 A space's home page is the root of its pages (WP5.78b, #201). The home
 page's path is empty: `EditPage`, `PageSource`, `PageHistory`,
