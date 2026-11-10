@@ -68,7 +68,7 @@ import Wiki.App.View.Users (pageSizeKey)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.HomePage (HomeDocument (page))
-import Wiki.Core.Id (SpaceId (..), UserId (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
@@ -175,6 +175,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
       , UserSpaces
+      , PermanentLink (PageId "no-such-page")
       ]
         <> map Admin adminSections
 
@@ -253,6 +254,9 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , AssistantSettings
            , WhatsNewPage
            , UserSpaces
+           , -- The server prerenders a permanent address only for a page
+             -- not found, or not to be shown to the reader.
+             PermanentLink (PageId "no-such-page")
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections

@@ -110,10 +110,11 @@ import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationTo
 import Wiki.Core.Id (PageId (..), SpaceId)
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination, pageIdSegment, readPageIdSegment)
 import Wiki.Core.Notification (PageLocation (..))
-import Wiki.Core.Path (TreeNode (..), findChild, parsePath, pathUnder, renderPath, resolvePath, resolveUnder)
+import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath, resolveUnder)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (slug))
+import Wiki.Core.Space qualified as S
 
 -- | A place in the application.
 data Route
@@ -650,14 +651,14 @@ resolvePageLink spaces spacePath home pages pagePath destination
         _ -> relative segments
       pure (PageLink target fragment)
   where
-    -- A page by its id: at its address, if it is one of this space's
-    -- pages, and otherwise at its permanent address. The path is the
-    -- page's path under the space's home page, as
-    -- 'Wiki.Core.Space.pagePath' finds it. The wiki's front page has no
-    -- space path, and its links by id stay permanent addresses.
-    byId pid = case pathUnder home (\i -> find (\n -> nodeId n == i) pages) pid of
-      Just path | not (null spacePath) -> pageRoute spacePath path
-      _ -> PermanentLink pid
+    -- A page by its id: at its address ('Wiki.Core.Space.pagePath'), if
+    -- it is one of this space's pages, and otherwise at its permanent
+    -- address. The wiki's front page has no space path, and its links by
+    -- id stay permanent addresses.
+    byId pid = fromMaybe (PermanentLink pid) $ do
+      guard (not (null spacePath))
+      space <- lastMay =<< rightToMaybe (resolvePath (findChild spaces) spacePath)
+      pageRoute spacePath <$> S.pagePath space (\i -> find (\n -> nodeId n == i) pages) pid
 
     -- A page by its own address: its space has to be one the reader can
     -- see, and a page of this space one it has.
