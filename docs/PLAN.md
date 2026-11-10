@@ -1130,8 +1130,14 @@ session runs the Codex CLI on the pushed head, `gpt-6.1-sol` at high reasoning
 effort, and when its quota has run out asks the GitHub Codex bot instead, with a
 comment of `@codex review` on the pull request (the owner, 2026-11-10: the CLI is
 the default; on the owner's machine it is signed in with the owner's account, so
-there is no key to give and no credential to remove). The session fixes the real findings and pushes, for three rounds at
-most (the owner, 2026-11-02: "Zmniejsz max liczbe przebiegów do 3"; four before). The owner merges; the session
+there is no key to give and no credential to remove). The session fixes the real findings and pushes, for about three rounds
+(the owner, 2026-11-02: "Zmniejsz max liczbe przebiegów do 3"; four before). Three
+is a rule of thumb (the owner, 2026-11-10): when the third round finds only
+trifles, they may be left, and said so in the pull request; when it still finds
+something serious, or the same kind of mistake in another place, the rounds go on.
+A session on Fable reviews the subagent's branch itself first, before the pull
+request is opened, so each package has two reviews, the session's and Codex's (the
+owner, the same day). The owner merges; the session
 merges only when asked ("nie merguj sam, chyba że poproszę"). The session may hand a
 commit it has good reason to trust to CI rather than run the whole gate locally first,
 when nothing else is waiting on CI (the owner, 2026-10-31).
