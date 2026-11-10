@@ -10,8 +10,11 @@ module Maker.Deploy.Unit
   , renderUnit
   , consoleWrapper
   , dbUrl
+  , databaseWords
   )
 where
+
+import System.FilePath ((</>))
 
 -- | A word of a unit's @ExecStart=@, quoted for systemd: in double quotes,
 -- with backslashes and quotes escaped, and @%@ and @$@ doubled, which
@@ -86,6 +89,19 @@ renderUnit u =
 -- password, which is in a file of the deployment's.
 dbUrl :: String -> String
 dbUrl port = "postgres://wiki@127.0.0.1:" <> port <> "/wiki"
+
+-- | The words of a server unit's @ExecStart=@ that name its database, with
+-- the space before them: @--sqlite@ and the deployment's file, or the
+-- PostgreSQL database with its password file and its @pg_dump@ and
+-- @pg_restore@. The arguments are the database (@postgres@ or not), the
+-- deployment's directory, the database's port and the PostgreSQL
+-- directory. The deploy writes them, and the move to PostgreSQL
+-- ("Maker.Deploy.Move") finds the first and puts the second in its place.
+databaseWords :: String -> FilePath -> String -> FilePath -> String
+databaseWords db dir dbPort pgDir
+  | db == "postgres" =
+      " --database " <> dbUrl dbPort <> " --database-password-file " <> unitWord (pgDir </> "db-password") <> " --pg-dump " <> unitWord (pgDir </> "pg_dump") <> " --pg-restore " <> unitWord (pgDir </> "pg_restore")
+  | otherwise = " --sqlite " <> unitWord (dir </> "data" </> "wiki.sqlite")
 
 -- | The console of a deployment, @<dir>/bin/wiki@: wiki-server with the
 -- deployment's database, given in the environment, for @users@, @backup@,

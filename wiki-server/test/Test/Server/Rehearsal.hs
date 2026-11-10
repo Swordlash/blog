@@ -1,7 +1,8 @@
 -- | The upgrade's rehearsal (WP5.75 of docs/PLAN.md, "Wiki.Server.Rehearsal"):
 -- the pages check's comparison of the pages read before the migration
 -- with those read after, the copy cut off from the outside, and each check
--- run with this program as both the old and the new one. The rehearsal
+-- run with this program as both the old and the new one, on one database
+-- and across a move from SQLite to PostgreSQL (WP5.80b). The rehearsal
 -- itself runs two programs, and is tested end to end by
 -- toolchain/rehearse-ci.sh in CI.
 module Test.Server.Rehearsal (unitSpec, spec) where
@@ -14,14 +15,15 @@ import Network.HTTP.Types (hContentType)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing, choiceOf, withConnectionTo, withEmptyPlace)
+import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace)
 import Test.Hspec
-import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoPlace, withDemoRunning)
+import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoMoved, withDemoPlace, withDemoRunning)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Types (PersonalSpaceSwitch (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (listAccounts)
 import Wiki.Server.Console (runUsers, usersParser)
+import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
 import Wiki.Server.Rehearsal (Check (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, isolateCopy, readPages, readSpaces)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
@@ -86,6 +88,7 @@ spec :: Backing -> Spec
 spec backing = do
   copySpec backing
   checksSpec backing
+  moveSpec backing
 
 copySpec :: Backing -> Spec
 copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
@@ -157,13 +160,36 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
     verdict <- rehearseCheck "accounts" at serve changePassword
     verdict `shouldSatisfy` either (T.isPrefixOf "the password's first sign-in: not signed in") (const False)
 
+-- | Each check across a move from SQLite to PostgreSQL, as the rehearsal
+-- of a move runs it (@--move-to-database@): this program serves the demo's
+-- wiki in SQLite for the before, the wiki is copied into an empty
+-- PostgreSQL database as @wiki-server copy-database@ copies it, and this
+-- program serves that database for the after. Every check must pass. On
+-- SQLite there is no move to rehearse.
+moveSpec :: Backing -> Spec
+moveSpec = \case
+  OnSqlite -> pass
+  backing -> describe "the rehearsal of a move to PostgreSQL, its checks" $
+    for_ [name | Check {name} <- checks] $ \name ->
+      it ("passes the " <> toS name <> " check when the wiki moves from SQLite to PostgreSQL") $ withDemoMoved backing $ \inSqlite serveSqlite moved serveMoved -> do
+        let copy =
+              runCopy CopyOptions {place = placeOptionsOf inSqlite, target = choiceOf moved.database} >>= \case
+                Copied _ -> pass
+                other -> expectationFailure ("the wiki was not copied: " <> show other)
+        rehearseAcross name inSqlite serveSqlite copy serveMoved `shouldReturn` Right ()
+
 -- | Run the check of this name as the rehearsal does: what it holds around
 -- the whole run, its seed on the place, its before on a server over the
 -- place, the action given, and its after on a second server over the same
 -- place. The result is the after's verdict; a seed or a before that fails
 -- fails the test.
 rehearseCheck :: Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> IO (Either Text ())
-rehearseCheck wanted at serve between = do
+rehearseCheck wanted at serve between = rehearseAcross wanted at serve between serve
+
+-- | 'rehearseCheck' with the after on a server of its own, which serves
+-- what the action between made: the moved wiki, for a move.
+rehearseAcross :: Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
+rehearseAcross wanted at serve between serveAfter = do
   manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 120_000_000}
   let serverOf r = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
       orFail :: Text -> Either Text x -> IO x
@@ -173,7 +199,7 @@ rehearseCheck wanted at serve between = do
       seeded <- seed held Seeding {copy = at, console = consoleOn at} >>= orFail "the seed"
       fixture <- serve (\r -> beforeIt held seeded manager (serverOf r)) >>= orFail "the before"
       between
-      serve (\r -> afterIt held fixture manager (serverOf r))
+      serveAfter (\r -> afterIt held fixture manager (serverOf r))
     _ -> panic ("no check is named " <> wanted)
 
 -- | The console as the rehearsal runs the old program's ('Seeding'), here

@@ -18,6 +18,12 @@ module Maker.Deploy.Prepare
   , pgWrapper
   , pgWrapperFor
   , pgCompose
+
+    -- * For the move to PostgreSQL ("Maker.Deploy.Move")
+  , serverBuildNative
+  , serverCabalOutput
+  , pgFiles
+  , dockerReady
   )
 where
 
@@ -235,7 +241,11 @@ prepare p0 = do
               | has p0 "fresh" && sqliteThere && null toSqlite = sqlite <> " is set aside (--fresh)"
               | otherwise = toSqlite
         when (not (null found) && not (has p0 "fresh")) $ do
-          warn ("the state is incompatible: " <> found <> ". Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves a data/wiki.sqlite aside into " <> dir <> "/data/replaced/<time>/; nothing is deleted")
+          let whole
+                | v "db" == "postgres" && v "prev_db" == "sqlite" =
+                    " To move the whole wiki into PostgreSQL instead (accounts, settings and all), stop here and run sh toolchain/deploy-local.sh --move-to-postgres" <> (if v "name" == "wiki-demo" then "" else " --name " <> v "name") <> (if has p0 "prefix" then " --prefix " <> v "prefix" else "") <> " from the checkout it was deployed from."
+                | otherwise = ""
+          warn ("the state is incompatible: " <> found <> ". Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves a data/wiki.sqlite aside into " <> dir <> "/data/replaced/<time>/; nothing is deleted." <> whole)
           interactive <- (&&) <$> hIsTerminalDevice stdin <*> hIsTerminalDevice stdout
           if interactive
             then do
@@ -610,6 +620,12 @@ pgCompose name pd port args = do
   environment <- withVars [("WIKI_DB_PASSWORD_FILE", pd </> "db-password"), ("WIKI_DB_PORT", if null port then "5433" else port)]
   hFlush stdout
   runProcess (setEnv environment (proc "docker" (["compose", "--project-name", name, "--file", pd </> "docker-compose.yml", "--file", pd </> "local.yml"] <> args)))
+
+-- | Whether Docker and its compose plugin answer.
+dockerReady :: IO Bool
+dockerReady = do
+  docker <- isJust <$> findExecutable "docker"
+  if not docker then pure False else (&&) <$> succeeds "docker" ["compose", "version"] <*> succeeds "docker" ["info"]
 
 -- | Run a command in a directory with variables added to the environment,
 -- its output on the terminal.

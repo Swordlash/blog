@@ -21,8 +21,9 @@ module Maker.Deploy.Options
   )
 where
 
--- | What the deploy is asked to do.
-data Action = Deploy | Stop | Status | Rollback
+-- | What the deploy is asked to do. 'MoveToPostgres' moves a deployment's
+-- wiki from SQLite into PostgreSQL ("Maker.Deploy.Move").
+data Action = Deploy | Stop | Status | Rollback | MoveToPostgres
   deriving (Eq, Show)
 
 -- | The options as given, named after the shell's variables: @opt…@ for a
@@ -180,6 +181,7 @@ table =
   , ("--stop", Flag (\o -> Right o {action = Stop}))
   , ("--status", Flag (\o -> Right o {action = Status}))
   , ("--rollback", Flag (\o -> Right o {action = Rollback}))
+  , ("--move-to-postgres", Flag (\o -> Right o {action = MoveToPostgres}))
   , ("--yes", Flag (\o -> Right o {yes = True}))
   ]
   where

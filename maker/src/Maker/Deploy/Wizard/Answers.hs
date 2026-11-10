@@ -8,7 +8,7 @@
 -- An answer file holds key=value lines; blank lines and lines starting
 -- with # are skipped. The keys:
 --
--- >   action=deploy|status|stop|rollback   name=NAME   prefix=DIR
+-- >   action=deploy|status|stop|rollback|move-to-postgres   name=NAME   prefix=DIR
 -- >   mode=server|static            backend_only=|head|REF
 -- >   db=postgres|sqlite            db_port=N
 -- >   texlive=machine|toolchain|none  texlive_mirror=URL
@@ -64,8 +64,10 @@ import Data.Text qualified as T
 
 -- * The answers
 
--- | What the wizard is asked to do with the deployment.
-data Action = Deploy | Status | Stop | Rollback
+-- | What the wizard is asked to do with the deployment. 'MoveToPostgres'
+-- moves a server deployment's wiki from SQLite into PostgreSQL
+-- (--move-to-postgres).
+data Action = Deploy | Status | Stop | Rollback | MoveToPostgres
   deriving (Eq, Ord, Show)
 
 -- | What is deployed: the wiki's server, or the serverless demo.
@@ -263,7 +265,7 @@ fromState kv a =
 -- with it.
 applyAnswer :: Answers -> (Text, Text) -> Either Text Answers
 applyAnswer a (key, v) = case key of
-  "action" -> pick (\x -> a {action = x}) [("deploy", Deploy), ("status", Status), ("stop", Stop), ("rollback", Rollback)]
+  "action" -> pick (\x -> a {action = x}) [("deploy", Deploy), ("status", Status), ("stop", Stop), ("rollback", Rollback), ("move-to-postgres", MoveToPostgres)]
   "name" -> Right a {name = v}
   "prefix" -> Right a {prefix = v}
   "mode" -> pick (\x -> a {mode = x}) [("server", Server), ("static", Demo)]

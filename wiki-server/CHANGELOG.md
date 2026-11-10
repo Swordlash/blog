@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+The rehearsal of a move to PostgreSQL (WP5.80b, #203). `wiki-server
+rehearse --move-to-database URL [--move-to-database-password-file FILE]`
+runs the upgrade's checks across two backends: the old program serves
+the copy as before, and after the migration and the check this program
+copies the copy into the empty PostgreSQL database URL names
+(`CopyDatabase.runCopy`) and serves that for each check's `after`.
+`RehearsalOptions` gains `moveTo`. The deploy's `--move-to-postgres`
+runs it with this program as old and new; `toolchain/rehearse-ci.sh
+NEW NEW --move` and CI do the same, and a test runs each check with its
+`before` on SQLite and its `after` on the copy in PostgreSQL
+(`Test.Server.Fixture.withDemoMoved`).
+
 A database copied into another, empty one (WP5.80a, #203). `wiki-server
 copy-database --data DIR [DATABASE] (--to-database URL
 [--to-database-password-file FILE] | --to-sqlite FILE)`

@@ -1632,7 +1632,9 @@ container and no second process: the deployment of before, for a small machine.
 The choice is remembered for the next run. Changing it on a deployment that has a
 wiki starts an empty one, so the deploy asks first, or takes `--fresh`: from
 PostgreSQL to `--sqlite` it stops the container and keeps its volume, and
-`--postgres --fresh` goes back to it (moving `data/wiki.sqlite` aside). The two hold
+`--postgres --fresh` goes back to it (moving `data/wiki.sqlite` aside). From
+SQLite to PostgreSQL, `--move-to-postgres` (below) moves the wiki itself
+instead. The two hold
 the same wiki and do the same, but for the search: on PostgreSQL it is
 PostgreSQL's full-text search, which finds whole words, ranks the pages by how
 well they match, and takes a phrase in quotes, `or` and `-word`; on SQLite it is
@@ -1673,8 +1675,57 @@ it was refused before anything was written (a server is running on the data
 directory, a server or console has the target open, the target is not empty)
 and 1 when the copy failed. `--to-sqlite FILE` copies the other way, into a new
 SQLite file, which the command makes (a file that is there already is refused,
-and a failed copy deletes only the file it made). The deploy does not switch a
-deployment over by itself yet.
+and a failed copy deletes only the file it made).
+
+A deployment on SQLite moves itself, with `--move-to-postgres`, run from the
+checkout it was deployed from (the move copies with that checkout's
+`wiki-server`, which reads only its own version of the schema; deploy the
+checkout first otherwise). It takes `--name`, `--prefix`, `--db-port` and
+`--semaphore` or `--no-semaphore`, and nothing else: every other setting stays
+as the last deploy left it. The wizard offers it beside `--rollback`.
+
+```sh
+sh toolchain/deploy-local.sh --move-to-postgres          # add --prefix DIR or --name NAME as deployed
+```
+
+In order, and what a failure at each step leaves:
+
+| Step | A failure leaves |
+| --- | --- |
+| The checks: a server this script deployed, with its unit, on SQLite, at the checkout's commit, with its `data/wiki.sqlite`, and Docker | Nothing changed |
+| `wiki-server` built with PostgreSQL (`toolchain/check-native.sh` and the bootstrap first, for libpq) | Nothing of the deployment changed |
+| PostgreSQL looked at first: a container of the compose project `<name>` set up on another port than `--db-port` is refused untouched, and one that runs is asked whether its database `wiki` is empty before anything is written. Otherwise its files are written and it is started as a deploy on PostgreSQL starts it, and the database checked to be empty | The wiki untouched; PostgreSQL put back exactly as it was found (its files' bytes, a container stopped again or removed, a volume removed when the move made it); a database that holds a wiki is left as it is, and refused |
+| The service stopped (it must stop), and the wiki backed up into `data/backups` | The service started again on SQLite, and PostgreSQL put back as it was found; so too for any other error in this and the next two steps |
+| `wiki-server copy-database` into PostgreSQL | The service started again on SQLite; PostgreSQL empty, as the copy left it |
+| `wiki-server rehearse --move-to-database`: the upgrade's checks (pages, accounts, home pages) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
+| The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and put back as it was found, and the service started on SQLite. A deployment kept by an earlier deploy is never restored. The switch back puts back by copies first and deletes what the move saved only once all of it is back: a step that fails stops it there, the service stopped, everything saved is where the move says, and `--rollback --yes` finishes |
+| The service started, and must answer | Switched back, as above |
+
+After a move that did not succeed, either the service runs on exactly the
+SQLite database the move began with (its `wiki.sqlite`, `-wal` and `-shm`,
+compared by size and SHA-256 before the service starts on them), or it is
+stopped and every copy is still there, the files set aside, the deployment
+in `previous/` and PostgreSQL's copy, and `--rollback --yes` finishes. The
+deploy's tests fail the move at each of its file operations and commands in
+turn and check this. A switch back puts nothing back while systemd does not
+say the service has stopped: a service that may still run on PostgreSQL
+keeps every copy where it is, and the move says to stop it and run
+`--rollback --yes`.
+
+The comparison runs on copies because the checks write (a canary account, a
+sign-in provider): the wiki the move fills is checked by `copy-database`
+itself, table by table, and the copies show that the server reads the wiki
+through PostgreSQL as it read it through SQLite. `data/wiki.sqlite` is only
+read, and never deleted. Afterwards the state says `db=postgres`, so every
+deploy builds and runs the server with PostgreSQL and rehearses its upgrades
+there. The SQLite backups in `data/backups` are pruned with the PostgreSQL
+ones, the oldest first, as backups are made; the file in `data/replaced/` is
+not.
+`--rollback` goes back to the wiki on SQLite, from the file set aside: what
+was written in PostgreSQL since is not in it, and stays in the volume, which a
+second move then refuses, saying how to delete it. A move killed during the
+switch (a moment) leaves `previous.before-move` beside `previous/`, and the
+next move refuses to start until it is put back or removed.
 
 A wiki also moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import
@@ -2570,7 +2621,8 @@ machine, runs the bootstrap the deploy needs, and does the rest: the page, the T
 step, the builds and the checks of what they made, the service's Node, HTTPS through
 Tailscale, the ports, PostgreSQL's container, and everything that changes the running
 deployment (the backup, the files, the unit, the restart, the checks that it answers,
-`tailscale serve`, the firewall and the report at the end), and `--rollback`. On a
+`tailscale serve`, the firewall and the report at the end), `--rollback`, and
+`--move-to-postgres` (`Maker.Deploy.Move`). On a
 machine with no cabal yet, `toolchain/bootstrap.sh maker` first installs GHC and cabal
 and builds the maker. `toolchain/undeploy-local.sh`, `--status` and `--stop` stay in
 shell, as does `toolchain/check-native.sh`: they need no GHC.

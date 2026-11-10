@@ -18,20 +18,20 @@
 -- the wizard, and the wizard takes them as answers over the state
 -- ('presetArgs'), so that its screens start with them.
 --
--- The screens: what to do (deploy, --status, --stop or --rollback) and
--- which deployment (--name, --prefix); what to deploy (--server or
--- --static); where the page comes from (built here, --backend-only, or
--- --app-page, with --bundle-locally); where the toolchain and the packages
--- come from (--system-tools, --npm-registry, --hackage-mirror); the
--- database and the TeX of the PDF exports (server only); how it is reached
--- (the ways of HTTPS, or plain HTTP); the address (port, bind address,
--- admin port); the extras. The answers start from the deployment's state
--- file, found by prefix and name as the deploy finds it, so that a rerun
--- is Enter through every screen. The last screen shows the command line:
--- Enter runs it (the wizard replaces itself with /bin/sh
--- toolchain/deploy-local.sh, so the deploy's output reaches the terminal
--- and its exit status is the wizard's), and q quits and prints the command
--- line for copying.
+-- The screens: what to do (deploy, --status, --stop, --rollback or
+-- --move-to-postgres) and which deployment (--name, --prefix); what to
+-- deploy (--server or --static); where the page comes from (built here,
+-- --backend-only, or --app-page, with --bundle-locally); where the
+-- toolchain and the packages come from (--system-tools, --npm-registry,
+-- --hackage-mirror); the database and the TeX of the PDF exports (server
+-- only); how it is reached (the ways of HTTPS, or plain HTTP); the address
+-- (port, bind address, admin port); the extras. The answers start from
+-- the deployment's state file, found by prefix and name as the deploy
+-- finds it, so that a rerun is Enter through every screen. The last
+-- screen shows the command line: Enter runs it (the wizard replaces itself
+-- with /bin/sh toolchain/deploy-local.sh, so the deploy's output reaches
+-- the terminal and its exit status is the wizard's), and q quits and
+-- prints the command line for copying.
 --
 -- With --args-from FILE the wizard shows no screens: it reads answers from
 -- FILE ("Maker.Deploy.Wizard.Answers" lists the keys), prints the command
@@ -191,12 +191,14 @@ fieldsFor s a = case s of
             Status -> "Show the deployment, its service and its address, and change nothing."
             Stop -> "Stop and disable the service, remove its unit, close its port and turn its tailscale serve off. Its files and the wiki's data stay."
             Rollback -> "Put back the server deployment the last upgrade replaced, with its database as the backup made before the upgrade: what was written since is lost. The deploy says what comes back, and asks first."
+            MoveToPostgres -> "Move the wiki of a server deployment on SQLite into PostgreSQL in Docker, accounts, settings and all, and switch the deployment to it: the service stops for the copy and a comparison, and starts again on PostgreSQL, or on SQLite as it was if anything fails. The deployment must be at this checkout's commit. data/wiki.sqlite is set aside into data/replaced/, never deleted, and --rollback goes back to it."
         )
         actionL
         [ (Deploy, ActionChoice Deploy, "deploy")
         , (Status, ActionChoice Status, "--status  show it")
         , (Stop, ActionChoice Stop, "--stop  take it down")
         , (Rollback, ActionChoice Rollback, "--rollback  go back")
+        , (MoveToPostgres, ActionChoice MoveToPostgres, "--move-to-postgres  move its wiki into PostgreSQL")
         ]
     , text
         "--name"

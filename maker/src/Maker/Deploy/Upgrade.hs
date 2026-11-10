@@ -17,6 +17,8 @@ module Maker.Deploy.Upgrade
   ( Kept (..)
   , previousDir
   , keepPrevious
+  , renderKept
+  , sqliteFiles
   , readKept
   , newBackup
   , migrateAndCheck
@@ -107,22 +109,28 @@ keepPrevious dir unitFile stateFile commit backup running dbRunning aside adopte
         when facts (copyFile (file <> ".json") (to <> ".json"))
         pure to
     now <- getCurrentTime
-    let yesNo b = if b then "yes" else "no"
     writeFile
       (previous </> "info")
-      ( unlines
-          [ "commit=" <> (if null commit then "unknown" else commit)
-          , "backup=" <> copied
-          , "kept=" <> formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now
-          , "running=" <> yesNo running
-          , "unit=" <> yesNo hasUnit
-          , "db_running=" <> yesNo dbRunning
-          , "aside=" <> aside
-          , "adopted_from=" <> adoptedFrom
-          ]
-      )
+      (renderKept Kept {commit = if null commit then "unknown" else commit, backup = copied, keptAt = formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" now, running, unit = hasUnit, dbRunning, aside, adoptedFrom})
     say ("kept the previous deployment (" <> (if null commit then "unknown" else commit) <> ") in " <> previous <> ", for a rollback")
   pure there
+
+-- | The text of @previous/info@ for a deployment kept there, which
+-- 'readKept' reads back.
+renderKept :: Kept -> String
+renderKept k =
+  unlines
+    [ "commit=" <> k.commit
+    , "backup=" <> k.backup
+    , "kept=" <> k.keptAt
+    , "running=" <> yesNo k.running
+    , "unit=" <> yesNo k.unit
+    , "db_running=" <> yesNo k.dbRunning
+    , "aside=" <> k.aside
+    , "adopted_from=" <> k.adoptedFrom
+    ]
+  where
+    yesNo b = if b then "yes" else "no"
 
 -- | What @previous/info@ under a deployment says, if a deployment is kept
 -- there with its binary.

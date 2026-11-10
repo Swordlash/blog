@@ -10,6 +10,7 @@ module Test.Server.Fixture
   , withDemoRunningUsing
   , withDemoRestarted
   , withDemoPlace
+  , withDemoMoved
   , site
   , template
   , serverInfoOn
@@ -72,7 +73,7 @@ import Protolude
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing (..), choiceOf, withPlace)
+import Test.Database (Backing (..), choiceOf, withEmptyPlace, withPlace)
 import Test.HUnit (assertFailure)
 import Test.Storage.Fixture (demoArchive)
 import Wiki.Api (AccountApi (..), AdminApi (..), WikiApi (..), requestMarker)
@@ -91,7 +92,7 @@ import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message, SendMail, Smtp (..), smtpSend)
 import Wiki.Server.Opaque (opaqueConfig)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
-import Wiki.Server.Storage (Place (..), defaultConfig, importArchive, withStorage)
+import Wiki.Server.Storage (Place (..), defaultConfig, importArchive, inDataDir, withStorage)
 
 -- | A server being driven by a test.
 data Running = Running
@@ -227,6 +228,19 @@ withDemoPlace backing act =
   withSystemTempDirectory "wiki-server-http" $ \dir -> withPlace backing (dir </> "data") $ \at -> do
     staticDir <- prepared dir at demoPrepared
     act at (serveIn identity at staticDir)
+
+-- | The demo's wiki in SQLite, not served yet, and an empty database on the
+-- backing for the same data directory, with a way to serve each. This is
+-- for the rehearsal of a move to PostgreSQL ("Wiki.Server.Rehearsal"): the
+-- old program serves the first, the wiki is copied into the second, and
+-- the new program serves that.
+withDemoMoved :: Backing -> (Place -> (forall a. (Running -> IO a) -> IO a) -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO b) -> IO b
+withDemoMoved backing act =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> withSystemTempDirectory "wiki-server-moved" $ \other -> withEmptyPlace backing other $ \blank -> do
+    let inSqlite = inDataDir (dir </> "data")
+        moved = Place {dataDir = inSqlite.dataDir, database = blank.database, programs = blank.programs}
+    staticDir <- prepared dir inSqlite demoPrepared
+    act inSqlite (serveIn identity inSqlite staticDir) moved (serveIn identity moved staticDir)
 
 -- | The static directory of a test's server in a directory, with the
 -- data directory and the database prepared as given.

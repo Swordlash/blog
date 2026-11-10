@@ -32,6 +32,9 @@ deployArgs a = case a.action of
   Status -> "--status" : which
   Stop -> "--stop" : which
   Rollback -> "--rollback" : which
+  -- The move builds wiki-server and starts PostgreSQL: its port and the
+  -- build's semaphore are the move's own options.
+  MoveToPostgres -> "--move-to-postgres" : which ++ option "--db-port" (a.dbPort) ++ semaphoreArgs
   Deploy ->
     concat
       [ [if server then "--server" else "--static"]
@@ -170,6 +173,7 @@ problems a =
               , T.null (a.toolchain)
               ]
             ]
+        MoveToPostgres -> portProblem "The database's port" (a.dbPort)
         _ -> []
     ]
   where
