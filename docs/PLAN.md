@@ -1273,6 +1273,34 @@ confirms it against reality and the plan is amended if it does not hold.
     and only while its editor is open, and anything more is a permission of
     its own, which may be as fine as a contribution needs. The packages are
     under "Open work".
+70. **A permanent link is a page by its id, pinned to a version (WP5.81,
+    #194, #235; the owner, 2026-11-10).** The owner's meaning of the issue:
+    a link to the page as it was when the link was made ("link +
+    &version=8"), not only a link that survives a move. "Copy permanent
+    link" among a page's actions copies `/l/<page id>/?version=<time>`,
+    and is the one thing in the interface that writes the form; the wiki's
+    front page does not offer it, since it has no address for a version.
+    A version is named by the time it was saved, as in the history's
+    address: there are no version numbers. The page's own address takes
+    `?version=` too (`PageAtVersion`) and shows that version as a page,
+    with a note saying which it is and a link to the page as it is now,
+    and without editing, comments or the live channel; the history links
+    to it ("Read this version"). `/l/<page id>/` without a version leads
+    to the page as it is now, wherever it has moved. The server answers a
+    permanent address with a 302 when the session may view the page, and
+    otherwise prerenders it as any address that names nothing; the
+    application, reading the route itself, asks where the page is
+    (`MonadWiki.pageLocation`, `GET api/v1/pages/<id>/location`) and
+    replaces the address, fragment and history entry's number kept. The
+    read by id answers a page its reader may not view exactly as an id no
+    page has. An id is any text: nothing parses one, and a segment that
+    would be empty, `.`, `..` or start with `~` is written with a `~`
+    before it. `Wiki.Core.Markdown.Link.classifyDestination` reads the
+    form (`ToPageId`), for the resolver, the exports and the packages
+    after (#189, #187); a link by id to a page the browser does not hold
+    is a link all the same, never shown as unresolved. The session had
+    first read the issue as a link that survives a move and proposed a
+    second package, a quote found again after edits; the owner dropped it.
 
 ## Repository layout
 
@@ -1359,12 +1387,11 @@ stage 2 is done.
 **The smaller issues first (the owner, 2026-11-10, in the evening):** the
 smaller issues are closed before plugins (#186), autocompletion (#187)
 and presentations (#191) are started. In this order: #194 (persistent
-links, WP5.81: what a link names is what #189 records and #187 later
-completes); #205's last part (WP5.85); #188 (emojis: the
+links, done: decision 70, #235); #205's last part (WP5.85); #188 (emojis: the
 editor's part is done, WP5.86, #236; the issue stays open only for
 Slack's names that GitHub's list does not have, until the owner says
-whether they are wanted); #189 (backlinks, on WP5.81's reading of a link by
-id); #196 and #200 (an `html` block and an interactive SVG, each in a
+whether they are wanted); #189 (backlinks, on decision 70's reading of a
+link by id); #196 and #200 (an `html` block and an interactive SVG, each in a
 frame the page's scripts and keys cannot be reached from, which is also
 the frame the plugins will run in); #204 (TODO lists first, then the
 calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
@@ -1377,52 +1404,6 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.81 Persistent links: a page's address by its id, pinned to a
-  version (#194).** A page's id never changes, and every answer of the API
-  carries it, but no address uses it: a link is a path, read when the page
-  is rendered, and a moved page's old address leads nowhere. Goal: an
-  address that names a page by its id, `/l/<page id>/` (another prefix if
-  the route's grammar has that one taken), with a fragment. The server
-  answers it with a redirect to the page's address of the moment when the
-  reader may view the page, and otherwise exactly as it answers an address
-  that names nothing; the application, reading it (the demo, a link
-  followed inside the wiki), asks where the page is and replaces the
-  address, the fragment kept, through signing in too. The read by id says
-  nothing of a page its reader may not view, a sealed one and one in the
-  container of personal spaces included: the same answer as for an id no
-  page has. An id is any text (the demo's are numbers), so nothing parses
-  one. Markdown: `classifyDestination` in wiki-core knows the form, so
-  that #187 and #189 can use it; a link by id to a page of the space being
-  read goes straight to that page, and one to a page the reader's browser
-  does not hold is a link all the same, resolved when followed, never
-  shown as unresolved. Who writes the form: the page's menu gets "Copy
-  permanent link"; the hover `#` of a heading and of a box copies the
-  permanent address with its fragment; the editor's "Link to a page" gets
-  a box "Permanent link", off by default, since the path reads better in
-  the source. The selection's "Copy link" stays as it is.
-  The PDF and Word exports read the form as they read a path. An import
-  that gives a page a new id, because the wiki uses the archive's id
-  already, leaves links by the old id in the imported text leading to the
-  page that holds that id: documented, not rewritten. The guide says how
-  to make a permanent link. Tests: the route's round trip; the server's
-  redirect and its refusals (a hidden page, a sealed one, signed out); a
-  link by id after a move to another parent and to another space; the
-  three ways of copying, in the browser.
-  **Added the same evening, the owner's meaning of the issue:** a
-  persistent link is pinned to the version of the page that was current
-  when the link was made ("link + &version=8"), so that the text and the
-  place it points at never change. `/l/<page id>/` takes
-  `?version=<the version's time>`, as the history's address does, and
-  leads to that version of the page, the fragment kept; "Copy permanent
-  link" in the page's menu copies it with the version shown, and is the
-  one thing in the interface that writes the form (the owner: "only a
-  link to a version of the page"). The `#` of a heading and the editor's
-  "Link to a page" stay as they were before the package, whatever the
-  entry says above; the address by id stays under the link, so that it
-  works after the page is moved.
-  The session had read the issue as a link that survives a move only, and
-  proposed a second package (a quote the wiki finds again after edits);
-  that proposal is dropped, since a pinned version needs no finding.
 - **WP5.85 `check` looks at how the real accounts sign in (#205, its
   last part).** The rehearsal's "accounts" check signs in two accounts it
   made itself; nothing looks at the accounts people have. Three things.
@@ -1811,6 +1792,20 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **Permanent links (WP5.81, #235).** Not tested: a pinned link to a
+  version of an encrypted page, and the page view's guard against an
+  older load finishing last (nothing orders two answers cheaply). The
+  browser specs run under the hash router, so a fragment kept and
+  scrolled to is checked by the demo's smoke test and the server's
+  `Location` headers only. Signing in through a provider loses the
+  fragment, as it does for a path address. A hand-written `/l/x` means
+  the page with id `x` even where a top-level space has the slug `l`,
+  which is still reached through `/s/l/…`. The merge import gives the
+  pages it creates new ids, so a link by id in imported text names the
+  page it named where the archive came from. The help dialog's own
+  resolver drops a path's query, version included; the guide writes none.
+  `Contents`' "ends each heading with a link to itself" read the notice
+  while it still said "Copying the link…" once under load.
 - **Emoji in the editor (WP5.86, #236).** Enter chooses an emoji only once
   two letters of its name are typed or the list was moved in, so that `:p`
   and a colon at a line's end stay text; after two letters it still
