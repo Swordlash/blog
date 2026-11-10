@@ -1361,7 +1361,9 @@ smaller issues are closed before plugins (#186), autocompletion (#187)
 and presentations (#191) are started. In this order: #194 (persistent
 links, WP5.81: what a link names is what #189 records and #187 later
 completes); #205's last part (WP5.85); #188 (emojis: the
-editor's part, WP5.86); #189 (backlinks, on WP5.81's reading of a link by
+editor's part is done, WP5.86, #236; the issue stays open only for
+Slack's names that GitHub's list does not have, until the owner says
+whether they are wanted); #189 (backlinks, on WP5.81's reading of a link by
 id); #196 and #200 (an `html` block and an interactive SVG, each in a
 frame the page's scripts and keys cannot be reached from, which is also
 the frame the plugins will run in); #204 (TODO lists first, then the
@@ -1446,29 +1448,6 @@ which the wiki pins since #227.
   "accounts" cover; the pull request says so. Tests: each refusal and each
   line, on both backends; the rehearsal failing on a copy with real
   accounts whose hashes a step removed.
-- **WP5.86 Emoji in the editor (#188, what is left of it).** Shortcodes
-  render already. The names come from one place, the `emojis` package
-  that commonmark-extensions reads them from, on the Haskell side; the
-  editor asks for them as it asks for people to mention. (1) Completion:
-  a colon typed after a space or at the start of a line opens a list of
-  emoji that narrows as the name is typed, in the editor's one
-  `autocompletion`, beside the mentions' source; accepting writes
-  `:name:`; Enter on a colon with nothing typed after it is a new line,
-  not an emoji; Escape closes the list and writes a backslash before the
-  colon (the issue: "hitting escape should escape it"), as one step to
-  undo; not in code, mathematics, links or HTML. (2) `-:` at the start of
-  a line opens the same list and writes `- :name: `: it is the editor's
-  shorthand, not Markdown. (3) An item of a bulleted list that starts
-  with an emoji shows the emoji in the bullet's place, the emoji still
-  part of the item's text (for search, comment quotes and the slides'
-  steps), as a task's box is; a task item and a numbered list are
-  unchanged; `- \:name:` keeps the bullet. This changes how a page that
-  has such items already looks. The PDF and Word exports keep their
-  bullet before the emoji: a known difference. (4) A toolbar button
-  "Emoji" opens a menu with a field to search and the emoji to pick; it is
-  a plain button, which can become a built-in plugin with #186. Not in
-  the package: Slack's names that GitHub's list does not have. The guide
-  and the help say all of it.
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
@@ -1815,6 +1794,20 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **Emoji in the editor (WP5.86, #236).** Enter chooses an emoji only once
+  two letters of its name are typed or the list was moved in, so that `:p`
+  and a colon at a line's end stay text; after two letters it still
+  chooses (`12 :10` then Enter gives `:100:`). The colon's list does not
+  open inside a link's text, since it uses the mentions' guards. `-:`
+  stays closed when the line before holds any `|`, prose included. The
+  comment boxes are plain text areas and complete nothing. The PDF and
+  Word exports keep their bullet before an emoji that the page shows as
+  the bullet. Not tested: an input method composing (Safari ends a
+  composition with an Enter that does not say so, and haskell-halogen's
+  `KeyboardEvent` has no `keyCode` to tell it by), touch keyboards, and a
+  real window 375px wide (the test narrows the editor instead). On a
+  toolbar narrower than 40rem every toolbar menu opens under the whole
+  toolbar, by a container query.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
