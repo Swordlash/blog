@@ -71,7 +71,7 @@ preloadId = "wiki-preload"
 -- arguments are lists of objects, each with the read's arguments and its
 -- response or @error@: @spacesAt@, @pages@, @pagesAt@, @drafts@,
 -- @searches@, @versionLists@ and @versions@ always, and @invitationsAt@,
--- @postDetails@, @threads@ and @watches@ as @null@ when empty, since they
+-- @postDetails@, @pageLocations@, @threads@ and @watches@ as @null@ when empty, since they
 -- were added later. The starred pages are @stars@, and the server's
 -- changelog @whatsNew@, each an answer or @null@. The administration's reads are an object with their
 -- response or @error@, or @null@. @people@ is by login, or @null@ when
@@ -101,6 +101,7 @@ preloadJSON c =
     , "texEngine" .= answer "texEngine" c.texEngine
     , "userPages" .= orNull (answers "users" (\q -> ["query" .= q]) c.userPages)
     , "postDetails" .= orNull (answers "details" (\space -> ["space" .= space]) c.postDetails)
+    , "pageLocations" .= orNull (answers "location" (\page -> ["page" .= page]) c.pageLocations)
     , "threads" .= orNull (answers "threads" (\page -> ["page" .= page]) c.threads)
     , "people" .= if Map.null c.people then Nothing else Just c.people
     , "notices" .= answer "notifications" c.notices
@@ -170,6 +171,7 @@ parsePreload = withObject "the page's payload" $ \o -> do
   texEngine <- traverse (withObject "an answer" (answerIn "texEngine")) =<< o .:? "texEngine"
   userPages <- byArguments "users" (.: "query") . fold =<< o .:? "userPages"
   postDetails <- byArguments "details" (.: "space") . fold =<< o .:? "postDetails"
+  pageLocations <- byArguments "location" (.: "page") . fold =<< o .:? "pageLocations"
   threads <- byArguments "threads" (.: "page") . fold =<< o .:? "threads"
   people <- fold <$> o .:? "people"
   notices <- traverse (withObject "an answer" (answerIn "notifications")) =<< o .:? "notices"

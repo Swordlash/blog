@@ -30,6 +30,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), find
 import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
+import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath, renderPath)
@@ -66,6 +67,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   sessions
   readingSpaces
   readingPages
+  locatingPages
   hiddenSpaces
   creatingSpaces
   changingSpaces
@@ -289,6 +291,77 @@ readingPages = describe "listPages and getPage" $ do
     getPageAt run reader "team" "nowhere" `shouldReturn` Left NotFound
     void (pageAt run reader "team/projects" "the-wiki")
     void (pageAt run admin "team" "team-handbook/on-call")
+
+--------------------------------------------------------------------------------
+-- Where a page is, by its id
+
+-- | 'pageLocation': where a page is now, by its id, which a page's
+-- permanent address is read with. A page the reader may not view answers
+-- exactly as an id no page has.
+locatingPages :: (MonadWiki m) => SpecWith (Fixture m)
+locatingPages = describe "pageLocation" $ do
+  it "gives a page's space's path and its own, empty for a space's home page" $ \(Fixture run) -> do
+    diagrams <- pageAt run Anonymous "docs" "markdown-guide/diagrams"
+    tour <- pageAt run Anonymous "docs" ""
+    run Anonymous (pageLocation diagrams.id) `shouldReturn` Right (location "docs" "markdown-guide/diagrams")
+    run reader (pageLocation tour.id) `shouldReturn` Right (location "docs" "")
+    -- The wiki is the projects' home page.
+    wiki <- pageAt run admin "team/projects" "the-wiki"
+    run reader (pageLocation wiki.id) `shouldReturn` Right (location "team/projects" "")
+    onCall <- pageAt run admin "team" "on-call"
+    run admin (pageLocation onCall.id) `shouldReturn` Right (location "team" "on-call")
+
+  it "gives the wiki's own home page no path at all" $ \(Fixture run) -> do
+    (_, home) <- run admin getHomeDocument >>= ok
+    run admin (pageLocation home.id) `shouldReturn` Right PageLocation {space = [], page = []}
+
+  it "follows a page moved under another parent, and to another space" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    team <- spaceAt run admin "team"
+    diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
+    aside <- run admin (createPage docs.id Nothing "Aside" "") >>= ok
+    void (run admin (movePage diagrams.id docs.id (Just aside.id)) >>= ok)
+    run Anonymous (pageLocation diagrams.id) `shouldReturn` Right (location "docs" "aside/diagrams")
+    void (run admin (movePage diagrams.id team.id Nothing) >>= ok)
+    run admin (pageLocation diagrams.id) `shouldReturn` Right (location "team" "diagrams")
+    -- Moved where the reader may not view it, it is not found for them.
+    run Anonymous (pageLocation diagrams.id) `shouldReturn` Left NotFound
+
+  it "answers a page someone may not view as an id no page has" $ \(Fixture run) -> do
+    onCall <- pageAt run admin "team" "on-call"
+    run admin (pageLocation onCall.id) `shouldReturn` Right (location "team" "on-call")
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who (pageLocation onCall.id) `shouldReturn` Left NotFound
+      run who (pageLocation (PageId "no-such-page")) `shouldReturn` Left NotFound
+
+  it "answers a page of a sealed space as not found for whoever is not let in" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    projects <- spaceAt run admin "team/projects"
+    wiki <- pageAt run admin "team/projects" "the-wiki"
+    editorId <- userId run editor
+    run admin (setSpaceGrant team.id (SubjectUser editorId) View True) >>= ok
+    run editor (pageLocation wiki.id) `shouldReturn` Right (location "team/projects" "")
+    void (run admin (setSpaceSealed projects.id True) >>= ok)
+    run editor (pageLocation wiki.id) `shouldReturn` Left NotFound
+    -- The reader's grant is on the sealed space itself.
+    run reader (pageLocation wiki.id) `shouldReturn` Right (location "team/projects" "")
+
+  it "answers a page of a personal space turned off as not found, for its owner too" $ \(Fixture run) -> do
+    void (run editor (setPersonalSpace True) >>= ok)
+    home <- pageAt run Anonymous "users/editor" ""
+    run Anonymous (pageLocation home.id) `shouldReturn` Right (location "users/editor" "")
+    void (run editor (setPersonalSpace False) >>= ok)
+    for_ [Anonymous, editor, admin] $ \who ->
+      run who (pageLocation home.id) `shouldReturn` Left NotFound
+
+  it "answers a deleted page as not found" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    gone <- run admin (createPage docs.id Nothing "Gone" "") >>= ok
+    run admin (pageLocation gone.id) `shouldReturn` Right (location "docs" "gone")
+    run admin (deletePage gone.id) >>= ok
+    run admin (pageLocation gone.id) `shouldReturn` Left NotFound
+  where
+    location s p = PageLocation {space = path s, page = if T.null p then [] else path p}
 
 --------------------------------------------------------------------------------
 -- Spaces someone may not view

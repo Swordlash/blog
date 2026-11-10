@@ -44,6 +44,7 @@ spec = describe "Wiki.Api.Links" $ do
     links.spaces.createPage s `shouldBe` "api/v1/spaces/s1/pages"
     links.pages.save p `shouldBe` "api/v1/pages/p1"
     links.pages.move p `shouldBe` "api/v1/pages/p1/move"
+    links.pages.location p `shouldBe` "api/v1/pages/p1/location"
     links.pages.shift p `shouldBe` "api/v1/pages/p1/shift"
     links.pages.delete p `shouldBe` "api/v1/pages/p1"
     links.pages.upload p `shouldBe` "api/v1/pages/p1/attachments"

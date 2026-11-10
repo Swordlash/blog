@@ -1418,6 +1418,7 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   listPages = run Reads . listPagesTx
   postDetails = run Reads . postDetailsTx
   getPage sid = run Reads . (withWriters <=< getPageTx sid)
+  pageLocation = run Reads . pageLocationTx
   createPage sid parent title = run Writes . (withWriters <=< createPageTx sid parent title)
   savePage pid base title = saving . (withWriters <=< savePageTx pid base title)
   movePage pid sid = run Writes . (withWriters <=< movePageTx pid sid)
@@ -1951,6 +1952,26 @@ getPageTx sid path = do
   resolveUnderM root (\parent slug -> db (childPage sid parent slug)) path >>= \case
     Right ps | Just p <- lastMay ps -> findPage p.id
     _ -> failWith NotFound
+
+-- | Where a page is now, by its id ('Wiki.App.Backend.pageLocation'): its
+-- space's path and its own. The permission to view the page's space is
+-- checked before anything else about the page is read, so a page the
+-- caller may not view is 'NotFound' as an id no page has. An encrypted
+-- space's page is answered too: its path is made of random slugs, and the
+-- browser reads the page itself.
+pageLocationTx :: PageId -> Tx PageLocation
+pageLocationTx pid = do
+  p <- findNode pid
+  (_, c) <- findSpace p.space
+  when (null c) (failWith NotFound)
+  requireView c
+  home <- asks (\x -> Home.isHomeSpace x.server.homePage p.space)
+  if home
+    then pure PageLocation {space = [], page = []}
+    else do
+      nodes <- lineageOf p.id
+      spaces <- asks (\x -> x.spaces)
+      maybe (failWith NotFound) (\path -> pure PageLocation {space = map (\x -> x.slug) c, page = path}) (pathIn spaces p.space (`Map.lookup` nodes) p.id)
 
 -- | The search over the pages the user may view in the spaces the query
 -- asks for. The database picks the pages, of the spaces searched only

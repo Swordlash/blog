@@ -49,6 +49,7 @@ module Wiki.App.Backend.Mem.State
   , listPagesIn
   , postDetailsIn
   , getPageIn
+  , pageLocationIn
   , searchPagesIn
   , getDraftIn
   , listVersionsIn
@@ -945,6 +946,18 @@ getPageIn sid path st = do
   (s, c) <- findSpace st sid
   requireView st c
   maybe (Left NotFound) (pure . withWriters st) (Space.pageAt s (pagesOf sid st) path)
+
+-- | Where a page is now, by its id ('Wiki.App.Backend.pageLocation'):
+-- checked as 'getPageIn' checks a page read by its path, so that a page
+-- the current user may not view is not found, as an id no page has.
+pageLocationIn :: PageId -> MemState -> Either WikiError PageLocation
+pageLocationIn pid st = do
+  p <- findPage st pid
+  (s, c) <- findSpace st p.space
+  requireView st c
+  if Home.isHomeSpace st.server.homePage s.id
+    then pure PageLocation {space = [], page = []}
+    else maybe (Left NotFound) (\path -> pure PageLocation {space = map (\x -> x.slug) c, page = path}) (Space.pagePath s (`Map.lookup` st.pages) p.id)
 
 -- | A page with who wrote it ('Page.createdBy', 'Page.updatedBy'): the
 -- authors of its first version and of the version it is now, as the

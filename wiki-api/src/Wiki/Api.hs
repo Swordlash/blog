@@ -118,6 +118,7 @@ import Wiki.Core.Attachment (Attachment, FileName)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
+import Wiki.Core.Notification (PageLocation)
 import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Permission (SpaceAccess)
 import Wiki.Core.Search (SearchHit)
@@ -454,6 +455,12 @@ data PagesApi form mode = PagesApi
   -- ^ @savePage@, against the version in @If-Match@.
   , move :: mode :- Capture "page" PageId :> "move" :> ReqBody '[JSON] PageMove :> Post '[JSON] Page
   -- ^ @movePage@.
+  , location :: mode :- Capture "page" PageId :> "location" :> Get '[JSON] PageLocation
+  -- ^ @pageLocation@: where the page is now, its space's path and its own
+  -- path there (@{"space": ["team"], "page": ["handbook", "on-call"]}@),
+  -- for the page's permanent address (@\/l\/\<page id>\/@). A page the
+  -- caller may not view is 'Wiki.Api.Error.NotFound', with the same body
+  -- as an id no page has.
   , shift :: mode :- Capture "page" PageId :> "shift" :> ReqBody '[JSON] ShiftBy :> Post '[JSON] Page
   -- ^ @shiftPage@.
   , template :: mode :- Capture "page" PageId :> "template" :> ReqBody '[JSON] PageTemplate :> Put '[JSON] Page
