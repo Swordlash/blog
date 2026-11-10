@@ -36,8 +36,8 @@ spec = describe "Wiki.App.Editor.Problems.problemRanges" $ do
     problemRanges text [Problem {from = 1, to = 1, kind = Diagram, message = "Parse error"}]
       `shouldBe` [ProblemRange {from = 0, to = 2, kind = "diagram", message = "Parse error"}]
   it "marks an island's failure at the island's lines in the text checked, the parser's problems beside it" $ do
-    let source = "# Title\n\n[[spoiler]]{a}(A)\nText $x^$ here.\n"
+    let source = "# Title\n\n[[!spoiler]]{a}(A)\nText $x^$ here.\n"
         checked = checkText source
         failed = Map.fromList [(key, "KaTeX parse error") | key <- Map.keys checked.islands]
     [(r.from, r.to, r.kind) | r <- problemRanges source (allProblems checked failed)]
-      `shouldBe` [(9, 26, "spoiler"), (27, 42, "formula")]
+      `shouldBe` [(9, 27, "spoiler"), (28, 43, "formula")]

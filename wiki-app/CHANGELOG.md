@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The wiki's own blocks with one marker pair (WP5.77). The guide's pages, the
+demo's handbook and the presentations deck write `[[!notes]]`,
+`[[!incremental]]`, `[[!div]]`, `[[!slides]]`, `[[!pause]]`, `[[!toc]]` and
+`[[!spoiler]]` in place of `:::`, `. . .`, `[[toc]]` and `[[spoiler]]`; the
+Markdown guide has sections on these blocks and on comments.
+`Wiki.App.Guide.unwrapped` keeps a line that starts with a marker
+(`Wiki.Core.Markdown.Ast.markerAt`) on a line of its own, and joins `:::`
+and three dots into the paragraph, as the text they are now.
+
 The editor's notices of saves (issue #193). "Draft saved" is no longer a
 span among the buttons of `.editor-actions`, whose appearing moved them: it
 and the green "Saved" are now in `.editor-corner`, the last child of

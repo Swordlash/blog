@@ -1768,7 +1768,7 @@ pre.numbered > code {
   color: var(--muted);
 }
 
-/* A heading spoiler (## [[spoiler]] Question): its summary is the
+/* A heading spoiler (## [[!spoiler]] Question): its summary is the
    section's heading, in its level's size and the text's colour, on the
    line of the disclosure triangle. The box's bar marks the section as
    hidden, in place of the heading's rule. */
@@ -6589,7 +6589,7 @@ a.mention {
   display: none;
 }
 
-/* A list of a page's headings, nested by level: in the page where [[toc]]
+/* A list of a page's headings, nested by level: in the page where [[!toc]]
    is, and in the "Contents" panel. The section being read is marked by
    wiki-app/jsbits/toc.js, as data-current. */
 .toc-list {

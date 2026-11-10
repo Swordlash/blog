@@ -94,7 +94,7 @@ spec m = do
 
   it "marks a spoiler that is not closed, without the preview, until it is closed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    let broken = "# Hello, world\n\n[[spoiler]]{answer}(The answer)\nForty-two."
+    let broken = "# Hello, world\n\n[[!spoiler]]{answer}(The answer)\nForty-two."
     setMarkdown ui broken
     eventually $ problemsMarked ui `shouldReturn` [(fst (linesOf broken 3 3), snd (linesOf broken 3 3), "Spoiler “answer” is not closed: add [[/spoiler]]{answer}")]
     find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
@@ -103,7 +103,7 @@ spec m = do
 
   it "counts the problems, and goes to the next one at each click on the count" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    let text = "# Hello, world\n\n> [!]\n> Not a box.\n\nBetween.\n\n[[/spoiler]]{nothing}\n\nAfter."
+    let text = "# Hello, world\n\n> [!]\n> Not a box.\n\nBetween.\n\n[[!nothing]]\n\nAfter."
     setMarkdown ui text
     eventually $ find ui ".editor-problems" >>= (`shouldHaveText` "2 problems")
     eventually $ length <$> problemsMarked ui `shouldReturn` 2

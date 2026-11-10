@@ -627,8 +627,8 @@ spec m = do
     press "End"
     press "Shift+Home"
     find ui ".editor-toolbar button[aria-label='Block spoiler']" >>= click
-    markdown ui `shouldReturn` "# Hello, world\n\n[[spoiler]]{name}(Description)\nSome ||words||\n[[/spoiler]]{name}"
-    editorSelection ui `shouldReturn` (28, 32)
+    markdown ui `shouldReturn` "# Hello, world\n\n[[!spoiler]]{name}(Description)\nSome ||words||\n[[/spoiler]]"
+    editorSelection ui `shouldReturn` (29, 33)
     eventually $ find ui ".editor-preview details.spoiler > summary" >>= (`shouldHaveText` "Description")
 
   it "shows a spoiler that is not closed in red in the preview as it is typed, and as a spoiler once it is" $ runPage $ do
@@ -636,7 +636,7 @@ spec m = do
     sideBySide ui
     text <- editorText ui
     clearBody ui
-    typeText text "[[spoiler]]{answer}(The answer)\nForty-two."
+    typeText text "[[!spoiler]]{answer}(The answer)\nForty-two."
     previewHas ui ".spoiler-error .spoiler-error-reason" "Spoiler “answer” is not closed: add [[/spoiler]]{answer}"
     previewHas ui ".spoiler-unclosed p" "Forty-two."
     computedStyle ".editor-preview .spoiler-unclosed" "color" >>= (`shouldNotBe` "")

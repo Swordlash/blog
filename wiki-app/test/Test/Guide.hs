@@ -85,9 +85,11 @@ spec = describe "Wiki.App.Guide" $ do
     it "joins the lines of a paragraph, an item, a quotation and a footnote" $
       unwrapped ["One", "two", "", "- a", "  b", "- c", "  - d", "", "1. e", "   f", "", "> g", "> h", "", "[^n]: i", "    j"]
         `shouldBe` ["One two", "", "- a b", "- c", "  - d", "", "1. e f", "", "> g h", "", "[^n]: i j"]
-    it "keeps a box's marker, a heading, a table, a div's fences, a break and a pause on their own lines" $
-      unwrapped ["> [!NOTE] Title", "> text", "> more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "::: notes", "x", "y", ":::", "", "---", "", ". . ."]
-        `shouldBe` ["> [!NOTE] Title", "> text more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "::: notes", "x y", ":::", "", "---", "", ". . ."]
+    it "keeps a box's marker, a heading, a table, the markers of the wiki's own blocks and a break on their own lines" $
+      unwrapped ["> [!NOTE] Title", "> text", "> more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "[[!notes]]", "x", "y", "[[/notes]]", "[[!pause]]", "z", "", "---"]
+        `shouldBe` ["> [!NOTE] Title", "> text more", "", "# Heading", "Text", "| a |", "| - |", "| 1 |", "[[!notes]]", "x y", "[[/notes]]", "[[!pause]]", "z", "", "---"]
+    it "joins three dots and colons as the text they are" $
+      unwrapped ["a", ". . .", ":::"] `shouldBe` ["a . . . :::"]
     it "keeps code, display math and HTML as written" $ do
       let kept = ["```", "a", "b", "```", "$$", "c", "d", "$$", "\\[", "e", "f", "\\]", "", "<div>", "g", "h", "</div>"]
       unwrapped kept `shouldBe` kept
@@ -164,7 +166,7 @@ spec = describe "Wiki.App.Guide" $ do
                  , ("how-deep-can-they-go", Nothing, OnHeading, [4])
                  ]
     hidden parsed `shouldBe` ["the butler"]
-    [() | SpoilerError {} <- parsed] `shouldBe` []
+    [() | MarkerError {} <- parsed] `shouldBe` []
 
   it "has the demo define the kind of box the Markdown guide shows" $ do
     (demoState demoNow).server.boxes `shouldBe` [exerciseBox]
