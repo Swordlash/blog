@@ -71,7 +71,8 @@ import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Notifications (feedPath)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
-import Wiki.App.Backend (MonadWiki (getHomeDocument))
+import Wiki.App.Backend (MonadWiki (getHomeDocument, pageLocation))
+import Wiki.App.Route (Route (PermanentLink), locationRoute)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (id))
 import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
@@ -85,7 +86,7 @@ import Wiki.Server.Feed (FeedKind (..), feedApplication, notificationFeedApplica
 import Wiki.Server.Health (healthApplication, metricsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Metrics (observe)
-import Wiki.Server.Render (renderPage)
+import Wiki.Server.Render (renderPage, routeAddress, routeOf)
 import Wiki.Server.Routes (routePattern)
 import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
@@ -202,6 +203,25 @@ feedOf segments = do
     "feed.rss" -> Just (path, Rss)
     _ -> Nothing
 
+-- | Where a request for a page's permanent address (@\/l\/\<page id>\/@,
+-- "Wiki.App.Route"'s 'PermanentLink') is sent: the page's own address
+-- under the listener's path, when the caller may view the page. 'Nothing'
+-- for any other request, and for a page the caller may not view or that
+-- is not there, which the caller learns nothing of: the address is then
+-- answered as any other, the application's "not found" page prerendered.
+-- The address is read as the application reads it ('routeOf'), and the
+-- page found as the application finds it ('pageLocation'). The redirect is
+-- a 302, not a permanent one, since the page can move again; it depends on
+-- the caller's session, so no shared cache may keep it.
+permanentTarget :: Env -> Who -> Text -> Request -> IO (Maybe Text)
+permanentTarget env who mount request =
+  routeOf mount (rawPathInfo request) >>= \case
+    PermanentLink pid ->
+      runStoredWiki env.storage who (pageLocation pid) >>= \case
+        Right place -> Just <$> routeAddress mount (locationRoute place)
+        Left _ -> pure Nothing
+    _ -> pure Nothing
+
 -- | The routes of a listener, for the given caller.
 listenerRoutes :: Logger -> Env -> Maybe StaticSite -> Listener -> Caller -> Application
 listenerRoutes logger env site l caller request respond = do
@@ -265,8 +285,16 @@ listenerRoutes logger env site l caller request respond = do
             , path == feedPath ->
                 notificationFeedApplication env.storage l.mount request respond
           rest -> do
-            hosts <- currentAssistantHosts env
-            maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site
+            -- A page's permanent address leads to the page's own, for
+            -- whoever may view the page. For anyone else, and for an id no
+            -- page has, it is a page like any other, which the server
+            -- prerenders as not found ('permanentTarget').
+            target <- if readOnly then permanentTarget env caller.who l.mount request else pure Nothing
+            case target of
+              Just address -> respond (responseLBS status302 [(hLocation, encodeUtf8 address), (hCacheControl, "private, no-cache"), (hVary, "Cookie")] "")
+              Nothing -> do
+                hosts <- currentAssistantHosts env
+                maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound
   where

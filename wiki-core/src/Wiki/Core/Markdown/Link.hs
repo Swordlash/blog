@@ -13,6 +13,9 @@
 -- * a destination with a scheme (@https:@, @mailto:@) or starting with
 --   @\/\/@ is a URL;
 -- * @#section@ is a place on the same page;
+-- * @\/l\/\<page id>\/@, with a fragment or not, is a page by its id: the
+--   permanent address, which keeps leading to the page after it moves
+--   (@\/l\/4f1c…\/#setup@);
 -- * anything else is a path, which a wiki reads as a page.
 --
 -- Whatever a resolver answers, the renderer only writes a URL whose scheme
@@ -24,6 +27,10 @@ module Wiki.Core.Markdown.Link
   , AttachmentRef (..)
   , Destination (..)
   , classifyDestination
+
+    -- * A page's permanent address
+  , pageIdSegment
+  , readPageIdSegment
 
     -- * Writing a reference
   , attachmentReference
@@ -46,6 +53,7 @@ import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Numeric (showHex)
 import Protolude
+import Wiki.Core.Id (PageId (..))
 
 -- | 'LinkTarget': what a destination resolves to, as the wiki answers it.
 -- @page@ is the wiki's own type for a page, turned into an @href@ by the
@@ -81,6 +89,10 @@ data Destination
     ToUrl Text
   | -- | @#fragment@: the fragment, without the @#@.
     ToAnchor Text
+  | -- | @\/l\/\<page id>\/@: a page by its id, and the fragment the link
+    -- names there (with its @#@, or empty). The id is decoded
+    -- ('readPageIdSegment').
+    ToPageId PageId Text
   | -- | Anything else: a path, absolute or relative, as written.
     ToPath Text
   deriving stock (Eq, Show)
@@ -90,9 +102,36 @@ classifyDestination dest
   | Just name <- T.stripPrefix "attachment:" stripped = ToAttachment (percentDecode name)
   | isJust (urlScheme dest) || "//" `T.isPrefixOf` stripped = ToUrl dest
   | Just fragment <- T.stripPrefix "#" stripped = ToAnchor fragment
+  | Just pid <- permanent = ToPageId pid fragmentPart
   | otherwise = ToPath dest
   where
     stripped = T.strip dest
+    (beforeFragment, fragmentPart) = T.breakOn "#" stripped
+    -- The query, if any, is not part of the address: the route ignores it.
+    permanent = case T.splitOn "/" (T.takeWhile (/= '?') beforeFragment) of
+      ["", "l", segment] -> readPageIdSegment (percentDecode segment)
+      ["", "l", segment, ""] -> readPageIdSegment (percentDecode segment)
+      _ -> Nothing
+
+-- | 'pageIdSegment' is a page's id as the segment of its permanent address
+-- (@\/l\/\<segment>\/@), before percent-encoding. An id is any text, but a
+-- segment cannot be empty, @.@ or @..@ (a browser removes those from an
+-- address). So an id that is one of those, or starts with @~@, is written
+-- with a @~@ before it. Every other id is written as it is.
+-- 'readPageIdSegment' reads the segment back as the same id.
+pageIdSegment :: PageId -> Text
+pageIdSegment pid
+  | pid.text `elem` ["", ".", ".."] || "~" `T.isPrefixOf` pid.text = "~" <> pid.text
+  | otherwise = pid.text
+
+-- | 'readPageIdSegment' is the page id a segment of a permanent address
+-- names, the segment percent-decoded already: the inverse of
+-- 'pageIdSegment'. The empty segment names no page.
+readPageIdSegment :: Text -> Maybe PageId
+readPageIdSegment segment
+  | T.null segment = Nothing
+  | Just escaped <- T.stripPrefix "~" segment = Just (PageId escaped)
+  | otherwise = Just (PageId segment)
 
 -- | The Markdown that refers to a page's attachment, as the editor inserts
 -- it when a file is uploaded. An image, a video or an audio file is

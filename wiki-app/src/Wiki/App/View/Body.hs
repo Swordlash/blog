@@ -347,7 +347,9 @@ resolve place destination = case Md.classifyDestination destination of
     Nothing -> Md.Unresolved
   Md.ToUrl url -> Md.External url
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)
-  Md.ToPath _ ->
+  -- A path, or a page's permanent address, which always leads somewhere
+  -- ('resolvePageLink').
+  _ ->
     maybe Md.Unresolved Md.Page $
       if homeSpace place.context place.space.id
         then resolvePageLink (filter (not . homeSpace place.context . (\s -> s.id)) place.context.spaces) [] Nothing ([] :: [PageSummary]) [] ("/" <> T.dropWhile (== '/') destination)

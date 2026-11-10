@@ -143,7 +143,7 @@ import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, redirectKeepingFragment, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
 import Wiki.App.Favicon (Favicon (..), defaultFavicon, homeFavicon, spaceFavicon)
@@ -153,7 +153,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
-import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle, settledRoute)
+import Wiki.App.Route (AdminSection, Route (..), adminSections, locationRoute, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
@@ -200,7 +200,7 @@ import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
-import Wiki.Core.Id (SpaceId, UserId)
+import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), summaryOf, templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
@@ -313,6 +313,11 @@ data Here
     -- may not say yet.
     SpaceFailed [Slug] (Maybe Space) WikiError
   | InSpace [Slug] Space [PageSummary]
+  | -- | A page's permanent address ('PermanentLink'), whose page is being
+    -- looked for ('Nothing'), or could not be found or reached: the
+    -- reason. Once found, the page's own address replaces the permanent
+    -- one ('followPermanent').
+    Following PageId (Maybe WikiError)
 
 -- | Whether the context every route shows (who is signed in, the tree of
 -- spaces) has been loaded.
@@ -478,7 +483,11 @@ component =
           feed <- traverse (\l -> l.liveFeed) live
           loaded <- atOnce $ do
             world <- fetchWorld demo
-            here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            here <-
+              if
+                | shutOut world.asking && not (publicHomeRoute world.asking route) -> pure NoSpace
+                | PermanentLink pid <- route -> lookingFor pid <$> pageLocation pid
+                | otherwise -> maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
           switcherHolder <- H.newRefLabel "space-switcher"
@@ -1142,9 +1151,17 @@ component =
       WhatsNewPage -> HH.slot_ "part" WhatsNewSlot WhatsNewView.component WhatsNewView.Input {context = context st}
       UserSpaces -> HH.slot_ "part" UserSpacesSlot UserSpacesView.component UserSpacesView.Input {context = context st}
       Home -> homeContent st
+      -- Until the page is found, and then its own route is shown. A page
+      -- that is not found, or that the reader may not view, is not found
+      -- as a page at a path is.
+      PermanentLink _ -> case st.here of
+        Following _ (Just e) -> failureView e RetryHere
+        _ -> loading
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
+        -- Left from a permanent address, until the space is asked for.
+        Following _ _ -> loading
         SpaceFailed path read' e
           -- An encrypted space whose pages this browser cannot read now
           -- says why, and offers to unlock the user's keys.
@@ -1293,8 +1310,11 @@ component =
         H.liftEffect keepContents
         -- What the route shows was loaded in the initial state, unless the
         -- backend would have waited for it.
-        gets (\st -> st.world) >>= \case
-          WorldReady -> announce
+        -- A permanent address found in the initial state is followed now,
+        -- since the initial state cannot change the address.
+        gets (\st -> (st.world, st.here)) >>= \case
+          (WorldReady, Following _ Nothing) -> loadHere True
+          (WorldReady, _) -> announce
           _ -> loadEverything
       RetryWorld -> do
         modify (\st -> st {world = WorldLoading})
@@ -1310,6 +1330,7 @@ component =
         case (st.world, st.here) of
           (WorldFailed (Unreachable _), _) -> handleAction RetryWorld
           (WorldReady, SpaceFailed _ _ (Unreachable _)) -> handleAction RetryHere
+          (WorldReady, Following _ (Just (Unreachable _))) -> handleAction RetryHere
           _ -> pass
       InstallChanged -> do
         installable <- H.liftEffect installAvailable
@@ -1578,6 +1599,7 @@ component =
       st <- get
       case spaceOfRoute st.route of
         _ | shutOut st.session && not (publicHomeRoute st.session st.route) -> modify (\s -> s {here = NoSpace})
+        _ | PermanentLink pid <- st.route -> followPermanent pid
         Nothing -> modify (\s -> s {here = NoSpace})
         Just path
           | not again, hereIs path st.here -> pass
@@ -1591,6 +1613,23 @@ component =
               when (spaceOfRoute now == Just path) $
                 modify (\s -> s {here = result})
       announce
+
+    -- Ask where the page of a permanent address is, and go there: its own
+    -- address replaces the permanent one in the history, so that Back
+    -- does not come back to it, and the address's fragment is kept for the
+    -- page to scroll to. A page not found leaves the permanent address in
+    -- place, so that signing in, which loads the route again, asks again.
+    -- The answer is never taken from an earlier one: the page may have
+    -- moved since.
+    followPermanent :: PageId -> H.HalogenM (State m) Action Slots output m ()
+    followPermanent pid = do
+      modify (\s -> s {here = Following pid Nothing})
+      result <- lift (pageLocation pid)
+      st <- get
+      -- Unless the route has moved on meanwhile.
+      when (st.route == PermanentLink pid) $ case result of
+        Right l -> redirectKeepingFragment st.router (locationRoute l)
+        Left e -> modify (\s -> s {here = Following pid (Just e)})
 
     -- Set the document's title for what is shown, and say whether all of
     -- it has loaded. A page's view, or the editor, says when it has loaded
@@ -1663,6 +1702,14 @@ fetchHere path =
   getSpace path >>= \case
     Left e -> pure (SpaceFailed path Nothing e)
     Right space -> either (SpaceFailed path (Just space)) (InSpace path space) <$> listPages space.id
+
+-- | What the shell shows for a permanent address after asking where its
+-- page is: the refusal, or, for a page found, the look for it, which
+-- 'followPermanent' finishes by going there.
+lookingFor :: PageId -> Either WikiError a -> Here
+lookingFor pid = \case
+  Left e -> Following pid (Just e)
+  Right _ -> Following pid Nothing
 
 -- | Whether the wiki is reached over the network: true on the HTTP
 -- backend, which is the one people sign in to, and false on the demo's,
@@ -1743,6 +1790,7 @@ hereIs path = \case
   SpaceFailed p _ _ -> p == path
   LoadingSpace p -> p == path
   NoSpace -> False
+  Following _ _ -> False
 
 waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
@@ -1833,6 +1881,7 @@ crumbs st = case st.route of
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
+  PermanentLink _ -> []
   Search {} -> [("Search", Nothing)]
   Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]
@@ -1867,6 +1916,7 @@ documentTitle st = case reverse (map fst (crumbs st)) of
   [] -> case st.here of
     SpaceFailed _ _ Forbidden -> "Private · Wiki"
     SpaceFailed _ _ NotFound -> "Not found · Wiki"
+    Following _ (Just NotFound) -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
 

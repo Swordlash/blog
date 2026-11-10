@@ -36,6 +36,7 @@ import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space qualified as S
@@ -55,6 +56,7 @@ spec backing = describe "the pages the server renders" $ do
   basePathAndLoad backing
   preloads backing
   addresses
+  permanentAddresses backing
   failures backing
   encrypted backing
 
@@ -284,6 +286,68 @@ addresses = describe "a request's address" $ do
     routeOf "/" "/s/docs" `shouldReturn` Space (slugs "docs")
     routeOf "/" "/elsewhere/" `shouldReturn` Unknown
     routeOf "/wiki/" "/s/docs/" `shouldReturn` Unknown
+    routeOf "/" "/l/17/" `shouldReturn` PermanentLink (PageId "17")
+
+-- | A page's permanent address (@\/l\/\<page id>\/@, WP5.81): a redirect
+-- to the page's own address for a reader who may view the page, and for
+-- anyone else exactly the page an address that names nothing gets.
+permanentAddresses :: Backing -> Spec
+permanentAddresses backing = describe "a page's permanent address" $ do
+  it "redirects to the page's own address, for a while, on each listener" $ withDemoRunning backing identity $ \r -> do
+    diagrams <- pageIdAt r [] "docs" "markdown-guide/diagrams"
+    reply <- getUrl r (r.public <> "/l/" <> diagrams.text <> "/")
+    (reply.status, header "Location" reply) `shouldBe` (302, Just "/s/docs/p/markdown-guide/diagrams/")
+    -- It depends on who asks: no shared cache keeps it.
+    (header "Cache-Control" reply, header "Vary" reply) `shouldBe` (Just "private, no-cache", Just "Cookie")
+    -- Without its last slash, and with a query, which it drops.
+    (header "Location" <$> getUrl r (r.public <> "/l/" <> diagrams.text <> "?x=1")) `shouldReturn` Just "/s/docs/p/markdown-guide/diagrams/"
+    -- A space's home page is the space's address.
+    tour <- pageIdAt r [] "docs" ""
+    (header "Location" <$> getUrl r (r.public <> "/l/" <> tour.text <> "/")) `shouldReturn` Just "/s/docs/"
+    -- The wiki's own home page is the front page.
+    (_, home) :: (S.Space, P.Page) <- ok200 (getUrl r (r.public <> "/" <> links.homeDocument))
+    (header "Location" <$> getUrl r (r.public <> "/l/" <> home.id.text <> "/")) `shouldReturn` Just "/"
+    -- The admin listener sends its reader to its own place.
+    (header "Location" <$> getUrl r (r.admin <> "/admin/l/" <> diagrams.text <> "/")) `shouldReturn` Just "/admin/s/docs/p/markdown-guide/diagrams/"
+
+  it "follows a page moved to another space" $ withAdminSession backing identity $ \r session -> do
+    diagrams <- pageIdAt r [session] "docs" "markdown-guide/diagrams"
+    blog <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.atPath (slugs "blog")) [session]) :: IO S.Space
+    moved <- send r methodPost (r.public <> "/" <> links.pages.move diagrams) [session, (hContentType, "application/json")] (encode Api.PageMove {Api.space = blog.id, Api.parent = Nothing})
+    moved.status `shouldBe` 200
+    (header "Location" <$> getUrl r (r.public <> "/l/" <> diagrams.text <> "/")) `shouldReturn` Just "/s/blog/p/diagrams/"
+
+  it "renders a page someone may not view exactly as an id no page has: not found, with nothing of the page" $ withAdminSession backing identity $ \r session -> do
+    handbook <- pageIdAt r [session] "team" "on-call"
+    -- The administrator is sent there.
+    (header "Location" <$> getUrlWith r (r.public <> "/l/" <> handbook.text <> "/") [session]) `shouldReturn` Just "/s/team/p/on-call/"
+    -- Nobody else learns that it is there. The ids are the same length, so
+    -- that the pages can be compared byte for byte, the id aside.
+    let missing = T.map (const 'x') handbook.text
+    (hiddenStatus, hidden) <- page r r.public ("/l/" <> handbook.text <> "/")
+    (missingStatus, nothing) <- page r r.public ("/l/" <> missing <> "/")
+    (hiddenStatus, missingStatus) `shouldBe` (404, 404)
+    appIn hidden `shouldSatisfy` T.isInfixOf "error-not-found"
+    hidden `shouldNotSatisfy` T.isInfixOf "On-call"
+    T.replace handbook.text "ID" hidden `shouldBe` T.replace missing "ID" nothing
+    -- And the API's answer is the same, status, headers and body.
+    hiddenAnswer <- getUrl r (r.public <> "/" <> links.pages.location handbook)
+    missingAnswer <- getUrl r (r.public <> "/" <> links.pages.location (PageId missing))
+    let shown reply = (reply.status, header "Content-Type" reply, header "Cache-Control" reply, reply.body)
+    shown hiddenAnswer `shouldBe` shown missingAnswer
+    hiddenAnswer.status `shouldBe` 404
+
+  it "carries the refusal for the program, which shows the same page" $ withDemoRunning backing identity $ \r -> do
+    (_, html) <- page r r.public "/l/no-such-page/"
+    p <- preloadIn html
+    p.pageLocations `shouldBe` Map.fromList [(PageId "no-such-page", Left NotFound)]
+  where
+    -- The id of the page at a path of a space, as the API reads it for
+    -- whoever the headers say.
+    pageIdAt r hs space path = do
+      found <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.atPath (slugs space)) hs) :: IO S.Space
+      p <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.pageAt found.id (if T.null path then [] else slugs path)) hs) :: IO P.Page
+      pure p.id
 
 failures :: Backing -> Spec
 failures backing = describe "when a render fails" $ do

@@ -9,10 +9,13 @@ import Halogen.VDom.DOM.Monad (runMemDOM)
 import Protolude hiding (print)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, chooseInt, elements, forAll, oneof, vectorOf, (===))
+import Test.QuickCheck (Gen, chooseInt, elements, forAll, listOf, oneof, vectorOf, (===))
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.App.Route
+import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
+import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 
 slug :: Text -> Slug
@@ -65,7 +68,18 @@ genRoute =
     , pure AssistantSettings
     , pure WhatsNewPage
     , pure UserSpaces
+    , PermanentLink . PageId <$> genPageId
     ]
+
+-- | A page's id: any text. A server's are UUIDs and the demo's numbers,
+-- but an archive can bring any, and a segment cannot hold some of them as
+-- they are ('pageIdSegment').
+genPageId :: Gen Text
+genPageId = oneof [elements awkwardIds, toS <$> listOf (elements ("ab9-~./ %#?&(" :: [Char]))]
+
+-- | Ids a path segment cannot hold as they are, or holds only encoded.
+awkwardIds :: [Text]
+awkwardIds = ["4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e", "17", "", ".", "..", "~", "~x", "a/b", "a b", "100% ?#&", "zażółć", "(x)", "l"]
 
 -- | A section of the administration, the users' with any listing.
 genSection :: Gen AdminSection
@@ -250,11 +264,34 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/search/?q=x&space=Not%20a%20slug" `shouldBe` Right (Search (Just "x") (Just []) True)
       parse route "/search/?q=x&space=" `shouldBe` Right (Search (Just "x") (Just []) True)
 
+    it "writes a page's permanent address under l, by its id, whatever the id is" $ do
+      print route (PermanentLink (PageId "4f1c-9a")) `shouldBe` "/l/4f1c-9a/"
+      print route (PermanentLink (PageId "17")) `shouldBe` "/l/17/"
+      print route (PermanentLink (PageId "a/b c")) `shouldBe` "/l/a%2Fb%20c/"
+      print route (PermanentLink (PageId "..")) `shouldBe` "/l/~../"
+      print route (PermanentLink (PageId "")) `shouldBe` "/l/~/"
+      parse route "/l/17" `shouldBe` Right (PermanentLink (PageId "17"))
+      parse route "/l/17/#setup" `shouldBe` Right (PermanentLink (PageId "17"))
+      parse route "/l/" `shouldSatisfy` isLeft
+      for_ awkwardIds $ \t -> parse route (print route (PermanentLink (PageId t))) `shouldBe` Right (PermanentLink (PageId t))
+
+    it "writes a permanent address a link in a page reads as the same id" $
+      for_ awkwardIds $ \t -> do
+        let address = print route (PermanentLink (PageId t))
+        classifyDestination address `shouldBe` ToPageId (PageId t) ""
+        classifyDestination (address <> "#setup") `shouldBe` ToPageId (PageId t) "#setup"
+
     it "reads no route from what is not one" $ do
       parse route "/s/" `shouldSatisfy` isLeft
       parse route "/s/Docs/" `shouldSatisfy` isLeft
       parse route "/s/docs/p/" `shouldSatisfy` isLeft
       parse route "/elsewhere/" `shouldSatisfy` isLeft
+
+  describe "locationRoute" $
+    it "goes to a page where it is now: the front page, a space's home page, or a page" $ do
+      locationRoute PageLocation {space = [], page = []} `shouldBe` Home
+      locationRoute PageLocation {space = slugs ["docs"], page = []} `shouldBe` Space (slugs ["docs"])
+      locationRoute PageLocation {space = slugs ["team", "projects"], page = slugs ["the-wiki"]} `shouldBe` Page (slugs ["team", "projects"]) (slugs ["the-wiki"])
 
   describe "routeOfHref" $ do
     it "reads the router's own addresses, under its base" $ do
@@ -264,6 +301,7 @@ spec = describe "Wiki.App.Route" $ do
       routeOfHref router "/wiki/s/docs/p/tour/#who-you-can-be" `shouldBe` Just (Page (slugs ["docs"]) (slugs ["tour"]))
       routeOfHref router "/wiki/" `shouldBe` Just Home
       routeOfHref router "/wiki/search/?q=x" `shouldBe` Just (Search (Just "x") Nothing True)
+      routeOfHref router "/wiki/l/17/#setup" `shouldBe` Just (PermanentLink (PageId "17"))
 
     it "leaves everything else alone" $ do
       router <- runMemDOM (Router.newRouter "/wiki/" Unknown route)

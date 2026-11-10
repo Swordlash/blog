@@ -11,7 +11,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route
 import Wiki.App.View.LinkDialog (pageAddress)
-import Wiki.Core.Id (PageId, SpaceId (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
@@ -111,6 +111,20 @@ spec = describe "resolvePageLink" $ do
     resolve (pageAddress (slugs ["docs"]) (slugs ["no-such-page"])) `shouldBe` Nothing
     -- Nor does a space nobody can see have pages.
     resolve (pageAddress (slugs ["nowhere"]) (slugs ["at-all"])) `shouldBe` Nothing
+
+  it "leads to a page of this space by its id at its address now, and to any other id at the permanent address" $ do
+    let idOf path = fromMaybe (panic "no page") (find (\p -> S.pagePath docs (`Map.lookup` demo.pages) p.id == Just (slugs path)) (pagesOf "docs"))
+        docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
+        diagrams = (idOf ["markdown-guide", "diagrams"]).id
+        tour = (idOf []).id
+    fromDocs [] ("/l/" <> diagrams.text <> "/#flowcharts") `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"])) "#flowcharts")
+    fromDocs ["markdown-guide"] ("/l/" <> tour.text) `shouldBe` docsSpace
+    -- A page of another space, or one the reader may not view, or no page
+    -- at all: the permanent address, asked about when it is followed, and
+    -- never a broken link.
+    fromDocs [] "/l/no-such-page/#x" `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page")) "#x")
+    let blogPost = fromMaybe (panic "no post") (head (pagesOf "blog"))
+    fromDocs [] ("/l/" <> blogPost.id.text <> "/") `shouldBe` Just (PageLink (PermanentLink blogPost.id) "")
 
   it "resolves every link between the demo's pages" $
     for_ (Map.elems demo.pages) $ \p -> do

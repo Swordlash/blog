@@ -18,6 +18,7 @@ module Wiki.App.Browser
   , articleLink
   , followArticleLink
   , markFragment
+  , redirectKeepingFragment
   , setDocumentTitle
   , setFavicon
   , EntryState (..)
@@ -245,6 +246,25 @@ markFragment place = when inBrowser . liftIO $ do
     kept <- w.history.state
     here <- (<>) <$> w.location.pathname <*> w.location.search
     w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent place))
+
+-- | Go to a route in place of the address the page is at
+-- ('Router.redirect'), keeping the address's fragment: a page's
+-- permanent address (@\/l\/17\/#setup@) becomes the page's own
+-- (@\/s\/docs\/p\/guide\/#setup@), and the page scrolls to the place
+-- once shown ('revealFragment'). The router writes the route's address
+-- without a fragment, so the fragment is put back after, in the same
+-- history entry, with its state kept. Under a router that keeps the route
+-- in the fragment (@#/l/17/@, the browser tests'), there is no fragment of
+-- the page's own to keep. Natively the route alone is gone to.
+redirectKeepingFragment :: (MonadIO m) => Router Route -> Route -> m ()
+redirectKeepingFragment router r = liftIO $ do
+  fragment <- if inBrowser then Window.window >>= \w -> w.location.hash else pure ""
+  Router.redirect router r
+  when (inBrowser && T.length fragment > 1 && not ("#/" `T.isPrefixOf` fragment)) $ do
+    w <- Window.window
+    kept <- w.history.state
+    here <- (<>) <$> w.location.pathname <*> w.location.search
+    w.history.replaceState kept "" (Just (here <> fragment))
 
 -- Go from a footnote's reference to its note, as following a link to
 -- @#fn-1@ on an ordinary page does: a new entry in the session history, so

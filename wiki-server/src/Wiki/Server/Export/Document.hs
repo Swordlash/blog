@@ -1082,7 +1082,10 @@ linkTarget place dest = case classifyDestination dest of
   -- Already prefixed, like the identifiers ('prefixIds').
   ToAnchor fragment -> Just ("#" <> fragment)
   ToAttachment name -> absolute place . place.attachmentAddress =<< findAttachment name place.attachments
-  ToPath _ -> do
+  -- A path, or a page's permanent address, as a link in the wiki reads
+  -- them: a page of the document is linked inside it, whichever way the
+  -- link names it, and any other at the wiki's address.
+  _ -> do
     PageLink r fragment <- resolvePageLink place.spaces place.spacePath place.root place.pages place.pagePath (if null place.spacePath then "/" <> T.dropWhile (== '/') dest else dest)
     case r of
       Page s p | Just anchor <- place.inDocument s p -> Just ("#" <> anchor)

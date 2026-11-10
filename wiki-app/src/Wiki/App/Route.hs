@@ -46,6 +46,7 @@
 -- > /assistant/                    AssistantSettings
 -- > /whats-new/                    WhatsNewPage
 -- > /user-spaces/                  UserSpaces
+-- > /l/4f1c-9a/                    PermanentLink (PageId 4f1c-9a)
 --
 -- Every address except the home's ends in a slash. On a static host each
 -- route is a directory with an @index.html@ in it (the prerender writes
@@ -66,6 +67,11 @@
 -- of them is written with a @~@ before it (@\/s\/~p\/@), which no slug can
 -- start with. That keeps every route's address unique: 'route' parses
 -- back exactly the route it printed.
+--
+-- A page's permanent address names it by its id, under @l@
+-- ('PermanentLink'): the id never changes, so the address keeps leading
+-- to the page when the page moves. No other route starts with @l@; a
+-- space's path is always under @s@.
 module Wiki.App.Route
   ( -- * Routes
     Route (..)
@@ -81,6 +87,7 @@ module Wiki.App.Route
   , routeOfHref
   , spaceRouteOf
   , pageRoute
+  , locationRoute
   , settledRoute
 
     -- * Links in pages
@@ -92,6 +99,7 @@ where
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
+import Data.Type.Equality (type (~))
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, noArgs, param, prefix, root, segment, suffix)
@@ -99,8 +107,10 @@ import Halogen.Router.Duplex qualified as Duplex
 import Protolude
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
-import Wiki.Core.Id (SpaceId)
-import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath, resolveUnder)
+import Wiki.Core.Id (PageId (..), SpaceId)
+import Wiki.Core.Markdown.Link (Destination (..), classifyDestination, pageIdSegment, readPageIdSegment)
+import Wiki.Core.Notification (PageLocation (..))
+import Wiki.Core.Path (TreeNode (..), findChild, parsePath, pathUnder, renderPath, resolvePath, resolveUnder)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (slug))
@@ -197,6 +207,15 @@ data Route
     -- finds the others by login or name. It is where the container "User
     -- subspaces" leads, since nobody may view the container itself.
     UserSpaces
+  | -- | A page's permanent address: the page by its id
+    -- ('Wiki.Core.Id.PageId'), which never changes, wherever the page is
+    -- now. The application asks where the page is
+    -- ('Wiki.App.Backend.pageLocation') and puts the page's own address in
+    -- place of this one; the server answers the address with a redirect
+    -- there ("Wiki.Server.App"). The id is written as
+    -- 'Wiki.Core.Markdown.Link.pageIdSegment' writes it, and a link in a
+    -- page reads it as 'Wiki.Core.Markdown.Link.classifyDestination' does.
+    PermanentLink PageId
   deriving stock (Eq, Show)
 
 -- | 'AdminSection' is a section of the administration: one page of it, with
@@ -368,6 +387,10 @@ route =
           (\case Unsubscribe t -> Just t; _ -> Nothing)
           Unsubscribe
           (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . UnsubscribeToken) segment)))
+      , alternative
+          (\case PermanentLink pid -> Just pid; _ -> Nothing)
+          PermanentLink
+          (prefix "l" (directory (as pageIdSegment (\t -> maybe (Left "no page id") Right (readPageIdSegment t)) segment)))
       ]
   where
     -- A space's path and a page's path, then the route's own word, if it
@@ -533,6 +556,15 @@ pageRoute sp = \case
   [] -> Space sp
   path -> Page sp path
 
+-- | 'locationRoute' is the route of a page where it is now, as
+-- 'Wiki.App.Backend.pageLocation' answers it: 'pageRoute' of its space's
+-- path and its own, or the front page ('Home') for the wiki's own home
+-- page, whose space has no path.
+locationRoute :: PageLocation -> Route
+locationRoute l = case l.space of
+  [] -> Home
+  sp -> pageRoute sp l.page
+
 -- | 'settledRoute' is a route as the application shows it: a 'Page' with
 -- the empty path, the home page's, is its space's own route ('pageRoute'),
 -- which shows a blog's posts where the page alone would not. A route made
@@ -548,8 +580,17 @@ data PageLink = PageLink Route Text
   deriving stock (Eq, Show)
 
 -- | Where a link written in a page leads, for a destination that is a path
--- ('Wiki.Core.Markdown.Link.ToPath'), or 'Nothing' when it names nothing
--- the wiki has (shown as a broken link).
+-- ('Wiki.Core.Markdown.Link.ToPath') or a page's permanent address
+-- ('Wiki.Core.Markdown.Link.ToPageId'), or 'Nothing' when it names
+-- nothing the wiki has (shown as a broken link).
+--
+-- A permanent address (@\/l\/\<page id>\/@) leads to the page with that
+-- id. A page of this space is linked at its address as it is now, so the
+-- link is followed without a question to the backend. Any other id is
+-- linked at its permanent address ('PermanentLink'), which asks where the
+-- page is when the link is followed: its space's pages are not at hand,
+-- and the page may be one the reader may not view. Such a link is never
+-- shown as broken.
 --
 -- A relative path is read as a browser reads it from the page's address
 -- (@\/s\/docs\/p\/markdown-guide\/diagrams@ without a slash at the end):
@@ -580,7 +621,7 @@ data PageLink = PageLink Route Text
 -- A segment that is not a slug is read as a title would be ('slugify'), so
 -- that a wiki link names a page by its title: @[[On-call]]@.
 resolvePageLink
-  :: (TreeNode node, Eq (NodeId node))
+  :: (TreeNode node, NodeId node ~ PageId)
   => [Space]
   -- ^ Every space the reader can see the path of.
   -> [Slug]
@@ -594,19 +635,30 @@ resolvePageLink
   -> Text
   -- ^ The destination, as written.
   -> Maybe PageLink
-resolvePageLink spaces spacePath home pages pagePath destination = do
-  let (beforeFragment, fragment) = T.breakOn "#" destination
-      pathPart = T.takeWhile (/= '?') beforeFragment
-      segments = T.splitOn "/" pathPart
-  target <- case T.uncons pathPart of
-    Just ('/', _)
-      | Right (Page sp pp) <- Duplex.parse route pathPart -> addressed sp pp
-      -- A space's own address, the address of its home page.
-      | Right (Space sp) <- Duplex.parse route pathPart -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
-      | otherwise -> absolute (filter (not . T.null) segments)
-    _ -> relative segments
-  pure (PageLink target fragment)
+resolvePageLink spaces spacePath home pages pagePath destination
+  | ToPageId pid fragment <- classifyDestination destination = Just (PageLink (byId pid) fragment)
+  | otherwise = do
+      let (beforeFragment, fragment) = T.breakOn "#" destination
+          pathPart = T.takeWhile (/= '?') beforeFragment
+          segments = T.splitOn "/" pathPart
+      target <- case T.uncons pathPart of
+        Just ('/', _)
+          | Right (Page sp pp) <- Duplex.parse route pathPart -> addressed sp pp
+          -- A space's own address, the address of its home page.
+          | Right (Space sp) <- Duplex.parse route pathPart -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
+          | otherwise -> absolute (filter (not . T.null) segments)
+        _ -> relative segments
+      pure (PageLink target fragment)
   where
+    -- A page by its id: at its address, if it is one of this space's
+    -- pages, and otherwise at its permanent address. The path is the
+    -- page's path under the space's home page, as
+    -- 'Wiki.Core.Space.pagePath' finds it. The wiki's front page has no
+    -- space path, and its links by id stay permanent addresses.
+    byId pid = case pathUnder home (\i -> find (\n -> nodeId n == i) pages) pid of
+      Just path | not (null spacePath) -> pageRoute spacePath path
+      _ -> PermanentLink pid
+
     -- A page by its own address: its space has to be one the reader can
     -- see, and a page of this space one it has.
     addressed sp pp = do

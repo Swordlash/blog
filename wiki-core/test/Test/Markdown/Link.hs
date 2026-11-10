@@ -7,6 +7,7 @@ import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, elements, forAll, listOf1, (===))
+import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Link
 
@@ -27,6 +28,29 @@ spec = describe "Markdown.Link" $ do
       classifyDestination "../setup" `shouldBe` ToPath "../setup"
       classifyDestination "/eng/onboarding" `shouldBe` ToPath "/eng/onboarding"
       classifyDestination "notes/a:b" `shouldBe` ToPath "notes/a:b"
+    it "reads a page's permanent address as its id, with the fragment" $ do
+      classifyDestination "/l/4f1c-9a/" `shouldBe` ToPageId (PageId "4f1c-9a") ""
+      classifyDestination "/l/17/#setup" `shouldBe` ToPageId (PageId "17") "#setup"
+      classifyDestination "/l/17#setup" `shouldBe` ToPageId (PageId "17") "#setup"
+      classifyDestination " /l/17/?x=1#a " `shouldBe` ToPageId (PageId "17") "#a"
+      classifyDestination "/l/a%2Fb%20c/" `shouldBe` ToPageId (PageId "a/b c") ""
+      classifyDestination "/l/~./" `shouldBe` ToPageId (PageId ".") ""
+      classifyDestination "/l/~~x/" `shouldBe` ToPageId (PageId "~x") ""
+    it "reads a permanent address in a link, a wiki link and a link in angle brackets" $ do
+      readBack "[the setup](/l/17/#setup)" `shouldBe` Just (ToPageId (PageId "17") "#setup", "the setup")
+      readBack "[[/l/17/#setup|the setup]]" `shouldBe` Just (ToPageId (PageId "17") "#setup", "the setup")
+      readBack "[x](</l/a(b)/>)" `shouldBe` Just (ToPageId (PageId "a(b)") "", "x")
+    it "reads anything else under /l/ as a path" $ do
+      classifyDestination "/l/" `shouldBe` ToPath "/l/"
+      classifyDestination "/l//" `shouldBe` ToPath "/l//"
+      classifyDestination "/l/17/more/" `shouldBe` ToPath "/l/17/more/"
+      classifyDestination "l/17/" `shouldBe` ToPath "l/17/"
+
+  describe "pageIdSegment" $ do
+    it "escapes the ids a segment cannot hold, and those starting with ~" $
+      map (pageIdSegment . PageId) ["17", "", ".", "..", "~x", "a~"] `shouldBe` ["17", "~", "~.", "~..", "~~x", "a~"]
+    prop "reads back as the same id" $ \t ->
+      readPageIdSegment (pageIdSegment (PageId (T.pack t))) === Just (PageId (T.pack t))
 
   describe "urlScheme" $ do
     it "finds the scheme, lowercased" $

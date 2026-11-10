@@ -41,6 +41,7 @@ module Wiki.Server.Render
   ( renderPage
   , inProcess
   , routeOf
+  , routeAddress
   , renderTimeout
   )
 where
@@ -156,6 +157,13 @@ routeOf mount raw = do
   router <- runMemDOM (Router.newRouter mount Unknown route)
   pure (fromMaybe Unknown (routeOfHref router (decodeUtf8With lenientDecode raw)))
 
+-- | The address of a route under a listener's path, as the program's
+-- router writes it ('Router.href').
+routeAddress :: Text -> Route -> IO Text
+routeAddress mount r = do
+  router <- runMemDOM (Router.newRouter mount Unknown route)
+  pure (Router.href router r)
+
 -- | The status a page is sent with: a 404 for an address that is not one
 -- of the application's, and for a space or page it names that does not
 -- exist or that the reader may not see; a 403 for a refusal of what the
@@ -182,6 +190,9 @@ statusOf at c = case at of
   PageHistory s p v _ -> ofSpace s `unlessRefused` ofPage s p `unlessRefused` ofVersion s p v
   PageSlides s p _ _ -> ofSpace s `unlessRefused` ofPage s p
   NewPage s _ -> ofSpace s
+  -- A permanent address is prerendered only for a page not found, or one
+  -- the reader may not view ("Wiki.Server.App"), and says so.
+  PermanentLink pid -> refusal (Map.lookup pid c.pageLocations)
   _ -> status200
   where
     publicHome r =

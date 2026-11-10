@@ -202,6 +202,8 @@ options ctx = (Body.islandOptions ctx mempty) {Md.resolveLink = resolve}
         -- is a path from the space.
         (Just g, Right slugs) -> Md.Page (PageLink (Page g slugs) "")
         _ -> Md.Unresolved
+      -- A page's permanent address leads where it does on a page.
+      Md.ToPageId pid fragment -> Md.Page (PageLink (PermanentLink pid) fragment)
 
 -- | The click handler of the sections: a click on one of their links that
 -- the application follows itself is stopped before the browser follows
