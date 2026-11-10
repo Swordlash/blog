@@ -167,10 +167,11 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     offline <- blocksOf ToOther place {publicUrl = Nothing} "See [[Tour]].\n"
     linkTargets offline `shouldBe` []
 
-  it "leaves out [[toc]], which the document's own table of contents stands for, but not a link to a page of that name" $ do
-    bs <- blocksOf ToOther place "# A\n\n[[toc]]\n\nText, and [[toc]] here.\n"
-    length bs `shouldBe` 2
+  it "leaves out [[!toc]], which the document's own table of contents stands for, but not a link to a page named toc" $ do
+    bs <- blocksOf ToOther place "# A\n\n[[!toc]]\n\nText, and [[toc]] here.\n\n[[toc]]\n"
+    length bs `shouldBe` 3
     headers bs `shouldBe` [(1, "a")]
+    filter (== "toc") (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["toc", "toc"]
 
   it "lets through only what the allowlist keeps of raw HTML, and reads it as pandoc's own" $ do
     bs <- blocksOf ToOther place "<script>alert('no')</script>\n\nPress <kbd>Ctrl</kbd> and <b onclick=\"steal()\">this</b>.\n\n<div class=\"box\"><img src=\"tree.png\" alt=\"A tree\" onerror=\"steal()\"></div>\n"
@@ -182,7 +183,7 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     images bs `shouldBe` ["attachments/a1/tree.png"]
 
   it "makes GitHub's alerts boxes, and leaves the deck's options out" $ do
-    bs <- blocksOf ToOther place "> [!WARNING]\n> Careful.\n\n::: {.slides theme=dark}\n:::\n"
+    bs <- blocksOf ToOther place "> [!WARNING]\n> Careful.\n\n[[!slides]]{theme=dark}\n"
     [cls | P.Div (_, cls, _) _ <- bs] `shouldBe` [["warning", "alert"]]
 
   it "makes a box of any kind a div of its class, titled with the title given, the kind's label or its name" $ do
@@ -234,8 +235,8 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
         inBox bs = concat [rest | P.Div (_, ["note", "alert"], _) (_ : rest) <- bs]
     table <- blocksOf ToOther place "> [!NOTE]\n> | a | b |\n> |---|---|\n> | 1 | 2 |\n"
     [() | P.Table {} <- inBox table] `shouldBe` [()]
-    fencedDiv <- blocksOf ToOther place "> [!NOTE]\n> ::: summary\n> x\n> :::\n"
-    [cls | P.Div (_, cls, _) _ <- inBox fencedDiv] `shouldBe` [["summary"]]
+    marked <- blocksOf ToOther place "> [!NOTE]\n> [[!div]]{.summary}\n> x\n> [[/div]]\n"
+    [cls | P.Div (_, cls, _) _ <- inBox marked] `shouldBe` [["summary"]]
     html <- blocksOf ToOther place "> [!NOTE]\n> <div>x</div>\n"
     boxClasses html `shouldBe` [["note", "alert"]]
     [() | P.Para _ <- inBox html] `shouldBe` []
@@ -294,13 +295,51 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> []) spelled `shouldBe` [[P.Str "Mine"]]
     [() | P.BlockQuote _ <- spelled] `shouldBe` [()]
 
+  describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
+    let words' = query (\case P.Str t -> [t]; _ -> [])
+        paragraphs = query (\case P.Para xs -> [stringify xs]; _ -> [])
+        stringify = T.concat . query (\case P.Str t -> [t]; P.Space -> [" "]; P.SoftBreak -> [" "]; P.LineBreak -> [" "]; _ -> [])
+    it "makes each block a div with the attributes the wiki read, nested ones too, where the page has it" $ do
+      bs <- blocksOf ToOther place "[[!div]]{#box .summary key=v}\nShort.\n[[/div]]\n\n- item\n\n  [[!notes]]\n  > [[!div]]{.inner}\n  > q\n  > [[/div]]\n  [[/notes]]\n\n[[!incremental]]\n[[!div]]{.a}\nx\n[[/div]]\n[[/incremental]]\n"
+      divClasses bs `shouldBe` [["summary"], ["notes"], ["inner"], ["incremental"], ["a"]]
+      [(ident, kvs) | P.Div (ident, ["summary"], kvs) _ <- bs] `shouldBe` [("box", [("key", "v")])]
+      [inner | P.Div (_, ["incremental"], _) inner <- bs] `shouldBe` [[P.Div ("", ["a"], []) [P.Para [P.Str "x"]]]]
+      show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
+    it "leaves ::: and three dots the text they are on the page, in every document" $
+      for_ [ToOther, ToTeX, ToBeamer, ToPowerPoint] $ \output -> do
+        bs <- blocksOf output place "::: notes\nSay it.\n:::\n\n. . .\n\n<p>. . .</p>\n"
+        (output, divClasses bs) `shouldBe` (output, [])
+        (output, query pauses bs) `shouldBe` (output, [])
+        (output, filter (`elem` [":::", ":::", ". . ."]) (words' bs)) `shouldBe` (output, [":::", ":::", ". . .", ". . ."])
+    it "shows a block never closed, a name the wiki does not have and a pause in a quotation as their lines and reasons" $ do
+      bs <- blocksOf ToOther place "[[!oops]]\n\n> [[!pause]]\n\n[[!notes]]\nx\n"
+      divClasses bs `shouldBe` []
+      paragraphs bs
+        `shouldBe` [ "[[!oops]] — “oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case"
+                   , "[[!pause]] — a pause is not read in a quotation or a footnote, which a deck shows whole"
+                   , "[[!notes]] — the [[!notes]] block is not closed: add [[/notes]] after its last line"
+                   , "x"
+                   ]
+    it "leaves the forms without the exclamation mark, an end marker with nothing open and a link written with its text as the links they are" $ do
+      bs <- blocksOf ToOther place "[[notes|Notes]]\n\n[[spoiler]]{a}(b)\n\n[[/div]]\n"
+      divClasses bs `shouldBe` []
+      paragraphs bs `shouldBe` ["Notes", "spoiler{a}(b)", "/div"]
+      show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
+
+  describe "comments" $ do
+    it "leaves a comment's text out of the document: on one line, on several, among a paragraph's text and around blocks" $
+      for_ [ToOther, ToTeX] $ \output -> do
+        bs <- blocksOf output place commented
+        (output, show bs) `shouldNotSatisfy` (T.isInfixOf "secret" . snd)
+        (output, raw bs) `shouldBe` (output, [])
+
   describe "spoilers" $ do
     let boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
         titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
         paragraphs = query (\case P.Para xs -> [stringify xs]; _ -> [])
         stringify = T.concat . query (\case P.Str t -> [t]; P.Space -> [" "]; P.SoftBreak -> [" "]; P.LineBreak -> [" "]; _ -> [])
     it "makes a block spoiler a box titled with its description, its content shown, and an inline spoiler its text" $ do
-      shown <- blocksOf ToOther place "[[spoiler]]{answer}(The *answer*)\nForty-two.\n\n- a\n[[/spoiler]]{answer}\n\nAfter ||hidden **bold**|| and a || b.\n"
+      shown <- blocksOf ToOther place "[[!spoiler]]{answer}(The *answer*)\nForty-two.\n\n- a\n[[/spoiler]]{answer}\n\nAfter ||hidden **bold**|| and a || b.\n"
       boxClasses shown `shouldBe` [["alert-spoiler"]]
       titles shown `shouldBe` [[P.Str "The", P.Space, P.Emph [P.Str "answer"]]]
       paragraphs shown `shouldSatisfy` elem "Forty-two."
@@ -324,7 +363,7 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       show coded `shouldNotSatisfy` T.isInfixOf "wikibox"
     it "keeps an inline spoiler in a box's title, a spoiler's description and a heading" $ do
       let spans = query (\case P.Span (_, ["spoiler"], _) xs -> [xs]; _ -> [])
-      titled' <- blocksOf ToOther place "> [!TIP] Who? ||The butler||\n> Yes.\n\n[[spoiler]]{x}(Ask ||him||)\nNo.\n[[/spoiler]]{x}\n\n## A ||hidden|| heading\n"
+      titled' <- blocksOf ToOther place "> [!TIP] Who? ||The butler||\n> Yes.\n\n[[!spoiler]]{x}(Ask ||him||)\nNo.\n[[/spoiler]]{x}\n\n## A ||hidden|| heading\n"
       spans titled' `shouldBe` [[P.Str "The", P.Space, P.Str "butler"], [P.Str "him"], [P.Str "hidden"]]
       titles titled' `shouldSatisfy` elem [P.Str "Ask", P.Space, P.Span ("", ["spoiler"], []) [P.Str "him"]]
       [ident | P.Header _ (ident, _, _) _ <- titled'] `shouldBe` ["a-hidden-heading"]
@@ -365,22 +404,22 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
       wikiAllIds `shouldBe` ["answer-2", "answer-3", "answer"]
       pass
     it "nests spoilers, and finds them in a quotation and a list item" $ do
-      nested <- blocksOf ToOther place "[[spoiler]]{a}(A)\nx\n[[spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
+      nested <- blocksOf ToOther place "[[!spoiler]]{a}(A)\nx\n[[!spoiler]]{b}(B)\ny\n[[/spoiler]]{b}\n[[/spoiler]]{a}\n\n> [[!spoiler]]{c}(C)\n> z\n> [[/spoiler]]{c}\n\n- item\n\n  [[!spoiler]]{d}(D)\n  w\n  [[/spoiler]]{d}\n"
       boxClasses nested `shouldBe` [["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"], ["alert-spoiler"]]
       titles nested `shouldBe` [[P.Str "A"], [P.Str "B"], [P.Str "C"], [P.Str "D"]]
       [inner | P.Div (_, ["alert-spoiler"], _) (_ : inner) <- nested, P.Div (_, ["alert-spoiler"], _) _ <- inner] `shouldSatisfy` (not . null)
     it "shows a spoiler the page shows in red as its marker and the reason, then its blocks, and a broken line as text" $ do
-      unclosed <- blocksOf ToOther place "[[spoiler]]{x}(D)\na\n\n[[/spoiler]]{y}\n"
+      unclosed <- blocksOf ToOther place "[[!spoiler]]{x}(D)\na\n\n[[/spoiler]]{y}\n"
       boxClasses unclosed `shouldBe` []
-      paragraphs unclosed `shouldBe` ["[[spoiler]]{x}(D) — Spoiler “x” is not closed: add [[/spoiler]]{x}", "a", "[[/spoiler]]{y} — no open spoiler of this name"]
-      cut <- blocksOf ToOther place "[[spoiler]]{s}(D)\ntext\n\n## Heading\n[[/spoiler]]{s}\n\nafter\n"
+      paragraphs unclosed `shouldBe` ["[[!spoiler]]{x}(D) — Spoiler “x” is not closed: add [[/spoiler]]{x}", "a", "[[/spoiler]]{y} — no open spoiler of this name"]
+      cut <- blocksOf ToOther place "[[!spoiler]]{s}(D)\ntext\n\n## Heading\n[[/spoiler]]{s}\n\nafter\n"
       boxClasses cut `shouldBe` []
       take 1 (paragraphs cut) `shouldSatisfy` all (T.isInfixOf "cuts a section")
       paragraphs cut `shouldSatisfy` elem "after"
       length (query (\case P.Header {} -> [()]; _ -> []) cut) `shouldBe` 1
 
     it "shows a heading spoiler's section as written: its heading without the marker, with the wiki's identifier, and its content" $ do
-      let source = "## Intro\n\nx\n\n## [[spoiler]]{q1} What is *X*?\n\nAn answer.\n\n### [[spoiler]] Intro\n\nDeeper.\n\n> ## [[spoiler]]\tQuoted ||y||\n\n## After\n\nSee [the question](#what-is-x) and [the second intro](#intro-2).\n"
+      let source = "## Intro\n\nx\n\n## [[!spoiler]]{q1} What is *X*?\n\nAn answer.\n\n### [[!spoiler]] Intro\n\nDeeper.\n\n> ## [[!spoiler]]\tQuoted ||y||\n\n## After\n\nSee [the question](#what-is-x) and [the second intro](#intro-2).\n"
           headings = query (\case P.Header level (ident, _, _) xs -> [(level, ident, stringify xs)]; _ -> [])
       shown <- blocksOf ToOther place source
       headings shown `shouldBe` [(2, "intro", "Intro"), (2, "what-is-x", "What is X?"), (3, "intro-2", "Intro"), (2, "quoted-y", "Quoted y"), (2, "after", "After")]
@@ -413,13 +452,13 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
 slides :: Spec
 slides = describe "a deck, as pandoc's slide writers read it" $ do
   it "cuts at the breaks, titles each slide with its first heading, and keeps the notes" $ do
-    bs <- blocksOf ToTeX place "# The deck\n\nBy me.\n\n---\n\n### A small title\n\nText.\n\n## Not the title\n\n::: notes\nSay this.\n:::\n\n---\n\nNo title here.\n"
+    bs <- blocksOf ToTeX place "# The deck\n\nBy me.\n\n---\n\n### A small title\n\nText.\n\n## Not the title\n\n[[!notes]]\nSay this.\n[[/notes]]\n\n---\n\nNo title here.\n"
     let out = slideBlocks bs
     [l | P.Header l _ _ <- out] `shouldBe` [1, 2, 2, 3, 2]
     query (\case P.Header _ _ xs -> [xs]; _ -> []) out `shouldBe` [[P.Str "The", P.Space, P.Str "deck"], [], [P.Str "A", P.Space, P.Str "small", P.Space, P.Str "title"], [P.Str "Not", P.Space, P.Str "the", P.Space, P.Str "title"], []]
     [cls | P.Div (_, cls, _) _ <- out] `shouldBe` [["notes"]]
 
-  it "keeps a deck's pauses and incremental boxes for Beamer, where the wiki reads them, and the rest as text" $ do
+  it "keeps a deck's pauses and incremental boxes for Beamer, where the wiki reads them, and three dots as text" $ do
     bs <- blocksOf ToBeamer place stepsDeck
     let latex = [t | P.RawBlock (P.Format "latex") t <- query (\case b@P.RawBlock {} -> [b]; _ -> []) bs]
     -- The pause after "One", and the one that starts slide B: after a
@@ -432,6 +471,7 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     [inner | P.Div (_, ["notes"], _) inner <- query (\case b@P.Div {} -> [b]; _ -> []) bs]
       `shouldBe` [[P.Para [P.Str "Say."], P.Para [P.Str "More."]]]
     query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
+    [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
 
   it "leaves a deck's pauses out of PowerPoint, which has none, and keeps its incremental boxes" $ do
     bs <- blocksOf ToPowerPoint place stepsDeck
@@ -439,12 +479,12 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     raw bs `shouldBe` []
     divClasses bs `shouldSatisfy` elem ["incremental"]
 
-  it "leaves the pauses out of any other document, where the three dots in a quotation or a footnote are text" $
+  it "leaves the pauses out of any other document, where three dots are text" $
     for_ [ToTeX, ToOther] $ \output -> do
       bs <- blocksOf output place stepsDeck
-      [b | b <- bs, isPause b] `shouldBe` []
-      query pauses (filter (\case P.BlockQuote _ -> False; _ -> True) bs) `shouldBe` [()]
-      query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."]]]
+      query pauses bs `shouldBe` []
+      query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
+      [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
       divClasses bs `shouldSatisfy` elem ["incremental"]
 
   it "gives a deck its title and its look" $ do
@@ -452,8 +492,9 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     Map.lookup "aspectratio" meta `shouldBe` Just (P.MetaString "43")
     Map.lookup "title" meta `shouldBe` Just (P.MetaInlines [P.Str "Deck"])
 
--- | A deck with steps: pauses, an incremental box, and three dots where
--- they are text (a quotation, the notes, a footnote).
+-- | A deck with steps: pauses (one in the notes), an incremental box, and
+-- three dots, which are text wherever they are (alone in a paragraph, a
+-- quotation, a footnote).
 stepsDeck :: Text
 stepsDeck =
   T.unlines
@@ -461,30 +502,32 @@ stepsDeck =
     , ""
     , "One"
     , ""
-    , ". . ."
+    , "[[!pause]]"
     , ""
     , "Two"
     , ""
-    , "::: incremental"
+    , "[[!incremental]]"
     , "- a"
     , "- b"
-    , ":::"
+    , "[[/incremental]]"
     , ""
-    , ". . ."
+    , "[[!pause]]"
     , ""
     , "Three"
+    , ""
+    , ". . ."
     , ""
     , "> . . ."
     , ">"
     , "> - q"
     , ""
-    , "::: notes"
+    , "[[!notes]]"
     , "Say."
     , ""
-    , ". . ."
+    , "[[!pause]]"
     , ""
     , "More."
-    , ":::"
+    , "[[/notes]]"
     , ""
     , "See[^1]."
     , ""
@@ -494,9 +537,41 @@ stepsDeck =
     , ""
     , "## B"
     , ""
-    , ". . ."
+    , "[[!pause]]"
     , ""
     , "Four"
+    ]
+
+-- | A page with comments of every shape: on a line of their own, among a
+-- paragraph's text, over several lines, and around blocks to keep them
+-- out of the page. Each comment holds the word "secret".
+commented :: Text
+commented =
+  T.unlines
+    [ "# Title"
+    , ""
+    , "One <!-- secret one --> line."
+    , ""
+    , "<!-- secret two -->"
+    , ""
+    , "<!--"
+    , "secret three"
+    , "-->"
+    , ""
+    , "Before <!-- secret four"
+    , "over two lines --> after."
+    , ""
+    , "<!--"
+    , "## A secret heading"
+    , ""
+    , "A secret paragraph."
+    , ""
+    , "- a secret item"
+    , "-->"
+    , ""
+    , "- item <!-- secret five -->"
+    , ""
+    , "End."
     ]
 
 pauses :: P.Block -> [()]
@@ -617,14 +692,26 @@ overHttp backing = describe "over HTTP" $ do
     -- pause makes no slide.
     Map.size slideFiles `shouldBe` 4
     -- The incremental list is built item by item; no pause is written out,
-    -- and the quotation's and the footnote's three dots are text.
+    -- and the three dots, alone, in the quotation and in the footnote, are text.
     filter ("<p:bldP" `BS.isInfixOf`) (Map.elems slideFiles) `shouldSatisfy` ((== 1) . length)
-    sum (map (T.count ". . ." . decodeUtf8) (Map.elems slideFiles)) `shouldBe` 2
+    sum (map (T.count ". . ." . decodeUtf8) (Map.elems slideFiles)) `shouldBe` 3
     document <- (`entryText` "word/document.xml") =<< zipped =<< export Docx
-    -- Only the quotation's and the footnote's three dots, which are text.
-    T.count ". . ." document `shouldBe` 1
+    -- The three dots alone and the quotation's, which are text (the footnote's are in its own part).
+    T.count ". . ." document `shouldBe` 2
     html <- decodeUtf8 <$> export Html
-    T.count ". . ." html `shouldBe` 2
+    T.count ". . ." html `shouldBe` 3
+
+  it "writes no comment of the page into an HTML, EPUB or DOCX file" $ withDemoRunning backing identity $ \r -> do
+    pid <- newPage r "Commented" commented
+    let export format = getUrl r (r.admin <> "/admin/" <> links.pages.export pid format) >>= (`exported` format)
+    html <- decodeUtf8 <$> export Html
+    html `shouldSatisfy` T.isInfixOf "End."
+    html `shouldNotSatisfy` T.isInfixOf "secret"
+    html `shouldNotSatisfy` T.isInfixOf "<!--"
+    epub <- zipped =<< export Epub
+    [name | (name, bytes) <- Map.toList epub, "secret" `BS.isInfixOf` bytes] `shouldBe` []
+    docx <- zipped =<< export Docx
+    [name | (name, bytes) <- Map.toList docx, "secret" `BS.isInfixOf` bytes] `shouldBe` []
 
   it "offers presentations only of a deck, and refuses a format it cannot make, saying why" $ withDemoRunning backing identity $ \r -> do
     (docs, pages) <- docsIds r

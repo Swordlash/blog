@@ -234,7 +234,7 @@ html = describe "a post's HTML" $
                 , "main = pure ()"
                 , "```"
                 , ""
-                , "## [[spoiler]]{q1} A question"
+                , "## [[!spoiler]]{q1} A question"
                 , ""
                 , "Its answer."
                 ]
