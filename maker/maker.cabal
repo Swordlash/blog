@@ -42,6 +42,7 @@ library
     Maker.Deploy.Front
     Maker.Deploy.Layout
     Maker.Deploy.Move
+    Maker.Deploy.Operations
     Maker.Deploy.Options
     Maker.Deploy.Page
     Maker.Deploy.Plan

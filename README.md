@@ -1701,6 +1701,14 @@ In order, and what a failure at each step leaves:
 | The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and put back as it was found, and the service started on SQLite. A deployment kept by an earlier deploy is never restored. The switch back puts back by copies first and deletes what the move saved only once all of it is back: a step that fails stops it there, the service stopped, everything saved is where the move says, and `--rollback --yes` finishes |
 | The service started, and must answer | Switched back, as above |
 
+After a move that did not succeed, either the service runs on exactly the
+SQLite database the move began with (its `wiki.sqlite`, `-wal` and `-shm`,
+compared by size and SHA-256 before the service starts on them), or it is
+stopped and every copy is still there, the files set aside, the deployment
+in `previous/` and PostgreSQL's copy, and `--rollback --yes` finishes. The
+deploy's tests fail the move at each of its file operations in turn and
+check this.
+
 The comparison runs on copies because the checks write (a canary account, a
 sign-in provider): the wiki the move fills is checked by `copy-database`
 itself, table by table, and the copies show that the server reads the wiki

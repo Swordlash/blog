@@ -191,7 +191,8 @@ fixture() {
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
-    FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK
+    FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER \
+    WIKI_TEST_MOVE_FAILPOINT WIKI_TEST_MOVE_OPERATIONS
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -780,6 +781,10 @@ case $name in
           # FAKE_RESTART_PG_LOCK names a directory made unwritable then,
           # for a switch back that cannot write there.
           [ -z "${FAKE_RESTART_PG_LOCK:-}" ] || chmod 555 "$FAKE_RESTART_PG_LOCK"
+          # FAKE_RESTART_PG_TAMPER names files (a pattern) changed then.
+          if [ -n "${FAKE_RESTART_PG_TAMPER:-}" ]; then
+            for tampered in $FAKE_RESTART_PG_TAMPER; do printf 'changed\n' >>"$tampered"; done
+          fi
           printf 'Job for %s failed\n' "$2" >&2
           exit 1
         fi
@@ -1632,6 +1637,16 @@ assert_contains "$case_dir/adopted-again" 'adopting wiki-demo'
 undeploy --prefix "$HOME/wiki-demo" --purge-data >/dev/null 2>&1
 pass 'a rollback of an adoption under --prefix moves the state and the PostgreSQL files back where the kept unit names them'
 
+# Every file operation of the move goes through Maker.Deploy.Operations,
+# which counts it for the failpoints below: Maker.Deploy.Move itself
+# renames, copies, writes and removes nothing, and runs no cp, mv, rm or
+# chmod.
+move_source=$SOURCE_DIR/../maker/src/Maker/Deploy/Move.hs
+if grep -nE '\b(renameFile|renameDirectory|copyFile|copyFileWithMetadata|writeFile|appendFile|removeFile|removeDirectory|removeDirectoryRecursive|removePathForcibly|createDirectory|createDirectoryIfMissing|setPermissions)\b|BS\.writeFile|runInherit "(cp|mv|rm|chmod|install)"' "$move_source" | grep -v '^[0-9]*: *--' >"$TMP/move-raw-operations"; then
+  fail "Maker.Deploy.Move changes files outside Maker.Deploy.Operations, which the failpoints do not cover: $(cat "$TMP/move-raw-operations")"
+fi
+pass 'the move changes files only through Maker.Deploy.Operations, which counts every operation for the failpoints'
+
 # The move of a wiki on SQLite into PostgreSQL (--move-to-postgres,
 # maker/src/Maker/Deploy/Move.hs). The checkout is a git repository here,
 # so that the deployment records the commit it was built from, which the
@@ -1856,6 +1871,95 @@ for lock in "$HOME/.config/wiki-demo" "$HOME/.config/systemd/user" "$HOME/wiki-d
   on_sqlite "a switch back that could not write $lock, finished with --rollback"
 done
 pass 'a failure after the switch (the switch, a page not copied back, the restart, a server that does not answer on PostgreSQL) switches back to SQLite, with the deployment kept before and PostgreSQL as it was found; a switch that fails before this move kept anything restores nothing older; a switch back that cannot restore deletes nothing it needs, and --rollback finishes it'
+
+# The switch's invariant, checked at every one of the move's file
+# operations: after a move that did not succeed, either the service runs
+# on exactly the SQLite database the move began with, or it is stopped and
+# every copy is still there (the SQLite files, at data/ or set aside, and
+# PostgreSQL's copy), and --rollback --yes finishes. The operations are
+# counted by the maker itself (Maker.Deploy.Operations): a run with
+# WIKI_TEST_MOVE_OPERATIONS lists them, and the move runs once more for
+# each, failing at it (WIKI_TEST_MOVE_FAILPOINT). The restart on
+# PostgreSQL fails in every run, so each reaches the switch back. The wiki
+# has a -wal and a -shm here, so that setting it aside is three renames.
+printf 'the write-ahead log\n' >"$data/wiki.sqlite-wal"
+printf 'the shared memory\n' >"$data/wiki.sqlite-shm"
+mkdir -p "$case_dir/before"
+for f in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do cp "$data/$f" "$case_dir/before/$f"; done
+database_sums() { for f in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do if [ -f "$1/$f" ]; then cksum <"$1/$f"; else printf 'none\n'; fi; done; }
+before_sums=$(database_sums "$case_dir/before")
+# The invariant, after a move that failed ($1 says how), then the
+# deployment put back as the next run expects it.
+invariant() {
+  if [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ]; then
+    assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+    [ "$(state db)" = sqlite ] || fail "$1: the service runs, and the state does not say SQLite"
+    [ "$(database_sums "$data")" = "$before_sums" ] || fail "$1: the service runs on another database than the one the move began with"
+  else
+    for f in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
+      kept=''
+      for d in "$data" "$data"/replaced/*; do
+        if [ -f "$d/$f" ] && cmp -s "$d/$f" "$case_dir/before/$f"; then kept=1; fi
+      done
+      [ -n "$kept" ] || fail "$1: the service is stopped, and $f as the move began is nowhere"
+    done
+    [ -e "$FAKE_DOCKER/tables-5433" ] || fail "$1: the service is stopped, and PostgreSQL's copy was emptied"
+    deploy --rollback --yes >"$case_dir/invariant-rollback" 2>&1 || fail "$1: --rollback --yes did not finish: $(cat "$case_dir/invariant-rollback")"
+    [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail "$1: the service does not answer after --rollback"
+    [ "$(database_sums "$data")" = "$before_sums" ] || fail "$1: --rollback put back another database than the one the move began with"
+  fi
+  # The deployment as the next run expects it: the deployment previous/
+  # held before the move back in its place, nothing set aside left,
+  # PostgreSQL deleted (as the move's message says to), and on SQLite.
+  if [ -d "$HOME/wiki-demo/previous.before-move" ]; then
+    rm -rf "$HOME/wiki-demo/previous"
+    mv "$HOME/wiki-demo/previous.before-move" "$HOME/wiki-demo/previous"
+  fi
+  rm -rf "$data/replaced" "$HOME/wiki-demo/bin.restoring" "$HOME/wiki-demo/app.restoring"
+  rm -rf "$FAKE_DOCKER/wiki-demo" "$FAKE_DOCKER/wiki-demo_wiki-db.volume" "$FAKE_DOCKER/tables-5433" "$pgd"
+  on_sqlite "$1, put back"
+}
+operations=$case_dir/operations
+rm -f "$operations"
+: >"$EVENTS"
+if FAKE_RESTART_PG_FAIL=1 WIKI_TEST_MOVE_OPERATIONS=$operations deploy --move-to-postgres >"$case_dir/counted" 2>&1; then fail 'the move whose restart fails went on'; fi
+invariant 'the move whose restart fails'
+total=$(wc -l <"$operations")
+[ "$total" -ge 30 ] || fail "the move counted only $total file operations: $(cat "$operations")"
+grep -q 'rename .*/data/wiki.sqlite-wal to ' "$operations" || fail "setting the wiki's -wal aside is not an operation: $(cat "$operations")"
+n=1
+while [ "$n" -le "$total" ]; do
+  what=$(sed -n "${n}p" "$operations")
+  out=$case_dir/failpoint
+  if FAKE_RESTART_PG_FAIL=1 WIKI_TEST_MOVE_FAILPOINT=$n deploy --move-to-postgres >"$out" 2>&1; then fail "the move failing at operation $what went on"; fi
+  assert_contains "$out" "failpoint $n: "
+  invariant "failing at operation $what"
+  n=$((n + 1))
+done
+pass "after a move that fails at any of its $total file operations, of the switch and of the switch back, the service runs on exactly the SQLite database it began with, or is stopped with every copy kept, and --rollback --yes finishes"
+
+# The guard does not rely on the journal: a switch back whose SQLite files
+# do not come back as the bytes the switch began with (here the copy set
+# aside is changed meanwhile) starts nothing, deletes nothing and empties
+# nothing, and says where the files set aside are.
+: >"$EVENTS"
+out=$case_dir/guard
+if FAKE_RESTART_PG_FAIL=1 FAKE_RESTART_PG_TAMPER="$data/replaced/*/wiki.sqlite" deploy --move-to-postgres >"$out" 2>&1; then fail 'the move whose files changed went on'; fi
+assert_contains "$out" "are not the wiki's database as the switch began"
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = unreachable ] || fail 'the service was started on a database that is not the one the move began with'
+[ -e "$FAKE_DOCKER/tables-5433" ] || fail 'PostgreSQL was emptied though the SQLite files are not the wiki'"'"'s'
+for kept in info state unit bin/wiki-server app/index.html; do
+  [ -e "$HOME/wiki-demo/previous/$kept" ] || fail "the guard's stop deleted previous/$kept"
+done
+guarded_aside=$(sed -n 's/^aside=//p' "$HOME/wiki-demo/previous/info")
+assert_contains "$out" "$guarded_aside"
+[ -f "$guarded_aside/wiki.sqlite-wal" ] && [ -f "$guarded_aside/wiki.sqlite-shm" ] || fail 'the guard'"'"'s stop deleted the files set aside'
+# What the message says: compare and put the right files back, then
+# --rollback --yes.
+cp "$case_dir/before/wiki.sqlite" "$guarded_aside/wiki.sqlite"
+invariant 'the guard'
+rm -f "$data/wiki.sqlite-wal" "$data/wiki.sqlite-shm"
+pass 'a switch back whose SQLite files are not the bytes the switch began with starts nothing, deletes nothing and keeps PostgreSQL'"'"'s copy'
 
 # The move.
 : >"$EVENTS"
