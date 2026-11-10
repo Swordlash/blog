@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+The help dialog has a section "Emoji" (WP5.83): `helpSections` takes the
+Markdown guide's `### Emoji` after "Tables".
+
 A space's home page is the root of its pages (WP5.78b, #201). The home
 page's path is empty: `EditPage`, `PageSource`, `PageHistory`,
 `PageSlides` and `LivePreview` with the empty path are written under the

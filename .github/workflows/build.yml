@@ -261,9 +261,9 @@ jobs:
       contents: read
     # Four jobs in parallel. unit, sqlite and postgres run the test suites
     # of that group (WIKI_TEST_GROUP). deploy builds wiki-server alone and
-    # runs the deploy scripts' tests and the plan job's scripts' tests,
-    # which take about four minutes and need no test suite: in the unit job
-    # they made it the run's longest.
+    # runs the deploy scripts' tests (the wizard's among them) and the plan
+    # job's scripts' tests, which take about four minutes and need no test
+    # suite: in the unit job they made it the run's longest.
     strategy:
       fail-fast: false
       matrix:
@@ -409,7 +409,9 @@ jobs:
 
     # The maker's own dependencies (Shake, optparse-applicative, hspec, and
     # brick for its terminal interface), from its own project, into the same
-    # store before it is saved, so later runs take them from the cache.
+    # store before it is saved, so later runs take them from the cache: the
+    # deploy group's wizard test among them, which builds the terminal
+    # interface with brick from the store.
     - name: Install the maker's dependencies
       if: matrix.group == 'unit'
       run: cd maker && cabal build all --enable-tests --only-dependencies
@@ -570,8 +572,27 @@ jobs:
     # Its last stage serves the static cases with the real wiki-server, the
     # one the Build wiki-server step made (cabal list-bin in dist-newstyle/native). About
     # two minutes.
-    - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
+    #
+    # First, with WIKI_TEST_WIZARD=1, the wizard's test (toolchain/test-configure.sh):
+    # it builds maker-tui with the maker's own project and checks the
+    # command lines the wizard builds, then drives its screens through
+    # script(1), and fails rather than skip that case when script(1) is
+    # missing on CI. Its brick and vty cost nothing to build here: this job
+    # restored the native store above, under the same key prefix as every
+    # group, and that copy is the one the unit group of an earlier run (this
+    # ref's, or main's) saved after "Install the maker's dependencies". The
+    # wizard's build plans brick and vty with the same unit ids as that step
+    # (`cabal build exe:maker-tui` and `cabal build all --enable-tests
+    # --only-dependencies` in maker/ give the same ids), so cabal finds them
+    # in the store and compiles only the maker's own modules: its library,
+    # which the deploy's tests build anyway, and the terminal interface's.
+    # brick is compiled here only on the first run after the store starts
+    # empty or the maker's dependencies change: the unit group of that run
+    # saves it for the next.
+    - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers, the wizard)
       if: matrix.group == 'deploy'
+      env:
+        WIKI_TEST_WIZARD: 1
       run: sh toolchain/test-deploy-local.sh
 
     # The plan job's scripts, against a fake GitHub API: a second each.

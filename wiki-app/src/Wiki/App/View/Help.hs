@@ -2,8 +2,8 @@
 
 -- | The help button and its dialog (WP5.44 of docs/PLAN.md): a round "?"
 -- in the bottom right corner of every page, which opens a dialog with what
--- a page can hold. Lists, tables, code, formulas, Mermaid diagrams, TikZ
--- pictures and the kinds of box, this wiki's own kinds too
+-- a page can hold. Lists, tables, emoji, code, formulas, Mermaid diagrams,
+-- TikZ pictures and the kinds of box, this wiki's own kinds too
 -- ("Wiki.App.Help"). Each section is rendered as a page renders it, with
 -- the Markdown it is written in under it, folded.
 --

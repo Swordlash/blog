@@ -20,8 +20,9 @@
 # against the deploy's header, and its wrapper, toolchain/configure.sh,
 # with the fakes. With WIKI_TEST_WIZARD=1 and cabal on PATH, it first runs
 # toolchain/test-configure.sh as well, which compiles the wizard (brick and
-# vty: minutes the first time) and checks the command lines it builds; npm
-# run test-native leaves that out.
+# vty: minutes the first time) and checks the command lines it builds and
+# its screens. CI's native job (group deploy) sets WIKI_TEST_WIZARD=1; npm
+# run test-native leaves the wizard out.
 #
 #   sh toolchain/test-deploy-local.sh
 #   WIKI_TEST_WIZARD=1 sh toolchain/test-deploy-local.sh
@@ -34,9 +35,9 @@ NODE_REAL=$(command -v node)
 GIT_REAL=$(command -v git)
 export GIT_REAL
 # The wizard's command lines, which take GHC, cabal and a compiled brick:
-# only when asked for (WIKI_TEST_WIZARD=1) and cabal is on PATH. They run
-# first, before the fixtures change HOME, PATH and cabal's directory, so
-# that cabal finds its package index and store.
+# only when asked for (WIKI_TEST_WIZARD=1, as CI does) and cabal is on
+# PATH. They run first, before the fixtures change HOME, PATH and cabal's
+# directory, so that cabal finds its package index and store.
 if [ "${WIKI_TEST_WIZARD:-}" = 1 ]; then
   if command -v cabal >/dev/null 2>&1; then
     sh "$SOURCE_DIR/test-configure.sh"

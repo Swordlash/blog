@@ -617,8 +617,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   click away from every page, for each user (kept by `wiki-server`, or in the
   browser by the demo).
 - **Help** at hand: the red **?** in the corner of every page shows, in short,
-  what a page can hold (lists, tables, code, formulas, Mermaid, TikZ and the
-  kinds of box, the wiki's own too), each rendered with its Markdown, from the
+  what a page can hold (lists, tables, emoji, code, formulas, Mermaid, TikZ and
+  the kinds of box, the wiki's own too), each rendered with its Markdown, from the
   in-app guide.
 - **Blogs**: a space shown as a blog lists its pages as posts, newest first,
   with an Atom and an RSS feed over `wiki-server`.
@@ -2286,10 +2286,18 @@ first, or name one with `WIKI_SERVER`), and that one over HTTPS too:
 
 ```sh
 sh toolchain/test-deploy-local.sh
+WIKI_TEST_WIZARD=1 sh toolchain/test-deploy-local.sh   # the wizard's test first
+sh toolchain/test-configure.sh     # the wizard's test alone
 sh toolchain/test-check-tex.sh     # the TeX check, against fake engines
 ```
 
-CI runs them in its `native` job, after the native tests (about two minutes).
+The wizard's test (`toolchain/test-configure.sh`) builds the wizard, checks the
+command line it builds for each set of answers, and drives its screens through
+`script(1)`, skipping that last case on a machine without `script(1)`. Its first
+run compiles brick and vty, minutes, so the deploy's test runs it only with
+`WIKI_TEST_WIZARD=1`. CI runs the deploy's test with the wizard's in the `native`
+job's `deploy` group, and the TeX check in its `unit` group; on CI a missing
+`script(1)` fails the wizard's test instead of skipping the case.
 
 ## Running in Docker
 
@@ -2668,8 +2676,12 @@ headless Chromium, and keep the built page as the run's `app` artifact) and `for
 `native` runs as four jobs side by side. `unit`, `sqlite` and `postgres` run the
 test groups of the same names (`WIKI_TEST_GROUP`, below); `unit` also builds and
 tests the maker and wiki-server without PostgreSQL. `deploy` builds wiki-server
-alone and tests the deploy scripts (`toolchain/test-deploy-local.sh`) and the plan
-job's scripts. On a pull request, `sqlite` also builds the base branch's wiki-server
+alone and tests the deploy scripts (`toolchain/test-deploy-local.sh`, with the
+wizard's test, `WIKI_TEST_WIZARD=1`) and the plan job's scripts. The wizard's
+brick comes from the native store, which `unit` fills with the maker's
+dependencies and saves; `deploy` restores the copy of an earlier run, so brick
+compiles there only once after the store starts empty or the maker's
+dependencies change. On a pull request, `sqlite` also builds the base branch's wiki-server
 and rehearses the upgrade from it (`toolchain/rehearse-ci.sh`) on SQLite and then
 on a PostgreSQL it starts after its tests.
 

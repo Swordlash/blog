@@ -9,8 +9,12 @@
 #
 # It needs GHC and cabal (. ~/.wiki-toolchain/env), and the first run
 # compiles brick and vty, which takes minutes. So `npm run test-native`
-# does not run it: toolchain/test-deploy-local.sh runs it at its end when
-# cabal is on PATH and WIKI_TEST_WIZARD=1 is set. The wizard is built with
+# does not run it: toolchain/test-deploy-local.sh runs it first when
+# WIKI_TEST_WIZARD=1 is set, and CI's native job (group deploy) sets it,
+# with brick from the cabal store the unit group saves. The last case drives
+# the screens through script(1); without script(1) it is skipped, but on
+# CI (CI=true, which GitHub sets) a missing script(1) fails instead, so CI
+# never passes without that case. The wizard is built with
 # the maker's own cabal project and run as a program, not through `cabal
 # run`, because the cases run with a HOME of their own, where cabal would
 # find neither its package index nor its store.
@@ -392,6 +396,8 @@ if command -v script >/dev/null 2>&1; then
   grep -a -F "ARGS --server --prefix $TMP/srv/driven --backend-only --system-tools --npm-registry https://preset-npm.example.org/ --hackage-mirror https://preset-hackage.example.org/ --sqlite --behind-proxy --port 8090 --admin-port 8091" "$TMP/driven" >/dev/null ||
     fail "the deploy the screens ran lost the presets: $(grep -a -o 'ARGS.*' "$TMP/driven")"
   pass 'through the screens: a deployment chosen on the first screen keeps the presets'
+elif [ "${CI:-}" = true ]; then
+  fail 'no script(1) on CI, so the case through the screens would be skipped (util-linux or bsdutils has it)'
 else
   printf 'test-configure: skipped the case through the screens: no script(1) here\n'
 fi
