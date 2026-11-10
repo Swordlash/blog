@@ -1359,8 +1359,8 @@ stage 2 is done.
 **The smaller issues first (the owner, 2026-11-10, in the evening):** the
 smaller issues are closed before plugins (#186), autocompletion (#187)
 and presentations (#191) are started. In this order: #194 (persistent
-links, WP5.81 and WP5.82: what a link names is what #189 records and
-#187 later completes); #205's last part (WP5.85); #188 (emojis: the
+links, WP5.81: what a link names is what #189 records and #187 later
+completes); #205's last part (WP5.85); #188 (emojis: the
 editor's part, WP5.86); #189 (backlinks, on WP5.81's reading of a link by
 id); #196 and #200 (an `html` block and an interactive SVG, each in a
 frame the page's scripts and keys cannot be reached from, which is also
@@ -1375,8 +1375,8 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.81 Persistent links: a page's address by its id (#194, the first
-  of two).** A page's id never changes, and every answer of the API
+- **WP5.81 Persistent links: a page's address by its id, pinned to a
+  version (#194).** A page's id never changes, and every answer of the API
   carries it, but no address uses it: a link is a path, read when the page
   is rendered, and a moved page's old address leads nowhere. Goal: an
   address that names a page by its id, `/l/<page id>/` (another prefix if
@@ -1397,7 +1397,7 @@ which the wiki pins since #227.
   permanent link"; the hover `#` of a heading and of a box copies the
   permanent address with its fragment; the editor's "Link to a page" gets
   a box "Permanent link", off by default, since the path reads better in
-  the source. The selection's "Copy link" stays as it is until WP5.82.
+  the source. The selection's "Copy link" stays as it is.
   The PDF and Word exports read the form as they read a path. An import
   that gives a page a new id, because the wiki uses the archive's id
   already, leaves links by the old id in the imported text leading to the
@@ -1406,22 +1406,17 @@ which the wiki pins since #227.
   redirect and its refusals (a hidden page, a sealed one, signed out); a
   link by id after a move to another parent and to another space; the
   three ways of copying, in the browser.
-- **WP5.82 Persistent links: a place on the page that survives edits
-  (#194, the second of two; the session's proposal, taken as wanted since
-  the owner said on 2026-11-10 to close the smaller issues, #194 among
-  them, and his to change).** A heading's
-  generated id changes when the heading is renamed or one with the same
-  text is written above it, and a box's number when a box is added above;
-  the selection's "Copy link" writes the browser's text fragment, which
-  the wiki does not read and which the application's own navigation loses.
-  Proposal: the selection's "Copy link" writes a quote in the fragment in
-  the wiki's own form (the exact text with a little before and after, as a
-  comment's anchor has), on the permanent address; the page view finds it
-  with `Wiki.Core.Anchor.locate`, scrolls to it and marks it, and says so
-  when the text is no longer on the page. A heading stays linked by its
-  id, and an id written by hand (`## Title {#setup}`) is the one that
-  survives a rename; the guide says so. #194 stays open until this is
-  built or the owner drops it.
+  **Added the same evening, the owner's meaning of the issue:** a
+  persistent link is pinned to the version of the page that was current
+  when the link was made ("link + &version=8"), so that the text and the
+  place it points at never change. `/l/<page id>/` takes
+  `?version=<the version's time>`, as the history's address does, and
+  leads to that version of the page, the fragment kept; "Copy permanent
+  link" copies it with the version shown. The `#` of a heading and the
+  editor's box copy the address without a version, the page as it is now.
+  The session had read the issue as a link that survives a move only, and
+  proposed a second package (a quote the wiki finds again after edits);
+  that proposal is dropped, since a pinned version needs no finding.
 - **WP5.85 `check` looks at how the real accounts sign in (#205, its
   last part).** The rehearsal's "accounts" check signs in two accounts it
   made itself; nothing looks at the accounts people have. Three things.
