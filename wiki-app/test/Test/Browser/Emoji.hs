@@ -287,6 +287,29 @@ spec m = do
     unsafeIOToPageM (threadDelay 300_000)
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "")
 
+  it "scrolls the emoji's grid to the entry the arrows reach, down to the last row and back up" $ runPage $ do
+    ui <- startChanged m identity (Just "user-editor") helloEditor
+    _ <- editorText ui
+    find ui emojiButton >>= click
+    eventually (focusedIs ".emoji-search" `shouldReturn` True)
+    -- Fifty found, more rows than the grid shows at once.
+    find ui ".emoji-search" >>= (`typeText` "s")
+    eventually $ length <$> findAll ui ".emoji-choice" `shouldReturn` 50
+    press "ArrowDown"
+    replicateM_ 6 (press "ArrowDown")
+    eventually (focusedIs ".emoji-choice[data-index='48']" `shouldReturn` True)
+    eventually $ seen ".emoji-choice[data-index='48']" `shouldReturn` True
+    press "ArrowRight"
+    eventually (focusedIs ".emoji-choice[data-index='49']" `shouldReturn` True)
+    seen ".emoji-choice[data-index='49']" `shouldReturn` True
+    -- Back up: the first row is seen again, then the field has the focus.
+    press "ArrowLeft"
+    replicateM_ 6 (press "ArrowUp")
+    eventually (focusedIs ".emoji-choice[data-index='0']" `shouldReturn` True)
+    eventually $ seen ".emoji-choice[data-index='0']" `shouldReturn` True
+    press "ArrowUp"
+    eventually (focusedIs ".emoji-search" `shouldReturn` True)
+
   it "keeps the toolbar's menus inside a narrow screen, the emoji's grid moving by rows as before" $ runPage $ do
     ui <- startChanged m identity (Just "user-editor") helloEditor
     _ <- editorText ui
@@ -334,6 +357,13 @@ spec m = do
     rightOf bulletBox `shouldSatisfy` (<= leftOf itemBox + 1)
     leftOf bulletBox `shouldSatisfy` (< leftOf itemBox)
   where
+    -- Whether an emoji's box lies within the grid's: not cut off by its
+    -- scrolling.
+    seen selector = do
+      grid <- rectOf ".emoji-grid"
+      entry <- rectOf selector
+      pure (topOf entry >= topOf grid - 0.5 && bottomOf entry <= bottomOf grid + 0.5)
+    bottomOf box = fromMaybe 0 (atMay box 3)
     leftOf box = fromMaybe 0 (head box)
     topOf box = fromMaybe 0 (atMay box 1)
     rightOf box = fromMaybe 0 (atMay box 2)

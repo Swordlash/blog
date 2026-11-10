@@ -41,6 +41,7 @@ module Wiki.App.Editor.Browser
   , focusText
   , goToTitleLine
   , focusElement
+  , focusInView
   , LiveFeed
   , listenLive
   , stopLive
@@ -352,6 +353,15 @@ goToTitleLine = liftIO . js_title_line
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
 focusElement = liftIO . HTMLElement.focusWithoutScrolling . coerce
+
+-- | Give an element the focus, and scroll it into view by the least
+-- amount, in the box that scrolls it and in the window, only where it is
+-- not already seen: an entry of a grid that scrolls (the "Emoji" menu's),
+-- reached with the arrow keys, which do not scroll the way Tab does.
+focusInView :: (MonadIO m) => Element -> m ()
+focusInView element = liftIO $ do
+  HTMLElement.focusWithoutScrolling (coerce element)
+  Element.scrollIntoViewBlock element Element.ToNearest
 
 -- | 'LiveFeed' is a window's subscription to what the editor of a page
 -- sends on the browser's channel between the wiki's windows (WP5.36 of

@@ -284,6 +284,7 @@ import Wiki.App.Editor.Browser
   , editorKey
   , emojiAsked
   , focusElement
+  , focusInView
   , focusText
   , forgetPreviewEntry
   , goToTitleLine
@@ -1862,11 +1863,12 @@ component =
       PickEmoji name -> do
         closeMenu
         whenM (gets (\st -> st.mode == Editing)) $ insert (":" <> name <> ":")
-      -- The focus to the menu's field (-1) or to one of its emoji.
+      -- The focus to the menu's field (-1) or to one of its emoji, which
+      -- the grid scrolls to when a row of it is out of sight.
       EmojiFocus n -> do
         holder <- gets (\st -> st.menuHolder) >>= H.getRef
         let selector = if n < 0 then ".emoji-search" else ".emoji-choice[data-index=\"" <> show n <> "\"]"
-        for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector selector >>= traverse_ focusElement))
+        for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector selector >>= traverse_ focusInView))
       -- An island of the preview failed, or was drawn after failing. The
       -- failure is kept even for a key the last check has not seen (the
       -- preview may have drawn a text the check has not read yet); only
