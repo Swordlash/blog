@@ -45,6 +45,7 @@ import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
 import Test.Storage.CodeSteps qualified as CodeSteps
 import Test.Storage.Contract qualified as Contract
+import Test.Storage.Copy qualified as Copy
 import Test.Storage.Encrypted qualified as Encrypted
 import Test.Storage.Keys qualified as Keys
 import Test.Storage.Migrate qualified as Migrate
@@ -76,6 +77,7 @@ main = secureMain $ do
         Opaque.unitSpec
         Rehearsal.unitSpec
         CodeSteps.unitSpec
+        Copy.unitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
@@ -87,6 +89,7 @@ main = secureMain $ do
           Permissions.spec b
           Scale.spec b
           Backup.spec b
+          Copy.spec b
           StorageAccounts.spec b
           Removal.spec b
           Keys.spec b

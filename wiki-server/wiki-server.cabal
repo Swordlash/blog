@@ -95,6 +95,7 @@ library
         Wiki.Server.Backups
         Wiki.Server.Compress
         Wiki.Server.Console
+        Wiki.Server.CopyDatabase
         Wiki.Server.Events
         Wiki.Server.Export
         Wiki.Server.Export.Document
@@ -129,6 +130,7 @@ library
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Check
+        Wiki.Server.Storage.Copy
         Wiki.Server.Storage.Comments
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
@@ -359,6 +361,7 @@ test-suite wiki-server-test
         Test.Storage.Backup
         Test.Storage.CodeSteps
         Test.Storage.Contract
+        Test.Storage.Copy
         Test.Storage.Fixture
         Test.Storage.Encrypted
         Test.Storage.Keys

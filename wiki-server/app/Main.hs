@@ -4,6 +4,7 @@
 -- >                     [--base-path PATH] [--static DIR] [--secure-cookies] …
 -- > wiki-server backup --data DIR [DATABASE] [--keep N]
 -- > wiki-server restore BACKUP --data DIR [DATABASE] [--attachments DIR]
+-- > wiki-server copy-database --data DIR [DATABASE] (--to-database URL [--to-database-password-file FILE] | --to-sqlite FILE)
 -- > wiki-server users (list | add | password | admin | disable) --data DIR [DATABASE] …
 -- > wiki-server oidc check --data DIR [DATABASE] [NAME]
 -- > wiki-server guide (install | update) --data DIR [DATABASE]
@@ -24,7 +25,9 @@
 -- ("Wiki.Server.Storage.Backup"); the deploy script runs it before it
 -- starts a new server. @restore@ restores a backup as the database of a
 -- data directory no server is running on, bringing the attachment files it
--- lacks from a copy if one is given. @users@ creates and changes the wiki's
+-- lacks from a copy if one is given. @copy-database@ copies the database
+-- into another, empty one, a wiki in SQLite into PostgreSQL, and checks
+-- the copy ("Wiki.Server.CopyDatabase"). @users@ creates and changes the wiki's
 -- users and their passwords ("Wiki.Server.Console"), which is how the first
 -- administrator is created. @oidc check@ asks the providers the
 -- administration has set how to sign in, and prints the redirect URI to
@@ -43,6 +46,7 @@ import System.Directory (doesDirectoryExist)
 import Wiki.Server (ServerError (..), serve)
 import Wiki.Server.Compress (compressDirectory)
 import Wiki.Server.Console (BackupOutcome (..), CheckOutcome (..), GuideCommand, MigrateOutcome (..), OidcCheck, RestoreCommand, Users, guideParser, oidcCheckParser, readPassword, restoreParser, runBackup, runCheck, runGuide, runMigrate, runOidcCheck, runRestore, runUsers, usersParser)
+import Wiki.Server.CopyDatabase (CopyOptions, CopyOutcome (..), copyParser, runCopy)
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Rehearsal (RehearsalOptions, RehearsalOutcome (..), rehearsalParser, runRehearsal)
 import Wiki.Server.Storage.Backup (defaultKeep)
@@ -70,6 +74,8 @@ data Command
     Check PlaceOptions
   | -- | Rehearse the upgrade on a copy of the running wiki.
     Rehearse RehearsalOptions
+  | -- | Copy the database into another, empty one.
+    CopyDatabase CopyOptions
 
 commands :: ParserInfo Command
 commands =
@@ -80,6 +86,7 @@ commands =
               <> command "restore" (info (Restore <$> restoreParser) (progDesc "Restore a backup into a data directory no server is running on"))
               <> command "migrate" (info (Migrate <$> placeOptions) (progDesc "Bring the database to this program's version of the schema, and do nothing else"))
               <> command "check" (info (Check <$> placeOptions) (progDesc "Read every row of every table as this program does, and change nothing"))
+              <> command "copy-database" (info (CopyDatabase <$> copyParser) (progDesc "Copy every table of the database into an empty one, a wiki in SQLite into PostgreSQL, and check the copy; no server may run on either"))
               <> command "rehearse" (info (Rehearse <$> rehearsalParser) (progDesc "Rehearse the upgrade from the running wiki's program to this one, on a copy of its database, before a deploy"))
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
@@ -168,6 +175,21 @@ main =
             putErrText ("wiki-server: the old program could not be driven, so the upgrade was not rehearsed: " <> why)
             exitWith (ExitFailure 7)
           RehearsalBroken why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
+      CopyDatabase c ->
+        runCopy c >>= \case
+          Copied lines' -> traverse_ putText lines'
+          CopyNotMigrated why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 4)
+          CopyUnreadable lines' -> do
+            traverse_ (putErrText . ("wiki-server: " <>)) lines'
+            exitWith (ExitFailure 5)
+          CopyRefused why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 6)
+          CopyFailed why -> do
             putErrText ("wiki-server: " <> why)
             exitWith (ExitFailure 1)
       Compress dir -> do
