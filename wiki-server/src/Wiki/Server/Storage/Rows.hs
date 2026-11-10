@@ -76,6 +76,13 @@ module Wiki.Server.Storage.Rows
   , insertAccount
   , StoredRecord (..)
   , StoredPassword (..)
+  , PasswordColumns (..)
+  , HalfRecord (..)
+  , passwordColumnsOf
+  , readPasswordColumns
+  , storedPassword
+  , loadPasswordColumns
+  , loadPasskeyOwners
   , storeRecord
   , replaceRecord
   , resetVaultIn
@@ -975,7 +982,7 @@ loadAvatarBlobs = do
 -- Accounts
 
 accountOf :: S.Users Identity -> Account
-accountOf r = Account {user = userOf r, hasPassword = isJust r.password_hash || isJust r.opaque_record, disabled = r.disabled}
+accountOf r = Account {user = userOf r, hasPassword = storedPassword (passwordColumnsOf r) /= NoPassword, disabled = r.disabled}
 
 -- | A user's account, by id.
 loadAccount :: (Backend be) => UserId -> Db be (Maybe Account)
@@ -1124,23 +1131,74 @@ resetVaultIn now u = do
 -- user who does not.
 passwordOf :: (Backend be) => UserId -> Db be (Maybe StoredPassword)
 passwordOf u =
-  fmap storedPassword
+  fmap (\(record, stretch, phc) -> storedPassword PasswordColumns {record, stretch, hash = phc})
     <$> runSelectReturningOne (select ((\r -> (r.opaque_record, r.opaque_stretch, r.password_hash)) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
 
--- | The password of a row's three columns.
-storedPassword :: (Maybe Text, Maybe Text, Maybe Text) -> StoredPassword
-storedPassword = \case
-  (Just record, Just stretch, _) -> WithRecord StoredRecord {record, stretch}
-  (_, _, Just phc) -> LegacyHash phc
-  _ -> NoPassword
+-- | 'PasswordColumns' is the three columns of a users row that hold a
+-- password: @opaque_record@, @opaque_stretch@ and @password_hash@, as
+-- stored, before anything reads them.
+data PasswordColumns = PasswordColumns
+  { record :: Maybe Text
+  , stretch :: Maybe Text
+  , hash :: Maybe Text
+  }
+  deriving stock (Eq, Show)
+
+-- | The 'PasswordColumns' of a users row.
+passwordColumnsOf :: S.Users Identity -> PasswordColumns
+passwordColumnsOf r = PasswordColumns {record = r.opaque_record, stretch = r.opaque_stretch, hash = r.password_hash}
+
+-- | 'HalfRecord' is an OPAQUE record stored with one of its two columns
+-- and not the other. The sign-in needs both, so it cannot use either.
+data HalfRecord
+  = RecordWithoutStretch
+  | StretchWithoutRecord
+  deriving stock (Eq, Show)
+
+-- | How a user signs in with a password, read from the three columns, and
+-- the half of a record kept without its other half, if there is one. This
+-- is the one reading of the columns: the sign-in takes the password from
+-- it ('storedPassword'), and @wiki-server check@ the half record
+-- ("Wiki.Server.WaysIn"), so the two cannot disagree. A record needs both
+-- of its columns. Without them the hash from before OPAQUE is the
+-- password, and without that there is none: a half record is then read
+-- as the hash beside it, or as no password.
+readPasswordColumns :: PasswordColumns -> (StoredPassword, Maybe HalfRecord)
+readPasswordColumns c = (stored, half)
+  where
+    stored = case (c.record, c.stretch, c.hash) of
+      (Just record, Just stretch, _) -> WithRecord StoredRecord {record, stretch}
+      (_, _, Just phc) -> LegacyHash phc
+      _ -> NoPassword
+    half = case (c.record, c.stretch) of
+      (Just _, Nothing) -> Just RecordWithoutStretch
+      (Nothing, Just _) -> Just StretchWithoutRecord
+      _ -> Nothing
+
+-- | How a user signs in with a password, as 'readPasswordColumns' reads
+-- the three columns.
+storedPassword :: PasswordColumns -> StoredPassword
+storedPassword = fst . readPasswordColumns
+
+-- | Every user's password columns, with the user's id, login and whether
+-- they are disabled: what @wiki-server check@ reads of how accounts sign
+-- in.
+loadPasswordColumns :: (Backend be) => Db be [(UserId, Login, Bool, PasswordColumns)]
+loadPasswordColumns =
+  map (\r -> (UserId r.id, Login r.login, r.disabled, passwordColumnsOf r))
+    <$> runSelectReturningList (select (orderBy_ (\r -> (asc_ r.login, asc_ r.id)) (all_ wikiDb.users)))
 
 -- | A user's account by login, as 'loadAccountByLogin' finds it, with how
 -- they sign in with a password.
 loadPasswordByLogin :: (Backend be) => Text -> Db be (Maybe (Account, StoredPassword))
 loadPasswordByLogin login =
-  fmap (\r -> (accountOf r, storedPassword (r.opaque_record, r.opaque_stretch, r.password_hash)))
+  fmap (\r -> (accountOf r, storedPassword (passwordColumnsOf r)))
     . head
     <$> runSelectReturningList (select (orderBy_ (\r -> asc_ r.login) (filter_ (\r -> lower_ r.login ==. lower_ (val_ login)) (all_ wikiDb.users))))
+
+-- | The users who have at least one passkey, which signs them in alone.
+loadPasskeyOwners :: (Backend be) => Db be (Set UserId)
+loadPasskeyOwners = Set.fromList . map UserId <$> runSelectReturningList (select ((\p -> p.user_id) <$> all_ wikiDb.passkeys))
 
 -- | How many users still have a password hash from before OPAQUE.
 legacyPasswordCount :: (Backend be) => Db be Int
@@ -1253,7 +1311,7 @@ loadUserPage q = do
     , [ ListedUser
           { user = userOf r
           , disabled = r.disabled
-          , hasPassword = isJust r.password_hash || isJust r.opaque_record
+          , hasPassword = storedPassword (passwordColumnsOf r) /= NoPassword
           , email = (\e -> AccountEmail {email = Email e, verified = isJust r.email_verified_at}) <$> r.email
           }
       | r <- rows

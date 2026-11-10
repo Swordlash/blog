@@ -27,6 +27,7 @@ module Wiki.Server.Password
   ( -- * Hashes
     hashPassword
   , verifyPassword
+  , hashReadable
   , Parameters (..)
   , parameters
   , hashWith
@@ -94,15 +95,38 @@ hashWith p salt (Password password) =
 -- matches no password. The comparison of the hashes takes the same time
 -- whatever they contain.
 verifyPassword :: Text -> Password -> Bool
-verifyPassword phc (Password password) = case T.splitOn "$" phc of
+verifyPassword phc (Password password) = case readHash phc of
+  Just h -> constEq h.expected (deriveLength (BS.length h.expected) h.parameters h.salt (encodeUtf8 password))
+  Nothing -> False
+
+-- | Whether 'verifyPassword' can check a password against a PHC string:
+-- one this module would have written. @wiki-server check@ refuses a hash
+-- that is not ("Wiki.Server.WaysIn"), since it matches no password.
+hashReadable :: Text -> Bool
+hashReadable = isJust . readHash
+
+-- | 'PhcHash' is a PHC string as 'readHash' reads it: the parameters, the
+-- salt and the hash.
+data PhcHash = PhcHash
+  { parameters :: Parameters
+  , salt :: ByteString
+  , expected :: ByteString
+  }
+
+-- | A PHC string's parts, if this module would have written it: argon2id
+-- of version 19, parameters a server can afford, a salt of eight bytes or
+-- more and a hash of sixteen or more. 'verifyPassword' checks a password
+-- with what this reads, and 'hashReadable' says whether it reads.
+readHash :: Text -> Maybe PhcHash
+readHash phc = case T.splitOn "$" phc of
   ["", "argon2id", "v=19", params, salt64, hash64]
     | Just p <- readParameters params
     , Right salt <- unbase64 salt64
     , Right expected <- unbase64 hash64
     , BS.length salt >= 8
     , BS.length expected >= 16 ->
-        constEq expected (deriveLength (BS.length expected) p salt (encodeUtf8 password))
-  _ -> False
+        Just PhcHash {parameters = p, salt, expected}
+  _ -> Nothing
 
 -- | The parameters of a PHC string's @m=…,t=…,p=…@, within what a server
 -- can afford: a string asking for more than a gibibyte or a hundred passes
