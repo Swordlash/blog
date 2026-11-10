@@ -289,7 +289,9 @@ listenerRoutes logger env site l caller request respond = do
             -- whoever may view the page. For anyone else, and for an id no
             -- page has, it is a page like any other, which the server
             -- prerenders as not found ('permanentTarget').
-            target <- if readOnly then permanentTarget env caller.who l.mount request else pure Nothing
+            target <- case rest of
+              "l" : _ | readOnly -> permanentTarget env caller.who l.mount request
+              _ -> pure Nothing
             case target of
               Just address -> respond (responseLBS status302 [(hLocation, encodeUtf8 address), (hCacheControl, "private, no-cache"), (hVary, "Cookie")] "")
               Nothing -> do

@@ -393,3 +393,7 @@ encrypted backing = describe "an encrypted space" $ do
     (_, html) <- pageAs r [session] r.public ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/")
     filter (`T.isInfixOf` html) [title.text, body.text, pageKey.wrapped.key.text] `shouldBe` []
     appIn html `shouldSatisfy` T.isInfixOf "decrypted in your browser"
+    -- Its permanent address leads to it as any page's does: its path is
+    -- made of the random slugs the server gave it.
+    (header "Location" <$> getUrlWith r (r.public <> "/l/" <> sealedPage.id.text <> "/") [session])
+      `shouldReturn` Just (encodeUtf8 ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/"))
