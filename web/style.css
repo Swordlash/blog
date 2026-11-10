@@ -3418,6 +3418,35 @@ body:has(.slides-view) {
   color: var(--muted);
 }
 
+/* On a narrow toolbar (a phone, or a narrow editor) a menu that opens
+   under a button far from the left would run past the screen's right
+   edge, and the page would scroll sideways. There every menu opens under
+   the whole toolbar instead, as wide as it. The toolbar is the container
+   the width is read from, and the positioned box the menus are placed in:
+   sticky on a phone (above), relative elsewhere. */
+.editor-toolbar {
+  container: editor-toolbar / inline-size;
+}
+
+@media not all and (max-width: 760px) {
+  .editor-toolbar {
+    position: relative;
+  }
+}
+
+@container editor-toolbar (max-width: 40rem) {
+  .toolbar-menu-holder {
+    position: static;
+  }
+
+  .toolbar-menu {
+    right: 0.25rem;
+    left: 0.25rem;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 .swatch-none .icon {
   width: 16px;
   height: 16px;
