@@ -1150,6 +1150,31 @@ confirms it against reality and the plan is amended if it does not hold.
     `[[`, `[[!` and `{` (#187). Comments (`<!-- … -->`) already worked
     (#197); the reference has a section on them.
 
+66. **A database is copied to the other backend in one transaction of the
+    target (WP5.80a, #203, #232; the owner, 2026-11-10).**
+    `wiki-server copy-database --data DIR [DATABASE] (--to-database URL
+    [--to-database-password-file FILE] | --to-sqlite FILE)` copies a wiki's
+    whole database into an empty one, in either direction
+    (`Wiki.Server.Storage.Copy`). The source is read in one read
+    transaction and never written. The target is written in one: the
+    schema by this program's own steps (`migrateWithin`), every table's
+    rows, the counters behind generated ids, then the checks (each table's
+    row count and an order-free digest of its rows against the source's,
+    and the database check `wiki-server check` runs), and only then the
+    commit; a failure leaves the target empty. The list of tables,
+    `copiedTables`, is written by hand in an order that writes a row after
+    the rows it refers to; a table the list lacks is refused before
+    anything is written, and a test compares the list with the tables a
+    migrated database holds, so a package that adds a table adds it there
+    (a `Copyable` instance and a place in the list). A row the target
+    refuses is named by its table and primary key, never by its other
+    columns. `--to-sqlite` makes a new file exclusively and deletes, on
+    failure, only that file. Exit 0 copied and checked, 4 the source is at
+    another schema version, 5 the source does not read whole, 6 refused
+    before anything was written, 1 the copy failed and the target is as it
+    was. CPP sits only in `Wiki.Server.CopyDatabase`, where it opens
+    PostgreSQL (decision 34).
+
 ## Repository layout
 
 ```
@@ -1322,30 +1347,14 @@ repository, which the wiki pins since #227.
   across is an export and an import of archives, which carry pages and not
   accounts, passwords, sessions, permissions or settings. Two pull
   requests, a then b.
-  - **a, `wiki-server` copies a database to another backend.** A command
-    of the server copies every table of a SQLite database into an empty
-    PostgreSQL one. The source must be at this program's schema version
-    (the command migrates nothing; it says to migrate first). The target
-    gets the schema from this program's own migrations and then the rows,
-    in one transaction, so that a failure leaves it as it was. Every table
-    is copied: the list comes from the schema itself, or a test fails when
-    a table of the schema is not in the copy. What the two databases keep
-    differently is handled where it differs and named in the report:
-    PostgreSQL's generated search column, counters behind generated ids,
-    times to the microsecond, booleans, and a row SQLite accepted that
-    PostgreSQL's constraints refuse (the copy stops and names the table
-    and the row). Afterwards the command verifies the copy: each table's
-    row count and content against the source, and the database check
-    (`wiki-server check`) on the target. Attachments are files in the data
-    directory and stay where they are. The server serves neither database
-    while the command runs; it refuses a source a server is running on.
-    The other direction, PostgreSQL to SQLite, is the same code if it
-    comes at no cost, and is not required.
+  - **a is done (#232, decision 66):** `wiki-server copy-database`.
   - **b, the maker moves a deployed wiki.** A command of the maker, for an
     instance deployed at the maker's own version: it builds the server
     with the `postgres` flag (a SQLite deployment is built without it,
     decision 34), brings up the PostgreSQL the deploy uses for a wiki in
-    PostgreSQL, backs the wiki up, stops the service, runs a's command,
+    PostgreSQL, backs the wiki up, stops the service, runs a's command
+    (`wiki-server copy-database --data DIR --to-database URL
+    --to-database-password-file FILE`, and acts on its exit codes),
     compares the wiki before and after with the rehearsal's checks
     (decision 58: `pages`, `accounts`, `home pages`, with this program as
     old and new, the old on SQLite and the new on PostgreSQL), switches
@@ -1633,6 +1642,17 @@ needs. Each was true when its package merged; check before relying on one.
   `Test.Browser.Vault` the examples of the user's keys share one page, and
   one that leaves a key on the device changes what a later one finds: an
   example that reads the device starts as a new device (`js_new_device`).
+- **Copying a database (WP5.80a, #232).** A SQLite source in use is
+  found through its data directory's lock only, as `restore` finds it: a
+  server on the same file under another `--data` is not found, and the
+  console's commands hold no lock. The source is read as one snapshot, so
+  a write during the copy is not in it. When a table's verification fails,
+  the diagnosis holds one digest for each row of that table in memory.
+- **PostgreSQL on the session's machine.** The server's PostgreSQL tests
+  can run locally since 2026-11-10: rootless Docker under the session's
+  account, started by its systemd session, and
+  `toolchain/ci-postgres.sh start` for the container CI uses. One
+  container and one port are shared by every agent that runs them.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
