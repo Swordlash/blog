@@ -16,8 +16,10 @@
 # dropped first. With --move the wiki is in SQLite, and NEW rehearses its
 # move to PostgreSQL, as `deploy-local.sh --move-to-postgres` does (WP5.80b):
 # OLD serves a copy in SQLite, NEW copies it into an empty database of that
-# PostgreSQL and serves it there, and each check compares what the two read. The wiki OLD makes has a space with a page and a page
-# under it, written through OLD's administration listener, and the guide
+# PostgreSQL and serves it there, and each check compares what the two read.
+# The wiki OLD makes, in every mode, has a space with a page and a page
+# under it, and two pages under the space's home page, one with the slug
+# of the top-level page, written through OLD's administration listener, and the guide
 # OLD installs itself, which the rehearsal leaves out of its comparison. It
 # also has a space set to have no home page, as a program from before
 # WP5.78 (docs/PLAN.md) allowed, which still holds the page it was made
@@ -94,11 +96,25 @@ put() {
   curl -fsS -X PUT -H 'Content-Type: application/json' -H 'X-Wiki-Request: 1' --data "$2" "$api/$1"
 }
 id_of() {
-  node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)); process.stdin.on("end", () => console.log(JSON.parse(s).id));'
+  field_of id
 }
-space=$(post spaces '{"parent":null,"name":"Rehearsal"}' | id_of)
+field_of() {
+  node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)); process.stdin.on("end", () => console.log(JSON.parse(s)[process.argv[1]]));' "$1"
+}
+made=$(post spaces '{"parent":null,"name":"Rehearsal"}')
+space=$(printf '%s' "$made" | id_of)
+home=$(printf '%s' "$made" | field_of homePage)
 page=$(post "spaces/$space/pages" '{"parent":null,"title":"First page","body":"# First page\n\nA **page** of the rehearsal, with $x^2$ and a [link](https://example.org)."}' | id_of)
 post "spaces/$space/pages" "{\"parent\":\"$page\",\"title\":\"A page under it\",\"body\":\"Some text under the first page.\"}" >/dev/null
+# Two pages under the home page, one with the slug of the top-level page
+# above: the step that makes the home page the root renames it, and the
+# top-level page keeps its address. An OLD from after that step puts a
+# page with no parent under the home page itself, and the rehearsal reads
+# that wiki as it is.
+if [ -n "$home" ] && [ "$home" != null ] && [ "$home" != undefined ]; then
+  post "spaces/$space/pages" "{\"parent\":\"$home\",\"title\":\"First page\",\"body\":\"A page under the home page, with the slug of a top-level page.\"}" >/dev/null
+  post "spaces/$space/pages" "{\"parent\":\"$home\",\"title\":\"Under the home page\",\"body\":\"Some text under the home page.\"}" >/dev/null
+fi
 homeless=$(post spaces '{"parent":null,"name":"No home page"}' | id_of)
 put "spaces/$homeless/profile" '{"description":"","icon":null,"homePage":null,"blog":false,"boxNumbering":"in-page"}' >/dev/null
 kill "$pid"

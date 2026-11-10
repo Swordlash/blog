@@ -387,7 +387,7 @@ roundTrip backing = describe "an export" $ do
             for spaces $ \(s :: Space) -> do
               listed <- ok200 (getUrl r (admin r (links.spaces.listPages s.id)))
               -- The list has no bodies: each page is read by itself.
-              pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (pagePathOf listed l.id))))
+              pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (fromMaybe [] (pagePathOf s listed l.id)))))
               pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name.text, a.source)) p.attachments) | (p :: Page) <- pages])
       expected <- shape origin
       shape copy `shouldReturn` expected

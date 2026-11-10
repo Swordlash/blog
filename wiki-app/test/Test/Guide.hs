@@ -23,8 +23,8 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Code, Emoji, Emph, Hidden, Link, SoftBreak, Str, Strikeout, Strong), ListItem (..), SpoilerHead (..), SpoilerKind (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Path (findChild, pathOf, resolvePath)
-import Wiki.Core.Space (Space (..), SpaceProfile (..))
+
+import Wiki.Core.Space (Space (..), SpaceProfile (..), pageAt, pagePath, rootPage)
 
 guide :: MemState
 guide = guideState (UTCTime (fromGregorian 2026 10 29) 0)
@@ -107,6 +107,8 @@ spec = describe "Wiki.App.Guide" $ do
     let tour = titled guide "Tour"
     [s.homePage | s <- Map.elems guide.spaces] `shouldBe` [(\p -> p.id) <$> tour]
     sort (map (\p -> p.title) pages) `shouldBe` sort ["Tour", "Markdown guide", "Diagrams", "Mathematics", "Presentations"]
+    -- The tour is the root of the guide's pages (WP5.78 of docs/PLAN.md).
+    [p.title | p <- pages, isNothing p.parent] `shouldBe` ["Tour"]
 
   it "has every page parse, and attaches what the Markdown guide shows" $ do
     for_ pages $ \p -> (p.title, isRight (parseMarkdown p.body)) `shouldBe` (p.title, True)
@@ -116,11 +118,13 @@ spec = describe "Wiki.App.Guide" $ do
     let internal t = not (any (`T.isPrefixOf` t) ["https://", "http://", "attachment:", "<", "#"])
         links = [(p, t) | p <- pages, t <- linkTargets p.body, internal t]
         spaces = Map.elems guide.spaces
-        pathIn p = fromMaybe [] (pathOf (`Map.lookup` guide.pages) p.id)
+        space = fromMaybe (panic "no space") (head spaces)
+        pathIn p = fromMaybe [] (pagePath space (`Map.lookup` guide.pages) p.id)
     links `shouldSatisfy` (not . null)
     for_ links $ \(p, t) -> do
-      let found = case Route.resolvePageLink spaces [s.slug | s <- spaces] pages (pathIn p) t of
-            Just (Route.PageLink (Route.Page _ target) _) -> isRight (resolvePath (findChild pages) target)
+      let found = case Route.resolvePageLink spaces [s.slug | s <- spaces] (rootPage space) pages (pathIn p) t of
+            Just (Route.PageLink (Route.Page _ target) _) -> isJust (pageAt space pages target)
+            Just (Route.PageLink (Route.Space _) _) -> True
             _ -> False
       ((p.title, t), found) `shouldBe` ((p.title, t), True)
 

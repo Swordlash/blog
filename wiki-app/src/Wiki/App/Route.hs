@@ -559,7 +559,8 @@ data PageLink = PageLink Route Text
 -- address, as the route codec writes it without the deployment's prefix
 -- (@\/s\/docs\/p\/guide\/@), is that page: what the editor's "Link to a
 -- page" writes, since it names one page however the space's pages and
--- subspaces are named. Any other path from the top is a space's path and
+-- subspaces are named. A space's own address (@\/s\/docs\/@), the home
+-- page's, is that space. Any other path from the top is a space's path and
 -- a page's: the longest leading part of it that is a space's path names
 -- the space, and the rest (if any) a page there. So a page that shares its
 -- slug with a subspace of its space is reached by its own address, not by
@@ -590,6 +591,8 @@ resolvePageLink spaces spacePath home pages pagePath destination = do
   target <- case T.uncons pathPart of
     Just ('/', _)
       | Right (Page sp pp) <- Duplex.parse route pathPart -> addressed sp pp
+      -- A space's own address, the address of its home page.
+      | Right (Space sp) <- Duplex.parse route pathPart -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
       | otherwise -> absolute (filter (not . T.null) segments)
     _ -> relative segments
   pure (PageLink target fragment)

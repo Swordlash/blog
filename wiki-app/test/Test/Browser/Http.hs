@@ -226,7 +226,7 @@ serveDemo = do
         ps <- fromRight [] <$> listPages s.id
         details <- fromRight mempty <$> postDetails s.id
         -- The list of pages has no bodies: each page is read by itself.
-        full <- rights <$> for ps (\p -> getPage s.id (pagePathOf ps p.id))
+        full <- rights <$> for ps (\p -> getPage s.id (fromMaybe [] (pagePathOf s ps p.id)))
         pure (s, ps, details, full)
       people <- directory
       threads <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
@@ -267,7 +267,7 @@ serveDemo = do
   for_ pages $ \(s, ps, details, full) -> do
     answerWith "GET" (endpointUrl (\e -> e.spaces.atPath (spacePathOf spaces s.id))) 200 s
     answerWith "GET" (endpointUrl (\e -> e.spaces.listPages s.id)) 200 ps
-    for_ full $ \p -> answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt s.id (pagePathOf ps p.id))) 200 p
+    for_ full $ \p -> answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt s.id (fromMaybe [] (pagePathOf s ps p.id)))) 200 p
     answerWith "GET" (endpointUrl (\e -> e.spaces.postDetails s.id)) 200 details
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
 

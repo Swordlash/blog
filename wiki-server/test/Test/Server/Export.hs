@@ -49,7 +49,7 @@ import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, probeTimeout, restrictTeX, texEngine, texLimits, writeDocument)
 import Wiki.Server.Export.Document
@@ -83,6 +83,7 @@ place =
   Place
     { spaces = demoArchive.spaces
     , spacePath = [slug "docs"]
+    , root = rootPage =<< find (\s -> s.slug == slug "docs") demoArchive.spaces
     , pages = docsPages
     , pagePath = [slug "markdown-guide"]
     , attachments = [tree, paper]

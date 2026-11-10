@@ -17,6 +17,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space qualified as S
 
 demo :: MemState
 demo = demoState demoNow
@@ -24,9 +25,13 @@ demo = demoState demoNow
 pages :: [Page]
 pages = Map.elems demo.pages
 
--- | A page's path within its space.
+-- | A page's space.
+spaceOf :: Page -> Maybe Space
+spaceOf p = Map.lookup p.space demo.spaces
+
+-- | A page's path within its space, from under its home page.
 pagePath :: Page -> [Slug]
-pagePath p = fromMaybe [] (pathOf (`Map.lookup` demo.pages) p.id)
+pagePath p = fromMaybe [] (spaceOf p >>= \s -> S.pagePath s (`Map.lookup` demo.pages) p.id)
 
 -- | The targets of the Markdown links and images in a body: what is between
 -- the parentheses of @](…)@.
@@ -44,13 +49,18 @@ spec = describe "Wiki.App.Demo" $ do
   it "has the spaces the tour describes" $
     sort [s.name | s <- Map.elems demo.spaces, not (Home.isHomeSpace demo.server.homePage s.id)] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
 
-  it "puts the tour in Docs" $ do
+  it "puts the tour in Docs, as its home page and the root of its pages" $ do
     let docs = find (\s -> s.name == "Docs") (Map.elems demo.spaces)
-    [p.title | p <- pages, Just p.space == ((\s -> s.id) <$> docs), p.parent == Nothing] `shouldSatisfy` elem "Tour"
+    [p.title | p <- pages, Just p.space == ((\s -> s.id) <$> docs), p.parent == Nothing] `shouldBe` ["Tour"]
+
+  it "has one page with no parent in each space, its home page" $
+    for_ (Map.elems demo.spaces) $ \s ->
+      (s.name, [Just p.id | p <- pages, p.space == s.id, isNothing p.parent]) `shouldBe` (s.name, [S.rootPage s | S.hasHome s])
 
   it "gives every page a path that leads back to it" $
-    for_ pages $ \p ->
-      case resolvePath (findChild (filter (\q -> q.space == p.space) pages)) (pagePath p) of
+    for_ pages $ \p -> case spaceOf p of
+      Nothing -> expectationFailure ("no space for " <> show p.title)
+      Just s -> case S.pagesAt s (filter (\q -> q.space == p.space) pages) (pagePath p) of
         Right chain -> (\q -> q.id) <$> lastMay chain `shouldBe` Just p.id
         Left e -> expectationFailure (show e)
 
@@ -99,13 +109,13 @@ spec = describe "Wiki.App.Demo" $ do
     for_ links $ \(p, t) -> do
       let inSpace sid = filter (\q -> q.space == sid) pages
           target =
-            Route.resolvePageLink spaces (spacePath p.space) (inSpace p.space) (pagePath p) t >>= \case
+            Route.resolvePageLink spaces (spacePath p.space) (S.rootPage =<< spaceOf p) (inSpace p.space) (pagePath p) t >>= \case
               Route.PageLink (Route.Space path) _ -> void (spaceAt path)
               -- A page in another space is not checked by the link: check
               -- it here.
               Route.PageLink (Route.Page path pagePath') _ -> do
                 s <- spaceAt path
-                void (rightToMaybe (resolvePath (findChild (inSpace s.id)) pagePath'))
+                void (S.pageAt s (inSpace s.id) pagePath')
               Route.PageLink _ _ -> Nothing
       ((p.title, t), isJust target) `shouldBe` ((p.title, t), True)
 
