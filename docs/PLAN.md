@@ -972,11 +972,17 @@ confirms it against reality and the plan is amended if it does not hold.
 
 59. **A password signs in through OPAQUE (WP5.74a, #184; the owner,
     2026-11-06 to 2026-11-09).** OPAQUE-3DH (RFC 9807) with ristretto255,
-    SHA-512 and Argon2id. The server's side is a package of this repository,
-    `opaque/`, written over libsodium's primitives and kept apart so that it
-    can be published: the messages are newtypes over their wire bytes, read
-    through `HasField` slices, built with one `BS.concat`; secrets live in
-    memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
+    SHA-512 and Argon2id. The server's side is the package `opaque-hs`,
+    written over libsodium's primitives. It was `opaque/` in this
+    repository and has had a repository of its own since #227 (the owner,
+    2026-11-10), [Swordlash/opaque-hs](https://github.com/Swordlash/opaque-hs),
+    pinned in `cabal.project` to one commit as haskell-halogen is, and
+    bumped the same way. Its tests run there, in its own CI: the RFCs'
+    vectors, `@serenity-kit/opaque` under Node, and libopaque with liboprf
+    step by step (#212). The wiki's tests of it are the server's own, which
+    sign in through its client. The messages are newtypes over their wire
+    bytes, read through `HasField` slices, built with one `BS.concat`;
+    secrets live in memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
     (opaque-ke compiled to wasm, audited), not this package built for wasm,
     since there is no libsodium for wasm32-wasi (the owner, 2026-11-06); it
     is pinned and loaded the first time a password is used. The context is
@@ -1074,8 +1080,10 @@ confirms it against reality and the plan is amended if it does not hold.
     groups wait on the database). Optimisation is set per package, in
     `package` stanzas: a top-level `optimization: True` in a file that
     imports `cabal.project` changed the dependencies' hashes. What is
-    deployed keeps it: the server at `-O2` (`cabal-native-opt.project`,
-    `opaque` included), the browser's application at `-O1` and `-O2`.
+    deployed keeps it: the server at `-O2` (`cabal-native-opt.project`),
+    the browser's application at `-O1` and `-O2`. opaque-hs is a
+    dependency since #227, so every build compiles it with cabal's default
+    optimisation (`-O1`), the everyday one included.
 
 64. **A step of the schema may be Haskell (#202, #222; the owner,
     2026-11-09, with #205's design).** `Wiki.Server.Storage.Migrate.Code`
@@ -1296,10 +1304,9 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
-  - **a is done (decision 59, #184; libsodium from source, #211).** What
-    remains of it is **a2b** (#212): an oracle test against libopaque and liboprf,
-    built from source, once their vectors are checked against the RFCs'
-    final ones. A deploy with `--system-tools` downloads libsodium's
+  - **a is done (decision 59, #184; libsodium from source, #211; the
+    oracle test against libopaque and liboprf, a2b, #212, in opaque-hs's
+    own repository, which #227 pins).** A deploy with `--system-tools` downloads libsodium's
     release (checked by its checksum) unless `--libsodium-source FILE`
     gives the tarball (#215).
   - **b is done**: b1, each user's key pair in the vault the assistant
