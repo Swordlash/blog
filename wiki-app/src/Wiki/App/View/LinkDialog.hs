@@ -18,12 +18,6 @@
 -- the server nor the deployment's prefix, so the link keeps working when
 -- the wiki moves to another address or prefix, whatever the router's mode.
 --
--- With "Permanent link" ticked (WP5.81), the address written is the page's
--- permanent one instead, by its id (@\/l\/4f1c…\/@,
--- 'Wiki.App.Route.PermanentLink'): it keeps leading to the page after the
--- page moves, where a path would lead nowhere. It is off at first, since a
--- path says in the source which page it is.
---
 -- It is a @\<dialog>@ shown as a modal ('showDialog'), as the editor's
 -- "New kind…" dialog is ("Wiki.App.View.NewKindDialog"): the rest of the
 -- page is inert, Escape closes it, and so does a click that starts on the
@@ -83,8 +77,6 @@ data State = State
   , element :: H.RefLabel
   , section :: Bool
   -- ^ Whether "Link a section" is ticked.
-  , permanent :: Bool
-  -- ^ Whether "Permanent link" is ticked.
   , picked :: Maybe Picked
   , pressedOnBackdrop :: Bool
   -- ^ Whether the pointer went down on the backdrop: only a click that
@@ -100,7 +92,6 @@ data Action
   | ClosedByBrowser
   | FromPicker Picker.Output
   | Section Bool
-  | Permanent Bool
   | LinkTo SearchHit (Maybe Text)
 
 component :: forall query m. (MonadLoad m, MonadUUID m, MonadUnliftIO m) => H.Component query Input Output m
@@ -109,7 +100,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           element <- H.newRefLabel "link-dialog"
-          pure State {input, element, section = False, permanent = False, picked = Nothing, pressedOnBackdrop = False}
+          pure State {input, element, section = False, picked = Nothing, pressedOnBackdrop = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.initialize = Just Initialize}
       }
@@ -134,9 +125,6 @@ component =
             {{ HH.slot "picker" () Picker.component Picker.Input {context = st.input.context, place = Picker.InDialog} FromPicker }}
             <label class="link-dialog-section-toggle">
               <input type="checkbox" checked={{ st.section }} onChecked={{ Section }}> Link a section
-            </label>
-            <label class="link-dialog-permanent-toggle" title="Link the page by its id, which keeps working when the page is moved">
-              <input type="checkbox" checked={{ st.permanent }} onChecked={{ Permanent }}> Permanent link
             </label>
             {% for p in maybeToList st.picked %}{{ sectionsOf p }}{% end %}
           </div>
@@ -186,7 +174,6 @@ component =
         when onBackdrop (handleAction Close)
       ClosedByBrowser -> H.raise Closed
       Section ticked -> modify (\st -> st {section = ticked, picked = if ticked then st.picked else Nothing})
-      Permanent ticked -> modify (\st -> st {permanent = ticked})
       FromPicker (Picker.Picked hit) ->
         gets (\st -> st.section) >>= \case
           False -> handleAction (LinkTo hit Nothing)
@@ -204,9 +191,7 @@ component =
       FromPicker (Picker.AllResults _) -> pass
       LinkTo hit fragment -> do
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
-        permanent <- gets (\st -> st.permanent)
-        let address = if permanent then Duplex.print route (PermanentLink hit.page) else pageAddress hit.spacePath hit.pagePath
-        H.raise (Chosen (snippetText hit.title) (address <> foldMap ("#" <>) fragment))
+        H.raise (Chosen (snippetText hit.title) (pageAddress hit.spacePath hit.pagePath <> foldMap ("#" <>) fragment))
 
 -- | A page's address in a link written in another page: its route's path
 -- (@\/s\/docs\/p\/markdown-guide\/diagrams\/@).

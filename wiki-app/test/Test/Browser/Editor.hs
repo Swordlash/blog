@@ -13,8 +13,6 @@ module Test.Browser.Editor (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.IORef (IORef, modifyIORef', readIORef)
-import Data.List qualified as List
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
@@ -33,7 +31,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Attachment (Attachment (name), FileName (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (PageId (..), UserId (..))
+import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown)
 import Wiki.Core.Markdown.Box (BoxKind (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
@@ -562,30 +560,6 @@ spec m = do
     find ui ".link-dialog-anchor[data-anchor='macros']" >>= click
     eventually $ length <$> findAll ui ".link-dialog" `shouldReturn` 0
     markdown ui `shouldReturn` "# Hello, world\n\nthe [macros](/s/docs/p/markdown-guide/mathematics/#macros)"
-
-  it "writes a page's permanent address, with its section, with \"Permanent link\" ticked" $ runPage $ do
-    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- editorText ui
-    clearBody ui
-    typeText text "the macros"
-    press "Control+Shift+ArrowLeft"
-    press "Control+Shift+K"
-    field <- find ui ".link-dialog .search-input"
-    -- Off at first: a path says in the source which page it is.
-    find ui ".link-dialog-permanent-toggle input" >>= (`getProperty` "checked") >>= (`shouldBe` "false")
-    find ui ".link-dialog-permanent-toggle input" >>= click
-    find ui ".link-dialog-section-toggle input" >>= click
-    typeText field "mathematics"
-    hit <- eventually $ do
-      hits <- findAll ui ".link-dialog a.search-hit[href$='#/s/docs/p/markdown-guide/mathematics/']"
-      maybe (expectationFailure "no hit for Mathematics yet") pure (head hits)
-    click hit
-    _ <- eventually $ find ui ".link-dialog-anchor[data-anchor='macros']"
-    find ui ".link-dialog-anchor[data-anchor='macros']" >>= click
-    eventually $ length <$> findAll ui ".link-dialog" `shouldReturn` 0
-    st <- unsafeIOToPageM (readIORef wiki)
-    mathematics <- maybe (expectationFailure "no Mathematics" >> pure "") (\p -> pure p.id.text) (List.find (\p -> p.title == "Mathematics") (Map.elems st.pages))
-    markdown ui `shouldReturn` ("# Hello, world\n\nthe [macros](/l/" <> mathematics <> "/#macros)")
 
   it "writes nothing when the \"Link to a page\" dialog is closed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
