@@ -1448,6 +1448,22 @@ which the wiki pins since #227.
   "accounts" cover; the pull request says so. Tests: each refusal and each
   line, on both backends; the rehearsal failing on a copy with real
   accounts whose hashes a step removed.
+- **WP5.87 Every login is ASCII (the owner, 2026-11-10; after WP5.85,
+  whose files it changes).** A new login has had to be ASCII since
+  2026-11-06 (`parseLogin`), and a login made before that was kept. The
+  owner: there are probably none, and if there are, migrate them and
+  enforce the rule. A code step rewrites each login that breaks the rule
+  into one that keeps it (its letters transliterated; when nothing usable
+  is left, `user-` and a piece of the user's id; a suffix when the result
+  is taken) and says whom it renamed and to what, in its output and in the
+  audit log. `wiki-server check` then refuses a login that breaks the rule,
+  and the sentence "a login made before the rule is kept" goes from the
+  code. A renamed user signs in with the same password under the new
+  login: the OPAQUE record is bound to the user's id, not to the login, and
+  a hash from before OPAQUE knows no login. To settle in the package: what
+  the user's personal space's slug does (it spells the login), and how the
+  renamed person learns of it (the sign-in form cannot tell them; the
+  administrator can, from the step's output).
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
