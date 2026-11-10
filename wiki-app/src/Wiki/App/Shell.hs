@@ -1619,8 +1619,6 @@ component =
     -- does not come back to it, and the address's fragment is kept for the
     -- page to scroll to. A page not found leaves the permanent address in
     -- place, so that signing in, which loads the route again, asks again.
-    -- The answer is never taken from an earlier one: the page may have
-    -- moved since.
     followPermanent :: PageId -> H.HalogenM (State m) Action Slots output m ()
     followPermanent pid = do
       modify (\s -> s {here = Following pid Nothing})
