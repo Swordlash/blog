@@ -1406,9 +1406,8 @@ smaller issues are closed before plugins (#186), autocompletion (#187)
 and presentations (#191) are started. In this order: #194 (persistent
 links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
 decision 58); #188 (emojis: the
-editor's part is done, WP5.86, #236; the issue stays open only for
-Slack's names that GitHub's list does not have, until the owner says
-whether they are wanted); #189 (backlinks, on decision 70's reading of a
+done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
+GitHub's list does not have are not needed); #189 (backlinks, on decision 70's reading of a
 link by id); #196 and #200 (an `html` block and an interactive SVG, each in a
 frame the page's scripts and keys cannot be reached from, which is also
 the frame the plugins will run in); #204 (TODO lists first, then the
