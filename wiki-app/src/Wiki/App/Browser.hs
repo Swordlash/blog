@@ -138,8 +138,10 @@ $( jsFields
 -- "Wiki.Core.Markdown"), when the application should follow it rather
 -- than the browser.
 data ArticleLink
-  = -- | One of the router's own addresses, followed without loading a page.
-    ToRoute Route
+  = -- | One of the router's own addresses, followed without loading a
+    -- page, and the fragment the link names there (with its @#@, or
+    -- empty), which the address keeps once there ('keepFragment').
+    ToRoute Route Text
   | -- | A place on the page (@#intro@), by its id. Without this, the
     -- page's @\<base href>@ would send the browser to the base address.
     ToFragment Text
@@ -171,7 +173,7 @@ articleLink router event = do
   let href = fromMaybe "" (Element.getAttributeNow anchor "href")
   guard (not (T.null href))
   case (routeOfHref router href, T.stripPrefix "#" href) of
-    (Just r, _) -> Just (ToRoute r)
+    (Just r, _) -> Just (ToRoute r (fragmentAfter r href))
     (Nothing, Just fragment)
       | isJust (Element.closestNow anchor "a.heading-anchor") -> Just (CopyAnchor (decodeComponent fragment))
       | otherwise -> case noteReference anchor of
@@ -179,6 +181,10 @@ articleLink router event = do
           Nothing -> Just (ToFragment (decodeComponent fragment))
     (Nothing, Nothing) -> Nothing
   where
+    -- The fragment written after the route's own address, if any.
+    fragmentAfter r href = case T.stripPrefix (Router.href router r) href of
+      Just rest | "#" `T.isPrefixOf` rest -> rest
+      _ -> ""
     -- A footnote's reference is the link's own id (@fnref-1@, or
     -- @fnref-1-2@ for the second reference to the note). The renderer
     -- writes the class @footnote-ref@ on references only, so the link is
@@ -210,9 +216,15 @@ clickedLink event = do
 -- to the place an address names when Back or Forward arrives at an entry
 -- of the page it shows ('revealFragment'). Preventing the click's default
 -- is the listener's job.
+--
+-- A link to a route with a fragment (@\/l\/17\/#setup@,
+-- @\/s\/docs\/p\/guide\/#setup@) keeps the fragment in the address it
+-- goes to, since the router writes the route's address alone: the page
+-- shown scrolls to it ('revealFragment'), and a permanent address passes
+-- it on to the page's own ('redirectKeepingFragment').
 followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
-  ToRoute r -> Router.navigate router r
+  ToRoute r fragment -> liftIO (Router.navigate router r >> keepFragment fragment)
   ToFragment fragment -> liftIO (scrollTo fragment)
   CopyAnchor fragment -> liftIO (scrollTo fragment)
   ToNote footnote reference -> liftIO (followNote footnote reference)
@@ -260,8 +272,19 @@ redirectKeepingFragment :: (MonadIO m) => Router Route -> Route -> m ()
 redirectKeepingFragment router r = liftIO $ do
   fragment <- if inBrowser then Window.window >>= \w -> w.location.hash else pure ""
   Router.redirect router r
-  when (inBrowser && T.length fragment > 1 && not ("#/" `T.isPrefixOf` fragment)) $ do
-    w <- Window.window
+  keepFragment fragment
+
+-- | Put a fragment (@#setup@) on the address the page is at now, in the
+-- same history entry, with its state kept: after the router has gone to a
+-- route, whose address it writes without one. Nothing for an empty
+-- fragment, and nothing under a router that keeps the route in the
+-- fragment (@#\/s\/…@, the browser tests'), where the fragment is the
+-- router's. Natively nothing.
+keepFragment :: Text -> IO ()
+keepFragment fragment = when (inBrowser && T.length fragment > 1 && not ("#/" `T.isPrefixOf` fragment)) $ do
+  w <- Window.window
+  now <- w.location.hash
+  unless ("#/" `T.isPrefixOf` now) $ do
     kept <- w.history.state
     here <- (<>) <$> w.location.pathname <*> w.location.search
     w.history.replaceState kept "" (Just (here <> fragment))
