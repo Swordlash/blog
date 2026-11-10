@@ -1714,13 +1714,48 @@ switched_back() {
 FAKE_RELOAD_FAIL=1 failed_move 'a switch that fails'
 assert_contains "$out" 'the switch to PostgreSQL failed'
 switched_back 'a switch that fails'
+# A page that is not copied back whole is a failed switch: the server
+# would answer without it. The fake cp fails halfway through that copy.
+cat >"$case_dir/bin/cp" <<'FAKE'
+#!/bin/sh
+if [ -n "${FAKE_CP_APP_FAIL:-}" ] && [ "${1:-}" = -R ] && [ "${2%/previous/app}" != "${2:-}" ]; then
+  mkdir -p "$3"
+  printf 'cp: error writing %s/app.wasm: No space left on device\n' "$3" >&2
+  exit 1
+fi
+exec /bin/cp "$@"
+FAKE
+chmod +x "$case_dir/bin/cp"
+FAKE_CP_APP_FAIL=1 failed_move 'a page that is not copied back'
+assert_contains "$out" 'the page could not be copied back from'
+switched_back 'a page that is not copied back'
+[ -f "$HOME/wiki-demo/app/index.html" ] || fail 'the switch back did not put the page back whole'
+# The switch fails at its first step, before this move has kept anything
+# (the deployment's directory cannot be written, data/ can): the
+# deployment previous/ held, with its backup, is the one before the move,
+# and is neither restored nor touched.
+chmod 555 "$HOME/wiki-demo"
+: >"$EVENTS"
+out=$case_dir/failed
+if deploy --move-to-postgres >"$out" 2>&1; then chmod 755 "$HOME/wiki-demo"; fail 'a move into a directory that cannot be written went on'; fi
+chmod 755 "$HOME/wiki-demo"
+assert_contains "$out" 'the switch to PostgreSQL failed'
+assert_lacks "$out" 'putting back the deployment on SQLite this move kept'
+assert_lacks "$EVENTS" 'wiki-server restore'
+on_sqlite 'a switch that fails before anything was kept'
+# A previous.before-move left by a move that was stopped halfway is
+# refused before anything changes.
+mkdir "$HOME/wiki-demo/previous.before-move"
+refused_move 'with a previous.before-move left'
+assert_contains "$out" 'from a move that was stopped halfway'
+rmdir "$HOME/wiki-demo/previous.before-move"
 FAKE_RESTART_PG_FAIL=1 failed_move 'a restart on PostgreSQL that fails'
 assert_contains "$out" 'systemctl --user restart wiki-demo.service failed'
 switched_back 'a restart on PostgreSQL that fails'
 FAKE_SERVE_PG_FAIL=1 failed_move 'a server that does not answer on PostgreSQL'
 assert_contains "$out" 'does not answer on'
 switched_back 'a server that does not answer on PostgreSQL'
-pass 'a failure after the switch (the switch, the restart, a server that does not answer on PostgreSQL) switches back to SQLite, with the deployment kept before, PostgreSQL emptied and its container stopped again'
+pass 'a failure after the switch (the switch, a page not copied back, the restart, a server that does not answer on PostgreSQL) switches back to SQLite, with the deployment kept before, PostgreSQL emptied and its container stopped again; a switch that fails before this move kept anything restores nothing older'
 
 # The move.
 : >"$EVENTS"

@@ -1695,10 +1695,10 @@ In order, and what a failure at each step leaves:
 | The checks: a server this script deployed, with its unit, on SQLite, at the checkout's commit, with its `data/wiki.sqlite`, and Docker | Nothing changed |
 | `wiki-server` built with PostgreSQL (`toolchain/check-native.sh` and the bootstrap first, for libpq) | Nothing of the deployment changed |
 | PostgreSQL started as a deploy on PostgreSQL starts it (the compose project `<name>`, the volume `<name>_wiki-db`), and its database `wiki` checked to be empty | The wiki untouched, the container left as it was found; a database that holds a wiki is left as it is, and refused |
-| The service stopped, and the wiki backed up into `data/backups` | The service started again on SQLite |
+| The service stopped (it must stop), and the wiki backed up into `data/backups` | The service started again on SQLite; so too for any other error in this and the next two steps |
 | `wiki-server copy-database` into PostgreSQL | The service started again on SQLite; PostgreSQL empty, as the copy left it |
 | `wiki-server rehearse --move-to-database`: the upgrade's checks (pages, accounts, home pages) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
-| The switch: `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/` (in place of the one kept there), the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back: the files of `previous/` and the deployment it held before, the SQLite file into `data/`, PostgreSQL emptied and its container stopped, the service started on SQLite |
+| The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and its container stopped, and the service started on SQLite. A deployment kept by an earlier deploy is never restored |
 | The service started, and must answer | Switched back, as above |
 
 The comparison runs on copies because the checks write (a canary account, a
@@ -1712,7 +1712,9 @@ ones, the oldest first, as backups are made; the file in `data/replaced/` is
 not.
 `--rollback` goes back to the wiki on SQLite, from the file set aside: what
 was written in PostgreSQL since is not in it, and stays in the volume, which a
-second move then refuses, saying how to delete it.
+second move then refuses, saying how to delete it. A move killed during the
+switch (a moment) leaves `previous.before-move` beside `previous/`, and the
+next move refuses to start until it is put back or removed.
 
 A wiki also moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import

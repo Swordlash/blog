@@ -20,27 +20,37 @@
 --    PostgreSQL makes them, and its database @wiki@ checked to hold no
 --    table. A failure, or a database that holds a wiki, leaves the
 --    container as it was found (stopped again when it was stopped).
--- 4. The service stops, and the wiki is backed up into @data\/backups@.
+-- 4. The service stops (and must be stopped), and the wiki is backed up
+--    into @data\/backups@.
 -- 5. @wiki-server copy-database@ copies the SQLite wiki into PostgreSQL,
 --    in one transaction that checks every table before it commits.
 -- 6. @wiki-server rehearse --move-to-database@ compares the wiki on the
 --    two backends with the upgrade's checks, on scratch copies, since the
 --    checks write. A failure at 4, 5 or 6 starts the service again on
 --    SQLite, as it was, and empties the PostgreSQL database again when
---    this move had filled it.
--- 7. The switch: the SQLite files are set aside into
---    @data\/replaced\/\<time>\/@ (never deleted), the deployment is kept in
---    @previous\/@ for @--rollback@ ("Maker.Deploy.Upgrade"), and the new
---    binary, the console, the unit and the state name PostgreSQL.
+--    this move had filled it (it was empty before the copy). An exception
+--    in these steps is handled the same way, so the service is never left
+--    stopped by one.
+-- 7. The switch, step by step: the deployment @previous\/@ held moved to
+--    @previous.before-move@; the SQLite files set aside into
+--    @data\/replaced\/\<time>\/@ (never deleted); the deployment kept in
+--    @previous\/@ for @--rollback@ ("Maker.Deploy.Upgrade"); the page
+--    copied back from there, and the new binary, the console, the unit and
+--    the state on PostgreSQL.
 -- 8. The service starts, and must answer. A failure at 7 or 8 switches
---    back: the files of @previous\/@ and the SQLite file go back, the
---    PostgreSQL database is emptied again, and the service starts on
---    SQLite.
+--    back. A journal notes each step of 7 once it is done, and the switch
+--    back undoes exactly those, the last first: the files this run kept in
+--    @previous\/@ go back, the SQLite files come back from where this run
+--    set them aside, the deployment @previous\/@ held before comes back.
+--    A step that was not done is not undone, so a deployment kept by an
+--    earlier deploy is never restored by a move. Then the PostgreSQL
+--    database is emptied again and the service starts on SQLite.
 --
 -- The SQLite file is never written: the copy and the comparison only read
--- it, and the switch moves it. The older deployment @previous\/@ held is
--- set aside during the switch and comes back with a switch back; a move
--- that succeeds replaces it with the deployment on SQLite.
+-- it, and the switch moves it. A move that succeeds replaces the
+-- deployment @previous\/@ held with the deployment on SQLite. A move
+-- killed during the switch leaves @previous.before-move@, which the next
+-- move refuses until someone has looked at it.
 module Maker.Deploy.Move
   ( Move (..)
   , moveToPostgres
@@ -49,20 +59,21 @@ module Maker.Deploy.Move
   )
 where
 
-import Control.Exception (SomeException, displayException, finally, fromException, throwIO, try)
+import Control.Exception (SomeException, catch, displayException, finally, fromException, throwIO, try)
 import Control.Monad (forM_, unless, when)
+import Control.Monad.Extra (whenM)
 import Data.Char (isSpace)
 import Data.IORef
 import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe)
-import Maker.Deploy.Apply (Place (..), Settings (..), answersWithin, deploymentUrl, pgDown, rollBackDeployment, settingsOf, startAgain, urlAnswers)
+import Maker.Deploy.Apply (answersWithin, deploymentUrl, pgDown, startAgain, urlAnswers)
 import Maker.Deploy.Layout (markedFor, markerName)
 import Maker.Deploy.Plan
 import Maker.Deploy.Prepare (dockerReady, pgCompose, pgComposeOutput, pgFiles, pgRunning, serverBuildNative, serverCabalOutput)
 import Maker.Deploy.Rehearse (rehearsalDatabase)
 import Maker.Deploy.State (stateGet, stateReplace)
 import Maker.Deploy.Unit (consoleWrapper, databaseWords, dbUrl)
-import Maker.Deploy.Upgrade (keepPrevious, previousDir, putAsideBack, readKept, setAside)
+import Maker.Deploy.Upgrade (keepPrevious, previousDir, putBackFiles, readKept, setAside)
 import System.Directory
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -157,6 +168,9 @@ moveToPostgres m = do
   newUnit <- case replaceOnce (databaseWords "sqlite" dir "" pgDir) (databaseWords "postgres" dir dbPort pgDir) unitText of
     Just t -> pure t
     Nothing -> die (m.unitFile <> " does not run wiki-server on " <> sqlite <> " as the deploy writes it: deploy this checkout first (" <> deployCommand <> "), then move it")
+  halfway <- doesPathExist (dir </> "previous.before-move")
+  when halfway $
+    die (dir </> "previous.before-move" <> " is there, from a move that was stopped halfway: it is the deployment previous/ held before that move. Look at it, put it back as previous/ or remove it, then move again")
   docker <- dockerReady
   unless docker $
     die "the wiki moves into PostgreSQL in Docker (docker compose), and Docker is not installed here or does not answer (docker info): install Docker and its compose plugin first; nothing was changed"
@@ -196,19 +210,29 @@ moveToPostgres m = do
             <> show tables
             <> " tables, in the volume "
             <> m.name
-            <> "_wiki-db): one this deployment kept there before it moved to SQLite, or one a move left before a --rollback. It is left as it is, and nothing was changed. To move this wiki there instead, keep what you need of that one (an export, with a server on it), then delete the volume: docker compose --project-name "
+            <> "_wiki-db): one this deployment kept there before it moved to SQLite, or one a move left before a --rollback. It is left as it is, and nothing was changed. To move this wiki there instead, keep what you need of that one (an export, with a server on it), then delete the container and its volume: WIKI_DB_PASSWORD_FILE="
+            <> pgDir
+            <> "/db-password WIKI_DB_PORT="
+            <> dbPort
+            <> " docker compose --project-name "
             <> m.name
-            <> " rm --stop --force postgres && docker volume rm "
-            <> m.name
-            <> "_wiki-db"
+            <> " --file "
+            <> pgDir
+            <> "/docker-compose.yml --file "
+            <> pgDir
+            <> "/local.yml down --volumes"
         )
     _ -> do
       leaveDb
       die "PostgreSQL's database wiki could not be read (see above), so the move cannot tell that it is empty. The wiki was not touched: it runs on SQLite as it did"
 
-  -- 4. From here the running deployment changes.
+  -- 4. From here the running deployment changes. 'filled' says whether
+  -- PostgreSQL's database holds this move's copy, which a failure then
+  -- empties again: it was empty before the copy, so emptying it touches
+  -- nothing but what this run wrote.
   wasRunning <- succeeds "systemctl" ["--user", "is-active", "--quiet", service]
   node <- findExecutable "node"
+  filled <- newIORef False
   let answers = urlAnswers node
       emptyAgain = do
         say "emptying PostgreSQL's database wiki again, which this move filled"
@@ -225,60 +249,83 @@ moveToPostgres m = do
               then say (service <> " runs again on SQLite and answers on " <> url)
               else warn (service <> " does not answer on " <> url <> " after it started again on SQLite; see journalctl --user -u " <> m.name)
           else say (service <> " is left stopped, as it was before the move")
-      beforeSwitch filled why = do
-        when filled emptyAgain
-        leaveDb
-        onSqliteAgain
+      beforeSwitch :: String -> IO b
+      beforeSwitch why = do
+        whenM (readIORef filled) (attempt "emptying PostgreSQL's database" emptyAgain)
+        attempt "stopping PostgreSQL's container again" leaveDb
+        attempt ("starting " <> service <> " again") onSqliteAgain
         die (why <> ". The wiki stays on SQLite, as it was; " <> sqlite <> " was not changed")
   say ("stopping " <> service)
-  _ <- runInherit "systemctl" ["--user", "stop", service]
-  say ("backing the wiki up into " <> dataDir </> "backups")
-  backedUp <- runInherit (dir </> "bin" </> "wiki-server") ["backup", "--data", dataDir, "--sqlite", sqlite]
-  unless (backedUp == ExitSuccess) $
-    beforeSwitch False ("the backup of " <> sqlite <> " failed (see above), so the move stopped before it copied anything")
+  stopped <- runInherit "systemctl" ["--user", "stop", service]
+  stillRunning <- succeeds "systemctl" ["--user", "is-active", "--quiet", service]
+  when (stopped /= ExitSuccess || stillRunning) $
+    beforeSwitch ("systemctl --user stop " <> service <> " did not stop it (see above), so the move stopped before it copied anything")
+  -- Any other failure while the service is stopped (an exception, rather
+  -- than a step that stops the move itself) is handled as a step's.
+  guardedBy beforeSwitch $ do
+    say ("backing the wiki up into " <> dataDir </> "backups")
+    backedUp <- runInherit (dir </> "bin" </> "wiki-server") ["backup", "--data", dataDir, "--sqlite", sqlite]
+    unless (backedUp == ExitSuccess) $
+      beforeSwitch ("the backup of " <> sqlite <> " failed (see above), so the move stopped before it copied anything")
 
-  -- 5. The copy.
-  say "copying the wiki into PostgreSQL (wiki-server copy-database), in one transaction that checks every table"
-  copied <- runInherit newBin ["copy-database", "--data", dataDir, "--sqlite", sqlite, "--to-database", dbUrl dbPort, "--to-database-password-file", pgDir </> "db-password"]
-  case copied of
-    ExitSuccess -> pure ()
-    ExitFailure 4 -> beforeSwitch False ("the wiki is at another version of the schema than this checkout's wiki-server copies (see above): deploy this checkout first (" <> deployCommand <> "), then move it")
-    ExitFailure 5 -> beforeSwitch False ("some of the wiki does not read whole (see above; " <> dir </> "bin" </> "wiki check --data " <> dataDir <> " says more), so it was not copied")
-    ExitFailure 6 -> beforeSwitch False "the copy was refused before anything was written (see above)"
-    ExitFailure _ -> beforeSwitch False "the copy failed (see above), and PostgreSQL's database is empty, as it was"
+    -- 5. The copy.
+    say "copying the wiki into PostgreSQL (wiki-server copy-database), in one transaction that checks every table"
+    copied <- runInherit newBin ["copy-database", "--data", dataDir, "--sqlite", sqlite, "--to-database", dbUrl dbPort, "--to-database-password-file", pgDir </> "db-password"]
+    case copied of
+      ExitSuccess -> writeIORef filled True
+      ExitFailure 4 -> beforeSwitch ("the wiki is at another version of the schema than this checkout's wiki-server copies (see above): deploy this checkout first (" <> deployCommand <> "), then move it")
+      ExitFailure 5 -> beforeSwitch ("some of the wiki does not read whole (see above; " <> dir </> "bin" </> "wiki check --data " <> dataDir <> " says more), so it was not copied")
+      ExitFailure 6 -> beforeSwitch "the copy was refused before anything was written (see above)"
+      ExitFailure _ -> beforeSwitch "the copy failed (see above), and PostgreSQL's database is empty, as it was"
 
-  -- 6. The comparison, on copies of both: the checks write.
-  say "comparing the wiki in PostgreSQL with the wiki in SQLite (wiki-server rehearse --move-to-database, on scratch copies)"
-  let scratch = m.stateDir </> (m.name <> ".rehearsal")
-      scratchUrl = "postgres://wiki@127.0.0.1:" <> dbPort <> "/" <> rehearsalDatabase
-      dropScratch = psqlIn "wiki" ("DROP DATABASE IF EXISTS " <> rehearsalDatabase)
-  removePathForcibly scratch
-  ready <- (&&) <$> dropScratch <*> psqlIn "wiki" ("CREATE DATABASE " <> rehearsalDatabase)
-  unless ready $
-    beforeSwitch True ("the comparison's scratch database " <> rehearsalDatabase <> " could not be made (see above)")
-  compared <-
-    runInherit newBin ["rehearse", "--old", newBin, "--data", dataDir, "--sqlite", sqlite, "--scratch", scratch, "--move-to-database", scratchUrl, "--move-to-database-password-file", pgDir </> "db-password"]
-      `finally` (removePathForcibly scratch >> dropScratch)
-  case compared of
-    ExitSuccess -> say "the comparison passed: the wiki reads the same in PostgreSQL as in SQLite"
-    ExitFailure 6 -> beforeSwitch True "the wiki does not read the same in PostgreSQL as in SQLite (see above)"
-    ExitFailure _ -> beforeSwitch True "the comparison of the wiki in PostgreSQL with the wiki in SQLite could not be made (see above)"
+    -- 6. The comparison, on copies of both: the checks write.
+    say "comparing the wiki in PostgreSQL with the wiki in SQLite (wiki-server rehearse --move-to-database, on scratch copies)"
+    let scratch = m.stateDir </> (m.name <> ".rehearsal")
+        scratchUrl = "postgres://wiki@127.0.0.1:" <> dbPort <> "/" <> rehearsalDatabase
+        dropScratch = psqlIn "wiki" ("DROP DATABASE IF EXISTS " <> rehearsalDatabase)
+        cleanUp = do
+          attempt ("removing " <> scratch) (removePathForcibly scratch)
+          dropped <- dropScratch
+          unless dropped (warn ("the comparison's scratch database " <> rehearsalDatabase <> " could not be dropped (see above); the next move or upgrade drops it first"))
+    removePathForcibly scratch
+    ready <- (&&) <$> dropScratch <*> psqlIn "wiki" ("CREATE DATABASE " <> rehearsalDatabase)
+    unless ready $
+      beforeSwitch ("the comparison's scratch database " <> rehearsalDatabase <> " could not be made (see above)")
+    compared <-
+      runInherit newBin ["rehearse", "--old", newBin, "--data", dataDir, "--sqlite", sqlite, "--scratch", scratch, "--move-to-database", scratchUrl, "--move-to-database-password-file", pgDir </> "db-password"]
+        `finally` cleanUp
+    case compared of
+      ExitSuccess -> say "the comparison passed: the wiki reads the same in PostgreSQL as in SQLite"
+      ExitFailure 6 -> beforeSwitch "the wiki does not read the same in PostgreSQL as in SQLite (see above)"
+      ExitFailure _ -> beforeSwitch "the comparison of the wiki in PostgreSQL with the wiki in SQLite could not be made (see above)"
 
-  -- 7. The switch. What is done is noted, so that a failure undoes it.
+  -- 7. The switch. Each step is noted in the journal once it is done, and
+  -- a failure undoes exactly the steps noted, the last first: the recovery
+  -- touches only what this run moved, made or kept.
+  journal <- newIORef []
   let olderPrevious = dir </> "previous.before-move"
+      note step = modifyIORef journal (step :)
   hadPrevious <- doesDirectoryExist (previousDir dir)
-  aside <- newIORef Nothing
   switched <- try @SomeException $ do
-    removePathForcibly olderPrevious
-    when hadPrevious (renameDirectory (previousDir dir) olderPrevious)
+    olderThere <- doesPathExist olderPrevious
+    when olderThere (throwIO (userError (olderPrevious <> " is there already, from a move that was stopped halfway: look at it, and remove it, before moving again")))
+    when hadPrevious $ do
+      renameDirectory (previousDir dir) olderPrevious
+      note OlderSetAside
     moved <- setAside dir
-    writeIORef aside moved
     case moved of
-      Just at -> say ("moved " <> sqlite <> " aside into " <> at <> ", where it is kept")
+      Just at -> do
+        note (SqliteSetAside at)
+        say ("moved " <> sqlite <> " aside into " <> at <> ", where it is kept")
       Nothing -> throwIO (userError (sqlite <> " was not there to set aside"))
+    -- previous/ is this run's from here, even if keeping fails halfway:
+    -- the deployment it held was moved out of its way, or there was none.
+    note PreviousStarted
     kept <- keepPrevious dir m.unitFile m.stateFile commit Nothing wasRunning dbWasRunning (fromMaybe "" moved) ""
     unless kept (throwIO (userError "the deployment could not be kept in previous/"))
-    _ <- runInherit "cp" ["-R", previousDir dir </> "app", dir </> "app"]
+    note DeploymentKept
+    pageCopied <- runInherit "cp" ["-R", previousDir dir </> "app", dir </> "app"]
+    unless (pageCopied == ExitSuccess) (throwIO (userError ("the page could not be copied back from " <> previousDir dir </> "app" <> " (see above)")))
     createDirectoryIfMissing True (dir </> "bin")
     copyFile newBin (dir </> "bin" </> "wiki-server")
     setPermissions (dir </> "bin" </> "wiki-server") . setOwnerExecutable True =<< getPermissions (dir </> "bin" </> "wiki-server")
@@ -289,55 +336,61 @@ moveToPostgres m = do
     stateReplace [("db", "postgres"), ("db_port", dbPort)] m.stateFile
     reloaded <- runInherit "systemctl" ["--user", "daemon-reload"]
     unless (reloaded == ExitSuccess) (throwIO (userError "systemctl --user daemon-reload failed (see above)"))
-  let switchBack why = do
+  let switchBack :: String -> IO b
+      switchBack why = do
         warn (why <> "; switching " <> m.name <> " back to SQLite")
-        _ <- runInherit "systemctl" ["--user", "stop", service]
-        emptyAgain
-        mk <- readKept dir
-        case mk of
-          Just k -> do
-            old <- settingsOf (previousDir dir </> "state")
-            let place = Place {name = m.name, dir = dir, unitFile = m.unitFile, stateFile = m.stateFile, stateDir = m.stateDir, pgDir = pgDir, noFirewall = True}
-                now = Settings {rulePort = old.rulePort, servePort = old.servePort, db = "postgres", dbPort = dbPort}
-            restored <- rollBackDeployment place Nothing now k
-            unless restored $
-              die (why <> "; the switch back stopped before the files went back (see above): the deployment on SQLite is in " <> previousDir dir <> ", and --rollback puts it back once the cause is fixed")
-          Nothing -> do
-            -- The deployment was not kept whole: what moved goes back.
-            forM_ ["bin", "app"] $ \d -> do
-              keptThere <- doesDirectoryExist (previousDir dir </> d)
-              here <- doesDirectoryExist (dir </> d)
-              when (keptThere && not here) (renameDirectory (previousDir dir </> d) (dir </> d))
-            removePathForcibly (previousDir dir)
-            readIORef aside >>= mapM_ (putAsideBack dir)
-        when hadPrevious $ do
-          removePathForcibly (previousDir dir)
-          renameDirectory olderPrevious (previousDir dir)
-        when dbWasRunning $ do
-          _ <- pgCompose m.name pgDir dbPort ["up", "--detach", "--wait", "postgres"]
-          pure ()
-        onSqliteAgain
+        attempt ("stopping " <> service) (() <$ runInherit "systemctl" ["--user", "stop", service])
+        steps <- readIORef journal
+        forM_ steps $ \case
+          DeploymentKept -> do
+            -- What this run kept: the binary and the page moved back, the
+            -- unit and the state copied back, previous/ removed.
+            say ("putting back the deployment on SQLite this move kept in " <> previousDir dir)
+            readKept dir >>= \case
+              Just k -> attempt "putting back the files kept in previous/" (putBackFiles dir m.unitFile m.stateFile service k)
+              Nothing -> warn ("the deployment this move kept in " <> previousDir dir <> " cannot be read back: put its bin/ and app/ back by hand")
+          PreviousStarted -> do
+            -- A keep that stopped halfway: what it moved goes back. Once
+            -- the deployment was kept whole, putBackFiles has removed it.
+            there <- doesDirectoryExist (previousDir dir)
+            when there $ attempt ("putting back what was moved into " <> previousDir dir) $ do
+              forM_ ["bin", "app"] $ \d -> do
+                keptThere <- doesDirectoryExist (previousDir dir </> d)
+                here <- doesDirectoryExist (dir </> d)
+                when (keptThere && not here) (renameDirectory (previousDir dir </> d) (dir </> d))
+              removePathForcibly (previousDir dir)
+          SqliteSetAside at -> attempt ("putting " <> sqlite <> " back from " <> at) (putSqliteBack dir at)
+          OlderSetAside -> attempt ("putting back the deployment " <> previousDir dir <> " held before the move") (renameDirectory olderPrevious (previousDir dir))
+        _ <- runInherit "systemctl" ["--user", "daemon-reload"]
+        whenM (readIORef filled) (attempt "emptying PostgreSQL's database" emptyAgain)
+        attempt "stopping PostgreSQL's container again" leaveDb
+        attempt ("starting " <> service <> " again") onSqliteAgain
         die (why <> ": switched back to SQLite, as it was before the move, " <> sqlite <> " unchanged")
   case switched of
     Left e -> switchBack ("the switch to PostgreSQL failed (" <> reason e <> ")")
     Right () -> pure ()
 
   -- 8. The start.
-  say ("starting " <> service <> " on PostgreSQL")
-  restarted <- runInherit "systemctl" ["--user", "restart", service]
-  unless (restarted == ExitSuccess) $
-    switchBack ("systemctl --user restart " <> service <> " failed (see above)")
-  url <- deploymentUrl m.stateFile
-  started <- answersWithin service answers url
-  unless started $ do
-    _ <- runInherit "systemctl" ["--user", "status", service, "--no-pager"]
-    switchBack (service <> " does not answer on " <> url <> " on PostgreSQL; see journalctl --user -u " <> m.name)
-  removePathForcibly olderPrevious
-  say (service <> " answers on " <> url <> ", on PostgreSQL")
+  guardedBy switchBack $ do
+    say ("starting " <> service <> " on PostgreSQL")
+    restarted <- runInherit "systemctl" ["--user", "restart", service]
+    unless (restarted == ExitSuccess) $
+      switchBack ("systemctl --user restart " <> service <> " failed (see above)")
+    url <- deploymentUrl m.stateFile
+    started <- answersWithin service answers url
+    unless started $ do
+      _ <- runInherit "systemctl" ["--user", "status", service, "--no-pager"]
+      switchBack (service <> " does not answer on " <> url <> " on PostgreSQL; see journalctl --user -u " <> m.name)
+    say (service <> " answers on " <> url <> ", on PostgreSQL")
+  -- The move stands from here: what follows only cleans up and reports.
+  attempt ("removing " <> olderPrevious <> ", the deployment previous/ held before the move") (removePathForcibly olderPrevious)
   adminPort <- stateGet "admin_port" m.stateFile
   admin <- answers ("http://127.0.0.1:" <> adminPort <> "/admin/api/v1/admin/status")
   unless admin $ warn ("its admin listener does not answer on http://127.0.0.1:" <> adminPort <> "/admin/; see journalctl --user -u " <> m.name)
-  movedTo <- fromMaybe "" <$> readIORef aside
+  steps <- readIORef journal
+  let movedTo = case [at | SqliteSetAside at <- steps] of
+        at : _ -> at
+        [] -> dataDir </> "replaced"
   putStr $
     unlines
       [ ""
@@ -348,6 +401,47 @@ moveToPostgres m = do
       , "in " <> dataDir </> "backups" <> ". --rollback goes back to the wiki on SQLite: what is written"
       , "in PostgreSQL meanwhile is not in it, and stays in the volume."
       ]
+
+-- | 'Step' is a step of the switch that is done, as its journal notes it:
+-- the deployment previous/ held moved to previous.before-move, the SQLite
+-- files set aside into this directory, previous/ begun by this run, and
+-- the deployment kept there whole.
+data Step = OlderSetAside | SqliteSetAside FilePath | PreviousStarted | DeploymentKept
+
+-- | Run an action, and hand a failure of it (an exception, not the move
+-- stopping itself) to the recovery given, with its reason.
+guardedBy :: (String -> IO a) -> IO a -> IO a
+guardedBy recover act =
+  act `catch` \e -> case fromException e of
+    Just (code :: ExitCode) -> throwIO code
+    Nothing -> recover ("the move failed (" <> reason e <> ")")
+
+-- | Run a step of a recovery, and warn when it fails, so that the steps
+-- after it run all the same.
+attempt :: String -> IO () -> IO ()
+attempt what act =
+  try act >>= \case
+    Right () -> pure ()
+    Left e -> case fromException e of
+      Just (code :: ExitCode) -> throwIO code
+      Nothing -> warn (what <> " failed (" <> reason e <> "); see that it is right by hand")
+
+-- | Move the SQLite files the switch set aside back into the deployment's
+-- @data\/@, and remove their directory once it is empty. A file of the same
+-- name in @data\/@, which nothing of the move makes, is never overwritten:
+-- the file set aside then stays where it is, and the move says so.
+putSqliteBack :: FilePath -> FilePath -> IO ()
+putSqliteBack dir at = do
+  forM_ ["wiki.sqlite", "wiki.sqlite-wal", "wiki.sqlite-shm"] $ \file -> do
+    kept <- doesFileExist (at </> file)
+    taken <- doesPathExist (dir </> "data" </> file)
+    when kept $
+      if taken
+        then warn (dir </> "data" </> file <> " is there, so " <> at </> file <> " was left where it is")
+        else renameFile (at </> file) (dir </> "data" </> file)
+  left <- listDirectory at
+  when (null left) (removeDirectory at)
+  say ("put the wiki set aside in " <> at <> " back into " <> dir </> "data")
 
 -- | Why a step of the switch failed, in words: the message of a failure
 -- the switch raised itself, or the exception as it shows.
