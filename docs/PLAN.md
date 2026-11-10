@@ -1412,8 +1412,12 @@ which the wiki pins since #227.
   place it points at never change. `/l/<page id>/` takes
   `?version=<the version's time>`, as the history's address does, and
   leads to that version of the page, the fragment kept; "Copy permanent
-  link" copies it with the version shown. The `#` of a heading and the
-  editor's box copy the address without a version, the page as it is now.
+  link" in the page's menu copies it with the version shown, and is the
+  one thing in the interface that writes the form (the owner: "only a
+  link to a version of the page"). The `#` of a heading and the editor's
+  "Link to a page" stay as they were before the package, whatever the
+  entry says above; the address by id stays under the link, so that it
+  works after the page is moved.
   The session had read the issue as a link that survives a move only, and
   proposed a second package (a quote the wiki finds again after edits);
   that proposal is dropped, since a pinned version needs no finding.
