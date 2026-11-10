@@ -1209,6 +1209,40 @@ confirms it against reality and the plan is amended if it does not hold.
     `Move.hs`'s source for an operation done any other way. The SQLite
     file is never deleted.
 
+68. **A space's home page is the root of its pages (WP5.78, #201, #225 and
+    #229; the owner, 2026-11-10).** Every space has one home page, the
+    page it opens at, and every other page is under it. Only a space
+    administrator changes it (`Wiki.Core.Permission.canEditPage`), and it
+    cannot be chosen, deleted, moved or made a template. Two kinds of
+    space have none and keep several top-level pages, each with its
+    segment: the container of personal spaces, and an encrypted space
+    (until #213). Step 12 of the schema gave every other space with none
+    the default one; step 13 made each home page its space's only
+    top-level page (`Storage.Migrate.Code.Step0012`, `Step0013`), and the
+    storage refuses a second root, which `wiki-server check` reports. The
+    home page has no segment in addresses: a space's address is its home
+    page's, a page that was top-level kept its address, and a page that
+    was under the home page lost the home page's segment.
+    `Wiki.Core.Space.pagePath` is the one function that builds a page's
+    path and `pagesAt` the one that reads one; the home page's editor,
+    source, history, slides and live preview are under the space's
+    address. An address of the time before is read again without the
+    home page's slug when it names nothing as written, but only where a
+    person typed or wrote it (reading a page, the shell's current page,
+    links): whatever matches or compares pages (the merge import, the
+    guide's update) reads paths exactly (`pageAtExactly`), since the
+    first review found an import overwriting a home page through the old
+    address. A blog shows its posts at its address, with its home page
+    above them through the page view itself, comments and all, once
+    someone has written it or commented on it; a home page nobody has
+    written stays hidden, and commenting on it, watching, starring and
+    exporting it are not offered until then (the owner, 2026-11-10: left
+    so). An archive's layout follows the tree, a page that was top-level
+    under its home page's directory, and an old archive is read by step
+    13's rule (`rootedPages`). The rehearsal builds each path as the
+    program it asks builds it, told by the schema version on `/healthz`,
+    which is stable; its `roots` check is step 13's.
+
 ## Repository layout
 
 ```
@@ -1288,8 +1322,8 @@ foundations, is done: #207 (compile times, #220, decision 63), #202
 and the PostgreSQL tests copying a migrated template (#221). Stage 2,
 the content's structure, on #202: #195 is done (decision 65, #224) and
 #197 was closed, since comments worked already; #201 (one home page per
-space; WP5.78 below) is half done: part a (#225), with the first step of
-the schema in code, is merged, and part b is next. Stage 3, the editor: #187 (autocompletion),
+space, the root of its pages) is done (decision 68, #225 and #229). So
+stage 2 is done. Stage 3, the editor, is next: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
 (emojis: shortcodes such as `:tada:` render already, through
@@ -1302,79 +1336,6 @@ Alongside, when there is room: #213 (WP5.74b3, after #201). #203
 opaque-hs, is done (#230, decision 59). #212 (WP5.74a2b) was closed in opaque-hs's own
 repository, which the wiki pins since #227.
 
-- **WP5.78 One home page per space, the root of its pages** (#201; the
-  owner, 2026-11-10). Today a space's home page is optional
-  (`Space.homePage :: Maybe PageId`), may be any of its pages at any
-  depth, and a space has many top-level pages. After this package every
-  space has one home page, the page the space opens at, and every other
-  page is under it. Space administrators and wiki administrators exist
-  already (`AdministerSpace`, `Administer`), so the issue's "space admins"
-  need nothing new. The owner's answers: only a space administrator edits
-  the home page; addresses stay as they are; a space without a home page
-  gets the default one, and the home page is no longer optional;
-  encrypted spaces are left as they are until #213. Two pull requests,
-  a then b, so that the first step of the schema in code is the simple
-  one.
-  - **a is done (#225): every space has a home page, and it is the
-    administrators'.** Step 12 of the schema, the first in code
-    (`Wiki.Server.Storage.Migrate.Code.Step0012`), gave every space with
-    none the default one, but the container of personal spaces and an
-    encrypted space; for those two alone `homePage` stays `Nothing`, and
-    the type keeps its `Maybe` for them. Every way a space is made gives
-    it one. The home page cannot be chosen, deleted or moved, and saving
-    it, restoring a version of it, its drafts, its attachments and the
-    live channel's "is editing" need `AdministerSpace`
-    (`Wiki.Core.Permission.canEditPage`, the server's `requireEditPage`).
-    Two things differ from what was planned. `SpaceProfile.homePage` is
-    dropped, where the plan had `setSpaceProfile` refuse a change of it:
-    a body that still sends the field is accepted and the field ignored.
-    The step fills `search_fold` with the live `foldText`, since a search
-    folds each query with the live fold and compares; everything else it
-    writes is its own copy, by decision 64.
-  - **b, the home page is the root.** A second step of the schema makes
-    each space's home page its only top-level page: the home page is
-    taken from under its parent, if it had one, and every other
-    top-level page goes under it, in the order they were in, before the
-    children the home page had. The home page has no segment in
-    addresses: the space's own address is the home page's, a page that
-    was top-level keeps its address, and a page that was under the home
-    page loses the home page's segment. So that old addresses still lead
-    somewhere, a path that names nothing as written and starts with the
-    home page's slug is read again without that segment. Where a child
-    the home page had and a page that was top-level share a slug, the one
-    that was top-level keeps it, since its address must not change, and
-    the other gets the next free one. Reading a page at the empty path
-    gives the home page. The home page's editor, source, history, slides
-    and live preview get routes under the space's address, as the wiki's
-    front page has its own. "New page" with no parent, and a move to "its
-    top level", mean under the home page; nothing but the home page has
-    no parent, which the storage refuses and the database check
-    (`wiki-server check`) reports. One function says what a page's path
-    is, given the space's home page, because an encrypted space keeps
-    several top-level pages, each with its segment, and no home page. The
-    sidebar and the space's list show the home page as the space and its
-    children as the space's pages. A blog's posts are the home page's
-    children. The heading levels of a space's export stay what they were
-    for pages that were top-level. Box numbers that count pages change:
-    the home page is no longer one of the numbered pages, so the pages
-    after it move up by one, and the home page's own boxes take the
-    number 0, as the boxes before a page's first section do. The guide's
-    tree and its record of installed pages, the archive (an old archive
-    with several top-level pages is brought in by the same rule) and the
-    demo's stored state follow. No page's text is rewritten, so a
-    relative link written on the home page, or on a page that was under
-    it, is read from one level higher than before and may lead elsewhere;
-    a home page that was not top-level leaves no way to its old address.
-    What of this is found goes under "Known gaps". The step is tested on
-    rows of its own (`withEmptyPlaceIn`), since after a no program can
-    make the databases it has to repair; the rehearsal's checks read a
-    page's path as the program they ask builds it, and the step's own
-    check says that every page that was top-level answers at its old
-    address and every space at its own.
-  - Left for later: an encrypted space's home page (#213); a redirect
-    that rewrites an old address in the address bar; a database
-    constraint on one root per space, which the two exceptions rule out
-    for now.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
@@ -1636,17 +1597,30 @@ needs. Each was true when its package merged; check before relying on one.
   that follows a quotation's `>` is a block on the page and not in an
   export, where pandoc appears to read the tab as code, so the content
   differs there too.
-- **Home pages (WP5.78a, #225).** An import's preview and summary do not
-  count the home pages it creates. A space set to "None" before the
-  upgrade now opens at the default home page, not at its list of pages.
-  The step's search text is made without a parser, so a space's name with
+- **Home pages (WP5.78, #225 and #229).** An import's preview and summary
+  do not count the home pages it creates. A space set to "None" before
+  the upgrade opens at the default home page, not at its list of pages.
+  Step 12's search text is made without a parser, so a space's name with
   Markdown in it (`*x*`) keeps those characters there until the page is
-  next saved. No operation can make a home page under another page any
-  more, so the tests of "a page with the home page underneath" make one
-  through unchecked state or a row update; part b's step removes the
-  case. Not tested: that encrypting a space after the step deletes the
-  home page the step gave it. The rehearsal now leaves out a space whose
-  pages answer 409 (an encrypted space), as it leaves out a 404's.
+  next saved. Not tested: that encrypting a space deletes the home page
+  step 12 gave it. After step 13, the old address of a child that was
+  renamed because a top-level page had its slug leads to that top-level
+  page, and old addresses below the renamed child lead nowhere. A home
+  page that was under another page lost its old address. A relative link
+  that climbs with `..` from the home page, or from a page that was under
+  it, starts one level higher than before; no page's text was rewritten.
+  Old addresses are not prerendered for a static host: its `404.html` is
+  the application, which reads them. The key under which a browser
+  remembers the home page's open spoilers changed, so those opened before
+  are forgotten. The refusals for "a page with the home page under it"
+  can only be reached through a hand-edited database now; their tests
+  make that state with SQL. When a rehearsal's old program is itself at
+  step 13 or later, `roots` has only home pages to check.
+- **The rehearsal's ports on CI.** `toolchain/rehearse-ci.sh` picked its
+  ports up to 39999, in the range Linux gives outgoing connections, and
+  one CI run failed on a port in use (#229). They are below 32768 now,
+  with another pair tried when one is taken;
+  `toolchain/test-rehearse-ci.sh` tests it.
 - **The browser's OPAQUE client (WP5.79, #230).** A step that fails for
   any reason but a wrong password says so on the console as a warning
   with the error's name ("OPAQUE: the sign-in could not finish:
