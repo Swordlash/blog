@@ -92,6 +92,16 @@ spec = describe "a space shown as a blog, rendered" $ do
     Rendered {html} <- render (as (Just "user-editor")) (Space blogPath)
     html `contains` "<a class=\"button new-post\" href=\"/s/blog/new-page/\">New post</a>"
 
+  it "offers its home page's editor to its administrators, and its source and history to every reader" $ do
+    Rendered {html = asAdmin} <- render (as (Just "user-admin")) (Space blogPath)
+    asAdmin `contains` "<a class=\"button blog-intro-edit\" href=\"/s/blog/edit/\">Edit home page</a>"
+    Rendered {html = asEditor} <- render (as (Just "user-editor")) (Space blogPath)
+    asEditor `lacks` "blog-intro-edit"
+    Rendered {html = asNobody} <- render (as Nothing) (Space blogPath)
+    asNobody `lacks` "blog-intro-edit"
+    asNobody `contains` "<a class=\"button blog-intro-source\" href=\"/s/blog/source/\">View source</a>"
+    asNobody `contains` "<a class=\"button blog-intro-history\" href=\"/s/blog/history/\">History</a>"
+
   it "names a post's author where one is known" $ do
     let st = as Nothing
         authored = st {versions = Map.map (Map.map (\v -> Saved {title = v.title, body = v.body, author = Just (UserId "user-editor")})) st.versions}

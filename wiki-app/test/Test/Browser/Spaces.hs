@@ -165,6 +165,27 @@ spec m = do
     _ <- find ui ".blog-view .post-list"
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Blog")
 
+  it "offers a blog's home page to its administrators to edit, and its source and history to every reader, from the blog" $ runPage $ do
+    -- The home page is the root of the blog's pages, with no entry in its
+    -- tree: the blog, at its address, carries the home page's actions.
+    admin <- start m (Just "user-admin") (Space (slugs ["blog"]))
+    find admin ".blog-view .actions a.blog-intro-edit[href$='#/s/blog/edit/']" >>= click
+    find admin ".editor-heading" >>= (`shouldHaveText` "Editing Home")
+    unmount admin
+    -- The editor writes the posts but does not administer the blog.
+    writer <- start m (Just "user-editor") (Space (slugs ["blog"]))
+    _ <- find writer ".blog-view .actions a.new-post"
+    length <$> findAll writer ".blog-view .blog-intro-edit" `shouldReturn` 0
+    unmount writer
+    visitor <- start m Nothing (Space (slugs ["blog"]))
+    length <$> findAll visitor ".blog-view .blog-intro-edit" `shouldReturn` 0
+    find visitor ".blog-view .actions a.blog-intro-source[href$='#/s/blog/source/']" >>= click
+    find visitor ".source-view h1" >>= (`shouldHaveText` "Home")
+    find visitor ".source-view a.source-back" >>= click
+    _ <- find visitor ".blog-view .post-list"
+    find visitor ".blog-view .actions a.blog-intro-history[href$='#/s/blog/history/']" >>= click
+    find visitor ".history-view h1" >>= (`shouldHaveText` "Home")
+
   it "shows a space as a blog, under its home page, once its administrator says so" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["docs"]))
     find ui ".space-settings-toggle" >>= click

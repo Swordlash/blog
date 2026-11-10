@@ -21,7 +21,11 @@
 -- people it mentions (WP4.13).
 --
 -- Its actions include the space's "Watch" button ("Wiki.App.View.Watch"),
--- as in the space view of a space that is not a blog.
+-- as in the space view of a space that is not a blog, and the home page's
+-- own: its editor for whoever administers the space, and its source and
+-- history for every reader. The home page is the root of the space's
+-- pages (WP5.78 of docs/PLAN.md), with no entry in the space's tree, and
+-- the blog's address is its address, so the blog is where they are.
 module Wiki.App.View.Blog
   ( Input (..)
   , component
@@ -44,7 +48,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Watch qualified as WatchView
@@ -121,14 +125,26 @@ component =
             <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
           </header>
           {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
-          {% if mayEdit ctx space.id || notified ctx %}
-            <div class="actions">{{ [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button new-post"] [HH.text "New post"] | mayEdit ctx space.id] }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
+          {% if mayEdit ctx space.id || notified ctx || isJust homeSummary %}
+            <div class="actions">{{ [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button new-post"] [HH.text "New post"] | mayEdit ctx space.id] }}{{ homeActions }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
           {% end %}
           {{ body }}
         </section>
       |]
       where
         path = spacePathOf ctx.spaces space.id
+        homeSummary = homeOf space pages
+        -- The home page's actions, under the space's address: its editor
+        -- for whoever may change it (a space administrator,
+        -- 'mayEditPage'), its source and history for every reader.
+        homeActions =
+          concat
+            [ [Router.link ctx.router Followed (EditPage path []) [HP.class_ "button blog-intro-edit"] [HH.text "Edit home page"] | mayEditPage ctx space.id h.id]
+                <> [ Router.link ctx.router Followed (PageSource path []) [HP.class_ "button blog-intro-source"] [HH.text "View source"]
+                   , Router.link ctx.router Followed (PageHistory path [] Nothing AgainstPrevious) [HP.class_ "button blog-intro-history"] [HH.text "History"]
+                   ]
+            | h <- maybeToList homeSummary
+            ]
         all' = posts space pages
         (shown, onThis) = onPage page all'
         total = pageCount (length all')
