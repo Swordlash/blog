@@ -78,7 +78,7 @@ helping m = describe "help" $ do
     find ui ".help-toggle" >>= click
     eventually (dialogOpen `shouldReturn` "true")
     titles <- traverse textContent =<< findAll ui ".help-section h3"
-    titles `shouldSatisfy` \ts -> all (`elem` ts) ["Mathematics", "Diagrams", "Pictures", "Notes and boxes", "This wiki's kinds of box"]
+    titles `shouldSatisfy` \ts -> all (`elem` ts) ["Emoji", "Mathematics", "Diagrams", "Pictures", "Notes and boxes", "This wiki's kinds of box"]
     -- The guide's boxes, rendered, and the demo's own kind.
     length <$> findAll ui ".help-section .alert-note" >>= (`shouldSatisfy` (> 0))
     length <$> findAll ui ".help-section .alert-exercise" >>= (`shouldSatisfy` (> 0))

@@ -617,8 +617,8 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   click away from every page, for each user (kept by `wiki-server`, or in the
   browser by the demo).
 - **Help** at hand: the red **?** in the corner of every page shows, in short,
-  what a page can hold (lists, tables, code, formulas, Mermaid, TikZ and the
-  kinds of box, the wiki's own too), each rendered with its Markdown, from the
+  what a page can hold (lists, tables, emoji, code, formulas, Mermaid, TikZ and
+  the kinds of box, the wiki's own too), each rendered with its Markdown, from the
   in-app guide.
 - **Blogs**: a space shown as a blog lists its pages as posts, newest first,
   with an Atom and an RSS feed over `wiki-server`.
