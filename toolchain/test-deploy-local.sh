@@ -984,7 +984,7 @@ done
 assert_contains "$HOME/$unit" "ExecStart=\"$pre/bin/wiki-server\" serve --data \"$pre/data\" --static \"$pre/app\" --listen 0.0.0.0:$p --admin-listen 127.0.0.1:$a --sqlite \"$pre/data/wiki.sqlite\""
 [ ! -e "$HOME/wiki-demo" ] || fail 'the deployment went to the home directory'
 [ ! -e "$HOME/.config/wiki-demo" ] || fail 'the state went to the home directory'
-[ "$(ls -A "$HOME" | sort | tr '\n' ' ')" = '.config .wiki-toolchain ' ] || fail "the home directory holds more than the unit: $(ls -A "$HOME" | tr '\n' ' ')"
+[ "$(ls -A "$HOME" | LC_ALL=C sort | tr '\n' ' ')" = '.config .wiki-toolchain ' ] || fail "the home directory holds more than the unit: $(ls -A "$HOME" | tr '\n' ' ')"
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server under the prefix does not answer'
 [ "$(sed -n 's/^toolchain=//p' "$pre/state/wiki-demo.state")" = "$pre/toolchain" ] || fail 'the state does not record the toolchain'
 assert_contains "$out" "--status --name wiki-demo --prefix $pre"
@@ -2138,7 +2138,7 @@ pass '--static goes back to the demo, over HTTPS without cookies, and keeps the 
 
 : >"$EVENTS"
 undeploy --purge >"$case_dir/purge" 2>&1 || fail 'undeploy --purge failed'
-[ "$(ls -A "$HOME/wiki-demo" | sort | tr '\n' ' ')" = '.wiki-demo-deployment data ' ] || fail "--purge left $(ls -A "$HOME/wiki-demo")"
+[ "$(ls -A "$HOME/wiki-demo" | LC_ALL=C sort | tr '\n' ' ')" = '.wiki-demo-deployment data ' ] || fail "--purge left $(ls -A "$HOME/wiki-demo")"
 [ ! -e "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail '--purge kept the state'
 assert_contains "$case_dir/purge" 'kept the wiki'"'"'s data'
 p2=$(other_port "$a1")
@@ -4377,11 +4377,11 @@ pass 'the files --bundle-locally builds again are those web/bundle.sh says it wr
 # the old name of --prefix, is mentioned in the header's prose only.
 wizard_options_differ() {
   sed -n '2,/^set -eu/p' "$SOURCE_DIR/deploy-local.sh" |
-    sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' -e '--yes' | sort -u >"$TMP/header-options"
-  grep -o '"--[a-z][a-z-]*' "$1" | sed 's/^"//' | grep -v -x -e '--args-from' -e '--help' | sort -u >"$TMP/wizard-options"
+    sed -n 's/^#   \(--[a-z][a-z-]*\).*/\1/p' | grep -v -x -e '--force' -e '--yes' | LC_ALL=C sort -u >"$TMP/header-options"
+  grep -o '"--[a-z][a-z-]*' "$1" | sed 's/^"//' | grep -v -x -e '--args-from' -e '--help' | LC_ALL=C sort -u >"$TMP/wizard-options"
   [ "$(wc -l <"$TMP/header-options")" -ge 20 ] || fail "the deploy's header lists too few options; did its format change? $(cat "$TMP/header-options")"
-  comm -23 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-wizard"
-  comm -13 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-header"
+  LC_ALL=C comm -23 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-wizard"
+  LC_ALL=C comm -13 "$TMP/header-options" "$TMP/wizard-options" >"$TMP/not-in-header"
   [ -s "$TMP/not-in-wizard" ] || [ -s "$TMP/not-in-header" ]
 }
 cat "$SOURCE_DIR"/../maker/src/Maker/Deploy/Wizard/*.hs "$SOURCE_DIR/../maker/tui/Maker/Tui/Deploy.hs" >"$TMP/wizard.hs"
