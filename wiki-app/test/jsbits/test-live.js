@@ -50,6 +50,12 @@ function wiki_test_history_back() {
   history.back();
 }
 
+// Go this many entries through the session history, as the Back menu
+// does for more than one.
+function wiki_test_history_go(delta) {
+  history.go(delta);
+}
+
 // Put the open editor's cursor at a character.
 function wiki_test_live_cursor(at) {
   const editor = document.querySelector(".editor-cm .cm-content")?.wikiEditor;

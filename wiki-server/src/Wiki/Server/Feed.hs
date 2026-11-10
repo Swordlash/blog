@@ -401,7 +401,8 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
         Nothing -> Md.Unresolved
       Md.ToUrl url -> Md.External url
       Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (pageRoute spacePath postPath)) <> "#" <> fragment)
-      Md.ToPath _ -> maybe Md.Unresolved Md.Page (resolvePageLink spaces spacePath (rootPage space) pages postPath destination)
+      -- A path, or a page's permanent address.
+      _ -> maybe Md.Unresolved Md.Page (resolvePageLink spaces spacePath (rootPage space) pages postPath destination)
     absolute u
       | "http://" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u = u
       | otherwise = addressOf base u

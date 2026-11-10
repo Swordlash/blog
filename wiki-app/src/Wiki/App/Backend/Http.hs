@@ -521,6 +521,13 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   getPage sid path =
     encryptedOr sid (pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path)
       >>= keepingSpaces (\p -> [(p.id, p.space)])
+
+  -- Page content (see "Wiki.App.Backend.Http.Cache"): cached only while
+  -- the program still shows the page the server prerendered, which for a
+  -- permanent address is the refusal; fetched afresh every time after
+  -- that, so that a page moved meanwhile is found where it is now. The
+  -- same read for any space: an encrypted space's paths are plain.
+  pageLocation pid = pageContent (\c -> Map.lookup pid c.pageLocations) (endpoints.pages.location pid) (withPageLocation pid)
   createPage sid parent title body =
     encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
       >>= keepingSpaces (\p -> [(p.id, p.space)])

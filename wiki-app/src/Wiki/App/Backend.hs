@@ -206,6 +206,7 @@ import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxKind)
+import Wiki.Core.Notification (PageLocation)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
@@ -630,6 +631,19 @@ class (Monad m) => MonadWiki m where
   getPage :: SpaceId -> [Slug] -> m (Either WikiError Page)
   default getPage :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> [Slug] -> m (Either WikiError Page)
   getPage s = lift . getPage s
+
+  -- | Where a page is now, by its id, which never changes: its space's
+  -- path and its own path there ('Wiki.Core.Space.pagePath'). A page's
+  -- permanent address ("Wiki.App.Route"'s 'Wiki.App.Route.PermanentLink')
+  -- is read with it. The wiki's own home page ('getHomeDocument') is in a
+  -- space with no path, and its path is empty too. A page in a space the
+  -- current user may not view is 'NotFound', exactly as an id no page has,
+  -- so that nobody learns from the answer that the page exists. A page of
+  -- an encrypted space has a path like any other: its slugs are random,
+  -- and say nothing of its title.
+  pageLocation :: PageId -> m (Either WikiError PageLocation)
+  default pageLocation :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError PageLocation)
+  pageLocation = lift . pageLocation
 
   -- | A new page in a space, at its top level or under another of its pages,
   -- with a title (its slug made from it) and a Markdown body. It goes last

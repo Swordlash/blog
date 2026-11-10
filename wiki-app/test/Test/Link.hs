@@ -5,13 +5,14 @@ module Test.Link (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route
 import Wiki.App.View.LinkDialog (pageAddress)
-import Wiki.Core.Id (PageId, SpaceId (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
@@ -73,6 +74,17 @@ spec = describe "resolvePageLink" $ do
   it "keeps the fragment, and drops the query" $
     fromDocs [] "markdown-guide?x=1#links" `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
 
+  it "keeps a version after a page's address or path, and leads to that version" $ do
+    let at = UTCTime (fromGregorian 2026 10 24) 34212
+        version = "?version=2026-10-24T09%3A30%3A12Z"
+    fromDocs [] ("/s/docs/p/markdown-guide/" <> version <> "#links") `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "#links")
+    fromDocs [] ("markdown-guide/" <> version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "")
+    fromDocs [] ("markdown-guide?x=1&" <> T.drop 1 version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide"]) at) "")
+    -- A space's own address is its home page's.
+    fromDocs [] ("/s/docs/" <> version) `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) [] at) "")
+    -- A version that is not a time is dropped, as the route drops it.
+    fromDocs [] "markdown-guide?version=yesterday" `shouldBe` docsPage ["markdown-guide"]
+
   it "reads a title as a slug, for a wiki link" $ do
     fromDocs [] "Markdown guide" `shouldBe` docsPage ["markdown-guide"]
     fromDocs ["markdown-guide"] "Tour" `shouldBe` docsSpace
@@ -111,6 +123,34 @@ spec = describe "resolvePageLink" $ do
     resolve (pageAddress (slugs ["docs"]) (slugs ["no-such-page"])) `shouldBe` Nothing
     -- Nor does a space nobody can see have pages.
     resolve (pageAddress (slugs ["nowhere"]) (slugs ["at-all"])) `shouldBe` Nothing
+
+  it "leads to a page of this space by its id at its address now, and to any other id at the permanent address" $ do
+    let idOf path = fromMaybe (panic "no page") (find (\p -> S.pagePath docs (`Map.lookup` demo.pages) p.id == Just (slugs path)) (pagesOf "docs"))
+        docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
+        diagrams = (idOf ["markdown-guide", "diagrams"]).id
+        tour = (idOf []).id
+    fromDocs [] ("/l/" <> diagrams.text <> "/#flowcharts") `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"])) "#flowcharts")
+    fromDocs ["markdown-guide"] ("/l/" <> tour.text) `shouldBe` docsSpace
+    -- A page of another space, or one the reader may not view, or no page
+    -- at all: the permanent address, asked about when it is followed, and
+    -- never a broken link.
+    fromDocs [] "/l/no-such-page/#x" `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page") Nothing) "#x")
+    -- With a version, to that version, here and elsewhere.
+    let at = UTCTime (fromGregorian 2026 10 24) 34212
+        versioned = "?version=2026-10-24T09%3A30%3A12Z"
+    fromDocs [] ("/l/" <> diagrams.text <> "/" <> versioned <> "#flowcharts") `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]) at) "#flowcharts")
+    fromDocs [] ("/l/no-such-page/" <> versioned) `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page") (Just at)) "")
+    let blogPost = fromMaybe (panic "no post") (head (pagesOf "blog"))
+    fromDocs [] ("/l/" <> blogPost.id.text <> "/") `shouldBe` Just (PageLink (PermanentLink blogPost.id Nothing) "")
+
+  it "reads /l/ and a segment as a permanent address, even where a top-level space has the slug l" $ do
+    let docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
+        el = docs {S.id = SpaceId "space-l", S.name = "L", S.slug = mkSlug' "l", S.parent = Nothing}
+        resolve = resolvePageLink (el : spaces) (slugs ["docs"]) (rootOf "docs") (pagesOf "docs") []
+    resolve "/l/notes" `shouldBe` Just (PageLink (PermanentLink (PageId "notes") Nothing) "")
+    -- Its pages are reached by the space's own address, or by a longer path.
+    resolve "/s/l/p/notes/" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes"])) "")
+    resolve "/l/notes/more" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes", "more"])) "")
 
   it "resolves every link between the demo's pages" $
     for_ (Map.elems demo.pages) $ \p -> do

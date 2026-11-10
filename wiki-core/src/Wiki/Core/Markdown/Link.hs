@@ -13,6 +13,10 @@
 -- * a destination with a scheme (@https:@, @mailto:@) or starting with
 --   @\/\/@ is a URL;
 -- * @#section@ is a place on the same page;
+-- * @\/l\/\<page id>\/@, with a fragment or not, is a page by its id,
+--   which keeps leading to the page after it moves (@\/l\/4f1c…\/#setup@);
+--   with @?version=\<time>@ it is the permanent address of one version of
+--   the page, whose text never changes;
 -- * anything else is a path, which a wiki reads as a page.
 --
 -- Whatever a resolver answers, the renderer only writes a URL whose scheme
@@ -24,6 +28,11 @@ module Wiki.Core.Markdown.Link
   , AttachmentRef (..)
   , Destination (..)
   , classifyDestination
+
+    -- * A page's permanent address
+  , pageIdSegment
+  , readPageIdSegment
+  , destinationVersion
 
     -- * Writing a reference
   , attachmentReference
@@ -44,8 +53,11 @@ where
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Numeric (showHex)
 import Protolude
+import Wiki.Core.Id (PageId (..))
 
 -- | 'LinkTarget': what a destination resolves to, as the wiki answers it.
 -- @page@ is the wiki's own type for a page, turned into an @href@ by the
@@ -81,6 +93,12 @@ data Destination
     ToUrl Text
   | -- | @#fragment@: the fragment, without the @#@.
     ToAnchor Text
+  | -- | @\/l\/\<page id>\/@: a page by its id, the version named by
+    -- @?version=@ (the time it was saved, 'Wiki.Core.Version.updatedAt'),
+    -- if any, and the fragment the link names there (with its @#@, or
+    -- empty). The id is decoded ('readPageIdSegment'); a version that is
+    -- not a time is read as none, as the application's route reads it.
+    ToPageId PageId (Maybe UTCTime) Text
   | -- | Anything else: a path, absolute or relative, as written.
     ToPath Text
   deriving stock (Eq, Show)
@@ -90,9 +108,47 @@ classifyDestination dest
   | Just name <- T.stripPrefix "attachment:" stripped = ToAttachment (percentDecode name)
   | isJust (urlScheme dest) || "//" `T.isPrefixOf` stripped = ToUrl dest
   | Just fragment <- T.stripPrefix "#" stripped = ToAnchor fragment
+  | Just pid <- permanent = ToPageId pid (destinationVersion dest) fragmentPart
   | otherwise = ToPath dest
   where
     stripped = T.strip dest
+    (beforeFragment, fragmentPart) = T.breakOn "#" stripped
+    pathPart = fst (T.breakOn "?" beforeFragment)
+    permanent = case T.splitOn "/" pathPart of
+      ["", "l", segment] -> readPageIdSegment (percentDecode segment)
+      ["", "l", segment, ""] -> readPageIdSegment (percentDecode segment)
+      _ -> Nothing
+
+-- | 'destinationVersion' is the version of a page a destination names in
+-- its query (@?version=\<time>@, the time it was saved, as a history's
+-- address writes it), after a permanent address or a page's own address:
+-- the only parameter a link to a page keeps. 'Nothing' for none, and for
+-- a value that is not a time, as the application's route reads it.
+destinationVersion :: Text -> Maybe UTCTime
+destinationVersion dest =
+  head [t | pair <- T.splitOn "&" (T.drop 1 query), Just v <- [T.stripPrefix "version=" pair], Just t <- [iso8601ParseM (toS (percentDecode v))]]
+  where
+    query = snd (T.breakOn "?" (fst (T.breakOn "#" (T.strip dest))))
+
+-- | 'pageIdSegment' is a page's id as the segment of its permanent address
+-- (@\/l\/\<segment>\/@), before percent-encoding. An id is any text, but a
+-- segment cannot be empty, @.@ or @..@ (a browser removes those from an
+-- address). So an id that is one of those, or starts with @~@, is written
+-- with a @~@ before it. Every other id is written as it is.
+-- 'readPageIdSegment' reads the segment back as the same id.
+pageIdSegment :: PageId -> Text
+pageIdSegment pid
+  | pid.text `elem` ["", ".", ".."] || "~" `T.isPrefixOf` pid.text = "~" <> pid.text
+  | otherwise = pid.text
+
+-- | 'readPageIdSegment' is the page id a segment of a permanent address
+-- names, the segment percent-decoded already: the inverse of
+-- 'pageIdSegment'. The empty segment names no page.
+readPageIdSegment :: Text -> Maybe PageId
+readPageIdSegment segment
+  | T.null segment = Nothing
+  | Just escaped <- T.stripPrefix "~" segment = Just (PageId escaped)
+  | otherwise = Just (PageId segment)
 
 -- | The Markdown that refers to a page's attachment, as the editor inserts
 -- it when a file is uploaded. An image, a video or an audio file is

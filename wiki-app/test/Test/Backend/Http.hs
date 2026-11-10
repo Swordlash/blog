@@ -42,7 +42,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPageLocation, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -52,6 +52,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
@@ -578,6 +579,20 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
 
+  -- A permanent address the server prerendered for someone not signed in
+  -- carries its refusal; once they sign in, where the page is is asked
+  -- again, so that they arrive at the page (WP5.81).
+  it "asks again where a page is after signing in, though the page it started from carried a refusal" $ do
+    let there = PageLocation {space = slugs "team", page = slugs "on-call"}
+        locationOf r = if requestUrl r == "api/v1/pages/page-9/location" then ok there else ok (Map.elems demo.spaces)
+    (transport, asked) <- scripted (opaqueServer False signedIn locationOf)
+    env <- newHttpEnvWith transport (withPageLocation (PageId "page-9") (Left NotFound) emptyCache)
+    runHttpWiki env (atOnce (pageLocation (PageId "page-9"))) `shouldReturn` Just (Left NotFound)
+    readIORef asked `shouldReturn` []
+    _ <- runHttpWiki env (signIn "admin" (Password "correct horse"))
+    runHttpWiki env (pageLocation (PageId "page-9")) `shouldReturn` Right there
+    (\rs -> [requestUrl r | r <- rs, "location" `T.isSuffixOf` requestUrl r]) <$> readIORef asked `shouldReturn` ["api/v1/pages/page-9/location"]
+
   it "answers a wrong password without sending it, once no account from before OPAQUE is left" $ do
     (env, asked) <- backend (opaqueServer False signedIn (const (status 500 "")))
     runHttpWiki env (signIn "admin" (Password "battery staple")) `shouldReturn` Left WrongCredentials
@@ -691,6 +706,8 @@ preload = describe "what a page it is rendered into carries" $ do
           . withDraft hello.id (HasDraft draft)
           . withDraft (PageId "other") NoDraft
           . withSearch (searchQuery "hello") []
+          . withPageLocation (PageId "gone") (Left NotFound)
+          . withPageLocation hello.id (Right PageLocation {space = slugs "blog", page = slugs "hello-world"})
           $ emptyCache
   it "reads back as the cache it was written from" $
     decodePreload (encodePreload cache) `shouldBe` Right cache
@@ -709,7 +726,7 @@ preload = describe "what a page it is rendered into carries" $ do
 
   it "writes what is not kept as nothing, and nothing as null" $
     encodePreload (withSpaceAt (slugs "away") (Left (Unreachable "offline")) emptyCache)
-      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"homeDocument\":null,\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"stars\":null,\"status\":null,\"texEngine\":null,\"threads\":null,\"userPages\":null,\"versionLists\":[],\"versions\":[],\"watches\":null,\"whatsNew\":null}"
+      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"homeDocument\":null,\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pageLocations\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"stars\":null,\"status\":null,\"texEngine\":null,\"threads\":null,\"userPages\":null,\"versionLists\":[],\"versions\":[],\"watches\":null,\"whatsNew\":null}"
 
   it "says why a payload cannot be read" $
     decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft

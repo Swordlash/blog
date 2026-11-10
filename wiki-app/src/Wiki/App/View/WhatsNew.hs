@@ -141,7 +141,9 @@ component =
       modify (\st -> st {loaded = either Failed Ready result})
 
 -- | The renderer's options: a page's islands, with the links an entry may
--- hold, which lead out of the wiki or to a place on this page.
+-- hold, which lead out of the wiki or to a place on this page. A link to a
+-- page of the wiki, by path or by id, names a page of the wiki the entry
+-- was written for, and is shown as broken.
 options :: (MonadIslands m, MonadUUID m) => Context -> Md.Options PageLink (H.ComponentSlot IslandSlots m Action) Action
 options ctx = (Body.islandOptions ctx mempty) {Md.resolveLink = resolve}
   where
@@ -150,6 +152,7 @@ options ctx = (Body.islandOptions ctx mempty) {Md.resolveLink = resolve}
       Md.ToAnchor fragment -> Md.External ("#" <> fragment)
       Md.ToAttachment _ -> Md.Unresolved
       Md.ToPath _ -> Md.Unresolved
+      Md.ToPageId {} -> Md.Unresolved
 
 -- | What an entry's ids start with on the page: @pr-158-@, by its pull
 -- request's number, which no two shown entries share.

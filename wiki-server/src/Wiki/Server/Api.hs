@@ -802,6 +802,7 @@ handlers env caller =
         PagesApi
           { save = \p version edit -> versioned <$> wiki (savePage p version.time edit.title edit.body)
           , move = \p body -> wiki (movePage p body.space body.parent)
+          , location = wiki . pageLocation
           , shift = \p body -> wiki (shiftPage p body.shift)
           , template = \p body -> wiki (setPageTemplate p body.template)
           , delete = \p -> wiki (deletePage p) $> NoContent

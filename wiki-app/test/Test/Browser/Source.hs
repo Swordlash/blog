@@ -20,7 +20,7 @@ spec m = do
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
     -- Nothing else among the page's actions for someone who may only read it.
     actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
-    actions `shouldBe` ["View source", "History", "Comments (0)"]
+    actions `shouldBe` ["View source", "History", "Copy permanent link", "Comments (0)"]
     -- The tour is Docs' home page: its source is under the space's address.
     find ui ".page-view .actions a[href$='#/s/docs/source/']" >>= click
     find ui ".source-view h1" >>= (`shouldHaveText` "Tour")

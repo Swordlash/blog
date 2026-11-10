@@ -53,7 +53,7 @@ import Wiki.Core.Comment qualified as Comment
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Draft qualified as Draft
 import Wiki.Core.Id
-import Wiki.Core.Notification (MailMode (..), Notification (..), Watch (..), WatchReason (..))
+import Wiki.Core.Notification (MailMode (..), Notification (..), PageLocation (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page, summaryOf)
 import Wiki.Core.Page qualified as Page (Page (..))
@@ -216,6 +216,7 @@ stubs =
                 then refuse (Conflict "The page has been saved since.")
                 else pure (versioned Sample.page {Page.id = p, Page.title = edit.title, Page.body = edit.body, Page.updatedAt = Sample.later})
           , move = \p body -> pure Sample.page {Page.id = p, Page.space = body.space, Page.parent = body.parent}
+          , location = \p -> if p == Sample.page.id then pure PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "tour"]} else refuse NotFound
           , shift = \p body -> pure Sample.page {Page.id = p, Page.position = fromEnum body.shift}
           , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
@@ -667,6 +668,10 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.pages.template p) PageTemplate {template = True}) 200 Sample.page {Page.template = True}
       (status <$> request methodDelete (links.pages.delete p) [] "") `shouldReturn` 204
       answers (request methodDelete (links.pages.delete (PageId "other")) [] "") 403 Forbidden
+
+    it "says where one is now, by its id, or that no page has it" $ do
+      answers (getAt (links.pages.location p)) 200 PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "tour"]}
+      answers (getAt (links.pages.location (PageId "other"))) 404 NotFound
 
   describe "drafts" $ do
     it "gives the user's draft of a page, or null" $ do

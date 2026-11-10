@@ -63,6 +63,7 @@ module Wiki.Server.Static
   , openStaticSite
   , PageRenderer
   , serveStatic
+  , servePage
   , withBaseHref
   , withPolicyMeta
   , pageHeaders
@@ -123,10 +124,7 @@ serveStatic site base hosts renderer segments request respond
       found <- regularFile site file
       let built
             | found = send site base hosts request status200 file >>= respond
-            | otherwise =
-                regularFile site (site.root </> "404.html") >>= \case
-                  True -> send site base hosts request status404 (site.root </> "404.html") >>= respond
-                  False -> respond (plain status404 "Not found" [])
+            | otherwise = notFoundPage site base hosts request respond
       if
         | isDirectory && not directoryAddress ->
             -- Inside the root or not, the redirect only adds a slash.
@@ -140,6 +138,30 @@ serveStatic site base hosts renderer segments request respond
                   Right (status, page) -> respond (rendered hosts status page)
                   Left _ -> built
         | otherwise -> built
+
+-- | Answer a request with the page prerendered for it, as 'serveStatic'
+-- answers an address that names no file of the build, without reading its
+-- path as one: for an address of the application whose segments are no
+-- file's, such as a page's permanent address (@\/l\/a%2Fb\/@), whose id
+-- may hold a @/@, a backslash or a control character that 'serveStatic'
+-- refuses in a file's path. Without a template, or when the render fails,
+-- it is the build's @404.html@, as for any address with no file.
+servePage :: StaticSite -> Text -> [Text] -> PageRenderer -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+servePage site base hosts render request respond =
+  readTemplate site >>= \case
+    Nothing -> notFoundPage site base hosts request respond
+    Just template ->
+      render template request >>= \case
+        Right (status, page) -> respond (rendered hosts status page)
+        Left _ -> notFoundPage site base hosts request respond
+
+-- | The build's @404.html@, with a 404, or a plain "Not found" for a build
+-- without one.
+notFoundPage :: StaticSite -> Text -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+notFoundPage site base hosts request respond =
+  regularFile site (site.root </> "404.html") >>= \case
+    True -> send site base hosts request status404 (site.root </> "404.html") >>= respond
+    False -> respond (plain status404 "Not found" [])
 
 -- | The build's template for the pages the server prerenders, if it has
 -- one.

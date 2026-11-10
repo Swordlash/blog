@@ -8,6 +8,8 @@ import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
+import Halogen.Router.Duplex (encodeComponent)
 import Protolude
 import Test.Hspec
 import Wiki.App.Backend (MonadWiki (..))
@@ -348,13 +350,13 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     -- The tour, Docs' home page, at its old address: its routes are under
     -- the space's address.
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/source/\">View source</a><a class=\"button\" href=\"/s/docs/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
+    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/source/\">View source</a><a class=\"button\" href=\"/s/docs/history/\">History</a><button class=\"button copy-permanent-link\" title=\"Copy a link to this version of the page: it keeps showing this text after the page is edited or moved\" type=\"button\">Copy permanent link</button><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
     asReader `lacks` ">Edit</a>"
     Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
-    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
+    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button class=\"button copy-permanent-link\" title=\"Copy a link to this version of the page: it keeps showing this text after the page is edited or moved\" type=\"button\">Copy permanent link</button><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
 
   it "offers a space's home page to whoever administers the space to change, and a page under it to whoever edits the space" $ do
     -- The editor is one of the blog's writers, and does not administer it.
@@ -466,6 +468,41 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html = asReader} <- render st {current = Just (UserId "user-reader")} (history (Just v1) AgainstPrevious)
     asReader `contains` "The first version"
     asReader `lacks` "Restore this version"
+
+  it "offers no permanent link on the wiki's front page, which has no address of a version" $ do
+    Rendered {html} <- render (as Nothing) Home
+    html `contains` "<h1"
+    html `lacks` "copy-permanent-link"
+    -- A blog's home page, shown above its posts once written, has one,
+    -- which leads to its version, shown as a page.
+    let st = as (Just "user-admin")
+        blogHome = head [h | sp <- Map.elems st.spaces, [sp.slug] == slugs ["blog"], Just h <- [sp.homePage]]
+        written = st {pages = Map.adjust (\p -> p {P.body = "# Our blog\n\nWhat we write."}) (fromMaybe (panic "no blog") blogHome) st.pages}
+    Rendered {html = blog} <- render written (Space (slugs ["blog"]))
+    blog `contains` "What we write."
+    blog `contains` "Copy permanent link</button>"
+    let homeSaved = maybe (panic "no blog home") (\p -> p.updatedAt) (Map.lookup (fromMaybe (panic "no blog") blogHome) st.pages)
+    Rendered {html = pinned} <- render written (PageAtVersion (slugs ["blog"]) [] homeSaved)
+    pinned `contains` "This is the page as it was saved on"
+
+  it "shows a version as the page showed it, saying which, with its permanent link, and no version the page does not have" $ do
+    (st, [v1, _, v3]) <- savedTwice
+    Rendered {html, title} <- render st (PageAtVersion (slugs ["blog"]) (slugs ["hello-world"]) v1)
+    html `contains` "<h1 id=\"hello-world\">Hello, world"
+    html `lacks` "Hello, everyone"
+    html `contains` "This is the page as it was saved on"
+    html `contains` "<a href=\"/s/blog/p/hello-world/\">See the page as it is now</a>"
+    html `contains` "Copy permanent link</button>"
+    -- It is only read: no editing, and no comments, which are about the
+    -- page's text now.
+    html `lacks` ">Edit</a>"
+    html `lacks` "comments-toggle"
+    title `shouldSatisfy` T.isPrefixOf "Version · "
+    -- The history links to it.
+    Rendered {html = history} <- render st (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) (Just v1) AgainstPrevious)
+    history `contains` ("<a href=\"/s/blog/p/hello-world/?version=" <> encodeComponent (toS (iso8601Show v1)) <> "\">Read this version</a>")
+    Rendered {html = missing} <- render st (PageAtVersion (slugs ["blog"]) (slugs ["hello-world"]) (addUTCTime 1 v3))
+    missing `contains` "error-not-found"
 
   it "refuses a history where the page is refused, and a version the page does not have" $ do
     Rendered {html, title} <- render (as Nothing) (PageHistory (slugs ["team"]) (slugs ["team-handbook"]) Nothing AgainstPrevious)

@@ -5,6 +5,7 @@
 module Test.Browser.Mount
   ( start
   , startWith
+  , startOn
   , startChanged
   , startChangedAgain
   , startAgain
@@ -66,6 +67,20 @@ startWith m who at = do
   (wiki, router) <- prepare who at
   ui <- mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
   pure (ui, wiki)
+
+-- | The shell mounted again over a wiki a test started already
+-- ('startWith'), as whoever its state says is signed in, at a route: the
+-- same wiki in a new tab, after something was written to it.
+startOn
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => IORef MemState
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startOn m wiki at = do
+  router <- unsafeIOToPageM testRouter
+  unsafeIOToPageM (Router.redirect router at)
+  mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
 
 -- | 'start', over the demo changed first: for a test that needs content
 -- of its own (a space with macros, a page with formulas).

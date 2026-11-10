@@ -68,7 +68,7 @@ import Wiki.App.View.Users (pageSizeKey)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.HomePage (HomeDocument (page))
-import Wiki.Core.Id (SpaceId (..), UserId (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
@@ -175,6 +175,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
       , UserSpaces
+      , PermanentLink (PageId "no-such-page") Nothing
       ]
         <> map Admin adminSections
 
@@ -232,6 +233,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstCurrent
            , PageHistory (path "blog") (path "hello-world") (Just demoNow) AgainstPrevious
            , EditPage (path "blog") (path "hello-world")
+           , PageAtVersion (path "blog") (path "hello-world") helloMade
+           , PageAtVersion (path "blog") (path "hello-world") (addUTCTime 1 demoNow)
            , PageSlides (path "docs") (path "markdown-guide/presentations") 4 1
            , PageSlides (path "docs") (path "markdown-guide/presentations") 7 2
            , PageSlides (path "docs") (path "markdown-guide/presentations") 8 2
@@ -253,6 +256,9 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , AssistantSettings
            , WhatsNewPage
            , UserSpaces
+           , -- The server prerenders a permanent address only for a page
+             -- not found, or not to be shown to the reader.
+             PermanentLink (PageId "no-such-page") Nothing
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections

@@ -51,6 +51,7 @@ wiki = defaultOptions {resolveLink, pageHref = ("/wiki/" <>)}
         | otherwise -> Unresolved
       ToUrl url -> External url
       ToAnchor _ -> External dest
+      ToPageId {} -> Unresolved
     attachment name = case name of
       "demo.mp4" -> Just (AttachmentRef name "/files/demo.mp4" (Just "video/mp4"))
       "team" -> Just (AttachmentRef name "/files/team" (Just "image/jpeg"))

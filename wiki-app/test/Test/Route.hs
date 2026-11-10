@@ -2,6 +2,7 @@
 -- written as, and the addresses are the ones the plan names.
 module Test.Route (spec) where
 
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (parse, print)
@@ -9,10 +10,13 @@ import Halogen.VDom.DOM.Monad (runMemDOM)
 import Protolude hiding (print)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, chooseInt, elements, forAll, oneof, vectorOf, (===))
+import Test.QuickCheck (Gen, chooseInt, elements, forAll, listOf, oneof, vectorOf, (===))
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.App.Route
+import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
+import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 
 slug :: Text -> Slug
@@ -65,7 +69,23 @@ genRoute =
     , pure AssistantSettings
     , pure WhatsNewPage
     , pure UserSpaces
+    , PermanentLink . PageId <$> genPageId <*> oneof [pure Nothing, Just <$> genTime]
+    , PageAtVersion <$> genPath <*> genPagePath <*> genTime
     ]
+
+-- | A version's time, with a fraction of a second or none.
+genTime :: Gen UTCTime
+genTime = elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]
+
+-- | A page's id: any text. A server's are UUIDs and the demo's numbers,
+-- but an archive can bring any, and a segment cannot hold some of them as
+-- they are ('pageIdSegment').
+genPageId :: Gen Text
+genPageId = oneof [elements awkwardIds, toS <$> listOf (elements ("ab9-~./ %#?&(" :: [Char]))]
+
+-- | Ids a path segment cannot hold as they are, or holds only encoded.
+awkwardIds :: [Text]
+awkwardIds = ["4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e", "17", "", ".", "..", "~", "~x", "a/b", "a b", "100% ?#&", "zażółć", "(x)", "l", "a\\b", "t\tu\1v\0w", T.replicate 300 "l"]
 
 -- | A section of the administration, the users' with any listing.
 genSection :: Gen AdminSection
@@ -250,11 +270,51 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/search/?q=x&space=Not%20a%20slug" `shouldBe` Right (Search (Just "x") (Just []) True)
       parse route "/search/?q=x&space=" `shouldBe` Right (Search (Just "x") (Just []) True)
 
+    it "writes a page's permanent address under l, by its id, whatever the id is" $ do
+      print route (PermanentLink (PageId "4f1c-9a") Nothing) `shouldBe` "/l/4f1c-9a/"
+      print route (PermanentLink (PageId "17") Nothing) `shouldBe` "/l/17/"
+      print route (PermanentLink (PageId "a/b c") Nothing) `shouldBe` "/l/a%2Fb%20c/"
+      print route (PermanentLink (PageId "..") Nothing) `shouldBe` "/l/~../"
+      print route (PermanentLink (PageId "") Nothing) `shouldBe` "/l/~/"
+      parse route "/l/17" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
+      parse route "/l/17/#setup" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
+      parse route "/l/" `shouldSatisfy` isLeft
+      for_ awkwardIds $ \t -> parse route (print route (PermanentLink (PageId t) Nothing)) `shouldBe` Right (PermanentLink (PageId t) Nothing)
+
+    it "writes a version after a permanent address and after a page's own, as a history writes it" $ do
+      let at = addUTCTime 0.5 demoTime
+      print route (PermanentLink (PageId "17") (Just at)) `shouldBe` "/l/17/?version=2026-10-24T09%3A30%3A12.5Z"
+      print route (PageAtVersion (slugs ["docs"]) (slugs ["tour"]) at) `shouldBe` "/s/docs/p/tour/?version=2026-10-24T09%3A30%3A12.5Z"
+      print route (PageAtVersion (slugs ["docs"]) [] at) `shouldBe` "/s/docs/?version=2026-10-24T09%3A30%3A12.5Z"
+      parse route "/s/docs/?version=2026-10-24T09%3A30%3A12.5Z" `shouldBe` Right (PageAtVersion (slugs ["docs"]) [] at)
+      -- A version that is not a time is left out, as a history's is.
+      parse route "/l/17/?version=yesterday" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
+      parse route "/s/docs/p/tour/?version=yesterday" `shouldBe` Right (Page (slugs ["docs"]) (slugs ["tour"]))
+      -- What a link in a page reads it as.
+      classifyDestination (print route (PermanentLink (PageId "17") (Just at)) <> "#setup") `shouldBe` ToPageId (PageId "17") (Just at) "#setup"
+
+    it "writes a permanent address a link in a page reads as the same id" $
+      for_ awkwardIds $ \t -> do
+        let address = print route (PermanentLink (PageId t) Nothing)
+        classifyDestination address `shouldBe` ToPageId (PageId t) Nothing ""
+        classifyDestination (address <> "#setup") `shouldBe` ToPageId (PageId t) Nothing "#setup"
+
     it "reads no route from what is not one" $ do
       parse route "/s/" `shouldSatisfy` isLeft
       parse route "/s/Docs/" `shouldSatisfy` isLeft
       parse route "/s/docs/p/" `shouldSatisfy` isLeft
       parse route "/elsewhere/" `shouldSatisfy` isLeft
+
+  describe "locationRoute" $
+    it "goes to a page where it is now: the front page, a space's home page, or a page" $ do
+      locationRoute PageLocation {space = [], page = []} Nothing `shouldBe` Home
+      locationRoute PageLocation {space = slugs ["docs"], page = []} Nothing `shouldBe` Space (slugs ["docs"])
+      locationRoute PageLocation {space = slugs ["team", "projects"], page = slugs ["the-wiki"]} Nothing `shouldBe` Page (slugs ["team", "projects"]) (slugs ["the-wiki"])
+      -- And to a version of it, but the front page's, which has no route
+      -- of a version.
+      locationRoute PageLocation {space = slugs ["docs"], page = slugs ["tour"]} (Just demoTime) `shouldBe` PageAtVersion (slugs ["docs"]) (slugs ["tour"]) demoTime
+      locationRoute PageLocation {space = slugs ["docs"], page = []} (Just demoTime) `shouldBe` PageAtVersion (slugs ["docs"]) [] demoTime
+      locationRoute PageLocation {space = [], page = []} (Just demoTime) `shouldBe` Home
 
   describe "routeOfHref" $ do
     it "reads the router's own addresses, under its base" $ do
@@ -264,6 +324,11 @@ spec = describe "Wiki.App.Route" $ do
       routeOfHref router "/wiki/s/docs/p/tour/#who-you-can-be" `shouldBe` Just (Page (slugs ["docs"]) (slugs ["tour"]))
       routeOfHref router "/wiki/" `shouldBe` Just Home
       routeOfHref router "/wiki/search/?q=x" `shouldBe` Just (Search (Just "x") Nothing True)
+      routeOfHref router "/wiki/l/17/#setup" `shouldBe` Just (PermanentLink (PageId "17") Nothing)
+      -- A page's id of any text, as the copied link writes it and a click
+      -- on it reads it.
+      for_ awkwardIds $ \t ->
+        routeOfHref router (Router.href router (PermanentLink (PageId t) (Just demoTime)) <> "#setup") `shouldBe` Just (PermanentLink (PageId t) (Just demoTime))
 
     it "leaves everything else alone" $ do
       router <- runMemDOM (Router.newRouter "/wiki/" Unknown route)

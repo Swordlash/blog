@@ -31,7 +31,7 @@ spec m = do
     ui <- start m Nothing (Page docs presentations)
     find ui ".page-body h1" >>= (`shouldHaveText` "Presentations")
     actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
-    actions `shouldBe` ["View source", "History", "Present", "Comments (0)"]
+    actions `shouldBe` ["View source", "History", "Copy permanent link", "Present", "Comments (0)"]
     find ui ".page-view .actions a.page-present" >>= click
     _ <- find ui ".slides-view"
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Slides")

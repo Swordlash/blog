@@ -42,7 +42,7 @@ import Wiki.Api.Types (NewPage (..), SessionInfo (exports))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
-import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId (..))
 import Wiki.Core.Markdown.Ast (Block (Div, Footnotes, Heading, List, Para, Pause, Spoiler), Footnote (..), Inline (Str), ListItem (..), ListKind (BulletList), SpoilerHead (..), parseMarkdown, parseWithAllMarkers)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
@@ -168,6 +168,23 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     linkTargets bs `shouldBe` ["https://wiki.example.org/s/docs/", "https://wiki.example.org/s/docs/p/markdown-guide/diagrams/#flow", "#intro"]
     offline <- blocksOf ToOther place {publicUrl = Nothing} "See [[Tour]].\n"
     linkTargets offline `shouldBe` []
+
+  it "links a page by its id as it links the same page by its path: inside the document, or at the wiki's address" $ do
+    let idOf title = maybe (panic ("no page " <> title)) (\p -> p.id.text) (find (\p -> p.title == title) place.pages)
+        diagrams = idOf "Diagrams"
+        source = "[By path](markdown-guide/diagrams#flow), [by id](/l/" <> diagrams <> "/#flow) and [elsewhere](/l/somewhere-else/#x).\n"
+    bs <- blocksOf ToOther place source
+    linkTargets bs
+      `shouldBe` [ "https://wiki.example.org/s/docs/p/markdown-guide/diagrams/#flow"
+                 , "https://wiki.example.org/s/docs/p/markdown-guide/diagrams/#flow"
+                 , -- A page this space does not have, at its permanent address.
+                   "https://wiki.example.org/l/somewhere-else/#x"
+                 ]
+    inside <- blocksOf ToOther place {inDocument = \s p -> if (s, p) == ([slug "docs"], [slug "markdown-guide", slug "diagrams"]) then Just "page-3" else Nothing} source
+    linkTargets inside `shouldBe` ["#page-3", "#page-3", "https://wiki.example.org/l/somewhere-else/#x"]
+    -- A version is not the text the document holds: the wiki's address.
+    pinned <- blocksOf ToOther place {inDocument = \_ _ -> Just "page-3"} ("[Then](/l/" <> diagrams <> "/?version=2026-10-24T09%3A30%3A12Z#flow).\n")
+    linkTargets pinned `shouldBe` ["https://wiki.example.org/s/docs/p/markdown-guide/diagrams/?version=2026-10-24T09%3A30%3A12Z#flow"]
 
   it "leaves out [[!toc]], which the document's own table of contents stands for, but not a link to a page named toc" $ do
     bs <- blocksOf ToOther place "# A\n\n[[!toc]]\n\nText, and [[toc]] here.\n\n[[toc]]\n"

@@ -1130,6 +1130,47 @@ try {
   // The demo starts as admin, who may edit it.
   await page.locator(editorText).waitFor({ timeout });
   console.log("ok: 404.html stands in for an address with no file, and the program shows its route");
+  // A page's permanent address, as "Copy permanent link" gives it (the
+  // notice shows it whether the clipboard took it or not), has no file
+  // either: the program asks where the page is and puts the address of the
+  // version it names in its place, the fragment kept (WP5.81).
+  await load(page, "/s/docs/p/markdown-guide/mathematics/");
+  await check({ path: "/s/docs/p/markdown-guide/mathematics/", view: "page-view", crumb: "Mathematics" }, "Mathematics");
+  await page.locator("#app .page-actions .copy-permanent-link").click();
+  const permanent = (await page.locator("#app .link-copied-address").textContent()).trim();
+  assert.ok(new URL(permanent).pathname.startsWith(at("/l/")), `not a permanent address: ${permanent}`);
+  const version = new URL(permanent).search;
+  assert.ok(version.startsWith("?version="), `no version in ${permanent}`);
+  await load(page, local(new URL(permanent).pathname) + version + "#macros");
+  await check({ path: `/s/docs/p/markdown-guide/mathematics/${version}`, view: "page-view", crumb: "Version" }, "a permanent address");
+  assert.equal(new URL(page.url()).hash, "#macros", "the permanent address's fragment");
+  await page.locator("#app .version-note").waitFor({ timeout });
+  console.log("ok: a page's permanent address leads to the version it was copied from, its fragment kept");
+  // A link in a page to a section of another page of the same space
+  // arrives at the section: the page view is given the other page, and
+  // scrolls once it has loaded it. The demo has no such link, so one is
+  // put in the tour's text for the length of a click, as a page's Markdown
+  // would write it: the application reads the link as the click is
+  // dispatched.
+  await load(page, "/s/docs/");
+  await check({ path: "/s/docs/", view: "page-view", crumb: "Docs" }, "the tour");
+  await page.evaluate(() => (window.stillTheSamePage = true));
+  await page.locator("#app .page-body p").first().evaluate((paragraph, href) => {
+    const link = document.createElement("a");
+    link.setAttribute("href", href);
+    link.textContent = "the macros";
+    paragraph.append(link);
+    link.click();
+    link.remove();
+  }, at("/s/docs/p/markdown-guide/mathematics/#macros"));
+  await check({ path: "/s/docs/p/markdown-guide/mathematics/", view: "page-view", crumb: "Mathematics" }, "a link to another page's section");
+  assert.equal(new URL(page.url()).hash, "#macros", "the section in the address");
+  await eventually(async () => {
+    const top = await page.locator("#app #macros").evaluate((heading) => heading.getBoundingClientRect().top);
+    assert.ok(top >= -2 && top < 200, `the section is not scrolled to: its top is at ${top}`);
+  }, "the section scrolled to");
+  assert.ok(await page.evaluate(() => window.stillTheSamePage === true), "following the link loaded a page");
+  console.log("ok: a link to another page's section arrives at the section, without loading a page");
   await page.context().close();
 
   // ---- 3. A dark scheme, and a phone -----------------------------------------

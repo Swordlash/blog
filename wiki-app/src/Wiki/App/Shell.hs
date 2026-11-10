@@ -143,7 +143,7 @@ import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, redirectKeepingFragment, replacingEntry, revealFragment, setDocumentTitle, setFavicon, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, onPreviewEntry, pickedFiles, readPickedFile)
 import Wiki.App.Favicon (Favicon (..), defaultFavicon, homeFavicon, spaceFavicon)
@@ -153,7 +153,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
-import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle, settledRoute)
+import Wiki.App.Route (AdminSection, Route (..), adminSections, locationRoute, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
@@ -200,7 +200,7 @@ import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
-import Wiki.Core.Id (SpaceId, UserId)
+import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), summaryOf, templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
@@ -313,6 +313,11 @@ data Here
     -- may not say yet.
     SpaceFailed [Slug] (Maybe Space) WikiError
   | InSpace [Slug] Space [PageSummary]
+  | -- | A page's permanent address ('PermanentLink'), whose page is being
+    -- looked for ('Nothing'), or could not be found or reached: the
+    -- reason. Once found, the page's own address replaces the permanent
+    -- one ('followPermanent').
+    Following PageId (Maybe WikiError)
 
 -- | Whether the context every route shows (who is signed in, the tree of
 -- spaces) has been loaded.
@@ -478,7 +483,11 @@ component =
           feed <- traverse (\l -> l.liveFeed) live
           loaded <- atOnce $ do
             world <- fetchWorld demo
-            here <- if shutOut world.asking && not (publicHomeRoute world.asking route) then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            here <-
+              if
+                | shutOut world.asking && not (publicHomeRoute world.asking route) -> pure NoSpace
+                | PermanentLink pid _ <- route -> lookingFor pid <$> pageLocation pid
+                | otherwise -> maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
           switcherHolder <- H.newRefLabel "space-switcher"
@@ -1142,9 +1151,17 @@ component =
       WhatsNewPage -> HH.slot_ "part" WhatsNewSlot WhatsNewView.component WhatsNewView.Input {context = context st}
       UserSpaces -> HH.slot_ "part" UserSpacesSlot UserSpacesView.component UserSpacesView.Input {context = context st}
       Home -> homeContent st
+      -- Until the page is found, and then its own route is shown. A page
+      -- that is not found, or that the reader may not view, is not found
+      -- as a page at a path is.
+      PermanentLink {} -> case st.here of
+        Following _ (Just e) -> failureView e RetryHere
+        _ -> loading
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
+        -- Left from a permanent address, until the space is asked for.
+        Following _ _ -> loading
         SpaceFailed path read' e
           -- An encrypted space whose pages this browser cannot read now
           -- says why, and offers to unlock the user's keys.
@@ -1175,6 +1192,7 @@ component =
                 LivePreview _ path -> HH.slot "view" LivePreviewSlot LivePreviewView.component LivePreviewView.Input {context = context st, space, pages, path = here' path} FromView
                 PageHistory _ path version against ->
                   HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = here' path, version, against} FromView
+                PageAtVersion _ path version -> pageViewOf space pages (here' path) (Just version)
                 PageSlides _ path slide step ->
                   HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path = here' path, slide, step} FromView
                 -- One editor per page edited: another page's editor is a
@@ -1183,7 +1201,10 @@ component =
                 NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
                 _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
-        pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+        pageView space pages path = pageViewOf space pages path Nothing
+        -- A version of a page is shown with no live channel: nothing
+        -- happens to a version.
+        pageViewOf space pages path version = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, version, feed = if shutOut st.session || isJust version then Nothing else st.feed} FromView
         blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page, feed = if shutOut st.session then Nothing else st.feed} FromView
 
     -- The front page: its page, and under it the spaces and the ones
@@ -1212,7 +1233,7 @@ component =
               [ case here of
                   InSpace _ space pages ->
                     let path = fromMaybe [] (pagePathOf space pages . (\p -> p.id) =<< homeOf space pages)
-                     in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+                     in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, version = Nothing, feed = if shutOut st.session then Nothing else st.feed} FromView
                   SpaceFailed _ _ e -> failureView e RetryHere
                   _ -> loading
               ]
@@ -1293,8 +1314,11 @@ component =
         H.liftEffect keepContents
         -- What the route shows was loaded in the initial state, unless the
         -- backend would have waited for it.
-        gets (\st -> st.world) >>= \case
-          WorldReady -> announce
+        -- A permanent address found in the initial state is followed now,
+        -- since the initial state cannot change the address.
+        gets (\st -> (st.world, st.here)) >>= \case
+          (WorldReady, Following _ Nothing) -> loadHere True
+          (WorldReady, _) -> announce
           _ -> loadEverything
       RetryWorld -> do
         modify (\st -> st {world = WorldLoading})
@@ -1310,6 +1334,7 @@ component =
         case (st.world, st.here) of
           (WorldFailed (Unreachable _), _) -> handleAction RetryWorld
           (WorldReady, SpaceFailed _ _ (Unreachable _)) -> handleAction RetryHere
+          (WorldReady, Following _ (Just (Unreachable _))) -> handleAction RetryHere
           _ -> pass
       InstallChanged -> do
         installable <- H.liftEffect installAvailable
@@ -1578,6 +1603,7 @@ component =
       st <- get
       case spaceOfRoute st.route of
         _ | shutOut st.session && not (publicHomeRoute st.session st.route) -> modify (\s -> s {here = NoSpace})
+        _ | PermanentLink pid version <- st.route -> followPermanent pid version
         Nothing -> modify (\s -> s {here = NoSpace})
         Just path
           | not again, hereIs path st.here -> pass
@@ -1591,6 +1617,21 @@ component =
               when (spaceOfRoute now == Just path) $
                 modify (\s -> s {here = result})
       announce
+
+    -- Ask where the page of a permanent address is, and go there: its own
+    -- address replaces the permanent one in the history, so that Back
+    -- does not come back to it, and the address's fragment is kept for the
+    -- page to scroll to. A page not found leaves the permanent address in
+    -- place, so that signing in, which loads the route again, asks again.
+    followPermanent :: PageId -> Maybe UTCTime -> H.HalogenM (State m) Action Slots output m ()
+    followPermanent pid version = do
+      modify (\s -> s {here = Following pid Nothing})
+      result <- lift (pageLocation pid)
+      st <- get
+      -- Unless the route has moved on meanwhile.
+      when (st.route == PermanentLink pid version) $ case result of
+        Right l -> redirectKeepingFragment st.router (locationRoute l version)
+        Left e -> modify (\s -> s {here = Following pid (Just e)})
 
     -- Set the document's title for what is shown, and say whether all of
     -- it has loaded. A page's view, or the editor, says when it has loaded
@@ -1664,6 +1705,14 @@ fetchHere path =
     Left e -> pure (SpaceFailed path Nothing e)
     Right space -> either (SpaceFailed path (Just space)) (InSpace path space) <$> listPages space.id
 
+-- | What the shell shows for a permanent address after asking where its
+-- page is: the refusal, or, for a page found, the look for it, which
+-- 'followPermanent' finishes by going there.
+lookingFor :: PageId -> Either WikiError a -> Here
+lookingFor pid = \case
+  Left e -> Following pid (Just e)
+  Right _ -> Following pid Nothing
+
 -- | Whether the wiki is reached over the network: true on the HTTP
 -- backend, which is the one people sign in to, and false on the demo's,
 -- which keeps its wiki in the browser.
@@ -1734,6 +1783,7 @@ spaceOfRoute = \case
   LivePreview path _ -> Just path
   PageHistory path _ _ _ -> Just path
   PageSlides path _ _ _ -> Just path
+  PageAtVersion path _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -1743,6 +1793,7 @@ hereIs path = \case
   SpaceFailed p _ _ -> p == path
   LoadingSpace p -> p == path
   NoSpace -> False
+  Following _ _ -> False
 
 waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
@@ -1764,6 +1815,7 @@ waitsForPage st = case (st.route, st.here) of
   (LivePreview _ _, InSpace {}) -> True
   (PageHistory {}, InSpace {}) -> True
   (PageSlides {}, InSpace {}) -> True
+  (PageAtVersion {}, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
 
@@ -1789,6 +1841,7 @@ currentPage st = case (st.route, st.here) of
   (LivePreview _ path, InSpace _ space pages) -> currentPageOf space pages path
   (PageHistory _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
   (PageSlides _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
+  (PageAtVersion _ path _, InSpace _ space pages) -> currentPageOf space pages path
   _ -> Nothing
 
 -- | The breadcrumbs: inside a space, the directory of spaces first, then
@@ -1827,12 +1880,16 @@ crumbs st = case st.route of
   LivePreview path pagePath ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Preview", Nothing) | not (null page)]
+  PageAtVersion path pagePath _ ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("Version", Nothing) | not (null page)]
   PageSlides path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Slides", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
+  PermanentLink {} -> []
   Search {} -> [("Search", Nothing)]
   Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]
@@ -1867,6 +1924,7 @@ documentTitle st = case reverse (map fst (crumbs st)) of
   [] -> case st.here of
     SpaceFailed _ _ Forbidden -> "Private · Wiki"
     SpaceFailed _ _ NotFound -> "Not found · Wiki"
+    Following _ (Just NotFound) -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
 

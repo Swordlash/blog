@@ -12,6 +12,13 @@ An item of a bulleted list whose text starts with an emoji is rendered
 with the class `emoji-item`, and the emoji with `emoji-bullet`, which the
 stylesheet shows in the bullet's place; the item's text is unchanged.
 
+A page's permanent address (WP5.81, #194): `classifyDestination` reads
+`/l/<page id>/`, with a fragment or not, as `ToPageId` with the id, the
+version its `?version=` names, if any, and the fragment, before reading
+anything else as a path. `pageIdSegment` and
+`readPageIdSegment` write and read an id as the address's segment: an id
+that is empty, `.` or `..`, or starts with `~`, has a `~` before it.
+
 A space's home page is the root of its pages (WP5.78b, #201).
 `Wiki.Core.Space` has `rootPage` (the home page, or none for the container
 of personal spaces and an encrypted space), `pagePath` and `pagesAt` and

@@ -71,7 +71,8 @@ import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Notifications (feedPath)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
-import Wiki.App.Backend (MonadWiki (getHomeDocument))
+import Wiki.App.Backend (MonadWiki (getHomeDocument, pageLocation))
+import Wiki.App.Route (Route (PermanentLink), locationRoute)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (id))
 import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
@@ -85,11 +86,11 @@ import Wiki.Server.Feed (FeedKind (..), feedApplication, notificationFeedApplica
 import Wiki.Server.Health (healthApplication, metricsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Metrics (observe)
-import Wiki.Server.Render (renderPage)
+import Wiki.Server.Render (renderPage, routeAddress, routeOf)
 import Wiki.Server.Routes (routePattern)
 import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
-import Wiki.Server.Static (StaticSite, serveStatic)
+import Wiki.Server.Static (StaticSite, servePage, serveStatic)
 import Wiki.Server.Storage (Who (..), readServerSettings, readSettings, runStoredWiki)
 import Wiki.Server.Vault (siteFor)
 
@@ -202,6 +203,38 @@ feedOf segments = do
     "feed.rss" -> Just (path, Rss)
     _ -> Nothing
 
+-- | What a request under @l\/@ is, if it is a page's permanent address
+-- (@\/l\/\<page id>\/@, "Wiki.App.Route"'s 'PermanentLink'): 'Found',
+-- with the page's own address under the listener's path, or the address
+-- of the version it names, when the caller may view the page; 'Refused'
+-- for a page the caller may not view or that is not there, which the
+-- caller learns nothing of: the address is then prerendered as the
+-- application's "not found" page, as an address that names nothing is
+-- ('Wiki.Server.Static.servePage'). A version the page does not have is
+-- the page view's to answer, as not found: the caller may view the page.
+-- The address is read as the application reads it ('routeOf'), from the
+-- raw path, and the page found as the application finds it
+-- ('pageLocation'). The redirect is
+-- a 302, not a permanent one, since the page can move again; it depends on
+-- the caller's session, so no shared cache may keep it.
+permanentTarget :: Env -> Who -> Text -> Request -> IO Permanent
+permanentTarget env who mount request =
+  routeOf mount (rawPathInfo request <> rawQueryString request) >>= \case
+    PermanentLink pid version ->
+      runStoredWiki env.storage who (pageLocation pid) >>= \case
+        Right place -> Found <$> routeAddress mount (locationRoute place version)
+        Left _ -> pure Refused
+    _ -> pure NotPermanent
+
+-- | 'Permanent' is what a request under @l\/@ is ('permanentTarget'): a
+-- page's permanent address, with the address it leads to, or refused (no
+-- page has the id, or the caller may not view it); or no permanent
+-- address at all, served as any other path.
+data Permanent
+  = Found Text
+  | Refused
+  | NotPermanent
+
 -- | The routes of a listener, for the given caller.
 listenerRoutes :: Logger -> Env -> Maybe StaticSite -> Listener -> Caller -> Application
 listenerRoutes logger env site l caller request respond = do
@@ -265,8 +298,21 @@ listenerRoutes logger env site l caller request respond = do
             , path == feedPath ->
                 notificationFeedApplication env.storage l.mount request respond
           rest -> do
+            -- A page's permanent address leads to the page's own, for
+            -- whoever may view the page. For anyone else, and for an id no
+            -- page has, it is a page like any other, which the server
+            -- prerenders as not found ('permanentTarget').
+            -- It is read from the raw path, as the application reads it, and
+            -- never as a file's path: an id may hold a slash, a backslash or
+            -- a control character, which a file's path may not.
+            target <- case rest of
+              "l" : _ | readOnly -> permanentTarget env caller.who l.mount request
+              _ -> pure NotPermanent
             hosts <- currentAssistantHosts env
-            maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site
+            case target of
+              Found address -> respond (responseLBS status302 [(hLocation, encodeUtf8 address), (hCacheControl, "private, no-cache"), (hVary, "Cookie")] "")
+              Refused -> maybe notFound (\s -> servePage s l.mount hosts pages request respond) site
+              NotPermanent -> maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound
   where

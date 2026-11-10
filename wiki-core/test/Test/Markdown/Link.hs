@@ -3,10 +3,12 @@
 module Test.Markdown.Link (spec) where
 
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, elements, forAll, listOf1, (===))
+import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Link
 
@@ -27,6 +29,39 @@ spec = describe "Markdown.Link" $ do
       classifyDestination "../setup" `shouldBe` ToPath "../setup"
       classifyDestination "/eng/onboarding" `shouldBe` ToPath "/eng/onboarding"
       classifyDestination "notes/a:b" `shouldBe` ToPath "notes/a:b"
+    it "reads a page's permanent address as its id, with the fragment" $ do
+      classifyDestination "/l/4f1c-9a/" `shouldBe` ToPageId (PageId "4f1c-9a") Nothing ""
+      classifyDestination "/l/17/#setup" `shouldBe` ToPageId (PageId "17") Nothing "#setup"
+      classifyDestination "/l/17#setup" `shouldBe` ToPageId (PageId "17") Nothing "#setup"
+      classifyDestination " /l/17/?x=1#a " `shouldBe` ToPageId (PageId "17") Nothing "#a"
+      classifyDestination "/l/a%2Fb%20c/" `shouldBe` ToPageId (PageId "a/b c") Nothing ""
+      classifyDestination "/l/~./" `shouldBe` ToPageId (PageId ".") Nothing ""
+      classifyDestination "/l/~~x/" `shouldBe` ToPageId (PageId "~x") Nothing ""
+    it "reads a permanent address in a link, a wiki link and a link in angle brackets" $ do
+      readBack "[the setup](/l/17/#setup)" `shouldBe` Just (ToPageId (PageId "17") Nothing "#setup", "the setup")
+      readBack "[[/l/17/#setup|the setup]]" `shouldBe` Just (ToPageId (PageId "17") Nothing "#setup", "the setup")
+      readBack "[x](</l/a(b)/>)" `shouldBe` Just (ToPageId (PageId "a(b)") Nothing "", "x")
+    it "reads a version after a permanent address, and leaves out one that is not a time" $ do
+      classifyDestination "/l/17/?version=2026-10-24T09%3A30%3A12.5Z#setup"
+        `shouldBe` ToPageId (PageId "17") (Just (UTCTime (fromGregorian 2026 10 24) 34212.5)) "#setup"
+      classifyDestination "/l/17/?x=1&version=2026-10-24T09:30:12Z" `shouldBe` ToPageId (PageId "17") (Just (UTCTime (fromGregorian 2026 10 24) 34212)) ""
+      classifyDestination "/l/17/?version=yesterday" `shouldBe` ToPageId (PageId "17") Nothing ""
+    it "reads the version a page's own address names too" $ do
+      destinationVersion "/s/docs/p/tour/?x=1&version=2026-10-24T09%3A30%3A12Z#a" `shouldBe` Just (UTCTime (fromGregorian 2026 10 24) 34212)
+      destinationVersion "tour?version=2026-10-24T09:30:12Z" `shouldBe` Just (UTCTime (fromGregorian 2026 10 24) 34212)
+      destinationVersion "tour#version=2026-10-24T09:30:12Z" `shouldBe` Nothing
+      destinationVersion "tour?version=never" `shouldBe` Nothing
+    it "reads anything else under /l/ as a path" $ do
+      classifyDestination "/l/" `shouldBe` ToPath "/l/"
+      classifyDestination "/l//" `shouldBe` ToPath "/l//"
+      classifyDestination "/l/17/more/" `shouldBe` ToPath "/l/17/more/"
+      classifyDestination "l/17/" `shouldBe` ToPath "l/17/"
+
+  describe "pageIdSegment" $ do
+    it "escapes the ids a segment cannot hold, and those starting with ~" $
+      map (pageIdSegment . PageId) ["17", "", ".", "..", "~x", "a~"] `shouldBe` ["17", "~", "~.", "~..", "~~x", "a~"]
+    prop "reads back as the same id" $ \t ->
+      readPageIdSegment (pageIdSegment (PageId (T.pack t))) === Just (PageId (T.pack t))
 
   describe "urlScheme" $ do
     it "finds the scheme, lowercased" $
