@@ -76,7 +76,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/Swordlash/opaque-hs
-  tag: d9b195a92864b8aa220c186c05d8000e95230d8e
+  tag: 3ac875fdf5598c89cd06f23a264a1d2d71a8a942
 
 -- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
 -- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
