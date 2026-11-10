@@ -23,12 +23,12 @@ import Text.Emoji (emojiFromAlias, emojis)
 
 -- | The emoji whose names match what was typed, as (name, emoji) pairs,
 -- at most 'emojiLimit' of them. The name equal to the letters comes first,
--- then the names that start with them, then the names with a word (a part
--- after @_@ or @-@) that starts with them, each group in the list's own
--- order, which keeps similar emoji together. A name that holds the letters
--- only inside a word does not match: @30@ finds no clock, so a time typed
--- as @12 :30@ opens no list. Upper and lower case are the same, and a space
--- is an @_@, so the menu's field finds "party popper" as @party_popper@.
+-- then the names that start with them, then the names in which they start
+-- a later word (after an @_@ or a @-@), each group in the list's own order,
+-- which keeps similar emoji together. A name that holds the letters only
+-- inside a word does not match: @30@ finds no clock, so a time typed as
+-- @12 :30@ opens no list. Upper and lower case are the same, and a space is
+-- an @_@, so the menu's field finds @white_check_mark@ for "check mark".
 -- No letters at all give 'commonEmoji'.
 emojiMatches :: Text -> [(Text, Text)]
 emojiMatches typed
@@ -39,7 +39,9 @@ emojiMatches typed
     exact = [e | e@(name, _) <- allEmoji, name == letters]
     starting = [e | e@(name, _) <- allEmoji, name /= letters, letters `T.isPrefixOf` name]
     inside = [e | e@(name, _) <- allEmoji, not (letters `T.isPrefixOf` name), any (letters `T.isPrefixOf`) (laterWords name)]
-    laterWords name = drop 1 (T.split (\c -> c == '_' || c == '-') name)
+    -- What follows each @_@ or @-@ of a name, to its end: @check_mark@ and
+    -- @mark@ of @white_check_mark@.
+    laterWords name = [T.drop 1 rest | (_, rest) <- T.breakOnAll "_" name <> T.breakOnAll "-" name]
 
 -- | Every emoji the wiki knows by name, as (name, emoji) pairs, in the
 -- @emojis@ package's order: GitHub's list, grouped as Unicode groups the

@@ -47,7 +47,8 @@ spec = describe "Markdown.Emoji" $ do
       length (names "a") `shouldBe` emojiLimit
 
     it "reads capitals as small letters and a space as an underscore" $ do
-      names "Party Popper" `shouldBe` names "party_popper"
+      names "Check Mark" `shouldBe` names "check_mark"
+      names "check mark" `shouldSatisfy` elem "white_check_mark"
       take 1 (names "TADA") `shouldBe` ["tada"]
 
     it "offers the common ones before a letter is typed" $ do
