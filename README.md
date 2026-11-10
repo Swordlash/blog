@@ -1648,9 +1648,37 @@ sqlite`, or `backends: sqlite, postgresql`). Going back to `--postgres` builds i
 with PostgreSQL again; cabal rebuilds `wiki-server` when the flag changes. By
 hand: `cabal build --constraint='wiki-server -postgres' wiki-server:exe:wiki-server`.
 
-A wiki moves between the two, and from a server of before PostgreSQL (whose
+A wiki in SQLite moves to PostgreSQL whole, accounts, sessions, permissions and
+settings with it, with `wiki-server copy-database` (or `bin/wiki
+copy-database …`), with the server stopped:
+
+```sh
+wiki-server copy-database --data ~/wiki-demo/data \
+  --to-database postgres://wiki@127.0.0.1:5433/wiki \
+  --to-database-password-file ~/.config/wiki-demo/wiki-demo.postgres/db-password
+```
+
+It copies every table of the database the data directory's options name (the
+SQLite file by default) into an empty PostgreSQL database, in one transaction:
+the schema made by the program's own migrations, then the rows, then a check
+that each table reads back with the source's rows and that the copy reads
+whole as `wiki-server check` reads a database; only then is it committed, and
+anything that fails leaves the target empty. A row PostgreSQL refuses (a text
+with the character NUL, a foreign key SQLite did not check) is named by its
+table and its key. The SQLite file is not changed, and the attachments stay in
+`--data`: serve the copy with the same `--data` and `--database`. It ends with
+0 when copied, 4 when the SQLite database is not at the program's version of
+the schema (run `wiki-server migrate` first), 5 when it does not read, 6 when
+it was refused before anything was written (a server is running on the data
+directory, a server or console has the target open, the target is not empty)
+and 1 when the copy failed. `--to-sqlite FILE` copies the other way, into a new
+SQLite file, which the command makes (a file that is there already is refused,
+and a failed copy deletes only the file it made). The deploy does not switch a
+deployment over by itself yet.
+
+A wiki also moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import
-(the administration's "Backups and data"), never by copying the database. A deploy that
+(the administration's "Backups and data"). A deploy that
 finds such a `data/wiki.sqlite` stops before it changes anything, says the state
 is incompatible, and goes on only with `--fresh` (or `yes` at its question, on a
 terminal), which moves the file aside into `data/replaced/<time>/` (it is never

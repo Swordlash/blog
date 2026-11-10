@@ -41,6 +41,10 @@ module Wiki.Server.Storage.Postgres
   , postgresTables
   , postgresSize
 
+    -- * Copies of a database
+  , advancePostgresCounters
+  , postgresKeepsText
+
     -- * The search
   , postgresSearch
   , postgresCodePoints
@@ -218,6 +222,48 @@ postgresTables =
 -- (@pg_database_size@, a function Beam has no combinator for).
 postgresSize :: Pg Int64
 postgresSize = fromMaybe 0 <$> Beam.runSelectReturningOne (select (pure (Beam.as_ @Int64 (customExpr_ ("pg_database_size(current_database())" :: (IsString a) => a)))))
+
+--------------------------------------------------------------------------------
+-- Copies of a database
+
+-- | Set the counter behind each column whose values the database makes
+-- past the largest value the column holds, in the running transaction:
+-- after rows were written with their ids given, as a copy of a database
+-- writes them ("Wiki.Server.Storage.Copy"), so that the next row made gets
+-- a new id. The columns are found in the schema the connection works in
+-- (identity columns, and any column whose default takes the next value of
+-- a sequence), not named here, so that a column a later step of the schema
+-- adds is set too. Each counter is set so that the next value it gives is
+-- the largest value plus one, or 1 for an empty table.
+--
+-- It is one @DO@ block of PL\/pgSQL, which returns no rows: the table and
+-- column names come from the catalog, and a statement made of names needs
+-- @EXECUTE@, which only PL\/pgSQL has.
+advancePostgresCounters :: Connection -> IO ()
+advancePostgresCounters c =
+  runPostgresScript c $
+    T.unlines
+      [ "DO $$"
+      , "DECLARE"
+      , "  generated record;"
+      , "  next_value bigint;"
+      , "BEGIN"
+      , "  FOR generated IN"
+      , "    SELECT table_name, column_name FROM information_schema.columns"
+      , "    WHERE table_schema = current_schema()"
+      , "      AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')"
+      , "  LOOP"
+      , "    EXECUTE format('SELECT coalesce(max(%I), 0) + 1 FROM %I', generated.column_name, generated.table_name) INTO next_value;"
+      , "    PERFORM setval(pg_get_serial_sequence(format('%I', generated.table_name), generated.column_name), next_value, false);"
+      , "  END LOOP;"
+      , "END"
+      , "$$;"
+      ]
+
+-- | Whether PostgreSQL's text keeps a text as it is: it holds every
+-- character but NUL.
+postgresKeepsText :: Text -> Bool
+postgresKeepsText = not . T.any (== '\0')
 
 --------------------------------------------------------------------------------
 -- The search

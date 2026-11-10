@@ -850,6 +850,10 @@ deriving stock instance Eq (AuditLog Identity)
 
 deriving stock instance Show (AuditLog Identity)
 
+deriving stock instance Eq (PermissionsGeneration Identity)
+
+deriving stock instance Show (PermissionsGeneration Identity)
+
 deriving stock instance Eq (WikiSchema Identity)
 
 deriving stock instance Show (WikiSchema Identity)

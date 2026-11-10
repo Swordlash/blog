@@ -48,6 +48,7 @@ module Wiki.Server.Storage.Migrate
   , misnumbered
   , knownVersion
   , migrate
+  , migrateWithin
   , applySteps
   , applyMigrations
   , schemaVersion
@@ -168,21 +169,38 @@ applyMigrations = applySteps . map InSql
 -- ('OldSchema'); either is left alone.
 applySteps :: (Backend be) => [Step] -> Connection be -> IO [Int]
 applySteps given c = do
-  let steps = sortOn stepNumber given
+  for_ (misnumbered given) (throwIO . StepsMisnumbered)
+  withTransaction True c (pendingSteps given c)
+
+-- | 'migrateWithin' is 'migrate' in a transaction the caller has begun and
+-- ends: the steps are applied and recorded as 'migrate' applies them, and
+-- the caller's commit keeps them, or its rollback undoes them with whatever
+-- else the transaction wrote. The copy of a database to another one
+-- ("Wiki.Server.Storage.Copy") makes the target's schema this way, so that
+-- the schema and the copied rows are committed together or not at all.
+migrateWithin :: (Backend be) => Connection be -> IO [Int]
+migrateWithin c = do
+  let steps = stepsFor (schemaSuffix c)
   for_ (misnumbered steps) (throwIO . StepsMisnumbered)
-  withTransaction True c $ do
-    current <- versionOf c
-    let known = maybe 0 stepNumber (lastMay steps)
-    when (current > known) $
-      throwIO SchemaTooNew {found = current, known}
-    let pending = filter (\s -> stepNumber s > current) steps
-    for_ pending $ \s -> do
-      case s of
-        InSql m -> runScript c m.statements
-        InCode CodeStep {run} -> run c
-      now <- getCurrentTime
-      runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral (stepNumber s), applied_at = now}])))
-    pure (map stepNumber pending)
+  pendingSteps steps c
+
+-- | Apply and record the steps a database has not had yet, in the running
+-- transaction, the steps' numbers already checked.
+pendingSteps :: (Backend be) => [Step] -> Connection be -> IO [Int]
+pendingSteps given c = do
+  let steps = sortOn stepNumber given
+  current <- versionOf c
+  let known = maybe 0 stepNumber (lastMay steps)
+  when (current > known) $
+    throwIO SchemaTooNew {found = current, known}
+  let pending = filter (\s -> stepNumber s > current) steps
+  for_ pending $ \s -> do
+    case s of
+      InSql m -> runScript c m.statements
+      InCode CodeStep {run} -> run c
+    now <- getCurrentTime
+    runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral (stepNumber s), applied_at = now}])))
+  pure (map stepNumber pending)
 
 -- | The error for steps of the schema whose numbers are not 1, 2, 3 and so
 -- on, each once: a step in code given a number a schema file has, or a

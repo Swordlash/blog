@@ -119,6 +119,7 @@ module Wiki.Server.Storage
   , CheckProblem (..)
   , TableRead (..)
   , checkDatabase
+  , checkConnection
 
     -- * The wiki's settings
   , readSettings
@@ -592,7 +593,14 @@ data CheckProblem
 -- migration left that the new program cannot read is found then, not by
 -- the first reader to open the page that holds it.
 checkDatabase :: Place -> IO (Either CheckProblem [TableRead])
-checkDatabase place = withDatabase place $ \c -> do
+checkDatabase place = withDatabase place checkConnection
+
+-- | 'checkConnection' is 'checkDatabase' on a connection the caller has
+-- open, in the caller's transaction if it has begun one. The copy of a
+-- database to another one ("Wiki.Server.Storage.Copy") checks its target
+-- this way before it commits, and its source before it copies.
+checkConnection :: (Backend be) => Connection be -> IO (Either CheckProblem [TableRead])
+checkConnection c = do
   at <- databaseVersion c
   let known = knownVersion (schemaSuffix c)
   if at /= known

@@ -33,6 +33,7 @@ module Wiki.Server.Options
   , DatabaseChoice (..)
   , placeOptions
   , databaseChoice
+  , databaseUrl
   , pgPrograms
   , resolvePlace
   , databaseUrlVariable
@@ -355,12 +356,20 @@ databaseChoice = sqlite <|> postgres <|> pure InDataDirectory
     sqlite = SqliteChosen <$> strOption (long "sqlite" <> metavar "FILE" <> help "Keep the wiki in this SQLite file (by default DIR/wiki.sqlite, when no PostgreSQL database is named)")
     postgres =
       PostgresChosen
-        <$> option url (long "database" <> metavar "URL" <> help "Keep the wiki in this PostgreSQL database, postgres://USER@HOST:PORT/NAME, without its password (the whole URL may be in WIKI_DATABASE_URL instead)")
+        <$> option (databaseUrl "put the password in --database-password-file FILE, or the whole URL in WIKI_DATABASE_URL") (long "database" <> metavar "URL" <> help "Keep the wiki in this PostgreSQL database, postgres://USER@HOST:PORT/NAME, without its password (the whole URL may be in WIKI_DATABASE_URL instead)")
         <*> optional (strOption (long "database-password-file" <> metavar "FILE" <> help "The file that holds the PostgreSQL database's password"))
+
+-- | 'databaseUrl' reads a PostgreSQL database's URL from the command line,
+-- and refuses one with a password in it: every user of the machine can
+-- read a process's arguments, so the password goes in a file instead. The
+-- text given says where, in the refusal.
+databaseUrl :: Text -> ReadM Text
+databaseUrl instead = url
+  where
     url = eitherReader $ \raw ->
       let t = toS raw
        in if hasPassword t
-            then Left "a --database URL with a password in it would show the password to every user of the machine: put the password in --database-password-file FILE, or the whole URL in WIKI_DATABASE_URL"
+            then Left ("a database URL with a password in it would show the password to every user of the machine: " <> toS instead)
             else Right t
     hasPassword t = userPassword t || "password=" `T.isInfixOf` t
     -- A password in the URL's user part: a colon before the @ of the part
