@@ -46,17 +46,19 @@
 --    copied back from there, and the new binary, the console, the unit and
 --    the state on PostgreSQL.
 -- 8. The service starts, and must answer. A failure at 7 or 8 switches
---    back. A journal notes each step of 7 once it is done, and the switch
---    back undoes exactly those, the last first: the files this run kept in
---    @previous\/@ go back, the SQLite files come back from where this run
---    set them aside, the deployment @previous\/@ held before comes back.
---    A step that was not done is not undone, so a deployment kept by an
---    earlier deploy is never restored by a move. A step whose undoing
---    fails stops the switch back there, with the service stopped: what it
---    restores from is not deleted (the deployment kept in @previous\/@ is
---    put back by copies, and removed only once all of it is back), nor is
---    anything an earlier step saved, and the move says where each is and
---    that @--rollback@ finishes. Otherwise the PostgreSQL database is
+--    back, in two phases. A journal notes each step of 7 once it is done.
+--    Phase one puts back, by copies, what those steps moved, the last
+--    first: the binary, page, unit and state this run kept in
+--    @previous\/@, the SQLite files it set aside. It deletes nothing that
+--    was saved, so a step that was not done is not undone and a deployment
+--    kept by an earlier deploy is never restored. When a step of phase one
+--    fails, the switch back stops there with the service stopped, and
+--    everything saved is still where the message says (@previous\/@, the
+--    SQLite files, @previous.before-move@), for @--rollback@. Phase two
+--    runs only when all of phase one succeeded: 'discardSaved', the one
+--    function that deletes what the move saved, removes this run's
+--    @previous\/@ and the SQLite files set aside and puts back the
+--    deployment @previous\/@ held before. Then the PostgreSQL database is
 --    emptied again, PostgreSQL is put back as step 3 found it, and the
 --    service starts on SQLite.
 --
@@ -74,12 +76,12 @@ module Maker.Deploy.Move
 where
 
 import Control.Exception (SomeException, catch, displayException, finally, fromException, throwIO, try)
-import Control.Monad (filterM, forM, forM_, unless, when)
+import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.Extra (whenM)
 import Data.ByteString qualified as BS
 import Data.Char (isSpace)
 import Data.IORef
-import Data.List (isPrefixOf)
+import Data.List (intercalate, isPrefixOf)
 import Data.Maybe (fromMaybe, isJust)
 import Maker.Deploy.Apply (answersWithin, deploymentUrl, startAgain, urlAnswers)
 import Maker.Deploy.Layout (markedFor, markerName)
@@ -419,12 +421,13 @@ moveToPostgres m = do
         warn (why <> "; switching " <> m.name <> " back to SQLite")
         attempt ("stopping " <> service) (() <$ runInherit "systemctl" ["--user", "stop", service])
         steps <- readIORef journal
-        -- The steps undone, the last first. A step whose undoing fails
-        -- stops the switch back there: what it restores from is kept, and
-        -- so is everything an earlier step saved, for a person to finish.
-        whole <- undoAll steps
+        -- Phase one puts back, by copies, what each step of the journal
+        -- moved, and deletes nothing it saved. Phase two, 'discardSaved',
+        -- runs only when all of phase one has succeeded.
+        whole <- restoreAll steps
         if whole
           then do
+            discardSaved dir steps
             _ <- runInherit "systemctl" ["--user", "daemon-reload"]
             whenM (readIORef filled) (attempt "emptying PostgreSQL's database" emptyAgain)
             attempt "putting PostgreSQL back as it was found" restorePg
@@ -432,64 +435,53 @@ moveToPostgres m = do
             die (why <> ": switched back to SQLite, as it was before the move, " <> sqlite <> " unchanged")
           else do
             keptWhole <- isJust <$> readKept dir
-            olderThere <- doesDirectoryExist olderPrevious
-            let asideNow = [at | SqliteSetAside at <- steps]
             die
               ( why
                   <> "; the switch back to SQLite stopped where a step failed (see above), and "
                   <> service
-                  <> " is left stopped. Nothing it needs was deleted: "
-                  <> ( if keptWhole
-                         then "the deployment on SQLite is kept in " <> previousDir dir <> " (its binary, page, unit and state)"
-                         else "what the move had moved into " <> previousDir dir <> " is still there"
-                     )
-                  <> concat [", the SQLite wiki in " <> at <> " (unless it is back in " <> dataDir <> ")" | at <- asideNow]
-                  <> (if olderThere then ", the deployment previous/ held before the move in " <> olderPrevious else "")
-                  <> ", and PostgreSQL's database holds the copy. Fix the cause, then "
+                  <> " is left stopped. Everything the move saved is still there: "
+                  <> intercalate
+                    ", "
+                    ( [ if keptWhole
+                          then "the deployment on SQLite in " <> previousDir dir <> " (its binary, page, unit and state)"
+                          else "what the move had moved of the deployment on SQLite (bin/, app/) in " <> previousDir dir
+                      | any isPrevious steps
+                      ]
+                        <> ["the SQLite wiki in " <> at | SqliteSetAside at <- steps]
+                        <> ["the deployment previous/ held before the move in " <> olderPrevious | OlderSetAside <- steps]
+                    )
+                  <> "; and PostgreSQL's database holds the copy. Fix the cause, then "
                   <> ( if keptWhole
                          then "run " <> deployCommand <> " --rollback --yes, which puts that deployment and its SQLite wiki back"
-                         else "move " <> previousDir dir <> "/bin and /app back into " <> dir <> " and the SQLite files back into " <> dataDir <> " by hand, and start " <> service
+                         else "copy " <> previousDir dir <> "/bin and /app back into " <> dir <> " where they are missing and the SQLite files back into " <> dataDir <> ", then start " <> service
                      )
-                  <> (if olderThere then "; then rename " <> olderPrevious <> " back to " <> previousDir dir <> " if you want it kept" else "")
+                  <> concat ["; then rename " <> olderPrevious <> " back to " <> previousDir dir <> " if you want it kept" | OlderSetAside <- steps]
               )
-      -- Undo the journal's steps, the last first, while each succeeds.
-      undoAll = \case
+      -- Phase one: each step put back, the last first, while each succeeds.
+      restoreAll = \case
         [] -> pure True
         step : earlier -> do
-          done <- undo step
-          if done then undoAll earlier else pure False
-      undo = \case
+          done <- restore step
+          if done then restoreAll earlier else pure False
+      restore = \case
         DeploymentKept -> do
           say ("putting back the deployment on SQLite this move kept in " <> previousDir dir)
           readKept dir >>= \case
             Just k -> restoring ("putting back the deployment kept in " <> previousDir dir) (restoreKept dir m.unitFile m.stateFile k)
             Nothing -> warn ("the deployment this move kept in " <> previousDir dir <> " cannot be read back") >> pure False
-        PreviousStarted -> do
-          -- A keep that stopped halfway: what it moved goes back, and
-          -- previous/ goes only once nothing of the deployment is left
-          -- in it. Once the deployment was kept whole and put back,
-          -- previous/ is gone already.
-          there <- doesDirectoryExist (previousDir dir)
-          if not there
-            then pure True
-            else restoring ("putting back what the move had moved into " <> previousDir dir) $ do
-              forM_ ["bin", "app"] $ \d -> do
-                keptThere <- doesDirectoryExist (previousDir dir </> d)
-                here <- doesDirectoryExist (dir </> d)
-                when (keptThere && not here) (renameDirectory (previousDir dir </> d) (dir </> d))
-              left <- filterM (\d -> doesDirectoryExist (previousDir dir </> d)) ["bin", "app"]
-              if null left
-                then removePathForcibly (previousDir dir) >> pure True
-                else warn (unwords left <> " of the deployment is still in " <> previousDir dir <> ", beside one in " <> dir) >> pure False
-        SqliteSetAside at -> restoring ("putting " <> sqlite <> " back from " <> at) (putSqliteBack dir at)
-        -- The deployment previous/ held before the move. Its failing
-        -- leaves it in previous.before-move, which nothing deletes; the
-        -- service starts on SQLite all the same.
-        OlderSetAside -> do
-          attempt
-            ("putting back the deployment " <> previousDir dir <> " held before the move (it stays in " <> olderPrevious <> ")")
-            (renameDirectory olderPrevious (previousDir dir))
-          pure True
+        -- A keep that stopped halfway: what it moved is copied back where
+        -- it is missing. A keep that was whole was put back above.
+        PreviousStarted -> restoring ("putting back what the move had moved into " <> previousDir dir) $ do
+          copied <- forM ["bin", "app"] $ \d -> do
+            keptThere <- doesDirectoryExist (previousDir dir </> d)
+            here <- doesDirectoryExist (dir </> d)
+            if keptThere && not here then copyDirectoryIn (previousDir dir </> d) (dir </> d) else pure True
+          pure (and copied)
+        SqliteSetAside at -> restoring ("putting " <> sqlite <> " back from " <> at) (copySqliteBack dir at)
+        -- previous/ is still the move's in phase one: the deployment it
+        -- held before comes back in phase two.
+        OlderSetAside -> pure True
+        Succeeded -> pure True
   case switched of
     Left e -> switchBack ("the switch to PostgreSQL failed (" <> reason e <> ")")
     Right () -> pure ()
@@ -507,7 +499,7 @@ moveToPostgres m = do
       switchBack (service <> " does not answer on " <> url <> " on PostgreSQL; see journalctl --user -u " <> m.name)
     say (service <> " answers on " <> url <> ", on PostgreSQL")
   -- The move stands from here: what follows only cleans up and reports.
-  attempt ("removing " <> olderPrevious <> ", the deployment previous/ held before the move") (removePathForcibly olderPrevious)
+  discardSaved dir [Succeeded]
   adminPort <- stateGet "admin_port" m.stateFile
   admin <- answers ("http://127.0.0.1:" <> adminPort <> "/admin/api/v1/admin/status")
   unless admin $ warn ("its admin listener does not answer on http://127.0.0.1:" <> adminPort <> "/admin/; see journalctl --user -u " <> m.name)
@@ -529,8 +521,9 @@ moveToPostgres m = do
 -- | 'Step' is a step of the switch that is done, as its journal notes it:
 -- the deployment previous/ held moved to previous.before-move, the SQLite
 -- files set aside into this directory, previous/ begun by this run, and
--- the deployment kept there whole.
-data Step = OlderSetAside | SqliteSetAside FilePath | PreviousStarted | DeploymentKept
+-- the deployment kept there whole. 'Succeeded' is not in the journal: it
+-- tells 'discardSaved' that the move stands.
+data Step = OlderSetAside | SqliteSetAside FilePath | PreviousStarted | DeploymentKept | Succeeded
 
 -- | Run an action, and hand a failure of it (an exception, not the move
 -- stopping itself) to the recovery given, with its reason.
@@ -560,11 +553,11 @@ restoring what act =
       Just (code :: ExitCode) -> throwIO code
       Nothing -> warn (what <> " failed (" <> reason e <> ")") >> pure False
 
--- | Put back the deployment the move kept in @previous\/@: its state and
--- unit copied back, then its binary and page copied in place of the
--- move's, each whole before the one it replaces goes. @previous\/@ is
--- removed only once all of that has succeeded, so a failure leaves it
--- whole, for @--rollback@. The answer is whether it was put back.
+-- | Put back the deployment the move kept in @previous\/@, by copies: its
+-- state and unit copied back, then its binary and page copied in place of
+-- the move's, each whole before the one it replaces goes. Nothing of
+-- @previous\/@ is removed: that is 'discardSaved''s, once every step of the
+-- switch back has succeeded. The answer is whether it was put back.
 restoreKept :: FilePath -> FilePath -> FilePath -> Kept -> IO Bool
 restoreKept dir unitFile stateFile kept = do
   let previous = previousDir dir
@@ -572,42 +565,73 @@ restoreKept dir unitFile stateFile kept = do
   when kept.unit (copyFile (previous </> "unit") unitFile)
   copied <- forM ["bin", "app"] $ \d -> do
     there <- doesDirectoryExist (previous </> d)
-    if not there
-      then pure True
-      else do
-        let incoming = dir </> (d <> ".restoring")
-        removePathForcibly incoming
-        code <- runInherit "cp" ["-R", previous </> d, incoming]
-        if code /= ExitSuccess
-          then warn ("copying " <> previous </> d <> " back failed (see above)") >> pure False
-          else do
-            removePathForcibly (dir </> d)
-            renameDirectory incoming (dir </> d)
-            pure True
-  if and copied
-    then removePathForcibly previous >> pure True
-    else pure False
+    if there then copyDirectoryIn (previous </> d) (dir </> d) else pure True
+  pure (and copied)
 
--- | Move the SQLite files the switch set aside back into the deployment's
--- @data\/@, and remove their directory once it is empty. A file of the same
--- name in @data\/@, which nothing of the move makes, is never overwritten:
--- the file set aside then stays where it is, and the answer is 'False',
--- since the service must not start on another file.
-putSqliteBack :: FilePath -> FilePath -> IO Bool
-putSqliteBack dir at = do
-  moved <- forM ["wiki.sqlite", "wiki.sqlite-wal", "wiki.sqlite-shm"] $ \file -> do
+-- | Copy a directory to a place, in place of what is there: into a new
+-- directory beside it first, which replaces it only once the copy is
+-- whole. What is replaced is the move's own (its binary, its page). The
+-- answer is whether the copy is in place.
+copyDirectoryIn :: FilePath -> FilePath -> IO Bool
+copyDirectoryIn from to = do
+  let incoming = to <> ".restoring"
+  removePathForcibly incoming
+  code <- runInherit "cp" ["-R", from, incoming]
+  if code /= ExitSuccess
+    then warn ("copying " <> from <> " back failed (see above)") >> pure False
+    else do
+      removePathForcibly to
+      renameDirectory incoming to
+      pure True
+
+-- | Copy the SQLite files the switch set aside back into the deployment's
+-- @data\/@. The files set aside stay where they are: 'discardSaved'
+-- removes them once every step of the switch back has succeeded. A file of
+-- the same name in @data\/@, which nothing of the move makes, is never
+-- overwritten: the answer is then 'False', since the service must not start
+-- on another file.
+copySqliteBack :: FilePath -> FilePath -> IO Bool
+copySqliteBack dir at = do
+  copied <- forM ["wiki.sqlite", "wiki.sqlite-wal", "wiki.sqlite-shm"] $ \file -> do
     kept <- doesFileExist (at </> file)
     taken <- doesPathExist (dir </> "data" </> file)
     if not kept
       then pure True
       else
         if taken
-          then warn (dir </> "data" </> file <> " is there, so " <> at </> file <> " was left where it is") >> pure False
-          else renameFile (at </> file) (dir </> "data" </> file) >> pure True
-  left <- listDirectory at
-  when (null left) (removeDirectory at)
-  when (and moved) (say ("put the wiki set aside in " <> at <> " back into " <> dir </> "data"))
-  pure (and moved)
+          then warn (dir </> "data" </> file <> " is there, so " <> at </> file <> " was not copied over it") >> pure False
+          else copyFile (at </> file) (dir </> "data" </> file) >> pure True
+  when (and copied) (say ("copied the wiki set aside in " <> at <> " back into " <> dir </> "data"))
+  pure (and copied)
+
+-- | The one place where the move deletes what it saved: once a switch back
+-- has put everything back ('restoreAll'), the deployment this run kept in
+-- @previous\/@ and the SQLite files it set aside are removed, and the
+-- deployment @previous\/@ held before the move takes its place again; once
+-- a move has succeeded, that older deployment alone, which the one on
+-- SQLite replaces. A removal that fails leaves the thing where it was, and
+-- says so.
+discardSaved :: FilePath -> [Step] -> IO ()
+discardSaved dir steps = do
+  let older = dir </> "previous.before-move"
+      discard what path = attempt ("removing " <> path <> ", " <> what) (removePathForcibly path)
+  when (any isPrevious steps) (discard "the deployment the move kept, now put back" (previousDir dir))
+  forM_ [at | SqliteSetAside at <- steps] (discard "the SQLite files the move set aside, now copied back")
+  forM_ [() | OlderSetAside <- steps] $ \() -> do
+    previousGone <- not <$> doesPathExist (previousDir dir)
+    if previousGone
+      then attempt ("putting back the deployment " <> previousDir dir <> " held before the move (it stays in " <> older <> ")") (renameDirectory older (previousDir dir))
+      else warn ("the deployment " <> previousDir dir <> " held before the move stays in " <> older <> ", since " <> previousDir dir <> " is still there")
+  forM_ [() | Succeeded <- steps] $ \() ->
+    discard "the deployment previous/ held before the move, which the one on SQLite replaces" older
+
+-- | Whether a step is one of the move's keeping a deployment in
+-- @previous\/@.
+isPrevious :: Step -> Bool
+isPrevious = \case
+  PreviousStarted -> True
+  DeploymentKept -> True
+  _ -> False
 
 -- | The files of PostgreSQL's directory a deploy writes ('pgFiles'), and
 -- so the move.

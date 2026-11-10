@@ -1711,6 +1711,26 @@ cmp -s "$FAKE_DOCKER/tables-5433" "$case_dir/tables-other" || fail 'the wiki Pos
 assert_contains "$out" 'removed the PostgreSQL container this move made, and its volume wiki-demo_wiki-db'
 rm "$FAKE_DOCKER/tables-5433"
 on_sqlite 'a PostgreSQL that holds a wiki'
+# Without WIKI_MAKER, the shell checks the deployment before the bootstrap
+# may write under --prefix: a directory that holds no deployment of this
+# script's, empty or not, is refused, left byte for byte as it was, and
+# nothing is installed or built.
+dir_listing() { (cd "$1" && find . -printf '%p %y %s %m\n' | LC_ALL=C sort && find . -type f -exec cksum {} + | LC_ALL=C sort); }
+mkdir -p "$case_dir/unrelated/sub" "$case_dir/empty"
+printf 'not a deployment\n' >"$case_dir/unrelated/notes.txt"
+printf 'nor this\n' >"$case_dir/unrelated/sub/more.txt"
+for other in "$case_dir/unrelated" "$case_dir/empty"; do
+  listing=$(dir_listing "$other")
+  : >"$EVENTS"
+  out=$case_dir/refused-prefix
+  if env -u WIKI_MAKER sh "$case_dir/repo/toolchain/deploy-local.sh" --move-to-postgres --prefix "$other" --name other >"$out" 2>&1; then
+    fail "a move under $other went on"
+  fi
+  assert_contains "$out" "there is no wiki's server deployed under the name other under $other to move"
+  [ "$(dir_listing "$other")" = "$listing" ] || fail "the refused move changed $other"
+  assert_lacks "$EVENTS" 'bootstrap'
+  assert_lacks "$EVENTS" 'cabal'
+done
 pass 'a move is refused before the service stops: with other options, for no such deployment, without Docker, at another commit or one not known, and into a PostgreSQL that holds a wiki (the container, volume and files the move made for the question removed again)'
 
 # A failure before the switch starts the service again on SQLite, and
@@ -1802,32 +1822,39 @@ switched_back 'a restart on PostgreSQL that fails'
 FAKE_SERVE_PG_FAIL=1 failed_move 'a server that does not answer on PostgreSQL'
 assert_contains "$out" 'does not answer on'
 switched_back 'a server that does not answer on PostgreSQL'
-# A switch back that cannot restore the state it kept (the directory of
-# the state cannot be written by then) stops there, the service stopped:
-# previous/ stays whole, with the state and the unit, the SQLite wiki stays
-# where it was set aside, and --rollback finishes once the cause is gone.
-: >"$EVENTS"
-out=$case_dir/restore-fails
-if FAKE_RESTART_PG_FAIL=1 FAKE_RESTART_PG_LOCK=$HOME/.config/wiki-demo deploy --move-to-postgres >"$out" 2>&1; then
-  chmod 755 "$HOME/.config/wiki-demo"
-  fail 'a move whose switch back could not restore went on'
-fi
-chmod 755 "$HOME/.config/wiki-demo"
-assert_contains "$out" 'the switch back to SQLite stopped where a step failed'
-assert_contains "$out" 'run sh toolchain/deploy-local.sh --rollback --yes'
-assert_contains "$out" "the deployment previous/ held before the move in $HOME/wiki-demo/previous.before-move"
-for kept in info state unit bin/wiki-server app/index.html; do
-  [ -e "$HOME/wiki-demo/previous/$kept" ] || fail "the failed switch back deleted previous/$kept"
+# A switch back that cannot write a directory one of its steps writes
+# (the state's, the unit's, the deployment's, data/) stops there, the
+# service stopped: previous/ stays whole, with the state and the unit, the
+# SQLite wiki stays where it was set aside, and --rollback finishes once the
+# cause is gone. The fake restart on PostgreSQL makes the directory
+# unwritable, then fails.
+for lock in "$HOME/.config/wiki-demo" "$HOME/.config/systemd/user" "$HOME/wiki-demo" "$data"; do
+  : >"$EVENTS"
+  out=$case_dir/restore-fails
+  if FAKE_RESTART_PG_FAIL=1 FAKE_RESTART_PG_LOCK=$lock deploy --move-to-postgres >"$out" 2>&1; then
+    chmod 755 "$lock"
+    fail "a move whose switch back could not write $lock went on"
+  fi
+  chmod 755 "$lock"
+  assert_contains "$out" 'the switch back to SQLite stopped where a step failed'
+  assert_contains "$out" 'Everything the move saved is still there'
+  assert_contains "$out" 'run sh toolchain/deploy-local.sh --rollback --yes'
+  assert_contains "$out" "the deployment previous/ held before the move in $HOME/wiki-demo/previous.before-move"
+  for kept in info state unit bin/wiki-server app/index.html; do
+    [ -e "$HOME/wiki-demo/previous/$kept" ] || fail "the switch back that could not write $lock deleted previous/$kept"
+  done
+  assert_contains "$HOME/wiki-demo/previous/state" 'db=sqlite'
+  moved_aside=$(sed -n 's/^aside=//p' "$HOME/wiki-demo/previous/info")
+  assert_contains "$out" "the SQLite wiki in $moved_aside"
+  cmp -s "$moved_aside/wiki.sqlite" "$case_dir/sqlite-before" || fail "the switch back that could not write $lock lost the SQLite wiki set aside"
+  [ -d "$HOME/wiki-demo/previous.before-move" ] || fail "the switch back that could not write $lock lost the deployment kept before the move"
+  [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = unreachable ] || fail "the service was started after a switch back that could not write $lock"
+  deploy --rollback --yes >"$case_dir/restore-fails-rollback" 2>&1 || fail "--rollback after a switch back that could not write $lock failed"
+  mv "$HOME/wiki-demo/previous.before-move" "$HOME/wiki-demo/previous"
+  # What the message says to do with PostgreSQL's copy: delete the volume.
+  rm -rf "$FAKE_DOCKER/wiki-demo" "$FAKE_DOCKER/wiki-demo_wiki-db.volume" "$FAKE_DOCKER/tables-5433" "$pgd"
+  on_sqlite "a switch back that could not write $lock, finished with --rollback"
 done
-assert_contains "$HOME/wiki-demo/previous/state" 'db=sqlite'
-moved_aside=$(sed -n 's/^aside=//p' "$HOME/wiki-demo/previous/info")
-cmp -s "$moved_aside/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the failed switch back lost the SQLite wiki set aside'
-[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = unreachable ] || fail 'the service was started after a switch back that failed'
-deploy --rollback --yes >"$case_dir/restore-fails-rollback" 2>&1 || fail '--rollback after a failed switch back failed'
-mv "$HOME/wiki-demo/previous.before-move" "$HOME/wiki-demo/previous"
-# What the message says to do with PostgreSQL's copy: delete the volume.
-rm -rf "$FAKE_DOCKER/wiki-demo" "$FAKE_DOCKER/wiki-demo_wiki-db.volume" "$FAKE_DOCKER/tables-5433" "$pgd"
-on_sqlite 'a switch back that could not restore, finished with --rollback'
 pass 'a failure after the switch (the switch, a page not copied back, the restart, a server that does not answer on PostgreSQL) switches back to SQLite, with the deployment kept before and PostgreSQL as it was found; a switch that fails before this move kept anything restores nothing older; a switch back that cannot restore deletes nothing it needs, and --rollback finishes it'
 
 # The move.
