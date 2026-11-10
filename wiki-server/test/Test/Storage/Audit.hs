@@ -128,7 +128,7 @@ eachWrite backing = describe "has one entry for each write of the administration
   it "a space deleted, with what went with it, and a page deleted" $ withDemo backing $ \st -> do
     blog <- spaceNamed st "Blog"
     pages <- as st "admin" (listPages blog.id) >>= ok
-    let leaves = [p | p <- pages, isNothing p.parent, not (any (\q -> q.parent == Just p.id) pages)]
+    let leaves = [p | p <- pages, p.parent == blog.homePage, not (any (\q -> q.parent == Just p.id) pages)]
     victim <- maybe (assertFailure "the blog has no page without pages under it") pure (head leaves)
     deletedPage <- recordsOne st (as st "editor" (deletePage victim.id))
     summary deletedPage `shouldBe` ("page.delete", "page", victim.title, [("path", slugText victim.slug), ("space", "blog")])

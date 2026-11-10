@@ -31,7 +31,7 @@ import Web.Event.Event (defaultPreventedNow, preventDefault)
 import Web.Event.Event qualified as Event
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Wiki.App.Backend (MonadLoad (..))
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.App.View.PagePicker qualified as Picker
 import Wiki.App.View.Popup (pressedOutside)
@@ -95,7 +95,7 @@ component =
       -- takes the focus now, with its text selected, to be typed over.
       Shortcut -> H.tell "picker" () Picker.Focus
       PressedOutside -> H.tell "picker" () Picker.Close
-      FromPicker (Picker.Picked hit) -> go (Page hit.spacePath hit.pagePath)
+      FromPicker (Picker.Picked hit) -> go (pageRoute hit.spacePath hit.pagePath)
       FromPicker (Picker.AllResults r) -> go r
 
     go :: Route -> H.HalogenM State Action Slots output m ()

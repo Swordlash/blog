@@ -70,7 +70,8 @@ spec m = do
     ui <- start m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["tour"]))
     find ui ".sidebar-space-name" >>= (`shouldHaveText` "Docs")
     tree <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
-    tree `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
+    -- The tour is Docs' home page, the space's own link above the tree.
+    tree `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations"]
     -- Nothing of the other spaces, but in the switcher, closed.
     length <$> findAll ui ".wiki-sidebar a[href$='#/s/blog/']" `shouldReturn` 0
     toggle <- find ui ".space-switcher-toggle"
@@ -101,7 +102,8 @@ spec m = do
   it "offers a space's home page to its administrators alone to edit, and no other page for it" $ runPage $ do
     -- The editor writes the blog's posts and does not administer the blog.
     ui <- start m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["home"]))
-    _ <- find ui ".page-view .actions a[href$='/new-page/home/']"
+    -- A page under the home page is a page of the space: its "New page".
+    _ <- find ui ".page-view .actions a[href$='#/s/blog/new-page/']"
     length <$> findAll ui ".page-view .actions a[href$='/edit/']" `shouldReturn` 0
     unmount ui
     admin <- start m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["home"]))
@@ -162,6 +164,27 @@ spec m = do
     find ui ".wiki-sidebar .sidebar-space" >>= click
     _ <- find ui ".blog-view .post-list"
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Blog")
+
+  it "offers a blog's home page to its administrators to edit, and its source and history to every reader, from the blog" $ runPage $ do
+    -- The home page is the root of the blog's pages, with no entry in its
+    -- tree: the blog, at its address, carries the home page's actions.
+    admin <- start m (Just "user-admin") (Space (slugs ["blog"]))
+    find admin ".blog-view .actions a.blog-intro-edit[href$='#/s/blog/edit/']" >>= click
+    find admin ".editor-heading" >>= (`shouldHaveText` "Editing Home")
+    unmount admin
+    -- The editor writes the posts but does not administer the blog.
+    writer <- start m (Just "user-editor") (Space (slugs ["blog"]))
+    _ <- find writer ".blog-view .actions a.new-post"
+    length <$> findAll writer ".blog-view .blog-intro-edit" `shouldReturn` 0
+    unmount writer
+    visitor <- start m Nothing (Space (slugs ["blog"]))
+    length <$> findAll visitor ".blog-view .blog-intro-edit" `shouldReturn` 0
+    find visitor ".blog-view .actions a.blog-intro-source[href$='#/s/blog/source/']" >>= click
+    find visitor ".source-view h1" >>= (`shouldHaveText` "Home")
+    find visitor ".source-view a.source-back" >>= click
+    _ <- find visitor ".blog-view .post-list"
+    find visitor ".blog-view .actions a.blog-intro-history[href$='#/s/blog/history/']" >>= click
+    find visitor ".history-view h1" >>= (`shouldHaveText` "Home")
 
   it "shows a space as a blog, under its home page, once its administrator says so" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["docs"]))

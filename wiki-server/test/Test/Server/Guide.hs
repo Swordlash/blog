@@ -183,6 +183,31 @@ updating backing = describe "updating it to this release" $ do
         other -> expectationFailure (show other)
       updateLines done `shouldSatisfy` any (T.isInfixOf "additions of attachments are not")
 
+  it "reads a record from before the tour was the root of the guide's pages, with the tour at the empty path" $
+    withStorageIn backing $ \_ st -> do
+      _ <- installGuide st operator "console" >>= ok
+      g <- guideOf st
+      pages <- reading st (loadPages g.id)
+      let at title = maybe (panic ("no page " <> title)) identity (find (\p -> p.title == title) pages)
+          tour = at "Tour"
+          old = "# Tour\n\nOld.\n"
+      -- The record as an earlier release wrote it: the tour at its own
+      -- path, with the text that release gave it.
+      writing st $ do
+        updatePageText tour.id tour.title old tour.updatedAt
+        record <- (>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed"
+        for_ record $ \(i :: Installed) ->
+          storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert "tour" (writtenHash tour.title old) (Map.delete "" i.pages)})))
+      done <- updateGuide' st
+      case done of
+        GuideUpdated {updated, leftAlone} -> (updated, leftAlone) `shouldBe` (["home page"], [])
+        other -> expectationFailure (show other)
+      now' <- runStoredWiki st Administrator (getPage g.id []) >>= ok
+      (now'.id, now'.body) `shouldBe` (tour.id, tour.body)
+      -- The record is written as it is now.
+      record <- reading st ((>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed")
+      ((\(i :: Installed) -> (Map.member "" i.pages, Map.member "tour" i.pages)) <$> record) `shouldBe` Just (True, False)
+
   it "tells the live channel of each page it rewrites, as a save does" $
     withPlaceIn backing $ \at -> do
       told <- newIORef []
@@ -192,7 +217,9 @@ updating backing = describe "updating it to this release" $ do
         g <- guideOf st
         pages <- reading st (loadPages g.id)
         let tour = maybe (panic "no tour") identity (find (\p -> p.title == "Tour") pages)
-        earlierRelease st tour "tour" tour.title "# Tour\n\nOld.\n"
+        -- The tour is the guide's home page, the root of its pages: its
+        -- path is empty.
+        earlierRelease st tour "" tour.title "# Tour\n\nOld.\n"
         _ <- updateGuide' st
         rewritten <- reading st (loadPages g.id)
         let now' = maybe (panic "no tour") identity (find (\p -> p.title == "Tour") rewritten)

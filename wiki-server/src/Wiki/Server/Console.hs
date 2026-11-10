@@ -473,6 +473,7 @@ runCheck options =
         CheckNotMigrated ("The database is at version " <> show at <> " of the schema, and this program reads version " <> show known <> ": run wiki-server migrate first.")
       Right (Right (Left (UnreadableTables tables))) -> CheckUnreadable (map line tables <> ["Some tables did not read (above): this program cannot read the database as it is."])
       Right (Right (Left (UnreadableRecords why))) -> CheckUnreadable ["Every row read, but the wiki's records built from them did not: " <> why]
+      Right (Right (Left (BrokenRecords broken))) -> CheckUnreadable (broken <> ["Every record read, but some break a rule of the wiki's (above)."])
       Right (Left why) -> CheckFailed why
       Left e -> CheckFailed ("The database could not be read: " <> toS (displayException e))
     line t = case t.rows of

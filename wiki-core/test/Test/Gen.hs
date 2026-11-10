@@ -48,7 +48,7 @@ import Wiki.Core.Page
 import Wiki.Core.Permission
 import Wiki.Core.Search
 import Wiki.Core.Slug
-import Wiki.Core.Space
+import Wiki.Core.Space hiding (pagePath)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User
 import Wiki.Core.Vault (KeyId (..))

@@ -300,7 +300,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
@@ -2421,7 +2421,7 @@ headingOf st = case st.loaded of
 
 -- | Where Cancel, and Save and close, navigate to: the page.
 leaving :: Input -> Route
-leaving input = documentRoute input.context input.space.id (Page (spacePathOf input.context.spaces input.space.id) input.path)
+leaving input = documentRoute input.context input.space.id (pageRoute (spacePathOf input.context.spaces input.space.id) input.path)
 
 -- | The place the work's links are resolved from: where the page is.
 placeOf :: Input -> Work -> Body.Place

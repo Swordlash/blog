@@ -49,7 +49,7 @@ import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export (engineReport, newExports, oneAtATime, probeOutputLimit, probeTexEngine, probeTexEngineWithin, probeTimeout, restrictTeX, texEngine, texLimits, writeDocument)
 import Wiki.Server.Export.Document
@@ -83,6 +83,7 @@ place =
   Place
     { spaces = demoArchive.spaces
     , spacePath = [slug "docs"]
+    , root = rootPage =<< find (\s -> s.slug == slug "docs") demoArchive.spaces
     , pages = docsPages
     , pagePath = [slug "markdown-guide"]
     , attachments = [tree, paper]
@@ -163,7 +164,8 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
 
   it "links a page of the wiki under its public address, and keeps it as text without one" $ do
     bs <- blocksOf ToOther place "See [[Tour]], [the diagrams](markdown-guide/diagrams#flow) and [the top](#intro).\n"
-    linkTargets bs `shouldBe` ["https://wiki.example.org/s/docs/p/tour/", "https://wiki.example.org/s/docs/p/markdown-guide/diagrams/#flow", "#intro"]
+    -- The tour is Docs' home page: its address is the space's.
+    linkTargets bs `shouldBe` ["https://wiki.example.org/s/docs/", "https://wiki.example.org/s/docs/p/markdown-guide/diagrams/#flow", "#intro"]
     offline <- blocksOf ToOther place {publicUrl = Nothing} "See [[Tour]].\n"
     linkTargets offline `shouldBe` []
 
@@ -779,7 +781,7 @@ overHttp backing = describe "over HTTP" $ do
     -- In the space's order: each page after the one before it.
     let ordered = map (\p -> p.title) (pageTreeOrder docs.pageOrder (Map.elems pages))
         positions = map at ordered
-    ordered `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
+    ordered `shouldBe` ["Tour", "Markdown guide", "Diagrams", "Mathematics", "Presentations"]
     and (zipWith (<) positions (drop 1 positions)) `shouldBe` True
 
   it "is for whoever may read the page or the space" $ withDemoRunning backing identity $ \r -> do

@@ -31,6 +31,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, resolvePath)
 import Wiki.Core.Slug (Slug, headingSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space qualified as S
 
 -- | The repository's root, from the package's directory, where the suite
 -- runs.
@@ -154,7 +155,7 @@ pageAt :: [Slug] -> [Slug] -> Maybe Page
 pageAt spacePath pagePath = do
   s <- spaceAt spacePath
   let inSpace = filter (\q -> q.space == s.id) (Map.elems demo.pages)
-  rightToMaybe (resolvePath (findChild inSpace) pagePath) >>= lastMay
+  S.pageAt s inSpace pagePath
 
 -- | An example of the README: a fenced block in a language the demo's
 -- content is written in, and the first link into the demo in the paragraph

@@ -52,7 +52,7 @@ import Web.HTML.HTMLInputElement qualified as HTMLInputElement
 import Web.UIEvent.FocusEvent (FocusEvent)
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session, WikiError)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.App.View.SearchHit (hitContents, spaceNamesOf)
 import Wiki.Core.Id (SpaceId (..))
@@ -256,7 +256,7 @@ component =
               <ul class="search-hits" role="listbox">
                 {% for (i, hit) in zip [0 ..] (take shown hits) %}{% let chosen = Just i == st.selected %}
                   <li role="option" aria-selected={{ ariaBool chosen }}>
-                    {{ Router.link ctx.router (const (Clicked hit)) (Page hit.spacePath hit.pagePath) [HP.classes ("search-hit" : ["selected" | chosen])] (hitContents ctx.spaces hit) }}
+                    {{ Router.link ctx.router (const (Clicked hit)) (pageRoute hit.spacePath hit.pagePath) [HP.classes ("search-hit" : ["selected" | chosen])] (hitContents ctx.spaces hit) }}
                   </li>
                 {% end %}
               </ul>

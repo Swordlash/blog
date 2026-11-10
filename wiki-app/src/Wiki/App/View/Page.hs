@@ -116,7 +116,7 @@ import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedTh
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (Against (..), Route (..))
+import Wiki.App.Route (Against (..), Route (..), pageRoute)
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
@@ -131,7 +131,6 @@ import Wiki.Core.Id
   ( AttachmentId
   , CommentThreadId (..)
   , PageId
-  , SpaceId
   , UserId
   )
 import Wiki.Core.Markdown qualified as Md
@@ -140,7 +139,7 @@ import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (blog, encryption, homePage, id, name))
+import Wiki.Core.Space (Space (blog, encryption, homePage, id, name), rootPage)
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (Avatar, User (id))
 import Wiki.Core.Version (Author (..))
@@ -374,7 +373,7 @@ component =
             <> ( if home
                    then rename
                    else
-                     [Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]]
+                     [Router.link input.context.router Followed (NewPage spacePath (guard (not (null input.path)) $> input.path)) [HP.class_ "button"] [HH.text "New subpage"]]
                        <> rename
                        -- The space's home page stays where it is, and
                        -- stays the space's.
@@ -448,7 +447,7 @@ component =
       Renaming title -> Just (inForm [textField "New title" title Typed] "Rename")
       Moving chosen targetPages parent ->
         let spaces = targetSpaces input.context page
-            target = (\s -> s.id) <$> atMay spaces chosen
+            target = atMay spaces chosen
             parents = Nothing : map Just (allowedParents page target targetPages)
          in Just $
               inForm
@@ -703,7 +702,7 @@ component =
       ChoseParent n -> withPage $ \page ->
         modify $ \st -> case st.mode of
           Moving chosen ps _ ->
-            let target = (\s -> s.id) <$> atMay (targetSpaces st.input.context page) chosen
+            let target = atMay (targetSpaces st.input.context page) chosen
              in st {mode = Moving chosen ps (join (atMay (Nothing : map Just (allowedParents page target ps)) n))}
           other -> st {mode = other}
       Submit -> do
@@ -719,7 +718,7 @@ component =
               savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done (const Nothing)
             Moving chosen ps parent -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
               movePage page.id target.id parent
-                >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (pagePathOf ps) parent <> [moved.slug])))
+                >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
       FromComments out -> case out of
         CommentsView.Did event -> do
@@ -784,7 +783,9 @@ component =
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id
-            parentRoute = maybe (Space spacePath) (const (Page spacePath (take (length input.path - 1) input.path))) page.parent
+            -- The page above it, or the space for a page under the home
+            -- page, whose path is one slug.
+            parentRoute = pageRoute spacePath (take (length input.path - 1) input.path)
         deletePage page.id >>= done (const (Just parentRoute))
 
     load :: H.HalogenM State Action Slots ViewOutput m ()
@@ -913,13 +914,17 @@ targetSpaces ctx page =
   , mayMovePage (principalOf ctx) (grantsOf ctx) (chainOf ctx page.space) (chainOf ctx s.id)
   ]
 
--- | The pages of the target space a page may be put under: in its own
--- space, not itself nor one of the pages under it.
-allowedParents :: Page -> Maybe SpaceId -> [PageSummary] -> [PageId]
+-- | The pages of the target space a page may be put under, besides its
+-- top level: in its own space, not itself nor one of the pages under it.
+-- The space's home page is not among them: the top level, the first
+-- choice, is under it ('Wiki.Core.Space.parentOrRoot'), since nothing but
+-- the home page is at the top of a space's pages.
+allowedParents :: Page -> Maybe Space -> [PageSummary] -> [PageId]
 allowedParents page target ps
-  | target == Just page.space = [p.id | p <- ps, p.id /= page.id, page.id `notElem` ancestorsOf p]
-  | otherwise = [p.id | p <- ps]
+  | ((\s -> s.id) <$> target) == Just page.space = [p.id | p <- ps, p.id /= page.id, page.id `notElem` ancestorsOf p, notRoot p]
+  | otherwise = [p.id | p <- ps, notRoot p]
   where
+    notRoot p = Just p.id /= (rootPage =<< target)
     ancestorsOf p = case p.parent of
       Nothing -> []
       Just q -> q : maybe [] ancestorsOf (findPage ps q)

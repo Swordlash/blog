@@ -38,7 +38,7 @@ import Protolude hiding (State)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.App.Backend (WikiError)
 import Wiki.App.Backend.Stars (MonadStars (..))
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.App.View.Popup (watchPopup)
 import Wiki.Core.Notification (PageLocation (..))
@@ -139,7 +139,7 @@ component =
       where
         ctx = st.input.context
         -- The wiki's home page has the root's own address.
-        routeOf s = documentRoute ctx s.space (Page s.location.space s.location.page)
+        routeOf s = documentRoute ctx s.space (pageRoute s.location.space s.location.page)
         spaceName s
           | homeSpace ctx s.space = "Home" :: Text
           | otherwise = maybe "" (\sp -> sp.name) (find (\sp -> sp.id == s.space) ctx.spaces)

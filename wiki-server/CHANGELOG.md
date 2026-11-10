@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+Each space's home page is the root of its pages (WP5.78b, #201). Step 13
+of the schema, `Wiki.Server.Storage.Migrate.Code.Step0013`, puts every
+other top-level page under the home page, before the pages it had, takes
+a nested home page from under its parent, and gives a page under the home
+page whose slug a top-level page has the next free one; it reads and
+writes rows of its own, one at a time, and fails the migration if a space
+keeps a second root. Every page path the storage builds or reads goes
+through `Wiki.Core.Space.pagePath` and `pagesAt` (`pathIn`,
+`resolveUnderM`): `getPage` at the empty path is the home page, and an old
+path with the home page's slug first is read again without it.
+`createPage` and `movePage` with no parent put the page under the home
+page (`parentOrRoot`), and `requireOneRoot` refuses a write that leaves a
+second root, as the full import and the merge import do. `checkDatabase`
+reports such a space (`BrokenRecords`, exit 5 through `CheckUnreadable`).
+`insertHomePage` puts the space's top-level pages under the page it makes.
+The full import and the merge import read an archive through
+`rootedArchive`; the merge import matches pages by their paths from under
+the home pages, read exactly as written (`pageAtExactly`, never through
+the rule for old addresses), puts a page with no parent under the wiki's home page, and
+skips every page of a space whose home page is skipped. The guide is built
+with the tour as its root, records its pages' paths from under it, reads a
+record written before with the tour at the empty path (`rootedRecord`),
+and its update adds a page at the top under the tour. The export's heading
+levels, box numbers, sitemap, feeds and notifications' locations follow.
+The rehearsal's pages check reads a page at the path its program builds
+(`rootedPaths`, from `/healthz`'s schema version; `pathAsBuilt`), and the
+new `roots` check says every top-level page answers at its old address and
+every space at its own. `toolchain/rehearse-ci.sh` seeds two pages under
+a home page, one with a top-level page's slug.
+
 The rehearsal of a move to PostgreSQL (WP5.80b, #203). `wiki-server
 rehearse --move-to-database URL [--move-to-database-password-file FILE]`
 runs the upgrade's checks across two backends: the old program serves

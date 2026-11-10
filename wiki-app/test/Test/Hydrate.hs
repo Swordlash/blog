@@ -323,7 +323,8 @@ apiOver providers seed = do
   wiki <- newMemWiki seed
   st <- readIORef wiki
   let spacePath s = fromMaybe [] (pathOf (`Map.lookup` st.spaces) s)
-      pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
+      -- A page's path from under its space's home page.
+      pagePath p = fromMaybe [] (Map.lookup p st.pages >>= \x -> Map.lookup x.space st.spaces >>= \s -> S.pagePath s (`Map.lookup` st.pages) p)
   now <- getCurrentTime
   table <- runMemWiki wiki $ do
     me <- session

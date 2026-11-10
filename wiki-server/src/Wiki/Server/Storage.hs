@@ -205,6 +205,7 @@ import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumS
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Type.Equality (type (~))
 import Data.UUID.Types qualified as UUID
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
@@ -241,7 +242,7 @@ import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentB
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
-import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong, withoutHomeDocument)
+import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.HomePage qualified as Home
@@ -251,7 +252,7 @@ import Wiki.Core.Markdown.Box (numberingName)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
-import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath, resolvePathM)
+import Wiki.Core.Path (NodeId, TreeNode, ancestry, childrenOf, findChild, resolvePath, resolvePathM, resolveUnderM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
   , GlobalPermission (..)
@@ -275,7 +276,8 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
@@ -581,6 +583,10 @@ data CheckProblem
   | -- | Every row read, but the wiki's records built from them did not:
     -- why.
     UnreadableRecords Text
+  | -- | Every record read, but some break a rule the wiki keeps: a line
+    -- for each. A space whose pages have a second root, a page with no
+    -- parent beside the space's home page (WP5.78 of docs/PLAN.md), is one.
+    BrokenRecords [Text]
   deriving stock (Eq, Show)
 
 -- | Read the whole database as this program reads it, and change nothing:
@@ -610,26 +616,41 @@ checkConnection c = do
       if any (isLeft . (\t -> t.rows)) tables
         then pure (Left (UnreadableTables tables))
         else
-          first (UnreadableRecords . toS . displayException)
-            . ($> tables)
-            <$> try @SomeException (runDb c records)
+          try @SomeException (runDb c records) <&> \case
+            Left e -> Left (UnreadableRecords (toS (displayException e)))
+            Right [] -> Right tables
+            Right broken -> Left (BrokenRecords broken)
   where
     -- Each record forced whole (through its Show), so that a value the
     -- conversion from a row cannot make fails here and not later. The
     -- shown text is consumed as it is made, never held: the records are in
     -- memory as an export holds them, and no more.
-    records :: (Backend be) => Db be ()
+    --
+    -- What is read is then checked against the rules the wiki keeps, and a
+    -- line says what breaks each.
+    records :: (Backend be) => Db be [Text]
     records = do
       forced =<< loadUsers
       forced =<< loadGroups
       forced =<< loadMembership
       forced =<< loadGrants
-      forced =<< loadSpaces
-      forced =<< loadAllPages
+      spaces <- loadSpaces
+      forced spaces
+      pages <- loadAllPages
+      forced pages
       forced =<< Comments.loadAllThreads commentAuthor
       forced =<< loadAuditLog
       forced =<< loadSettings
       forced . (\s -> s.homePage) =<< loadServerSettings
+      pure (rootProblems spaces pages)
+    -- Each space with a home page has that page as the only one with no
+    -- parent.
+    rootProblems spaces pages =
+      [ "The space " <> s.name <> " (" <> s.id.text <> ") has pages with no parent beside its home page: " <> T.intercalate ", " [p.title <> " (" <> p.id.text <> ")" | p <- stray] <> "."
+      | s <- Map.elems spaces
+      , let stray = strayRoots s [p | p <- pages, p.space == s.id]
+      , not (null stray)
+      ]
     forced :: (Show a, MonadIO m) => a -> m ()
     forced a = liftIO (void (evaluate (length (show a :: [Char]))))
 
@@ -1236,6 +1257,18 @@ requireOrdinary :: SpaceId -> Tx ()
 requireOrdinary sid =
   asks (\x -> Home.isHomeSpace x.server.homePage sid) >>= \home ->
     when home (invalid "The wiki home is a singleton; its space and page cannot be restructured.")
+
+-- | Refuse a write that leaves a page with no parent in a space beside its
+-- home page ('strayRootsOf'): nothing but the home page, the root of the
+-- space's pages, has none (WP5.78 of docs/PLAN.md). Creating and moving a
+-- page put one asked for at the top level under the home page
+-- ('parentOrRoot'), so this holds unless something else is wrong.
+requireOneRoot :: SpaceId -> Tx ()
+requireOneRoot sid = do
+  (s, _) <- findSpace sid
+  stray <- db (strayRootsOf s)
+  unless (null stray) $
+    invalid ("Nothing but " <> s.name <> "'s home page may be at the top of its pages.")
 
 requireAdminister :: [Space] -> Tx ()
 requireAdminister c = requireView c >> ask >>= \x -> require (canAdministerSpace x.principal x.grants c) >> traverse_ (requireOrdinary . (\s -> s.id)) c
@@ -1892,7 +1925,7 @@ postDetailsTx sid = do
   pages <- db (loadPageSummaries sid)
   firsts <- Map.fromList <$> db (loadFirstVersions sid)
   counts <- Map.fromList <$> db (loadCommentCounts sid)
-  bodies <- Map.fromList <$> db (loadPostBodies sid)
+  bodies <- Map.fromList <$> db (loadPostBodies sid (rootPage s))
   let details p =
         PostDetails
           { author = (Map.lookup p.id firsts >>= \r -> (versionOf p.id r).author)
@@ -1903,16 +1936,19 @@ postDetailsTx sid = do
           }
   pure (Map.fromList [(p.id, details p) | p <- pages])
 
--- | A page by its path in a space. The path is followed one slug at a
--- time, each step one query through the index of siblings' slugs
--- ('childPage'), so the reads grow with the path's length, not with the
--- size of the space.
+-- | A page by its path in a space, from under the space's home page, the
+-- root of its pages ('Wiki.Core.Space.pagesAt'): the empty path is the
+-- home page, and an old address that starts with the home page's slug is
+-- read again without it. The path is followed one slug at a time, each
+-- step one query through the index of siblings' slugs ('childPage'), so
+-- the reads grow with the path's length, not with the size of the space.
 getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do
-  (_, c) <- findSpace sid
+  (s, c) <- findSpace sid
   requireView c
   requirePlain "Reading a page as plain text" c
-  resolvePathM (\parent slug -> db (childPage sid parent slug)) path >>= \case
+  root <- maybe (pure Nothing) (\r -> db (pageNode r)) (rootPage s)
+  resolveUnderM root (\parent slug -> db (childPage sid parent slug)) path >>= \case
     Right ps | Just p <- lastMay ps -> findPage p.id
     _ -> failWith NotFound
 
@@ -1961,7 +1997,7 @@ searchPagesTx q = do
               )
             | (n, text, rank) <- found
             , Just c <- [Map.lookup n.space searched]
-            , Just pagePath <- [pathOf (`Map.lookup` nodes) n.id]
+            , Just pagePath <- [pathIn ctx.spaces n.space (`Map.lookup` nodes) n.id]
             ]
       -- A database that ranks its matches (PostgreSQL) has found the
       -- best; one that does not (SQLite) has found every page with every
@@ -1969,6 +2005,12 @@ searchPagesTx q = do
       pure $ case traverse (\(rank, c) -> (,c) <$> rank) candidates of
         Just ranked | not (null ranked) -> searchRanked q ranked
         _ -> searchPlain q (map snd candidates)
+
+-- | A page's path in its space ('Wiki.Core.Space.pagePath'), among the
+-- pages the lookup finds: from under the space's home page. 'Nothing' for
+-- a space or a page that is not there.
+pathIn :: (TreeNode p, NodeId p ~ PageId) => Map SpaceId Space -> SpaceId -> (PageId -> Maybe p) -> PageId -> Maybe [Slug]
+pathIn spaces sid byId pid = Map.lookup sid spaces >>= \s -> Space.pagePath s byId pid
 
 -- | These pages and every page above them, by id: what 'pathOf' needs to
 -- find each one's path. The pages above are read one level at a time, all
@@ -2519,9 +2561,13 @@ shiftPageTx pid how = do
 --------------------------------------------------------------------------------
 -- Pages
 
+-- | A new page. With no parent, it goes under the space's home page
+-- ('Wiki.Core.Space.parentOrRoot'), since nothing but the home page has
+-- no parent.
 createPageTx :: SpaceId -> Maybe PageId -> Text -> Text -> Tx Page
-createPageTx sid parent title body = do
-  (_, c) <- findSpace sid
+createPageTx sid asked title body = do
+  (s, c) <- findSpace sid
+  let parent = parentOrRoot s asked
   parentPage <- traverse findNode parent
   requireEdit c
   requireOrdinary sid
@@ -2551,6 +2597,7 @@ createPageTx sid parent title body = do
           }
   author <- asks (\x -> x.author)
   db (insertPage page >> insertVersion page author)
+  requireOneRoot sid
   -- Creating a page counts as a save: the people it mentions, and whoever
   -- watches its space, are notified.
   tellTx page.id sid page.title Nothing "" PageSaved (newlyMentioned "" body)
@@ -2583,11 +2630,14 @@ savePageTx pid base title body = do
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)
   pure p'
 
+-- | Move a page with the pages under it. A page moved to no parent goes
+-- under the destination's home page ('Wiki.Core.Space.parentOrRoot').
 movePageTx :: PageId -> SpaceId -> Maybe PageId -> Tx Page
-movePageTx pid destination parent = do
+movePageTx pid destination asked = do
   ctx <- ask
   p <- findNode pid
-  (_, target) <- findSpace destination
+  (targetSpace, target) <- findSpace destination
+  let parent = parentOrRoot targetSpace asked
   parentPage <- traverse findNode parent
   let source = chainOf ctx p.space
   requireView source
@@ -2623,6 +2673,7 @@ movePageTx pid destination parent = do
   db $ do
     placePage pid destination parent slug position
     setPageSpace destination (Set.toList (Set.delete pid subtree))
+  requireOneRoot destination
   when (destination /= p.space) pagesMoved
   findPage pid
 
@@ -2653,7 +2704,7 @@ deletePageTx pid = do
   for_ (homeDeleteRefusal s pid (Set.toList gone)) invalid
   let under = Set.size gone - 1
   above <- lineageOf pid
-  let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
+  let path = maybe "" (T.intercalate "/" . map slugText) (Space.pagePath s (`Map.lookup` above) pid)
   db (deletePageRow pid)
   pagesMoved
   record
@@ -3762,7 +3813,7 @@ tellTx pid sid title thread excerpt occasion logins = do
             , occasion
             , mentioned = Set.fromList (mapMaybe (`Map.lookup` byLogin) (Set.toList logins))
             }
-        location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathOf (`Map.lookup` nodes) pid)}
+        location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathIn ctx.spaces sid (`Map.lookup` nodes) pid)}
         actorAuthor = maybe (namedAuthor actor actor.text) authorOf ctx.user
     time <- now
     for_ (recipients grants watchers happened) $ \(u, kind) -> do
@@ -3816,7 +3867,7 @@ locatedTx n = do
       if canView ctx.principal ctx.grants chain
         then do
           nodes <- lineageOf p.id
-          let path = pathOf (`Map.lookup` nodes) p.id
+          let path = pathIn ctx.spaces p.space (`Map.lookup` nodes) p.id
           pure (Just (withLocation (PageLocation (map (\x -> x.slug) chain) <$> path) n))
         else pure Nothing
 
@@ -3850,7 +3901,7 @@ newestLocated u readable = go 0 mempty []
       more <- for wanted $ \sid -> (sid,) . Map.fromList . map (\x -> (x.id, x)) <$> db (pageNodes sid)
       let known = spaces <> Map.fromList more
           located =
-            [ withLocation (PageLocation (map (\x -> x.slug) (chainOf ctx p.space)) <$> pathOf (`Map.lookup` Map.findWithDefault mempty p.space known) p.id) n
+            [ withLocation (PageLocation (map (\x -> x.slug) (chainOf ctx p.space)) <$> pathIn ctx.spaces p.space (`Map.lookup` Map.findWithDefault mempty p.space known) p.id) n
             | n <- batch
             , Just p <- [Map.lookup n.page nodes]
             , readable p.space
@@ -4009,9 +4060,10 @@ starredPageTx pid =
         then pure Nothing
         else do
           nodes <- lineageOf p.id
+          spaces <- asks (\x -> x.spaces)
           pure $
             (\pagePath -> StarredPage {Star.page = p.id, Star.space = p.space, Star.title = p.title, Star.location = PageLocation {space = map (\x -> x.slug) chain, page = pagePath}})
-              <$> pathOf (`Map.lookup` nodes) p.id
+              <$> pathIn spaces p.space (`Map.lookup` nodes) p.id
 
 -- | Star a page the user may view, or take its star away, as the class's
 -- Haddock says ("Wiki.App.Backend.Stars"). The result is the list after.
@@ -4053,7 +4105,10 @@ instance (MonadIO m) => MonadStars (StoredWiki m) where
 importArchive :: Storage -> Archive -> IO (Either Text ())
 importArchive st incoming = fmap void (writingEitherThen st transaction (cacheServerSettings st))
   where
-    a = withoutHomeDocument incoming
+    -- An older archive's spaces may have several top-level pages: each
+    -- space's home page becomes their root, as step 13 of the schema made
+    -- it in the wiki's own database.
+    a = rootedArchive (withoutHomeDocument incoming)
     transaction :: (Backend be) => Db be (Either Text Kept)
     transaction = do
       vacant <- wikiIsEmpty
@@ -4100,10 +4155,18 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- older wiki, where a space could have none.
           time <- liftIO (micro <$> getCurrentTime)
           traverse_ (insertHomePage Nothing time) [sp | sp <- spaces, hasHome sp, isNothing sp.homePage]
-          traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
-          importHomeDocument (attachmentsDir st.place.dataDir) incoming
-          restoreAudit a.audit
-          Right <$> loadServerSettings
+          -- Nothing but a space's home page has no parent ('rootedArchive'
+          -- made it so). An archive whose home page is a page of another
+          -- space, which no wiki writes, would leave a second.
+          imported <- loadSpaces
+          stray <- concat <$> traverse strayRootsOf (Map.elems imported)
+          case stray of
+            n : _ -> pure (Left ("The archive leaves the page " <> show n.id.text <> " with no parent beside its space's home page."))
+            [] -> do
+              traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
+              importHomeDocument (attachmentsDir st.place.dataDir) incoming
+              restoreAudit a.audit
+              Right <$> loadServerSettings
 
 -- | Records in an order where each comes after its parent: those with no
 -- parent among them first, then those whose parent has come, and so on.

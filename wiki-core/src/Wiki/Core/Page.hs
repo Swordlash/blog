@@ -9,6 +9,7 @@ module Wiki.Core.Page
   , templatePages
   , childPages
   , positionPage
+  , placedPage
   , pageTreeOrder
   , pageNumber
   , savedAs
@@ -30,7 +31,7 @@ import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
-import Wiki.Core.Path (TreeNode (..), findChild)
+import Wiki.Core.Path (TreeNode (..), findChild, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.Version (Author)
 
@@ -160,16 +161,20 @@ pageTreeOrder :: (Sibling p, NodeId p ~ PageId) => ChildOrder -> [p] -> [p]
 pageTreeOrder order = treeOrder (const order)
 
 -- | 'pageNumber' is a page's number, by its path among the pages of its
--- space: its position under its parent, from 1, in the space's page order,
--- whether that order is by hand or not. A box's number may start with it
+-- space, given the space's root page ('Wiki.Core.Space.rootPage'): its
+-- position under its parent, from 1, in the space's page order, whether
+-- that order is by hand or not. A box's number may start with it
 -- ("Wiki.Core.Markdown.Box"). Templates are numbered among the templates
--- under the same parent, and the other pages without them. 'Nothing' when
--- no page has the path.
-pageNumber :: ChildOrder -> [PageSummary] -> [Slug] -> Maybe Int
-pageNumber order pages path = do
-  page <- foldM (\parent slug -> Just <$> findChild pages ((\p -> p.id) <$> parent) slug) Nothing path
-  p <- page
-  (+ 1) <$> findIndex (\s -> s.id == p.id) [s | s <- childPages order pages p.parent, s.template == p.template]
+-- under the same parent, and the other pages without them. The root, the
+-- space's home page, is not one of the numbered pages: it is 0, as the
+-- boxes before a page's first section are in section 0. 'Nothing' when no
+-- page has the path.
+pageNumber :: Maybe PageId -> ChildOrder -> [PageSummary] -> [Slug] -> Maybe Int
+pageNumber root order pages path = do
+  p <- lastMay =<< rightToMaybe (resolveUnder (root >>= \r -> find (\x -> x.id == r) pages) (findChild pages) path)
+  if Just p.id == root
+    then Just 0
+    else (+ 1) <$> findIndex (\s -> s.id == p.id) [s | s <- childPages order pages p.parent, s.template == p.template]
 
 -- | The page at another position among its siblings. (A function, since a
 -- record update of @position@ cannot tell a page's field from a space's
@@ -183,6 +188,27 @@ positionPage position p =
     , parent = p.parent
     , title = p.title
     , slug = p.slug
+    , body = p.body
+    , attachments = p.attachments
+    , createdAt = p.createdAt
+    , updatedAt = p.updatedAt
+    , position
+    , template = p.template
+    , createdBy = p.createdBy
+    , updatedBy = p.updatedBy
+    }
+
+-- | The page at another place in its space: under this parent ('Nothing'
+-- for none), with this slug and this position among its new siblings. (A
+-- function for the reason 'positionPage' is one.)
+placedPage :: Maybe PageId -> Slug -> Int -> Page -> Page
+placedPage parent slug position p =
+  Page
+    { id = p.id
+    , space = p.space
+    , parent
+    , title = p.title
+    , slug
     , body = p.body
     , attachments = p.attachments
     , createdAt = p.createdAt

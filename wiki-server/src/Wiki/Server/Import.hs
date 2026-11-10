@@ -76,12 +76,13 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
+import System.IO.Error (userError)
 import Wiki.Api.Import
 import Wiki.Api.ServerSettings (ServerSettingsOf (homePage))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Export (Archive (..), readArchive, threadsAmong, withoutHomeDocument)
+import Wiki.Core.Export (Archive (..), readArchive, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
@@ -90,7 +91,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, spaceTreeOrder, withHome, withProfile)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, pageAtExactly, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -139,10 +140,14 @@ data PageMatch = PageMatch
 
 -- | Match an archive with a wiki's spaces and the pages of each (fetched
 -- only for the spaces the archive has a match for): every space of the
--- archive, each before its subspaces, with its pages.
+-- archive, each before its subspaces, with its pages. A page's path is
+-- its path from under its space's home page ('Wiki.Core.Space.pagePath'),
+-- in the archive and in the wiki alike, so that the archive's home page
+-- meets the wiki's. The archive's pages are taken as they are: the caller
+-- gives a rooted archive ('rootedArchive').
 matchArchive :: [Space] -> (SpaceId -> [Page]) -> Archive -> [SpaceMatch]
 matchArchive serverSpaces serverPages a =
-  [ SpaceMatch {archived = s, path, server, pages = matchPages (maybe [] (\x -> serverPages x.id) server) s}
+  [ SpaceMatch {archived = s, path, server, pages = matchPages server (maybe [] (\x -> serverPages x.id) server) s}
   | s <- spaceTreeOrder a.spaces
   , Just path <- [pathOf (`Map.lookup` archivedSpaces) s.id]
   , let server = found (findChild serverSpaces) path
@@ -150,12 +155,12 @@ matchArchive serverSpaces serverPages a =
   where
     archivedSpaces = Map.fromList [(s.id, s) | s <- a.spaces]
     pagesOf = Map.fromListWith (flip (<>)) [(p.space, [p]) | p <- a.pages]
-    matchPages theirs s =
+    matchPages serverSpace theirs s =
       let ours = Map.findWithDefault [] s.id pagesOf
           byId = Map.fromList [(p.id, p) | p <- ours]
-       in [ PageMatch {archived = p, path, server = found (findChild theirs) path}
+       in [ PageMatch {archived = p, path, server = serverSpace >>= \t -> pageAtExactly t theirs path}
           | p <- pageTreeOrder s.pageOrder ours
-          , Just path <- [pathOf (`Map.lookup` byId) p.id]
+          , Just path <- [pagePath s (`Map.lookup` byId) p.id]
           ]
     found child path = either (const Nothing) lastMay (resolvePath child path)
 
@@ -210,7 +215,7 @@ spaceSkipped choices path = any (`isPrefixOf` path) (filter (not . null) choices
 -- | Whether the choices leave a page out: it, or a page above it, was
 -- unchecked.
 pageSkipped :: ImportChoices -> [Slug] -> [Slug] -> Bool
-pageSkipped choices space path = any (\r -> r.space == space && not (null r.page) && r.page `isPrefixOf` path) choices.skipPages
+pageSkipped choices space path = any (\r -> r.space == space && r.page `isPrefixOf` path) choices.skipPages
 
 -- | How a conflict is resolved: as chosen, or by keeping the server's
 -- page.
@@ -243,7 +248,7 @@ matchIn :: (Backend be) => Archive -> Db be [SpaceMatch]
 matchIn a = do
   settings <- loadServerSettings
   spaces <- filter (not . Home.isHomeSpace settings.homePage . (\s -> s.id)) . Map.elems <$> loadSpaces
-  let ordinary = withoutHomeDocument a
+  let ordinary = rootedArchive (withoutHomeDocument a)
       wanted = matchArchive spaces (const []) ordinary
   pages <- Map.fromList <$> for [s | m <- wanted, Just s <- [m.server]] (\s -> (s.id,) <$> loadPages s.id)
   pure (matchArchive spaces (\sid -> Map.findWithDefault [] sid pages) ordinary)
@@ -308,6 +313,13 @@ mergeArchive blobs a choices = do
   let start = Progress {summary = nothingYet, spaceIds = mempty, created = mempty, pageIds = mempty, commentsBrought = 0}
       discussions = threadsAmong (administratorUser : people) a
   done <- foldlM (importSpace blobs a discussions choices) start matches
+  -- Nothing but a space's home page has no parent: an import that would
+  -- leave a second is refused, and the transaction undone.
+  spaces <- loadSpaces
+  for_ (ordNub (Map.elems done.spaceIds)) $ \sid -> for_ (Map.lookup sid spaces) $ \s -> do
+    stray <- strayRootsOf s
+    unless (null stray) $
+      liftIO (throwIO (userError ("The import would leave pages with no parent in the space " <> toS s.name <> " beside its home page.")))
   importHomeDocument blobs a
   restoreAudit a.audit
   pure (done.summary, done.commentsBrought)
@@ -434,7 +446,13 @@ importPage blobs a discussions choices spacePath target progress pm
           pure (count kept {commentsBrought = kept.commentsBrought + said} (\s -> s {pagesReplaced = s.pagesReplaced + 1, attachments = s.attachments + n}))
   | otherwise = do
       i <- PageId <$> liftIO newId
-      let parent = pm.archived.parent >>= (`Map.lookup` progress.pageIds)
+      -- A page with no parent here (the archive's top level, or under a
+      -- page this import left out) goes under the space's home page, if
+      -- the space has one yet ('parentOrRoot'). The archive's own home
+      -- page comes first, into a space the import makes, and becomes its
+      -- root.
+      targetSpace <- Map.lookup target <$> loadSpaces
+      let parent = maybe identity parentOrRoot targetSpace (pm.archived.parent >>= (`Map.lookup` progress.pageIds))
       siblings <- childPages target parent
       let page =
             Page

@@ -37,7 +37,7 @@ import Wiki.Core.Export (writeArchive)
 -- | The shell's input for the demo: the router, the demo's tour for a
 -- newcomer, and its controls.
 input :: (MonadDemoUsers m) => Router Route -> Shell.Input m
-input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing, live = Nothing}
+input router = Shell.Input {router, welcome = Just (uncurry pageRoute tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing, live = Nothing}
 
 -- | The shell's input for a wiki on a server: the router, and the import
 -- into the server, which offers the wiki the demo left in this browser

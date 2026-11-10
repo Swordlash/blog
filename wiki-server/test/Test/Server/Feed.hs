@@ -347,7 +347,7 @@ heads backing = describe "the head of a page the server renders" $ do
     docs `shouldNotSatisfy` T.isInfixOf "feed.xml"
 
   it "says nothing of a private page, even to its administrator" $ withDemoRunning backing identity $ \r -> do
-    handbook <- decodeUtf8 . BSL.toStrict . (.body) <$> getUrl r (r.admin <> "/admin/s/team/p/team-handbook/")
-    handbook `shouldSatisfy` T.isInfixOf "<title>Team handbook · Team · Wiki</title>"
+    handbook <- decodeUtf8 . BSL.toStrict . (.body) <$> getUrl r (r.admin <> "/admin/s/team/p/on-call/")
+    handbook `shouldSatisfy` T.isInfixOf "<title>On-call · Team · Wiki</title>"
     handbook `shouldNotSatisfy` T.isInfixOf "og:"
     handbook `shouldNotSatisfy` T.isInfixOf "name=\"description\""

@@ -271,13 +271,25 @@ take that from themself, which the space's view does not offer.
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/spaces/<space>/pages` | | `[PageSummary]` `{"id", "space", "parent", "title", "slug", "createdAt", "updatedAt", "position", "template"}`, the space's whole tree, each page before the pages under it: a `Page` without its `body` and `attachments`, which `getPage` reads | 404 | `listPages` |
 | GET | `api/v1/spaces/<space>/post-details` | | `{"<page id>": PostDetails}` `{"author", "comments", "excerpt"}` for every page of the space: the author of its first version (or `null`), its number of comments, and, for a blog's post, its first paragraph as text (`""` for any other page) | 404 | `postDetails` |
-| GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, with `ETag` | 404 | `getPage` |
-| POST | `api/v1/spaces/<space>/pages` | `NewPage` `{"parent": id or null, "title", "body"}` | 201 `Page`, with `ETag` | 404, 403, 400 | `createPage` |
+| GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, from under its home page; `api/v1/spaces/<space>/pages/at`, with no slug, is the home page; with `ETag` | 404 | `getPage` |
+| POST | `api/v1/spaces/<space>/pages` | `NewPage` `{"parent": id or null, "title", "body"}`: `null` is under the space's home page | 201 `Page`, with `ETag` | 404, 403, 400 | `createPage` |
 | PUT | `api/v1/pages/<page>` | `PageEdit` `{"title", "body"}`, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `savePage` |
-| POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}` | `Page` | 404, 403, 400 (among others, its space's home page, or a page with it under it moved to another space) | `movePage` |
+| POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}`: `null` is under the space's home page | `Page` | 404, 403, 400 (among others, its space's home page, or a page with it under it moved to another space) | `movePage` |
 | POST | `api/v1/pages/<page>/shift` | `ShiftBy` `{"shift"}` | `Page`, with its new position | 404, 403, 400 | `shiftPage` |
 | PUT | `api/v1/pages/<page>/template` | `PageTemplate` `{"template": bool}` | `Page`; not a save, its `updatedAt` stays | 404, 403, 400 (a space's home page) | `setPageTemplate` |
 | DELETE | `api/v1/pages/<page>` | | 204 | 404, 403, 400 (its space's home page, or a page with it under it) | `deletePage` |
+
+A space's home page is the root of its pages (WP5.78): the only page of the
+space whose `parent` is `null`, every other page under it. A page's path, in
+`pages/at` and wherever a path is answered (a search hit's `pagePath`, a
+notification's or a star's `location.page`), starts under the home page:
+the home page's own path is empty, and a page under it has its slug alone.
+A path that names nothing and starts with the home page's slug, a page's
+path before the home page lost its segment, is read again without that
+slug. An encrypted space and the container of personal spaces have no
+home page: their pages may be several at the top, each with its slug in
+its path. The server refuses a write that would leave a second page with no
+parent in a space with a home page.
 
 A `Page` is a `PageSummary` with its `body`, its `attachments`, and who
 wrote it (WP5.55): `createdBy`, the `Author` of its first version, and
@@ -688,8 +700,13 @@ between the steps) with the choices:
  "conflicts": [{"page": {"space": ["docs"], "page": ["tour"]}, "resolution": "TakeImported"}]}
 ```
 
-A skipped space is not imported, nor its subspaces; a skipped page is not
-imported, nor the pages under it; a conflict not listed keeps the server's
+A page's path is its path from under its space's home page, in the archive
+and in the wiki alike, so that the archive's home page (the empty path) meets
+the wiki's: an archive written before the home page was the root of its
+space's pages is read as if it were. A page the archive has at the top of
+its space goes under the wiki's home page. A skipped space is not imported,
+nor its subspaces; a skipped page is not imported, nor the pages under it,
+and skipping a space's home page (the empty path) skips all its pages; a conflict not listed keeps the server's
 page (`KeepServer`). `{"skipSpaces": [], "skipPages": [], "conflicts": []}`
 imports everything and keeps every page of the server's. The plan is worked
 out again when the import is applied, against the wiki as it is then, so a

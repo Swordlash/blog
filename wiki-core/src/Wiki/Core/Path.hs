@@ -6,6 +6,10 @@
 -- slugs from the space's top-level pages (@a\/b@ and @p\/q@). Slugs are
 -- unique among siblings, so such a path names exactly one node.
 --
+-- A space's pages have one root, its home page, which has no segment of
+-- its own ('pathUnder', 'resolveUnder'): the page @p@ above is a page under
+-- the home page, and the space's own path is the home page's.
+--
 -- This module knows trees, not storage: 'resolvePath' takes a function
 -- that finds a node's child by slug, and 'ancestry' one that finds a node
 -- by id. Both backends (in memory and over HTTP) and the router use the
@@ -24,6 +28,12 @@ module Wiki.Core.Path
     -- * From a node to its path
   , ancestry
   , pathOf
+
+    -- * Trees with a root that has no segment
+  , pathUnder
+  , resolveUnder
+  , resolveUnderM
+  , resolveFromRoot
 
     -- * Paths as text
   , renderPath
@@ -89,13 +99,18 @@ resolvePathM
   => (Maybe (NodeId a) -> Slug -> m (Maybe a))
   -> [Slug]
   -> m (Either (PathError a) [a])
-resolvePathM child = go Nothing []
+resolvePathM child = walkFrom child Nothing
+
+-- | The nodes a path goes through from a parent ('Nothing' for the top of
+-- the tree), the parent left out.
+walkFrom :: (Monad m, TreeNode a) => (Maybe (NodeId a) -> Slug -> m (Maybe a)) -> Maybe (NodeId a) -> [Slug] -> m (Either (PathError a) [a])
+walkFrom child = go []
   where
-    go _ acc [] = pure (Right (reverse acc))
-    go parent acc (slug : rest) =
+    go acc _ [] = pure (Right (reverse acc))
+    go acc parent (slug : rest) =
       child parent slug >>= \case
         Nothing -> pure (Left PathError {resolved = reverse acc, missing = slug})
-        Just node -> go (Just (nodeId node)) (node : acc) rest
+        Just node -> go (node : acc) (Just (nodeId node)) rest
 
 -- | A node and its ancestors, root first: the nodes 'resolvePath' returns
 -- for the node's path. 'Nothing' when the node, or one of its ancestors,
@@ -115,6 +130,61 @@ ancestry byId = go Set.empty []
 -- | The path of a node, from its id: the slugs of its 'ancestry'.
 pathOf :: (TreeNode a, Ord (NodeId a)) => (NodeId a -> Maybe a) -> NodeId a -> Maybe [Slug]
 pathOf byId i = map nodeSlug <$> ancestry byId i
+
+--------------------------------------------------------------------------------
+-- Trees with a root that has no segment
+
+-- | 'pathUnder' is the path of a node in a tree whose root has no segment
+-- of its own: a space's pages, where the root is the space's home page
+-- (WP5.78 of docs/PLAN.md) and the space's own address is the home page's.
+-- The root's path is empty, and every other node's path is the slugs of
+-- its 'ancestry' without the root's. A tree with no root ('Nothing', an
+-- encrypted space's pages) has every slug, as 'pathOf' gives them. So does
+-- a node whose top ancestor is not the root, which a tree with a root does
+-- not have.
+pathUnder :: (TreeNode a, Ord (NodeId a)) => Maybe (NodeId a) -> (NodeId a -> Maybe a) -> NodeId a -> Maybe [Slug]
+pathUnder root byId i = withoutRoot <$> ancestry byId i
+  where
+    withoutRoot = \case
+      top : rest | Just (nodeId top) == root -> map nodeSlug rest
+      chain -> map nodeSlug chain
+
+-- | The nodes a path goes through in a tree whose root has no segment
+-- ('pathUnder'), the root first. The path starts under the root, so the
+-- empty path is the root alone. With no root, it is 'resolvePath'.
+--
+-- So that the addresses of the time before the root lost its segment
+-- still lead somewhere, a path that names nothing as written, and whose
+-- first segment is the root's slug, is read again without that segment,
+-- once. When that names nothing either, the error is the one of the path
+-- as written.
+resolveUnder :: (TreeNode a) => Maybe a -> (Maybe (NodeId a) -> Slug -> Maybe a) -> [Slug] -> Either (PathError a) [a]
+resolveUnder root child = runIdentity . resolveUnderM root (\p s -> Identity (child p s))
+
+-- | 'resolveUnder' with a lookup that runs in a monad, for a backend that
+-- fetches one level at a time.
+resolveUnderM :: (Monad m, TreeNode a) => Maybe a -> (Maybe (NodeId a) -> Slug -> m (Maybe a)) -> [Slug] -> m (Either (PathError a) [a])
+resolveUnderM Nothing child path = resolvePathM child path
+resolveUnderM (Just root) child path =
+  under path >>= \case
+    Left e
+      | top : rest <- path
+      , top == nodeSlug root ->
+          either (const (Left e)) Right <$> under rest
+    found -> pure found
+  where
+    under p = bimap (\e -> PathError {resolved = root : e.resolved, missing = e.missing}) (root :) <$> walkFrom child (Just (nodeId root)) p
+
+-- | The nodes a path goes through in a tree whose root has no segment
+-- ('pathUnder'), the root first, read exactly as written: 'resolveUnder'
+-- without its rule for old addresses. What compares a path with another,
+-- or matches one page with another by path, reads it so: an old address
+-- is for a person who typed it, and could name another page than the one
+-- the path is now. With no root, it is 'resolvePath'.
+resolveFromRoot :: (TreeNode a) => Maybe a -> (Maybe (NodeId a) -> Slug -> Maybe a) -> [Slug] -> Either (PathError a) [a]
+resolveFromRoot Nothing child path = resolvePath child path
+resolveFromRoot (Just root) child path =
+  bimap (\e -> PathError {resolved = root : e.resolved, missing = e.missing}) (root :) (runIdentity (walkFrom (\p s -> Identity (child p s)) (Just (nodeId root)) path))
 
 -- | A path as written in an address: its slugs separated by slashes, with
 -- no slash at either end: @a\/b@.

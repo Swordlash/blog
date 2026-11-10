@@ -226,7 +226,7 @@ serveDemo = do
         ps <- fromRight [] <$> listPages s.id
         details <- fromRight mempty <$> postDetails s.id
         -- The list of pages has no bodies: each page is read by itself.
-        full <- rights <$> for ps (\p -> getPage s.id (pagePathOf ps p.id))
+        full <- rights <$> for ps (\p -> getPage s.id (fromMaybe [] (pagePathOf s ps p.id)))
         pure (s, ps, details, full)
       people <- directory
       threads <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
@@ -254,7 +254,8 @@ serveDemo = do
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
   for_ home $ \document@(space, page) -> do
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 document
-    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [page.slug])) 200 page
+    -- The front page's page is the root of its space: its path is empty.
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 page
     answerWith "GET" (endpointUrl (\e -> e.notifications.pageWatch page.id)) 200 (Watch False Unchosen)
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
   for_ people answerUsers
@@ -267,7 +268,7 @@ serveDemo = do
   for_ pages $ \(s, ps, details, full) -> do
     answerWith "GET" (endpointUrl (\e -> e.spaces.atPath (spacePathOf spaces s.id))) 200 s
     answerWith "GET" (endpointUrl (\e -> e.spaces.listPages s.id)) 200 ps
-    for_ full $ \p -> answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt s.id (pagePathOf ps p.id))) 200 p
+    for_ full $ \p -> answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt s.id (fromMaybe [] (pagePathOf s ps p.id)))) 200 p
     answerWith "GET" (endpointUrl (\e -> e.spaces.postDetails s.id)) 200 details
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
 
@@ -750,13 +751,16 @@ views m = describe "the application over it" $ do
     length <$> findAll ui ".breadcrumbs li" `shouldReturn` 0
     unsafeIOToPageM js_server_release
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    -- The tour is Docs' home page: the space is its crumb.
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Docs")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     -- Whom the tour mentions is asked once it is shown, and answered.
     find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
     -- The list of the space's pages has no bodies: the page is asked for
     -- by itself, once.
-    let pagesAsked = map (\r -> r.url) . filter (\r -> "/pages/at/" `T.isInfixOf` r.url) <$> asked
+    -- (The tour is Docs' home page, asked for at the empty path, which
+    -- has no slash after it.)
+    let pagesAsked = map (\r -> r.url) . filter (\r -> "/pages/at" `T.isInfixOf` r.url) <$> asked
     pagesAsked >>= (`shouldSatisfy` ((== 1) . length))
     unmount ui
     serverStops
@@ -770,7 +774,8 @@ views m = describe "the application over it" $ do
     tourPage <- unsafeIOToPageM tourOfDocs
     ui <- startServer m tour
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    let tourAt = endpointUrl (\e -> e.spaces.pageAt tourPage.space (slugs ["tour"]))
+    -- The tour is read at its path as it is now, the home page's empty one.
+    let tourAt = endpointUrl (\e -> e.spaces.pageAt tourPage.space [])
         fetchesOf url = length . filter (\r -> r.method == "GET" && r.url == url) <$> asked
         listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
     fetchesOf tourAt `shouldReturn` 1
@@ -781,7 +786,7 @@ views m = describe "the application over it" $ do
     -- Someone else saves the tour meanwhile, in another session. Nothing
     -- tells this tab: it no longer shows the tour.
     answerWith "GET" tourAt 200 tourPage {P.body = "# Tour\n\nSaved by someone else."}
-    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/tour/']" >>= click
+    find ui ".wiki-sidebar .space-home-link" >>= click
     eventually $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved by someone else.")
     fetchesOf tourAt `shouldReturn` 2
     listsAsked `shouldReturn` lists
@@ -983,7 +988,8 @@ views m = describe "the application over it" $ do
         -- And the tour's comments, which its page shows, whom they and
         -- the tour mention, whether the tour is watched, and the bell's
         -- notifications.
-        page <- getPage s.id (slugs ["tour"])
+        -- At its path as it is now, which the view reads it at.
+        page <- getPage s.id []
         for_ page $ \p -> do
           threads <- fromRight [] <$> listThreads p.id
           _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
@@ -1012,7 +1018,7 @@ views m = describe "the application over it" $ do
     after <- findAll ui adoptable
     length after `shouldBe` length before
     zipWithM_ shouldBeSameElement after before
-    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Docs")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     asked `shouldReturn` []
     -- The page shown from the first render listens for its comments (the
@@ -1189,7 +1195,7 @@ presence m = describe "who is editing and reading" $ do
     let later = addUTCTime 60 home.updatedAt
         saved = home {P.body = "Home saved in another tab.", P.updatedAt = later}
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 (space, saved)
-    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [home.slug])) 200 saved
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 saved
     tell (Event home.id (PageChanged later))
     find ui ".page-body p" >>= (`shouldHaveText` "Home saved in another tab.")
     length <$> findAll ui ".comments-toggle, .page-comments" `shouldReturn` 0

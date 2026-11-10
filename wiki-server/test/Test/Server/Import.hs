@@ -310,6 +310,19 @@ conflicts backing = describe "a page at the same path" $ do
         mine <- makePage r ours "Tour" "Ours."
         pure (ours, mine)
 
+  it "is matched by its path as written, never by the old address of the server's home page" $ withRunning backing $ \r -> do
+    -- The server's space has its home page at home; the archive has a page
+    -- at home, which is a new page under it, not the home page.
+    ours <- makeSpace r "docs"
+    let named = archive [space "s1" Nothing "docs"] [page "p1" "s1" Nothing "home" "Imported at home."]
+    plan <- preview r named
+    [map (\p -> p.conflict) s.pages | s <- plan.spaces] `shouldBe` [[Nothing]]
+    apply r named importEverything `shouldReturn` summary {spacesMerged = 1, pagesCreated = 1}
+    child <- pageAt r ["docs"] ["home"]
+    (child.body, child.parent) `shouldBe` ("Imported at home.", ours.homePage)
+    home <- pageAt r ["docs"] []
+    Just home.id `shouldBe` ours.homePage
+
   it "is a conflict, with the server's page beside it" $ withRunning backing $ \r -> do
     (_, mine) <- setUp r
     plan <- preview r theirs
@@ -387,7 +400,7 @@ roundTrip backing = describe "an export" $ do
             for spaces $ \(s :: Space) -> do
               listed <- ok200 (getUrl r (admin r (links.spaces.listPages s.id)))
               -- The list has no bodies: each page is read by itself.
-              pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (pagePathOf listed l.id))))
+              pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (fromMaybe [] (pagePathOf s listed l.id)))))
               pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name.text, a.source)) p.attachments) | (p :: Page) <- pages])
       expected <- shape origin
       shape copy `shouldReturn` expected

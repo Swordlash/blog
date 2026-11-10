@@ -136,6 +136,7 @@ module Wiki.Server.Storage.Rows
   , setSpacePosition
   , deleteSpaceRow
   , insertHomePage
+  , strayRootsOf
   , insertPage
   , updatePageText
   , setPagePosition
@@ -841,12 +842,13 @@ loadFirstVersions :: (Backend be) => SpaceId -> Db be [(PageId, VersionRow)]
 loadFirstVersions space = firstVersionsWhere (\p -> p.space_id ==. val_ space.text)
 
 -- | The bodies of the pages of a space that can be posts of a blog: the
--- pages at its top level that are not templates ("Wiki.Core.Blog"'s
--- 'isPost' decides the rest). A blog's list shows an excerpt of each.
-loadPostBodies :: (Backend be) => SpaceId -> Db be [(PageId, Text)]
-loadPostBodies space =
+-- pages under its root, its home page ('Wiki.Core.Space.rootPage'), that
+-- are not templates ("Wiki.Core.Blog"'s 'isPost' decides the rest). A
+-- blog's list shows an excerpt of each.
+loadPostBodies :: (Backend be) => SpaceId -> Maybe PageId -> Db be [(PageId, Text)]
+loadPostBodies space root =
   map (first PageId)
-    <$> runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ space.text &&. isNothing_ p.parent &&. p.template ==. val_ False) (all_ wikiDb.pages)))
+    <$> runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ space.text &&. under root p &&. p.template ==. val_ False) (all_ wikiDb.pages)))
 
 -- | How many comments each page of a space has, in all its threads; a page
 -- with none is left out.
@@ -1569,9 +1571,11 @@ deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.te
 
 -- | Give a space its default home page ('Space.defaultHomePage'), made at
 -- this time among the space's top-level pages, with its first version by
--- this author ('Nothing' for nobody's), and make it the space's home page.
--- The result is the space with it. A space is made with one this way, and
--- so is a space an import brings in without one.
+-- this author ('Nothing' for nobody's), and make it the space's home page
+-- and the root of its pages: the top-level pages go under it, with their
+-- slugs and positions, and keep their addresses. The result is the space
+-- with it. A space is made with one this way, and so is a space an import
+-- brings in without one.
 insertHomePage :: (Backend be) => Maybe UserId -> UTCTime -> Space -> Db be Space
 insertHomePage author time space = do
   pid <- liftIO (PageId . UUID.toText <$> generateV4)
@@ -1580,8 +1584,16 @@ insertHomePage author time space = do
       space' = Space.withHome (Just home.id) space
   insertPage home
   insertVersion home author
+  -- The new home page has no pages under it, so no slug clashes there.
+  for_ topLevel $ \n -> placePage n.id space.id (Just home.id) n.slug n.position
   updateSpace space'
   pure space'
+
+-- | The pages of a space with no parent that should have one: every one
+-- but its home page ('Wiki.Core.Space.strayRoots'). Empty for a space with
+-- no home page. A write that leaves one is refused.
+strayRootsOf :: (Backend be) => Space -> Db be [PageNode]
+strayRootsOf s = Space.strayRoots s <$> childPages s.id Nothing
 
 -- | The fold a search matches a page against: its title and its search
 -- text ('bodyText' of its body), each folded as the search folds them

@@ -70,8 +70,8 @@ import Wiki.App.Head (Site (..))
 import Wiki.App.Route (Route (..), route, routeOfHref)
 import Wiki.App.Static (Served (..), renderServed, withHead)
 import Wiki.Core.HomePage (HomePage (showAnonymous))
-import Wiki.Core.Page (Page (id))
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Page (Page (id), PageSummary (id))
+import Wiki.Core.Space (Space (id), pageAt, pagePath)
 import Wiki.Core.Version (VersionInfo (number, updatedAt))
 import Wiki.Server.Address (addressOf, hrefAddress, publicAddress)
 import Wiki.Server.Api (Env (..), apiApplication, callerAs)
@@ -194,8 +194,15 @@ statusOf at c = case at of
     unlessRefused a b = if a == status200 then b else a
     ofSpace s = refusal (Map.lookup s c.spaceAt)
     ofPage s p = case Map.lookup s c.spaceAt of
-      Just (Right space) -> refusal (cachedPage space.id p c)
+      Just (Right space) -> refusal (pageIn space p)
       _ -> status200
+    -- The page read at a path: the views read it at its path as it is
+    -- now, which an old address (with the home page's slug first) is not.
+    pageIn space p = cachedPage space.id p c <|> (canonical space p >>= \cp -> cachedPage space.id cp c)
+    canonical space p = do
+      listed <- rightToMaybe =<< Map.lookup space.id c.pages
+      found <- pageAt space listed p
+      pagePath space (\i -> find (\x -> x.id == i) listed) found.id
     -- A version the page's history does not have. The history view reads
     -- the history a page at a time, the latest first, until it reaches
     -- the version asked for. So the version is not there if the pages read
@@ -204,7 +211,7 @@ statusOf at c = case at of
       Nothing -> status200
       Just time -> case Map.lookup s c.spaceAt of
         Just (Right space)
-          | Just (Right page) <- cachedPage space.id p c
+          | Just (Right page) <- pageIn space p
           , listed <- concat [vs | ((pid, _), Right vs) <- Map.toList c.versionLists, pid == page.id]
           , not (any (\v -> v.updatedAt == time) listed)
           , any (\v -> v.number == 1 || v.updatedAt < time) listed ->

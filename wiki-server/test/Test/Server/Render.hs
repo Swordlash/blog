@@ -123,16 +123,21 @@ anonymous backing = describe "for someone not signed in" $ do
     pages `shouldSatisfy` T.isInfixOf "<title>Space settings · Docs · Wiki</title>"
     appIn pages `shouldSatisfy` T.isInfixOf "<h1>Docs</h1>"
     appIn pages `shouldSatisfy` T.isInfixOf "<p class=\"space-description\">How to use this wiki: a guided tour, and everything its Markdown can do.</p>"
+    -- The tour is Docs' home page, at the space's address; its old address
+    -- still shows it.
     (tourStatus, tour) <- page r r.public "/s/docs/p/tour/"
     tourStatus `shouldBe` 200
-    tour `shouldSatisfy` T.isInfixOf "<title>Tour · Docs · Wiki</title>"
+    tour `shouldSatisfy` T.isInfixOf "<title>Docs · Wiki</title>"
     appIn tour `shouldSatisfy` T.isInfixOf "anyone may read them, signed in or not."
-    (sourceStatus, source) <- page r r.public "/s/docs/p/tour/source/"
+    (guideStatus, guide) <- page r r.public "/s/docs/p/markdown-guide/"
+    guideStatus `shouldBe` 200
+    guide `shouldSatisfy` T.isInfixOf "<title>Markdown guide · Docs · Wiki</title>"
+    (sourceStatus, source) <- page r r.public "/s/docs/source/"
     sourceStatus `shouldBe` 200
     appIn source `shouldSatisfy` T.isInfixOf "| nobody (not signed in)   | read the public spaces, **Blog** and **Docs**        |"
-    (historyStatus, history) <- page r r.public "/s/docs/p/tour/history/"
+    (historyStatus, history) <- page r r.public "/s/docs/history/"
     historyStatus `shouldBe` 200
-    history `shouldSatisfy` T.isInfixOf "<title>History · Tour · Wiki</title>"
+    history `shouldSatisfy` T.isInfixOf "<title>History · Docs · Wiki</title>"
     appIn history `shouldSatisfy` T.isInfixOf "Version 1 (current)"
     appIn history `shouldSatisfy` T.isInfixOf "<td class=\"diff-text\"># Tour</td>"
     (slidesStatus, slides) <- page r r.public "/s/docs/p/markdown-guide/presentations/slides/?slide=3"
@@ -160,7 +165,7 @@ anonymous backing = describe "for someone not signed in" $ do
       appIn html `shouldNotSatisfy` T.isInfixOf "error-forbidden"
 
   it "renders what is not there with a 404: an address, a space, a page, a version" $ withDemoRunning backing identity $ \r -> do
-    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/nowhere/pages/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
+    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/nowhere/pages/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/history/?version=2020-01-01T00%3A00%3A00Z", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
       (status, html) <- page r r.public path
       (path, status) `shouldBe` (path, 404)
       appIn html `shouldSatisfy` \a -> "Not found" `T.isInfixOf` a || "error-not-found" `T.isInfixOf` a
@@ -175,9 +180,9 @@ anonymous backing = describe "for someone not signed in" $ do
 administrator :: Backing -> Spec
 administrator backing = describe "for an administrator signed in" $ do
   it "renders the private spaces with their pages, and the administration" $ withAdminSession backing identity $ \r session -> do
-    (status, html) <- pageAs r [session] r.public "/s/team/p/team-handbook/"
+    (status, html) <- pageAs r [session] r.public "/s/team/p/on-call/"
     status `shouldBe` 200
-    html `shouldSatisfy` T.isInfixOf "<title>Team handbook · Team · Wiki</title>"
+    html `shouldSatisfy` T.isInfixOf "<title>On-call · Team · Wiki</title>"
     appIn html `shouldSatisfy` T.isInfixOf "Ada Admin"
     appIn html `shouldSatisfy` T.isInfixOf "Sign out"
     -- The administration's first section at /admin/, and the users at
@@ -194,7 +199,7 @@ administrator backing = describe "for an administrator signed in" $ do
     preload <- preloadIn admin
     Map.size preload.userPages `shouldBe` 1
     -- The same address, to nobody: neither the space nor the administration.
-    (.status) <$> getUrl r (r.public <> "/s/team/p/team-handbook/") `shouldReturn` 404
+    (.status) <$> getUrl r (r.public <> "/s/team/p/on-call/") `shouldReturn` 404
     (_, refused) <- page r r.public "/admin/users/"
     appIn refused `shouldNotSatisfy` T.isInfixOf "user-table"
 
@@ -212,7 +217,7 @@ adminListener backing = describe "on the admin listener" $ do
     (status, html) <- page r r.admin "/admin/s/team/"
     status `shouldBe` 200
     html `shouldSatisfy` T.isInfixOf "<base href=\"/admin/\">"
-    appIn html `shouldSatisfy` T.isInfixOf "href=\"/admin/s/team/p/team-handbook/\""
+    appIn html `shouldSatisfy` T.isInfixOf "href=\"/admin/s/team/p/on-call/\""
     appIn html `shouldNotSatisfy` T.isInfixOf "href=\"/s/"
 
 basePathAndLoad :: Backing -> Spec
@@ -221,7 +226,7 @@ basePathAndLoad backing = describe "under a base path, and many at once" $ do
     (status, html) <- page r r.public "/wiki/s/docs/"
     status `shouldBe` 200
     html `shouldSatisfy` T.isInfixOf "<base href=\"/wiki/\">"
-    appIn html `shouldSatisfy` T.isInfixOf "href=\"/wiki/s/docs/p/tour/\""
+    appIn html `shouldSatisfy` T.isInfixOf "href=\"/wiki/s/docs/p/markdown-guide/\""
     appIn html `shouldNotSatisfy` T.isInfixOf "href=\"/s/"
 
   it "renders pages asked for at once as it renders them one by one" $ withAdminSession backing identity $ \r session -> do
@@ -256,12 +261,17 @@ preloads backing = describe "what a page carries for the program" $ do
       for_ p.searches $ \(query, hits) -> api (searchUrl query) `shouldReturn` hits
 
   it "holds what the route shows: its space's list of pages, and the page shown" $ withDemoRunning backing identity $ \r -> do
-    (_, html) <- page r r.public "/s/docs/p/tour/"
+    (_, html) <- page r r.public "/s/docs/p/markdown-guide/"
     p <- preloadIn html
     (isJust p.session, Map.keys p.spaceAt, Map.size p.pages) `shouldBe` (True, [slugs "docs"], 1)
     -- The list of pages has no bodies, so the page shown is carried by
     -- itself, once.
-    map snd (Map.keys p.pageAt) `shouldBe` [slugs "tour"]
+    map snd (Map.keys p.pageAt) `shouldBe` [slugs "markdown-guide"]
+    -- The home page at its old address is read at its address now, the
+    -- space's.
+    (_, home) <- page r r.public "/s/docs/p/tour/"
+    homeLoad <- preloadIn home
+    map snd (Map.keys homeLoad.pageAt) `shouldBe` [[]]
 
 addresses :: Spec
 addresses = describe "a request's address" $ do

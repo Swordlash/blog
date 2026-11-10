@@ -17,6 +17,7 @@ import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..), Si
 import Wiki.App.Route (Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
+import Wiki.Core.Comment qualified as C
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -54,13 +55,21 @@ blogOf st = fromMaybe (panic "the demo has no blog") (find (\s -> s.name == "Blo
 withTwelve :: MemState -> MemState
 withTwelve st = foldl' add st [1 .. 12 :: Int]
   where
-    add s n = fst (insertPage (blogOf st).id Nothing ("Post " <> show n) ("The text of post " <> show n <> ".") (addUTCTime (fromIntegral n * 3600) demoNow) s)
+    add s n = fst (insertPage (blogOf st).id (blogOf st).homePage ("Post " <> show n) ("The text of post " <> show n <> ".") (addUTCTime (fromIntegral n * 3600) demoNow) s)
 
 -- | The demo's blog with a home page someone wrote: its second post.
 withHome :: MemState -> MemState
-withHome st = st {spaces = Map.adjust (S.withHome ((\p -> p.id) <$> notes)) (blogOf st).id st.spaces}
+withHome st = st {spaces = Map.adjust (S.withHome ((\p -> p.id) <$> notes)) (blogOf st).id st.spaces, pages = Map.mapMaybe moved st.pages}
   where
     notes = find (\p -> p.title == "Notes on Haskell") (Map.elems st.pages) :: Maybe P.Page
+    -- The post becomes the root of the blog's pages, in the place of the
+    -- home page the blog was made with, which goes.
+    old = (blogOf st).homePage
+    moved p
+      | Just p.id == old = Nothing
+      | Just p.id == ((\n -> n.id) <$> notes) = Just (P.placedPage Nothing p.slug p.position p)
+      | p.parent == old = Just (P.placedPage ((\n -> n.id) <$> notes) p.slug p.position p)
+      | otherwise = Just p
 
 spec :: Spec
 spec = describe "a space shown as a blog, rendered" $ do
@@ -83,6 +92,16 @@ spec = describe "a space shown as a blog, rendered" $ do
   it "offers a new post to whoever may edit the space" $ do
     Rendered {html} <- render (as (Just "user-editor")) (Space blogPath)
     html `contains` "<a class=\"button new-post\" href=\"/s/blog/new-page/\">New post</a>"
+
+  it "offers its home page's editor to its administrators, and its source and history to every reader" $ do
+    Rendered {html = asAdmin} <- render (as (Just "user-admin")) (Space blogPath)
+    asAdmin `contains` "<a class=\"button blog-intro-edit\" href=\"/s/blog/edit/\">Edit home page</a>"
+    Rendered {html = asEditor} <- render (as (Just "user-editor")) (Space blogPath)
+    asEditor `lacks` "blog-intro-edit"
+    Rendered {html = asNobody} <- render (as Nothing) (Space blogPath)
+    asNobody `lacks` "blog-intro-edit"
+    asNobody `contains` "<a class=\"button blog-intro-source\" href=\"/s/blog/source/\">View source</a>"
+    asNobody `contains` "<a class=\"button blog-intro-history\" href=\"/s/blog/history/\">History</a>"
 
   it "names a post's author where one is known" $ do
     let st = as Nothing
@@ -113,13 +132,33 @@ spec = describe "a space shown as a blog, rendered" $ do
 
   it "shows its home page above its posts, and not among them" $ do
     Rendered {html} <- render (withHome (as Nothing)) (Space blogPath)
-    -- The article carries the key its spoilers are remembered by
+    -- The home page is shown by the page view, with its toolbar: the
+    -- article carries the key its spoilers are remembered by
     -- ("Wiki.App.View.Body"'s spoilerScope), the reader's and the page's.
-    html `contains` "<div class=\"blog-home\"><article class=\"page-body\" data-spoilers=\"anonymous:blog/p/"
+    html `contains` "<div class=\"blog-home\"><div class=\"page-view"
+    html `contains` "<article class=\"page-body\" data-spoilers=\"anonymous:blog/p/\""
+    html `contains` "<a class=\"button\" href=\"/s/blog/source/\">View source</a>"
+    -- Its actions are the page view's, not the blog's own for it.
+    html `lacks` "blog-intro-source"
     html `contains` "\"><h1 id=\"notes-on-haskell\">Notes on Haskell"
     html `lacks` "Notes on Haskell</span></a>"
     html `contains` "Hello, world</span></a>"
     comesBefore html "class=\"blog-home\"" "class=\"space-cards post-list\""
+
+  it "shows its home page, untouched, when it has comments, with them and with what a page has" $ do
+    -- The first post's comments, on the blog's home page instead: a
+    -- notification about one of them leads to the blog's address.
+    let st = as Nothing
+        home = fromMaybe (panic "the blog has no home page") (blogOf st).homePage
+        hello = find (\p -> p.title == "Hello, world") (Map.elems st.pages) :: Maybe P.Page
+        moved = case hello >>= \h -> Map.lookup h.id st.threads of
+          Just ts -> st {threads = Map.insert home [t {C.page = home} | t <- ts] (maybe identity (\h -> Map.delete h.id) hello st.threads)}
+          Nothing -> panic "the first post has no threads"
+    Rendered {html} <- render moved (Space blogPath)
+    html `contains` "<div class=\"blog-home\"><div class=\"page-view"
+    html `contains` "<section aria-label=\"Comments on the page\" class=\"page-comments\"><h2>Comments</h2>"
+    html `contains` "<p>Welcome! Comments here are about the whole post; select some of its text to comment on that.</p>"
+    html `lacks` "blog-intro-source"
 
   it "leaves out a home page whose text is still the one the space was made with" $ do
     -- The demo's blog has the home page every space is given, untouched.
@@ -187,8 +226,8 @@ spec = describe "a space shown as a blog, rendered" $ do
       headTags site guide `contains` "<meta property=\"og:image\" content=\"https://wiki.example/files/tree.png\">"
 
     it "says nothing of a private page, even to someone who may read it" $ do
-      Rendered {meta} <- render (as (Just "user-admin")) (Page (slugs ["team"]) (slugs ["team-handbook"]))
-      meta.title `shouldBe` "Team handbook · Team · Wiki"
+      Rendered {meta} <- render (as (Just "user-admin")) (Page (slugs ["team"]) (slugs ["on-call"]))
+      meta.title `shouldBe` "On-call · Team · Wiki"
       meta.preview `shouldBe` Nothing
       headTags site meta `shouldBe` ""
 

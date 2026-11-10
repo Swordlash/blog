@@ -221,6 +221,19 @@ spec = describe "MemWiki kept in IndexedDB" $ do
         againSt <- readIORef again.wiki
         (blogOf againSt).homePage `shouldBe` Just home.id
         shouldReload db upgraded
+  it "puts the pages kept at the top of a space under its home page, as the server's step 13 does" $ withFreshDatabase $ \db -> do
+    -- The demo as a build from before the home page was the root kept it:
+    -- the Markdown guide at the top of Docs, beside the tour.
+    let docsOf st = fromMaybe (panic "the demo has no Docs") (find (\s -> s.name == "Docs") (Map.elems st.spaces))
+        titled t st = fromMaybe (panic ("no page " <> t)) (find (\p -> p.title == t) (Map.elems st.pages))
+        guide = titled "Markdown guide" seed
+        unrooted = Page {id = guide.id, space = guide.space, parent = Nothing, title = guide.title, slug = guide.slug, body = guide.body, attachments = guide.attachments, createdAt = guide.createdAt, updatedAt = guide.updatedAt, position = guide.position, template = guide.template, createdBy = guide.createdBy, updatedBy = guide.updatedBy}
+        older = seed {pages = Map.insert guide.id unrooted seed.pages}
+    runMemDOM (IDB.writeMany db (changes mempty (records older)))
+    upgraded <- open db
+    st <- readIORef upgraded.wiki
+    (titled "Markdown guide" st).parent `shouldBe` (docsOf st).homePage
+    [p.title | p <- Map.elems st.pages, p.space == (docsOf st).id, isNothing p.parent] `shouldBe` ["Tour"]
 
   describe "records" $ do
     it "read back as the wiki they were made from" $

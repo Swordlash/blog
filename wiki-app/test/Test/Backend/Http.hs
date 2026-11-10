@@ -57,6 +57,7 @@ import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space qualified as S
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Core.Vault (KeyId (..))
 import Wiki.Core.Version (Author)
@@ -83,7 +84,8 @@ status n body = Right (jsonResponse n body)
 demo :: MemState
 demo = demoState demoNow
 
--- | A page of the demo, by path, with its space's path.
+-- | A page of the demo, by path from under its space's home page, with its
+-- space's path.
 demoPage :: Text -> Text -> Page
 demoPage s p =
   fromMaybe (panic ("no page " <> p)) $
@@ -92,7 +94,8 @@ demoPage s p =
       | page <- Map.elems demo.pages
       , Just sp <- [pathOf (`Map.lookup` demo.spaces) page.space]
       , sp == slugs s
-      , pathOf (`Map.lookup` demo.pages) page.id == Just (slugs p)
+      , Just space <- [Map.lookup page.space demo.spaces]
+      , S.pagePath space (`Map.lookup` demo.pages) page.id == Just (slugs p)
       ]
 
 slugs :: Text -> [Slug]

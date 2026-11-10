@@ -382,7 +382,8 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       [(field "subspaceOrder" o, field "pageOrder" o) | o <- recordsIn "/space.json" files, field "name" o == Just (String "Team")]
         `shouldBe` [(Just (String "newest-first"), Just (String "by-hand"))]
       [(field "subspaceOrder" o, field "pageOrder" o) | o <- recordsIn "/space.json" files, field "name" o == Just (String "Blog")] `shouldBe` [(Nothing, Nothing)]
-      [field "position" o | o <- recordsIn "/page.json" files, field "title" o == Just (String "Team handbook")] `shouldBe` [Just (toJSON (1 :: Int))]
+      -- The pages under the team's home page, the handbook: the new one first.
+      [field "position" o | o <- recordsIn "/page.json" files, field "title" o == Just (String "On-call")] `shouldBe` [Just (toJSON (1 :: Int))]
       [field "position" o | o <- recordsIn "/page.json" files, field "title" o == Just (String "Second")] `shouldBe` [Nothing]
       fromArchive <$> readArchive files `shouldBe` Right st
 

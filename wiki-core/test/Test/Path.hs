@@ -153,3 +153,58 @@ spec = describe "Path" $ do
     prop "parses what it renders" $
       forAll genSlugs $
         \path -> parsePath (renderPath path) === Right path
+
+  describe "a space's pages under its home page (WP5.78)" $ do
+    let home = page "r" "h" "home" Nothing
+        tour = page "r" "t" "tour" (Just "h")
+        week = page "r" "w" "first-week" (Just "t")
+        -- A child of the home page with the home page's own slug.
+        homeChild = page "r" "c" "home" (Just "h")
+        rooted = [home, tour, week]
+        rootedSpace = withHome (Just home.id) (space "r" "rooted" Nothing)
+        byId ps i = find (\p -> p.id == i) ps
+        ids = fmap (map (\p -> p.id))
+    it "gives the home page the empty path and its pages theirs without its slug" $ do
+      pagePath rootedSpace (byId rooted) home.id `shouldBe` Just []
+      pagePath rootedSpace (byId rooted) tour.id `shouldBe` Just (slugs ["tour"])
+      pagePath rootedSpace (byId rooted) week.id `shouldBe` Just (slugs ["tour", "first-week"])
+    it "gives every slug in a space with no root, as an encrypted space has" $
+      pagePath (withHome Nothing rootedSpace) (byId rooted) tour.id `shouldBe` Just (slugs ["home", "tour"])
+    it "reads the empty path as the home page" $
+      ids (pagesAt rootedSpace rooted []) `shouldBe` Right [home.id]
+    it "reads a path from under the home page, the home page first" $
+      ids (pagesAt rootedSpace rooted (slugs ["tour", "first-week"])) `shouldBe` Right [home.id, tour.id, week.id]
+    it "reads an old address, with the home page's slug first, without that segment" $ do
+      pageAt rootedSpace rooted (slugs ["home", "tour"]) `shouldBe` Just tour
+      pageAt rootedSpace rooted (slugs ["home"]) `shouldBe` Just home
+    it "reads a path exactly as written, without the rule for old addresses, for what matches pages" $ do
+      pageAtExactly rootedSpace rooted (slugs ["home"]) `shouldBe` Nothing
+      pageAtExactly rootedSpace rooted (slugs ["tour"]) `shouldBe` Just tour
+      pageAtExactly rootedSpace rooted [] `shouldBe` Just home
+      pageAtExactly rootedSpace (homeChild : rooted) (slugs ["home"]) `shouldBe` Just homeChild
+    it "prefers the path as written to the old address" $ do
+      let withChild = homeChild : rooted
+      pageAt rootedSpace withChild (slugs ["home"]) `shouldBe` Just homeChild
+    it "reports the path as written when the old address names nothing either" $
+      pagesAt rootedSpace rooted (slugs ["home", "nope"])
+        `shouldBe` Left PathError {resolved = [home], missing = slug "home"}
+    it "resolves back every page's path, for every page" $
+      for_ rooted $ \p ->
+        (pageAt rootedSpace rooted =<< pagePath rootedSpace (byId rooted) p.id) `shouldBe` Just p
+    it "puts a page with no parent under the home page" $ do
+      parentOrRoot rootedSpace Nothing `shouldBe` Just home.id
+      parentOrRoot rootedSpace (Just tour.id) `shouldBe` Just tour.id
+      parentOrRoot (withHome Nothing rootedSpace) Nothing `shouldBe` Nothing
+    it "finds the pages with no parent that are not the home page" $ do
+      let stray = page "r" "s" "stray" Nothing
+      strayRoots rootedSpace (stray : rooted) `shouldBe` [stray]
+      strayRoots rootedSpace rooted `shouldBe` []
+      strayRoots (withHome Nothing rootedSpace) (stray : rooted) `shouldBe` []
+    it "numbers the home page 0 and the pages under it from 1 (pageNumber)" $ do
+      let about = page "r" "a" "about" (Just "h")
+          summaries = map summaryOf (about : rooted)
+      pageNumber (Just home.id) ByName summaries [] `shouldBe` Just 0
+      pageNumber (Just home.id) ByName summaries (slugs ["about"]) `shouldBe` Just 1
+      pageNumber (Just home.id) ByName summaries (slugs ["tour"]) `shouldBe` Just 2
+      pageNumber (Just home.id) ByName summaries (slugs ["tour", "first-week"]) `shouldBe` Just 1
+      pageNumber (Just home.id) ByName summaries (slugs ["nope"]) `shouldBe` Nothing

@@ -503,9 +503,11 @@ async function migrateTheDemo() {
   await page.locator("#app .search-space option", { hasText: "Docs" }).waitFor({ state: "attached", timeout });
   const hello = await pageAt("blog", "hello-world");
   assert.ok(hello && !hello.body.includes("Written on the server."), "the server's Hello, world was not replaced");
-  // The server's Blog was made with its home page.
-  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["hello-world", "home"], "Notes on Haskell was imported though left out");
-  await page.goto(url("/s/docs/p/tour/"));
+  // The server's Blog was made with its home page, the root of its pages,
+  // listed first; Notes on Haskell, left out, is not there.
+  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["home", "hello-world"], "Notes on Haskell was imported though left out");
+  // The tour is Docs' home page, at the space's address.
+  await page.goto(url("/s/docs/"));
   await page.locator("#app .page-view h1", { hasText: "Tour" }).waitFor({ timeout });
   console.log("ok: the demo's export is imported through the dialog, a page left out and a conflict taking the imported page, and its summary shown");
 
@@ -554,7 +556,7 @@ async function migrateTheDemo() {
   const reader = await newPage();
   for (const [path, expected] of [
     ["/s/docs/p/markdown-guide/", "Contents"],
-    ["/s/team/p/team-handbook/", "Before your first day"],
+    ["/s/team/", "Before your first day"],
   ]) {
     const loaded = await loadAdopted(reader, path);
     assert.equal(loaded.status, 200, `${path}: the status`);

@@ -566,8 +566,10 @@ openMemWiki db source = withRunInIO $ \run -> do
         -- Signed in as the demo starts, with its server settings except
         -- for the shared home page, which is kept in IndexedDB, and with
         -- the changelog this build carries. A space kept from before
-        -- every space had a home page gets its default one, which is then
-        -- kept with the rest.
+        -- every space had a home page gets its default one, and a space's
+        -- pages kept from before the home page was their root go under it,
+        -- as the server's step 13 puts them; both are then kept with the
+        -- rest.
         Stored restored ->
           do
             let start = ensureHomePages time (ensureHomeDocument time restored {current = seed.current, server = seed.server {SS.homePage = restored.server.homePage}, whatsNew = seed.whatsNew})

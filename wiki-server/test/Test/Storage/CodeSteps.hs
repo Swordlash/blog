@@ -18,13 +18,14 @@ import Test.Database (Backing, withConnectionTo)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture (withEmptyPlaceIn)
-import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend (MonadWiki (..), WikiError (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), searchQuery)
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..), isHomeBody)
 import Wiki.Core.Version (VersionInfo (..), latestVersions)
-import Wiki.Server.Storage (StoredWiki, Who (..), defaultConfig, runStoredWiki, withStorage)
+import Wiki.Server.Storage (CheckProblem (..), StoredWiki, Who (..), checkDatabase, defaultConfig, runStoredWiki, withStorage)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Migrate.Code.Step0012 (homeBody, homeSearchText)
@@ -296,6 +297,7 @@ spec backing = describe "the schema's steps in code" $ do
       runDb c tableNames `shouldReturn` []
 
   step0012Spec backing
+  step0013Spec backing
 
   it "are refused when misnumbered, before the database is touched" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
@@ -305,6 +307,139 @@ spec backing = describe "the schema's steps in code" $ do
         Left (StepsMisnumbered why) -> why `shouldSatisfy` T.isPrefixOf ("step " <> show (length files) <> " is both ")
         Right applied -> expectationFailure ("applied " <> show applied)
       runDb c tableNames `shouldReturn` []
+
+-- | The steps numbered up to this one.
+upTo :: Int -> [Step] -> [Step]
+upTo n = filter (\s -> stepNumber s <= n)
+
+-- | Where each page is: its parent, its slug and its position, by id.
+placesOf :: (Backend be) => Connection be -> IO (Map Text (Maybe Text, Text, Int32))
+placesOf c = Map.fromList . map (\p -> (p.id, (p.parent, p.slug, p.position))) <$> runDb c (runSelectReturningList (select (all_ oldDb.pages)))
+
+-- | Rows at version 12, as step 13 finds them: a space ordered by hand
+-- with two top-level pages beside its home page, and two pages under the
+-- home page, one with a top-level page's slug and one with the slug the
+-- first would be renamed to; a space whose home page is under a top-level
+-- page; a space whose home page is its root already; an encrypted space
+-- with two top-level pages; and the container of personal spaces.
+writeVersion12 :: (Backend be) => Connection be -> IO ()
+writeVersion12 c = do
+  void (applySteps (upTo 12 (stepsFor (schemaSuffix c))) c)
+  begin True c
+  runDb c $ do
+    runInsert . insert oldDb.spaces $
+      insertValues
+        [ oldSpace "plain" "Plain" "plain"
+        , oldSpace "nested" "Nested" "nested"
+        , oldSpace "rooted" "Rooted" "rooted"
+        , (oldSpace "secret" "Secret" "secret") {key_id = Just "k1"}
+        , (oldSpace "container" "User subspaces" "users") {personal_container = True}
+        ]
+    runInsert . insert oldDb.pages $
+      insertValues
+        [ oldPage "p-home" "plain" Nothing "home" 0 False
+        , oldPage "p-about" "plain" Nothing "about" 1 False
+        , oldPage "p-notes" "plain" Nothing "notes" 2 False
+        , oldPage "p-c" "plain" (Just "p-home") "notes" 0 False
+        , oldPage "p-d" "plain" (Just "p-home") "notes-2" 1 False
+        , oldPage "p-deep" "plain" (Just "p-c") "deep" 0 False
+        , oldPage "n-top" "nested" Nothing "top" 0 False
+        , oldPage "n-home" "nested" (Just "n-top") "home" 0 False
+        , oldPage "n-x" "nested" (Just "n-home") "x" 0 False
+        , oldPage "r-home" "rooted" Nothing "home" 0 False
+        , oldPage "r-a" "rooted" (Just "r-home") "a" 0 False
+        , oldPage "s-1" "secret" Nothing "x7f3" 0 False
+        , oldPage "s-2" "secret" Nothing "q9z1" 1 False
+        ]
+    for_ [("plain", "p-home"), ("nested", "n-home"), ("rooted", "r-home")] $ \(sid, home) ->
+      runUpdate (update oldDb.spaces (\x -> x.home_page <-. val_ (Just home)) (\x -> x.id ==. val_ sid))
+  commitTransaction c
+
+-- | Step 13 ("Wiki.Server.Storage.Migrate.Code.Step0013"): each space's home
+-- page becomes the root of its pages, written on rows of version 12 in an
+-- empty database.
+step0013Spec :: Backing -> SpecWith ()
+step0013Spec backing = describe "step 13, the home page is the root of a space's pages" $ do
+  it "puts the other top-level pages under the home page, renames a clashing page under it, and leaves the rest alone" $
+    withEmptyPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        writeVersion12 c
+        written <- runDb c (runSelectReturningList (select (all_ oldDb.pages)))
+        applySteps (upTo 13 (stepsFor (schemaSuffix c))) c `shouldReturn` [13]
+        places <- placesOf c
+        let placed i = Map.lookup i places
+        -- The home page alone at the top; the top-level pages under it,
+        -- with their slugs and positions; the home page's own pages after
+        -- them, the one with a top-level page's slug at the next free one.
+        placed "p-home" `shouldBe` Just (Nothing, "home", 0)
+        placed "p-about" `shouldBe` Just (Just "p-home", "about", 1)
+        placed "p-notes" `shouldBe` Just (Just "p-home", "notes", 2)
+        placed "p-c" `shouldBe` Just (Just "p-home", "notes-3", 3)
+        placed "p-d" `shouldBe` Just (Just "p-home", "notes-2", 4)
+        placed "p-deep" `shouldBe` Just (Just "p-c", "deep", 0)
+        -- A home page under a page comes out from under it, and that page
+        -- goes under the home page.
+        placed "n-home" `shouldBe` Just (Nothing, "home", 0)
+        placed "n-top" `shouldBe` Just (Just "n-home", "top", 0)
+        placed "n-x" `shouldBe` Just (Just "n-home", "x", 1)
+        -- A space rooted already, an encrypted one, and the container keep
+        -- what they had.
+        placed "r-home" `shouldBe` Just (Nothing, "home", 0)
+        placed "r-a" `shouldBe` Just (Just "r-home", "a", 0)
+        placed "s-1" `shouldBe` Just (Nothing, "x7f3", 0)
+        placed "s-2" `shouldBe` Just (Nothing, "q9z1", 1)
+        -- No page's text, title or search text changes.
+        after' <- runDb c (runSelectReturningList (select (all_ oldDb.pages)))
+        sortOn fst [(p.id, (p.title, p.body, p.search_text, p.search_fold, p.updated_at)) | p <- after']
+          `shouldBe` sortOn fst [(p.id, (p.title, p.body, p.search_text, p.search_fold, p.updated_at)) | p <- written]
+      -- The live program reads every page at its address from under the
+      -- home page, and an old address through the rule for old ones.
+      checkDatabase at >>= (`shouldSatisfy` isRight)
+      withStorage defaultConfig at $ \st -> do
+        let asAdministrator :: StoredWiki IO a -> IO a
+            asAdministrator = runStoredWiki st Administrator
+            slug t = either (panic . show) identity (mkSlug t)
+            at' sid path = fmap (\p -> p.id.text) <$> asAdministrator (getPage (SpaceId sid) (map slug path))
+        at' "plain" [] `shouldReturn` Right "p-home"
+        at' "plain" ["notes"] `shouldReturn` Right "p-notes"
+        at' "plain" ["notes-3"] `shouldReturn` Right "p-c"
+        at' "plain" ["notes-3", "deep"] `shouldReturn` Right "p-deep"
+        -- The old addresses of the pages under the home page.
+        at' "plain" ["home"] `shouldReturn` Right "p-home"
+        at' "plain" ["home", "notes-2"] `shouldReturn` Right "p-d"
+        -- The renamed page's old address now leads to the page that was
+        -- at the top and kept the slug, and its pages' old addresses lead
+        -- nowhere (a known gap).
+        at' "plain" ["home", "notes"] `shouldReturn` Right "p-notes"
+        at' "plain" ["home", "notes", "deep"] `shouldReturn` Left NotFound
+        at' "nested" [] `shouldReturn` Right "n-home"
+        at' "nested" ["top"] `shouldReturn` Right "n-top"
+        at' "nested" ["x"] `shouldReturn` Right "n-x"
+
+  it "is undone with the rest of the migration when a later step fails" $
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      writeVersion12 c
+      before' <- placesOf c
+      result <- try @IOException (applySteps (upTo 13 (stepsFor (schemaSuffix c)) <> arrange [] [failingStep 14]) c)
+      result `shouldSatisfy` isLeft
+      schemaVersion c `shouldReturn` 12
+      placesOf c `shouldReturn` before'
+
+  it "is refused by the storage and reported by the check when a space has a second page with no parent" $
+    withEmptyPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        writeVersion12 c
+        void (applySteps (stepsFor (schemaSuffix c)) c)
+        -- A second root, which only a row's update can make.
+        begin True c
+        runScript c "UPDATE pages SET parent = NULL WHERE id = 'p-about';"
+        commitTransaction c
+      checkDatabase at >>= \case
+        Left (BrokenRecords [line]) -> line `shouldSatisfy` T.isInfixOf "p-about"
+        other -> expectationFailure ("the check said " <> show other)
+      withStorage defaultConfig at $ \st -> do
+        made <- runStoredWiki st Administrator (createPage (SpaceId "plain") Nothing "Another" "")
+        made `shouldSatisfy` either (\case Invalid why -> "home page" `T.isInfixOf` why; _ -> False) (const False)
 
 -- | Step 12 ("Wiki.Server.Storage.Migrate.Code.Step0012"): every space but
 -- the container of personal spaces and an encrypted space gets a home
@@ -345,7 +480,7 @@ step0012Spec backing = describe "step 12, every space has a home page" $ do
           runUpdate (update oldDb.spaces (\x -> x.home_page <-. val_ (Just "homed-start")) (\x -> x.id ==. val_ "homed"))
         commitTransaction c
         written <- runDb c (runSelectReturningList (select (all_ oldDb.pages)))
-        applySteps (stepsFor (schemaSuffix c)) c `shouldReturn` [12 .. knownVersion (schemaSuffix c)]
+        applySteps (upTo 12 (stepsFor (schemaSuffix c))) c `shouldReturn` [12]
         spaces <- Map.fromList . map (\x -> (x.id, x.home_page)) <$> runDb c (runSelectReturningList (select (all_ oldDb.spaces)))
         pages <- runDb c (runSelectReturningList (select (all_ oldDb.pages)))
         versions <- runDb c (runSelectReturningList (select (all_ oldDb.page_versions)))

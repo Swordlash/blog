@@ -121,8 +121,9 @@ spacesAndPages backing = describe "spaces and pages" $ do
     ordered <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setOrder space.id)) SpaceOrder {children = ChildPages, order = NewestFirst})
     (ordered :: Space).pageOrder `shouldBe` NewestFirst
     pages <- ok200 (getUrl r (onAdmin r (links.spaces.listPages space.id)))
-    -- Newest first: the page made after the space's home page, then it.
-    map (\(p :: PageSummary) -> p.title) pages `shouldBe` ["Welcome", "Home"]
+    -- The space's home page, the root of its pages, then the page made
+    -- under it.
+    map (\(p :: PageSummary) -> p.title) pages `shouldBe` ["Home", "Welcome"]
     reply <- getUrl r (onAdmin r (links.spaces.pageAt space.id [page.slug]))
     jsonAs 200 reply `shouldReturn` page
     header "ETag" reply `shouldBe` Just (encodeUtf8 (toUrlPiece (pageVersion page)))

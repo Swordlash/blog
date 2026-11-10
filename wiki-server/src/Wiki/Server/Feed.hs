@@ -77,7 +77,7 @@ import Wiki.Api.Notifications (Notifications (..), feedPath)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces), WikiError (NotFound))
 import Wiki.App.Backend.Notifications (MonadNotifications (notifications))
-import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
+import Wiki.App.Route (PageLink (..), Route (..), pageRoute, resolvePageLink, route)
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Access (Access (..))
@@ -88,8 +88,8 @@ import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Markdown.Box (BoxKind, Numbering (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id))
-import Wiki.Core.Path (TreeNode (..), pathOf)
-import Wiki.Core.Space (Space (blog, boxNumbering, createdAt, description, id, name))
+import Wiki.Core.Path (TreeNode (..))
+import Wiki.Core.Space (Space (blog, boxNumbering, createdAt, description, id, name), pagePath, rootPage)
 import Wiki.Core.User (User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
@@ -289,13 +289,15 @@ sitemap storage cache base =
         urls =
           concat
             [ SitemapUrl {loc = at (Space spacePath), lastmod = foldl' max s.createdAt [p.updatedAt | p <- ps]}
-                : sortOn (\u -> u.loc) [SitemapUrl {loc = at (Page spacePath (pathIn p)), lastmod = p.updatedAt} | p <- ps]
+                : sortOn (\u -> u.loc) [SitemapUrl {loc = at (Page spacePath path), lastmod = p.updatedAt} | p <- ps, Just path@(_ : _) <- [pathIn p]]
             | s <- spaces
             , Just ps <- [Map.lookup s.id pages]
             , let spacePath = spacePathOf spaces s.id
-                  -- Each page's path, through its space's pages by id.
+                  -- Each page's path, through its space's pages by id,
+                  -- from under its home page. The home page's is empty: its
+                  -- address is the space's, listed above.
                   byId = Map.fromList [(p.id, p) | p <- ps]
-                  pathIn p = fromMaybe [] (pathOf (`Map.lookup` byId) p.id)
+                  pathIn p = pagePath s (`Map.lookup` byId) p.id
             ]
     pure (Just (sitemapXml (take maxSitemapUrls urls)))
 
@@ -343,7 +345,7 @@ notificationFeed storage base token =
       FeedEntry
         { title = notificationTitle n
         , url = case n.location of
-            Just l -> addressOf base (Duplex.print route (Page l.space l.page)) <> maybe "" (\t -> "#" <> threadElementId t) n.thread
+            Just l -> addressOf base (Duplex.print route (pageRoute l.space l.page)) <> maybe "" (\t -> "#" <> threadElementId t) n.thread
             Nothing -> base
         , entryId = Just (feedId <> "/" <> n.id.text)
         , published = n.createdAt
@@ -379,7 +381,7 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
   Right blocks -> renderToHtml (H.mkComponent H.ComponentSpec {initialState = \_ -> pure (), render = \_ -> HH.div_ (Md.renderBlocks options blocks), eval = H.mkEval H.defaultEval}) ()
   where
     spacePath = spacePathOf spaces space.id
-    pagePath = pagePathOf pages p.id
+    postPath = fromMaybe [] (pagePathOf space pages p.id)
     options :: Md.Options PageLink (H.ComponentSlot Empty MemDOM Void) Void
     options =
       Md.defaultOptions
@@ -398,8 +400,8 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
         Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType.text}
         Nothing -> Md.Unresolved
       Md.ToUrl url -> Md.External url
-      Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (Page spacePath pagePath)) <> "#" <> fragment)
-      Md.ToPath _ -> maybe Md.Unresolved Md.Page (resolvePageLink spaces spacePath pages pagePath destination)
+      Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (pageRoute spacePath postPath)) <> "#" <> fragment)
+      Md.ToPath _ -> maybe Md.Unresolved Md.Page (resolvePageLink spaces spacePath (rootPage space) pages postPath destination)
     absolute u
       | "http://" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u = u
       | otherwise = addressOf base u

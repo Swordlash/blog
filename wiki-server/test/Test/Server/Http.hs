@@ -79,15 +79,16 @@ importing backing = describe "importing an archive" $
           run = runHttpWiki http
           zipped = zipFiles demoNow (writeArchive changed)
           hello = PageRef {space = path "blog", page = path "hello-world"}
-          handbook = PageRef {space = path "crew", page = path "team-handbook"}
+          -- The on-call page, under the team's home page, the handbook.
+          onCall = PageRef {space = path "crew", page = path "on-call"}
       plan <- ok =<< run (previewImport zipped)
       [(s.path, s.status) | s <- plan.spaces]
         `shouldBe` [(path "blog", SpaceMerged), (path "docs", SpaceMerged), (path "crew", SpaceNew), (path "crew/projects", SpaceNew)]
       [(x.path, (\c -> c.sameContent) <$> x.conflict) | s <- plan.spaces, s.path == path "blog", x <- s.pages]
-        `shouldBe` [(path "hello-world", Just False), (path "home", Just True), (path "notes-on-haskell", Just True)]
-      let choices = ImportChoices {skipSpaces = [], skipPages = [handbook], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
+        `shouldBe` [([], Just True), (path "hello-world", Just False), (path "notes-on-haskell", Just True)]
+      let choices = ImportChoices {skipSpaces = [], skipPages = [onCall], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
       run (applyImport zipped choices)
-        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 2, pagesReplaced = 1, pagesKept = 7, pagesSkipped = 2, attachments = 1}
+        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 3, pagesReplaced = 1, pagesKept = 7, pagesSkipped = 1, attachments = 1}
       blog <- ok =<< run (getSpace (path "blog"))
       page <- ok =<< run (getPage blog.id (path "hello-world"))
       page.body `shouldBe` "Brought in from the demo."
@@ -100,7 +101,10 @@ importing backing = describe "importing an archive" $
       again <- ok =<< run (previewImport zipped)
       [s.status | s <- again.spaces] `shouldBe` replicate 4 SpaceMerged
       [(s.path, x.path) | s <- again.spaces, x <- s.pages, isNothing x.conflict]
-        `shouldBe` [(path "crew", path "team-handbook"), (path "crew", path "team-handbook/on-call")]
+        `shouldBe` [(path "crew", path "on-call")]
+      -- The team's home page is the archive's, the root of its pages.
+      handbook <- ok =<< run (getPage team.id [])
+      (handbook.title, Just handbook.id) `shouldBe` ("Team handbook", team.homePage)
   where
     -- The demo, with Hello, world rewritten and Team at another path.
     changed =

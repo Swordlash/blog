@@ -26,8 +26,9 @@
 -- the rehearsal starts it with is not a failed check.
 --
 -- So what the checks drive on the old program is stable: the options of
--- @serve@ and of the database, @users add@, the admin listener's API
--- (@info@, the spaces, their pages and a page at a path, and the routes
+-- @serve@ and of the database, @users add@, @\/healthz@ (its schema
+-- version), the admin listener's API
+-- (@info@, the spaces, a space at a path, their pages and a page at a path, and the routes
 -- toolchain/rehearse-ci.sh seeds a wiki with: making a space and a page,
 -- and a space's profile), the sign-in through a
 -- provider with its cookies, and @session@. Each says so in its
@@ -76,6 +77,11 @@ module Wiki.Server.Rehearsal
   , SpaceRead (..)
   , readSpaces
   , compareHomes
+
+    -- * Paths as a program builds them
+  , rootedPaths
+  , PageAt (..)
+  , pathAsBuilt
   )
 where
 
@@ -120,6 +126,8 @@ import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
+import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
 
 --------------------------------------------------------------------------------
@@ -425,7 +433,7 @@ runConsole program placeArgs args input =
 
 -- | Every check, in the order they run.
 checks :: [Check]
-checks = [pagesCheck, accountsCheck, homesCheck]
+checks = [pagesCheck, accountsCheck, homesCheck, rootsCheck]
 
 -- | A check that holds nothing and makes nothing before the old program
 -- serves the copy.
@@ -470,7 +478,9 @@ pagesCheck :: Check
 pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages manager server <&> (>>= comparePages was))
 
 -- | Every page of every space but the guide's, read through a server's
--- administration API, with each space's home page. A space whose pages
+-- administration API at its path as that server builds it ('pathAsBuilt':
+-- from under the home page for a program with step 13 of the schema), with
+-- each space's home page. A space whose pages
 -- answer 404 is left out: the list of spaces names some that nobody may
 -- read, administrators included (the container of personal spaces, and a
 -- personal space its owner hid; "Wiki.Core.Permission"). So is a space
@@ -479,6 +489,7 @@ pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages man
 -- the migration and not after still shows: its pages are then gone.
 readPages :: Manager -> Server -> IO (Either Text PagesRead)
 readPages manager server = runExceptT $ do
+  rooted <- ExceptT (rootedPaths manager server)
   spaces <- ExceptT (getJson manager (server.adminApi <> "/spaces")) >>= asList "the spaces"
   let byId = Map.fromList [(i, s) | s <- spaces, Just i <- [field "id" s]]
       inGuide s = case (field "parent" s, field "slug" s) of
@@ -486,26 +497,85 @@ readPages manager server = runExceptT $ do
         (Just p, _) -> maybe False inGuide (Map.lookup p byId)
         _ -> False
   read' <- for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s)] $ \(i, s) ->
-    fmap (\ps -> (i, field "homePage" s, ps)) <$> pagesOf i
+    fmap (\ps -> (i, field "homePage" s, ps)) <$> pagesOf rooted i (field "homePage" s)
   pure PagesRead {pages = concat [ps | Just (_, _, ps) <- read'], homes = Map.fromList [(i, h) | Just (i, h, _) <- read']}
   where
-    pagesOf spaceId =
+    pagesOf rooted spaceId home =
       ExceptT (getJsonUnless [404, 409] manager (server.adminApi <> "/spaces/" <> spaceId <> "/pages")) >>= \case
         Nothing -> pure Nothing
-        Just listed -> Just <$> (asList ("the pages of space " <> spaceId) listed >>= pagesIn spaceId)
-    pagesIn spaceId summaries = do
-      let byId = Map.fromList [(i, p) | p <- summaries, Just i <- [field "id" p]]
-          pathOf p = maybe [] pathOf (field "parent" p >>= (`Map.lookup` byId)) <> toList (field "slug" p)
-      for (Map.toList byId) $ \(i, p) -> do
-        let url = server.adminApi <> "/spaces/" <> spaceId <> "/pages/at/" <> T.intercalate "/" (map segment (pathOf p))
+        Just listed -> Just <$> (asList ("the pages of space " <> spaceId) listed >>= pagesIn rooted spaceId home)
+    pagesIn rooted spaceId home summaries = do
+      let at = pagesAtOf summaries
+      for at $ \p -> do
+        let url = pageUrl server spaceId (fromMaybe [] (pathAsBuilt rooted home at p.page))
         read' <- ExceptT (getJson manager url)
         case (,) <$> field "title" read' <*> field "body" read' of
-          Just (title, body) -> pure PageRead {space = spaceId, page = i, title, body}
+          Just (title, body) -> pure PageRead {space = spaceId, page = p.page, title, body}
           Nothing -> throwError ("GET " <> url <> " gave no title and source")
-    segment = decodeUtf8 . urlEncode False . encodeUtf8
-    asList what = \case
-      Array xs -> pure (toList xs)
-      _ -> throwError (what <> " are not a list")
+
+-- | A JSON list's items, or why not.
+asList :: (Monad m) => Text -> Value -> ExceptT Text m [Value]
+asList what = \case
+  Array xs -> pure (toList xs)
+  _ -> throwError (what <> " are not a list")
+
+--------------------------------------------------------------------------------
+-- Paths as a program builds them
+
+-- | Whether a server builds a page's path from under its space's home
+-- page, the root of the space's pages, with no segment for the home page
+-- (step 13 of the schema, "Wiki.Server.Storage.Migrate.Code.Step0013"),
+-- or with every slug from the space's top-level pages, as a program before
+-- it did. Its schema version says which: @\/healthz@, at the root of the
+-- public listener, gives it, and has since before the rehearsal existed.
+rootedPaths :: Manager -> Server -> IO (Either Text Bool)
+rootedPaths manager server =
+  getJson manager (server.public <> "/healthz") <&> \case
+    Left why -> Left why
+    Right v -> case v of
+      Object o | Just (Number n) <- KeyMap.lookup "schemaVersion" o -> Right (n >= fromIntegral step0013.version)
+      _ -> Left ("GET " <> server.public <> "/healthz gave no schema version")
+
+-- | 'PageAt' is where a page is, as a space's list of pages gives it: its
+-- id, its parent's, and its slug.
+data PageAt = PageAt
+  { page :: Text
+  , parent :: Maybe Text
+  , slug :: Text
+  }
+  deriving stock (Eq, Show)
+
+-- | The pages of a list of pages, where each is.
+pagesAtOf :: [Value] -> [PageAt]
+pagesAtOf summaries = [PageAt {page = i, parent = field "parent" p, slug} | p <- summaries, Just i <- [field "id" p], Just slug <- [field "slug" p]]
+
+-- | A page's path as a program builds it: the slugs from the space's top
+-- level down to the page, and for a program that builds paths from under
+-- the home page ('rootedPaths') without the home page's own, when the
+-- page is under it or is it. 'Nothing' for a page not among them, or one
+-- whose parents go round.
+pathAsBuilt :: Bool -> Maybe Text -> [PageAt] -> Text -> Maybe [Text]
+pathAsBuilt rooted home pages i = map (\p -> p.slug) . underRoot <$> chain mempty i
+  where
+    byId = Map.fromList [(p.page, p) | p <- pages]
+    chain seen k
+      | k `elem` seen = Nothing
+      | otherwise = do
+          p <- Map.lookup k byId
+          above <- maybe (Just []) (chain (k : seen)) p.parent
+          pure (above <> [p])
+    underRoot = \case
+      top : rest | rooted, Just top.page == home -> rest
+      c -> c
+
+-- | The address of a space's page at a path in a server's administration
+-- API: @…\/pages\/at@ and the path's segments, none for the empty path.
+pageUrl :: Server -> Text -> [Text] -> Text
+pageUrl server spaceId path = server.adminApi <> "/spaces/" <> spaceId <> "/pages/at" <> foldMap (\s -> "/" <> segment s) path
+
+-- | A slug as a segment of an address.
+segment :: Text -> Text
+segment = decodeUtf8 . urlEncode False . encodeUtf8
 
 -- | A GET of JSON, as 'getJson', with 'Nothing' for an answer of one of
 -- these statuses.
@@ -612,6 +682,85 @@ compareHomes was now =
          , isJust old.homePage
          , old.homePage /= s.homePage
          ]
+
+--------------------------------------------------------------------------------
+-- The roots check
+
+-- | 'RootsRead' is what the roots check reads of a server before the
+-- migration: each space it may read (but the guide's), by its id, with
+-- its path and its home page; and each page at the top of a space's
+-- pages, with its address as the program builds it ('pathAsBuilt').
+data RootsRead = RootsRead
+  { spaces :: [(Text, [Text], Maybe Text)]
+  , tops :: [(Text, Text, [Text])]
+  -- ^ The space's id, the page's id, the page's path.
+  }
+  deriving stock (Eq, Show)
+
+-- | The roots check, step 13 of the schema's
+-- ("Wiki.Server.Storage.Migrate.Code.Step0013", WP5.78 of docs/PLAN.md):
+-- after the migration, every page that was at the top of its space's
+-- pages answers at the address it had, and every space answers at its
+-- own, with its home page at the space's address (the empty path). The
+-- home page is checked there and not at its old address, which a page
+-- under it with the home page's slug rightly takes over. A
+-- space whose pages answer 404 or 409 is left out, as the pages check
+-- leaves it out.
+rootsCheck :: Check
+rootsCheck = simpleCheck "roots" readRoots (\was manager server -> compareRoots was manager server)
+
+-- | The spaces and the top-level pages, as a server lists them.
+readRoots :: Manager -> Server -> IO (Either Text RootsRead)
+readRoots manager server = runExceptT $ do
+  rooted <- ExceptT (rootedPaths manager server)
+  spaces <- ExceptT (getJson manager (server.adminApi <> "/spaces")) >>= asList "the spaces"
+  let byId = Map.fromList [(i, s) | s <- spaces, Just i <- [field "id" s]]
+      pathOf seen s = case (field "parent" s, field "slug" s) of
+        (_, Nothing) -> Nothing
+        (Nothing, Just slug) -> Just [slug]
+        (Just p, Just slug)
+          | p `elem` seen -> Nothing
+          | otherwise -> (<> [slug]) <$> (pathOf (p : seen) =<< Map.lookup p byId)
+      inGuide s = maybe False (\p -> take 1 p == [slugText guideSlug]) (pathOf [] s)
+  read' <- for [(i, s, path) | (i, s) <- Map.toList byId, not (inGuide s), Just path <- [pathOf [] s]] $ \(i, s, path) -> do
+    let home = field "homePage" s
+    ExceptT (getJsonUnless [404, 409] manager (server.adminApi <> "/spaces/" <> i <> "/pages")) >>= \case
+      Nothing -> pure Nothing
+      Just listed -> do
+        at <- pagesAtOf <$> asList ("the pages of space " <> i) listed
+        -- The home page is checked at the space's address, where it is
+        -- after the step: its old address may now name a page under it
+        -- with the same slug, which the path as written reaches first.
+        pure (Just ((i, path, home), [(i, p.page, built) | p <- at, isNothing p.parent, Just p.page /= home, Just built <- [pathAsBuilt rooted home at p.page]]))
+  pure RootsRead {spaces = map fst (catMaybes read'), tops = concatMap snd (catMaybes read')}
+
+-- | Whether every space and every page that was at the top answers where
+-- it did. Why not names the first few that do not.
+compareRoots :: RootsRead -> Manager -> Server -> IO (Either Text ())
+compareRoots was manager server = do
+  spaceProblems <- for was.spaces $ \(i, path, home) -> do
+    let at = server.adminApi <> "/spaces/at/" <> T.intercalate "/" (map segment path)
+    answered <- getJson manager at
+    homeAnswer <- getJson manager (pageUrl server i [])
+    pure $
+      [ "space " <> i <> " does not answer at /" <> T.intercalate "/" path <> ": " <> either identity (const "another space does") answered
+      | either (const True) (\v -> field "id" v /= Just i) answered
+      ]
+        <> [ "space " <> i <> " shows no home page at its address" <> either (": " <>) (const "") homeAnswer
+           | either (const True) (\v -> isNothing (field "id" v)) homeAnswer
+           ]
+        <> [ "space " <> i <> " shows another page than its home page at its address"
+           | Right v <- [homeAnswer]
+           , isJust home
+           , field "id" v /= home
+           ]
+  pageProblems <- for was.tops $ \(sid, pid, path) -> do
+    answered <- getJson manager (pageUrl server sid path)
+    pure
+      [ "page " <> pid <> " of space " <> sid <> " does not answer at " <> T.intercalate "/" path <> either (": " <>) (const "") answered
+      | either (const True) (\v -> field "id" v /= Just pid) answered
+      ]
+  pure (listProblems (concat spaceProblems <> concat pageProblems))
 
 --------------------------------------------------------------------------------
 -- The accounts check

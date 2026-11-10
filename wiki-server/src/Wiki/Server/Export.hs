@@ -135,7 +135,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), pageNumber, pageTreeOrder, summaryOf)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf, isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export.Document
 import Wiki.Server.Log (Level (..), Logger, logWith)
@@ -433,12 +433,17 @@ exportSpace exports engine key storage who sid format = oneAtATime exports key .
           let ordered = pageTreeOrder space.pageOrder pages
               anchors = Map.fromList [(p.id, "page-" <> show n) | (n, p) <- zip [1 :: Int ..] ordered]
               spacePath = spacePathOf spaces space.id
-              inDocument s path = if s == spacePath then head [a | p <- ordered, pagePathOf pages p.id == path, Just a <- [Map.lookup p.id anchors]] else Nothing
+              inDocument s path = if s == spacePath then head [a | p <- ordered, pagePathOf space pages p.id == Just path, Just a <- [Map.lookup p.id anchors]] else Nothing
               output = outputOf format
           (bag, stored) <- mediaOf storage ordered
           let pageOf p =
                 let anchor = Map.findWithDefault "" p.id anchors
-                 in DocumentPage p (length (pagePathOf pages p.id) - 1) anchor
+                    -- A page's depth is its path's length less one: a page
+                    -- under the home page, as every page that was at the top
+                    -- level before the home page became the root, is at 0,
+                    -- and so is the home page, whose path is empty.
+                    depth = max 0 (maybe 0 length (pagePathOf space pages p.id) - 1)
+                 in DocumentPage p depth anchor
                       <$> pageBlocks output (placeOf settings.publicUrl settings.boxes settings.mathMacros spaces pages p inDocument (anchor <> "-") stored) (readPage p.body)
           case traverse pageOf ordered of
             Left e -> pure (Left (ApiError.Invalid ("A page could not be read: " <> renderError e)))
@@ -500,8 +505,9 @@ placeOf publicUrl boxes ownMacros spaces pages page inDocument idPrefix stored =
   Place
     { spaces
     , spacePath = spacePathOf spaces page.space
+    , root = rootPage =<< spaceOf
     , pages
-    , pagePath = if null (spacePathOf spaces page.space) then [] else pagePathOf pages page.id
+    , pagePath = if null (spacePathOf spaces page.space) then [] else pathHere
     , attachments = page.attachments
     , stored
     , attachmentAddress = attachmentUrl
@@ -513,9 +519,13 @@ placeOf publicUrl boxes ownMacros spaces pages page inDocument idPrefix stored =
     , numbering =
         Numbering
           { form = maybe InPage (\s -> s.boxNumbering) (find (\s -> s.id == page.space) spaces)
-          , number = pageNumber (maybe ByName (\s -> s.pageOrder) (find (\s -> s.id == page.space) spaces)) (map summaryOf pages) (pagePathOf pages page.id)
+          , number = pageNumber (rootPage =<< spaceOf) (maybe ByName (\s -> s.pageOrder) spaceOf) (map summaryOf pages) pathHere
           }
     }
+  where
+    spaceOf = find (\s -> s.id == page.space) spaces
+    -- The page's path in its space, from under its home page.
+    pathHere = fromMaybe [] (spaceOf >>= \s -> pagePathOf s pages page.id)
 
 -- | The macros every page has, before its space's, until an administrator
 -- keeps the wiki's own copy in the server's settings (WP5.41 of

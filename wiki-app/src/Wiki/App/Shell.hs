@@ -153,7 +153,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
-import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle)
+import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
@@ -206,7 +206,7 @@ import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, tit
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (blog, description, encryption, icon, id, name, pageOrder, parent, personalContainer), containerName, subspacesOf)
+import Wiki.Core.Space (Icon (..), Space (blog, description, encryption, icon, id, name, parent, personalContainer), containerName, pageAt, pagesAt, rootPage, subspacesOf)
 import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a
@@ -471,7 +471,7 @@ component =
         -- On a backend that would wait, it is loaded in 'Initialize'
         -- instead, unless the backend has it cached.
         initialState = \Input {router, welcome, demo, migration, accounts, live} -> do
-          route <- Router.current router
+          route <- settledRoute <$> Router.current router
           -- The tab's live channel, made before any view: a page shown from
           -- the first render watches its page from its own initializer,
           -- which runs before the shell's.
@@ -1068,17 +1068,17 @@ component =
             <li><a class="space-pages-link" {{ [attr "aria-current" "page" | st.route == SpacePages path] }} {{ Router.linkProps st.router Followed (SpacePages path) }}>Space settings</a></li>
           </ul>
           <h2>Pages</h2>
-          {% if null tree %}
+          {% if all (\p -> Just p.id == rootPage space) tree %}
             <p class="empty">No pages yet.</p>
           {% else %}
-            {{ pageTree st.router Followed path space.pageOrder tree ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
+            {{ pageTree st.router Followed path space tree ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
           {% end %}
           {% if not (null templates) %}
             <h2>Templates</h2>
             <ul class="sidebar-templates">
               {% for t in templates %}
                 <li class="page-node{% if Just t.id == here %} current{% end %}">
-                  <a {{ [attr "aria-current" "page" | Just t.id == here] }} {{ Router.linkProps st.router Followed (Page path (pagePathOf pages t.id)) }}>{{ t.title }}</a>
+                  <a {{ [attr "aria-current" "page" | Just t.id == here] }} {{ Router.linkProps st.router Followed (pageRouteOf st.spaces space pages t.id) }}>{{ t.title }}</a>
                 </li>
               {% end %}
             </ul>
@@ -1153,7 +1153,11 @@ component =
               HH.slot "view" EncryptedSlot EncryptedView.component EncryptedView.Input {context = context st, space, problem = e} FromView
           | otherwise -> failureView e RetryHere
         InSpace _ space pages ->
-          let homePath = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
+          let homePath = fromMaybe [] (pagePathOf space pages . (\p -> p.id) =<< homeOf space pages)
+              -- A page's path as it is now, for one asked for at an old
+              -- address (with the home page's slug first): the views
+              -- number, link and show breadcrumbs from it.
+              here' = canonicalPath space pages
            in case st.route of
                 EditHome -> HH.slot "editor" (space.id, homePath) Editor.component Editor.Input {context = context st, space, pages, path = homePath, feed = st.feed, home = True} FromView
                 HomeSource -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path = homePath} FromView
@@ -1164,23 +1168,23 @@ component =
                 Posts _ n | space.blog -> blogView space pages n
                 -- Entering a space shows its home page, if it has one, at any
                 -- requested page of posts.
-                Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
-                Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
-                Page _ path -> pageView space pages path
-                PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
-                LivePreview _ path -> HH.slot "view" LivePreviewSlot LivePreviewView.component LivePreviewView.Input {context = context st, space, pages, path} FromView
+                Space _ | isJust (homeOf space pages) -> pageView space pages homePath
+                Posts _ _ | isJust (homeOf space pages) -> pageView space pages homePath
+                Page _ path -> pageView space pages (here' path)
+                PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path = here' path} FromView
+                LivePreview _ path -> HH.slot "view" LivePreviewSlot LivePreviewView.component LivePreviewView.Input {context = context st, space, pages, path = here' path} FromView
                 PageHistory _ path version against ->
-                  HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
+                  HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = here' path, version, against} FromView
                 PageSlides _ path slide step ->
-                  HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide, step} FromView
+                  HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path = here' path, slide, step} FromView
                 -- One editor per page edited: another page's editor is a
                 -- separate component, with its own draft.
-                EditPage _ path -> HH.slot "editor" (space.id, path) Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed, home = False} FromView
+                EditPage _ path -> let path' = here' path in HH.slot "editor" (space.id, path') Editor.component Editor.Input {context = context st, space, pages, path = path', feed = st.feed, home = False} FromView
                 NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
                 _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
         pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
-        blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
+        blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page, feed = if shutOut st.session then Nothing else st.feed} FromView
 
     -- The front page: its page, and under it the spaces and the ones
     -- visited last ("Wiki.App.View.Directory"). The directory stays mounted
@@ -1207,7 +1211,7 @@ component =
               [HP.class_ "home-document"]
               [ case here of
                   InSpace _ space pages ->
-                    let path = maybe [] (pagePathOf pages . (\p -> p.id)) (homeOf space pages)
+                    let path = fromMaybe [] (pagePathOf space pages . (\p -> p.id) =<< homeOf space pages)
                      in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
                   SpaceFailed _ _ e -> failureView e RetryHere
                   _ -> loading
@@ -1528,7 +1532,7 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       shut <- (.) <$> shutMenu <*> shutSwitcher
-      modify (shut . \st -> st {route = r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
       whatsNewSeen
       loadHere False
@@ -1541,7 +1545,7 @@ component =
       when (isJust next) (lift endPreload)
       loadWorld
       modify (\st -> st {generation = st.generation + 1})
-      for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
+      for_ next $ \r -> modify (\st -> st {route = settledRoute r, settled = False, leaving = Nothing})
       loadHere True
       -- The router is told last, so that the route it announces is the one
       -- already shown, which 'Arrived' ignores. From the editor's preview
@@ -1763,20 +1767,28 @@ waitsForPage st = case (st.route, st.here) of
   (Search {}, _) -> True
   _ -> False
 
-currentPageOf :: [PageSummary] -> [Slug] -> Maybe PageSummary
-currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>= lastMay
+-- | The page at a path in a space, among its pages: from under its home
+-- page, or at an old address ('Wiki.Core.Space.pageAt').
+currentPageOf :: Space -> [PageSummary] -> [Slug] -> Maybe PageSummary
+currentPageOf = pageAt
+
+-- | A page's path as it is now ('Wiki.Core.Space.pagePath'), for a path
+-- that names it, at an old address too ('currentPageOf'); the path as
+-- given when it names no page.
+canonicalPath :: Space -> [PageSummary] -> [Slug] -> [Slug]
+canonicalPath space pages path = fromMaybe path (currentPageOf space pages path >>= \p -> pagePathOf space pages p.id)
 
 currentPage :: State m -> Maybe PageSummary
 currentPage st = case (st.route, st.here) of
   (r, InSpace [] space pages) | spaceOfRoute r == Just [] -> homeOf space pages
   (Space _, InSpace _ space pages) -> homeOf space pages
   (Posts _ _, InSpace _ space pages) -> homeOf space pages
-  (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
-  (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
-  (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
-  (LivePreview _ path, InSpace _ _ pages) -> currentPageOf pages path
-  (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
-  (PageSlides _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
+  (Page _ path, InSpace _ space pages) -> currentPageOf space pages path
+  (EditPage _ path, InSpace _ space pages) -> currentPageOf space pages path
+  (PageSource _ path, InSpace _ space pages) -> currentPageOf space pages path
+  (LivePreview _ path, InSpace _ space pages) -> currentPageOf space pages path
+  (PageHistory _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
+  (PageSlides _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
   _ -> Nothing
 
 -- | The breadcrumbs: inside a space, the directory of spaces first, then
@@ -1837,10 +1849,13 @@ crumbs st = case st.route of
       | mayView (context st) s.id = Just (Space (spacePathOf st.spaces s.id))
       | s.personalContainer = Just UserSpaces
       | otherwise = Nothing
-    pageCrumbs path pagePath = case st.here of
-      InSpace _ _ pages ->
-        [ (p.title, Just (Page path (pagePathOf pages p.id)))
-        | p <- either (\e -> e.resolved) identity (resolvePath (findChild pages) pagePath)
+    -- The pages above the page, and the page, from under the space's home
+    -- page: the space's crumb stands for the home page.
+    pageCrumbs _ pagePath = case st.here of
+      InSpace _ space pages ->
+        [ (p.title, Just (pageRouteOf st.spaces space pages p.id))
+        | p <- either (\e -> e.resolved) identity (pagesAt space pages pagePath)
+        , Just p.id /= rootPage space
         ]
       _ -> []
 
@@ -1879,7 +1894,7 @@ headOf st = Head {title = documentTitle st, preview, feeds, icon = faviconOf st}
       (Posts path _, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
       (Page path pagePath, InSpace _ space pages)
         | public space
-        , Just p <- currentPageOf pages pagePath >>= shownPage ->
+        , Just p <- currentPageOf space pages pagePath >>= shownPage ->
             Just (ofPage space p (href (Page path pagePath)))
       _ -> Nothing
     -- The page shown, with its body, if it is the page named.

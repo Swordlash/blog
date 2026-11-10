@@ -89,6 +89,8 @@ guideState now = flip execState emptyState $ do
   modify (setMathMacros sid (T.intercalate "\n" guideMacros))
   tourPage <- insertGuide ServerTour sid (const now)
   modify (setProfile sid guideProfile . setHome sid tourPage)
+  -- The tour is the root of the guide's pages: the other pages go under it.
+  modify (ensureHomePages now)
 
 -- | The profile of the space that holds the guide: the demo's Docs and a
 -- server's Guide alike. Both open at the tour, their home page.
@@ -193,7 +195,9 @@ demoTour =
   , "you starred first, then a field that finds anyone else's by login or"
   , "name."
   , ""
-  , "A space opens at its home page, which is this one for Docs. **Pages and"
+  , "A space opens at its home page, which is this one for Docs: every other"
+  , "page of the space is under it, and a page made with **New page** goes"
+  , "there. **Pages and"
   , "settings**, in the sidebar, lists all of a space's pages, and there"
   , "whoever administers the space gives it a description and an icon (an"
   , "emoji, a colour, or an image), and edits its home page. The icon is the"
@@ -299,7 +303,8 @@ serverTour =
   , "to switch to another space. A space is private until whoever administers"
   , "it makes it public; **Space settings**, in the sidebar, is where they"
   , "choose who may view, edit or administer it, and give it a description and"
-  , "an icon; they alone edit its home page. The icon is the browser tab's on the space's pages;"
+  , "an icon; they alone edit its home page, the page the space opens at,"
+  , "which every other page of the space is under. The icon is the browser tab's on the space's pages;"
   , "an administrator gives the wiki an icon of its own on the front page, for"
   , "the tab everywhere else. **New space**, on the front page, is there for"
   , "whoever may create spaces. **Make private**, in a subspace's"

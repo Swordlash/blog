@@ -67,7 +67,7 @@ import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
@@ -76,7 +76,7 @@ import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Password (SessionToken)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, micro)
+import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, loadSpaces, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 #ifdef WIKI_POSTGRES
 import Database.PostgreSQL.Simple qualified as Pg
@@ -326,13 +326,15 @@ addPagesWith :: Storage -> SpaceId -> Text -> Text -> Int -> IO [PageId]
 addPagesWith st space name body n = do
   now <- micro <$> getCurrentTime
   let ids = [PageId (name <> "-page-" <> show i) | i <- [1 .. n]]
-  writing st $
+  writing st $ do
+    -- Under the space's home page, the root of its pages.
+    home <- (>>= rootPage) . Map.lookup space <$> loadSpaces
     for_ (zip [1 :: Int ..] ids) $ \(i, pid) ->
       insertPage
         Page
           { id = pid
           , space
-          , parent = Nothing
+          , parent = home
           , title = name <> " " <> show i
           , slug = either (panic . show) identity (mkSlug (name <> "-" <> show i))
           , body

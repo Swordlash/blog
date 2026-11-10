@@ -133,7 +133,7 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]))
     _ <- find ui ".page-actions .use-as-template"
     tree <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
-    tree `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
+    tree `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations"]
     length <$> findAll ui ".sidebar-templates" `shouldReturn` 0
     toggle <- find ui ".page-actions .use-as-template"
     getAttribute toggle "aria-pressed" `shouldReturn` Just "false"
@@ -141,7 +141,7 @@ spec m = do
     find ui ".template-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "{{title}}")
     find ui ".page-actions .use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
     eventually $ (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-templates a") `shouldReturn` ["Diagrams"]
-    (traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a") `shouldReturn` ["Markdown guide", "Mathematics", "Presentations", "Tour"]
+    (traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a") `shouldReturn` ["Markdown guide", "Mathematics", "Presentations"]
     (\p -> p.template) <$> readPage wiki ["docs"] ["markdown-guide", "diagrams"] `shouldReturn` True
     find ui ".page-actions .use-as-template" >>= click
     eventually $ length <$> findAll ui ".sidebar-templates" `shouldReturn` 0

@@ -11,7 +11,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route
 import Wiki.App.View.LinkDialog (pageAddress)
-import Wiki.Core.Id (SpaceId (..))
+import Wiki.Core.Id (PageId, SpaceId (..))
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
@@ -30,7 +30,11 @@ spaces = Map.elems demo.spaces
 
 -- | Where a destination leads from the page at this path of @docs@.
 fromDocs :: [Text] -> Text -> Maybe PageLink
-fromDocs page = resolvePageLink spaces (slugs ["docs"]) (pagesOf "docs") (slugs page)
+fromDocs page = resolvePageLink spaces (slugs ["docs"]) (rootOf "docs") (pagesOf "docs") (slugs page)
+
+-- | The root of a space's pages, its home page.
+rootOf :: Text -> Maybe PageId
+rootOf s = S.rootPage =<< find (\sp -> sp.slug == mkSlug' s) spaces
 
 mkSlug' :: Text -> Slug
 mkSlug' = either (panic . show) identity . mkSlug
@@ -38,48 +42,60 @@ mkSlug' = either (panic . show) identity . mkSlug
 pagesOf :: Text -> [Page]
 pagesOf s = [p | p <- Map.elems demo.pages, Just p.space == ((\sp -> sp.id) <$> find (\sp -> sp.slug == mkSlug' s) spaces)]
 
+-- | Where a link leads that leads to Docs itself: its home page.
+docsSpace :: Maybe PageLink
+docsSpace = Just (PageLink (Space (slugs ["docs"])) "")
+
 docsPage :: [Text] -> Maybe PageLink
 docsPage path = Just (PageLink (Page (slugs ["docs"]) (slugs path)) "")
 
 spec :: Spec
 spec = describe "resolvePageLink" $ do
+  -- The tour is the home page of Docs, the root of its pages: its path is
+  -- empty, and the Markdown guide is under it (WP5.78 of docs/PLAN.md).
   it "reads a relative path from the page's parent, as a browser does" $ do
-    fromDocs ["tour"] "markdown-guide" `shouldBe` docsPage ["markdown-guide"]
-    fromDocs ["tour"] "markdown-guide/diagrams" `shouldBe` docsPage ["markdown-guide", "diagrams"]
+    fromDocs [] "markdown-guide" `shouldBe` docsPage ["markdown-guide"]
+    fromDocs [] "markdown-guide/diagrams" `shouldBe` docsPage ["markdown-guide", "diagrams"]
     fromDocs ["markdown-guide", "diagrams"] "mathematics" `shouldBe` docsPage ["markdown-guide", "mathematics"]
     fromDocs ["markdown-guide", "diagrams"] "./mathematics" `shouldBe` docsPage ["markdown-guide", "mathematics"]
 
-  it "goes up with .., but not above the space's pages" $ do
-    fromDocs ["markdown-guide", "diagrams"] "../tour" `shouldBe` docsPage ["tour"]
+  it "goes up with .., but not above the pages under the home page" $ do
+    fromDocs ["markdown-guide", "diagrams"] ".." `shouldBe` docsSpace
     fromDocs ["markdown-guide", "diagrams"] "." `shouldBe` docsPage ["markdown-guide"]
-    fromDocs ["tour"] "." `shouldBe` Just (PageLink (Space (slugs ["docs"])) "")
-    fromDocs ["tour"] "../tour" `shouldBe` Nothing
+    fromDocs [] "." `shouldBe` docsSpace
+    fromDocs [] "../markdown-guide" `shouldBe` Nothing
+
+  it "reads an old address, with the home page's slug first, as the page's address now" $ do
+    fromDocs ["markdown-guide", "diagrams"] "../tour" `shouldBe` docsSpace
+    fromDocs [] "tour/markdown-guide" `shouldBe` docsPage ["markdown-guide"]
+    fromDocs ["markdown-guide"] "/docs/tour/markdown-guide/diagrams" `shouldBe` docsPage ["markdown-guide", "diagrams"]
 
   it "keeps the fragment, and drops the query" $
-    fromDocs ["tour"] "markdown-guide?x=1#links" `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
+    fromDocs [] "markdown-guide?x=1#links" `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
 
-  it "reads a title as a slug, for a wiki link" $
-    fromDocs ["markdown-guide"] "Tour" `shouldBe` docsPage ["tour"]
+  it "reads a title as a slug, for a wiki link" $ do
+    fromDocs [] "Markdown guide" `shouldBe` docsPage ["markdown-guide"]
+    fromDocs ["markdown-guide"] "Tour" `shouldBe` docsSpace
 
   it "leads nowhere for a page the space does not have" $ do
-    fromDocs ["tour"] "no-such-page" `shouldBe` Nothing
-    fromDocs ["tour"] "diagrams" `shouldBe` Nothing
+    fromDocs [] "no-such-page" `shouldBe` Nothing
+    fromDocs [] "diagrams" `shouldBe` Nothing
 
   it "reads a path from / as a space's path and a page's" $ do
-    fromDocs ["tour"] "/docs" `shouldBe` Just (PageLink (Space (slugs ["docs"])) "")
-    fromDocs ["tour"] "/team/projects" `shouldBe` Just (PageLink (Space (slugs ["team", "projects"])) "")
-    fromDocs ["tour"] "/docs/markdown-guide/diagrams" `shouldBe` docsPage ["markdown-guide", "diagrams"]
-    fromDocs ["tour"] "/docs/no-such-page" `shouldBe` Nothing
-    fromDocs ["tour"] "/blog/hello-world" `shouldBe` Just (PageLink (Page (slugs ["blog"]) (slugs ["hello-world"])) "")
-    fromDocs ["tour"] "/nowhere/at-all" `shouldBe` Nothing
+    fromDocs [] "/docs" `shouldBe` docsSpace
+    fromDocs [] "/team/projects" `shouldBe` Just (PageLink (Space (slugs ["team", "projects"])) "")
+    fromDocs [] "/docs/markdown-guide/diagrams" `shouldBe` docsPage ["markdown-guide", "diagrams"]
+    fromDocs [] "/docs/no-such-page" `shouldBe` Nothing
+    fromDocs [] "/blog/hello-world" `shouldBe` Just (PageLink (Page (slugs ["blog"]) (slugs ["hello-world"])) "")
+    fromDocs [] "/nowhere/at-all" `shouldBe` Nothing
 
   it "leads to each of the demo's pages from the address \"Link to a page\" writes, from anywhere" $
     for_ (Map.elems demo.pages) $ \p -> do
       let spacePath = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) p.space)
-          pagePath = fromMaybe [] (pathOf (`Map.lookup` demo.pages) p.id)
+          pagePath = fromMaybe [] (find (\s -> s.id == p.space) spaces >>= \s -> S.pagePath s (`Map.lookup` demo.pages) p.id)
           address = pageAddress spacePath pagePath
           expected = if null pagePath then Space spacePath else Page spacePath pagePath
-      (address, fromDocs ["tour"] (address <> "#intro")) `shouldBe` (address, Just (PageLink expected "#intro"))
+      (address, fromDocs [] (address <> "#intro")) `shouldBe` (address, Just (PageLink expected "#intro"))
 
   it "writes a page's own address for \"Link to a page\", without the router's prefix or mode" $
     pageAddress (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]) `shouldBe` "/s/docs/p/markdown-guide/diagrams/"
@@ -88,7 +104,7 @@ spec = describe "resolvePageLink" $ do
     let docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
         -- A subspace of Docs with the slug of one of Docs' pages.
         sub = docs {S.id = SpaceId "space-guide", S.name = "Guide", S.slug = mkSlug' "markdown-guide", S.parent = Just docs.id}
-        resolve = resolvePageLink (sub : spaces) (slugs ["docs"]) (pagesOf "docs") (slugs ["tour"])
+        resolve = resolvePageLink (sub : spaces) (slugs ["docs"]) (rootOf "docs") (pagesOf "docs") []
     resolve (pageAddress (slugs ["docs"]) (slugs ["markdown-guide"]) <> "#links") `shouldBe` Just (PageLink (Page (slugs ["docs"]) (slugs ["markdown-guide"])) "#links")
     resolve "/docs/markdown-guide" `shouldBe` Just (PageLink (Space (slugs ["docs", "markdown-guide"])) "")
     -- A page of this space it does not have is a broken link.
@@ -100,10 +116,10 @@ spec = describe "resolvePageLink" $ do
     for_ (Map.elems demo.pages) $ \p -> do
       let space = fromMaybe (panic "no space") (find (\s -> s.id == p.space) spaces)
           spacePath = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) space.id)
-          pagePath = fromMaybe [] (pathOf (`Map.lookup` demo.pages) p.id)
+          pagePath = fromMaybe [] (S.pagePath space (`Map.lookup` demo.pages) p.id)
           siblings = filter (\q -> q.space == p.space) (Map.elems demo.pages)
       for_ (filter (not . T.isPrefixOf "<") (linkTargets p.body)) $ \t -> case classifyDestination t of
-        ToPath _ -> (p.title, t, isJust (resolvePageLink spaces spacePath siblings pagePath t)) `shouldBe` (p.title, t, True)
+        ToPath _ -> (p.title, t, isJust (resolvePageLink spaces spacePath (S.rootPage space) siblings pagePath t)) `shouldBe` (p.title, t, True)
         _ -> pass
 
 -- | The targets of the Markdown links and images in a body, and of its wiki
