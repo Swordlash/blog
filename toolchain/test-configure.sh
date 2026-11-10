@@ -194,8 +194,15 @@ pass 'the page from the state: whats_new=no is --no-whats-new, and on again is -
 expect "sh toolchain/deploy-local.sh --status --prefix $TMP/srv/wiki" action=status "prefix=$TMP/srv/wiki"
 expect "sh toolchain/deploy-local.sh --stop --name team" action=stop name=team
 expect "sh toolchain/deploy-local.sh --rollback --prefix $TMP/srv/wiki" action=rollback "prefix=$TMP/srv/wiki"
-expect "sh toolchain/deploy-local.sh --move-to-postgres --prefix $TMP/srv/wiki --name team" action=move-to-postgres "prefix=$TMP/srv/wiki" name=team
+expect "sh toolchain/deploy-local.sh --move-to-postgres --prefix $TMP/srv/wiki --name team --db-port 5433" action=move-to-postgres "prefix=$TMP/srv/wiki" name=team
 pass '--status, --stop, --rollback and --move-to-postgres name the deployment alone'
+
+# The move takes its own two options from the answers: PostgreSQL's port
+# (the remembered one, or the default, when none is typed) and the
+# build's semaphore.
+expect "sh toolchain/deploy-local.sh --move-to-postgres --name team --db-port 5437 --no-semaphore" action=move-to-postgres name=team db_port=5437 semaphore=off
+expect "sh toolchain/deploy-local.sh --move-to-postgres --name team --db-port 5433 --semaphore" action=move-to-postgres name=team semaphore=on
+pass 'the move passes on the database port and the semaphore it is given'
 
 # A deployment in the home directory, its state in ~/.config/wiki-demo,
 # with an address the deploy chose itself (not an answer) and a demo of a
