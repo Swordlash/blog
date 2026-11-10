@@ -190,7 +190,8 @@ fixture() {
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
-    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN
+    FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
+    FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
   # The managed Node the bootstrap installs, which the unit must name.
@@ -219,13 +220,15 @@ EOF
   cat >"$case_dir/fake-wiki-server" <<EOF
 #!/bin/sh
 printf 'wiki-server %s\n' "\$*" >>"$EVENTS"
+arguments=" \$* "
 command=\$1
 shift
 target=\${1:-}
-data= listen= admin= static= sqlite= database= dump= cert= key=
+data= listen= admin= static= sqlite= database= dump= cert= key= to_database=
 while [ \$# -gt 0 ]; do
   case \$1 in
     --data) data=\$2; shift ;;
+    --to-database) to_database=\$2; shift ;;
     --tls-cert) cert=\$2; shift ;;
     --tls-key) key=\$2; shift ;;
     --listen) listen=\$2; shift ;;
@@ -266,9 +269,25 @@ case \$command in
   rehearse)
     # The upgrade's rehearsal (Maker.Deploy.Rehearse): FAKE_REHEARSE_EXIT
     # ends it as wiki-server rehearse does, 6 for a failed check and 7 for
-    # an old program it cannot drive.
-    [ -z "\${FAKE_REHEARSE_EXIT:-}" ] || { printf 'fake rehearsal failure\n' >&2; exit "\$FAKE_REHEARSE_EXIT"; }
+    # an old program it cannot drive. The comparison of a move to
+    # PostgreSQL (--move-to-database, Maker.Deploy.Move) ends with
+    # FAKE_MOVE_COMPARE_EXIT instead.
+    case \$arguments in
+      *' --move-to-database '*)
+        [ -z "\${FAKE_MOVE_COMPARE_EXIT:-}" ] || { printf 'fake comparison failure: page p1 has another source\n' >&2; exit "\$FAKE_MOVE_COMPARE_EXIT"; } ;;
+      *) [ -z "\${FAKE_REHEARSE_EXIT:-}" ] || { printf 'fake rehearsal failure\n' >&2; exit "\$FAKE_REHEARSE_EXIT"; } ;;
+    esac
     printf 'pages: passed\n' ;;
+  copy-database)
+    # As wiki-server copy-database does into PostgreSQL: the database the
+    # URL names, by its port, then holds the wiki's tables, which the fake
+    # docker's psql counts (FAKE_DOCKER/tables-<port>). FAKE_COPY_EXIT ends
+    # it as the real one ends a copy it did not make, the target untouched.
+    [ -z "\${FAKE_COPY_EXIT:-}" ] || { printf 'fake copy failure\n' >&2; exit "\$FAKE_COPY_EXIT"; }
+    port=\${to_database##*:}
+    port=\${port%%/*}
+    printf '30\n' >"\$FAKE_DOCKER/tables-\$port"
+    printf 'Copied the SQLite database %s into the PostgreSQL database %s.\n' "\$sqlite" "\$to_database" ;;
   check)
     [ -z "\${FAKE_CHECK_FAIL:-}" ] || { printf 'fake check failure: a row does not read\n' >&2; exit 5; }
     printf 'Read every table back.\n' ;;
@@ -296,6 +315,8 @@ case \$command in
     [ -z "\${FAKE_GUIDE_FAIL:-}" ] || { printf 'fake guide failure\n' >&2; exit 1; }
     printf "The guide's pages have this release's text (5 pages).\n" ;;
   serve)
+    # FAKE_SERVE_PG_FAIL: a server that does not start on PostgreSQL.
+    [ -z "\${FAKE_SERVE_PG_FAIL:-}" ] || [ -z "\$database" ] || { printf 'fake failure to open PostgreSQL\n' >&2; exit 1; }
     mkdir -p "\$data"
     [ -z "\$sqlite" ] || [ -f "\$sqlite" ] || printf 'a database\n' >"\$sqlite"
     exec "$NODE_REAL" -e '
@@ -642,6 +663,7 @@ case $name in
     container=$FAKE_DOCKER/$project
     case "$*" in
       'up --detach --wait postgres')
+        [ -z "${FAKE_PG_UP_FAIL:-}" ] || { printf 'Error response from daemon: port is already allocated\n' >&2; exit 1; }
         if [ -f "$container" ]; then
           printf 'started on %s\n' "$WIKI_DB_PORT" >"$container"
           printf 'docker: started the container of %s\n' "$project" >>"$EVENTS"
@@ -658,7 +680,14 @@ case $name in
         # statement goes to the events.
         grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
         shift 3
-        printf 'psql of %s: %s\n' "$project" "$*" >>"$EVENTS" ;;
+        printf 'psql of %s: %s\n' "$project" "$*" >>"$EVENTS"
+        # The move to PostgreSQL (Maker.Deploy.Move) counts the tables of
+        # the database wiki, which copy-database fills, and empties it
+        # again by dropping it.
+        case $* in
+          *'SELECT count(*) FROM pg_catalog.pg_tables'*) cat "$FAKE_DOCKER/tables-$WIKI_DB_PORT" 2>/dev/null || printf '0\n' ;;
+          *' DROP DATABASE wiki') rm -f "$FAKE_DOCKER/tables-$WIKI_DB_PORT" ;;
+        esac ;;
       'exec -T postgres pg_dump '* | 'exec -T postgres pg_restore '*)
         grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
         shift 3
@@ -696,12 +725,20 @@ case $name in
     }
     case $1 in
       show-environment) printf 'HOME=%s\nPATH=%s\n' "$HOME" "$FAKE_SERVICE_PATH" ;;
-      daemon-reload) ;;
+      # FAKE_RELOAD_FAIL fails a daemon-reload, and FAKE_RESTART_PG_FAIL a
+      # restart of a unit on PostgreSQL: the move's switch and its start.
+      daemon-reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || { printf 'Failed to reload daemon\n' >&2; exit 1; } ;;
       enable) touch "$FAKE_SYSTEMD/$2.enabled" ;;
       disable)
         [ "$2" != --now ] || { shift; stop "$2"; }
         rm -f "$FAKE_SYSTEMD/$2.enabled" ;;
-      restart) stop "$2"; start "$2" ;;
+      restart)
+        if [ -n "${FAKE_RESTART_PG_FAIL:-}" ] && grep -q -- '--database postgres://' "$units/$2"; then
+          printf 'Job for %s failed\n' "$2" >&2
+          exit 1
+        fi
+        stop "$2"
+        start "$2" ;;
       start) alive "$2" || start "$2" ;;
       stop) stop "$2" ;;
       is-active) [ "$2" != --quiet ] || shift; alive "$2" ;;
@@ -1548,6 +1585,216 @@ deploy --prefix "$HOME/wiki-demo" --no-build >"$case_dir/adopted-again" 2>&1 || 
 assert_contains "$case_dir/adopted-again" 'adopting wiki-demo'
 undeploy --prefix "$HOME/wiki-demo" --purge-data >/dev/null 2>&1
 pass 'a rollback of an adoption under --prefix moves the state and the PostgreSQL files back where the kept unit names them'
+
+# The move of a wiki on SQLite into PostgreSQL (--move-to-postgres,
+# maker/src/Maker/Deploy/Move.hs). The checkout is a git repository here,
+# so that the deployment records the commit it was built from, which the
+# move compares with the checkout's. After each failure the deployment is
+# as it was: the unit and the state on SQLite, data/wiki.sqlite byte for
+# byte, the service answering, and PostgreSQL's database empty.
+fixture move
+git -C "$case_dir/repo" init -q
+git -C "$case_dir/repo" add -A
+git -C "$case_dir/repo" -c user.name=test -c user.email=test@example.org commit -q -m 'the fixture'
+head=$(git -C "$case_dir/repo" rev-parse HEAD)
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+data=$HOME/wiki-demo/data
+pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+statefile=$HOME/.config/wiki-demo/wiki-demo.state
+deploy --server --sqlite --port "$p" --admin-port "$a" --no-firewall >"$case_dir/first" 2>&1 || fail 'the first deploy on SQLite failed'
+[ "$(state git_commit)" = "$head" ] || fail "the deployment does not record the checkout's commit"
+deploy --no-build >"$case_dir/second" 2>&1 || fail 'the second deploy on SQLite failed'
+printf 'written on SQLite\n' >>"$data/wiki.sqlite"
+cp "$data/wiki.sqlite" "$case_dir/sqlite-before"
+cp "$HOME/wiki-demo/previous/info" "$case_dir/previous-before"
+# On SQLite as it was: what each failure below must leave.
+on_sqlite() {
+  assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+  assert_lacks "$HOME/$unit" '--database postgres://'
+  [ "$(state db)" = sqlite ] || fail "$1: the state does not say SQLite"
+  cmp -s "$data/wiki.sqlite" "$case_dir/sqlite-before" || fail "$1: data/wiki.sqlite is not as it was"
+  [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail "$1: the server does not answer on SQLite"
+  [ ! -e "$FAKE_DOCKER/tables-5433" ] || fail "$1: PostgreSQL's database still holds the copy"
+  cmp -s "$HOME/wiki-demo/previous/info" "$case_dir/previous-before" || fail "$1: the deployment kept in previous/ changed"
+  assert_contains "$HOME/wiki-demo/bin/wiki" 'The database is the SQLite file'
+}
+on_sqlite 'before the move'
+pass 'a deployment on SQLite from a git checkout records its commit, for the move'
+
+# Refused before anything changes: another option, a deployment that is
+# not there, no Docker, a commit that is not the checkout's or not known,
+# and a PostgreSQL whose database holds a wiki.
+refused_move() {
+  why=$1
+  shift
+  : >"$EVENTS"
+  out=$case_dir/refused
+  if deploy --move-to-postgres "$@" >"$out" 2>&1; then fail "a move went on: $why"; fi
+  assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+  assert_lacks "$EVENTS" 'wiki-server copy-database'
+  on_sqlite "$why"
+}
+refused_move 'with --port' --port 9999
+assert_contains "$out" '--move-to-postgres takes only --name, --prefix, --db-port and --semaphore or --no-semaphore'
+refused_move 'with another name' --name other
+assert_contains "$out" 'there is no wiki'"'"'s server deployed under the name other to move'
+FAKE_NO_DOCKER=1 refused_move 'without Docker'
+assert_contains "$out" 'Docker is not installed here or does not answer'
+assert_lacks "$EVENTS" 'cabal build'
+sed -i "s/^git_commit=.*/git_commit=0123456789abcdef/" "$statefile"
+refused_move 'at another commit'
+assert_contains "$out" "the deployment wiki-demo runs commit 0123456789abcdef, and this checkout is at $head"
+sed -i "s/^git_commit=.*/git_commit=unknown/" "$statefile"
+refused_move 'at a commit not known'
+assert_contains "$out" 'the commit wiki-demo was deployed from is not known'
+sed -i "s/^git_commit=.*/git_commit=$head/" "$statefile"
+printf '12\n' >"$FAKE_DOCKER/tables-5433"
+cp "$FAKE_DOCKER/tables-5433" "$case_dir/tables-other"
+: >"$EVENTS"
+out=$case_dir/holds
+if deploy --move-to-postgres >"$out" 2>&1; then fail 'a move into a PostgreSQL that holds a wiki went on'; fi
+assert_contains "$out" 'holds a wiki already (12 tables, in the volume wiki-demo_wiki-db)'
+assert_contains "$EVENTS" 'cabal build --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server +postgres'
+assert_contains "$EVENTS" 'docker: created the container and the volume of wiki-demo'
+assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+cmp -s "$FAKE_DOCKER/tables-5433" "$case_dir/tables-other" || fail 'the wiki PostgreSQL held was changed'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+rm "$FAKE_DOCKER/tables-5433"
+on_sqlite 'a PostgreSQL that holds a wiki'
+pass 'a move is refused before the service stops: with other options, for no such deployment, without Docker, at another commit or one not known, and into a PostgreSQL that holds a wiki (left as it is, its container stopped again)'
+
+# A failure before the switch starts the service again on SQLite, and
+# empties PostgreSQL's database when the copy had filled it.
+failed_move() {
+  why=$1
+  : >"$EVENTS"
+  out=$case_dir/failed
+  if deploy --move-to-postgres >"$out" 2>&1; then fail "a move went on: $why"; fi
+  on_sqlite "$why"
+}
+FAKE_BUILD_FAIL=1 failed_move 'a build that fails'
+assert_contains "$out" 'the build of wiki-server failed (see above), so nothing was changed'
+assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+FAKE_PG_UP_FAIL=1 failed_move 'a PostgreSQL that does not start'
+assert_contains "$out" 'PostgreSQL did not start (see above)'
+assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+FAKE_BACKUP_FAIL=1 failed_move 'a backup that fails'
+assert_contains "$out" "the backup of $data/wiki.sqlite failed (see above)"
+assert_contains "$EVENTS" 'systemctl stop wiki-demo.service'
+assert_lacks "$EVENTS" 'wiki-server copy-database'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+for code in 4 5 6 1; do
+  FAKE_COPY_EXIT=$code failed_move "a copy that ends with $code"
+  assert_contains "$EVENTS" "copy-database --data $data --sqlite $data/wiki.sqlite --to-database postgres://wiki@127.0.0.1:5433/wiki --to-database-password-file $pgd/db-password"
+  assert_lacks "$EVENTS" 'DROP DATABASE wiki'
+done
+assert_contains "$out" 'the copy failed (see above), and PostgreSQL'"'"'s database is empty, as it was'
+FAKE_MOVE_COMPARE_EXIT=6 failed_move 'a comparison that fails'
+assert_contains "$out" 'the wiki does not read the same in PostgreSQL as in SQLite'
+assert_contains "$EVENTS" "rehearse --old $case_dir/repo/dist-newstyle/native-opt/wiki-server --data $data --sqlite $data/wiki.sqlite --scratch $HOME/.config/wiki-demo/wiki-demo.rehearsal --move-to-database postgres://wiki@127.0.0.1:5433/wiki_rehearsal --move-to-database-password-file $pgd/db-password"
+assert_contains "$EVENTS" 'psql of wiki-demo: psql --quiet --username=wiki --dbname=postgres --command DROP DATABASE wiki'
+assert_contains "$EVENTS" 'psql of wiki-demo: psql --quiet --username=wiki --dbname=postgres --command CREATE DATABASE wiki'
+[ ! -e "$HOME/.config/wiki-demo/wiki-demo.rehearsal" ] || fail 'the comparison left its scratch directory'
+FAKE_MOVE_COMPARE_EXIT=1 failed_move 'a comparison that cannot be made'
+assert_contains "$out" 'the comparison of the wiki in PostgreSQL with the wiki in SQLite could not be made'
+pass 'a failure before the switch (the build, PostgreSQL, the backup, the copy, the comparison) leaves the deployment on SQLite, its service answering, and PostgreSQL empty'
+
+# A failure after the switch switches back: the switch itself (here its
+# daemon-reload), the restart, and the server that does not answer on
+# PostgreSQL.
+switched_back() {
+  assert_contains "$out" "moved $data/wiki.sqlite aside into"
+  assert_contains "$out" 'switched back to SQLite, as it was before the move'
+  [ -z "$(find "$data/replaced" -name wiki.sqlite 2>/dev/null)" ] || fail "$1: the switch back left a wiki.sqlite set aside"
+  [ ! -e "$HOME/wiki-demo/previous.before-move" ] || fail "$1: the switch back left the older previous/ aside"
+  assert_contains "$EVENTS" 'psql of wiki-demo: psql --quiet --username=wiki --dbname=postgres --command DROP DATABASE wiki'
+  assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+}
+FAKE_RELOAD_FAIL=1 failed_move 'a switch that fails'
+assert_contains "$out" 'the switch to PostgreSQL failed'
+switched_back 'a switch that fails'
+FAKE_RESTART_PG_FAIL=1 failed_move 'a restart on PostgreSQL that fails'
+assert_contains "$out" 'systemctl --user restart wiki-demo.service failed'
+switched_back 'a restart on PostgreSQL that fails'
+FAKE_SERVE_PG_FAIL=1 failed_move 'a server that does not answer on PostgreSQL'
+assert_contains "$out" 'does not answer on'
+switched_back 'a server that does not answer on PostgreSQL'
+pass 'a failure after the switch (the switch, the restart, a server that does not answer on PostgreSQL) switches back to SQLite, with the deployment kept before, PostgreSQL emptied and its container stopped again'
+
+# The move.
+: >"$EVENTS"
+out=$case_dir/moved
+deploy --move-to-postgres >"$out" 2>&1 || fail 'the move failed'
+{ [ "$(line_of "$EVENTS" 'systemctl stop wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server backup')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'wiki-server copy-database')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server copy-database')" -lt "$(line_of "$EVENTS" 'wiki-server rehearse')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server rehearse')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
+  fail 'the move did not stop, back up, copy, compare and start in that order'
+assert_contains "$EVENTS" "wiki-server backup --data $data --sqlite $data/wiki.sqlite"
+assert_contains "$HOME/$unit" "--database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
+assert_lacks "$HOME/$unit" '--sqlite'
+{ [ "$(state db)" = postgres ] && [ "$(state db_port)" = 5433 ] && [ "$(state git_commit)" = "$head" ]; } || fail 'the state does not say PostgreSQL'
+[ "$(state port)" = "$p" ] || fail 'the move changed the port in the state'
+[ ! -e "$data/wiki.sqlite" ] || fail 'data/wiki.sqlite is still in data/'
+aside=$(sed -n 's/^aside=//p' "$HOME/wiki-demo/previous/info")
+cmp -s "$aside/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the SQLite file set aside is not the wiki byte for byte'
+[ -z "$(sed -n 's/^backup=//p' "$HOME/wiki-demo/previous/info")" ] || fail 'a backup was kept for a rollback of the move'
+assert_contains "$HOME/wiki-demo/previous/state" 'db=sqlite'
+assert_contains "$HOME/wiki-demo/previous/unit" "--sqlite \"$data/wiki.sqlite\""
+[ -f "$HOME/wiki-demo/app/index.html" ] || fail 'the move lost the page'
+assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_URL='postgres://wiki@127.0.0.1:5433/wiki'"
+assert_contains "$FAKE_DOCKER/tables-5433" '30'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer on PostgreSQL'
+assert_contains "$out" 'The wiki of wiki-demo is in PostgreSQL now'
+deploy --status >"$case_dir/status" 2>&1
+assert_contains "$case_dir/status" 'its database: PostgreSQL in Docker, the compose project wiki-demo, on 127.0.0.1:5433'
+pass 'the move stops the service, backs up, copies, compares, sets data/wiki.sqlite aside, keeps the deployment on SQLite, and starts the server on PostgreSQL'
+
+refused_move_on_postgres() {
+  : >"$EVENTS"
+  out=$case_dir/refused
+  if deploy --move-to-postgres >"$out" 2>&1; then fail 'a second move went on'; fi
+  assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+}
+refused_move_on_postgres
+assert_contains "$out" 'the wiki of wiki-demo is in PostgreSQL already'
+pass 'a deployment in PostgreSQL already is not moved again'
+
+# --rollback goes back to the wiki on SQLite, byte for byte; PostgreSQL's
+# volume keeps the moved wiki, so a second move is refused until it is
+# deleted (here: the fake's tables forgotten).
+: >"$EVENTS"
+out=$case_dir/rollback
+deploy --rollback --yes >"$out" 2>&1 || fail '--rollback after the move failed'
+assert_contains "$out" "its wiki comes back from $aside, where the move to PostgreSQL"
+assert_lacks "$EVENTS" 'wiki-server restore'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+cmp -s "$data/wiki.sqlite" "$case_dir/sqlite-before" || fail 'the rollback did not give the SQLite wiki back byte for byte'
+[ "$(state db)" = sqlite ] || fail 'the rollback did not put SQLite back in the state'
+assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after the rollback'
+out=$case_dir/again-refused
+if deploy --move-to-postgres >"$out" 2>&1; then fail 'a move into the volume the first one left went on'; fi
+assert_contains "$out" 'holds a wiki already (30 tables'
+rm "$FAKE_DOCKER/tables-5433"
+pass '--rollback after the move gives the SQLite wiki back and stops PostgreSQL, whose wiki then refuses a second move'
+
+# Moved again, on another port; then a plain deploy finds the deployment on
+# PostgreSQL (no --fresh, no SQLite file in its way) and rehearses its
+# upgrade there.
+deploy --move-to-postgres --db-port 5437 >"$case_dir/moved-again" 2>&1 || fail 'the second move failed'
+assert_contains "$HOME/$unit" '--database postgres://wiki@127.0.0.1:5437/wiki'
+assert_contains "$pgd/pg_dump" "WIKI_DB_PORT='5437'"
+: >"$EVENTS"
+out=$case_dir/after-move
+deploy --no-build >"$out" 2>&1 || fail 'a deploy after the move failed'
+assert_lacks "$out" 'the state is incompatible'
+assert_contains "$EVENTS" "wiki-server rehearse --old $HOME/wiki-demo/bin/wiki-server --data $data --database postgres://wiki@127.0.0.1:5437/wiki"
+assert_contains "$EVENTS" 'cabal list-bin --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server --constraint=wiki-server +postgres'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer after a deploy that followed the move'
+undeploy --purge-data >/dev/null 2>&1
+pass 'a deploy after the move keeps the wiki in PostgreSQL and rehearses its upgrade there'
 
 # The wiki's server.
 fixture server

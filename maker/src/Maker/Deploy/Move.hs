@@ -49,7 +49,7 @@ module Maker.Deploy.Move
   )
 where
 
-import Control.Exception (SomeException, finally, throwIO, try)
+import Control.Exception (SomeException, displayException, finally, fromException, throwIO, try)
 import Control.Monad (forM_, unless, when)
 import Data.Char (isSpace)
 import Data.IORef
@@ -66,6 +66,7 @@ import Maker.Deploy.Upgrade (keepPrevious, previousDir, putAsideBack, readKept, 
 import System.Directory
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
+import System.IO.Error (ioeGetErrorString, isUserError)
 import Text.Read (readMaybe)
 
 -- | 'Move' is what the deploy's front ("Maker.Deploy.Front") gives the
@@ -318,7 +319,7 @@ moveToPostgres m = do
         onSqliteAgain
         die (why <> ": switched back to SQLite, as it was before the move, " <> sqlite <> " unchanged")
   case switched of
-    Left e -> switchBack ("the switch to PostgreSQL failed (" <> show e <> ")")
+    Left e -> switchBack ("the switch to PostgreSQL failed (" <> reason e <> ")")
     Right () -> pure ()
 
   -- 8. The start.
@@ -347,6 +348,13 @@ moveToPostgres m = do
       , "in " <> dataDir </> "backups" <> ". --rollback goes back to the wiki on SQLite: what is written"
       , "in PostgreSQL meanwhile is not in it, and stays in the volume."
       ]
+
+-- | Why a step of the switch failed, in words: the message of a failure
+-- the switch raised itself, or the exception as it shows.
+reason :: SomeException -> String
+reason e = case fromException e of
+  Just io | isUserError io -> ioeGetErrorString io
+  _ -> displayException e
 
 -- | A text without the spaces around it.
 trim :: String -> String
