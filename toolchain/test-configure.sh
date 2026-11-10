@@ -361,7 +361,7 @@ pass 'the presets are applied over whichever deployment is loaded, its state inc
 
 # The same through the screens, where the bug was: the wizard starts with
 # the presets on the default deployment, the first screen is given another
-# deployment's prefix (Tab past the four choices of what to do and the
+# deployment's prefix (Tab past the five choices of what to do and the
 # name), and Enter goes through the nine screens and runs the deploy, here
 # a fake that prints its arguments. They carry the presets over that
 # deployment's state. The keys go through script(1), a terminal for vty,
@@ -375,7 +375,7 @@ if command -v script >/dev/null 2>&1; then
     cd "$TMP/drive"
     {
       sleep 3
-      for _ in 1 2 3 4 5; do printf '\t'; sleep 0.3; done
+      for _ in 1 2 3 4 5 6; do printf '\t'; sleep 0.3; done
       printf '%s' "$TMP/srv/driven"
       sleep 1
       for _ in 1 2 3 4 5 6 7 8 9; do printf '\r'; sleep 1; done
