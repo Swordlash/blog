@@ -1672,7 +1672,9 @@ the schema (run `wiki-server migrate` first), 5 when it does not read, 6 when
 it was refused before anything was written (a server is running on the data
 directory, a server or console has the target open, the target is not empty)
 and 1 when the copy failed. `--to-sqlite FILE` copies the other way, into a new
-SQLite file. The deploy does not switch a deployment over by itself yet.
+SQLite file, which the command makes (a file that is there already is refused,
+and a failed copy deletes only the file it made). The deploy does not switch a
+deployment over by itself yet.
 
 A wiki also moves between the two, and from a server of before PostgreSQL (whose
 `wiki.sqlite` has a schema this one does not read), by an export and an import
