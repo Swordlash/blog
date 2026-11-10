@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+The browser's OPAQUE client from opaque-hs (WP5.79). In the browser,
+`Wiki.App.Backend.Opaque` is now opaque-hs's `Crypto.OPAQUE.Client`, as it
+is natively, in place of the binding of the wiki's own to
+`@serenity-kit/opaque` (`jsbits/opaque.js`, gone); its four functions and
+their types are the same. The finishing steps are
+`Crypto.OPAQUE.Client.WebCrypto`'s there, and the `CryptoKey` of the export
+key goes into the page's registry of keys through the new
+`Wiki.App.Assistant.holdKey` (`wiki_vault_hold_key` in `jsbits/vault.js`).
+opaque-hs finds serenity-kit through `globalThis.opaqueHsSerenity`, which
+web/src/islands.js sets to the island's loader. The browser now raises
+Argon2id's parameters to at least one pass and 8 KiB, as the native client
+and the server do; it used to fail a step below them. A step that fails for any
+reason but a wrong password says so on the console, with a warning.
+
 Every space has a home page, and it is its administrators' (WP5.78a,
 #201). The space settings no longer have the home page's select, and a
 page no longer has "Set as home page" (`.set-home` and `.space-home-field`
