@@ -587,6 +587,12 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-prune-caches.sh
 
+    # The rehearsal script's ports, against a fake old and new wiki-server:
+    # below 32768, and another pair when one is taken. Two seconds.
+    - name: Test rehearse-ci.sh
+      if: matrix.group == 'deploy'
+      run: sh toolchain/test-rehearse-ci.sh
+
     # The README's screenshots are taken by hand (npm run screenshots, which
     # needs a wasm build and Chromium), so nothing in CI runs the script:
     # parsing it at least catches a syntax error before someone next needs it.

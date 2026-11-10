@@ -72,21 +72,44 @@ else
   scratch_args=''
 fi
 
-# OLD serves the wiki, on loopback ports this run picks.
-port=$((20000 + $$ % 20000))
-admin=$((port + 1))
-"$old" serve --data "$data" "$@" --listen "127.0.0.1:$port" --admin-listen "127.0.0.1:$admin" >"$work/old.log" 2>&1 &
-pid=$!
-api=http://127.0.0.1:$admin/admin/api/v1
-tries=0
-until curl -fsS "$api/info" >/dev/null 2>&1; do
-  tries=$((tries + 1))
-  if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
-    cat "$work/old.log" >&2
-    printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
-    exit 1
+# OLD serves the wiki on two loopback ports this run picks, the listener's
+# and the admin listener's, side by side. Both are below 32768: Linux hands
+# out ports for outgoing connections from 32768 up (ip_local_port_range),
+# so none of the runner's own connections, such as the tests' to
+# PostgreSQL, can hold one of them. A port taken all the same, by another
+# server, makes OLD stop at once with "Address already in use": the run
+# then tries another pair, ten pairs at most, before it gives up.
+attempt=0
+while :; do
+  port=$((20000 + (($$ + attempt * 17) % 6380) * 2))
+  admin=$((port + 1))
+  "$old" serve --data "$data" "$@" --listen "127.0.0.1:$port" --admin-listen "127.0.0.1:$admin" >"$work/old.log" 2>&1 &
+  pid=$!
+  api=http://127.0.0.1:$admin/admin/api/v1
+  tries=0
+  answered=''
+  while :; do
+    if curl -fsS "$api/info" >/dev/null 2>&1; then
+      answered=1
+      break
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
+  [ -z "$answered" ] || break
+  if ! kill -0 "$pid" 2>/dev/null && grep -q 'Address already in use' "$work/old.log" && [ "$attempt" -lt 9 ]; then
+    printf 'rehearse-ci: port %s or %s is taken, trying another pair\n' "$port" "$admin" >&2
+    wait "$pid" 2>/dev/null || true
+    pid=''
+    attempt=$((attempt + 1))
+    continue
   fi
-  sleep 0.5
+  cat "$work/old.log" >&2
+  printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
+  exit 1
 done
 
 post() {
