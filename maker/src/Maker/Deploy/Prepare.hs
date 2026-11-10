@@ -23,8 +23,6 @@ module Maker.Deploy.Prepare
   , serverBuildNative
   , serverCabalOutput
   , pgFiles
-  , pgRunning
-  , pgComposeOutput
   , dockerReady
   )
 where
@@ -622,18 +620,6 @@ pgCompose name pd port args = do
   environment <- withVars [("WIKI_DB_PASSWORD_FILE", pd </> "db-password"), ("WIKI_DB_PORT", if null port then "5433" else port)]
   hFlush stdout
   runProcess (setEnv environment (proc "docker" (["compose", "--project-name", name, "--file", pd </> "docker-compose.yml", "--file", pd </> "local.yml"] <> args)))
-
--- | What docker compose prints on the deployment's project, with its files
--- and port, and whether it succeeded; its errors are on the terminal. The
--- move to PostgreSQL reads a query's answer this way.
-pgComposeOutput :: String -> FilePath -> String -> [String] -> IO (Bool, String)
-pgComposeOutput name pd port args = do
-  environment <- withVars [("WIKI_DB_PASSWORD_FILE", pd </> "db-password"), ("WIKI_DB_PORT", if null port then "5433" else port)]
-  hFlush stdout
-  result <- try (readProcessStdout (setEnv environment (setStdin nullStream (proc "docker" (["compose", "--project-name", name, "--file", pd </> "docker-compose.yml", "--file", pd </> "local.yml"] <> args)))))
-  pure $ case result of
-    Right (code, out) -> (code == ExitSuccess, decodeFs out)
-    Left (_ :: IOException) -> (False, "")
 
 -- | Whether Docker and its compose plugin answer.
 dockerReady :: IO Bool

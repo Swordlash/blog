@@ -18,15 +18,10 @@ module Maker.Deploy.Apply
   , sanName
 
     -- * For the move to PostgreSQL ("Maker.Deploy.Move")
-  , Place (..)
-  , Settings (..)
-  , settingsOf
-  , rollBackDeployment
   , startAgain
   , answersWithin
   , deploymentUrl
   , urlAnswers
-  , pgDown
   )
 where
 
