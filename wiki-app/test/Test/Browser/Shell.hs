@@ -1,18 +1,39 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | The shell in a browser, over the demo's wiki: what each user sees, going
--- from page to page by clicking, and changing spaces and pages. Each test
--- starts on a fresh copy of the demo ("Test.Browser.Mount").
+-- from page to page by clicking, and changing spaces and pages, and a
+-- page's permanent address followed to the page. Each test starts on a
+-- fresh copy of the demo ("Test.Browser.Mount").
 module Test.Browser.Shell (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (clickButton, slugs, start)
+import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
+import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Page (Page (body, id, title))
+
+-- The address the test page is at (test/jsbits/test-location.js).
+$( browserJS
+     ["jsbits/test-location.js"]
+     [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
+     ]
+ )
+
+-- | The id of the demo's page with this title.
+demoPage :: Text -> PageId
+demoPage t = maybe (panic ("no page " <> t)) (\p -> p.id) (List.find (\p -> p.title == t) (Map.elems (demoState demoNow).pages))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -158,6 +179,50 @@ spec m = do
   it "shows that an address is nothing" $ runPage $ do
     ui <- start m Nothing Unknown
     find ui ".not-found h1" >>= (`shouldHaveText` "Not found")
+
+  -- The test router keeps the route in the fragment, where no fragment of
+  -- the page's own can go: that the fragment is kept is the application
+  -- router's (Wiki.App.Browser.redirectKeepingFragment).
+  it "follows a page's permanent address to the page, in place of the address" $ runPage $ do
+    ui <- start m Nothing (PermanentLink (demoPage "Mathematics"))
+    find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Mathematics")
+
+  it "shows a permanent address of a page someone may not view as not found, and the page once someone who may is signed in" $ runPage $ do
+    let onCall = demoPage "On-call"
+    ui <- start m (Just "user-reader") (PermanentLink onCall)
+    find ui ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
+    textContent (root ui) >>= (`shouldSatisfy` (not . T.isInfixOf "On-call"))
+    location `shouldReturn` ("#/l/" <> onCall.text <> "/")
+    -- As an id no page has.
+    nowhere <- start m (Just "user-reader") (PermanentLink (PageId "no-such-page"))
+    find nowhere ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
+    unmount nowhere
+    -- Someone who may see it arrives at the page from the same address.
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=admin]" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "On-call")
+    eventually $ location `shouldReturn` "#/s/team/p/on-call/"
+
+  it "leads a link by a page's id to the page, from another space too" $ runPage $ do
+    let mathematics = demoPage "Mathematics"
+        diagrams = demoPage "Diagrams"
+        links = "[the diagrams](/l/" <> diagrams.text <> "/) and [the macros](/l/" <> mathematics.text <> "/#macros) and [a lost one](/l/no-such-page/)"
+        writeIn t heading = Map.adjust (\p -> p {body = "# " <> heading <> "\n\n" <> links}) (demoPage t)
+        written st = st {pages = writeIn "Tour" "Tour" (writeIn "Hello, world" "Hello, world" st.pages)}
+    tour <- startChanged m written Nothing (Space (slugs ["docs"]))
+    -- In the space that holds the page, straight to the page's address.
+    _ <- find tour ".page-body a[href$='#/s/docs/p/markdown-guide/diagrams/']"
+    unmount tour
+    ui <- startChanged m written Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    -- From another space, to the permanent address, never a broken link.
+    _ <- find ui ".page-body a[href$='#/l/no-such-page/']"
+    length <$> findAll ui ".page-body a.link-unresolved" `shouldReturn` 0
+    find ui (".page-body a[href$='#/l/" <> mathematics.text <> "/#macros']") >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
   where
     shouldSatisfy' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
+    location = unsafeIOToPageM (fromJSText <$> js_location_hash)
     shouldHaveText' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)

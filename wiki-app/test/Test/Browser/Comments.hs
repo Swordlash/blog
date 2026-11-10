@@ -11,6 +11,8 @@
 module Test.Browser.Comments (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
@@ -18,8 +20,17 @@ import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Page (Page (id, title))
+
+-- | The id of the demo's page with this title, as its permanent address
+-- writes it.
+demoPage :: Text -> Text
+demoPage t = maybe (panic ("no page " <> t)) (\p -> p.id.text) (List.find (\p -> p.title == t) (Map.elems (demoState demoNow).pages))
 
 -- Selecting text as a reader does: test/jsbits/test-select.js.
 $( browserJS
@@ -82,16 +93,26 @@ spec m = do
     find anonymous ".link-copied-label" >>= textContent >>= (`shouldSatisfy` (not . T.null))
     length <$> findAll anonymous ".copy-selection-link" `shouldReturn` 0
 
-  it "copies a section's address from a heading's # and a box's, and stays on the page" $ runPage $ do
+  -- The address copied is the page's permanent one, by its id (WP5.81),
+  -- which still leads to the section after the page moves; the link's
+  -- own address, for a middle click, stays the page's.
+  it "copies a section's permanent address from a heading's # and a box's, and stays on the page" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide", "mathematics"]))
     find ui ".page-body a.heading-anchor[href='#macros']" >>= click
-    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "/#macros")
+    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf ("#/l/" <> demoPage "Mathematics" <> "/#macros"))
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
     unmount ui
     guide <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
     box <- find guide ".page-body .alert-exercise[id='box-exercise-1']"
     findIn box ".alert-title a.heading-anchor[href='#box-exercise-1']" >>= click
-    eventually $ find guide ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "/#box-exercise-1")
+    eventually $ find guide ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf ("#/l/" <> demoPage "Markdown guide" <> "/#box-exercise-1"))
+
+  it "copies the page's permanent address from its actions, for any reader" $ runPage $ do
+    ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide", "mathematics"]))
+    find ui ".page-actions .copy-permanent-link" >>= (`shouldHaveText` "Copy permanent link")
+    find ui ".page-actions .copy-permanent-link" >>= click
+    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf ("#/l/" <> demoPage "Mathematics" <> "/"))
+    find ui ".link-copied-label" >>= textContent >>= (`shouldSatisfy` (`elem` ["Link copied:", "The link could not be copied. It is selected, to copy by hand:"]))
 
   it "replies to a thread, and resolves it, which unmarks its quote, and reopens it" $ runPage $ do
     ui <- start m (Just "user-editor") hello

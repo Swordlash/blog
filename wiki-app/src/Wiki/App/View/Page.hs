@@ -223,7 +223,8 @@ data State = State
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
--- @#@, or by "Copy link" on selected text (WP5.53 of docs/PLAN.md).
+-- @#@, by "Copy link" on selected text (WP5.53 of docs/PLAN.md), or by
+-- "Copy permanent link" among the page's actions (WP5.81).
 data Copied = Copied
   { address :: Text
   , outcome :: Maybe Bool
@@ -254,6 +255,7 @@ data Action
   | SetTemplate Bool
   | ShowChanged
   | CopySelection BlockText
+  | CopyPermanentLink
   | ChooseWidth PageWidth
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
@@ -366,7 +368,7 @@ component =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           | changes
           ]
-            <> [viewSource, history]
+            <> [viewSource, history, copyPermanent]
             <> present
             <> export
             <> [comments | commentsHere input]
@@ -382,8 +384,11 @@ component =
                               else [button "Move" StartMove, button "Delete" (Open ConfirmingDelete)] <> useAsTemplate
                           )
                )
-      | otherwise = [viewSource, history] <> present <> export <> [comments | commentsHere input]
+      | otherwise = [viewSource, history, copyPermanent] <> present <> export <> [comments | commentsHere input]
       where
+        -- For every reader: the page's address by its id, which keeps
+        -- working after the page moves.
+        copyPermanent = [hh|<button type="button" class="button copy-permanent-link" title="Copy an address of this page that keeps working when the page is moved" onClick={{ const CopyPermanentLink }}>Copy permanent link</button>|]
         home = homeSpace input.context input.space.id
         -- Whether this page is the space's home page, which only the
         -- space's administrators change ('mayEditPage').
@@ -666,10 +671,15 @@ component =
       -- A click on a heading's or a box's #: the section's address goes
       -- to the clipboard and into the address bar, and the page stays
       -- where it is. Its listener has kept the browser from following it.
-      FollowLink (CopyAnchor fragment) -> do
+      --
+      -- The address copied is the page's permanent one
+      -- ('permanentAddress'), so that it still leads to the section after
+      -- the page moves; the address bar shows the page's own.
+      FollowLink (CopyAnchor fragment) -> withPage $ \page -> do
         H.liftEffect (markFragment fragment)
-        here <- gets pageAddress >>= absoluteUrl
+        here <- gets (`permanentAddress` page) >>= absoluteUrl
         copyAddress (here <> "#" <> encodeComponent fragment)
+      CopyPermanentLink -> withPage $ \page -> gets (`permanentAddress` page) >>= absoluteUrl >>= copyAddress
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect (followArticleLink router target)
@@ -1089,6 +1099,12 @@ pageAddress st =
   Router.href
     st.input.context.router
     (documentRoute st.input.context st.input.space.id (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path))
+
+-- | 'permanentAddress' is the page's permanent address
+-- ('Wiki.App.Route.PermanentLink'): its id's, which leads to the page
+-- wherever it is moved later.
+permanentAddress :: State -> Page -> Text
+permanentAddress st page = Router.href st.input.context.router (PermanentLink page.id)
 
 -- | How long the notice of a copied address stays: long enough to be read
 -- in passing.

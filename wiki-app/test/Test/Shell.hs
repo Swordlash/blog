@@ -348,13 +348,13 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     -- The tour, Docs' home page, at its old address: its routes are under
     -- the space's address.
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/source/\">View source</a><a class=\"button\" href=\"/s/docs/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
+    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/source/\">View source</a><a class=\"button\" href=\"/s/docs/history/\">History</a><button class=\"button copy-permanent-link\" title=\"Copy an address of this page that keeps working when the page is moved\" type=\"button\">Copy permanent link</button><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
     asReader `lacks` ">Edit</a>"
     Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
-    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
+    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button class=\"button copy-permanent-link\" title=\"Copy an address of this page that keeps working when the page is moved\" type=\"button\">Copy permanent link</button><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
 
   it "offers a space's home page to whoever administers the space to change, and a page under it to whoever edits the space" $ do
     -- The editor is one of the blog's writers, and does not administer it.
