@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A page's permanent address, `/l/<page id>/` (WP5.81, #194), is answered
+with a 302 to the page's own address for a session that may view the page,
+`Cache-Control: private, no-cache` and `Vary: Cookie`; otherwise it is
+prerendered as not found, as any address that names nothing. The storage
+answers `pageLocation`, and the feeds and the PDF and Word exports read a
+link by id as they read one by path.
+
 Each space's home page is the root of its pages (WP5.78b, #201). Step 13
 of the schema, `Wiki.Server.Storage.Migrate.Code.Step0013`, puts every
 other top-level page under the home page, before the pages it had, takes

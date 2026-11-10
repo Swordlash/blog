@@ -178,6 +178,14 @@ the import is then recorded itself. The demo's import leaves the log out.
   administrator. Importing an export of the same server again brings no
   comment twice.
 
+A link by a page's id, a permanent link (`/l/<page id>/`), is imported as
+it is written, not rewritten. The demo and an import into an empty server
+keep the archive's ids, so such a link leads where it did. The merge gives
+every page it creates a new id, so a link by id in the imported text goes
+on leading to the page that holds the archive's id: on the server the
+archive came from, the page that was exported; elsewhere, most likely no
+page.
+
 ## Compatibility
 
 - **Additions need no new version.** A reader ignores the fields and the

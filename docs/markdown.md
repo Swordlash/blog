@@ -59,6 +59,8 @@ Task lists show a checkbox:
 
 A link to a page of the wiki is a path, relative to the current page or, starting with `/`, to the wiki: [the guide](guide), [setup](../setup), [a team's page](/engineering/onboarding). A page's own address in the wiki, `/s/engineering/p/onboarding/` (what the address bar shows after the wiki's own part), links to that page too, even where a subspace has the page's name; the editor's "Link to a page" (Ctrl+Shift+K) writes links this way, after you pick the page, and one of its sections if you like. A wiki link is shorter: [[onboarding]] links to the page `onboarding`, and [[onboarding|our onboarding]] does too, with another label.
 
+A path leads nowhere once its page is moved. A permanent link names the page by its id instead, which never changes: `/l/<page id>/`, with a section after it if you like (`[the setup](/l/4f1c9a2e/#setup)`), leads to the page wherever it is now, in its space or another. "Copy permanent link" among a page's buttons copies one, and so does the `#` at the end of a heading or a box, with its section; the editor's "Link to a page" writes one when "Permanent link" is ticked. A wiki link takes one too: [[/l/4f1c9a2e/|the setup]]. A permanent link to a page the reader may not view, or that has been deleted, leads to the wiki's "not found", as a path to it would.
+
 A link to the web is a URL: <https://example.com>, or [with a label](https://example.com "and a title"). A bare URL such as https://example.com is a link too. Links that leave the wiki get `rel="noopener"`. A `javascript:` link is shown as its text.
 
 A link that names nothing the wiki knows is shown as broken, as its text.

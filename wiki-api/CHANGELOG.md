@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`GET pages/<page>/location` answers where a page is now, by its id, as a
+`PageLocation` (WP5.81, #194): its space's path and its own, both empty
+for the wiki's own home page. A page the caller may not view is 404 with
+the same body as an id no page has.
+
 `PUT spaces/<space>/profile` takes no `homePage` (WP5.78a, #201): one in
 the body is ignored, and the space keeps its home page. It is stable for
 the upgrade's rehearsal now, which CI seeds a space with no home page

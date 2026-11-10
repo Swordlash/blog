@@ -366,9 +366,13 @@ its text, as `[Mathematics](/s/docs/p/markdown-guide/mathematics/)`, the
 page's own address without the server's part, which names that page even where
 a subspace has its name. With **Link a section** ticked, the dialog then lists
 the page's headings and boxes, and the link goes to the one chosen
-(`/s/docs/p/markdown-guide/mathematics/#macros`). Every heading and every box
-has a `#` that shows when the pointer is on it: a click copies the address
-of that section, and a box's address has its kind and number, `#box-tip-2`.
+(`/s/docs/p/markdown-guide/mathematics/#macros`). With **Permanent link**
+ticked, the link names the page by its id instead, `/l/<page id>/#macros`,
+and keeps leading to the page after the page is moved, to another place in its
+space or to another space. Every heading and every box has a `#` that shows
+when the pointer is on it: a click copies the permanent address of that
+section, and a box's address has its kind and number, `#box-tip-2`. **Copy
+permanent link** among a page's buttons copies the page's own.
 Text selected in a page gets **Copy link** beside **Comment**: its address
 ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
 Safari and Firefox open it scrolled to that text, highlighted.
