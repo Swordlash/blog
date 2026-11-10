@@ -1706,8 +1706,11 @@ SQLite database the move began with (its `wiki.sqlite`, `-wal` and `-shm`,
 compared by size and SHA-256 before the service starts on them), or it is
 stopped and every copy is still there, the files set aside, the deployment
 in `previous/` and PostgreSQL's copy, and `--rollback --yes` finishes. The
-deploy's tests fail the move at each of its file operations in turn and
-check this.
+deploy's tests fail the move at each of its file operations and commands in
+turn and check this. A switch back puts nothing back while systemd does not
+say the service has stopped: a service that may still run on PostgreSQL
+keeps every copy where it is, and the move says to stop it and run
+`--rollback --yes`.
 
 The comparison runs on copies because the checks write (a canary account, a
 sign-in provider): the wiki the move fills is checked by `copy-database`

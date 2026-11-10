@@ -1,18 +1,28 @@
 -- | 'Operations' is how the move to PostgreSQL ("Maker.Deploy.Move")
--- changes files: every rename, copy, write, removal and permission change
--- of the move goes through one of this module's functions, and each is
--- one counted operation. "Maker.Deploy.Move" imports none of
--- "System.Directory"'s functions that change files, so an operation added
--- there is counted too, or does not compile; the deploy's tests also check
--- its source for them.
+-- changes files and runs commands: every rename, copy, write, removal and
+-- permission change of the move, and every external command it runs (but
+-- the deploy's own helpers it calls whole), goes through one of this
+-- module's functions, and each is one counted operation.
+-- "Maker.Deploy.Move" imports none of "System.Directory"'s functions that
+-- change files, nor the deploy's ways of running a command, so an
+-- operation added there is counted too, or does not compile; the deploy's
+-- tests also check its source for them.
+--
+-- A command's exit code is never thrown away: 'run' and 'compose' answer
+-- it, and 'output' answers whether the command succeeded with what it
+-- printed, to a caller that must look at them (GHC's unused-do-bind
+-- warning, an error in this project, catches a bare call, and the source
+-- check a discarded one). 'report' alone runs a command whose result means
+-- nothing to the move: it shows a service's status.
 --
 -- The count is what the tests drive. With @WIKI_TEST_MOVE_OPERATIONS=FILE@
 -- each operation appends its number and what it does to FILE, so a test
 -- learns how many there are from the code itself. With
--- @WIKI_TEST_MOVE_FAILPOINT=N@ the N-th operation fails, as an I/O error
--- would, before it does anything. A test runs the move once for each N and
--- checks what the recovery leaves. Neither variable is set outside the
--- tests, and without them an operation is just what it does.
+-- @WIKI_TEST_MOVE_FAILPOINT=N@ the N-th operation fails before it does
+-- anything: a file operation as an I/O error would, a command as one that
+-- exits with 97, or prints nothing and fails. A test runs the move once for
+-- each N and checks what the recovery leaves. Neither variable is set
+-- outside the tests, and without them an operation is just what it does.
 module Maker.Deploy.Operations
   ( Operations
   , operations
@@ -26,6 +36,10 @@ module Maker.Deploy.Operations
   , permissions
   , command
   , step
+  , run
+  , compose
+  , output
+  , report
   )
 where
 
@@ -33,10 +47,11 @@ import Control.Exception (throwIO)
 import Control.Monad (forM_, when)
 import Data.ByteString qualified as BS
 import Data.IORef
-import Maker.Deploy.Plan (runInherit)
+import Maker.Deploy.Plan (outputOf, runInherit, warn)
+import Maker.Deploy.Prepare (pgCompose)
 import System.Directory qualified as Directory
 import System.Environment (lookupEnv)
-import System.Exit (ExitCode)
+import System.Exit (ExitCode (..))
 import Text.Read (readMaybe)
 
 -- | 'Operations' counts the move's file operations: how many have run, the
@@ -60,9 +75,8 @@ operations = do
 -- otherwise done.
 operation :: Operations -> String -> IO a -> IO a
 operation o what act = do
-  n <- atomicModifyIORef' o.counted (\k -> (k + 1, k + 1))
-  forM_ o.logFile $ \f -> appendFile f (show n <> " " <> what <> "\n")
-  when (o.failAt == Just n) $ throwIO (userError ("failpoint " <> show n <> ": " <> what))
+  failing <- count o what
+  when failing $ throwIO (userError ("failpoint: " <> what))
   act
 
 -- | Rename a file.
@@ -98,9 +112,9 @@ permissions :: Operations -> FilePath -> Directory.Permissions -> IO ()
 permissions o path perms = operation o ("permissions of " <> path) (Directory.setPermissions path perms)
 
 -- | Run a command that changes files (@cp -R@), or the system's view of
--- them (@systemctl --user daemon-reload@), as one operation.
+-- them (@systemctl --user daemon-reload@), as 'run' does.
 command :: Operations -> FilePath -> [String] -> IO ExitCode
-command o program args = operation o (unwords (program : args)) (runInherit program args)
+command = run
 
 -- | An action of another module that is one operation, done whole or not
 -- at all (the state file, written to a temporary file and renamed), or
@@ -108,3 +122,40 @@ command o program args = operation o (unwords (program : args)) (runInherit prog
 -- which the move saves first): counted as one.
 step :: Operations -> String -> IO a -> IO a
 step = operation
+
+-- | Whether this operation is the one to fail: counted and logged, and
+-- 'True' for the failpoint's, which the caller then makes fail its own way
+-- (a command that fails rather than an exception).
+count :: Operations -> String -> IO Bool
+count o what = do
+  n <- atomicModifyIORef' o.counted (\k -> (k + 1, k + 1))
+  forM_ o.logFile $ \f -> appendFile f (show n <> " " <> what <> "\n")
+  let failing = o.failAt == Just n
+  when failing (warn ("failpoint " <> show n <> ": " <> what <> " (made to fail)"))
+  pure failing
+
+-- | Run a command, its output on the terminal, and answer how it ended:
+-- with 97, and without running it, at the failpoint.
+run :: Operations -> FilePath -> [String] -> IO ExitCode
+run o program args = do
+  failing <- count o (unwords (program : args))
+  if failing then pure (ExitFailure 97) else runInherit program args
+
+-- | docker compose on a deployment's project, with its files and port
+-- ("Maker.Deploy.Prepare"'s 'pgCompose'), as 'run'.
+compose :: Operations -> String -> FilePath -> String -> [String] -> IO ExitCode
+compose o name pd port args = do
+  failing <- count o (unwords (["docker", "compose", "--project-name", name] <> args))
+  if failing then pure (ExitFailure 97) else pgCompose name pd port args
+
+-- | What a command prints, and whether it succeeded; at the failpoint,
+-- nothing and a failure.
+output :: Operations -> FilePath -> [String] -> IO (Bool, String)
+output o program args = do
+  failing <- count o (unwords (program : args))
+  if failing then pure (False, "") else outputOf program args
+
+-- | Run a command only to show what it prints (a service's status): its
+-- exit code means nothing to the move. Not counted.
+report :: FilePath -> [String] -> IO ()
+report program args = () <$ runInherit program args

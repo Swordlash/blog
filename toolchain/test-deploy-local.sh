@@ -191,7 +191,7 @@ fixture() {
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
-    FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER \
+    FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER FAKE_STOP_PG_FAIL FAKE_SERVE_PG_SILENT \
     WIKI_TEST_MOVE_FAILPOINT WIKI_TEST_MOVE_OPERATIONS
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -320,7 +320,11 @@ case \$command in
     [ -z "\${FAKE_SERVE_PG_FAIL:-}" ] || [ -z "\$database" ] || { printf 'fake failure to open PostgreSQL\n' >&2; exit 1; }
     mkdir -p "\$data"
     [ -z "\$sqlite" ] || [ -f "\$sqlite" ] || printf 'a database\n' >"\$sqlite"
-    exec "$NODE_REAL" -e '
+    # FAKE_SERVE_PG_SILENT: a server on PostgreSQL that runs, but does not
+    # answer the probe of the API.
+    info=/api/v1/info
+    [ -z "\${FAKE_SERVE_PG_SILENT:-}" ] || [ -z "\$database" ] || info=/not-the-info
+    FAKE_INFO_PATH=\$info exec "$NODE_REAL" -e '
       const http = require("node:http");
       const https = require("node:https");
       const fs = require("node:fs");
@@ -344,7 +348,7 @@ case \$command in
           }
         }).listen(Number(address.slice(at + 1)), address.slice(0, at));
       };
-      serve(listen, "/api/v1/info", Boolean(cert));
+      serve(listen, process.env.FAKE_INFO_PATH || "/api/v1/info", Boolean(cert));
       serve(admin, "/admin/api/v1/admin/status", false);
     ' "\$listen" "\$admin" "\$static" "\$cert" "\$key" ;;
 esac
@@ -686,6 +690,14 @@ case $name in
         case $2 in
           inspect) [ -f "$FAKE_DOCKER/$3.volume" ] ;;
           rm) rm -f "$FAKE_DOCKER/$3.volume" ;;
+          ls)
+            # --quiet --filter name=^NAME$: NAME when the volume is there.
+            for arg do
+              case $arg in
+                'name=^'*) named=${arg#name=^}; named=${named%$} ;;
+              esac
+            done
+            [ ! -f "$FAKE_DOCKER/$named.volume" ] || printf '%s\n' "$named" ;;
         esac
         exit ;;
     esac
@@ -791,8 +803,24 @@ case $name in
         stop "$2"
         start "$2" ;;
       start) alive "$2" || start "$2" ;;
-      stop) stop "$2" ;;
-      is-active) [ "$2" != --quiet ] || shift; alive "$2" ;;
+      stop)
+        # FAKE_STOP_PG_FAIL: a stop of a unit on PostgreSQL that fails, the
+        # service still running.
+        if [ -n "${FAKE_STOP_PG_FAIL:-}" ] && grep -q -- '--database postgres://' "$units/$2"; then
+          printf 'Failed to stop %s: Access denied\n' "$2" >&2
+          exit 1
+        fi
+        stop "$2" ;;
+      is-active)
+        # As systemctl: active, or inactive with 3, said unless --quiet.
+        quiet=''
+        [ "$2" != --quiet ] || { quiet=1; shift; }
+        if alive "$2"; then
+          [ -n "$quiet" ] || printf 'active\n'
+        else
+          [ -n "$quiet" ] || printf 'inactive\n'
+          exit 3
+        fi ;;
       status) if alive "$2"; then printf '%s: active (running)\n' "$2"; else printf '%s: inactive\n' "$2"; exit 3; fi ;;
       *) printf 'fake systemctl: unexpected %s\n' "$*" >&2; exit 91 ;;
     esac ;;
@@ -1637,15 +1665,18 @@ assert_contains "$case_dir/adopted-again" 'adopting wiki-demo'
 undeploy --prefix "$HOME/wiki-demo" --purge-data >/dev/null 2>&1
 pass 'a rollback of an adoption under --prefix moves the state and the PostgreSQL files back where the kept unit names them'
 
-# Every file operation of the move goes through Maker.Deploy.Operations,
-# which counts it for the failpoints below: Maker.Deploy.Move itself
-# renames, copies, writes and removes nothing, and runs no cp, mv, rm or
-# chmod.
+# Every file operation and every command of the move goes through
+# Maker.Deploy.Operations, which counts it for the failpoints below:
+# Maker.Deploy.Move itself renames, copies, writes and removes nothing, and
+# runs no command any other way (runInherit, succeeds, outputOf,
+# pgCompose, the process library). No exit code is thrown away: a result of
+# Operations' commands bound to _ or dropped with () <$ fails the check too
+# (a bare call is an error already, by GHC's unused-do-bind warning).
 move_source=$SOURCE_DIR/../maker/src/Maker/Deploy/Move.hs
-if grep -nE '\b(renameFile|renameDirectory|copyFile|copyFileWithMetadata|writeFile|appendFile|removeFile|removeDirectory|removeDirectoryRecursive|removePathForcibly|createDirectory|createDirectoryIfMissing|setPermissions)\b|BS\.writeFile|runInherit "(cp|mv|rm|chmod|install)"' "$move_source" | grep -v '^[0-9]*: *--' >"$TMP/move-raw-operations"; then
-  fail "Maker.Deploy.Move changes files outside Maker.Deploy.Operations, which the failpoints do not cover: $(cat "$TMP/move-raw-operations")"
+if grep -nE '\b(renameFile|renameDirectory|copyFile|copyFileWithMetadata|writeFile|appendFile|removeFile|removeDirectory|removeDirectoryRecursive|removePathForcibly|createDirectory|createDirectoryIfMissing|setPermissions|runInherit|succeeds|outputOf|pgCompose|runProcess|readProcess[A-Za-z]*|callProcess|system)\b|BS\.writeFile|_ <- Op\.|\(\) <\$ Op\.|void \(?Op\.' "$move_source" | grep -v '^[0-9]*: *--' >"$TMP/move-raw-operations"; then
+  fail "Maker.Deploy.Move changes files or runs commands outside Maker.Deploy.Operations, or throws an exit code away: $(cat "$TMP/move-raw-operations")"
 fi
-pass 'the move changes files only through Maker.Deploy.Operations, which counts every operation for the failpoints'
+pass 'the move changes files and runs commands only through Maker.Deploy.Operations, which counts every one for the failpoints, and looks at every exit code'
 
 # The move of a wiki on SQLite into PostgreSQL (--move-to-postgres,
 # maker/src/Maker/Deploy/Move.hs). The checkout is a git repository here,
@@ -1781,7 +1812,16 @@ assert_contains "$EVENTS" 'psql of wiki-demo: psql --quiet --username=wiki --dbn
 [ ! -e "$HOME/.config/wiki-demo/wiki-demo.rehearsal" ] || fail 'the comparison left its scratch directory'
 FAKE_MOVE_COMPARE_EXIT=1 failed_move 'a comparison that cannot be made'
 assert_contains "$out" 'the comparison of the wiki in PostgreSQL with the wiki in SQLite could not be made'
-pass 'a failure before the switch (the build, PostgreSQL, the backup, the copy, the comparison) leaves the deployment on SQLite, its service answering, and PostgreSQL empty'
+# A read that prepares the switch and fails (data/replaced that cannot be
+# read) is a failure before the switch like any other.
+mkdir -p "$data/replaced"
+chmod 000 "$data/replaced"
+failed_move 'a data/replaced that cannot be read'
+chmod 755 "$data/replaced"
+rmdir "$data/replaced"
+assert_contains "$out" 'the move failed ('
+assert_contains "$out" 'The wiki stays on SQLite, as it was'
+pass 'a failure before the switch (the build, PostgreSQL, the backup, the copy, the comparison, a read that prepares the switch) leaves the deployment on SQLite, its service answering, and PostgreSQL empty'
 
 # A failure after the switch switches back: the switch itself (here its
 # daemon-reload), the restart, and the server that does not answer on
@@ -1852,7 +1892,7 @@ for lock in "$HOME/.config/wiki-demo" "$HOME/.config/systemd/user" "$HOME/wiki-d
   fi
   chmod 755 "$lock"
   assert_contains "$out" 'the switch back to SQLite stopped where a step failed'
-  assert_contains "$out" 'Everything the move saved is still there'
+  assert_contains "$out" 'Nothing was deleted or emptied'
   assert_contains "$out" 'run sh toolchain/deploy-local.sh --rollback --yes'
   assert_contains "$out" "the deployment previous/ held before the move in $HOME/wiki-demo/previous.before-move"
   for kept in info state unit bin/wiki-server app/index.html; do
@@ -1936,7 +1976,29 @@ while [ "$n" -le "$total" ]; do
   invariant "failing at operation $what"
   n=$((n + 1))
 done
-pass "after a move that fails at any of its $total file operations, of the switch and of the switch back, the service runs on exactly the SQLite database it began with, or is stopped with every copy kept, and --rollback --yes finishes"
+pass "after a move that fails at any of its $total operations (each file operation and each command, from PostgreSQL's preparation through the switch back), the service runs on exactly the SQLite database it began with, or is stopped with every copy kept, and --rollback --yes finishes"
+
+# A switch back whose service still runs on PostgreSQL (it runs, but does
+# not answer, and its stop fails) puts nothing back and deletes and
+# empties nothing, and says so; once it is stopped, --rollback --yes
+# finishes.
+: >"$EVENTS"
+out=$case_dir/stop-fails
+if FAKE_SERVE_PG_SILENT=1 FAKE_STOP_PG_FAIL=1 deploy --move-to-postgres >"$out" 2>&1; then fail 'a move whose server on PostgreSQL could not be stopped went on'; fi
+assert_contains "$out" 'still runs, on PostgreSQL, so nothing was put back, deleted or emptied'
+systemctl --user is-active --quiet wiki-demo.service || fail 'the service that could not be stopped is not running'
+assert_contains "$HOME/$unit" '--database postgres://'
+[ -e "$FAKE_DOCKER/tables-5433" ] || fail 'PostgreSQL was emptied under a running service'
+for kept in info state unit bin/wiki-server app/index.html; do
+  [ -e "$HOME/wiki-demo/previous/$kept" ] || fail "the switch back that could not stop the service deleted previous/$kept"
+done
+stopped_aside=$(sed -n 's/^aside=//p' "$HOME/wiki-demo/previous/info")
+for f in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
+  cmp -s "$stopped_aside/$f" "$case_dir/before/$f" || fail "the switch back that could not stop the service lost $f set aside"
+done
+systemctl --user stop wiki-demo.service
+invariant 'a switch back whose service could not be stopped'
+pass 'a switch back whose service still runs on PostgreSQL puts nothing back and deletes and empties nothing, and --rollback --yes finishes once it is stopped'
 
 # The guard does not rely on the journal: a switch back whose SQLite files
 # do not come back as the bytes the switch began with (here the copy set
