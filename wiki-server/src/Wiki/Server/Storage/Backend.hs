@@ -45,7 +45,7 @@ import Wiki.Server.Storage.Sqlite (beginSqlite, closeSqlite, commitSqlite, rollb
 #ifdef WIKI_POSTGRES
 import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
 import Database.PostgreSQL.Simple qualified as Pg
-import Wiki.Server.Storage.Postgres (beginPostgres, closePostgres, commitPostgres, postgresCodePoints, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
+import Wiki.Server.Storage.Postgres (advancePostgresCounters, beginPostgres, closePostgres, commitPostgres, postgresCodePoints, postgresKeepsText, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
 #endif
 
 -- | What a database must do with a column type of the schema: write a
@@ -112,6 +112,20 @@ class
 
   -- | The names of the tables the database holds.
   tableNames :: Db be [Text]
+
+  -- | Set the counter behind each column whose ids the database makes
+  -- (PostgreSQL's identity columns, such as @global_grants.seq@) past the
+  -- largest id the column holds, in the running transaction. The copy of a
+  -- database ("Wiki.Server.Storage.Copy") writes rows with their ids given,
+  -- which PostgreSQL's counters do not see; without this, the next row made
+  -- would get an id a copied row has. SQLite needs nothing: it gives a new
+  -- row the largest id plus one.
+  advanceCounters :: Connection be -> IO ()
+
+  -- | Whether a text column of this database keeps a text as it is.
+  -- PostgreSQL's text cannot hold the character NUL; SQLite's can. The copy
+  -- of a database refuses a row whose text this database would not keep.
+  keepsText :: Proxy be -> Text -> Bool
 
   -- | How many bytes the database takes, when the database says
   -- ('Nothing' on SQLite, whose files the storage measures itself).
@@ -191,6 +205,8 @@ instance Backend Sqlite where
   runScript = runSqliteScript
   schemaSuffix _ = "sqlite"
   tableNames = sqliteObjects
+  advanceCounters _ = pass
+  keepsText _ _ = True
   databaseSize = pure Nothing
   capabilities _ = Capabilities {database = "sqlite", search = FoldedText}
   searchMatches spaces templates ws _ _ = map (\(n, t) -> (n, t, Nothing)) <$> sqliteSearch spaces templates ws
@@ -210,6 +226,8 @@ instance Backend Postgres where
   runScript = runPostgresScript
   schemaSuffix _ = "postgres"
   tableNames = postgresTables
+  advanceCounters = advancePostgresCounters
+  keepsText _ = postgresKeepsText
   databaseSize = Just . fromIntegral <$> postgresSize
   capabilities _ = Capabilities {database = "postgres", search = FullText}
   searchMatches spaces templates _ folded most = map (\(n, t, r) -> (n, t, Just r)) <$> postgresSearch spaces templates folded most
