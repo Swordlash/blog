@@ -182,6 +182,9 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
                  ]
     inside <- blocksOf ToOther place {inDocument = \s p -> if (s, p) == ([slug "docs"], [slug "markdown-guide", slug "diagrams"]) then Just "page-3" else Nothing} source
     linkTargets inside `shouldBe` ["#page-3", "#page-3", "https://wiki.example.org/l/somewhere-else/#x"]
+    -- A version is not the text the document holds: the wiki's address.
+    pinned <- blocksOf ToOther place {inDocument = \_ _ -> Just "page-3"} ("[Then](/l/" <> diagrams <> "/?version=2026-10-24T09%3A30%3A12Z#flow).\n")
+    linkTargets pinned `shouldBe` ["https://wiki.example.org/s/docs/p/markdown-guide/diagrams/?version=2026-10-24T09%3A30%3A12Z#flow"]
 
   it "leaves out [[!toc]], which the document's own table of contents stands for, but not a link to a page named toc" $ do
     bs <- blocksOf ToOther place "# A\n\n[[!toc]]\n\nText, and [[toc]] here.\n\n[[toc]]\n"

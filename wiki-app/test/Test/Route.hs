@@ -68,8 +68,13 @@ genRoute =
     , pure AssistantSettings
     , pure WhatsNewPage
     , pure UserSpaces
-    , PermanentLink . PageId <$> genPageId
+    , PermanentLink . PageId <$> genPageId <*> oneof [pure Nothing, Just <$> genTime]
+    , PageAtVersion <$> genPath <*> genPagePath <*> genTime
     ]
+
+-- | A version's time, with a fraction of a second or none.
+genTime :: Gen UTCTime
+genTime = elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]
 
 -- | A page's id: any text. A server's are UUIDs and the demo's numbers,
 -- but an archive can bring any, and a segment cannot hold some of them as
@@ -265,21 +270,33 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/search/?q=x&space=" `shouldBe` Right (Search (Just "x") (Just []) True)
 
     it "writes a page's permanent address under l, by its id, whatever the id is" $ do
-      print route (PermanentLink (PageId "4f1c-9a")) `shouldBe` "/l/4f1c-9a/"
-      print route (PermanentLink (PageId "17")) `shouldBe` "/l/17/"
-      print route (PermanentLink (PageId "a/b c")) `shouldBe` "/l/a%2Fb%20c/"
-      print route (PermanentLink (PageId "..")) `shouldBe` "/l/~../"
-      print route (PermanentLink (PageId "")) `shouldBe` "/l/~/"
-      parse route "/l/17" `shouldBe` Right (PermanentLink (PageId "17"))
-      parse route "/l/17/#setup" `shouldBe` Right (PermanentLink (PageId "17"))
+      print route (PermanentLink (PageId "4f1c-9a") Nothing) `shouldBe` "/l/4f1c-9a/"
+      print route (PermanentLink (PageId "17") Nothing) `shouldBe` "/l/17/"
+      print route (PermanentLink (PageId "a/b c") Nothing) `shouldBe` "/l/a%2Fb%20c/"
+      print route (PermanentLink (PageId "..") Nothing) `shouldBe` "/l/~../"
+      print route (PermanentLink (PageId "") Nothing) `shouldBe` "/l/~/"
+      parse route "/l/17" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
+      parse route "/l/17/#setup" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
       parse route "/l/" `shouldSatisfy` isLeft
-      for_ awkwardIds $ \t -> parse route (print route (PermanentLink (PageId t))) `shouldBe` Right (PermanentLink (PageId t))
+      for_ awkwardIds $ \t -> parse route (print route (PermanentLink (PageId t) Nothing)) `shouldBe` Right (PermanentLink (PageId t) Nothing)
+
+    it "writes a version after a permanent address and after a page's own, as a history writes it" $ do
+      let at = addUTCTime 0.5 demoTime
+      print route (PermanentLink (PageId "17") (Just at)) `shouldBe` "/l/17/?version=2026-10-24T09%3A30%3A12.5Z"
+      print route (PageAtVersion (slugs ["docs"]) (slugs ["tour"]) at) `shouldBe` "/s/docs/p/tour/?version=2026-10-24T09%3A30%3A12.5Z"
+      print route (PageAtVersion (slugs ["docs"]) [] at) `shouldBe` "/s/docs/?version=2026-10-24T09%3A30%3A12.5Z"
+      parse route "/s/docs/?version=2026-10-24T09%3A30%3A12.5Z" `shouldBe` Right (PageAtVersion (slugs ["docs"]) [] at)
+      -- A version that is not a time is left out, as a history's is.
+      parse route "/l/17/?version=yesterday" `shouldBe` Right (PermanentLink (PageId "17") Nothing)
+      parse route "/s/docs/p/tour/?version=yesterday" `shouldBe` Right (Page (slugs ["docs"]) (slugs ["tour"]))
+      -- What a link in a page reads it as.
+      classifyDestination (print route (PermanentLink (PageId "17") (Just at)) <> "#setup") `shouldBe` ToPageId (PageId "17") (Just at) "#setup"
 
     it "writes a permanent address a link in a page reads as the same id" $
       for_ awkwardIds $ \t -> do
-        let address = print route (PermanentLink (PageId t))
-        classifyDestination address `shouldBe` ToPageId (PageId t) ""
-        classifyDestination (address <> "#setup") `shouldBe` ToPageId (PageId t) "#setup"
+        let address = print route (PermanentLink (PageId t) Nothing)
+        classifyDestination address `shouldBe` ToPageId (PageId t) Nothing ""
+        classifyDestination (address <> "#setup") `shouldBe` ToPageId (PageId t) Nothing "#setup"
 
     it "reads no route from what is not one" $ do
       parse route "/s/" `shouldSatisfy` isLeft
@@ -289,9 +306,14 @@ spec = describe "Wiki.App.Route" $ do
 
   describe "locationRoute" $
     it "goes to a page where it is now: the front page, a space's home page, or a page" $ do
-      locationRoute PageLocation {space = [], page = []} `shouldBe` Home
-      locationRoute PageLocation {space = slugs ["docs"], page = []} `shouldBe` Space (slugs ["docs"])
-      locationRoute PageLocation {space = slugs ["team", "projects"], page = slugs ["the-wiki"]} `shouldBe` Page (slugs ["team", "projects"]) (slugs ["the-wiki"])
+      locationRoute PageLocation {space = [], page = []} Nothing `shouldBe` Home
+      locationRoute PageLocation {space = slugs ["docs"], page = []} Nothing `shouldBe` Space (slugs ["docs"])
+      locationRoute PageLocation {space = slugs ["team", "projects"], page = slugs ["the-wiki"]} Nothing `shouldBe` Page (slugs ["team", "projects"]) (slugs ["the-wiki"])
+      -- And to a version of it, but the front page's, which has no route
+      -- of a version.
+      locationRoute PageLocation {space = slugs ["docs"], page = slugs ["tour"]} (Just demoTime) `shouldBe` PageAtVersion (slugs ["docs"]) (slugs ["tour"]) demoTime
+      locationRoute PageLocation {space = slugs ["docs"], page = []} (Just demoTime) `shouldBe` PageAtVersion (slugs ["docs"]) [] demoTime
+      locationRoute PageLocation {space = [], page = []} (Just demoTime) `shouldBe` Home
 
   describe "routeOfHref" $ do
     it "reads the router's own addresses, under its base" $ do
@@ -301,7 +323,7 @@ spec = describe "Wiki.App.Route" $ do
       routeOfHref router "/wiki/s/docs/p/tour/#who-you-can-be" `shouldBe` Just (Page (slugs ["docs"]) (slugs ["tour"]))
       routeOfHref router "/wiki/" `shouldBe` Just Home
       routeOfHref router "/wiki/search/?q=x" `shouldBe` Just (Search (Just "x") Nothing True)
-      routeOfHref router "/wiki/l/17/#setup" `shouldBe` Just (PermanentLink (PageId "17"))
+      routeOfHref router "/wiki/l/17/#setup" `shouldBe` Just (PermanentLink (PageId "17") Nothing)
 
     it "leaves everything else alone" $ do
       router <- runMemDOM (Router.newRouter "/wiki/" Unknown route)

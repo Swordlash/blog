@@ -152,7 +152,7 @@ options ctx = (Body.islandOptions ctx mempty) {Md.resolveLink = resolve}
       Md.ToAnchor fragment -> Md.External ("#" <> fragment)
       Md.ToAttachment _ -> Md.Unresolved
       Md.ToPath _ -> Md.Unresolved
-      Md.ToPageId _ _ -> Md.Unresolved
+      Md.ToPageId {} -> Md.Unresolved
 
 -- | What an entry's ids start with on the page: @pr-158-@, by its pull
 -- request's number, which no two shown entries share.

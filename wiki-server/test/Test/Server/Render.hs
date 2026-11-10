@@ -16,6 +16,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Network.HTTP.Types (Header, hContentType, methodPost, methodPut)
 import Protolude
 import System.FilePath ((</>))
@@ -43,7 +44,7 @@ import Wiki.Core.Space qualified as S
 import Wiki.Core.Vault
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
-import Wiki.Server.Render (routeOf)
+import Wiki.Server.Render (routeAddress, routeOf)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Vault (keyIdOf)
 import Wiki.Server.WebAuthn (toBase64Url)
@@ -286,7 +287,7 @@ addresses = describe "a request's address" $ do
     routeOf "/" "/s/docs" `shouldReturn` Space (slugs "docs")
     routeOf "/" "/elsewhere/" `shouldReturn` Unknown
     routeOf "/wiki/" "/s/docs/" `shouldReturn` Unknown
-    routeOf "/" "/l/17/" `shouldReturn` PermanentLink (PageId "17")
+    routeOf "/" "/l/17/" `shouldReturn` PermanentLink (PageId "17") Nothing
 
 -- | A page's permanent address (@\/l\/\<page id>\/@, WP5.81): a redirect
 -- to the page's own address for a reader who may view the page, and for
@@ -309,6 +310,29 @@ permanentAddresses backing = describe "a page's permanent address" $ do
     (header "Location" <$> getUrl r (r.public <> "/l/" <> home.id.text <> "/")) `shouldReturn` Just "/"
     -- The admin listener sends its reader to its own place.
     (header "Location" <$> getUrl r (r.admin <> "/admin/l/" <> diagrams.text <> "/")) `shouldReturn` Just "/admin/s/docs/p/markdown-guide/diagrams/"
+
+  it "redirects an address with a version to that version, shown as the page was, and a version the page does not have to not found" $ withDemoRunning backing identity $ \r -> do
+    docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
+    diagrams <- ok200 (getUrl r (r.public <> "/" <> links.spaces.pageAt docs.id (slugs "markdown-guide/diagrams"))) :: IO P.Page
+    -- The addresses as the application's router writes them.
+    let permanent t = routeAddress "/" (PermanentLink diagrams.id (Just t))
+        versionAt t = routeAddress "/" (PageAtVersion (slugs "docs") (slugs "markdown-guide/diagrams") t)
+    pinned <- permanent diagrams.updatedAt
+    there <- versionAt diagrams.updatedAt
+    there `shouldSatisfy` T.isPrefixOf "/s/docs/p/markdown-guide/diagrams/?version="
+    reply <- getUrl r (r.public <> pinned)
+    (reply.status, header "Location" reply) `shouldBe` (302, Just (encodeUtf8 there))
+    (status, html) <- page r r.public there
+    status `shouldBe` 200
+    appIn html `shouldSatisfy` T.isInfixOf "This is the page as it was saved on"
+    appIn html `shouldSatisfy` T.isInfixOf "<h1 id=\"diagrams\">Diagrams"
+    -- The page may be viewed, so it is led there; the version is not there.
+    let later = addUTCTime 1 diagrams.updatedAt
+    nowhere <- versionAt later
+    (header "Location" <$> (getUrl r . (r.public <>) =<< permanent later)) `shouldReturn` Just (encodeUtf8 nowhere)
+    (missingStatus, missing) <- page r r.public nowhere
+    missingStatus `shouldBe` 404
+    appIn missing `shouldSatisfy` T.isInfixOf "error-not-found"
 
   it "follows a page moved to another space" $ withAdminSession backing identity $ \r session -> do
     diagrams <- pageIdAt r [session] "docs" "markdown-guide/diagrams"

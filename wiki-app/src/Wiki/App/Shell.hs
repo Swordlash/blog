@@ -486,7 +486,7 @@ component =
             here <-
               if
                 | shutOut world.asking && not (publicHomeRoute world.asking route) -> pure NoSpace
-                | PermanentLink pid <- route -> lookingFor pid <$> pageLocation pid
+                | PermanentLink pid _ <- route -> lookingFor pid <$> pageLocation pid
                 | otherwise -> maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
@@ -1154,7 +1154,7 @@ component =
       -- Until the page is found, and then its own route is shown. A page
       -- that is not found, or that the reader may not view, is not found
       -- as a page at a path is.
-      PermanentLink _ -> case st.here of
+      PermanentLink {} -> case st.here of
         Following _ (Just e) -> failureView e RetryHere
         _ -> loading
       _ -> case st.here of
@@ -1192,6 +1192,7 @@ component =
                 LivePreview _ path -> HH.slot "view" LivePreviewSlot LivePreviewView.component LivePreviewView.Input {context = context st, space, pages, path = here' path} FromView
                 PageHistory _ path version against ->
                   HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path = here' path, version, against} FromView
+                PageAtVersion _ path version -> pageViewOf space pages (here' path) (Just version)
                 PageSlides _ path slide step ->
                   HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path = here' path, slide, step} FromView
                 -- One editor per page edited: another page's editor is a
@@ -1200,7 +1201,10 @@ component =
                 NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
                 _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
-        pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+        pageView space pages path = pageViewOf space pages path Nothing
+        -- A version of a page is shown with no live channel: nothing
+        -- happens to a version.
+        pageViewOf space pages path version = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, version, feed = if shutOut st.session || isJust version then Nothing else st.feed} FromView
         blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page, feed = if shutOut st.session then Nothing else st.feed} FromView
 
     -- The front page: its page, and under it the spaces and the ones
@@ -1229,7 +1233,7 @@ component =
               [ case here of
                   InSpace _ space pages ->
                     let path = fromMaybe [] (pagePathOf space pages . (\p -> p.id) =<< homeOf space pages)
-                     in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = if shutOut st.session then Nothing else st.feed} FromView
+                     in HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, version = Nothing, feed = if shutOut st.session then Nothing else st.feed} FromView
                   SpaceFailed _ _ e -> failureView e RetryHere
                   _ -> loading
               ]
@@ -1599,7 +1603,7 @@ component =
       st <- get
       case spaceOfRoute st.route of
         _ | shutOut st.session && not (publicHomeRoute st.session st.route) -> modify (\s -> s {here = NoSpace})
-        _ | PermanentLink pid <- st.route -> followPermanent pid
+        _ | PermanentLink pid version <- st.route -> followPermanent pid version
         Nothing -> modify (\s -> s {here = NoSpace})
         Just path
           | not again, hereIs path st.here -> pass
@@ -1619,14 +1623,14 @@ component =
     -- does not come back to it, and the address's fragment is kept for the
     -- page to scroll to. A page not found leaves the permanent address in
     -- place, so that signing in, which loads the route again, asks again.
-    followPermanent :: PageId -> H.HalogenM (State m) Action Slots output m ()
-    followPermanent pid = do
+    followPermanent :: PageId -> Maybe UTCTime -> H.HalogenM (State m) Action Slots output m ()
+    followPermanent pid version = do
       modify (\s -> s {here = Following pid Nothing})
       result <- lift (pageLocation pid)
       st <- get
       -- Unless the route has moved on meanwhile.
-      when (st.route == PermanentLink pid) $ case result of
-        Right l -> redirectKeepingFragment st.router (locationRoute l)
+      when (st.route == PermanentLink pid version) $ case result of
+        Right l -> redirectKeepingFragment st.router (locationRoute l version)
         Left e -> modify (\s -> s {here = Following pid (Just e)})
 
     -- Set the document's title for what is shown, and say whether all of
@@ -1779,6 +1783,7 @@ spaceOfRoute = \case
   LivePreview path _ -> Just path
   PageHistory path _ _ _ -> Just path
   PageSlides path _ _ _ -> Just path
+  PageAtVersion path _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -1810,6 +1815,7 @@ waitsForPage st = case (st.route, st.here) of
   (LivePreview _ _, InSpace {}) -> True
   (PageHistory {}, InSpace {}) -> True
   (PageSlides {}, InSpace {}) -> True
+  (PageAtVersion {}, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
 
@@ -1835,6 +1841,7 @@ currentPage st = case (st.route, st.here) of
   (LivePreview _ path, InSpace _ space pages) -> currentPageOf space pages path
   (PageHistory _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
   (PageSlides _ path _ _, InSpace _ space pages) -> currentPageOf space pages path
+  (PageAtVersion _ path _, InSpace _ space pages) -> currentPageOf space pages path
   _ -> Nothing
 
 -- | The breadcrumbs: inside a space, the directory of spaces first, then
@@ -1873,13 +1880,16 @@ crumbs st = case st.route of
   LivePreview path pagePath ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Preview", Nothing) | not (null page)]
+  PageAtVersion path pagePath _ ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("Version", Nothing) | not (null page)]
   PageSlides path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Slides", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
-  PermanentLink _ -> []
+  PermanentLink {} -> []
   Search {} -> [("Search", Nothing)]
   Admin section -> [("Administration", Just (Admin R.Overview)), (sectionTitle section, Nothing)]
   AssistantSettings -> [("Writing assistant", Nothing)]

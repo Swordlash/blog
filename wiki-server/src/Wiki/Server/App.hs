@@ -205,7 +205,9 @@ feedOf segments = do
 
 -- | Where a request for a page's permanent address (@\/l\/\<page id>\/@,
 -- "Wiki.App.Route"'s 'PermanentLink') is sent: the page's own address
--- under the listener's path, when the caller may view the page. 'Nothing'
+-- under the listener's path, or the address of the version it names, when
+-- the caller may view the page. A version the page does not have is the
+-- page view's to answer, as not found: the caller may view the page. 'Nothing'
 -- for any other request, and for a page the caller may not view or that
 -- is not there, which the caller learns nothing of: the address is then
 -- answered as any other, the application's "not found" page prerendered.
@@ -215,10 +217,10 @@ feedOf segments = do
 -- the caller's session, so no shared cache may keep it.
 permanentTarget :: Env -> Who -> Text -> Request -> IO (Maybe Text)
 permanentTarget env who mount request =
-  routeOf mount (rawPathInfo request) >>= \case
-    PermanentLink pid ->
+  routeOf mount (rawPathInfo request <> rawQueryString request) >>= \case
+    PermanentLink pid version ->
       runStoredWiki env.storage who (pageLocation pid) >>= \case
-        Right place -> Just <$> routeAddress mount (locationRoute place)
+        Right place -> Just <$> routeAddress mount (locationRoute place version)
         Left _ -> pure Nothing
     _ -> pure Nothing
 

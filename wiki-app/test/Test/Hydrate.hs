@@ -175,7 +175,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
       , UserSpaces
-      , PermanentLink (PageId "no-such-page")
+      , PermanentLink (PageId "no-such-page") Nothing
       ]
         <> map Admin adminSections
 
@@ -233,6 +233,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstCurrent
            , PageHistory (path "blog") (path "hello-world") (Just demoNow) AgainstPrevious
            , EditPage (path "blog") (path "hello-world")
+           , PageAtVersion (path "blog") (path "hello-world") helloMade
+           , PageAtVersion (path "blog") (path "hello-world") (addUTCTime 1 demoNow)
            , PageSlides (path "docs") (path "markdown-guide/presentations") 4 1
            , PageSlides (path "docs") (path "markdown-guide/presentations") 7 2
            , PageSlides (path "docs") (path "markdown-guide/presentations") 8 2
@@ -256,7 +258,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , UserSpaces
            , -- The server prerenders a permanent address only for a page
              -- not found, or not to be shown to the reader.
-             PermanentLink (PageId "no-such-page")
+             PermanentLink (PageId "no-such-page") Nothing
            , Admin (Users (UserListing "ed" 1 Everyone))
            ]
         <> map Admin adminSections

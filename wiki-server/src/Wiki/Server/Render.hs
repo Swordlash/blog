@@ -192,7 +192,9 @@ statusOf at c = case at of
   NewPage s _ -> ofSpace s
   -- A permanent address is prerendered only for a page not found, or one
   -- the reader may not view ("Wiki.Server.App"), and says so.
-  PermanentLink pid -> refusal (Map.lookup pid c.pageLocations)
+  PermanentLink pid _ -> refusal (Map.lookup pid c.pageLocations)
+  -- A version the page does not have is not found, as a page is.
+  PageAtVersion s p t -> ofSpace s `unlessRefused` ofPage s p `unlessRefused` ofVersionAt s p t
   _ -> status200
   where
     publicHome r =
@@ -228,6 +230,9 @@ statusOf at c = case at of
           , any (\v -> v.number == 1 || v.updatedAt < time) listed ->
               status404
         _ -> status200
+    ofVersionAt s p t = case Map.lookup s c.spaceAt of
+      Just (Right space) | Just (Right page) <- pageIn space p -> refusal (Map.lookup (page.id, t) c.versions)
+      _ -> status200
     refusal = \case
       Just (Left NotFound) -> status404
       Just (Left Forbidden) -> status403

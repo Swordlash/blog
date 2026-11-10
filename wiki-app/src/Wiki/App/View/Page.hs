@@ -95,6 +95,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -142,7 +143,7 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (blog, encryption, homePage, id, name), rootPage)
 import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (Avatar, User (id))
-import Wiki.Core.Version (Author (..))
+import Wiki.Core.Version (Author (..), Version (..))
 
 -- | The page view's input: the page at a path in a space the shell has
 -- loaded, with the space's pages (for the links between them).
@@ -151,6 +152,12 @@ data Input = Input
   , space :: Space
   , pages :: [PageSummary]
   , path :: [Slug]
+  , version :: Maybe UTCTime
+  -- ^ The version of the page shown, by its time, where a permanent
+  -- address with a version leads ('Wiki.App.Route.PageAtVersion'), or
+  -- 'Nothing' for the page as it is. A version is shown as the page is,
+  -- with a note above it saying which it is and linking to the page as it
+  -- is, and with no comments, which are about the page's text now.
   , feed :: Maybe Feed
   -- ^ The tab's live channel, on a backend that has one.
   }
@@ -227,6 +234,9 @@ data State = State
 -- "Copy permanent link" among the page's actions (WP5.81).
 data Copied = Copied
   { address :: Text
+  , pinned :: Bool
+  -- ^ Whether it is the permanent address of the version shown, which the
+  -- notice says.
   , outcome :: Maybe Bool
   -- ^ Whether the clipboard took it, once known. When it did not, the
   -- address stays selected in the notice, to be copied by hand.
@@ -335,6 +345,7 @@ component =
             [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
+                <> toList (versionNote input page)
                 <> toList (templateNote page)
                 <> titleRow
                 <> toList (postInfo input page)
@@ -364,6 +375,8 @@ component =
 
     actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
     actions input page deck comments
+      -- A version is only read: its history, and its permanent link.
+      | isJust input.version = [history, copyPermanent]
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           | changes
@@ -386,9 +399,11 @@ component =
                )
       | otherwise = [viewSource, history, copyPermanent] <> present <> export <> [comments | commentsHere input]
       where
-        -- For every reader: the page's address by its id, which keeps
-        -- working after the page moves.
-        copyPermanent = [hh|<button type="button" class="button copy-permanent-link" title="Copy an address of this page that keeps working when the page is moved" onClick={{ const CopyPermanentLink }}>Copy permanent link</button>|]
+        -- For every reader: the permanent address of the version shown,
+        -- by the page's id and the version's time, which keeps showing
+        -- this text after the page is edited, and keeps working after it
+        -- is moved.
+        copyPermanent = [hh|<button type="button" class="button copy-permanent-link" title="Copy a link to this version of the page: it keeps showing this text after the page is edited or moved" onClick={{ const CopyPermanentLink }}>Copy permanent link</button>|]
         home = homeSpace input.context input.space.id
         -- Whether this page is the space's home page, which only the
         -- space's administrators change ('mayEditPage').
@@ -413,6 +428,20 @@ component =
         -- page except the space's home page.
         useAsTemplate =
           [[hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]]
+
+    -- A note above a version of the page saying which it is, with a link
+    -- to the page as it is now.
+    versionNote :: Input -> Page -> Maybe (H.ComponentHTML Action Slots m)
+    versionNote input page = do
+      _ <- input.version
+      let now = pageRoute (spacePathOf input.context.spaces input.space.id) input.path
+      pure
+        [hh|
+          <p class="version-note" role="note">
+            This is the page as it was saved on <time {{ [attr "datetime" (toS (iso8601Show page.updatedAt))] }}>{{ dateOf page.updatedAt }}</time>.
+            <a {{ Router.linkProps input.context.router Followed (documentRoute input.context page.space now) }}>See the page as it is now</a>
+          </p>
+        |]
 
     -- A note on a template saying what it is, since it is not in the tree.
     templateNote :: Page -> Maybe (H.ComponentHTML Action Slots m)
@@ -657,7 +686,7 @@ component =
         when (isJust old.feed && isNothing input.feed) disconnectFeed
         modify (\st -> st {input})
         when gainedFeed subscribeFeed
-        let elsewhere = old.space.id /= input.space.id || old.path /= input.path
+        let elsewhere = old.space.id /= input.space.id || old.path /= input.path || old.version /= input.version
         when elsewhere $ do
           unwatchAll
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders})
@@ -671,15 +700,12 @@ component =
       -- A click on a heading's or a box's #: the section's address goes
       -- to the clipboard and into the address bar, and the page stays
       -- where it is. Its listener has kept the browser from following it.
-      --
-      -- The address copied is the page's permanent one
-      -- ('permanentAddress'), so that it still leads to the section after
-      -- the page moves; the address bar shows the page's own.
-      FollowLink (CopyAnchor fragment) -> withPage $ \page -> do
+      FollowLink (CopyAnchor fragment) -> do
         H.liftEffect (markFragment fragment)
-        here <- gets (`permanentAddress` page) >>= absoluteUrl
-        copyAddress (here <> "#" <> encodeComponent fragment)
-      CopyPermanentLink -> withPage $ \page -> gets (`permanentAddress` page) >>= absoluteUrl >>= copyAddress
+        here <- gets pageAddress >>= absoluteUrl
+        copyAddress False (here <> "#" <> encodeComponent fragment)
+      -- The permanent address of the version shown ('permanentAddress').
+      CopyPermanentLink -> withPage $ \page -> gets (`permanentAddress` page) >>= absoluteUrl >>= copyAddress True
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect (followArticleLink router target)
@@ -692,7 +718,7 @@ component =
             ( \s -> do
                 modify (\st -> st {selected = Nothing})
                 here <- gets pageAddress >>= absoluteUrl
-                copyAddress (here <> "#" <> textFragment blocks s.anchor)
+                copyAddress False (here <> "#" <> textFragment blocks s.anchor)
             )
       Open mode -> modify (\st -> st {mode, problem = Nothing})
       Typed t -> modify $ \st -> case st.mode of
@@ -880,10 +906,10 @@ component =
     -- rendered with the address before the copy, since the copy without
     -- an asynchronous clipboard selects it there. The copy waits for the
     -- browser, so it runs off the loop ('liftIO').
-    copyAddress :: Text -> H.HalogenM State Action Slots ViewOutput m ()
-    copyAddress address = do
+    copyAddress :: Bool -> Text -> H.HalogenM State Action Slots ViewOutput m ()
+    copyAddress pinned address = do
       gets (\st -> st.copiedWait) >>= traverse_ H.kill
-      modify (\st -> st {copied = Just Copied {address, outcome = Nothing}, copiedWait = Nothing})
+      modify (\st -> st {copied = Just Copied {address, pinned, outcome = Nothing}, copiedWait = Nothing})
       element <- gets (\st -> st.copiedText) >>= H.getRef
       took <- maybe (pure False) (\e -> liftIO (copyText e address)) element
       modify (\st -> st {copied = (\c -> c {outcome = Just took}) <$> st.copied})
@@ -909,12 +935,20 @@ component =
 -- attachments, or the reason it cannot be shown.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input =
-  getPage input.space.id input.path >>= \case
+  getPage input.space.id input.path >>= fmap join . traverse asked >>= \case
     Left e -> pure (Failed e)
     Right page -> do
       urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
       let parsed = Md.parseMarkdown page.body
       pure (Ready page urls (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
+  where
+    -- The version asked for, if any, in the page's place: its title, its
+    -- text, its time and who saved it. A version the page does not have is
+    -- not found, as a page that is not there.
+    asked page = case input.version of
+      Nothing -> pure (Right page)
+      Just t ->
+        getVersion page.id t <&> fmap (\v -> page {title = v.title, body = v.body, updatedAt = v.updatedAt, updatedBy = v.author})
 
 -- | The spaces a page may be moved to: those where the rules allow it.
 targetSpaces :: Context -> Page -> [Space]
@@ -1098,13 +1132,16 @@ pageAddress :: State -> Text
 pageAddress st =
   Router.href
     st.input.context.router
-    (documentRoute st.input.context st.input.space.id (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path))
+    (documentRoute st.input.context st.input.space.id (maybe (Page sp st.input.path) (PageAtVersion sp st.input.path) st.input.version))
+  where
+    sp = spacePathOf st.input.context.spaces st.input.space.id
 
--- | 'permanentAddress' is the page's permanent address
--- ('Wiki.App.Route.PermanentLink'): its id's, which leads to the page
--- wherever it is moved later.
+-- | 'permanentAddress' is the permanent address of the version of the page
+-- shown ('Wiki.App.Route.PermanentLink'): the page's id, which leads to it
+-- wherever it is moved later, and the version's time, so that it keeps
+-- showing this text after the page is edited.
 permanentAddress :: State -> Page -> Text
-permanentAddress st page = Router.href st.input.context.router (PermanentLink page.id)
+permanentAddress st page = Router.href st.input.context.router (PermanentLink page.id (Just page.updatedAt))
 
 -- | How long the notice of a copied address stays: long enough to be read
 -- in passing.
@@ -1115,7 +1152,9 @@ copiedTime = 2_000_000
 copiedLabel :: Copied -> Text
 copiedLabel c = case c.outcome of
   Nothing -> "Copying the link…"
-  Just True -> "Link copied:"
+  Just True
+    | c.pinned -> "Link to this version copied:"
+    | otherwise -> "Link copied:"
   Just False -> "The link could not be copied. It is selected, to copy by hand:"
 
 -- | Whether the page has comments: not on the wiki's home page, and not in
@@ -1123,7 +1162,7 @@ copiedLabel c = case c.outcome of
 -- a selection quotes the page's text, which the server must not read
 -- there.
 commentsHere :: Input -> Bool
-commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.space.encryption
+commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.space.encryption && isNothing input.version
 
 mayCommentHere :: State -> Bool
 mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)

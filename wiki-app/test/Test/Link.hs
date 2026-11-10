@@ -5,6 +5,7 @@ module Test.Link (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -122,15 +123,20 @@ spec = describe "resolvePageLink" $ do
     -- A page of another space, or one the reader may not view, or no page
     -- at all: the permanent address, asked about when it is followed, and
     -- never a broken link.
-    fromDocs [] "/l/no-such-page/#x" `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page")) "#x")
+    fromDocs [] "/l/no-such-page/#x" `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page") Nothing) "#x")
+    -- With a version, to that version, here and elsewhere.
+    let at = UTCTime (fromGregorian 2026 10 24) 34212
+        versioned = "?version=2026-10-24T09%3A30%3A12Z"
+    fromDocs [] ("/l/" <> diagrams.text <> "/" <> versioned <> "#flowcharts") `shouldBe` Just (PageLink (PageAtVersion (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]) at) "#flowcharts")
+    fromDocs [] ("/l/no-such-page/" <> versioned) `shouldBe` Just (PageLink (PermanentLink (PageId "no-such-page") (Just at)) "")
     let blogPost = fromMaybe (panic "no post") (head (pagesOf "blog"))
-    fromDocs [] ("/l/" <> blogPost.id.text <> "/") `shouldBe` Just (PageLink (PermanentLink blogPost.id) "")
+    fromDocs [] ("/l/" <> blogPost.id.text <> "/") `shouldBe` Just (PageLink (PermanentLink blogPost.id Nothing) "")
 
   it "reads /l/ and a segment as a permanent address, even where a top-level space has the slug l" $ do
     let docs = fromMaybe (panic "no docs") (find (\sp -> sp.slug == mkSlug' "docs") spaces)
         el = docs {S.id = SpaceId "space-l", S.name = "L", S.slug = mkSlug' "l", S.parent = Nothing}
         resolve = resolvePageLink (el : spaces) (slugs ["docs"]) (rootOf "docs") (pagesOf "docs") []
-    resolve "/l/notes" `shouldBe` Just (PageLink (PermanentLink (PageId "notes")) "")
+    resolve "/l/notes" `shouldBe` Just (PageLink (PermanentLink (PageId "notes") Nothing) "")
     -- Its pages are reached by the space's own address, or by a longer path.
     resolve "/s/l/p/notes/" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes"])) "")
     resolve "/l/notes/more" `shouldBe` Just (PageLink (Page (slugs ["l"]) (slugs ["notes", "more"])) "")

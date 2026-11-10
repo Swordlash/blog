@@ -7,22 +7,28 @@
 module Test.Browser.Shell (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.IORef (readIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.Router.Duplex (encodeComponent)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (clickButton, slugs, start, startChanged)
+import Test.Browser.Mount (clickButton, slugs, start, startChanged, startOn, startWith)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
 import Wiki.Core.Id (PageId (..))
-import Wiki.Core.Page (Page (body, id, title))
+import Wiki.Core.Page (Page (body, id, space, title, updatedAt))
 
 -- The address the test page is at (test/jsbits/test-location.js).
 $( browserJS
@@ -184,19 +190,19 @@ spec m = do
   -- the page's own can go: that the fragment is kept is the application
   -- router's (Wiki.App.Browser.redirectKeepingFragment).
   it "follows a page's permanent address to the page, in place of the address" $ runPage $ do
-    ui <- start m Nothing (PermanentLink (demoPage "Mathematics"))
+    ui <- start m Nothing (PermanentLink (demoPage "Mathematics") Nothing)
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
     eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Mathematics")
 
   it "shows a permanent address of a page someone may not view as not found, and the page once someone who may is signed in" $ runPage $ do
     let onCall = demoPage "On-call"
-    ui <- start m (Just "user-reader") (PermanentLink onCall)
+    ui <- start m (Just "user-reader") (PermanentLink onCall Nothing)
     find ui ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
     textContent (root ui) >>= (`shouldSatisfy` (not . T.isInfixOf "On-call"))
     location `shouldReturn` ("#/l/" <> onCall.text <> "/")
     -- As an id no page has.
-    nowhere <- start m (Just "user-reader") (PermanentLink (PageId "no-such-page"))
+    nowhere <- start m (Just "user-reader") (PermanentLink (PageId "no-such-page") Nothing)
     find nowhere ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
     unmount nowhere
     -- Someone who may see it arrives at the page from the same address.
@@ -222,6 +228,37 @@ spec m = do
     find ui (".page-body a[href$='#/l/" <> mathematics.text <> "/#macros']") >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
     eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
+  -- "Copy permanent link" copies the address of the version shown, which
+  -- keeps showing that text after the page is edited (WP5.81).
+  it "copies the permanent link of the version shown, which shows that version after the page is edited" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide", "mathematics"]))
+    find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    st <- unsafeIOToPageM (readIORef wiki)
+    page <- maybe (panic "no Mathematics") pure (Map.lookup (demoPage "Mathematics") st.pages)
+    let pinned = "#/l/" <> page.id.text <> "/?version=" <> encodeComponent (toS (iso8601Show page.updatedAt))
+    find ui ".page-actions .copy-permanent-link" >>= (`shouldHaveText` "Copy permanent link")
+    find ui ".page-actions .copy-permanent-link" >>= click
+    eventually $ find ui ".link-copied-address" >>= textContent >>= (`shouldSatisfy` T.isSuffixOf pinned)
+    find ui ".link-copied-label" >>= textContent >>= (`shouldSatisfy` (`elem` ["Link to this version copied:", "The link could not be copied. It is selected, to copy by hand:"]))
+    unmount ui
+    -- The page is edited and moved meanwhile.
+    _ <- unsafeIOToPageM . runMemWiki wiki $ do
+      saved <- either (panic . show) identity <$> savePage page.id page.updatedAt "Mathematics" "# Mathematics\n\nRewritten since."
+      either (panic . show) identity <$> movePage saved.id saved.space Nothing
+    again <- startOn m wiki (PermanentLink page.id (Just page.updatedAt))
+    find again ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    eventually $ location `shouldReturn` ("#/s/docs/p/mathematics/?version=" <> encodeComponent (toS (iso8601Show page.updatedAt)))
+    find again ".version-note" >>= (`shouldSatisfy'` "This is the page as it was saved on")
+    find again ".page-body" >>= (`shouldSatisfy'` "macros")
+    textContent (root again) >>= (`shouldSatisfy` (not . T.isInfixOf "Rewritten since."))
+    -- The note links to the page as it is.
+    find again ".version-note a" >>= click
+    find again ".page-body" >>= (`shouldSatisfy'` "Rewritten since.")
+    eventually $ location `shouldReturn` "#/s/docs/p/mathematics/"
+    unmount again
+    -- A version the page does not have is not found, as a page is.
+    missing <- startOn m wiki (PermanentLink page.id (Just (addUTCTime 1 page.updatedAt)))
+    find missing ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
   where
     shouldSatisfy' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
     location = unsafeIOToPageM (fromJSText <$> js_location_hash)

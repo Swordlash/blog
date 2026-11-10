@@ -4,7 +4,8 @@
 -- who may read the page. It lists the page's versions, the latest first,
 -- and for the chosen one shows what it changed (a diff against the version
 -- before it) or what has changed since (against the current page), with a
--- link back to the page. Someone who may edit the page may restore a
+-- link back to the page, and one to the version read as the page showed
+-- it ("Wiki.App.View.Page" with a version). Someone who may edit the page may restore a
 -- version, which saves its title and body as the page's latest version,
 -- after confirming in place.
 --
@@ -189,6 +190,7 @@ component =
         <section class="version-detail" aria-label={{ versionName shown n }}>
           <h2>{{ versionName shown n }}</h2>
           <p class="version-meta">Saved {{ time "chosen" chosen.updatedAt }} by {{ authorName chosen.author }}</p>
+          {{ readVersion st.input chosen }}
           {{ compareChoice st.input shown }}
           {{ restoreView st shown }}
           {{ comparisonView shown }}
@@ -196,6 +198,15 @@ component =
       |]
       where
         (n, chosen) = shown.chosen
+
+    -- A link to the version as the page showed it ('PageAtVersion'), where
+    -- "Copy permanent link" copies its permanent address. The wiki's
+    -- front page has no route of a version.
+    readVersion :: Input -> VersionInfo -> [H.ComponentHTML Action Slots m]
+    readVersion input v =
+      [ [hh|<p class="version-read"><a {{ Router.linkProps input.context.router Followed (PageAtVersion (spacePathOf input.context.spaces input.space.id) input.path v.updatedAt) }}>Read this version</a></p>|]
+      | not (homeSpace input.context input.space.id)
+      ]
 
     -- Compare with the version before, or with the current page: a choice
     -- only for a version that is not the latest, which is the page.

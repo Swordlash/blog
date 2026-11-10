@@ -13,9 +13,10 @@
 -- * a destination with a scheme (@https:@, @mailto:@) or starting with
 --   @\/\/@ is a URL;
 -- * @#section@ is a place on the same page;
--- * @\/l\/\<page id>\/@, with a fragment or not, is a page by its id: the
---   permanent address, which keeps leading to the page after it moves
---   (@\/l\/4f1c…\/#setup@);
+-- * @\/l\/\<page id>\/@, with a fragment or not, is a page by its id,
+--   which keeps leading to the page after it moves (@\/l\/4f1c…\/#setup@);
+--   with @?version=\<time>@ it is the permanent address of one version of
+--   the page, whose text never changes;
 -- * anything else is a path, which a wiki reads as a page.
 --
 -- Whatever a resolver answers, the renderer only writes a URL whose scheme
@@ -51,6 +52,8 @@ where
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Numeric (showHex)
 import Protolude
 import Wiki.Core.Id (PageId (..))
@@ -89,10 +92,12 @@ data Destination
     ToUrl Text
   | -- | @#fragment@: the fragment, without the @#@.
     ToAnchor Text
-  | -- | @\/l\/\<page id>\/@: a page by its id, and the fragment the link
-    -- names there (with its @#@, or empty). The id is decoded
-    -- ('readPageIdSegment').
-    ToPageId PageId Text
+  | -- | @\/l\/\<page id>\/@: a page by its id, the version named by
+    -- @?version=@ (the time it was saved, 'Wiki.Core.Version.updatedAt'),
+    -- if any, and the fragment the link names there (with its @#@, or
+    -- empty). The id is decoded ('readPageIdSegment'); a version that is
+    -- not a time is read as none, as the application's route reads it.
+    ToPageId PageId (Maybe UTCTime) Text
   | -- | Anything else: a path, absolute or relative, as written.
     ToPath Text
   deriving stock (Eq, Show)
@@ -102,13 +107,15 @@ classifyDestination dest
   | Just name <- T.stripPrefix "attachment:" stripped = ToAttachment (percentDecode name)
   | isJust (urlScheme dest) || "//" `T.isPrefixOf` stripped = ToUrl dest
   | Just fragment <- T.stripPrefix "#" stripped = ToAnchor fragment
-  | Just pid <- permanent = ToPageId pid fragmentPart
+  | Just pid <- permanent = ToPageId pid version fragmentPart
   | otherwise = ToPath dest
   where
     stripped = T.strip dest
     (beforeFragment, fragmentPart) = T.breakOn "#" stripped
-    -- The query, if any, is not part of the address: the route ignores it.
-    permanent = case T.splitOn "/" (T.takeWhile (/= '?') beforeFragment) of
+    (pathPart, query) = T.breakOn "?" beforeFragment
+    -- Of the query, only the version is read: the route ignores the rest.
+    version = head [t | pair <- T.splitOn "&" (T.drop 1 query), Just v <- [T.stripPrefix "version=" pair], Just t <- [iso8601ParseM (toS (percentDecode v))]]
+    permanent = case T.splitOn "/" pathPart of
       ["", "l", segment] -> readPageIdSegment (percentDecode segment)
       ["", "l", segment, ""] -> readPageIdSegment (percentDecode segment)
       _ -> Nothing

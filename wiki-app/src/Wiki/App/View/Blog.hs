@@ -143,7 +143,7 @@ component =
         path = spacePathOf ctx.spaces space.id
         homeSummary = homeOf space pages
         -- The home page, by the page view, at its path, the empty one.
-        homeView = HH.slot "home" () PageView.component PageView.Input {context = ctx, space, pages, path = [], feed} FromHome
+        homeView = HH.slot "home" () PageView.component PageView.Input {context = ctx, space, pages, path = [], version = Nothing, feed} FromHome
         -- Whether the home page is shown, by its own view: written, or
         -- commented on.
         homeShown = case loaded of

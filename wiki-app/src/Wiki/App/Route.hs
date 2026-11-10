@@ -46,7 +46,11 @@
 -- > /assistant/                    AssistantSettings
 -- > /whats-new/                    WhatsNewPage
 -- > /user-spaces/                  UserSpaces
--- > /l/4f1c-9a/                    PermanentLink (PageId 4f1c-9a)
+-- > /s/docs/p/tour/?version=2026-10-24T09%3A30%3A12.5Z
+-- >                                PageAtVersion [docs] [tour] 2026-10-24 09:30:12.5
+-- > /l/4f1c-9a/?version=2026-10-24T09%3A30%3A12.5Z
+-- >                                PermanentLink (PageId 4f1c-9a) (Just …)
+-- > /l/4f1c-9a/                    PermanentLink (PageId 4f1c-9a) Nothing
 --
 -- Every address except the home's ends in a slash. On a static host each
 -- route is a directory with an @index.html@ in it (the prerender writes
@@ -69,9 +73,10 @@
 -- back exactly the route it printed.
 --
 -- A page's permanent address names it by its id, under @l@
--- ('PermanentLink'): the id never changes, so the address keeps leading
--- to the page when the page moves. No other route starts with @l@; a
--- space's path is always under @s@.
+-- ('PermanentLink'), and one of its versions by the time it was saved:
+-- the id never changes, so the address keeps leading to the page when the
+-- page moves, and a version never changes either. No other route starts
+-- with @l@; a space's path is always under @s@.
 module Wiki.App.Route
   ( -- * Routes
     Route (..)
@@ -216,7 +221,17 @@ data Route
     -- there ("Wiki.Server.App"). The id is written as
     -- 'Wiki.Core.Markdown.Link.pageIdSegment' writes it, and a link in a
     -- page reads it as 'Wiki.Core.Markdown.Link.classifyDestination' does.
-    PermanentLink PageId
+    -- With a version (@?version=@, the time it was saved, as a history's
+    -- address names it), the address leads to that version ('PageAtVersion'):
+    -- what "Copy permanent link" copies. Without one, it leads to the page
+    -- as it is.
+    PermanentLink PageId (Maybe UTCTime)
+  | -- | One version of a page, shown as the page is, with a note that says
+    -- which version it is: its space's path, its own path there, and the
+    -- version's time ('Wiki.Core.Version.updatedAt'), a parameter
+    -- (@version@) after the page's own address. Where a page's permanent
+    -- address with a version leads.
+    PageAtVersion [Slug] [Slug] UTCTime
   deriving stock (Eq, Show)
 
 -- | 'AdminSection' is a section of the administration: one page of it, with
@@ -320,6 +335,12 @@ route =
       , alternative (\case HomeSource -> Just (); _ -> Nothing) (const HomeSource) (prefix "source" (directory noArgs))
       , alternative (\case HomeHistory v a -> Just (v, a); _ -> Nothing) (uncurry HomeHistory) (prefix "history" (directory historyParams))
       , alternative (\case HomeSlides n k -> Just (n, k); _ -> Nothing) (uncurry HomeSlides) (prefix "slides" (directory slideParams))
+      , -- Before 'Space' and 'Page', which parse the same path and ignore
+        -- the query: this one parses it only with its parameter.
+        alternative
+          (\case PageAtVersion s p t -> Just ((s, p), t); _ -> Nothing)
+          (\((s, p), t) -> PageAtVersion s p t)
+          (prefix "s" (directory ((,) <$> Duplex.lmap fst pageOrHome <*> Duplex.lmap snd versionParam)))
       , -- Before 'Space', which parses the same path and ignores the
         -- query: this one parses it only with its parameter.
         alternative
@@ -389,9 +410,17 @@ route =
           Unsubscribe
           (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . UnsubscribeToken) segment)))
       , alternative
-          (\case PermanentLink pid -> Just pid; _ -> Nothing)
-          PermanentLink
-          (prefix "l" (directory (as pageIdSegment (\t -> maybe (Left "no page id") Right (readPageIdSegment t)) segment)))
+          (\case PermanentLink pid v -> Just (pid, v); _ -> Nothing)
+          (uncurry PermanentLink)
+          ( prefix
+              "l"
+              ( directory
+                  ( (,)
+                      <$> Duplex.lmap fst (as pageIdSegment (\t -> maybe (Left "no page id") Right (readPageIdSegment t)) segment)
+                      <*> Duplex.lmap snd (Duplex.optional versionParam)
+                  )
+              )
+          )
       ]
   where
     -- A space's path and a page's path, then the route's own word, if it
@@ -411,6 +440,10 @@ route =
           (sp, []) -> atHome.printer (sp, [])
           sp -> nested.printer sp
         parser = nested.parser <|> (if isJust word then atHome.parser else empty)
+    -- A page's path, after @p@, or the home page's, which is the space's
+    -- own address: the page of 'PageAtVersion'.
+    pageOrHome :: RouteDuplex' ([Slug], [Slug])
+    pageOrHome = RouteDuplex (spaceAndPage Nothing).printer ((spaceAndPage Nothing).parser <|> ((,[]) <$> slugs.parser))
     optionalSlugs :: RouteDuplex' (Maybe [Slug])
     optionalSlugs = RouteDuplex (maybe mempty slugs.printer) ((Just <$> slugs.parser) <|> pure Nothing)
     searchParams :: RouteDuplex' (Maybe Text, Maybe [Slug], Bool)
@@ -426,7 +459,7 @@ route =
     historyParams :: RouteDuplex' (Maybe UTCTime, Against)
     historyParams =
       (,)
-        <$> Duplex.lmap fst (Duplex.optional (as (toS . iso8601Show) (\t -> maybe (Left ("not a time: " <> t)) Right (iso8601ParseM (toS t))) (param "version")))
+        <$> Duplex.lmap fst (Duplex.optional versionParam)
         <*> Duplex.lmap
           snd
           ( (\a -> if a == Just "current" then AgainstCurrent else AgainstPrevious)
@@ -447,6 +480,13 @@ route =
     -- parameter parses as left out, which would search every space instead.
     readPath :: Text -> Either Text [Slug]
     readPath = Right . fromRight [] . parsePath
+
+-- | A version of a page, by its time, as the parameter @version@: written
+-- with every digit of its fraction, so that it parses back as exactly the
+-- same time. A value that is not a time is refused, which an optional
+-- parameter reads as left out.
+versionParam :: RouteDuplex' UTCTime
+versionParam = as (toS . iso8601Show) (\t -> maybe (Left ("not a time: " <> t)) Right (iso8601ParseM (toS t))) (param "version")
 
 -- | A number counted from 1, as a parameter left out at 1. A value that is
 -- not a number parses as 1; one past the end of what it counts is for the
@@ -558,13 +598,16 @@ pageRoute sp = \case
   path -> Page sp path
 
 -- | 'locationRoute' is the route of a page where it is now, as
--- 'Wiki.App.Backend.pageLocation' answers it: 'pageRoute' of its space's
--- path and its own, or the front page ('Home') for the wiki's own home
--- page, whose space has no path.
-locationRoute :: PageLocation -> Route
-locationRoute l = case l.space of
-  [] -> Home
-  sp -> pageRoute sp l.page
+-- 'Wiki.App.Backend.pageLocation' answers it, and of one of its versions
+-- if one is given: 'pageRoute' of its space's path and its own, or
+-- 'PageAtVersion'. The wiki's own home page, whose space has no path, is
+-- the front page ('Home'), with or without a version: the front page has
+-- no route of a version.
+locationRoute :: PageLocation -> Maybe UTCTime -> Route
+locationRoute l version = case (l.space, version) of
+  ([], _) -> Home
+  (sp, Nothing) -> pageRoute sp l.page
+  (sp, Just t) -> PageAtVersion sp l.page t
 
 -- | 'settledRoute' is a route as the application shows it: a 'Page' with
 -- the empty path, the home page's, is its space's own route ('pageRoute'),
@@ -586,8 +629,10 @@ data PageLink = PageLink Route Text
 -- nothing the wiki has (shown as a broken link).
 --
 -- A permanent address (@\/l\/\<page id>\/@) leads to the page with that
--- id. A page of this space is linked at its address as it is now, so the
--- link is followed without a question to the backend. Any other id is
+-- id, and with a version (@?version=@) to that version of it. A page of
+-- this space is linked at its address as it is now ('PageAtVersion' with a
+-- version), so the link is followed without a question to the backend.
+-- Any other id is
 -- linked at its permanent address ('PermanentLink'), which asks where the
 -- page is when the link is followed: its space's pages are not at hand,
 -- and the page may be one the reader may not view. Such a link is never
@@ -637,7 +682,7 @@ resolvePageLink
   -- ^ The destination, as written.
   -> Maybe PageLink
 resolvePageLink spaces spacePath home pages pagePath destination
-  | ToPageId pid fragment <- classifyDestination destination = Just (PageLink (byId pid) fragment)
+  | ToPageId pid version fragment <- classifyDestination destination = Just (PageLink (byId pid version) fragment)
   | otherwise = do
       let (beforeFragment, fragment) = T.breakOn "#" destination
           pathPart = T.takeWhile (/= '?') beforeFragment
@@ -655,10 +700,11 @@ resolvePageLink spaces spacePath home pages pagePath destination
     -- it is one of this space's pages, and otherwise at its permanent
     -- address. The wiki's front page has no space path, and its links by
     -- id stay permanent addresses.
-    byId pid = fromMaybe (PermanentLink pid) $ do
+    byId pid version = fromMaybe (PermanentLink pid version) $ do
       guard (not (null spacePath))
       space <- lastMay =<< rightToMaybe (resolvePath (findChild spaces) spacePath)
-      pageRoute spacePath <$> S.pagePath space (\i -> find (\n -> nodeId n == i) pages) pid
+      path <- S.pagePath space (\i -> find (\n -> nodeId n == i) pages) pid
+      pure (locationRoute PageLocation {space = spacePath, page = path} version)
 
     -- A page by its own address: its space has to be one the reader can
     -- see, and a page of this space one it has.
