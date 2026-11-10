@@ -8,10 +8,11 @@ import GHC.Foreign qualified as GHC
 import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
+import Maker.Deploy.Move (replaceOnce)
 import Maker.Deploy.Page (Asset (..), isCode, newestCommitAsset, parseAssets, pruneOrder, repoOf, tagAsset)
 import Maker.Deploy.Plan (decodeFs, encodeFs, get, has, parsePlan, set)
 import Maker.Deploy.Prepare (localYml, pageBackend, pgWrapper)
-import Maker.Deploy.State (renderState, stateKeys)
+import Maker.Deploy.State (renderState, stateKeys, stateReplace)
 import Maker.Deploy.Tailscale (Https (..), Serve (..), dnsNameOf, httpsOf, isOldVersion, serveRoot)
 import Maker.Deploy.Tex (sourceWords, texYear, texlivePackages)
 import Maker.Deploy.Unit
@@ -47,6 +48,29 @@ spec = describe "the deploy's part in the maker" $ do
       length text `shouldBe` 1 + length stateKeys
     it "names a deployment without a mode static" $
       lines (renderState (parsePlan "name=demo\n") "") `shouldContain` ["mode=static"]
+
+  describe "the move to PostgreSQL" $ do
+    it "puts the PostgreSQL words in place of the unit's SQLite words, found once" $ do
+      let sqlite = databaseWords "sqlite" "/srv/wiki" "" "/srv/wiki/state/wiki.postgres"
+          postgres = databaseWords "postgres" "/srv/wiki" "5433" "/srv/wiki/state/wiki.postgres"
+          line = "ExecStart=\"/srv/wiki/bin/wiki-server\" serve --listen 127.0.0.1:8080" <> sqlite <> " --no-pdf"
+      sqlite `shouldBe` " --sqlite \"/srv/wiki/data/wiki.sqlite\""
+      postgres `shouldBe` " --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"/srv/wiki/state/wiki.postgres/db-password\" --pg-dump \"/srv/wiki/state/wiki.postgres/pg_dump\" --pg-restore \"/srv/wiki/state/wiki.postgres/pg_restore\""
+      replaceOnce sqlite postgres line `shouldBe` Just ("ExecStart=\"/srv/wiki/bin/wiki-server\" serve --listen 127.0.0.1:8080" <> postgres <> " --no-pdf")
+    it "refuses words that are not there, or there twice" $ do
+      replaceOnce "--sqlite x" "y" "serve" `shouldBe` Nothing
+      replaceOnce "--sqlite x" "y" "--sqlite x --sqlite x" `shouldBe` Nothing
+    it "replaces the state's values where they are, and adds a missing one at the end" $ do
+      tmp <- getTemporaryDirectory
+      let dir = tmp </> "maker-state-replace-test"
+          file = dir </> "wiki.state"
+      removePathForcibly dir
+      createDirectoryIfMissing True dir
+      writeFile file "# comment\nname=wiki\ndb=sqlite\nport=8080\ndb=sqlite\n"
+      stateReplace [("db", "postgres"), ("db_port", "5433")] file
+      text <- readFile file
+      length text `seq` lines text `shouldBe` ["# comment", "name=wiki", "db=postgres", "port=8080", "db_port=5433"]
+      removePathForcibly dir
 
   describe "the unit" $ do
     it "quotes an ExecStart word for systemd" $
