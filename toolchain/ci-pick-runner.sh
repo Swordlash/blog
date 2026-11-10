@@ -1,9 +1,11 @@
 #!/bin/sh
 # Which runner this run's wasm job takes: the owner's machine
-# (`self-hosted`) when the run is trusted and the machine is free, GitHub's
-# hosted runners (`ubuntu-latest`) otherwise. Prints `runner=<label>` for
-# $GITHUB_OUTPUT, and the decision with its reason, in one line, to the
-# log (stderr) and to the run's summary ($GITHUB_STEP_SUMMARY, when set).
+# (`self-hosted`) when the run is trusted, the machine is free and the
+# repository variable `WASM_RUNNER` does not ask for the hosted runners,
+# GitHub's hosted runners (`ubuntu-latest`) otherwise. Prints
+# `runner=<label>` for $GITHUB_OUTPUT, and the decision with its reason,
+# in one line, to the log (stderr) and to the run's summary
+# ($GITHUB_STEP_SUMMARY, when set).
 #
 # GitHub has no "first available" across a self-hosted runner and its
 # hosted ones: `runs-on` with several labels asks for a runner carrying all
@@ -17,21 +19,29 @@
 #                    the rule is written); anything else is untrusted.
 #   RUNNER_INPUT     the dispatch input `runner`, empty for other events:
 #                    `hosted` asks for the hosted runners, whatever else.
+#   RUNNER_VARIABLE  the repository variable `WASM_RUNNER` for a push or a
+#                    pull request, empty for other events: `hosted` sends
+#                    the run to the hosted runners, whatever the owner's
+#                    machine is doing; any other value changes nothing.
 #   GITHUB_REPOSITORY, GITHUB_RUN_ID, GH_TOKEN (a token that may read the
 #                    repository's Actions runs), GITHUB_API_URL (optional).
 #
-# The rule: a run by hand that asks for `hosted`, and a run that is not
-# trusted, take the hosted runners, without asking the API. A trusted run
-# takes the owner's machine unless it is busy: another run of this workflow
-# (not this one, whatever its attempt), queued or in progress, has a job
-# that asked for `self-hosted` (its `labels`, which are the `runs-on` it
-# asked for, set before it is given a runner) and is queued or in progress.
-# A job `waiting` on an environment's approval, and a finished one, do not
-# count. Another run, queued or in progress, that lists no jobs at all
-# counts as busy: where its jobs will run cannot be known yet, and the
-# hosted runners, always there, are the side that cannot wait on a busy
-# machine. Any doubt (an API error, a response it cannot read, a missing
-# tool) answers `ubuntu-latest`, which is always there, and says why.
+# The rule: a run by hand that asks for `hosted`, a run that is not trusted,
+# and a push or pull request while the repository variable `WASM_RUNNER` is
+# `hosted`, take the hosted runners, without asking the API. The variable is
+# there for the times when the owner's machine is slowed down by other work
+# (Claude sessions building on it): it can only send a run to the hosted
+# runners, never to the owner's machine. A trusted run takes the owner's
+# machine unless it is busy: another run of this workflow (not this one,
+# whatever its attempt), queued or in progress, has a job that asked for
+# `self-hosted` (its `labels`, which are the `runs-on` it asked for, set
+# before it is given a runner) and is queued or in progress. A job `waiting`
+# on an environment's approval, and a finished one, do not count. Another
+# run, queued or in progress, that lists no jobs at all counts as busy:
+# where its jobs will run cannot be known yet, and the hosted runners,
+# always there, are the side that cannot wait on a busy machine. Any doubt
+# (an API error, a response it cannot read, a missing tool) answers
+# `ubuntu-latest`, which is always there, and says why.
 #
 # The newest 30 queued and the newest 30 running runs are looked at, which
 # is far more than one machine's queue ever holds. What the token cannot
@@ -66,6 +76,9 @@ if [ "${RUNNER_INPUT:-}" = hosted ]; then
 fi
 if [ "${TRUSTED:-}" != true ]; then
   hosted "the run is not trusted (a fork's pull request, or a bot's), so it does not run on the owner's machine"
+fi
+if [ "${RUNNER_VARIABLE:-}" = hosted ]; then
+  hosted "the repository variable WASM_RUNNER is hosted, which sends every push's and pull request's wasm job to the hosted runners"
 fi
 for tool in curl awk; do
   if ! command -v "$tool" >/dev/null 2>&1; then

@@ -2650,7 +2650,8 @@ a public repository). It chooses where `wasm` runs:
 - For a trusted run (a push to `main`, a run by hand, a pull request whose head
   branch is in this repository, which only someone with write access pushes: the
   owner, and the Claude sessions working for them), **the self-hosted runner**
-  registered for this repository, the owner's machine, **when it is free**, and
+  registered for this repository, the owner's machine, **when it is free** (and the
+  repository variable `WASM_RUNNER`, below, does not send the run elsewhere), and
   the hosted runners when it is busy. Busy means another run of the workflow, queued
   or in progress, has a job that asked for `self-hosted` and is queued or running;
   `toolchain/ci-pick-runner.sh` asks the Actions API with the run's own token
@@ -2668,6 +2669,25 @@ it is off waits in the queue until it is back. The way out is to cancel it and r
 workflow by hand with `runner: hosted` (*Run workflow*; the input is `self-hosted`,
 the owner's machine when it is free, by default), which is also how the hosted path is
 exercised on demand.
+
+A free machine is not always a fast one. When Claude sessions build on the owner's
+machine, the wasm job there slows down: measured on 2026-11-10, it took 6m28s to
+9m04s with the machine to itself and 11m38s to 13m54s while sessions were building
+on it, against 12m26s on the hosted runners. For such times the repository variable
+`WASM_RUNNER` sends the wasm job of every push and pull request to the hosted
+runners, whatever the machine is doing, without a commit:
+
+```sh
+gh variable set WASM_RUNNER --body hosted   # every push and pull request: hosted
+gh variable delete WASM_RUNNER              # back to the owner's machine when it is free
+```
+
+(or Settings, Secrets and variables, Actions, Variables). Unset, empty or any other
+value changes nothing. A run by hand follows its own `runner` input whatever the
+variable says, and the weekly run is hosted anyway. `plan`'s line in the summary
+names the variable when it is why the run went hosted. The variable is not part of
+the trust rule: it can only send a run to the hosted runners, never to the owner's
+machine.
 
 The second layer is a repository setting, which the owner sets once: Settings,
 Actions, General, "Fork pull request workflows from outside collaborators",
