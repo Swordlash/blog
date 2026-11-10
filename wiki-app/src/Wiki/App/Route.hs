@@ -98,6 +98,8 @@ module Wiki.App.Route
     -- * Links in pages
   , PageLink (..)
   , resolvePageLink
+  , resolvePageLinkWith
+  , linkName
   )
 where
 
@@ -681,11 +683,35 @@ resolvePageLink
   -> Text
   -- ^ The destination, as written.
   -> Maybe PageLink
-resolvePageLink spaces spacePath home pages pagePath destination
+resolvePageLink spaces spacePath home pages =
+  resolvePageLinkWith spaces spacePath home (\i -> find (\n -> nodeId n == i) pages) (findChild pages)
+
+-- | 'resolvePageLinkWith' is 'resolvePageLink' with the pages of the
+-- page's space looked up by id and by their parent and slug, rather than
+-- searched in a list: what a caller that resolves many links of a large
+-- space gives it, with the pages in maps ("Wiki.App.Backlinks"). Both
+-- lookups find the pages of that space only.
+resolvePageLinkWith
+  :: (TreeNode node, NodeId node ~ PageId)
+  => [Space]
+  -- ^ Every space the reader can see the path of.
+  -> [Slug]
+  -- ^ The path of the page's space.
+  -> Maybe PageId
+  -- ^ The space's root, its home page ('Wiki.Core.Space.rootPage').
+  -> (PageId -> Maybe node)
+  -- ^ A page of that space, by its id.
+  -> (Maybe PageId -> Slug -> Maybe node)
+  -- ^ A page of that space, by its parent and its slug.
+  -> [Slug]
+  -- ^ The page's path.
+  -> Text
+  -- ^ The destination, as written.
+  -> Maybe PageLink
+resolvePageLinkWith spaces spacePath home pageById childOf pagePath destination
   | ToPageId pid version fragment <- classifyDestination destination = Just (PageLink (byId pid version) fragment)
   | otherwise = do
-      let (beforeFragment, fragment) = T.breakOn "#" destination
-          pathPart = T.takeWhile (/= '?') beforeFragment
+      let (pathPart, fragment) = destinationPath destination
           segments = T.splitOn "/" pathPart
       target <- case T.uncons pathPart of
         Just ('/', _)
@@ -712,7 +738,7 @@ resolvePageLink spaces spacePath home pages pagePath destination
     byId pid version = fromMaybe (PermanentLink pid version) $ do
       guard (not (null spacePath))
       space <- lastMay =<< rightToMaybe (resolvePath (findChild spaces) spacePath)
-      path <- S.pagePath space (\i -> find (\n -> nodeId n == i) pages) pid
+      path <- S.pagePath space pageById pid
       pure (locationRoute PageLocation {space = spacePath, page = path} version)
 
     -- A page by its own address: its space has to be one the reader can
@@ -748,11 +774,49 @@ resolvePageLink spaces spacePath home pages pagePath destination
 
     -- A page of this space by its path, at its address as it is now.
     here path = do
-      chain <- rightToMaybe (resolveUnder rootNode (findChild pages) path)
+      chain <- rightToMaybe (resolveUnder rootNode childOf path)
       pure (pageRoute spacePath (map nodeSlug (withoutRoot chain)))
-    rootNode = home >>= \r -> find (\n -> nodeId n == r) pages
+    rootNode = home >>= pageById
     withoutRoot = \case
       top : rest | Just (nodeId top) == home -> rest
       chain -> chain
 
-    asSlug s = rightToMaybe (mkSlug s) <|> slugify s
+-- | The path a destination written as a path holds, without its query,
+-- and its fragment (with its @#@, or empty): what 'resolvePageLink' and
+-- 'linkName' read.
+destinationPath :: Text -> (Text, Text)
+destinationPath destination = (T.takeWhile (/= '?') beforeFragment, fragment)
+  where
+    (beforeFragment, fragment) = T.breakOn "#" destination
+
+-- | A segment of a path in a link as a slug: a slug as written, or else a
+-- title's slug ('slugify'), so that a wiki link names a page by its title.
+asSlug :: Text -> Maybe Slug
+asSlug s = rightToMaybe (mkSlug s) <|> slugify s
+
+-- | 'linkName' is what a page must be named for a link to lead to it
+-- when the page is created or moved: the slug of the last page the
+-- destination's path names, read as 'resolvePageLink' reads the path
+-- (@.@ and @..@ followed, a segment read as a title's slug where it is
+-- not a slug), or the id a page's permanent address names. 'Nothing' for
+-- a path that ends at a page the link's own page is under (@..@, @.@),
+-- which is never a page created or moved without that page moving too,
+-- and for a destination that is not a page's path or id. The server
+-- stores a link with its name, and when a page is created or moved
+-- resolves again only the links named as it is (see
+-- "Wiki.Server.Storage.Rows", "Links").
+linkName :: Text -> Maybe Text
+linkName destination = case classifyDestination destination of
+  ToPageId pid _ _ -> Just pid.text
+  ToPath _ -> do
+    -- The slugs the path names after the page's place, newest first; a
+    -- step above them goes into the page's own path, which ends at a
+    -- page above it.
+    let step names = \case
+          "" -> Just names
+          "." -> Just names
+          ".." -> Just (drop 1 names)
+          written -> (: names) <$> asSlug written
+    names <- foldM step [] (T.splitOn "/" (fst (destinationPath destination)))
+    slugText <$> head names
+  _ -> Nothing

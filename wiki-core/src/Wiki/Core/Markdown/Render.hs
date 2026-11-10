@@ -130,6 +130,7 @@ module Wiki.Core.Markdown.Render
   , renderSections
   , renderSectionsWithIds
   , renderRawHtml
+  , linkDestinations
   , boxOf
   , scrollingCode
   , lineNumbers
@@ -848,6 +849,70 @@ renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
     pieces = \case
       Html.Element name attrs children -> [PNode (htmlElement opts name attrs (fromPieces (concatMap pieces children)))]
       Html.TextNode t -> [PText t]
+
+-- | 'linkDestinations' is the destination of every link the renderer
+-- makes of some blocks, as written and in the order of the document,
+-- whatever it resolves to: a Markdown link's and a wiki link's, an
+-- embed's (an embed that resolves to a page is shown as a link to it), and
+-- the @href@ of each @a@ in raw HTML that the allowlist keeps. It walks
+-- the blocks as 'renderBlocks' does, so it finds what a reader can click:
+-- a link inside a link's text is shown as text and is not one, an embed's
+-- caption is plain text, a block spoiler that is written wrong shows its
+-- blocks but not its description, and code, a formula or a diagram holds
+-- no link. An image's or a video's @src@ in raw HTML is never a page, and
+-- is left out. A page's backlinks ("Wiki.App.Backlinks") are counted
+-- from what this finds, so that the list and the links on the page agree.
+linkDestinations :: [Block] -> [Text]
+linkDestinations = concatMap block
+  where
+    block = \case
+      Para xs -> inlines False xs
+      Plain xs -> inlines False xs
+      Heading _ _ xs -> inlines False xs
+      BlockQuote bs -> linkDestinations bs
+      List _ items -> concat [linkDestinations bs | ListItem _ bs <- items]
+      Table _ header rows -> concatMap (inlines False) (header <> concat rows)
+      Div _ bs -> linkDestinations bs
+      Alert _ box bs -> foldMap (inlines False) box.title <> linkDestinations bs
+      Spoiler h bs
+        | isJust h.problem -> linkDestinations bs
+        | otherwise -> inlines False h.description <> linkDestinations bs
+      Footnotes notes -> concat [linkDestinations bs | Footnote _ _ bs <- notes]
+      RawHtmlBlock raw -> html (const absurd) False (Html.parseHtml raw)
+      _ -> []
+    -- As 'renderBlocks' reads them: raw HTML among the inlines is parsed
+    -- with the Markdown around it, in a link's text with no @a@ allowed.
+    inlines :: Bool -> [Inline] -> [Text]
+    inlines inLink xs
+      | any isRawHtml xs = html inline inLink (Html.parseFragments (htmlContext inLink) (map fragment xs))
+      | otherwise = concatMap (inline inLink) xs
+      where
+        fragment = \case
+          RawHtml raw -> Html.Markup raw
+          x -> Html.Markdown x
+        isRawHtml = \case
+          RawHtml _ -> True
+          _ -> False
+    inline :: Bool -> Inline -> [Text]
+    inline inLink = \case
+      Emph xs -> inlines inLink xs
+      Strong xs -> inlines inLink xs
+      Strikeout xs -> inlines inLink xs
+      Hidden xs -> inlines inLink xs
+      Link _ _ _ xs | inLink -> inlines True xs
+      Link _ dest _ xs -> dest : inlines True xs
+      Image _ dest _ _ -> [dest]
+      RawHtml raw -> html inline inLink (Html.parseFragments (htmlContext inLink) [Html.Markup raw])
+      _ -> []
+    htmlContext inLink = if inLink then Html.PhrasingInLink else Html.Phrasing
+    -- Every @a@ with an @href@ ('htmlElement' makes each a link), and the
+    -- Markdown among the elements, which inside an @a@ is a link's text.
+    html :: (Bool -> a -> [Text]) -> Bool -> [Html.Node a] -> [Text]
+    html content inLink = concatMap $ \case
+      Html.Element name attrs children ->
+        [dest | name == "a", Just dest <- [attribute "href" attrs]] <> html content (inLink || name == "a") children
+      Html.TextNode _ -> []
+      Html.Content x -> content inLink x
 
 -- | Render an element the allowlist kept, with its attributes. A URL is
 -- resolved as a Markdown link's or embed's is ('resolveLink'), except that

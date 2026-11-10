@@ -76,6 +76,7 @@ library
       Wiki.App.Assistant.Keys
       Wiki.App.Assistant.Sync
       Wiki.App.Backend
+      Wiki.App.Backlinks
       Wiki.App.Backend.Admin
       Wiki.App.Backend.Comments
       Wiki.App.Backend.Encrypted

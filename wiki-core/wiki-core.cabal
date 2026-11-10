@@ -68,6 +68,7 @@ library
       Wiki.Core.Assistant.Vault
       Wiki.Core.Attachment
       Wiki.Core.Audit
+      Wiki.Core.Backlink
       Wiki.Core.Blog
       Wiki.Core.Comment
       Wiki.Core.Diff
