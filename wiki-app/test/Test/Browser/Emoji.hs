@@ -24,13 +24,20 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..), User (..))
 
 -- Which element has the focus: test/jsbits/test-focus.js. The style sheet's
--- values and an element's box: test/jsbits/test-style.js and
--- test/jsbits/test-layout.js.
+-- values, an element's box, a style set by hand and how far the page
+-- scrolls sideways: test/jsbits/test-style.js and test/jsbits/test-layout.js.
+-- Whether a key's default was prevented, and an Enter of an input method:
+-- test/jsbits/test-keys.js.
 $( browserJS
-     ["jsbits/test-focus.js", "jsbits/test-style.js", "jsbits/test-layout.js"]
+     ["jsbits/test-focus.js", "jsbits/test-style.js", "jsbits/test-layout.js", "jsbits/test-keys.js"]
      [ ("js_focused_matches", "wiki_test_focused_matches", Safe, [t|JSText -> IO Bool|])
      , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_rect", "wiki_test_rect", Safe, [t|JSText -> IO JSText|])
+     , ("js_set_style", "wiki_test_set_style", Safe, [t|JSText -> JSText -> JSText -> IO ()|])
+     , ("js_sideways", "wiki_test_sideways", Safe, [t|IO Int|])
+     , ("js_watch_keys", "wiki_test_watch_keys", Safe, [t|IO ()|])
+     , ("js_last_key_prevented", "wiki_test_last_key_prevented", Safe, [t|IO Bool|])
+     , ("js_composing_enter", "wiki_test_composing_enter", Safe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -92,6 +99,36 @@ spec m = do
     -- Nor letters that only some word's middle holds: 12 :30 opens no list.
     typeText text " 12 :30"
     noCompletion ui
+    -- A move in the list with the arrows lets Enter choose with fewer
+    -- letters, whichever entry it lands on: :+ shows :+1: alone, where
+    -- ArrowDown stays.
+    clearBody ui
+    typeText text "ok :+"
+    alone <- listShown ui
+    (findAllIn alone ".cm-completionLabel" >>= traverse textContent) `shouldReturn` [":+1:"]
+    press "ArrowDown"
+    press "Enter"
+    markdown ui `shouldReturn` "# Hello, world\n\nok :+1:"
+    closed ui
+    -- Down and back up to the first entry.
+    typeText text " :"
+    common <- listShown ui
+    firstLabel <- fromMaybe "" . head <$> (findAllIn common ".cm-completionLabel" >>= traverse textContent)
+    press "ArrowDown"
+    press "ArrowUp"
+    press "Enter"
+    markdown ui `shouldReturn` ("# Hello, world\n\nok :+1: " <> firstLabel)
+    closed ui
+    -- A move is forgotten once another letter is typed: Enter after one
+    -- letter is a new line again.
+    typeText text " :"
+    _ <- listShown ui
+    press "ArrowDown"
+    press "p"
+    _ <- listShown ui
+    press "Enter"
+    markdown ui `shouldReturn` ("# Hello, world\n\nok :+1: " <> firstLabel <> " :p\n")
+    closed ui
     -- Not in inline code, a code block or math.
     clearBody ui
     typeText text "`x  y`"
@@ -222,11 +259,61 @@ spec m = do
     find ui emojiButton >>= click
     find ui ".emoji-search" >>= (`typeText` "qqq")
     find ui ".emoji-none" >>= (`shouldHaveText` "No emoji has that name.")
-    -- Enter there neither writes anything nor saves the page.
-    press "Enter"
-    find ui ".emoji-none" >>= (`shouldHaveText` "No emoji has that name.")
+    -- Enter there, with a modifier or none, neither writes anything nor
+    -- reaches the form, which would save the page.
+    unsafeIOToPageM js_watch_keys
+    for_ ["Enter", "Shift+Enter", "Control+Enter", "Alt+Enter"] $ \key -> do
+      press key
+      (key,) <$> unsafeIOToPageM js_last_key_prevented >>= (`shouldBe` (key, True))
+      find ui ".emoji-none" >>= (`shouldHaveText` "No emoji has that name.")
+    -- Nor with an emoji found: Shift+Enter in the field chooses nothing.
+    find ui ".emoji-search" >>= clear
+    find ui ".emoji-search" >>= (`typeText` "bug")
+    eventually $ length <$> findAll ui ".emoji-choice" `shouldReturn` 1
+    press "Shift+Enter"
+    unsafeIOToPageM js_last_key_prevented >>= (`shouldBe` True)
+    _ <- find ui ".emoji-menu"
+    -- An Enter an input method is composing with is its own: the menu
+    -- neither chooses nor stops it.
+    unsafeIOToPageM (js_composing_enter (toJSText ".emoji-search")) >>= (`shouldBe` False)
+    _ <- find ui ".emoji-menu"
+    -- Shift+Enter on an emoji chooses it, as a click does.
+    press "ArrowDown"
+    eventually (focusedIs ".emoji-choice[data-index='0']" `shouldReturn` True)
+    press "Shift+Enter"
+    eventually $ length <$> findAll ui ".emoji-menu" `shouldReturn` 0
+    markdown ui `shouldReturn` "# Hello, world\n\nLaunch :rocket::tada::tada::bug:"
+    -- No save happened meanwhile.
+    unsafeIOToPageM (threadDelay 300_000)
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "")
-    markdown ui `shouldReturn` "# Hello, world\n\nLaunch :rocket::tada::tada:"
+
+  it "keeps the toolbar's menus inside a narrow screen, the emoji's grid moving by rows as before" $ runPage $ do
+    ui <- startChanged m identity (Just "user-editor") helloEditor
+    _ <- editorText ui
+    -- The editor as narrow as a phone's screen (375 pixels).
+    unsafeIOToPageM (js_set_style (toJSText ".editor-form") (toJSText "max-width") (toJSText "375px"))
+    for_ ["Box", "HTML", "Colour", "Emoji"] $ \name -> do
+      find ui (".editor-toolbar button[aria-label='" <> name <> "']") >>= click
+      _ <- find ui ".toolbar-menu"
+      menu <- rectOf ".toolbar-menu"
+      bar <- rectOf ".editor-toolbar"
+      (name, rightOf menu <= rightOf bar + 0.5) `shouldBe` (name, True)
+      (name, leftOf menu >= leftOf bar - 0.5) `shouldBe` (name, True)
+      sideways <- unsafeIOToPageM js_sideways
+      (name, sideways) `shouldBe` (name, 0)
+      press "Escape"
+      eventually $ length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
+    -- The emoji's grid still has eight to a row.
+    find ui emojiButton >>= click
+    eventually (focusedIs ".emoji-search" `shouldReturn` True)
+    press "ArrowDown"
+    press "ArrowDown"
+    eventually (focusedIs ".emoji-choice[data-index='8']" `shouldReturn` True)
+    firstBox <- rectOf ".emoji-choice[data-index='0']"
+    ninth <- rectOf ".emoji-choice[data-index='8']"
+    leftOf ninth `shouldBe` leftOf firstBox
+    (topOf ninth > topOf firstBox) `shouldBe` True
+    unsafeIOToPageM (js_set_style (toJSText ".editor-form") (toJSText "max-width") (toJSText ""))
 
   it "shows a bulleted item that starts with an emoji with the emoji in the bullet's place, and the others with their bullets" $ runPage $ do
     ui <- startChanged m identity (Just "user-editor") helloEditor
@@ -243,12 +330,13 @@ spec m = do
     itemBox <- rectOf ".page-view .page-body li.emoji-item"
     bulletBox <- rectOf ".page-view .page-body li.emoji-item .emoji-bullet"
     plainBox <- rectOf ".page-view .page-body li:not(.emoji-item):not(.task-list-item)"
-    let leftOf box = fromMaybe 0 (head box)
-        rightOf box = fromMaybe 0 (atMay box 2)
     leftOf itemBox `shouldBe` leftOf plainBox
     rightOf bulletBox `shouldSatisfy` (<= leftOf itemBox + 1)
     leftOf bulletBox `shouldSatisfy` (< leftOf itemBox)
   where
+    leftOf box = fromMaybe 0 (head box)
+    topOf box = fromMaybe 0 (atMay box 1)
+    rightOf box = fromMaybe 0 (atMay box 2)
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
     emojiButton = ".editor-toolbar button[aria-label='Emoji']"
     withAnna = insertUser User {id = UserId "user-anna", login = Login "anna", displayName = "Anna Nowak", avatar = Nothing}
