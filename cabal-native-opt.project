@@ -34,9 +34,6 @@ tests: False
 semaphore: False
 jobs: $ncpus
 
-package opaque
-  optimization: True
-
 package wiki-core
   optimization: True
   ghc-options: -O2
