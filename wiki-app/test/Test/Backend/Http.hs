@@ -559,7 +559,7 @@ accounts = describe "signing in and out" $ do
     map (\r -> lookup "X-Wiki-Request" (headersOf r)) rs `shouldBe` [Just "1", Just "1"]
 
   it "is answered in the browser tests with what the server's functions make" $
-    -- The browser suite cannot use the opaque package, so it carries the
+    -- The browser suite cannot use the opaque-hs package, so it carries the
     -- answers as fixed bytes (Test.Browser.Opaque).
     (fakeChallenge, fakeRegistration) `shouldBe` (fakeChallengeMade, fakeRegistrationMade)
 

@@ -53,7 +53,7 @@
 #     ~/.wiki-toolchain/libsodium-$LIBSODIUM_VERSION (behind the link
 #     ~/.wiki-toolchain/libsodium), in every mode that builds natively, with
 #     --system-tools too: Debian and Ubuntu ship a libsodium too old for the
-#     opaque package, and a static library leaves wiki-server needing none
+#     opaque-hs package, and a static library leaves wiki-server needing none
 #     on the machine it runs on. Its release tarball comes from
 #     download.libsodium.org or GitHub, or with --libsodium-source=FILE
 #     (native and build) from a file brought onto the machine by hand,

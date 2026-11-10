@@ -1,7 +1,7 @@
 -- | A server's side of OPAQUE for the HTTP backend's tests (WP5.74a of
 -- docs/PLAN.md, "Wiki.Api.Opaque"): a scripted answer to the sign-in, the
 -- proof of a password and the registration of a new one, with the
--- @opaque@ package's own server functions, so that the backend's client
+-- @opaque-hs@ package's own server functions, so that the backend's client
 -- side is checked against the real protocol rather than recorded bytes.
 --
 -- It is pure, as the scripted transport is: its random values are fixed,

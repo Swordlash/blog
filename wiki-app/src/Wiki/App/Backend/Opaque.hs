@@ -7,14 +7,14 @@
 --
 -- In the browser the steps are @\@serenity-kit\/opaque@ (opaque-ke
 -- compiled to wasm), bundled by web/bundle.sh and called through
--- @jsbits\/opaque.js@. Natively they are the @opaque@ package's client,
+-- @jsbits\/opaque.js@. Natively they are the @opaque-hs@ package's client,
 -- which the server's tests sign in through, so that every native run of
 -- those tests is also a test of that client against the server. The two
--- speak the same protocol (opaque's interoperability tests run one against
--- the other).
+-- speak the same protocol (opaque-hs's own tests run one against the
+-- other).
 --
 -- The choice is made with CPP, in this module only, rather than with
--- 'inBrowser': the dependency itself differs by target. The @opaque@
+-- 'inBrowser': the dependency itself differs by target. The @opaque-hs@
 -- package is not built for wasm32, so that nothing in the browser can
 -- depend on it, and is in this package's dependencies natively only.
 --

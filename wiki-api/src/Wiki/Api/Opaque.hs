@@ -2,10 +2,10 @@
 
 -- | Signing in with a password through OPAQUE (RFC 9807): the messages the
 -- browser and the server exchange, as the API carries them (WP5.74a of
--- docs/PLAN.md). The server's side is the @opaque@ package; the browser's
+-- docs/PLAN.md). The server's side is the @opaque-hs@ package; the browser's
 -- is @\@serenity-kit\/opaque@ (opaque-ke compiled to wasm), which speaks
 -- the same messages. This module knows them only as bytes, so that nothing
--- built for the browser depends on the @opaque@ package.
+-- built for the browser depends on the @opaque-hs@ package.
 --
 -- The wiki's OPAQUE uses the suite ristretto255, SHA-512 and 3DH, no
 -- identities (they stand for the parties' public keys), an empty context

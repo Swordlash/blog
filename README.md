@@ -1880,8 +1880,10 @@ to the demo, keeping `data/`.
   administrator. It is gone: a deployment that had it loses it on its next run,
   and the script refuses it, pointing at the console below.)
 - **Passwords never leave the browser.** Signing in with a password, and setting
-  one, goes through OPAQUE (RFC 9807): the server's side is the `opaque` package
-  of this repository, over libsodium, and the browser's is
+  one, goes through OPAQUE (RFC 9807): the server's side is
+  [opaque-hs](https://github.com/Swordlash/opaque-hs), a Haskell package over
+  libsodium, tested in its own repository against the RFCs' test vectors,
+  against `@serenity-kit/opaque` and against libopaque; the browser's is
   [`@serenity-kit/opaque`](https://github.com/serenity-kit/opaque) (opaque-ke
   compiled to WebAssembly, fetched the first time a password is used). The
   browser proves that it knows the password, and the server keeps a
@@ -2404,7 +2406,7 @@ ghcup's default. Missing tools go to: the wasm sysroot into `~/.ghc-wasm`; Node 
 `~/.wiki-toolchain/node`; libsodium, which every native build links statically, built
 from the release `toolchain/pins.env` pins (its checksum checked) into
 `~/.wiki-toolchain/libsodium` by `toolchain/libsodium.sh`, since Debian's and Ubuntu's
-is too old for the `opaque` package; Chromium's headless shell where Playwright keeps its
+is too old for the `opaque-hs` package; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
 release zip, checked against a pinned hash, or built from Hackage where GitHub's
 downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's and zlib's headers, `zstd`, `jq`
@@ -2843,7 +2845,8 @@ At the top, `Dockerfile` and `docker-compose.yml` run the server in Docker
 out of the build.
 
 haskell-halogen's packages come from one `source-repository-package` stanza in
-`cabal.project`, pinned to a commit. `cabal.project` builds every package natively;
+`cabal.project`, pinned to a commit, and so does opaque-hs (the server's side of
+OPAQUE), from a stanza of its own. `cabal.project` builds every package natively;
 `cabal-wasm.project` imports it and builds for wasm with the pinned cross compiler.
 
 ## Commands
@@ -3023,6 +3026,7 @@ three, which only the server links:
 | `wiki-server` | [texmath](https://github.com/jgm/texmath) | GPL-2.0-or-later (its cabal file says GPL-2; its file notices and README say "or any later version") |
 | `wiki-server` | [skylighting](https://github.com/jgm/skylighting) | GPL-2.0-or-later (likewise) |
 | the server and the page (`app.wasm`) | [haskell-halogen](https://github.com/Swordlash/haskell-halogen) | Apache-2.0 |
+| `wiki-server` | [opaque-hs](https://github.com/Swordlash/opaque-hs) (the server's side of OPAQUE) | MIT |
 | the page | [KaTeX](https://katex.org/) | MIT |
 | the page | [Mermaid](https://mermaid.js.org/), with the libraries it bundles (DOMPurify among them: MPL-2.0 or Apache-2.0) | MIT |
 | the page | [highlight.js](https://highlightjs.org/) | BSD-3-Clause |
