@@ -35,6 +35,17 @@
 -- drives it as it is now. A new check that drives something else marks it
 -- the same way.
 --
+-- The same checks rehearse a move of the wiki to PostgreSQL (WP5.80b of
+-- docs/PLAN.md, @--move-to-database URL@). The program is then the same on
+-- both sides, and the database differs. The old program serves the copy
+-- in SQLite, as above. After the migration and the check, this program
+-- copies the copy into the empty PostgreSQL database URL names
+-- (@wiki-server copy-database@'s copy, "Wiki.Server.CopyDatabase"), and
+-- serves that database for each check's 'after'. So the copy's second
+-- half reads what the first half made, through the other backend. The
+-- checks write (an account, a provider, settings), so they run on scratch
+-- databases, never on the wiki the move fills.
+--
 -- Both servers listen on loopback addresses, on ports the system gives.
 -- They are read through their administration listener, which is served
 -- to the loopback address as an administrator without a sign-in
@@ -102,8 +113,9 @@ import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Console (CheckOutcome (..), MigrateOutcome (..), runCheck, runMigrate)
+import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.FakeProvider (Fake (..), clientSecret, person, withFakeProvider)
-import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), placeOptions, resolvePlace)
+import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), databaseUrl, placeOptions, resolvePlace)
 import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
@@ -132,6 +144,11 @@ data RehearsalOptions = RehearsalOptions
   -- drop: it is overwritten.
   , scratchRestore :: Maybe FilePath
   -- ^ The @pg_restore@ that restores into the scratch database.
+  , moveTo :: Maybe (Text, Maybe FilePath)
+  -- ^ For the rehearsal of a move to PostgreSQL: an empty PostgreSQL
+  -- database, with its password file. The migrated copy is copied into it,
+  -- and the new program serves it there. It is the caller's to make and to
+  -- drop.
   }
   deriving stock (Eq, Show)
 
@@ -143,6 +160,7 @@ rehearsalParser =
     <*> strOption (long "scratch" <> metavar "DIR" <> help "The scratch data directory for the copy, which must not exist yet; it is deleted afterwards")
     <*> optional ((,) <$> strOption (long "scratch-database" <> metavar "URL" <> help "A PostgreSQL database for the copy, postgres://USER@HOST:PORT/NAME (overwritten)") <*> optional (strOption (long "scratch-database-password-file" <> metavar "FILE" <> help "The file that holds the scratch database's password")))
     <*> optional (strOption (long "scratch-pg-restore" <> metavar "PROGRAM" <> help "The pg_restore that restores into the scratch database"))
+    <*> optional ((,) <$> option (databaseUrl "put the password in --move-to-database-password-file FILE") (long "move-to-database" <> metavar "URL" <> help "Rehearse a move to PostgreSQL: copy the migrated copy into this empty database, postgres://USER@HOST:PORT/NAME, and serve it there with this program") <*> optional (strOption (long "move-to-database-password-file" <> metavar "FILE" <> help "The file that holds that database's password")))
 
 -- | 'RehearsalOutcome' is how a rehearsal ended. The program's exit code
 -- tells them apart for the deploy: 0, 6, 7 and 1.
@@ -217,9 +235,21 @@ rehearse o = either identity identity <$> runExceptT steps
         CheckNotMigrated why -> broken ("The migrated copy was not read: " <> why)
         CheckUnreadable lines' -> broken ("The migrated copy has rows this program cannot read: " <> T.intercalate "; " (take 5 lines'))
         CheckFailed why -> broken ("The migrated copy was not read: " <> why)
+      -- For a move, the migrated copy goes into the move's PostgreSQL
+      -- database, which the new program serves instead.
+      servedChoice <- case o.moveTo of
+        Nothing -> pure scratchChoice
+        Just (url, passwordFile) -> do
+          let target = PostgresChosen url passwordFile
+          liftIO (runCopy CopyOptions {place = scratchOptions, target}) >>= \case
+            Copied _ -> pure target
+            CopyNotMigrated why -> broken ("The copy could not be moved to PostgreSQL: " <> why)
+            CopyUnreadable lines' -> broken ("The copy could not be moved to PostgreSQL: " <> T.intercalate "; " (take 5 lines'))
+            CopyRefused why -> broken ("The copy could not be moved to PostgreSQL: " <> why)
+            CopyFailed why -> broken ("The copy could not be moved to PostgreSQL: " <> why)
       -- This program on the migrated copy, and each check's verdict.
       self <- liftIO getExecutablePath
-      results <- withServer (o.scratch </> "new.log") self (serveArgs scratchChoice ["--no-guide"]) (broken . ("The new program did not serve the migrated copy: " <>)) $ \server ->
+      results <- withServer (o.scratch </> "new.log") self (serveArgs servedChoice ["--no-guide"]) (broken . ("The new program did not serve the migrated copy: " <>)) $ \server ->
         for fixtures $ \(name, after) -> (name,) <$> liftIO (after server)
       let lines' = [either (\why -> name <> ": failed: " <> why) (const (name <> ": passed")) r | (name, r) <- results]
       pure (if all (isRight . snd) results then Rehearsed lines' else ChecksFailed lines')

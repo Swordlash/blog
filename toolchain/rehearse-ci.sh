@@ -8,11 +8,15 @@
 #
 #   sh toolchain/rehearse-ci.sh OLD NEW              # on SQLite
 #   sh toolchain/rehearse-ci.sh OLD NEW --postgres   # on toolchain/ci-postgres.sh's PostgreSQL
+#   sh toolchain/rehearse-ci.sh NEW NEW --move       # a move from SQLite to that PostgreSQL
 #
 # With --postgres it reads the variables toolchain/ci-postgres.sh prints
 # (WIKI_TEST_DATABASE_URL, WIKI_TEST_PG_DUMP, WIKI_TEST_PG_RESTORE,
 # WIKI_TEST_PSQL), and makes two databases there, the wiki's and the copy's,
-# dropped first. The wiki OLD makes has a space with a page and a page
+# dropped first. With --move the wiki is in SQLite, and NEW rehearses its
+# move to PostgreSQL, as `deploy-local.sh --move-to-postgres` does (WP5.80b):
+# OLD serves a copy in SQLite, NEW copies it into an empty database of that
+# PostgreSQL and serves it there, and each check compares what the two read. The wiki OLD makes has a space with a page and a page
 # under it, written through OLD's administration listener, and the guide
 # OLD installs itself, which the rehearsal leaves out of its comparison. It
 # also has a space set to have no home page, as a program from before
@@ -25,10 +29,15 @@
 # keeps stable (the README's CI section): OLD is the base branch's program,
 # which this script, from the pull request, must still drive.
 set -eu
-old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres]}
-new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres]}
-postgres=''
-[ "${3:-}" = --postgres ] && postgres=1
+old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
+new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
+postgres='' move=''
+case ${3:-} in
+  --postgres) postgres=1 ;;
+  --move) move=1 ;;
+  '') ;;
+  *) printf 'rehearse-ci: unknown option %s\n' "$3" >&2; exit 2 ;;
+esac
 
 work=$(mktemp -d)
 pid=''
@@ -49,6 +58,13 @@ if [ -n "$postgres" ]; then
   done
   set -- --database "$base/rehearsal_live" --pg-dump "$WIKI_TEST_PG_DUMP" --pg-restore "$WIKI_TEST_PG_RESTORE"
   scratch_args="--scratch-database $base/rehearsal_scratch --scratch-pg-restore $WIKI_TEST_PG_RESTORE"
+elif [ -n "$move" ]; then
+  : "${WIKI_TEST_DATABASE_URL:?run toolchain/ci-postgres.sh start first}"
+  base=${WIKI_TEST_DATABASE_URL%/*}
+  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS rehearsal_move"
+  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE rehearsal_move"
+  set -- --sqlite "$data/wiki.sqlite"
+  scratch_args="--move-to-database $base/rehearsal_move"
 else
   set -- --sqlite "$data/wiki.sqlite"
   scratch_args=''

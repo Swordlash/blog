@@ -550,6 +550,16 @@ jobs:
         new=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)
         sh toolchain/rehearse-ci.sh "$RUNNER_TEMP/base-wiki-server" "$new" --postgres
 
+    # The comparison a move from SQLite to PostgreSQL makes
+    # (deploy-local.sh --move-to-postgres, WP5.80b): this pull request's
+    # wiki-server as the old program and the new, the old on SQLite and the
+    # new on a copy in PostgreSQL.
+    - name: Rehearse a move from SQLite to PostgreSQL
+      if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
+      run: |
+        new=$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server)
+        sh toolchain/rehearse-ci.sh "$new" "$new" --move
+
     - name: Stop PostgreSQL
       if: always() && (matrix.group == 'postgres' || (github.event_name == 'pull_request' && matrix.group == 'sqlite'))
       run: sh toolchain/ci-postgres.sh stop
