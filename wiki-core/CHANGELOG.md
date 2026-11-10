@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The Markdown tests pin down emoji shortcodes as the guide now describes
+them (#188): GitHub's names with underscores, `+` and `-`; a name not in
+the list kept as text (Slack's `:thinking_face:` among them); a known name read between digits (`1:100:2`); a
+backslash before the first or the last colon, or `&#58;` for the first,
+keeping a shortcode text; and a shortcode in inline code or a code block
+left as it is. `docs/markdown.md`, which the assistant's reference
+embeds, has a section "Emoji" saying the same.
+
 Every space has a home page (WP5.78a, #201). `SpaceProfile` no longer has
 `homePage`: a space keeps the home page it was made with, and a profile
 that still names one in JSON has it ignored. `checkProfile` no longer takes

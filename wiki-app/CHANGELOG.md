@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The guide's Markdown guide has a section "Emoji" under "Text" (#188): how
+to write one, a table of examples, that the names are GitHub's (gemoji's
+list, through the `emojis` package), so a name from elsewhere works only
+if that list has it, and how to keep a name between colons as text, with a backslash before its first colon or in
+code. The page's text changes, so `wiki-server guide update` gives it to an
+installed guide; the "Contents" panel of the page lists "Emoji" after
+"Tables".
+
 The browser's OPAQUE client from opaque-hs (WP5.79). In the browser,
 `Wiki.App.Backend.Opaque` is now opaque-hs's `Crypto.OPAQUE.Client`, as it
 is natively, in place of the binding of the wiki's own to

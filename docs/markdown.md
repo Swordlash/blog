@@ -4,7 +4,7 @@ Pages are written in Markdown: [CommonMark](https://commonmark.org) with GitHub'
 
 ## Text
 
-Paragraphs are separated by a blank line. *Emphasis*, **strong emphasis**, ~~strikethrough~~ and `inline code` work as usual, and so do emoji shortcodes such as :tada: and :rocket:.
+Paragraphs are separated by a blank line. *Emphasis*, **strong emphasis**, ~~strikethrough~~ and `inline code` work as usual, and so do emoji: [Emoji](#emoji) below.
 
 A line break in the text is a line break on the page, in quotations and boxes too:
 so this sentence is on a line of its own,
@@ -15,6 +15,12 @@ and so is this one. Write a paragraph on one line, however long, and break a lin
 A line of three dashes is a thematic break:
 
 ---
+
+## Emoji
+
+A name between colons is an emoji: `:tada:` is :tada:, `:rocket:` is :rocket:, `:white_check_mark:` is :white_check_mark: and `:+1:` is :+1:. Pointing at one shows its name. The names are GitHub's, from its list [gemoji](https://github.com/github/gemoji/blob/master/db/emoji.json), through the `emojis` package that commonmark-extensions uses. A name from elsewhere, such as Slack, works only if GitHub's list has it: 🤔 is `:thinking:`, not `:thinking_face:`. A name that is not in the list stays text, as written. The newest emoji have no name in the list yet: paste them as they are.
+
+A name in the list is an emoji wherever it is, even between digits: `1:100:2` is 1:100:2. To keep it text, put a backslash before its first colon: `1\:100:2` is 1\:100:2, and `\:tada:` is \:tada:. In inline code and in code blocks, colons are always text: `` `:tada:` `` is `:tada:`.
 
 ## Headings
 

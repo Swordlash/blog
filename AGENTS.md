@@ -20,31 +20,37 @@ One session, the one the owner talks to, owns the work (the owner, 2026-10-31): 
 `docs/PLAN.md`, cuts the plan into work packages, sees each one through, and amends
 the plan as it goes: a decision confirmed or changed, acceptance criteria met or
 carried over. Who writes the code depends on the session's model (the owner,
-2026-11-03): a session on Fable (`claude-fable`) plans, briefs and reviews, and never
-implements itself: for each work package it runs one Opus subagent (model `opus`,
-every effort `high`) in a worktree of its own, with the package's text, the files to
-read and the verification to run, and takes its report; a session on another model
-implements itself. Either way the session is the one that opens the pull request,
+2026-11-03, confirmed 2026-11-10): a session on Fable (`claude-fable`) plans, briefs
+and reviews, and never implements itself: for each work package it runs one Opus
+subagent (model `opus`, every effort `high`) in a worktree of its own, with the
+package's text, the files to read and the verification to run, and takes its report;
+a session on another model implements itself. Either way the session is the one that opens the pull request,
 handles the review rounds and amends the plan. Changes to `docs/PLAN.md` alone go
 straight to `main`, without a pull request; code goes through one, one per work package,
-opened ready for review, not as a draft, on its own branch.
+opened ready for review, not as a draft, on its own branch. The pull request is opened
+early, as soon as the session thinks the branch has a chance to pass (the owner,
+2026-11-10).
 
-Before a pull request merges, the session reviews it with Codex on the pushed head
-(`codex exec review --base <merge-base> -m gpt-6.1-sol -c model_reasoning_effort=high`,
-in a detached checkout of the head, with the owner's key given on standard input and the
-saved credential removed afterwards; a model or effort below that is not a review). A
-session without the key, or whose key has run out of quota, asks the GitHub Codex bot
-instead, with a comment of `@codex review` on the pull request, and waits for its answer
-(the owner, 2026-11-02); its review counts as a round. The
-session verifies each finding, fixes the real ones and pushes, and every push of fixes
+Each work package has two reviews on a Fable session (the owner, 2026-11-10): the
+session's own review of the subagent's branch, before the pull request is opened, and
+then Codex's. Before a pull request merges, the session reviews it with Codex on the
+pushed head. By default that is the Codex CLI (the owner, 2026-11-10):
+`codex exec review --base <merge-base> -m gpt-6.1-sol -c model_reasoning_effort=high`,
+in a detached checkout of the head; a model or effort below that is not a review. On the
+owner's machine the CLI is signed in with the owner's account, so no key is given on
+standard input and no credential is removed afterwards, and the session never runs
+`codex logout`. There the CLI runs with `-c 'sandbox_mode="danger-full-access"'`,
+because its own sandbox cannot start on that machine. When the CLI's quota has run out,
+the session asks the GitHub Codex bot instead, with a comment of `@codex review` on the
+pull request, and waits for its answer (the owner, 2026-11-02); its review counts as a
+round. The session verifies each finding, fixes the real ones and pushes, and every push of fixes
 is followed by another round, however small the fixes, until a round finds nothing
 (the owner, 2026-11-03: a round is never skipped because the fixes were small). Every
-pull request, every time. Three rounds at most (the owner, 2026-11-02, down from
-four): the fixes after the third are made and described in the pull request, not
-reviewed again, except when the third round's finding is of the same kind as an
-earlier round's (the same mechanism, another case of it): then one more round is run
-after the fix, so that the family of findings is closed by a review (the owner,
-2026-11-04).
+pull request, every time. Three rounds is a rule of thumb (the owner, 2026-11-02, down
+from four; a rule of thumb since 2026-11-10): when the third round finds only trifles,
+they may be left, and said so in the pull request; when it still finds something
+serious, or the same kind of mistake in another place (the same mechanism, another case
+of it; the owner, 2026-11-04), the rounds go on.
 
 Every pull request adds one changelog entry, `changelog/<number>-<slug>.md`
 (the owner, 2026-11-05; the grammar is the README's "Changelog entries"):
@@ -52,14 +58,17 @@ what the pull request changed, for the wiki's users, in plain language, with
 an example of each new feature. The number is the entry's `pr` with zeros in
 front to five digits, so that the files list in order. The session writes it
 with the branch as `00000-<slug>.md` with `pr: 0`, and in one more commit,
-once it has opened the pull request and before the review, fills in the
+once it has opened the pull request and before Codex's review, fills in the
 number and renames the file to match (`00169-<slug>.md`, `pr: 169`); CI's
 `changelog` job checks both. The label `no-changelog` exempts a pull request; it is the owner's, and
 the session never applies it.
 
 The owner merges. The session does not merge a pull request unless the owner asks it
-to. When `main` has moved, the session rebases the branch onto it (and force-pushes:
-work-package branches belong to the session) so CI runs on the rebased head.
+to. When the owner tells the session to merge a pull request as it is, without waiting
+for its checks, the session merges it past the branch's rules (`gh pr merge --admin`;
+the owner, 2026-11-10). When `main` has moved, the session rebases the branch onto it
+(and force-pushes: work-package branches belong to the session) so CI runs on the
+rebased head.
 
 When a work package is done, its pull request's description says what was built, the
 choices made, and what differs from the plan. The plan keeps no log of the work (the
@@ -69,7 +78,9 @@ gaps and notes" for the packages after it.
 
 ## Verification gate
 
-A work package is done only when all of these hold, and the session says so with the output:
+A work package is done only when all of these hold, and CI's run on its pull request's
+head is where they are shown (the owner, 2026-11-10; before that a package's whole gate
+was run locally first):
 
 - `npm run build-native` and `npm run test-native` pass.
 - `npm run build-wasm` passes, and `npm run test-wasm` once there are browser tests.
@@ -80,15 +91,18 @@ A work package is done only when all of these hold, and the session says so with
 - Tests for what the package adds: native hspec for pure code (domain, Markdown rendering,
   permission rules, backend contracts), hspec-halogen in a real browser for components.
 
+All of CI runs on GitHub's runners: the repository variable `WASM_RUNNER` is `hosted`
+(#228). Locally, before the push, a package owes the type-check (`npm run build-native`,
+and `npm run build-wasm` where it changed code only wasm compiles), the formatter
+(`npm run format` changes nothing), and whichever test suites its author judges worth
+running. The pull request is opened then, and CI's run on its head is the gate; the pull
+request's description says which suites were run locally and which were left to CI.
+This was first the rule for a change that touches no Haskell of the repository's own
+packages (the owner, 2026-11-03: "wystarczy typecheck i CI niech robi testy"), and is
+the rule for every change since 2026-11-10.
+
 A gate that cannot be run (toolchain missing, network down) is reported as not run, never as
 passed.
-
-A change that touches no Haskell of the repository's own packages (a pin bump of
-haskell-halogen, a toolchain script, a workflow, documentation) needs only the native
-type-check locally (`npm run build-native`, or the session's type-check script); CI
-runs the tests on the pushed head (the owner, 2026-11-03: "wystarczy typecheck i CI
-niech robi testy"). The full gate above is for a work package that changes the
-packages.
 
 ## Toolchain
 

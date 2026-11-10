@@ -46,6 +46,26 @@ spec = describe "Markdown.Ast" $ do
     it "reads emoji shortcodes" $
       ":tada:" `parses` para [Emoji "tada" "🎉"]
 
+  describe "emoji shortcodes" $ do
+    it "reads GitHub's names, with underscores, plus and minus signs" $
+      ":rocket: :white_check_mark: :+1: :-1:"
+        `parses` para [Emoji "rocket" "🚀", Str " ", Emoji "white_check_mark" "✅", Str " ", Emoji "+1" "👍", Str " ", Emoji "-1" "👎"]
+    it "leaves a name it does not know as text, Slack's for 🤔 too" $ do
+      "Meet at :nosuchname: or 10:30:45." `parses` para [Str "Meet at :nosuchname: or 10:30:45."]
+      ":thinking: :thinking_face:" `parses` para [Emoji "thinking" "🤔", Str " :thinking_face:"]
+    it "reads a known name between other characters too" $
+      "1:100:2" `parses` para [Str "1", Emoji "100" "💯", Str "2"]
+    it "leaves a shortcode text when a backslash is before its first colon or its last" $ do
+      "\\:tada:" `parses` para [Str ":tada:"]
+      ":tada\\:" `parses` para [Str ":tada:"]
+      "1\\:100:2" `parses` para [Str "1:100:2"]
+    it "leaves a shortcode text when its first colon is written as &#58;" $
+      "&#58;tada:" `parses` para [Str ":tada:"]
+    it "leaves a shortcode as it is in inline code and in code blocks" $ do
+      "`:tada:`" `parses` para [Code [] ":tada:"]
+      "```\n:tada:\n```" `parses` [CodeBlock [] Nothing ":tada:\n"]
+      "    :tada:" `parses` [CodeBlock [] Nothing ":tada:\n"]
+
   describe "links" $ do
     it "keeps the destination and the title as written" $
       "[docs](../guide \"The guide\")" `parses` para [Link [] "../guide" "The guide" [Str "docs"]]

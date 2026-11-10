@@ -56,7 +56,7 @@ spec m = do
     nested <- traverse textContent =<< findAll ui ".page-contents nav > .toc-list > li > .toc-list > li > a"
     take 3 nested `shouldBe` ["Text", "Code", "Mathematics"]
     deeper <- traverse textContent =<< findAll ui ".page-contents a[href='#text'] + .toc-list > li > a"
-    deeper `shouldBe` ["Lists", "Tasks", "Tables"]
+    deeper `shouldBe` ["Lists", "Tasks", "Tables", "Emoji"]
     -- Nothing of the panel's in the page's text.
     length <$> findAll ui ".page-text .toc" `shouldReturn` 0
     -- At the top, the first section is the one read.

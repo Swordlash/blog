@@ -3,7 +3,8 @@
 -- demo's own tour. Every page parses, every link between them leads to a
 -- page of the guide, and the Markdown guide shows the boxes
 -- ("Wiki.Core.Markdown.Box"): the five kinds, one of its own, one without
--- a number and a title with math. The guide's source is wrapped, and its
+-- a number and a title with math. It shows emoji too, and the ways to keep
+-- a name between colons text. The guide's source is wrapped, and its
 -- pages are not: each paragraph is one line ('unwrapped'), since a line
 -- break in a page is one on the page.
 module Test.Guide (spec) where
@@ -19,7 +20,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Guide
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
-import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Emph, Hidden, Link, SoftBreak, Strikeout, Strong), ListItem (..), SpoilerHead (..), SpoilerKind (..), parseMarkdown, plainText)
+import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), Inline (Code, Emoji, Emph, Hidden, Link, SoftBreak, Str, Strikeout, Strong), ListItem (..), SpoilerHead (..), SpoilerKind (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -167,6 +168,20 @@ spec = describe "Wiki.App.Guide" $ do
                  ]
     hidden parsed `shouldBe` ["the butler"]
     [() | MarkerError {} <- parsed] `shouldBe` []
+
+  it "shows emoji in the Markdown guide, and keeps text the names it escapes and the ones in code" $ do
+    let parsed = either (const []) identity . parseMarkdown . (\p -> p.body) =<< maybeToList (titled guide "Markdown guide")
+        shown = concatMap $ \case
+          Para xs -> xs
+          Table _ header rows -> concat (header <> concat rows)
+          _ -> []
+        inlines = shown parsed
+    for_ ["tada", "rocket", "white_check_mark", "+1", "100"] $ \name ->
+      (name, name `elem` [k | Emoji k _ <- inlines]) `shouldBe` (name, True)
+    -- Escaped with a backslash, as the guide shows, these stay text.
+    for_ ["1:100:2", ":tada:"] $ \escaped ->
+      (escaped, any (T.isInfixOf escaped) [t | Str t <- inlines]) `shouldBe` (escaped, True)
+    [t | Code _ t <- inlines] `shouldSatisfy` elem ":tada:"
 
   it "has the demo define the kind of box the Markdown guide shows" $ do
     (demoState demoNow).server.boxes `shouldBe` [exerciseBox]
