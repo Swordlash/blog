@@ -59,6 +59,7 @@ module Wiki.App.Editor.Browser
   , clickElement
   , EditorKey (..)
   , editorKey
+  , GridKey (..)
   , gridKey
 
     -- * The assistant's edits
@@ -489,20 +490,32 @@ editorKey event
     key = if T.length pressed.key == 1 then T.toLower pressed.key else pressed.key
     inText = isJust (Event.target event >>= Element.fromEventTarget >>= (`Element.closestNow` "textarea.editor-text, .cm-content"))
 
--- | A key pressed without a modifier in a menu with a grid of entries
--- (the toolbar's "Emoji" menu): the key's name (@ArrowDown@, @Enter@), and
--- the number of the entry it was pressed on, from the entry's
--- @data-index@, or 'Nothing' when it was pressed elsewhere in the menu
--- (its field). 'Nothing' for a key with a modifier, and while an input
--- method composes. Pure, so that the listener can decide whether the
--- browser's own action is to be stopped.
-gridKey :: Event -> Maybe (Text, Maybe Int)
+-- | 'GridKey' is a key pressed in a menu with a grid of entries (the
+-- toolbar's "Emoji" menu), as 'gridKey' reads it.
+data GridKey = GridKey
+  { key :: Text
+  -- ^ The key's name: @ArrowDown@, @Enter@, @a@.
+  , plain :: Bool
+  -- ^ Whether no modifier (Shift, Ctrl, Alt, Meta) was held.
+  , entry :: Maybe Int
+  -- ^ The number of the entry the key was pressed on, from the entry's
+  -- @data-index@, or 'Nothing' when it was pressed elsewhere in the menu
+  -- (its field).
+  }
+
+-- | The key a keydown in a menu with a grid of entries is, or 'Nothing'
+-- while an input method composes text: that key (an Enter that ends the
+-- composition, too) is the input method's, and the menu leaves it alone.
+-- Pure, so that the listener can decide whether the browser's own action
+-- is to be stopped.
+gridKey :: Event -> Maybe GridKey
 gridKey event
-  | pressed.isComposing || pressed.ctrlKey || pressed.metaKey || pressed.altKey || pressed.shiftKey = Nothing
-  | otherwise = Just (pressed.key, at)
+  | pressed.isComposing || pressed.key == "Process" = Nothing
+  | otherwise = Just GridKey {key = pressed.key, plain, entry}
   where
     pressed = KeyboardEvent event
-    at = Event.target event >>= Element.fromEventTarget >>= (`Element.getAttributeNow` "data-index") >>= readMaybe . T.unpack
+    plain = not (pressed.ctrlKey || pressed.metaKey || pressed.altKey || pressed.shiftKey)
+    entry = Event.target event >>= Element.fromEventTarget >>= (`Element.getAttributeNow` "data-index") >>= readMaybe . T.unpack
 
 -- | The editor's current text: CodeMirror's, or the textarea's.
 currentText :: (MonadIO m) => Element -> m Text

@@ -268,6 +268,7 @@ import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
+  , GridKey (..)
   , PickedFile (..)
   , announceUpload
   , answerEmoji
@@ -1112,24 +1113,37 @@ component =
 
     -- The keys of the "Emoji" menu, read in the keydown's listener, which
     -- stops the browser's own action for them (Enter in the field would
-    -- submit the form, an arrow would scroll). In the field, Enter chooses
-    -- the first emoji found and the down arrow goes to it. On an emoji, the
-    -- arrows move through the grid, a row of 'emojiColumns' at a time up
-    -- and down, and up from the first row (or left from the first emoji)
-    -- back to the field. Any other key is left to the browser: Tab moves
-    -- the focus, and Enter on an emoji is its click.
+    -- submit the form, which saves the page; an arrow would scroll).
+    --
+    -- Enter, with or without a modifier, never reaches the form: in the
+    -- field it chooses the first emoji found (nothing when none is found,
+    -- or when a modifier is held), and on an emoji it chooses that emoji,
+    -- as a click does. Without a modifier, the down arrow goes from the
+    -- field to the first emoji, and on an emoji the arrows move through
+    -- the grid, a row of 'emojiColumns' at a time up and down, and up from
+    -- the first row (or left from the first emoji) back to the field. A
+    -- key an input method is composing with is the input method's
+    -- ('gridKey'). Any other key is left to the browser: Tab moves the
+    -- focus, and a letter is typed in the field.
     emojiKey :: [(Text, Text)] -> Event -> Maybe Action
-    emojiKey found ev = case gridKey ev of
-      -- With nothing found, Enter is still stopped, so that it does not
-      -- save the page, and does nothing ('PanelSubmitted').
-      Just ("Enter", Nothing) -> Just (maybe PanelSubmitted (PickEmoji . fst) (head found))
-      Just ("ArrowDown", Nothing) | not (null found) -> Just (EmojiFocus 0)
-      Just ("ArrowRight", Just i) -> step i 1
-      Just ("ArrowLeft", Just i) -> step i (-1)
-      Just ("ArrowDown", Just i) -> step i emojiColumns
-      Just ("ArrowUp", Just i) -> step i (-emojiColumns)
-      _ -> Nothing
+    emojiKey found ev = do
+      pressed <- gridKey ev
+      case (pressed.key, pressed.entry) of
+        ("Enter", Nothing)
+          | pressed.plain -> Just (choose (head found))
+          | otherwise -> Just PanelSubmitted
+        ("Enter", Just i) -> Just (choose (atMay found i))
+        _ | not pressed.plain -> Nothing
+        ("ArrowDown", Nothing) | not (null found) -> Just (EmojiFocus 0)
+        ("ArrowRight", Just i) -> step i 1
+        ("ArrowLeft", Just i) -> step i (-1)
+        ("ArrowDown", Just i) -> step i emojiColumns
+        ("ArrowUp", Just i) -> step i (-emojiColumns)
+        _ -> Nothing
       where
+        -- With nothing to choose, Enter is still stopped, so that it does
+        -- not save the page, and does nothing ('PanelSubmitted').
+        choose = maybe PanelSubmitted (PickEmoji . fst)
         step i by
           | i + by < 0 = Just (EmojiFocus (-1))
           | i + by >= length found = Just (EmojiFocus i)
@@ -1655,8 +1669,8 @@ component =
       FromMacros MacrosPanel.SpaceMacrosSaved -> H.raise (Changed Nothing)
       -- A panel's own form was submitted: the panel has handled it, and
       -- the event goes no further, to the page's form, which would save.
-      -- Enter in the "Emoji" menu's field, with no emoji found, is
-      -- stopped the same way.
+      -- Enter in the "Emoji" menu with nothing to choose (none found, or a
+      -- modifier held in its field) is stopped the same way.
       PanelSubmitted -> pass
       NewKind -> closeMenu >> modify (\st -> st {kindDialogOpen = True})
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})

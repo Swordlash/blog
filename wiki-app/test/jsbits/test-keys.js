@@ -27,3 +27,13 @@ function wiki_test_dispatch_key(key) {
   document.body.dispatchEvent(event);
   return event.defaultPrevented;
 }
+
+// Dispatch a keydown of Enter, as an input method sends it while it
+// composes text, to the first element a selector finds (Test.Browser.Emoji),
+// and say whether a listener prevented its default: an Enter that ends a
+// composition is the input method's, which the page leaves alone.
+function wiki_test_composing_enter(selector) {
+  const event = new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true });
+  document.querySelector(selector)?.dispatchEvent(event);
+  return event.defaultPrevented;
+}
