@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+A space's home page is the root of its pages (WP5.78b, #201). The home
+page's path is empty: `EditPage`, `PageSource`, `PageHistory`,
+`PageSlides` and `LivePreview` with the empty path are written under the
+space's address (`/s/docs/edit/`), a `Page` with the empty path is written
+as the space's address, and `pageRoute` gives `Space` for it.
+`resolvePageLink` takes the space's root and gives a page's address as it
+is now, for an old one too, and reads a space's own address. The shell
+reads a page asked for at an old address as the page it names, and gives
+the views its path as it is now; the sidebar and the space's list show the
+pages under the home page (`pageTree` takes the space), and the move
+dialog no longer lists the home page, since its top level is under it.
+`pagePathOf` takes the space and answers `Maybe`; `pageRouteOf` is new.
+The demo's backend reads and writes pages from under the home page, puts a
+page with no parent under it, and `ensureHomePages` roots every space's
+pages, so the demo's content, a wiki kept in the browser from before and
+an archive follow. The guide is built with the tour as its root. The
+prerender writes the home page's routes under the space's address.
+
 The guide's Markdown guide has a section "Emoji" under "Text" (#188): how
 to write one, a table of examples, that the names are GitHub's (gemoji's
 list, through the `emojis` package), so a name from elsewhere works only

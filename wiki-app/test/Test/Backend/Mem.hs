@@ -27,7 +27,7 @@ import Wiki.App.Backend.Mem.State (MemState (..), Prepared (..), setHome)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Search (SearchHit (..), searchQuery, searchable)
 import Wiki.Core.Space (Space (..))
@@ -70,12 +70,15 @@ spec = do
       names `shouldBe` ["Blog", "Docs"]
 
     it "refuses to delete a page with its space's home page under it, or to move it to another space, and moves it within the space" $ do
-      -- A home page under another page, as a space may have one from
-      -- before every space had its own: made without the backend's
-      -- checks, which would not make it.
+      -- A home page under another page, as a space may have had one from
+      -- before the home page was the root of its pages: made without the
+      -- backend's checks, which would not make it. The pages are found by
+      -- their ids, since their paths start under the home page, which
+      -- this one is not.
       let demo = demoState demoNow
           docs = fromMaybe (panic "the demo has no Docs") (find (\s -> s.name == "Docs") (Map.elems demo.spaces))
-          diagrams = fromMaybe (panic "the demo has no Diagrams") (find (\p -> p.title == "Diagrams") (Map.elems demo.pages))
+          titled t = fromMaybe (panic ("the demo has no " <> t)) (find (\p -> p.title == t) (Map.elems demo.pages))
+          diagrams = titled "Diagrams"
       ref <- newMemWiki (setHome docs.id diagrams.id demo)
       let run :: MemWiki IO x -> IO x
           run = runMemWiki ref
@@ -84,14 +87,16 @@ spec = do
             Left (Invalid _) -> pass
             other -> expectationFailure ("expected Invalid, got " <> show (void other))
       run (switchUser (Just (UserId "user-admin")))
-      guide <- run (getPage docs.id (at "markdown-guide")) >>= either (panic . show) pure
+      let guide = titled "Markdown guide"
+          tour = titled "Tour"
       blog <- run (getSpace (at "blog")) >>= either (panic . show) pure
-      tour <- run (getPage docs.id (at "tour")) >>= either (panic . show) pure
+      aside <- run (createPage docs.id (Just tour.id) "Aside" "") >>= either (panic . show) pure
       run (deletePage guide.id) >>= invalid
       run (movePage guide.id blog.id Nothing) >>= invalid
-      run (movePage guide.id docs.id (Just tour.id)) >>= either (panic . show) (const pass)
+      run (movePage guide.id docs.id (Just aside.id)) >>= either (panic . show) (const pass)
       (\s -> s.homePage) <$> (run (getSpace (at "docs")) >>= either (panic . show) pure) `shouldReturn` Just diagrams.id
-      void (run (getPage docs.id (at "tour/markdown-guide/diagrams")) >>= either (panic . show) pure)
+      listed <- run (listPages docs.id) >>= either (panic . show) pure
+      [p.parent | p <- listed, p.id == guide.id] `shouldBe` [Just aside.id]
 
     it "makes ids from a counter, the same on every run" $ do
       let ids st = (Map.keys st.spaces, Map.keys st.pages)

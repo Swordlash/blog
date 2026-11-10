@@ -342,12 +342,15 @@ updateGuide st actor address = do
     step now archive g record r = do
       pages <- loadPages g.id
       let at = pathText r.path
+          -- How a line names the page: by its path, and the tour, at the
+          -- empty path, as the home page.
+          shown = if null r.path then "home page" else at
           found = pageAt g pages r.path
           recorded = Map.lookup at record.pages
           release = writtenHash r.page.title r.page.body
           hashOf p = writtenHash p.title p.body
           missing p = [x.name.text | x <- r.page.attachments, x.name `notElem` map (\y -> y.name) p.attachments]
-          leftOut p = [AttachmentsLeftOut (at <> ": " <> T.intercalate ", " (missing p)) | not (null (missing p))]
+          leftOut p = [AttachmentsLeftOut (shown <> ": " <> T.intercalate ", " (missing p)) | not (null (missing p))]
       case found of
         Just p
           | hashOf p == release -> pure ([Current] <> [Wrote at release | recorded /= Just release] <> leftOut p)
@@ -357,11 +360,11 @@ updateGuide st actor address = do
               let new = savedAs (micro now) r.page.title r.page.body p
               updatePageText p.id new.title new.body new.updatedAt
               insertVersion new Nothing
-              pure ([Rewritten at new, Wrote at release] <> leftOut p)
-          | isJust recorded -> pure [LeftAlone (at <> ": changed by an administrator since the guide wrote it, so left alone")]
-          | otherwise -> pure [LeftAlone (at <> ": a page the guide did not write, so left alone")]
+              pure ([Rewritten shown new, Wrote at release] <> leftOut p)
+          | isJust recorded -> pure [LeftAlone (shown <> ": changed by an administrator since the guide wrote it, so left alone")]
+          | otherwise -> pure [LeftAlone (shown <> ": a page the guide did not write, so left alone")]
         Nothing
-          | Map.member at record.pages -> pure [LeftAlone (at <> ": not where this release puts it (moved, renamed or deleted), so left alone")]
+          | Map.member at record.pages -> pure [LeftAlone (shown <> ": not where this release puts it (moved, renamed or deleted), so left alone")]
           | otherwise -> case unsnoc r.path of
               Nothing -> pure []
               Just (parentPath, _) -> do
@@ -369,8 +372,8 @@ updateGuide st actor address = do
                 -- release's paths.
                 let parent = maybe (Left ()) (Right . Just) (pageAt g pages parentPath)
                 case parent of
-                  Left () -> pure [LeftAlone (at <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
-                  Right under -> [Added at, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r
+                  Left () -> pure [LeftAlone (shown <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
+                  Right under -> [Added shown, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r
 
     -- A page of the release the guide never had, under its parent, last
     -- among its siblings, with its attachments.

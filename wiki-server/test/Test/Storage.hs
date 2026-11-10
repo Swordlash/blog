@@ -486,11 +486,14 @@ wholeWikis backing = describe "importArchive and exportArchive" $ do
       stored <- reading st Rows.loadSpaces
       (\s -> s.homePage) <$> Map.lookup (SpaceId "the-container") stored `shouldBe` Just Nothing
 
-  it "refuse to delete a page with its space's home page under it, or to move it to another space, and move it within the space" $
+  it "refuse to delete a page with its space's home page under it, or to move it to another space" $
     withPlaceIn backing $ \at -> do
       withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
-      -- A home page under another page, as a space may have one from
-      -- before every space had its own; no write of the storage makes one.
+      -- A home page under another page, as a space may have had one from
+      -- before the home page was the root of its pages (step 13 of the
+      -- schema takes it from there); no write of the storage makes one.
+      -- The pages are found by their ids: their paths start under the
+      -- home page, which this one is not.
       withConnectionTo at $ \c -> do
         begin True c
         runScript c "UPDATE spaces SET home_page = (SELECT id FROM pages WHERE slug = 'diagrams') WHERE slug = 'docs';"
@@ -503,15 +506,13 @@ wholeWikis backing = describe "importArchive and exportArchive" $ do
               other -> expectationFailure ("expected Invalid, got " <> show (void other))
         docs <- asAdministrator (getSpace (path "docs")) >>= ok
         blog <- asAdministrator (getSpace (path "blog")) >>= ok
-        guide <- asAdministrator (getPage docs.id (path "markdown-guide")) >>= ok
-        diagrams <- asAdministrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
-        tour <- asAdministrator (getPage docs.id (path "tour")) >>= ok
-        docs.homePage `shouldBe` Just diagrams.id
-        asAdministrator (deletePage guide.id) >>= invalid
-        asAdministrator (movePage guide.id blog.id Nothing) >>= invalid
-        void (asAdministrator (movePage guide.id docs.id (Just tour.id)) >>= ok)
-        (\s -> s.homePage) <$> (asAdministrator (getSpace (path "docs")) >>= ok) `shouldReturn` Just diagrams.id
-        void (asAdministrator (getPage docs.id (path "tour/markdown-guide/diagrams")) >>= ok)
+        pages <- asAdministrator (listPages docs.id) >>= ok
+        let titled t = fromMaybe (panic ("no page " <> t)) (find (\p -> p.title == t) pages)
+        docs.homePage `shouldBe` Just (titled "Diagrams").id
+        asAdministrator (deletePage (titled "Markdown guide").id) >>= invalid
+        asAdministrator (movePage (titled "Markdown guide").id blog.id Nothing) >>= invalid
+        asAdministrator (deletePage (titled "Tour").id) >>= invalid
+        (\s -> s.homePage) <$> (asAdministrator (getSpace (path "docs")) >>= ok) `shouldReturn` Just (titled "Diagrams").id
 
   it "refuse an archive without the bytes of an attachment, writing nothing" $
     withStorageIn backing $ \_ st -> do

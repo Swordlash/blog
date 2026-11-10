@@ -544,7 +544,13 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 
 - **Spaces** in a tree, public or private, each a tree of pages, shown one at a
   time as Confluence shows them; the front page is a directory of spaces, and a
-  space has a description, an icon and a home page of its own. Pages are listed
+  space has a description, an icon and a home page of its own. The home page
+  is the top of the space's pages: every other page is under it, it is at the
+  space's own address (`/s/docs/`, its editor at `/s/docs/edit/`), and a page
+  under it has no part of its address for it (`/s/docs/p/markdown-guide/`).
+  "New page" with no page to put it under, and a move to a space's top level,
+  put the page under the home page. An encrypted space has no home page, and
+  its pages may be several at its top. Pages are listed
   by name, by date or in an order put by hand. A space's icon is the browser
   tab's icon on its pages, and the wiki's own icon, which an administrator sets
   on the front page, is the tab's icon everywhere else.
@@ -1888,9 +1894,11 @@ to the demo, keeping `data/`.
   (or `bin/wiki migrate …`) does only that, and says from which version; and
   `wiki-server check --data DIR` reads every row of every table, and the wiki's
   records built from them, as the program does, changes nothing, and lists the
-  tables with their rows. Both run on a directory no server is running on. The
+  tables with their rows. It also says which records break a rule the wiki
+  keeps: a space with a page beside its home page at the top of its pages.
+  Both run on a directory no server is running on. The
   check ends with 4 when the database is not at the program's version of the
-  schema (migrate it first), 5 when something does not read (it says what), and
+  schema (migrate it first), 5 when something does not read or breaks a rule (it says what), and
   1 when the database cannot be opened. The deploy runs both (see the next
   item); by hand, run them with a new `wiki-server` before starting it on an old
   database:

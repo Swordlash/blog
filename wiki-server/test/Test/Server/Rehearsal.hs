@@ -25,7 +25,7 @@ import Wiki.Server.Accounts (listAccounts)
 import Wiki.Server.Console (runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
-import Wiki.Server.Rehearsal (Check (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, isolateCopy, readPages, readSpaces)
+import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, isolateCopy, pathAsBuilt, readPages, readSpaces)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
@@ -34,6 +34,30 @@ unitSpec :: Spec
 unitSpec = do
   pagesUnitSpec
   homesUnitSpec
+  pathsUnitSpec
+
+-- | A page's path as a program before step 13 of the schema builds it, and
+-- as one after it does: from the top of the space, or from under its home
+-- page.
+pathsUnitSpec :: Spec
+pathsUnitSpec = describe "the upgrade's rehearsal, a page's path as each program builds it" $ do
+  let pages =
+        [ PageAt {page = "h", parent = Nothing, slug = "home"}
+        , PageAt {page = "a", parent = Just "h", slug = "about"}
+        , PageAt {page = "d", parent = Just "a", slug = "deep"}
+        , PageAt {page = "t", parent = Nothing, slug = "top"}
+        ]
+  it "has every slug from the top for a program before the step" $ do
+    pathAsBuilt False (Just "h") pages "d" `shouldBe` Just ["home", "about", "deep"]
+    pathAsBuilt False (Just "h") pages "h" `shouldBe` Just ["home"]
+  it "leaves the home page's slug out for a program with the step, the home page's own path empty" $ do
+    pathAsBuilt True (Just "h") pages "d" `shouldBe` Just ["about", "deep"]
+    pathAsBuilt True (Just "h") pages "h" `shouldBe` Just []
+    pathAsBuilt True (Just "h") pages "t" `shouldBe` Just ["top"]
+  it "has every slug in a space with no home page, and nothing for a page not there or under itself" $ do
+    pathAsBuilt True Nothing pages "d" `shouldBe` Just ["home", "about", "deep"]
+    pathAsBuilt True (Just "h") pages "nowhere" `shouldBe` Nothing
+    pathAsBuilt True Nothing (PageAt {page = "x", parent = Just "y", slug = "x"} : PageAt {page = "y", parent = Just "x", slug = "y"} : pages) "x" `shouldBe` Nothing
 
 -- | Pages read from spaces s1 and s2, whose home pages are p1 and none.
 readOf :: [PageRead] -> PagesRead
@@ -159,6 +183,13 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
             logins -> expectationFailure ("expected one canary account with a password, found " <> show logins)
     verdict <- rehearseCheck "accounts" at serve changePassword
     verdict `shouldSatisfy` either (T.isPrefixOf "the password's first sign-in: not signed in") (const False)
+  it "fails the roots check, naming the space, when a space no longer answers at its address" $ withDemoPlace backing $ \at serve -> do
+    let moveBlog = withConnectionTo at $ \c -> do
+          begin True c
+          runScript c "UPDATE spaces SET slug = 'elsewhere' WHERE slug = 'blog';"
+          commitTransaction c
+    verdict <- rehearseCheck "roots" at serve moveBlog
+    verdict `shouldSatisfy` either (T.isInfixOf "does not answer at /blog") (const False)
 
 -- | Each check across a move from SQLite to PostgreSQL, as the rehearsal
 -- of a move runs it (@--move-to-database@): this program serves the demo's

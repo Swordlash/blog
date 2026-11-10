@@ -373,7 +373,7 @@ component =
             <> ( if home
                    then rename
                    else
-                     [Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]]
+                     [Router.link input.context.router Followed (NewPage spacePath (guard (not (null input.path)) $> input.path)) [HP.class_ "button"] [HH.text "New subpage"]]
                        <> rename
                        -- The space's home page stays where it is, and
                        -- stays the space's.

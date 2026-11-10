@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+A space's home page is the root of its pages (WP5.78b, #201).
+`Wiki.Core.Space` has `rootPage` (the home page, or none for the container
+of personal spaces and an encrypted space), `pagePath` and `pagesAt` and
+`pageAt` (a page's path from under the root, the home page's empty, and an
+old path with the root's slug first read again without it),
+`parentOrRoot`, `strayRoots`, and `rootedPages` and `rootedPagesOf`, which
+apply the upgrade's rule to pages written before it. `Wiki.Core.Path` has
+the generic `pathUnder`, `resolveUnder` and `resolveUnderM`.
+`Wiki.Core.Export.rootedArchive` roots an archive's pages. A blog's posts
+are the home page's children (`Wiki.Core.Blog.posts`), and
+`Wiki.Core.Page.pageNumber` takes the root and numbers it 0.
+
 The Markdown tests pin down emoji shortcodes as the guide now describes
 them (#188): GitHub's names with underscores, `+` and `-`; a name not in
 the list kept as text (Slack's `:thinking_face:` among them); a known name read between digits (`1:100:2`); a

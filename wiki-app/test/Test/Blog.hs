@@ -54,13 +54,21 @@ blogOf st = fromMaybe (panic "the demo has no blog") (find (\s -> s.name == "Blo
 withTwelve :: MemState -> MemState
 withTwelve st = foldl' add st [1 .. 12 :: Int]
   where
-    add s n = fst (insertPage (blogOf st).id Nothing ("Post " <> show n) ("The text of post " <> show n <> ".") (addUTCTime (fromIntegral n * 3600) demoNow) s)
+    add s n = fst (insertPage (blogOf st).id (blogOf st).homePage ("Post " <> show n) ("The text of post " <> show n <> ".") (addUTCTime (fromIntegral n * 3600) demoNow) s)
 
 -- | The demo's blog with a home page someone wrote: its second post.
 withHome :: MemState -> MemState
-withHome st = st {spaces = Map.adjust (S.withHome ((\p -> p.id) <$> notes)) (blogOf st).id st.spaces}
+withHome st = st {spaces = Map.adjust (S.withHome ((\p -> p.id) <$> notes)) (blogOf st).id st.spaces, pages = Map.mapMaybe moved st.pages}
   where
     notes = find (\p -> p.title == "Notes on Haskell") (Map.elems st.pages) :: Maybe P.Page
+    -- The post becomes the root of the blog's pages, in the place of the
+    -- home page the blog was made with, which goes.
+    old = (blogOf st).homePage
+    moved p
+      | Just p.id == old = Nothing
+      | Just p.id == ((\n -> n.id) <$> notes) = Just (P.placedPage Nothing p.slug p.position p)
+      | p.parent == old = Just (P.placedPage ((\n -> n.id) <$> notes) p.slug p.position p)
+      | otherwise = Just p
 
 spec :: Spec
 spec = describe "a space shown as a blog, rendered" $ do
@@ -187,8 +195,8 @@ spec = describe "a space shown as a blog, rendered" $ do
       headTags site guide `contains` "<meta property=\"og:image\" content=\"https://wiki.example/files/tree.png\">"
 
     it "says nothing of a private page, even to someone who may read it" $ do
-      Rendered {meta} <- render (as (Just "user-admin")) (Page (slugs ["team"]) (slugs ["team-handbook"]))
-      meta.title `shouldBe` "Team handbook · Team · Wiki"
+      Rendered {meta} <- render (as (Just "user-admin")) (Page (slugs ["team"]) (slugs ["on-call"]))
+      meta.title `shouldBe` "On-call · Team · Wiki"
       meta.preview `shouldBe` Nothing
       headTags site meta `shouldBe` ""
 

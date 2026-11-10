@@ -196,10 +196,11 @@ demoState now = ensureHomeDocument now $ flip execState emptyState $ do
             ]
         }
 
--- | Where the tour is: the path of its space, and its own path there. The
+-- | Where the tour is: the path of its space, and its own path there, the
+-- empty path of the space's home page, which the tour is. The
 -- shell's front page points a newcomer to it.
 tourPath :: ([Slug], [Slug])
-tourPath = (slugs ["docs"], slugs ["tour"])
+tourPath = (slugs ["docs"], [])
   where
     slugs = map (either (panic . show) identity . mkSlug)
 

@@ -93,7 +93,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "<a class=\"space-card-link\" href=\"/s/blog/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">✍️</span><span class=\"space-card-name\">Blog</span></a>"
     html `contains` "<span class=\"space-card-name\">Docs</span>"
     html `lacks` "Team"
-    html `contains` "<a href=\"/s/docs/p/tour/\">Take the tour</a>"
+    html `contains` "<a href=\"/s/docs/\">Take the tour</a>"
     html `contains` "Not signed in"
     html `lacks` "New space"
 
@@ -345,8 +345,10 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     page `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a>"
 
   it "offers every reader of a page its source, and only an editor the rest" $ do
+    -- The tour, Docs' home page, at its old address: its routes are under
+    -- the space's address.
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
+    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/source/\">View source</a><a class=\"button\" href=\"/s/docs/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button><div aria-label=\"Page width\" class=\"page-width-switch\" role=\"radiogroup\">"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
@@ -356,12 +358,14 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "offers a space's home page to whoever administers the space to change, and a page under it to whoever edits the space" $ do
     -- The editor is one of the blog's writers, and does not administer it.
+    -- The home page, at its old address: its routes are under the space's
+    -- address, and "New subpage" is the space's "New page".
     Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["home"]))
-    asEditor `contains` "href=\"/s/blog/new-page/home/\">New subpage</a>"
-    asEditor `contains` "href=\"/s/blog/p/home/history/\">History</a>"
+    asEditor `contains` "href=\"/s/blog/new-page/\">New subpage</a>"
+    asEditor `contains` "href=\"/s/blog/history/\">History</a>"
     for_ [">Edit</a>", ">Rename</button>", ">Move</button>", ">Delete</button>", ">Use as template</button>"] (asEditor `lacks`)
     Rendered {html = asAdmin} <- render (as (Just "user-admin")) (Page (slugs ["blog"]) (slugs ["home"]))
-    asAdmin `contains` "href=\"/s/blog/p/home/edit/\">Edit</a>"
+    asAdmin `contains` "href=\"/s/blog/edit/\">Edit</a>"
     asAdmin `contains` ">Rename</button>"
     -- It stays where it is, and stays the space's.
     for_ [">Move</button>", ">Delete</button>", ">Use as template</button>", "Set as home page"] (asAdmin `lacks`)
@@ -387,18 +391,22 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     asReader `contains` "comment-reply"
 
   it "shows a page's Markdown to someone not signed in, with the way back to the page" $ do
-    Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["tour"]))
-    title `shouldBe` "Source · Tour · Wiki"
+    -- The tour is Docs' home page: its source is under the space's address.
+    Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["docs"]) [])
+    title `shouldBe` "Source · Docs · Wiki"
     html `contains` "<div class=\"source-view\"><header class=\"view-header\"><h1>Tour</h1>"
-    html `contains` "<a class=\"button source-back\" href=\"/s/docs/p/tour/\">Back</a><button class=\"source-copy\" type=\"button\">Copy</button>"
+    html `contains` "<a class=\"button source-back\" href=\"/s/docs/\">Back</a><button class=\"source-copy\" type=\"button\">Copy</button>"
     html `contains` "<pre class=\"source-text\"># Tour\n\nThis is the demo of a wiki"
     -- The Markdown as it is written, not rendered: a table's pipes, a
     -- callout's marker, and markup escaped as text.
     html `contains` "&gt; [!NOTE]"
     html `contains` "| Who "
     html `lacks` "<article"
-    html `contains` "<a href=\"/s/docs/p/tour/\">Tour</a>"
+    html `contains` "<a href=\"/s/docs/\">Docs</a>"
     html `contains` "<span aria-current=\"page\">Source</span>"
+    -- A page under it has its own crumb.
+    Rendered {title = guideTitle} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["markdown-guide"]))
+    guideTitle `shouldBe` "Source · Markdown guide · Wiki"
 
   it "shows the source to a reader who may not edit the page" $ do
     Rendered {html} <- render (as (Just "user-reader")) (PageSource (slugs ["team", "projects"]) (slugs ["the-wiki"]))
@@ -418,11 +426,11 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     projects `contains` "class=\"error error-not-found\""
 
   it "shows a page's history to someone not signed in: its one version, all of its text new" $ do
-    Rendered {html, title} <- render (as Nothing) (PageHistory (slugs ["docs"]) (slugs ["tour"]) Nothing AgainstPrevious)
-    title `shouldBe` "History · Tour · Wiki"
+    Rendered {html, title} <- render (as Nothing) (PageHistory (slugs ["docs"]) [] Nothing AgainstPrevious)
+    title `shouldBe` "History · Docs · Wiki"
     html `contains` "<div class=\"history-view\"><header class=\"view-header\"><h1>Tour</h1><span class=\"badge\">History</span></header>"
-    html `contains` "<a class=\"button history-back\" href=\"/s/docs/p/tour/\">Back</a>"
-    html `contains` "<a aria-current=\"true\" href=\"/s/docs/p/tour/history/\">Version 1 (current)</a>"
+    html `contains` "<a class=\"button history-back\" href=\"/s/docs/\">Back</a>"
+    html `contains` "<a aria-current=\"true\" href=\"/s/docs/history/\">Version 1 (current)</a>"
     html `contains` "<time class=\"wiki-time\" datetime=\"2026-09-30T12:00:00Z\">"
     html `contains` "The first version: all of its text is new."
     html `contains` "<tr class=\"diff-line diff-added\"><td class=\"diff-number\"></td><td class=\"diff-number\">1</td><td aria-hidden=\"true\" class=\"diff-sign\">+</td><td class=\"diff-text\"># Tour</td></tr>"
@@ -508,11 +516,13 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "keeps a search to a space, and its subspaces only when asked" $ do
     Rendered {html = only} <- render (as (Just "user-admin")) (Search (Just "the") (Just (slugs ["team"])) False)
     only `contains` "in Team."
-    only `contains` "href=\"/s/team/p/team-handbook/\""
-    only `lacks` "href=\"/s/team/projects/p/"
+    -- The handbook, Team's home page, is at the space's address.
+    only `contains` "href=\"/s/team/\""
+    only `lacks` "href=\"/s/team/projects/"
     Rendered {html = all'} <- render (as (Just "user-admin")) (Search (Just "the") (Just (slugs ["team"])) True)
     all' `contains` "in Team and its subspaces."
-    all' `contains` "href=\"/s/team/projects/p/the-wiki/\""
+    -- The wiki, Projects' home page, at the subspace's address.
+    all' `contains` "href=\"/s/team/projects/\""
 
   it "says when a search finds nothing" $ do
     Rendered {html} <- render (as Nothing) (Search (Just "handbook") Nothing True)

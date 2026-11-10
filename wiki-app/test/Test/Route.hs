@@ -28,14 +28,20 @@ genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
 
+-- | A page's path, the home page's empty one among them: a space's home page
+-- is the root of its pages, and its routes have no path of their own.
+genPagePath :: Gen [Slug]
+genPagePath = oneof [pure [], genPath]
+
 genRoute :: Gen Route
 genRoute =
   oneof
     [ pure Home
     , Space <$> genPath
     , Page <$> genPath <*> genPath
-    , EditPage <$> genPath <*> genPath
-    , PageSource <$> genPath <*> genPath
+    , EditPage <$> genPath <*> genPagePath
+    , PageSource <$> genPath <*> genPagePath
+    , LivePreview <$> genPath <*> genPagePath
     , NewSpace <$> oneof [pure Nothing, Just <$> genPath]
     , pure Unknown
     , NewPage <$> genPath <*> oneof [pure Nothing, Just <$> genPath]
@@ -46,10 +52,10 @@ genRoute =
     , Admin <$> genSection
     , PageHistory
         <$> genPath
-        <*> genPath
+        <*> genPagePath
         <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
         <*> elements [AgainstPrevious, AgainstCurrent]
-    , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)] <*> oneof [pure 1, chooseInt (-3, 9)]
+    , PageSlides <$> genPath <*> genPagePath <*> oneof [pure 1, chooseInt (-3, 40)] <*> oneof [pure 1, chooseInt (-3, 9)]
     , SpacePages <$> genPath
     , Posts <$> genPath <*> chooseInt (-3, 40)
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
@@ -187,6 +193,29 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/blog/?page=next" `shouldBe` Right (Posts (slugs ["blog"]) 1)
       parse route "/s/blog/" `shouldBe` Right (Space (slugs ["blog"]))
       parse route "/s/blog/pages/?page=2" `shouldBe` Right (SpacePages (slugs ["blog"]))
+
+    it "writes the home page's routes under its space's address, with no p (WP5.78)" $ do
+      let docs = slugs ["docs"]
+      print route (Page docs []) `shouldBe` "/s/docs/"
+      print route (EditPage docs []) `shouldBe` "/s/docs/edit/"
+      print route (PageSource docs []) `shouldBe` "/s/docs/source/"
+      print route (LivePreview docs []) `shouldBe` "/s/docs/live-preview/"
+      print route (PageHistory docs [] (Just (addUTCTime 0.5 demoTime)) AgainstCurrent)
+        `shouldBe` "/s/docs/history/?version=2026-10-24T09%3A30%3A12.5Z&against=current"
+      print route (PageSlides docs [] 3 1) `shouldBe` "/s/docs/slides/?slide=3"
+      parse route "/s/docs/" `shouldBe` Right (Space docs)
+      parse route "/s/docs/edit/" `shouldBe` Right (EditPage docs [])
+      parse route "/s/team/projects/source" `shouldBe` Right (PageSource (slugs ["team", "projects"]) [])
+      parse route "/s/docs/history/" `shouldBe` Right (PageHistory docs [] Nothing AgainstPrevious)
+      parse route "/s/docs/slides/?slide=2" `shouldBe` Right (PageSlides docs [] 2 1)
+      parse route "/s/docs/live-preview/" `shouldBe` Right (LivePreview docs [])
+      -- A space whose slug is one of the words is escaped, and keeps its
+      -- home page's routes apart from its own.
+      print route (EditPage (slugs ["edit"]) []) `shouldBe` "/s/~edit/edit/"
+      parse route "/s/~edit/" `shouldBe` Right (Space (slugs ["edit"]))
+      -- The route of a page from its path: the space's own for the home page.
+      pageRoute docs [] `shouldBe` Space docs
+      pageRoute docs (slugs ["tour"]) `shouldBe` Page docs (slugs ["tour"])
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

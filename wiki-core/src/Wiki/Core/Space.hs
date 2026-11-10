@@ -545,28 +545,11 @@ rootedPages space pages = case find (\p -> Just p.id == rootPage space) pages of
           (Just tops, Just children) -> max 0 (maximum tops - minimum children + 1)
           _ -> 0
         moved p
-          | p.id == home.id = placed Nothing p.slug p.position p
-          | p.space == space.id && isNothing p.parent = placed (Just home.id) p.slug p.position p
-          | p.parent == Just home.id = placed p.parent (Map.findWithDefault p.slug p.id renamed) (p.position + past) p
+          | p.id == home.id = Page.placedPage Nothing p.slug p.position p
+          | p.space == space.id && isNothing p.parent = Page.placedPage (Just home.id) p.slug p.position p
+          | p.parent == Just home.id = Page.placedPage p.parent (Map.findWithDefault p.slug p.id renamed) (p.position + past) p
           | otherwise = p
      in if null others && isNothing home.parent then pages else map moved pages
-  where
-    placed parent slug position p =
-      Page.Page
-        { id = p.id
-        , space = p.space
-        , parent
-        , title = p.title
-        , slug
-        , body = p.body
-        , attachments = p.attachments
-        , createdAt = p.createdAt
-        , updatedAt = p.updatedAt
-        , position
-        , template = p.template
-        , createdBy = p.createdBy
-        , updatedBy = p.updatedBy
-        }
 
 -- | 'rootedPagesOf' is 'rootedPages' for every one of these spaces: the
 -- pages of a whole wiki, or of an archive, with each space's home page as

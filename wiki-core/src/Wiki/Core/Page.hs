@@ -9,6 +9,7 @@ module Wiki.Core.Page
   , templatePages
   , childPages
   , positionPage
+  , placedPage
   , pageTreeOrder
   , pageNumber
   , savedAs
@@ -187,6 +188,27 @@ positionPage position p =
     , parent = p.parent
     , title = p.title
     , slug = p.slug
+    , body = p.body
+    , attachments = p.attachments
+    , createdAt = p.createdAt
+    , updatedAt = p.updatedAt
+    , position
+    , template = p.template
+    , createdBy = p.createdBy
+    , updatedBy = p.updatedBy
+    }
+
+-- | The page at another place in its space: under this parent ('Nothing'
+-- for none), with this slug and this position among its new siblings. (A
+-- function for the reason 'positionPage' is one.)
+placedPage :: Maybe PageId -> Slug -> Int -> Page -> Page
+placedPage parent slug position p =
+  Page
+    { id = p.id
+    , space = p.space
+    , parent
+    , title = p.title
+    , slug
     , body = p.body
     , attachments = p.attachments
     , createdAt = p.createdAt
