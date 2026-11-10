@@ -14,16 +14,16 @@ where
 import Data.List ((\\))
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, picosecondsToDiffTime)
-import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, QExpr, TableEntity, aggregate_, all_, default_, insert, insertExpressions, insertValues, max_, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
+import Database.Beam (Beamable, DatabaseEntity, FromBackendRow, QExpr, TableEntity, aggregate_, all_, default_, filter_, insert, insertExpressions, insertValues, max_, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
 import Database.SQLite.Simple qualified as SQLite
 import Protolude
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, removeFile)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace, withPlace)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, ok)
-import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
+import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), release, reserve, runCopy)
 import Wiki.Server.Storage (Place (..), checkDatabase, defaultConfig, importArchive, inDataDir, withStorage, writing)
 import Wiki.Server.Storage.Backend (Backend (..), Sqlite)
 import Wiki.Server.Storage.Backup (lockDataDir, unlockDataDir)
@@ -109,9 +109,40 @@ spec backing = describe "copy-database" $ do
       _ <- withConnectionTo target migrate
       original <- withConnectionTo target (\c -> runDb c everyRow)
       runCopy (copying source target) >>= \case
-        CopyRefused why -> why `shouldSatisfy` T.isInfixOf "not empty"
+        CopyRefused why -> why `shouldSatisfy` (\w -> T.isInfixOf "not empty" w || T.isInfixOf "already" w)
         other -> expectationFailure ("not refused: " <> show other)
       withConnectionTo target (\c -> runDb c everyRow) `shouldReturn` original
+
+  it "refuses a SQLite file that is there already, and leaves it and its database alone" $
+    withSystemTempDirectory "wiki-copy-source" $ \dir -> withPlace backing dir $ \source -> do
+      fill source
+      withSystemTempDirectory "wiki-copy-target" $ \out -> do
+        -- Another wiki's database, at the path the copy is told to make.
+        let other = inDataDir out
+        fill other
+        original <- withConnectionTo other (\c -> runDb c everyRow)
+        runCopy (copying source other) >>= \case
+          CopyRefused why -> why `shouldSatisfy` T.isInfixOf "already"
+          outcome -> expectationFailure ("not refused: " <> show outcome)
+        withConnectionTo other (\c -> runDb c everyRow) `shouldReturn` original
+
+  it "deletes when it fails only the SQLite file it made, not one put in its place meanwhile" $
+    withSystemTempDirectory "wiki-copy-target" $ \out -> do
+      let file = out </> "copy.sqlite"
+      made <- reserve file >>= either (\o -> panic ("not reserved: " <> show o)) pure
+      -- Another process's database at the path, after the copy made its
+      -- file there: the copy's file is gone, and this one is not it.
+      removeFile file
+      writeFile file "another database"
+      release made
+      readFile file `shouldReturn` "another database"
+      -- The file the copy made is deleted, with SQLite's files beside it.
+      removeFile file
+      mine <- reserve file >>= either (\o -> panic ("not reserved: " <> show o)) pure
+      writeFile (file <> "-wal") ""
+      release mine
+      doesFileExist file `shouldReturn` False
+      doesFileExist (file <> "-wal") `shouldReturn` False
 
   it "refuses a source a server is running on" $
     withSqliteWiki $ \source -> withTarget $ \target ->
@@ -140,6 +171,17 @@ spec backing = describe "copy-database" $ do
           why `shouldSatisfy` T.isInfixOf "sessions"
         other -> expectationFailure ("not refused: " <> show other)
       tablesOf target `shouldReturn` []
+
+  it "cuts a time finer than a microsecond to the microsecond, and says so" $
+    withSqliteWiki $ \source -> withTarget $ \target -> do
+      let fine = addUTCTime 0.000000789 (time 0)
+      SQLite.withConnection (fileOf source) $ \c ->
+        runDb c (runInsert (insert wikiDb.sessions (insertValues [SessionRow {id_hash = "copy-fine", user_id = "copy-u1", created_at = fine, last_seen_at = time 0, expires_at = time 9, public_id = "copy-fine-public", address = "127.0.0.1"}])))
+      runCopy (copying source target) >>= \case
+        Copied lines' -> lines' `shouldSatisfy` elem "sessions: 2 rows, 1 of them with a time cut to the microsecond"
+        other -> expectationFailure ("not copied: " <> show other)
+      times <- withConnectionTo target $ \c -> runDb c (runSelectReturningList (select ((\s -> s.created_at) <$> filter_ (\s -> s.id_hash ==. val_ "copy-fine") (all_ wikiDb.sessions))))
+      times `shouldBe` [time 0]
 
   it "refuses a text PostgreSQL cannot keep, naming the row" $ case backing of
     OnSqlite -> pendingWith "SQLite keeps the character NUL in a text: only PostgreSQL refuses it"

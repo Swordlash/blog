@@ -21,7 +21,10 @@ counters are set past the copied ids (`Backend.advanceCounters`). A
 refused row is named by its primary key. The command refuses a source not
 at this program's schema (exit 4), one that does not read (5), and a
 source a server runs on, a target a server or console holds, or a target
-that is not empty (6); a copy that failed exits 1. `Options.databaseUrl`
+that is not empty (6); a copy that failed exits 1. A SQLite target is
+made exclusively (`reserve`, `O_EXCL`) before anything else can fail and
+held open, and a failed copy deletes it only while the path still names
+that file (`release`); a file that is there already is refused. `Options.databaseUrl`
 is the reader of a password-less database URL, and `PermissionsGeneration`
 rows are `Eq` and `Show`.
 

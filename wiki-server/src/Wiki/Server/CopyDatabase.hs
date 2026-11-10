@@ -19,6 +19,13 @@
 -- copied: they stay in @DIR\/attachments@, which a server on the copy uses
 -- with the same @--data DIR@.
 --
+-- A SQLite target (@--to-sqlite FILE@) is a new file: the command makes
+-- it exclusively, before anything else that can fail, and refuses a file
+-- that is there already. When the copy fails it deletes that file, and
+-- only that one: a file another process put at the path meanwhile is left
+-- alone. A PostgreSQL target is never dropped or emptied: the copy's
+-- transaction is rolled back, and the database holds nothing of the copy.
+--
 -- The program ends with 0 when the copy is made and checked; 4 when the
 -- database to copy is not at this program's version of the schema
 -- (migrate it first, as @wiki-server check@ ends with 4 then); 5 when it
@@ -31,6 +38,11 @@ module Wiki.Server.CopyDatabase
   , copyParser
   , CopyOutcome (..)
   , runCopy
+
+    -- * A SQLite target
+  , Reserved
+  , reserve
+  , release
   )
 where
 
@@ -39,6 +51,10 @@ import Database.SQLite.Simple qualified as Sqlite
 import Options.Applicative
 import Protolude
 import System.Directory (doesFileExist, removeFile)
+import System.IO.Error (isAlreadyExistsError)
+import System.Posix.Files (deviceID, fileID, getFdStatus, getFileStatus)
+import System.Posix.IO (OpenFileFlags (..), OpenMode (WriteOnly), closeFd, defaultFileFlags, openFd)
+import System.Posix.Types (Fd)
 import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..), databaseUrl, placeOptions, resolvePlace)
 import Wiki.Server.Storage (Place (..))
 import Wiki.Server.Storage.Backend (Backend (..))
@@ -71,7 +87,7 @@ copyParser = CopyOptions <$> placeOptions <*> (postgres <|> sqlite)
       PostgresChosen
         <$> option (databaseUrl "put the password in --to-database-password-file FILE") (long "to-database" <> metavar "URL" <> help "Copy into this PostgreSQL database, postgres://USER@HOST:PORT/NAME, without its password: an empty one, as createdb makes it")
         <*> optional (strOption (long "to-database-password-file" <> metavar "FILE" <> help "The file that holds that database's password"))
-    sqlite = SqliteChosen <$> strOption (long "to-sqlite" <> metavar "FILE" <> help "Copy into this SQLite file instead, which must not hold a database yet")
+    sqlite = SqliteChosen <$> strOption (long "to-sqlite" <> metavar "FILE" <> help "Copy into this SQLite file instead, a new one: the copy makes it, and refuses a file that is there already")
 
 -- | How @wiki-server copy-database@ ended, and so how the program ends
 -- (the module's documentation lists the exit codes).
@@ -100,30 +116,82 @@ runCopy o =
             SqliteFile file -> unlessM (liftIO (doesFileExist file)) $ throwError (CopyRefused ("There is no database " <> toS file <> " to copy."))
             PostgresAt _ -> pass
           when (origin.database == into.database) $ throwError (CopyRefused "The database to copy and the database to copy into are the same.")
-          lock <- ExceptT (first CopyRefused <$> lockDataDir origin.dataDir)
-          -- A SQLite file the copy makes is deleted again when the copy fails,
-          -- so that the target is as it was: not there.
-          fresh <- case into.database of
-            SqliteFile file -> not <$> liftIO (doesFileExist file)
-            PostgresAt _ -> pure False
-          result <-
-            liftIO $
-              try @SomeException (withAlone ReadOnly origin.database (\source -> withAlone ReadWrite into.database (\target -> copyDatabase source target)))
-                `finally` unlockDataDir lock
-          let outcome = case result of
-                Left e
-                  | Just old <- fromException @OldSchema e -> CopyNotMigrated (toS (displayException old))
-                  | otherwise -> CopyFailed ("The copy failed, and " <> describe into.database <> " is as it was: " <> toS (displayException e))
-                Right (Left inUse) -> CopyRefused inUse
-                Right (Right (Left inUse)) -> CopyRefused inUse
-                Right (Right (Right (Left problem))) -> explain origin.database into.database problem
-                Right (Right (Right (Right tables))) -> Copied (report origin into tables)
-          case (outcome, into.database) of
-            (Copied _, _) -> pass
-            (_, SqliteFile file) | fresh -> liftIO (for_ [file, file <> "-wal", file <> "-shm"] (\f -> whenM (doesFileExist f) (removeFile f)))
-            _ -> pass
+          -- A SQLite target is a new file, which this invocation makes before
+          -- anything else that can fail, so that a failure deletes only the
+          -- file this invocation made.
+          made <- case into.database of
+            SqliteFile file -> Just <$> ExceptT (reserve file)
+            PostgresAt _ -> pure Nothing
+          outcome <- liftIO (copyInto origin into `onException` traverse_ release made)
+          liftIO $ case outcome of
+            Copied _ -> traverse_ keep made
+            _ -> traverse_ release made
           pure outcome
       )
+
+-- | 'Reserved' is a SQLite file this invocation made: its path, and the
+-- file itself, held open until the copy is done. While it is held open its
+-- inode cannot be given to another file, so a file at the path with the
+-- same device and inode is this one ('release').
+data Reserved = Reserved
+  { file :: FilePath
+  , held :: Fd
+  }
+
+-- | Make a new, empty SQLite file for the copy, readable by its owner
+-- only, as the database is. It is made exclusively (@O_EXCL@): a file of
+-- that name that is there already, or made by another process at the same
+-- moment, is refused, and never taken over. The files SQLite keeps beside
+-- a database must not be there either, since SQLite would read them as the
+-- new file's.
+reserve :: FilePath -> IO (Either CopyOutcome Reserved)
+reserve file = do
+  beside <- filterM doesFileExist [file <> "-wal", file <> "-shm", file <> "-journal"]
+  if not (null beside)
+    then pure (Left (CopyRefused ("There are files of a SQLite database at " <> toS file <> " already (" <> T.intercalate ", " (map toS beside) <> "): --to-sqlite names a new file.")))
+    else
+      try (openFd file WriteOnly defaultFileFlags {exclusive = True, creat = Just 0o600}) <&> \case
+        Left e
+          | isAlreadyExistsError e -> Left (CopyRefused ("There is a file " <> toS file <> " already: --to-sqlite names a new file, which the copy makes."))
+          | otherwise -> Left (CopyRefused ("The file " <> toS file <> " cannot be made: " <> show e))
+        Right held -> Right Reserved {file, held}
+
+-- | Delete a SQLite file this invocation made, with the files SQLite made
+-- beside it, if the path still names that file; a file another process
+-- put at the path is left alone. Then let the file go.
+release :: Reserved -> IO ()
+release r = flip finally (closeFd r.held) $ do
+  mine <- getFdStatus r.held
+  there <- try @IOException (getFileStatus r.file)
+  case there of
+    Right s
+      | deviceID s == deviceID mine && fileID s == fileID mine ->
+          for_ [r.file <> "-wal", r.file <> "-shm", r.file <> "-journal", r.file] $ \f -> whenM (doesFileExist f) (removeFile f)
+    _ -> pass
+
+-- | Keep a SQLite file this invocation made, the copy in it: let it go.
+keep :: Reserved -> IO ()
+keep r = closeFd r.held
+
+-- | Copy a place's database into another's, once both are found: the
+-- source's data directory locked, each database opened alone, and the copy
+-- made.
+copyInto :: Place -> Place -> IO CopyOutcome
+copyInto origin into =
+  lockDataDir origin.dataDir >>= \case
+    Left held -> pure (CopyRefused held)
+    Right lock -> do
+      result <-
+        try @SomeException (withAlone ReadOnly origin.database (\source -> withAlone ReadWrite into.database (\target -> copyDatabase source target)))
+          `finally` unlockDataDir lock
+      pure $ case result of
+        Left e
+          | Just old <- fromException @OldSchema e -> CopyNotMigrated (toS (displayException old))
+          | otherwise -> CopyFailed ("The copy failed, and " <> describe into.database <> " is as it was: " <> toS (displayException e))
+        Right (Left inUse) -> CopyRefused inUse
+        Right (Right (Left inUse)) -> CopyRefused inUse
+        Right (Right (Right (Left problem))) -> explain origin.database into.database problem
+        Right (Right (Right (Right tables))) -> Copied (report origin into tables)
 
 -- | What a successful copy says: each table with its rows, and what to do
 -- next.
