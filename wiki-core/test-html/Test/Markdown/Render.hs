@@ -393,7 +393,7 @@ spec = describe "Markdown.Render" $ do
     it "keeps the five kinds' own look whatever is defined"
       $ showsWith defaultOptions {boxes = [BoxKind {name = "note", label = "N", colour = Red, icon = Star}]} "> [!NOTE]\n> x"
       $ "<div class=\"alert alert-note\" id=\"box-note-1\"><p class=\"alert-title\">Note<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#box-note-1\"></a></p><p>x</p></div>"
-    it "writes a fenced div with its class" $
+    it "writes a div with its class" $
       "[[!div]]{.summary}\nShort.\n[[/div]]" `shows'` "<div class=\"summary\"><p>Short.</p></div>"
 
   describe "spoilers" $ do
@@ -423,6 +423,9 @@ spec = describe "Markdown.Render" $ do
     it "writes a broken marker line in red, with the reason as its title" $
       "[[!nope]]"
         `shows'` "<p class=\"spoiler-error\" title=\"“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case\">[[!nope]]<span class=\"spoiler-error-reason\">“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case</span></p>"
+    it "writes an unclosed block's marker in red, then its blocks as they are in the unclosed div, as an unclosed spoiler's" $
+      "[[!notes]]\nSay it."
+        `shows'` "<p class=\"spoiler-error\" title=\"the [[!notes]] block is not closed: add [[/notes]] after its last line\">[[!notes]]<span class=\"spoiler-error-reason\">the [[!notes]] block is not closed: add [[/notes]] after its last line</span></p><div class=\"spoiler-unclosed\"><p>Say it.</p></div>"
     it "writes an unclosed spoiler's marker in red, then its blocks as they are in the unclosed div" $
       "[[!spoiler]]{x}(D)\na\n\n```\ncode\n```"
         `shows'` "<p class=\"spoiler-error\" title=\"Spoiler “x” is not closed: add [[/spoiler]]{x}\">[[!spoiler]]{x}(D)<span class=\"spoiler-error-reason\">Spoiler “x” is not closed: add [[/spoiler]]{x}</span></p><div class=\"spoiler-unclosed\"><p>a</p><pre><code>code\n</code></pre></div>"

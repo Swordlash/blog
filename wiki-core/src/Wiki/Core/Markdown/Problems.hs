@@ -130,20 +130,20 @@ checkText :: Text -> Checked
 checkText source = Checked {problems = parserProblems source, islands = islandPlaces source}
 
 -- | The problems the parser finds in a text, in the order of their lines:
--- the spoilers' broken marker lines, the spoilers not closed or cutting a
--- section, and the quotations that start like a box's marker but are not
--- boxes. None when the text cannot be parsed, which CommonMark never
+-- the broken marker lines of spoilers and of the other blocks of the
+-- wiki's own, the spoilers not closed or cutting a section, and the
+-- quotations that start like a box's marker but are not boxes. None when the text cannot be parsed, which CommonMark never
 -- refuses. A heading spoiler (@## [[!spoiler]] Question@) has no end marker
 -- and is never wrong: the parser gives it no problem. A marker pair that
 -- crosses the end of its section cuts a section, and is marked as any
 -- other pair that does.
 parserProblems :: Text -> [Problem]
-parserProblems source = sort (spoilerLines <> spoilerHeads <> boxes)
+parserProblems source = sort (markerLines <> spoilerHeads <> boxes)
   where
     (tree, markers) = case A.parseWithAllMarkers source of
       Right (bs, _, ms, _) -> (bs, ms)
       Left _ -> ([], [])
-    spoilerLines =
+    markerLines =
       [ Problem {from = line, to = line, kind = if spoilerLine written then Spoiler else Marker, message = sentence why}
       | A.MarkerLine line _ (A.Faulty written why) <- markers
       ]

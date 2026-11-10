@@ -13,6 +13,7 @@ import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
 import Test.Markdown.Box qualified as Box
+import Test.Markdown.Comments qualified as Comments
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Markers qualified as Markers
@@ -48,6 +49,7 @@ main = hspec . parallel $ do
   Allowlist.spec
   Link.spec
   Markers.spec
+  Comments.spec
   Mention.spec
   Spoiler.spec
   Problems.spec

@@ -122,9 +122,18 @@ entryCount :: [Entry] -> Int
 entryCount = sum . map (\e -> 1 + entryCount e.below)
 
 -- | Whether the document places its table of contents itself, with
--- @[[!toc]]@.
+-- @[[!toc]]@: at its top level, or in a quotation, a list, a box, a spoiler
+-- or a footnote, where the line is read too.
 hasContentsMarker :: [Block] -> Bool
-hasContentsMarker = elem TableOfContents
+hasContentsMarker = any $ \case
+  TableOfContents -> True
+  BlockQuote bs -> hasContentsMarker bs
+  List _ items -> or [hasContentsMarker bs | ListItem _ bs <- items]
+  Div _ bs -> hasContentsMarker bs
+  Alert _ _ bs -> hasContentsMarker bs
+  Spoiler _ bs -> hasContentsMarker bs
+  Footnotes notes -> or [hasContentsMarker bs | Footnote _ _ bs <- notes]
+  _ -> False
 
 -- | The minimum number of headings for the page view to show its
 -- "Contents" panel: a page of one or two sections is easy to scan.

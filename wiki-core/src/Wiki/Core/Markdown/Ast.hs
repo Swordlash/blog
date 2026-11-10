@@ -445,13 +445,13 @@ data WrittenIds = WrittenIds
   -- heading, or 'Nothing'. The headings in footnotes come last, because
   -- the wiki puts the footnotes at the end of the page.
   , taken :: [Text]
-  -- ^ Every identifier written in the page: those of headings, fenced
-  -- divs and code blocks.
+  -- ^ Every identifier written in the page: those of headings, divs
+  -- and code blocks.
   }
   deriving stock (Eq, Show)
 
 -- | The identifiers written in braces in a block and in the blocks inside
--- it: those of headings, fenced divs and code blocks.
+-- it: those of headings, divs and code blocks.
 writtenIds :: Block -> [Text]
 writtenIds = \case
   Heading _ attrs _ -> ownId attrs

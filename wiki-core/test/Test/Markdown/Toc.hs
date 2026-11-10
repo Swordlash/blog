@@ -132,6 +132,8 @@ spec = describe "Markdown.Toc" $ do
     it "is found by hasContentsMarker" $ do
       hasContentsMarker (parsed "# A\n\n[[!toc]]") `shouldBe` True
       hasContentsMarker (parsed "# A\n\n[[toc]]") `shouldBe` False
+      hasContentsMarker (parsed "# A\n\n> [[!toc]]") `shouldBe` True
+      hasContentsMarker (parsed "# A\n\n[[!div]]\n- [[!toc]]\n[[/div]]") `shouldBe` True
 
   describe "tableOfContents" $ do
     it "nests headings by level" $

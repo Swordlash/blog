@@ -486,7 +486,7 @@ requestSpec = describe "the requests" $ do
   it "embed the authors' reference, docs/markdown.md" $ do
     markdownReference `shouldSatisfy` T.isPrefixOf "# Writing pages"
     markdownReference `shouldSatisfy` T.isInfixOf "```mermaid"
-    markdownReference `shouldSatisfy` T.isInfixOf "[[toc]]"
+    markdownReference `shouldSatisfy` T.isInfixOf "[[!toc]]"
 
   it "put the reference first in Anthropic's system prompt, marked for caching, and nothing that changes" $ do
     let request = anthropicRequest Agent (ModelName "claude-opus-5-5") "low"

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+One marker pair for the wiki's own blocks (WP5.77). A start marker is
+`[[!name]]{attributes}(Title)` on a line of its own and an end marker
+`[[/name]]`: `[[!spoiler]]`, `[[!notes]]`, `[[!incremental]]` and
+`[[!div]]` hold blocks, and `[[!slides]]`, `[[!pause]]` and `[[!toc]]` are
+one line each. The braces are read by commonmark-extensions' `pAttributes`.
+`Wiki.Core.Markdown.Ast` no longer reads fenced divs (`:::`), three dots as
+a pause, or `[[spoiler]]`, `[[toc]]` and `[[TOC]]` without the mark, which
+are text and links now. `Div`, `Pause` and `TableOfContents` are unchanged;
+`SpoilerError` is `MarkerError`, `SpoilerMarker` and `SpoilerRole` are
+`MarkerLine` and `MarkerRole` (with `Opens`, `Pauses`, `SetsSlides` and
+`PlacesContents`), and `MarkerName`, `MarkerStart`, `openingMarker`,
+`closingMarker` and `markerAt` are new. A block other than a spoiler that
+is never closed is a `MarkerError` line and a `Div` of the class
+`spoiler-unclosed` holding its blocks. `Wiki.Core.Markdown.Problems`
+gains the kind `Marker`. The toolbar's block spoiler writes `[[/spoiler]]`
+without the name.
+
 Encrypted spaces (WP5.74b2). `Wiki.Core.Space.Space` gains `encryption ::
 Maybe KeyId`, the id of an encrypted space's current key (absent in JSON
 means `Nothing`; an archive never carries it). The new `Wiki.Core.Encrypted`

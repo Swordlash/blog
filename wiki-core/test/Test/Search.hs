@@ -58,6 +58,11 @@ pages =
 spec :: Spec
 spec = describe "Wiki.Core.Search" $ do
   describe "searchPlain" $ do
+    it "finds no word that is only in a comment, which the page does not show" $ do
+      let commented = page "docs" "Notes" "Shown <!-- hidden -->.\n\n<!--\n## Draft\n\nunfinished words\n-->\n" ["notes"]
+      titles (search "hidden" [commented]) `shouldBe` []
+      titles (search "unfinished" [commented]) `shouldBe` []
+      titles (search "shown" [commented]) `shouldBe` ["Notes"]
     it "finds nothing for a query with no words" $ do
       search "" pages `shouldBe` []
       search "   \t " pages `shouldBe` []
