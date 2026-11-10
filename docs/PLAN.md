@@ -1120,11 +1120,15 @@ per package once there is a release to speak of.
 
 ## How work is organised
 
-The session the owner talks to implements every work package itself, one at a time,
-without subagents (the owner, 2026-10-31: "Usuń wzmiankę o wykonywaniu zadań przez
-subagentow opus, będziesz wykonywać wszystko sam"). Before a pull request merges, it is
-reviewed with Codex, `gpt-6.1-sol` at high reasoning effort, with the owner's key, as
-`AGENTS.md` says; the session fixes the real findings and pushes, for three rounds at
+The session the owner talks to owns the work, one package at a time. Who writes the
+code depends on the session's model, as `AGENTS.md` says (the owner, 2026-11-03,
+confirmed 2026-11-10; before that the session implemented everything itself): a
+session on Fable plans, briefs and reviews, and one Opus subagent in a worktree of
+its own implements each package; a session on another model implements itself.
+Before a pull request merges, it is reviewed by Codex: the session asks with a
+comment of `@codex review` on the pull request and waits for the answer (the owner,
+2026-11-10: "prosimy o @codex review pod PR"; the local run with the owner's key is
+not used). The session fixes the real findings and pushes, for three rounds at
 most (the owner, 2026-11-02: "Zmniejsz max liczbe przebiegów do 3"; four before). The owner merges; the session
 merges only when asked ("nie merguj sam, chyba że poproszę"). The session may hand a
 commit it has good reason to trust to CI rather than run the whole gate locally first,
@@ -1151,9 +1155,13 @@ done. Stage 1,
 foundations, is done: #207 (compile times, #220, decision 63), #202
 (migrations in code, with the rest of #205: #222, decisions 58 and 64),
 and the PostgreSQL tests copying a migrated template (#221). Stage 2,
-the content's structure, on #202, is next: #195 (one syntax
-for extensions and styles), #197 (comments), #201 (one home page per
-space, space administrators). Stage 3, the editor: #187 (autocompletion),
+the content's structure, on #202, is next: #195 (the marker pair for
+every block of the wiki's own, reduced by the owner on 2026-11-10 from
+"one syntax for extensions and styles": WP5.77 below), #197 (comments:
+they work already, so the owner closed it on 2026-11-10; the guide's
+section on them comes with WP5.77), #201
+(one home page per space, space administrators; it brings the first step
+of the schema in code, since WP5.77 rewrites no page). Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
 (emojis), #190 (table views). Stage 5: #191 (presentations as a kind of
@@ -1161,6 +1169,80 @@ page), #204 (calendars and TODO lists; the lists can come earlier).
 Alongside, when there is room: #213 (WP5.74b3, after #201), #212
 (WP5.74a2b), #203 (SQLite to PostgreSQL).
 
+- **WP5.77 One marker pair for the wiki's own blocks; `:::` and `. . .` go**
+  (#195; the owner, 2026-11-10). The issue asked for every
+  extension, boxes and code blocks included, in one new syntax, with a
+  rewrite of the existing pages. The owner reduced it: what annoyed was
+  `:::` in presentations. So the spoiler's marker pair becomes the form of
+  every block of the wiki's own, the fenced div and pandoc's pause are
+  removed, and nothing else changes: boxes stay `> [!KIND]` (GitHub's
+  syntax, exported as pandoc's alerts), code fences and headings keep their
+  attributes.
+  - **The form.** `[[name]]{attributes}(Title)` on a line of its own, the
+    blocks, then `[[/name]]` on a line of its own, for a fixed list of
+    names; any other `[[…]]` is a wiki link as before, and a marker in the
+    middle of a line is one too. The braces hold pandoc's attributes, the
+    ones a code fence and a heading take: `#id`, `.class`, `key=value`.
+    The names: `spoiler` (as today, with its description in the
+    parentheses); `notes` and `incremental` (a deck's speaker notes and
+    its lists shown item by item); `div` (a box with the classes its
+    braces give, what `::: summary` was: `[[div]]{.summary}`); and two that
+    are one line, with no end marker: `[[slides]]{theme=dark aspect=4:3}`
+    (the deck's look) and `[[pause]]` (the next step of a slide). Only a
+    spoiler takes parentheses.
+  - **The names against wiki links.** The names are read in lower case
+    only. `[[notes]]`, `[[incremental]]`, `[[div]]` and `[[pause]]` at the
+    start of a line are markers from now on, in a list item too, and
+    never a link to a page of that name; `[[slides]]` is the marker only
+    with braces after it, and a link without. A link to such a page, alone
+    on a line, is written with its text, `[[notes|Notes]]`, or among other
+    words. A page that has such a link today shows a block never closed,
+    in red, whose reason names that way out: the changelog says so, as a
+    change that breaks.
+  - **A spoiler's name stays its name.** `{answer}` as today, and
+    `{#answer}` reads as the same: the name the browser remembers the
+    spoiler by (`data-spoiler`), not an HTML id, so two spoilers may share
+    one and no link leads to it. The heading's form takes both spellings
+    too. A spoiler takes no class and no other attribute. The name in an
+    end marker is optional for every name (`[[/spoiler]]`); when written,
+    it must be the open block's, as today. An end marker ends the
+    innermost open block and only when it is of the same name.
+  - **What goes.** `:::` fenced divs and `. . .` as a pause are no longer
+    read: nobody has a presentation in production (the owner), so no page
+    is rewritten, there is no step of the schema, and the old forms show
+    as the text they are. The AST keeps `Div` and `Pause`; only what is
+    written for them changes, so the deck, the search, the contents and
+    the renderer read what they read. The export hands pandoc the same
+    divs and pauses as before, written into the text pandoc reads as the
+    spoiler's markers are; pandoc itself still reads `:::` and `. . .`, so
+    the export also keeps the ones an author wrote from being read as a
+    div or a pause: they are text in a document as on the page.
+  - **Errors** show in red where they are, with the reason, in the page
+    and through the editor's problems (decision 49), as a spoiler's do: a
+    marker that is not a whole one, parentheses on a name that takes none,
+    an end marker with nothing open or of another name, a block never
+    closed, a pause where none is read.
+  - **Everything that writes the old forms**: the guide and the Markdown
+    reference, the demo's pages, the README's examples (`Test.Readme`),
+    the built-in templates, the toolbar if it writes any, the tests, the
+    screenshots if a page they show changed.
+  - **Comments (#197, closed).** `<!-- … -->` is left out of a page already. The
+    guide gets a section of its own on comments (one line, several lines,
+    among a paragraph's text, around blocks to keep them out of the page;
+    hidden from the page, not from its readers, since "View source" shows
+    it), and tests that a comment's text is in no search hit, excerpt,
+    contents entry or exported document (the source of an HTML or EPUB
+    export included: fixed where it is found there). Completing `-->` in
+    the editor is #187's.
+  - Acceptance: the gate of `AGENTS.md`; parser tests for each name, the
+    nesting, the errors and that `:::` and `. . .` are text; the deck's
+    tests on the new forms, steps counted as before; the export's tests
+    (Beamer's `\pause` and `[<+->]`, notes, the deck's options) passing on
+    the new forms; the guide's and the README's tests.
+  - Left for later, when wanted: `[[box]]{.warning}(Title)` beside
+    `> [!WARNING]` and kinds of box with a look given on the page (the
+    issue's `color`, `title`, `numbering`); completion of names and
+    attributes after `[[` and `{` (#187); the rest of #191.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
