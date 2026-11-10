@@ -5,8 +5,10 @@
 # runner the wasm job takes) when the owner's machine is free, when
 # another run has a job queued or running there, when only this run's own
 # jobs, hosted jobs or finished ones are there, when the API fails or
-# answers something it cannot read, and when the run is not trusted or a
-# run by hand asks for the hosted runners (no request is made then).
+# answers something it cannot read, when the run is not trusted, a run by
+# hand asks for the hosted runners or the repository variable WASM_RUNNER
+# is `hosted` (no request is made then), and when that variable is
+# something else.
 #
 #   sh toolchain/test-ci-pick-runner.sh
 #
@@ -141,15 +143,18 @@ job() {
   fi
 }
 
-# check <name> <expected runner> <requests: some|none> [TRUSTED] [RUNNER_INPUT]
-# This run's id is 100.
+# check <name> <expected runner> <requests: some|none> [TRUSTED]
+#   [RUNNER_INPUT] [RUNNER_VARIABLE] [reason]
+# This run's id is 100. With a reason, the summary's line must contain it.
 check() {
   name=$1 expected=$2 requests=$3 trusted=${4-true} input=${5:-}
+  variable=${6:-} reason=${7:-}
   rm -f "$work/summary"
   if output=$(PATH="$work/bin:$PATH" FAKE_API="$work/api" \
     GITHUB_API_URL=https://api.example GITHUB_REPOSITORY=o/r GH_TOKEN=t \
     GITHUB_RUN_ID=100 GITHUB_STEP_SUMMARY="$work/summary" \
-    TRUSTED="$trusted" RUNNER_INPUT="$input" sh "$script" 2>"$work/stderr"); then
+    TRUSTED="$trusted" RUNNER_INPUT="$input" RUNNER_VARIABLE="$variable" \
+    sh "$script" 2>"$work/stderr"); then
     :
   else
     output="exit $?: $output"
@@ -161,6 +166,8 @@ check() {
     problem="expected no request to the API, got: $(cat "$work/api/requests")"
   elif [ "$(wc -l <"$work/summary")" -ne 1 ] || ! grep -q "^Runner: $expected, because " "$work/summary"; then
     problem="expected one line naming $expected in the summary, got: $(cat "$work/summary" 2>/dev/null)"
+  elif [ -n "$reason" ] && ! grep -qF "$reason" "$work/summary"; then
+    problem="expected the summary to give the reason '$reason', got: $(cat "$work/summary")"
   fi
   if [ -z "$problem" ]; then
     printf 'ok: %s\n  (%s)\n' "$name" "$(cat "$work/stderr")"
@@ -248,6 +255,20 @@ check "a run by hand asking for hosted: hosted, even when idle and trusted" ubun
 runs queued
 runs in_progress "$this_run"
 check "a run by hand asking for self-hosted, idle: the owner's machine" self-hosted some true self-hosted
+
+runs queued
+runs in_progress "$this_run"
+check "WASM_RUNNER is hosted: hosted, even when idle and trusted, without asking the API" \
+  ubuntu-latest none true '' hosted "the repository variable WASM_RUNNER is hosted"
+
+runs queued
+runs in_progress "$this_run"
+check "WASM_RUNNER is something else, idle: the owner's machine" self-hosted some true '' self-hosted
+
+runs queued
+runs in_progress "$this_run"
+check "WASM_RUNNER is self-hosted on a run that is not trusted: hosted, without asking the API" \
+  ubuntu-latest none false '' self-hosted "the run is not trusted"
 
 if [ "$failures" -gt 0 ]; then
   printf '%s case(s) failed.\n' "$failures"

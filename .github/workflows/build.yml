@@ -103,6 +103,16 @@ permissions:
 # a runner that carries them all). Whether the machine is on, the token
 # cannot see, so a run sent to it while it is off waits until it is back
 # (or is cancelled, and run by hand with `runner: hosted`).
+# The owner can also send every push's and pull request's wasm job to the
+# hosted runners without a commit, by setting the repository variable
+# WASM_RUNNER to `hosted` (Settings, Secrets and variables, Actions,
+# Variables, or `gh variable set WASM_RUNNER --body hosted`): for the times
+# when Claude sessions build on the owner's machine and slow the wasm job
+# down there. Unset, empty or any other value changes nothing. A run by
+# hand follows its own input `runner` instead, and the weekly run is hosted
+# anyway. The variable is not part of the trust rule and cannot loosen it:
+# it can only send a run to the hosted runners, never to the owner's
+# machine.
 # A fork's run also waits for the owner's approval first: the repository's
 # setting, Settings, Actions, General, "Fork pull request workflows from
 # outside collaborators", requires it for every outside contributor. That
@@ -228,14 +238,18 @@ jobs:
     # (see the top): false for a pull request from a fork, anything a bot
     # started, and a run by hand asking for the hosted runners. The weekly
     # run asks for them too:
-    # it is there to keep the hosted caches alive. The script prints its
-    # answer and why in one line, in the log and in the run's summary.
+    # it is there to keep the hosted caches alive. RUNNER_VARIABLE is the
+    # repository variable WASM_RUNNER (see the top), given for a push and a
+    # pull request only, so that a run by hand follows its own input. The
+    # script prints its answer and why in one line, in the log and in the
+    # run's summary.
     - name: Pick the wasm runner
       id: pick
       env:
         GH_TOKEN: ${{ github.token }}
         TRUSTED: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted' || github.event_name == 'schedule') && 'false' || 'true' }}
         RUNNER_INPUT: ${{ github.event_name == 'schedule' && 'hosted' || inputs.runner }}
+        RUNNER_VARIABLE: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && vars.WASM_RUNNER || '' }}
       run: sh toolchain/ci-pick-runner.sh >> "$GITHUB_OUTPUT"
 
   native:
