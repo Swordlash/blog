@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+An end marker after indented code, after a block of HTML of one line, or
+on the line that ends a list item holding another open block, ends its
+block again. The marker parser runs the continuation of each block inside
+the marked block on the end marker's line, as commonmark does, instead of
+refusing the marker while code, HTML or another block of the wiki's own is
+still on the parser's stack from the line before.
+
 One marker pair for the wiki's own blocks (WP5.77). A start marker is
 `[[!name]]{attributes}(Title)` on a line of its own and an end marker
 `[[/name]]`: `[[!spoiler]]`, `[[!notes]]`, `[[!incremental]]` and

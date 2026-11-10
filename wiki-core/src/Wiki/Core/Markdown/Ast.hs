@@ -1559,10 +1559,14 @@ markerBlockSpec =
       SlidesName -> SetsSlides
       _ -> PlacesContents
     -- The line is the end marker of this block: it has the block's name,
-    -- the block is the innermost open one, and nothing above it on the
-    -- stack takes its lines as they are (code, HTML). Where the marker's
-    -- text starts, if so.
+    -- the block is the innermost open one on this line, and the line is
+    -- not a line of a block inside it that takes its lines as they are
+    -- (code, HTML). Where the marker's text starts, if so.
     closesBlock node = do
+      stack <- CM.nodeStack <$> getState
+      let above = takeWhile (\n -> CM.blockStartPos (rootLabel n) /= CM.blockStartPos (rootLabel node) || isNothing (openOf n)) stack
+      crossed <- Parsec.lookAhead (holdsLine (reverse above))
+      guard (not crossed)
       CM.nonindentSpaces
       at <- getPosition
       toks <- many (CM.satisfyTok (not . CM.hasType CM.LineEnd))
@@ -1570,11 +1574,31 @@ markerBlockSpec =
       case readMarker toks of
         Just (EndText kind named) | kind == own.openKind, maybe True (\n -> own.openName == Just n) named -> pass
         _ -> mzero
-      stack <- CM.nodeStack <$> getState
-      let above = takeWhile (\n -> CM.blockStartPos (rootLabel n) /= CM.blockStartPos (rootLabel node) || isNothing (openOf n)) stack
-          verbatim n = let s = CM.blockSpec (rootLabel n) in CM.blockContainsLines s && not (CM.blockParagraph s)
-      guard (not (any (\n -> isJust (openOf n) || verbatim n) above))
       pure (Parsec.sourceLine at, Parsec.sourceColumn at)
+    -- Whether the line belongs to a block inside this one that an end
+    -- marker may not cross: another open block of the wiki's own, or a
+    -- block that takes its lines as they are. The blocks are those above
+    -- this one on the parser's stack, the outermost first. The stack is
+    -- the one the previous line left: a block that does not continue on
+    -- this line is still on it (indented code before a line that is not
+    -- indented, a block in a list item that has ended). So each block's
+    -- own continuation is run on the line, as commonmark runs them, until
+    -- one does not continue. An open block of the wiki's own always
+    -- continues, and its continuation is not run, since it would read an
+    -- end marker as its own. The caller restores the input and the
+    -- parser's state ('Parsec.lookAhead').
+    holdsLine = \case
+      nodes | not (any stops nodes) -> pure False
+      n : _ | isJust (openOf n) -> pure True
+      n : inner -> do
+        continued <- optionMaybe (try (CM.blockContinue (CM.blockSpec (rootLabel n)) n))
+        matched <- CM.blockMatched <$> getState
+        case continued of
+          Just _ | matched -> if verbatim n then pure True else holdsLine inner
+          _ -> pure False
+      [] -> pure False
+    stops n = isJust (openOf n) || verbatim n
+    verbatim n = let s = CM.blockSpec (rootLabel n) in CM.blockContainsLines s && not (CM.blockParagraph s)
 
 -- | The open block a node of the parser's stack is, if it is one.
 openOf :: CM.BlockNode Identity Inlines Blocks -> Maybe OpenBlock

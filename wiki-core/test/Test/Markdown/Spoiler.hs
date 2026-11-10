@@ -144,6 +144,22 @@ spec = describe "Markdown spoilers and listings" $ do
     it "does not read an end marker in code" $
       "[[!spoiler]]{x}(D)\n```\n[[/spoiler]]{x}\n```\n[[/spoiler]]{x}\n"
         `parses` [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [CodeBlock [] Nothing "[[/spoiler]]{x}\n"]]
+    it "reads an end marker on the line after indented code, which that line ends" $ do
+      "[[!spoiler]]{x}(D)\n    code\n[[/spoiler]]{x}\n"
+        `parses` [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [CodeBlock [] Nothing "code\n"]]
+      "[[!spoiler]]{x}(D)\n    code\n[[/spoiler]]\nafter\n"
+        `parses` [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [CodeBlock [] Nothing "code\n"], Para [Str "after"]]
+      "- [[!spoiler]]{x}(D)\n      code\n  [[/spoiler]]{x}\n"
+        `parses` [List BulletList [ListItem Nothing [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [CodeBlock [] Nothing "code\n"]]]]
+    it "reads an end marker on the line after a block of HTML of one line" $
+      "[[!spoiler]]{x}(D)\n<pre>x</pre>\n[[/spoiler]]\n"
+        `parses` [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [RawHtmlBlock "<pre>x</pre>\n"]]
+    it "reads an end marker on the line that ends the list item of a block inside, which is not closed" $
+      spoilers (blocksOf "[[!spoiler]]{x}(D)\n- [[!div]]\n  y\n[[/spoiler]]{x}\n") `shouldBe` [("x", Nothing)]
+    it "does not read an end marker in a fenced code block not closed or a block of HTML" $ do
+      spoilers (blocksOf "[[!spoiler]]{x}(D)\n```\n[[/spoiler]]{x}\n") `shouldBe` [("x", Just NotClosed)]
+      "[[!spoiler]]{x}(D)\n<div>\n[[/spoiler]]{x}\n</div>\n\n[[/spoiler]]{x}\n"
+        `parses` [Spoiler (headOf "x" [Str "D"] "[[!spoiler]]{x}(D)" 1) [RawHtmlBlock "<div>\n[[/spoiler]]{x}\n</div>\n"]]
     it "leaves the marker without its exclamation mark, a marker in a line's middle and an escaped marker as they were" $ do
       "[[spoiler]]{x}(D)" `parses` [Para [Link [("class", "wikilink")] "spoiler" "" [Str "spoiler"], Str "{x}(D)"]]
       [() | Para _ <- blocksOf "See [[!spoiler]] here"] `shouldBe` [()]

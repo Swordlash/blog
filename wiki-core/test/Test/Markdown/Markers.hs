@@ -61,6 +61,38 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
       "- [[!notes]]\n  a\n  [[/notes]]" `parses` [List BulletList [ListItem Nothing [Div [("class", "notes")] [Para [Str "a"]]]]]
     it "does not read an end marker in code" $
       "[[!div]]\n```\n[[/div]]\n```\n[[/div]]" `parses` [Div [] [CodeBlock [] Nothing "[[/div]]\n"]]
+    it "reads an end marker on the line after indented code, which that line ends" $ do
+      "[[!div]]{.summary}\n    code\n[[/div]]" `parses` [Div [("class", "summary")] [CodeBlock [] Nothing "code\n"]]
+      "[[!notes]]\n    code\n\n[[/notes]]" `parses` [Div [("class", "notes")] [CodeBlock [] Nothing "code\n"]]
+      "[[!incremental]]\n    code\n[[/incremental]]\nafter" `parses` [Div [("class", "incremental")] [CodeBlock [] Nothing "code\n"], Para [Str "after"]]
+      "- [[!div]]{.x}\n      code\n  [[/div]]" `parses` [List BulletList [ListItem Nothing [Div [("class", "x")] [CodeBlock [] Nothing "code\n"]]]]
+      "- [[!notes]]\n      code\n  [[/notes]]" `parses` [List BulletList [ListItem Nothing [Div [("class", "notes")] [CodeBlock [] Nothing "code\n"]]]]
+      "- [[!incremental]]\n      code\n  [[/incremental]]" `parses` [List BulletList [ListItem Nothing [Div [("class", "incremental")] [CodeBlock [] Nothing "code\n"]]]]
+      "[[!div]]\n    [[/div]]\n[[/div]]" `parses` [Div [] [CodeBlock [] Nothing "[[/div]]\n"]]
+      "[[!div]]\n- a\n\n      code\n[[/div]]" `parses` [Div [] [List BulletList [ListItem Nothing [Para [Str "a"], CodeBlock [] Nothing "code\n"]]]]
+    it "reads an end marker on the line after a block of HTML of one line" $
+      "[[!div]]\n<pre>x</pre>\n[[/div]]" `parses` [Div [] [RawHtmlBlock "<pre>x</pre>\n"]]
+    it "reads an end marker on the line that ends the list item of a block inside, which is not closed" $
+      "[[!notes]]\n- [[!div]]\n  x\n[[/notes]]"
+        `parses` [ Div
+                     [("class", "notes")]
+                     [ List
+                         BulletList
+                         [ ListItem
+                             Nothing
+                             [ MarkerError "[[!div]]" "the [[!div]] block is not closed: add [[/div]] after its last line"
+                             , Div [("class", "spoiler-unclosed")] [Para [Str "x"]]
+                             ]
+                         ]
+                     ]
+                 ]
+    it "does not read an end marker in a fenced code block not closed or a block of HTML" $ do
+      "[[!div]]\n```\n[[/div]]\n"
+        `parses` [ MarkerError "[[!div]]" "the [[!div]] block is not closed: add [[/div]] after its last line"
+                 , Div [("class", "spoiler-unclosed")] [CodeBlock [] Nothing "[[/div]]\n"]
+                 ]
+      "[[!div]]\n- ```\n  [[/div]]\n  ```\n[[/div]]" `parses` [Div [] [List BulletList [ListItem Nothing [CodeBlock [] Nothing "[[/div]]\n"]]]]
+      "[[!notes]]\n<div>\n[[/notes]]\n</div>\n\n[[/notes]]" `parses` [Div [("class", "notes")] [RawHtmlBlock "<div>\n[[/notes]]\n</div>\n"]]
     it "gives a div's written id to the page's ids, which no heading then takes" $
       blocksOf "[[!div]]{#intro}\nx\n[[/div]]\n\n# Intro\n"
         `shouldBe` [Div [("id", "intro")] [Para [Str "x"]], Heading 1 [("id", "intro-2")] [Str "Intro"]]
