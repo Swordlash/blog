@@ -7,7 +7,7 @@
 -- configuration wizard), and what ghc-wasm-meta's setup runs (jq, unzip,
 -- zstd) in the modes that install the wasm toolchain. libsodium is not a
 -- package here: "Maker.Toolchain.Libsodium" builds the pinned release from
--- source, since Debian's is too old for the opaque package.
+-- source, since Debian's is too old for the opaque-hs package.
 --
 -- On Debian or Ubuntu the packages that are missing are installed with
 -- apt-get, as root or through a sudo that needs no password; the bootstrap

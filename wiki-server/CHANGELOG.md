@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+OPAQUE from opaque-hs. The server's side of OPAQUE is the package
+`opaque-hs`, from a repository of its own (Swordlash/opaque-hs) at a
+commit `cabal.project` pins, in place of the package `opaque` this
+repository carried. The modules (`Crypto.OPAQUE.*`) and their API are the
+same; that repository runs the package's own tests.
+
 A marker line indented with a tab is exported as its block. The wiki's
 parser gives a marker's column as CommonMark counts it, a tab to the next
 multiple of four columns, and `withBoxes` took it as an index into the

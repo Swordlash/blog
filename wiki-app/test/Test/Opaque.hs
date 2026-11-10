@@ -1,5 +1,5 @@
 -- | The server's side of OPAQUE for the application's tests (WP5.74a of
--- docs/PLAN.md, "Wiki.Api.Opaque"), with the @opaque@ package's own server
+-- docs/PLAN.md, "Wiki.Api.Opaque"), with the @opaque-hs@ package's own server
 -- functions and fixed random values: a server setup, one user with a record
 -- (admin, whose password is @correct horse@), the server's answer to a
 -- first message, and the two answers the browser tests carry as fixed bytes

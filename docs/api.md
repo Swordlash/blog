@@ -129,7 +129,8 @@ again replaces the browser's session. `signIn` and `signOut` are methods of
 
 A password never travels (WP5.74a, `Wiki.Api.Opaque`): the browser and the
 server run OPAQUE (RFC 9807, ristretto255, SHA-512, 3DH), the browser with
-`@serenity-kit/opaque` and the server with the `opaque` package, and the
+`@serenity-kit/opaque` and the server with the
+[`opaque-hs`](https://github.com/Swordlash/opaque-hs) package, and the
 server keeps a registration record per user. The
 messages (`ke1`, `ke2`, `ke3`, a registration's `request` and `response`, a
 `record`) are their RFC encodings in unpadded base64url. `stretch`

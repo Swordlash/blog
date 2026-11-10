@@ -508,7 +508,7 @@ comparePages was now
 --
 -- After the migration, the first signs in on the new server with its
 -- password as the application does ("Wiki.App.Backend.Http"), through the
--- client of the @opaque@ package. Since OPAQUE (WP5.74a), @users add@
+-- client of the @opaque-hs@ package. Since OPAQUE (WP5.74a), @users add@
 -- registers the password through OPAQUE, so the check proves that an
 -- upgrade keeps the records it finds signing in. An old program from
 -- before OPAQUE stored a hash instead: its account signs in the old way

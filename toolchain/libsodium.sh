@@ -11,8 +11,8 @@
 # $WIKI_TOOLCHAIN_HOME/.wiki-toolchain, as for toolchain/bootstrap.sh).
 #
 # The native build links libsodium for two packages: sel's bindings
-# (libsodium-bindings), for the second factor's codes, and opaque, the
-# server's side of OPAQUE. opaque needs
+# (libsodium-bindings), for the second factor's codes, and opaque-hs, the
+# server's side of OPAQUE. opaque-hs needs
 # libsodium 1.0.19 or later for its HKDF, and Debian and Ubuntu ship 1.0.18.
 # So every native build (a developer's, CI's, the deploy's and the Docker
 # image's) uses the one release pinned in toolchain/pins.env

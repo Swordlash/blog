@@ -184,11 +184,11 @@ library
     exposed-modules:
         Wiki.App.Static
 
-  -- The client's half of OPAQUE (Wiki.App.Backend.Opaque) is the opaque
-  -- package natively and @serenity-kit/opaque in the browser: opaque is
+  -- The client's half of OPAQUE (Wiki.App.Backend.Opaque) is the opaque-hs
+  -- package natively and @serenity-kit/opaque in the browser: opaque-hs is
   -- not built for wasm32.
   if !arch(wasm32)
-    build-depends: opaque
+    build-depends: opaque-hs
 
   build-depends:
       aeson,
@@ -362,7 +362,7 @@ test-suite wiki-app-test
         hspec >= 2,
         http-media,
         http-types,
-        opaque,
+        opaque-hs,
         protolude,
         servant-client-core,
         text,

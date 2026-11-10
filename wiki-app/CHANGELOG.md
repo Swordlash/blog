@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The native OPAQUE client from opaque-hs. `Wiki.App.Backend.Opaque` and the
+tests' server (`Test.Opaque`) use the package `opaque-hs`, from a
+repository of its own at a commit `cabal.project` pins, in place of the
+package `opaque` this repository carried; the modules and their API are
+the same. The browser's client is still `@serenity-kit/opaque`.
+
 The wiki's own blocks with one marker pair (WP5.77). The guide's pages, the
 demo's handbook and the presentations deck write `[[!notes]]`,
 `[[!incremental]]`, `[[!div]]`, `[[!slides]]`, `[[!pause]]`, `[[!toc]]` and

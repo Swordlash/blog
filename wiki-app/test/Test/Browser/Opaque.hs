@@ -1,7 +1,7 @@
 -- | The browser tests' fixed answers to OPAQUE's requests ("Wiki.Api.Opaque"):
 -- their server answers each address with one fixed answer, and the
 -- browser's client is serenity-kit, so the answers are bytes made once by
--- the @opaque@ package's server (which is not built for the browser).
+-- the @opaque-hs@ package's server (which is not built for the browser).
 -- "Test.Backend.Opaque" checks, natively, that they are still what the
 -- server's functions make ("Test.Opaque").
 module Test.Browser.Opaque

@@ -82,12 +82,11 @@ RUN npm ci --no-audit --no-fund
 # leaves out only the targets themselves, and would otherwise try to compile
 # a local library the target depends on, whose sources are not here yet.
 COPY cabal.project cabal-native-opt.project cabal-wasm.project cabal-wasm-opt.project ./
-COPY opaque/opaque.cabal opaque/
 COPY wiki-core/wiki-core.cabal wiki-core/
 COPY wiki-api/wiki-api.cabal wiki-api/
 COPY wiki-app/wiki-app.cabal wiki-app/
 COPY wiki-server/wiki-server.cabal wiki-server/
-ARG LIBRARIES="opaque:lib:opaque wiki-core:lib:wiki-core wiki-api:lib:wiki-api wiki-app:lib:wiki-app"
+ARG LIBRARIES="wiki-core:lib:wiki-core wiki-api:lib:wiki-api wiki-app:lib:wiki-app"
 RUN --mount=type=cache,id=wiki-dist-newstyle,target=/src/dist-newstyle,sharing=locked \
     cabal update \
  && cabal build --only-dependencies --builddir=dist-newstyle/native \
