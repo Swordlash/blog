@@ -53,6 +53,12 @@ without `space`, `parent` and `body`: the directories say where each one is,
 and `page.md` holds the body, so that a `.md` file opened by itself is just
 the page. A file named in a record (`file` of an icon, of an attachment) is
 named from the record's own directory: `icon.png`, `attachments/plan.pdf`.
+A space's home page is the root of its pages (WP5.78), so a space's
+`pages/` holds its home page's directory alone, and every other page is
+under it: `spaces/blog/pages/home/pages/hello-world/`. An archive written
+before, with several pages at the top of a space, is read as it is and
+imported with the space's other pages put under its home page, keeping
+their addresses.
 
 A subject is `{"user": id}` or `{"group": id}`. A global permission is
 `"administer"` or `"create-spaces"`, a permission on a space `"view"`,

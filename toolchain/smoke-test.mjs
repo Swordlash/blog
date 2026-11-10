@@ -409,8 +409,15 @@ try {
   const paths = await prerenderedPaths(root);
   let guideAndDiagrams = 0;
   assert.ok(paths.length >= 10, `only ${paths.length} pages were prerendered`);
-  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/pages/", "/s/team/projects/", "/s/docs/p/tour/", "/s/docs/p/tour/source/", "/s/team/p/team-handbook/"]) {
+  // A space's home page is at the space's address, and so are its source
+  // and history (WP5.78 of docs/PLAN.md); a page under it at its own.
+  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/pages/", "/s/docs/source/", "/s/docs/history/", "/s/team/projects/", "/s/docs/p/markdown-guide/", "/s/docs/p/markdown-guide/source/", "/s/team/p/on-call/"]) {
     assert.ok(paths.includes(path), `${path} was not prerendered`);
+  }
+  // A home page's old address is not written: the static host serves the
+  // application's own page there (404.html), which reads it as the page.
+  for (const path of ["/s/docs/p/tour/", "/s/team/p/team-handbook/"]) {
+    assert.ok(!paths.includes(path), `${path}, a home page's old address, was prerendered`);
   }
   const visitor = await newPage();
   const repaired = [];
@@ -606,7 +613,7 @@ try {
   // page and the offline page carry it, and every page here runs under it
   // (a violation is a console error, which fails the test).
   {
-    for (const path of ["/", "/404.html", "/offline.html", "/s/docs/p/tour/"]) {
+    for (const path of ["/", "/404.html", "/offline.html", "/s/docs/", "/s/docs/p/markdown-guide/"]) {
       const html = await (await fetch(url(path))).text();
       assert.match(
         html,
@@ -741,7 +748,8 @@ try {
 
   // The tour, from the front page's invitation.
   await page.locator("#app .directory a", { hasText: "Take the tour" }).click();
-  await arrive({ path: "/s/docs/p/tour/", view: "page-view", crumb: "Tour" }, "the tour");
+  // The tour is Docs' home page, at the space's address.
+  await arrive({ path: "/s/docs/", view: "page-view", crumb: "Docs" }, "the tour");
 
   // Who one is, from the menu at the top right. The demo starts as admin;
   // nobody sees no private space, and admin every one.
@@ -926,7 +934,8 @@ try {
   assert.equal(await page.locator("#app .search-input").inputValue(), "handbook");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await arrive({ path: "/s/team/p/team-handbook/", view: "page-view", crumb: "Team handbook" }, "a search's hit");
+  // The handbook is Team's home page, at the space's address.
+  await arrive({ path: "/s/team/", view: "page-view", crumb: "Team" }, "a search's hit");
   // Enter with no hit chosen: the page of every result, at an address of
   // its own.
   await page.keyboard.press("/");
@@ -1044,7 +1053,9 @@ try {
   // per page, the page's body as page.md, its comments beside it.
   const exportedFiles = unzipSync(await readFile(exportPath));
   assert.equal(JSON.parse(strFromU8(exportedFiles["manifest.json"])).formatVersion, 2, "the export's format version");
-  const helloDir = "spaces/blog/pages/hello-world/";
+  // The page is under the blog's home page, the root of its pages, and its
+  // directory under the home page's.
+  const helloDir = "spaces/blog/pages/home/pages/hello-world/";
   for (const name of ["page.json", "page.md", "comments.json"]) {
     assert.ok(exportedFiles[helloDir + name], `the export has no ${helloDir}${name}`);
   }
@@ -1180,7 +1191,7 @@ try {
   await phone.locator(editorText).waitFor({ timeout });
   assert.ok(!(await phone.locator("#app .editor-preview").isVisible()), "the preview stays after Back to editing");
   // A page's source wraps its long lines rather than widening the page.
-  await load(phone, "/s/docs/p/tour/source/");
+  await load(phone, "/s/docs/source/");
   await phone.locator("#app .source-text").waitFor({ timeout });
   assert.ok(await fits(), "a page's source is wider than a phone");
   // The administration's forms are one column at any width (WP5.5): on a
@@ -1273,7 +1284,7 @@ try {
   // Copy puts the Markdown on the clipboard, as written. Headless Chromium
   // lets a page at it only with the permissions granted.
   const copier = await newPage({ permissions: ["clipboard-read", "clipboard-write"] });
-  await load(copier, "/s/docs/p/tour/source/");
+  await load(copier, "/s/docs/source/");
   const source = await copier.locator("#app .source-text").textContent();
   assert.ok(source.startsWith("# Tour\n"), "the source is not the tour's Markdown");
   await copier.locator("#app .source-view button.source-copy").click();
