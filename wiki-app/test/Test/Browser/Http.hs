@@ -254,7 +254,8 @@ serveDemo = do
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
   for_ home $ \document@(space, page) -> do
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 document
-    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [page.slug])) 200 page
+    -- The front page's page is the root of its space: its path is empty.
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 page
     answerWith "GET" (endpointUrl (\e -> e.notifications.pageWatch page.id)) 200 (Watch False Unchosen)
   for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
   for_ people answerUsers
@@ -750,7 +751,8 @@ views m = describe "the application over it" $ do
     length <$> findAll ui ".breadcrumbs li" `shouldReturn` 0
     unsafeIOToPageM js_server_release
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    -- The tour is Docs' home page: the space is its crumb.
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Docs")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     -- Whom the tour mentions is asked once it is shown, and answered.
     find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
@@ -770,7 +772,8 @@ views m = describe "the application over it" $ do
     tourPage <- unsafeIOToPageM tourOfDocs
     ui <- startServer m tour
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    let tourAt = endpointUrl (\e -> e.spaces.pageAt tourPage.space (slugs ["tour"]))
+    -- The tour is read at its path as it is now, the home page's empty one.
+    let tourAt = endpointUrl (\e -> e.spaces.pageAt tourPage.space [])
         fetchesOf url = length . filter (\r -> r.method == "GET" && r.url == url) <$> asked
         listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
     fetchesOf tourAt `shouldReturn` 1
@@ -781,7 +784,7 @@ views m = describe "the application over it" $ do
     -- Someone else saves the tour meanwhile, in another session. Nothing
     -- tells this tab: it no longer shows the tour.
     answerWith "GET" tourAt 200 tourPage {P.body = "# Tour\n\nSaved by someone else."}
-    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/tour/']" >>= click
+    find ui ".wiki-sidebar .space-home-link" >>= click
     eventually $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved by someone else.")
     fetchesOf tourAt `shouldReturn` 2
     listsAsked `shouldReturn` lists
@@ -983,7 +986,8 @@ views m = describe "the application over it" $ do
         -- And the tour's comments, which its page shows, whom they and
         -- the tour mention, whether the tour is watched, and the bell's
         -- notifications.
-        page <- getPage s.id (slugs ["tour"])
+        -- At its path as it is now, which the view reads it at.
+        page <- getPage s.id []
         for_ page $ \p -> do
           threads <- fromRight [] <$> listThreads p.id
           _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
@@ -1189,7 +1193,7 @@ presence m = describe "who is editing and reading" $ do
     let later = addUTCTime 60 home.updatedAt
         saved = home {P.body = "Home saved in another tab.", P.updatedAt = later}
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 (space, saved)
-    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [home.slug])) 200 saved
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 saved
     tell (Event home.id (PageChanged later))
     find ui ".page-body p" >>= (`shouldHaveText` "Home saved in another tab.")
     length <$> findAll ui ".comments-toggle, .page-comments" `shouldReturn` 0

@@ -24,10 +24,11 @@ spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIsl
 spec m = do
   it "lists a space's pages newest first once an administrator chooses it, in the space and the sidebar" $ runPage $ do
     ui <- start m (Just "user-admin") blog
-    titlesIn ui spacePages `shouldReturn` ["Hello, world", "Home", "Notes on Haskell"]
+    -- The blog's home page is the space itself, above its pages.
+    titlesIn ui spacePages `shouldReturn` ["Hello, world", "Notes on Haskell"]
     chooseOrder ui ".order-pages select" "ArrowDown"
-    eventually (titlesIn ui spacePages `shouldReturn` ["Notes on Haskell", "Hello, world", "Home"])
-    titlesIn ui sidebarPages `shouldReturn` ["Notes on Haskell", "Hello, world", "Home"]
+    eventually (titlesIn ui spacePages `shouldReturn` ["Notes on Haskell", "Hello, world"])
+    titlesIn ui sidebarPages `shouldReturn` ["Notes on Haskell", "Hello, world"]
     -- Not by hand, so there is nothing to move a page with.
     length <$> findAll ui ".space-view .move-controls" `shouldReturn` 0
 
@@ -38,22 +39,22 @@ spec m = do
     _ <- eventually (find admin ".space-view .page-tree .move-controls")
     unmount admin
     editor <- startKept m db (Just "user-editor") blog
-    titlesIn editor spacePages `shouldReturn` ["Hello, world", "Home", "Notes on Haskell"]
-    -- The first page cannot go further up; the others can.
+    titlesIn editor spacePages `shouldReturn` ["Hello, world", "Notes on Haskell"]
+    -- The first page cannot go further up; the other can.
     ups <- findAll editor ".space-view .page-tree .move-up"
-    traverse (`getProperty` "disabled") ups `shouldReturn` ["true", "false", "false"]
+    traverse (`getProperty` "disabled") ups `shouldReturn` ["true", "false"]
     case ups of
-      [_, _, notes] -> click notes
+      [_, notes] -> click notes
       _ -> expectationFailure "expected a move-up button for each page"
-    eventually (titlesIn editor spacePages `shouldReturn` ["Hello, world", "Notes on Haskell", "Home"])
+    eventually (titlesIn editor spacePages `shouldReturn` ["Notes on Haskell", "Hello, world"])
     unmount editor
     again <- startKept m db (Just "user-editor") blog
-    titlesIn again spacePages `shouldReturn` ["Hello, world", "Notes on Haskell", "Home"]
-    titlesIn again sidebarPages `shouldReturn` ["Hello, world", "Notes on Haskell", "Home"]
+    titlesIn again spacePages `shouldReturn` ["Notes on Haskell", "Hello, world"]
+    titlesIn again sidebarPages `shouldReturn` ["Notes on Haskell", "Hello, world"]
 
   it "shows a reader the order chosen, and nothing to change it with" $ runPage $ do
     ui <- startChanged m (byHandNewestFirst "Blog") (Just "user-reader") blog
-    titlesIn ui spacePages `shouldReturn` ["Notes on Haskell", "Hello, world", "Home"]
+    titlesIn ui spacePages `shouldReturn` ["Notes on Haskell", "Hello, world"]
     length <$> findAll ui ".move-controls" `shouldReturn` 0
     buttons <- findAll ui ".space-view .actions button"
     labels <- traverse textContent buttons

@@ -53,7 +53,8 @@ spec m = do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
     actions <- traverse textContent =<< findAll ui ".page-view .actions > :not(.page-width-switch)"
     actions `shouldBe` ["View source", "History", "Comments (0)"]
-    find ui ".page-view .actions a[href$='#/s/docs/p/tour/history/']" >>= click
+    -- The tour is Docs' home page: its history is under the space's address.
+    find ui ".page-view .actions a[href$='#/s/docs/history/']" >>= click
     find ui ".history-view h1" >>= (`shouldHaveText` "Tour")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "History")
     versions <- traverse textContent =<< findAll ui ".version-list li > a"

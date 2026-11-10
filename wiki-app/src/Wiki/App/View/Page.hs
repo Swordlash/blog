@@ -116,7 +116,7 @@ import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedTh
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
-import Wiki.App.Route (Against (..), Route (..))
+import Wiki.App.Route (Against (..), Route (..), pageRoute)
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
@@ -783,7 +783,9 @@ component =
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id
-            parentRoute = maybe (Space spacePath) (const (Page spacePath (take (length input.path - 1) input.path))) page.parent
+            -- The page above it, or the space for a page under the home
+            -- page, whose path is one slug.
+            parentRoute = pageRoute spacePath (take (length input.path - 1) input.path)
         deletePage page.id >>= done (const (Just parentRoute))
 
     load :: H.HalogenM State Action Slots ViewOutput m ()

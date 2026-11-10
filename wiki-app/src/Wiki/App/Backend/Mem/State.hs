@@ -641,10 +641,14 @@ placePages siblings st = st {pages = Map.mapWithKey (\k p -> maybe p (`positionP
 
 -- | Add a page without checks, last among its siblings, created and last
 -- updated at the time given, with a slug made from its title that no
--- sibling uses.
+-- sibling uses. A page given no parent goes under the space's home page,
+-- the root of its pages, if the space has one yet
+-- ('Wiki.Core.Space.parentOrRoot'): the demo's content, made before its
+-- spaces have their home pages, is rooted afterwards ('ensureHomePages').
 insertPage :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> MemState -> (MemState, Page)
-insertPage space parent title body now st0 =
+insertPage space asked title body now st0 =
   let (i, st) = newId "page" st0
+      parent = maybe asked (`Space.parentOrRoot` asked) (Map.lookup space st.spaces)
       base = fromMaybe (fallbackSlug "page") (slugify title)
       slug = freshSlug (isJust . findChild (pagesOf space st) parent) base
       page =
