@@ -982,13 +982,26 @@ confirms it against reality and the plan is amended if it does not hold.
     step by step (#212). The wiki's tests of it are the server's own, which
     sign in through its client. The messages are newtypes over their wire
     bytes, read through `HasField` slices, built with one `BS.concat`;
-    secrets live in memory libsodium zeroes. The browser's client is `@serenity-kit/opaque`
-    (opaque-ke compiled to wasm, audited), not this package built for wasm
-    (the owner, 2026-11-06: libsodium publishes no build for wasm32-wasi;
-    opaque-hs can since be built over one compiled for it, with its flag
-    `wasm-libsodium`, which the wiki does not use: there a secret is
-    zeroed but never locked); it
-    is pinned and loaded the first time a password is used. The context is
+    secrets live in memory libsodium zeroes. The browser's client is
+    opaque-hs's `Crypto.OPAQUE.Client` too (WP5.79, #230; the owner,
+    2026-11-10; before that the wiki had a binding of its own). On wasm32
+    the package is that client alone, and it calls `@serenity-kit/opaque`
+    (opaque-ke compiled to wasm, audited), not the package's own protocol
+    code built for wasm (the owner, 2026-11-06: libsodium publishes no
+    build for wasm32-wasi; opaque-hs can since be built over one compiled
+    for it, with its flag `wasm-libsodium`, which the wiki does not use:
+    there a secret is zeroed but never locked). The finishing steps in the
+    browser are `Crypto.OPAQUE.Client.WebCrypto`'s, which hand the export
+    key straight to WebCrypto, for `deriveKey` only and not extractable;
+    the page's key registry holds that key, and its bytes never reach the
+    program. serenity-kit is pinned in `package.json`, bundled as
+    `islands/opaque.js`, and found through `globalThis.opaqueHsSerenity`,
+    which `islands.js` sets to its loader, so it is fetched the first time
+    a password is used. Over plain HTTP, where a browser has no
+    `crypto.subtle`, a sign-in and a new password still work and give no
+    key: the owner's production wiki is served that way, and a browser
+    test signs in so. Both clients raise Argon2id's parameters to at least
+    one pass and 8 KiB, as the server's side does. The context is
     empty, because serenity-kit cannot set one. HKDF comes from libsodium
     1.0.19 or later, built from source by the toolchain
     (`toolchain/libsodium.sh`, the version and checksum in
@@ -1225,9 +1238,9 @@ commonmark-extensions; what is left is the editor's part, a toolbar
 button, completion after a colon and lists with an emoji for a bullet,
 which waits for #187 and #186), #190 (table views). Stage 5: #191 (presentations as a kind of
 page), #204 (calendars and TODO lists; the lists can come earlier).
-Alongside, when there is room: WP5.79 (the browser's OPAQUE client from
-opaque-hs), #213 (WP5.74b3, after #201), #203
-(SQLite to PostgreSQL, WP5.80). #212 (WP5.74a2b) was closed in opaque-hs's own
+Alongside, when there is room: #213 (WP5.74b3, after #201), #203
+(SQLite to PostgreSQL, WP5.80). WP5.79, the browser's OPAQUE client from
+opaque-hs, is done (#230, decision 59). #212 (WP5.74a2b) was closed in opaque-hs's own
 repository, which the wiki pins since #227.
 
 - **WP5.78 One home page per space, the root of its pages** (#201; the
@@ -1303,58 +1316,6 @@ repository, which the wiki pins since #227.
     that rewrites an old address in the address bar; a database
     constraint on one root per space, which the two exceptions rule out
     for now.
-- **WP5.79 The browser's OPAQUE client from opaque-hs** (the owner,
-  2026-11-10). The application has two clients of OPAQUE in one module,
-  `Wiki.App.Backend.Opaque`, chosen with CPP: natively opaque-hs's, and in
-  the browser a binding of the wiki's own to `@serenity-kit/opaque`
-  (`wiki-app/jsbits/opaque.js`), written before opaque-hs had a client for
-  the browser. opaque-hs has one now (opaque-hs#3): `Crypto.OPAQUE.Client`,
-  the same names and types natively and on wasm, where it calls
-  serenity-kit. And it has what the wiki's binding does and that client
-  did not (opaque-hs#7): `Crypto.OPAQUE.Client.WebCrypto`, whose finishing
-  steps hand the export key straight to WebCrypto as a key that cannot be
-  exported, so that its bytes never reach the Haskell program. After this
-  package the application has one client, opaque-hs's, on both backends.
-  - The pin of opaque-hs is bumped to the commit that has both modules, in
-    its own commit. wiki-app depends on opaque-hs on wasm too, where the
-    package is the client alone; the wasm project already names
-    haskell-halogen-jsbits, which that client is declared with.
-  - `Wiki.App.Backend.Opaque` keeps its four functions and their types
-    (`startLogin`, `finishLogin`, `startRegistration`, `finishRegistration`
-    with `Maybe KeyRef`), so that nothing above it changes. The starting
-    steps are `Crypto.OPAQUE.Client`'s on both backends. The finishing
-    steps differ by backend in one small place only: in the browser they
-    are `Crypto.OPAQUE.Client.WebCrypto`'s, and the `CryptoKey` they give
-    is put in the page's key registry (`wikiKeyRegistry`, which the vault
-    reads) for its `KeyRef`; natively they are the plain ones, the export
-    key is zeroed and no key is given, as now. That place is a few lines
-    of CPP in this module, or two small modules the `.cabal` file chooses
-    between; not two clients.
-  - The export key is imported for `deriveKey` only, as the wiki's binding
-    imports it. Where the page has no WebCrypto the sign-in still succeeds
-    and gives no key, as now. This is not a corner: the owner's
-    production wiki at work is served over plain HTTP, where a browser
-    gives no `crypto.subtle` (the owner, 2026-11-10). Signing in and
-    setting a password over plain HTTP are part of the package's
-    acceptance, with a browser test that takes `crypto.subtle` away and
-    signs in; what needs WebCrypto there (the vault, encrypted spaces) is
-    unavailable as before, and passkeys need HTTPS as before.
-  - opaque-hs's client finds serenity-kit through
-    `globalThis.opaqueHsSerenity`. The page sets it to the island's loader
-    (`wikiIslands.opaque`), so that the library is still fetched the first
-    time a password is used and not with the page.
-  - `wiki-app/jsbits/opaque.js` goes, but for what registers a `CryptoKey`
-    in the page's registry, which belongs with the vault's JavaScript.
-  - The configuration is the one both sides state already: no context,
-    Argon2id with the record's passes and memory. opaque-hs's browser
-    client counts memory in KiB, rounded down, as the wiki's binding did.
-    Its `clientFinish` gives one error for a wrong password and a wrong
-    server, which the application does not tell apart either.
-  - The tests of the sign-in in a browser (`Test.Browser.Opaque`,
-    `Test.Browser.Vault`'s checks that no key in the page can be exported)
-    and of the native client against the server (`Test.Backend.Opaque`)
-    are the package's gate: they pass unchanged, or change only where they
-    named the old binding.
 - **WP5.80 A wiki in SQLite moves to PostgreSQL** (#203; the owner,
   2026-11-10). A wiki starts in SQLite, a file beside the server; once it
   has grown, its administrator may want PostgreSQL. Today the only way
@@ -1663,6 +1624,15 @@ needs. Each was true when its package merged; check before relying on one.
   case. Not tested: that encrypting a space after the step deletes the
   home page the step gave it. The rehearsal now leaves out a space whose
   pages answer 409 (an encrypted space), as it leaves out a 404's.
+- **The browser's OPAQUE client (WP5.79, #230).** A step that fails for
+  any reason but a wrong password says so on the console as a warning
+  with the error's name ("OPAQUE: the sign-in could not finish:
+  KsfError"); the wiki's old binding logged an error with the JavaScript
+  exception's text. `keyRefOf` is still exported from
+  `Wiki.App.Assistant`, though nothing outside it uses it. In
+  `Test.Browser.Vault` the examples of the user's keys share one page, and
+  one that leaves a key on the device changes what a later one finds: an
+  example that reads the device starts as a new device (`js_new_device`).
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
