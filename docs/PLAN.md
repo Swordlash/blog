@@ -1205,14 +1205,15 @@ foundations, is done: #207 (compile times, #220, decision 63), #202
 and the PostgreSQL tests copying a migrated template (#221). Stage 2,
 the content's structure, on #202: #195 is done (decision 65, #224) and
 #197 was closed, since comments worked already; #201 (one home page per
-space; WP5.78 below, which brings the first step of the schema in code)
-is next. Stage 3, the editor: #187 (autocompletion),
+space; WP5.78 below) is half done: part a (#225), with the first step of
+the schema in code, is merged, and part b is next. Stage 3, the editor: #187 (autocompletion),
 #189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
 (emojis), #190 (table views). Stage 5: #191 (presentations as a kind of
 page), #204 (calendars and TODO lists; the lists can come earlier).
-Alongside, when there is room: #213 (WP5.74b3, after #201), #212
-(WP5.74a2b), #203 (SQLite to PostgreSQL).
+Alongside, when there is room: #213 (WP5.74b3, after #201), #203
+(SQLite to PostgreSQL). #212 (WP5.74a2b) was closed in opaque-hs's own
+repository, which the wiki pins since #227.
 
 - **WP5.78 One home page per space, the root of its pages** (#201; the
   owner, 2026-11-10). Today a space's home page is optional
@@ -1227,39 +1228,22 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
   encrypted spaces are left as they are until #213. Two pull requests,
   a then b, so that the first step of the schema in code is the simple
   one.
-  - **a, every space has a home page, and it is the administrators'.**
-    The step of the schema (decision 64, the first one) gives a space
-    with no home page the default one, with a version, as creating a
-    space does. By decision 64 it carries its own copy of the default
-    title and body and fills the search columns without the live parser.
-    A space set to "None" may still hold the page it was made with, so
-    the step takes the next free slug among the top-level pages (`home`,
-    `home-2`) and a position before them: a second `home` would break the
-    unique index, undo the whole pass and keep the server from starting.
-    Not the container of personal spaces (it has no pages and nobody
-    views it) and not an encrypted space (the server cannot write a page
-    there, and encrypting a space still deletes its untouched home page):
-    for those two alone `homePage` stays `Nothing`, and the type keeps its
-    `Maybe` for them. Every way a space is made gives it one: an import
-    of an archive and a merge import (a space the archive gives none),
-    the demo's seed and its stored state on load, the guide. The home
-    page cannot be chosen any more: the settings' choice with its "None"
-    and the page's "Set as home page" go, `setSpaceProfile` refuses a
-    change of it, and deleting the home page and every move of it, within
-    its space too, are refused (the foreign key's `SET NULL` stays for a
-    deleted space only). Saving the home page, which is also renaming it,
-    restoring a version of it, its drafts, its attachments and the live
-    channel's "is editing" need `AdministerSpace`, on the server (one
-    check that takes the page, beside `requireEdit`) and in the in-memory
-    backend, and the application hides the controls with the same rule.
-    A blog shows its home page above its posts, so a blog that had none
-    would now show the default text there: the blog's view leaves out a
-    home page that is still the text it was made with (`isHomeBody`).
-    The rehearsal's `pages` check accepts a new page only where it is the
-    home page the step gave a space that had none, and a check of the
-    step's own says that every space but the two kinds has one
-    afterwards; CI's seed gets a space with no home page, made through
-    the old program.
+  - **a is done (#225): every space has a home page, and it is the
+    administrators'.** Step 12 of the schema, the first in code
+    (`Wiki.Server.Storage.Migrate.Code.Step0012`), gave every space with
+    none the default one, but the container of personal spaces and an
+    encrypted space; for those two alone `homePage` stays `Nothing`, and
+    the type keeps its `Maybe` for them. Every way a space is made gives
+    it one. The home page cannot be chosen, deleted or moved, and saving
+    it, restoring a version of it, its drafts, its attachments and the
+    live channel's "is editing" need `AdministerSpace`
+    (`Wiki.Core.Permission.canEditPage`, the server's `requireEditPage`).
+    Two things differ from what was planned. `SpaceProfile.homePage` is
+    dropped, where the plan had `setSpaceProfile` refuse a change of it:
+    a body that still sends the field is accepted and the field ignored.
+    The step fills `search_fold` with the live `foldText`, since a search
+    folds each query with the live fold and compares; everything else it
+    writes is its own copy, by decision 64.
   - **b, the home page is the root.** A second step of the schema makes
     each space's home page its only top-level page: the home page is
     taken from under its parent, if it had one, and every other
@@ -1565,14 +1549,17 @@ needs. Each was true when its package merged; check before relying on one.
   that follows a quotation's `>` is a block on the page and not in an
   export, where pandoc appears to read the tab as code, so the content
   differs there too.
-- **The rehearsal and encrypted spaces (found 2026-11-10, by reading the
-  code; not run).** The `pages` check lists every space's pages through
-  the admin listener and leaves a space out only on 404. Listing the
-  pages of an encrypted space answers 409 (`requirePlain` in
-  `listPagesTx`), which the check takes as a failure. So an upgrade of a
-  wiki that has an encrypted space should stop at the rehearsal, before
-  anything changes; `--no-rehearsal` is the way round until the check
-  leaves such a space out, or compares its ciphertext.
+- **Home pages (WP5.78a, #225).** An import's preview and summary do not
+  count the home pages it creates. A space set to "None" before the
+  upgrade now opens at the default home page, not at its list of pages.
+  The step's search text is made without a parser, so a space's name with
+  Markdown in it (`*x*`) keeps those characters there until the page is
+  next saved. No operation can make a home page under another page any
+  more, so the tests of "a page with the home page underneath" make one
+  through unchecked state or a row update; part b's step removes the
+  case. Not tested: that encrypting a space after the step deletes the
+  home page the step gave it. The rehearsal now leaves out a space whose
+  pages answer 409 (an encrypted space), as it leaves out a 404's.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
