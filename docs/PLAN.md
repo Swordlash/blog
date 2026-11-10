@@ -1408,9 +1408,10 @@ links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
 decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, on decision 70's reading of a
-link by id); #196 and #200 (an `html` block and an interactive SVG, each in a
-frame the page's scripts and keys cannot be reached from, which is also
-the frame the plugins will run in); #204 (TODO lists first, then the
+link by id); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
+as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
+that runs scripts and shares no origin, the frame the plugins will run
+in); #204 (TODO lists first, then the
 calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
 WP5.84 first), with #190 (table views) after it, since the issue asks for
 it as a plugin; #187; #191. Which of #204 and #213 count as smaller is
@@ -1448,6 +1449,46 @@ which the wiki pins since #227.
   rehearsal check (decisions 58 and 64); the table is read by `check`
   and copied by `copy-database`. Takes the next schema step; WP5.87
   takes the one after, and is briefed when this has merged.
+- **WP5.89 An `html` block in a frame, `latex` as display mathematics,
+  `{.norender}` (#196; the owner, 2026-11-11).** Raw HTML in a page goes
+  through the allowlist of decision 13 into the page itself, with no
+  style of the author's. A fenced block `html` is now rendered, with the
+  author's own CSS (a `style` attribute and `<style>` elements), in a
+  frame of its own, so that no style of it can restyle or imitate the
+  wiki around it (the owner chose the frame over a filter of CSS in the
+  page). The frame runs no script: its sandbox never has `allow-scripts`,
+  and the block's HTML still goes through the allowlist (widened by
+  `style` and `<style>` only) before it is written into the frame, so a
+  script is not there to run either. The invariant, kept by two named
+  constants and a test: no frame the wiki renders has `allow-scripts` and
+  `allow-same-origin` together. This frame is not the one plugins will
+  run in; that is #200's, which runs scripts and shares no origin. The
+  wiki's own styles (the colours, the boxes) work inside the frame, with
+  the page's theme. A link in the block opens in a new tab; `attachment:`
+  and the wiki's paths are resolved as in the page. A link in an `html`
+  block is not a backlink. A fenced block `latex` is display mathematics,
+  as `$$` and `math` are (the owner: "```latex should work as $$ does");
+  `tex`, `xml` and `svg` stay listings. `{.norender}` on a block that is
+  rendered (`html`, `latex`, `math`, `mermaid`, `tikz`) shows it as a
+  listing of its language instead. A page that has an `html` or `latex`
+  listing already shows it rendered from now on (the owner: no
+  migration; the changelog says so). The feed and whatever renders with
+  the default options write the block's source as text. What only a
+  browser can answer (whether the frame loads under the page's policy,
+  how its height is measured) is tried in Chromium first, and the pull
+  request says the answers are Chromium's.
+- **WP5.90 An interactive SVG (#200; the owner, 2026-11-11: only when
+  asked for; after WP5.89).** An SVG attachment is shown as an image, in
+  which no script runs. `![flame](attachment:flame.svg){.interactive}`
+  shows it in a frame that runs its scripts and shares nothing with the
+  wiki: another origin (the sandbox without `allow-same-origin`, and the
+  server's `Content-Security-Policy: sandbox` on the answer, so that the
+  file opened by itself is no better off), no network, no way out of the
+  frame. Without the attribute it stays an image, and so in the demo,
+  which has no server to send the headers. Before it is briefed: whether
+  the session's cookie reaches a sandboxed frame's first load of a
+  private space's attachment, on which the design depends. This is the
+  frame external plugins will run in (decision 69).
 - **WP5.87 Every login is ASCII (the owner, 2026-11-10; after WP5.85,
   whose files it changes, and after WP5.88, which takes the schema step
   before its own).** A new login has had to be ASCII since
