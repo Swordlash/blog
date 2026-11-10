@@ -599,7 +599,7 @@ ensureHomePages now st = rootAll (foldl' (\acc s -> fst (giveHomePage Nothing no
 -- ('Wiki.Core.Space.rootedPages'), as step 13 of the server's schema
 -- makes them.
 rootAll :: MemState -> MemState
-rootAll st = st {pages = Map.fromList [(p.id, p) | p <- foldl' (flip Space.rootedPages) (Map.elems st.pages) (Map.elems st.spaces)]}
+rootAll st = st {pages = Map.fromList [(p.id, p) | p <- Space.rootedPagesOf (Map.elems st.spaces) (Map.elems st.pages)]}
 
 -- | Choose the order a space lists one kind of its children in, without
 -- checks. When the order switches to 'ByHand' from another order, the

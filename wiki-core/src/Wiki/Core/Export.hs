@@ -75,6 +75,7 @@ module Wiki.Core.Export
   , currentVersion
   , writeArchive
   , withoutHomeDocument
+  , rootedArchive
   , ArchiveFile (..)
   , archiveFiles
   , readArchive
@@ -134,7 +135,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), rootedPagesOf)
 import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
 import Wiki.Core.Version (Author (..), Version (..))
 
@@ -186,6 +187,16 @@ withoutHomeDocument a = case a.homePage >>= (\h -> h.document) of
       , threads = Map.delete d.page a.threads
       , grants = a.grants {Permission.spaces = filter (\g -> g.space /= d.space) a.grants.spaces}
       }
+
+-- | 'rootedArchive' is an archive with each space's home page as the root
+-- of its pages ('Wiki.Core.Space.rootedPages'): the rule step 13 of the
+-- server's schema applied to the wiki's pages (WP5.78 of docs/PLAN.md).
+-- An archive written before the home page was the root has several
+-- top-level pages in a space; an import reads it through this, so that it
+-- comes in as the wiki's own pages did. Every page keeps its address. An
+-- archive written since is unchanged.
+rootedArchive :: Archive -> Archive
+rootedArchive a = a {pages = rootedPagesOf a.spaces a.pages}
 
 -- | The version of the format this module writes, and the newest it reads.
 currentVersion :: Int

@@ -50,6 +50,7 @@ module Wiki.Core.Space
   , parentOrRoot
   , strayRoots
   , rootedPages
+  , rootedPagesOf
   , withHome
   , defaultHomePage
   , homeDeleteRefusal
@@ -566,6 +567,12 @@ rootedPages space pages = case find (\p -> Just p.id == rootPage space) pages of
         , createdBy = p.createdBy
         , updatedBy = p.updatedBy
         }
+
+-- | 'rootedPagesOf' is 'rootedPages' for every one of these spaces: the
+-- pages of a whole wiki, or of an archive, with each space's home page as
+-- the root of its pages.
+rootedPagesOf :: [Space] -> [Page.Page] -> [Page.Page]
+rootedPagesOf spaces pages = foldl' (flip rootedPages) pages spaces
 
 -- | A space with this page as its home page, or with none. (A function,
 -- since a record update of @homePage@ cannot tell a space's field from

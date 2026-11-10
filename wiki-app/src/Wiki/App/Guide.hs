@@ -89,6 +89,8 @@ guideState now = flip execState emptyState $ do
   modify (setMathMacros sid (T.intercalate "\n" guideMacros))
   tourPage <- insertGuide ServerTour sid (const now)
   modify (setProfile sid guideProfile . setHome sid tourPage)
+  -- The tour is the root of the guide's pages: the other pages go under it.
+  modify (ensureHomePages now)
 
 -- | The profile of the space that holds the guide: the demo's Docs and a
 -- server's Guide alike. Both open at the tour, their home page.

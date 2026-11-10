@@ -89,7 +89,7 @@ import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (body, id, space))
 import Wiki.Core.Path (pathOf)
 import Wiki.Core.Slides (isDeck)
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (id), pagePath)
 
 -- | A route's page: the application's HTML, for the mount point, the
 -- document's title, and everything else the page says about itself in its
@@ -131,8 +131,11 @@ prerenderedRoutes st =
          | p <- Map.elems st.pages
          , not (Home.isHomePage st.server.homePage p.id)
          , Just sp <- [spacePath p.space]
-         , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
-         , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p.body]
+         , Just s <- [Map.lookup p.space st.spaces]
+         , Just pp <- [pagePath s (`Map.lookup` st.pages) p.id]
+         , -- A space's home page is at the space's own address, written
+           -- above: its path is empty, and only its other routes are here.
+           r <- [Page sp pp | not (null pp)] <> [PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p.body]
          ]
   where
     spacePath = pathOf (`Map.lookup` st.spaces)

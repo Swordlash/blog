@@ -242,7 +242,7 @@ import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentB
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
-import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong, withoutHomeDocument)
+import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.HomePage qualified as Home
@@ -276,7 +276,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, strayRoots, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
@@ -583,6 +583,10 @@ data CheckProblem
   | -- | Every row read, but the wiki's records built from them did not:
     -- why.
     UnreadableRecords Text
+  | -- | Every record read, but some break a rule the wiki keeps: a line
+    -- for each. A space whose pages have a second root, a page with no
+    -- parent beside the space's home page (WP5.78 of docs/PLAN.md), is one.
+    BrokenRecords [Text]
   deriving stock (Eq, Show)
 
 -- | Read the whole database as this program reads it, and change nothing:
@@ -612,26 +616,41 @@ checkConnection c = do
       if any (isLeft . (\t -> t.rows)) tables
         then pure (Left (UnreadableTables tables))
         else
-          first (UnreadableRecords . toS . displayException)
-            . ($> tables)
-            <$> try @SomeException (runDb c records)
+          try @SomeException (runDb c records) <&> \case
+            Left e -> Left (UnreadableRecords (toS (displayException e)))
+            Right [] -> Right tables
+            Right broken -> Left (BrokenRecords broken)
   where
     -- Each record forced whole (through its Show), so that a value the
     -- conversion from a row cannot make fails here and not later. The
     -- shown text is consumed as it is made, never held: the records are in
     -- memory as an export holds them, and no more.
-    records :: (Backend be) => Db be ()
+    --
+    -- What is read is then checked against the rules the wiki keeps, and a
+    -- line says what breaks each.
+    records :: (Backend be) => Db be [Text]
     records = do
       forced =<< loadUsers
       forced =<< loadGroups
       forced =<< loadMembership
       forced =<< loadGrants
-      forced =<< loadSpaces
-      forced =<< loadAllPages
+      spaces <- loadSpaces
+      forced spaces
+      pages <- loadAllPages
+      forced pages
       forced =<< Comments.loadAllThreads commentAuthor
       forced =<< loadAuditLog
       forced =<< loadSettings
       forced . (\s -> s.homePage) =<< loadServerSettings
+      pure (rootProblems spaces pages)
+    -- Each space with a home page has that page as the only one with no
+    -- parent.
+    rootProblems spaces pages =
+      [ "The space " <> s.name <> " (" <> s.id.text <> ") has pages with no parent beside its home page: " <> T.intercalate ", " [p.title <> " (" <> p.id.text <> ")" | p <- stray] <> "."
+      | s <- Map.elems spaces
+      , let stray = strayRoots s [p | p <- pages, p.space == s.id]
+      , not (null stray)
+      ]
     forced :: (Show a, MonadIO m) => a -> m ()
     forced a = liftIO (void (evaluate (length (show a :: [Char]))))
 
@@ -1238,6 +1257,18 @@ requireOrdinary :: SpaceId -> Tx ()
 requireOrdinary sid =
   asks (\x -> Home.isHomeSpace x.server.homePage sid) >>= \home ->
     when home (invalid "The wiki home is a singleton; its space and page cannot be restructured.")
+
+-- | Refuse a write that leaves a page with no parent in a space beside its
+-- home page ('strayRootsOf'): nothing but the home page, the root of the
+-- space's pages, has none (WP5.78 of docs/PLAN.md). Creating and moving a
+-- page put one asked for at the top level under the home page
+-- ('parentOrRoot'), so this holds unless something else is wrong.
+requireOneRoot :: SpaceId -> Tx ()
+requireOneRoot sid = do
+  (s, _) <- findSpace sid
+  stray <- db (strayRootsOf s)
+  unless (null stray) $
+    invalid ("Nothing but " <> s.name <> "'s home page may be at the top of its pages.")
 
 requireAdminister :: [Space] -> Tx ()
 requireAdminister c = requireView c >> ask >>= \x -> require (canAdministerSpace x.principal x.grants c) >> traverse_ (requireOrdinary . (\s -> s.id)) c
@@ -2566,6 +2597,7 @@ createPageTx sid asked title body = do
           }
   author <- asks (\x -> x.author)
   db (insertPage page >> insertVersion page author)
+  requireOneRoot sid
   -- Creating a page counts as a save: the people it mentions, and whoever
   -- watches its space, are notified.
   tellTx page.id sid page.title Nothing "" PageSaved (newlyMentioned "" body)
@@ -2641,6 +2673,7 @@ movePageTx pid destination asked = do
   db $ do
     placePage pid destination parent slug position
     setPageSpace destination (Set.toList (Set.delete pid subtree))
+  requireOneRoot destination
   when (destination /= p.space) pagesMoved
   findPage pid
 
@@ -4072,7 +4105,10 @@ instance (MonadIO m) => MonadStars (StoredWiki m) where
 importArchive :: Storage -> Archive -> IO (Either Text ())
 importArchive st incoming = fmap void (writingEitherThen st transaction (cacheServerSettings st))
   where
-    a = withoutHomeDocument incoming
+    -- An older archive's spaces may have several top-level pages: each
+    -- space's home page becomes their root, as step 13 of the schema made
+    -- it in the wiki's own database.
+    a = rootedArchive (withoutHomeDocument incoming)
     transaction :: (Backend be) => Db be (Either Text Kept)
     transaction = do
       vacant <- wikiIsEmpty
@@ -4119,10 +4155,18 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
           -- older wiki, where a space could have none.
           time <- liftIO (micro <$> getCurrentTime)
           traverse_ (insertHomePage Nothing time) [sp | sp <- spaces, hasHome sp, isNothing sp.homePage]
-          traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
-          importHomeDocument (attachmentsDir st.place.dataDir) incoming
-          restoreAudit a.audit
-          Right <$> loadServerSettings
+          -- Nothing but a space's home page has no parent ('rootedArchive'
+          -- made it so). An archive whose home page is a page of another
+          -- space, which no wiki writes, would leave a second.
+          imported <- loadSpaces
+          stray <- concat <$> traverse strayRootsOf (Map.elems imported)
+          case stray of
+            n : _ -> pure (Left ("The archive leaves the page " <> show n.id.text <> " with no parent beside its space's home page."))
+            [] -> do
+              traverse_ (traverse_ Comments.restoreThread) (threadsAmong (administratorUser : a.users) a)
+              importHomeDocument (attachmentsDir st.place.dataDir) incoming
+              restoreAudit a.audit
+              Right <$> loadServerSettings
 
 -- | Records in an order where each comes after its parent: those with no
 -- parent among them first, then those whose parent has come, and so on.
