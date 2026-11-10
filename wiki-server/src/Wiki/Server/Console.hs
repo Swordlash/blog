@@ -47,6 +47,7 @@ module Wiki.Server.Console
   , UsersCommand (..)
   , usersParser
   , runUsers
+  , listing
 
     -- * Passwords
   , readPassword
@@ -114,9 +115,10 @@ data UsersCommand
     -- Stable for the upgrade's rehearsal: its check "ways in" runs
     -- @users list@ with the place's options after it on the old program and
     -- on the new one ("Wiki.Server.Rehearsal"), and reads the table. So the
-    -- command changes only compatibly: the heading line's words, the login
-    -- first, and SIGNS IN last with one of its three values, as 'listing'
-    -- says, and the two lines of a wiki with no users.
+    -- command changes only compatibly: the heading line, the columns each
+    -- padded to its width in characters with two spaces between, the login
+    -- first and SIGNS IN last with one of its three values, as 'listing'
+    -- says, and the first line of a wiki with no users.
     ListUsers
   | -- | Create a user: their login, their display name (the login if not
     -- given), whether they are an administrator, and whether they sign in
@@ -231,10 +233,14 @@ describe user = user.login.text <> " (" <> user.displayName <> ")"
 -- that signs in only through a provider or with a passkey reads
 -- @no (no password)@.
 --
+-- Each column is padded to its width, the length in characters of its
+-- longest value or heading, and a name's line breaks count as characters:
+-- the row of a name with a line break spans several lines, its columns
+-- still at their widths.
+--
 -- Stable for the upgrade's rehearsal (see 'ListUsers'): its check "ways
--- in" finds the login by the heading's columns and SIGNS IN by what a line
--- ends with, and fails for a login that read @yes@ before an upgrade and
--- does not after it.
+-- in" reads each row by the heading's columns, and fails for a login that
+-- read @yes@ before an upgrade and does not after it.
 listing :: [(Account, Bool)] -> [Text]
 listing accounts = row heading : map (row . cells) accounts
   where

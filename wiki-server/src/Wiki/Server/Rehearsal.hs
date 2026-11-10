@@ -1005,31 +1005,62 @@ waysInCheck = simpleCheck "ways in" (const listed) (\was _ server -> listed serv
 
 -- | The column SIGNS IN of @wiki-server users list@'s output
 -- ("Wiki.Server.Console"'s @listing@), by login, or why the output is not
--- that table. The first line must be the heading, whose words are LOGIN,
--- NAME, ADMINISTRATOR and SIGNS IN; or the output must say there are no
--- users yet. The login is the heading's first column, as wide as the
--- space before NAME. SIGNS IN is what a row ends with, after two spaces:
--- @yes@, @no (disabled)@ or @no (no password)@. A display name may hold a
--- line break, which splits its row over two lines: a line that ends with
--- none of the three is read with the lines after it, until one does. The
--- output may not end in such a line.
+-- that table. The output must say there are no users yet, or be the
+-- table: its heading line, whose words are LOGIN, NAME, ADMINISTRATOR and
+-- SIGNS IN, then one row after another, each followed by a line break.
+--
+-- The table is read by the heading's columns, never by what a line ends
+-- with. @listing@ pads the login, the name and ADMINISTRATOR each to the
+-- width of its column, counted in characters ('T.length'), puts two spaces
+-- between columns, and ends the row with SIGNS IN: @yes@, @no (disabled)@
+-- or @no (no password)@. The heading gives each column's offset, so a row
+-- is read field by field: the login padded to its column's width, two
+-- spaces, the name's width of characters, two spaces, @yes@ or @no@ padded
+-- to ADMINISTRATOR's width, two spaces, and SIGNS IN up to the line break
+-- that ends the row. A display name may hold line breaks: they are
+-- characters of the name, counted in its column's width, so the row of
+-- such a name spans several lines and is still read whole, with its own
+-- SIGNS IN. No text inside a name can end a row early or join two rows,
+-- since a name takes exactly its column's width. Anything that does not
+-- fit (padding that is not spaces, a missing separator, a value that is
+-- none of a column's, the same login twice) is output this function does
+-- not know: the rehearsal then says it cannot drive the old program,
+-- rather than guess.
 readUsersList :: Text -> Either Text (Map Text Text)
-readUsersList out = case dropWhile T.null (map T.stripEnd (T.lines out)) of
-  [] -> Left "users list printed nothing"
-  heading : rest
+readUsersList out = case T.breakOn "\n" (T.dropWhile (== '\n') out) of
+  (heading, body)
+    | T.null heading -> Left "users list printed nothing"
     | "There are no users yet" `T.isPrefixOf` heading -> Right Map.empty
-    | T.words heading == ["LOGIN", "NAME", "ADMINISTRATOR", "SIGNS", "IN"] ->
-        let loginWidth = T.length (fst (T.breakOn "NAME" heading)) - 2
-         in Map.fromList <$> rows loginWidth Nothing rest
+    | T.words heading == ["LOGIN", "NAME", "ADMINISTRATOR", "SIGNS", "IN"] -> do
+        let at word = T.length (fst (T.breakOn word heading))
+        listed <- rows (at "NAME" - 2) (at "ADMINISTRATOR" - at "NAME" - 2) (at "SIGNS IN" - at "ADMINISTRATOR" - 2) (T.drop 1 body)
+        let logins = map fst listed
+        when (length (ordNub logins) /= length logins) (Left "users list printed a login twice")
+        pure (Map.fromList listed)
     | otherwise -> Left ("users list did not print its table: its first line is " <> show heading)
   where
-    rows _ Nothing [] = Right []
-    rows _ (Just pending) [] = Left ("a row of users list ends with none of SIGNS IN's values: " <> show pending)
-    rows width pending (line : more) =
-      let row = maybe line (<> "\n" <> line) pending
-       in case find (\v -> ("  " <> v) `T.isSuffixOf` row) signsInValues of
-            Just v -> ((T.stripEnd (T.take width row), v) :) <$> rows width Nothing more
-            Nothing -> rows width (Just row) more
+    rows loginWidth nameWidth adminWidth = go
+      where
+        go t
+          | T.null t = Right []
+          | otherwise = do
+              let (loginField, afterLogin) = T.splitAt loginWidth t
+                  login = T.dropWhileEnd (== ' ') loginField
+              unless (T.length loginField == loginWidth && not (T.null login) && not ("\n" `T.isInfixOf` login)) $
+                Left ("users list printed a row that does not start with a login: " <> show (T.take 80 t))
+              (_, afterName) <- column login nameWidth =<< separated login afterLogin
+              (admin, afterAdmin) <- column login adminWidth =<< separated login afterName
+              unless (admin `elem` map (T.justifyLeft adminWidth ' ') ["yes", "no"]) $
+                Left ("users list printed a row for " <> login <> " whose ADMINISTRATOR is not yes or no: " <> show admin)
+              (status, next) <- T.breakOn "\n" <$> separated login afterAdmin
+              unless (status `elem` signsInValues) $
+                Left ("users list printed a row for " <> login <> " whose SIGNS IN is none of its values: " <> show status)
+              ((login, status) :) <$> go (T.drop 1 next)
+    separated login t =
+      maybe (Left ("users list printed a row for " <> login <> " without two spaces between its columns")) Right (T.stripPrefix "  " t)
+    column login width t =
+      let (taken, after) = T.splitAt width t
+       in if T.length taken == width then Right (taken, after) else Left ("users list printed a row for " <> login <> " that ends before its columns do")
 
 -- | The values of the column SIGNS IN of @wiki-server users list@.
 signsInValues :: [Text]

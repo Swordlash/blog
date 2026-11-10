@@ -21,9 +21,10 @@ import Test.Hspec
 import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoMoved, withDemoPlace, withDemoRunning)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Types (PersonalSpaceSwitch (..))
+import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (listAccounts)
-import Wiki.Server.Console (runUsers, usersParser)
+import Wiki.Server.Console (listing, runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
 import Wiki.Server.Password (hashWith, parameters)
@@ -41,36 +42,69 @@ unitSpec = do
   waysInUnitSpec
 
 -- | @wiki-server users list@'s table as the ways in check reads it, and its
--- comparison of the table before the upgrade with the table after.
+-- comparison of the table before the upgrade with the table after. The
+-- tables are the console's own ('listing'), printed a line at a time.
 waysInUnitSpec :: Spec
 waysInUnitSpec = describe "the upgrade's rehearsal, the ways in check" $ do
-  let table =
-        T.unlines
-          [ "LOGIN            NAME              ADMINISTRATOR  SIGNS IN"
-          , "admin            The Administrator yes            yes"
-          , "ann              Ann Lee  yes      no             no (disabled)"
-          , "bo               Bo                no             no (no password)"
-          , "carl.the.second  Carl             no             yes"
-          ]
-  it "reads SIGNS IN by login, by what each row ends with, whatever the names hold" $
-    readUsersList table
+  it "reads SIGNS IN by login, by the heading's columns, whatever the names hold" $
+    readUsersList (printed [("admin", "The Administrator", True, yes), ("ann", "Ann Lee  yes", False, disabledOne), ("bo", "Bo", False, noPassword), ("carl.the.second", "Carl", False, yes)])
       `shouldBe` Right (Map.fromList [("admin", "yes"), ("ann", "no (disabled)"), ("bo", "no (no password)"), ("carl.the.second", "yes")])
-  it "reads a display name with a line break in it as one row" $
-    readUsersList (T.unlines ["LOGIN  NAME   ADMINISTRATOR  SIGNS IN", "dee    Dee", "Two    no             yes", "eve    Eve    no             no (no password)"])
-      `shouldBe` Right (Map.fromList [("dee", "yes"), ("eve", "no (no password)")])
+  it "reads the row of a name that holds a line break after \"  yes\" with the SIGNS IN of its own last line, and fails when that account loses its password" $ do
+    let was = readUsersList (printed [("uno", "One  yes\nTwo", False, yes), ("zed", "Zed", False, yes)])
+        now = readUsersList (printed [("uno", "One  yes\nTwo", False, noPassword), ("zed", "Zed", False, yes)])
+    was `shouldBe` Right (Map.fromList [("uno", "yes"), ("zed", "yes")])
+    now `shouldBe` Right (Map.fromList [("uno", "no (no password)"), ("zed", "yes")])
+    (compareWaysIn <$> was <*> now) `shouldBe` Right (Left "the login uno signed in with a password before the upgrade, and after it users list says no (no password)")
+    -- The same with "  yes" and "  no (disabled)" the other way round.
+    readUsersList (printed [("uno", "One  no (disabled)\nTwo", False, yes)]) `shouldBe` Right (Map.fromList [("uno", "yes")])
+  it "reads a name with two line breaks, and one whose next line looks like a row, without dropping, making or joining a row" $ do
+    let users =
+          [ ("ada", "A\nB\nC", False, yes)
+          , ("bea", "Bea\nzed  Zed  no  yes", False, noPassword)
+          , ("cat", "\nadmin  The Administrator  yes  yes\n", True, disabledOne)
+          , ("dot", "Dot  ", False, noPassword)
+          , ("zed", "Zed", False, yes)
+          ]
+    readUsersList (printed users)
+      `shouldBe` Right (Map.fromList [("ada", "yes"), ("bea", "no (no password)"), ("cat", "no (disabled)"), ("dot", "no (no password)"), ("zed", "yes")])
   it "reads a wiki with no users as no logins" $
-    readUsersList "There are no users yet: make the first administrator with\n  wiki-server users add --data /x LOGIN --admin\n" `shouldBe` Right Map.empty
-  it "refuses output that is not the table: another heading, nothing, or a row that ends with no value of SIGNS IN" $ do
+    readUsersList (T.unlines ["There are no users yet: make the first administrator with", "  wiki-server users add --data /x LOGIN --admin"]) `shouldBe` Right Map.empty
+  it "refuses output that is not the table, rather than guess: another heading, nothing, a row off its columns, an unknown value, a login twice" $ do
+    let heading = "LOGIN  NAME  ADMINISTRATOR  SIGNS IN"
     readUsersList "LOGIN  NAME  ROLE\nadmin  Admin  owner\n" `shouldSatisfy` isLeft
     readUsersList "" `shouldSatisfy` isLeft
     readUsersList "Usage: wiki-server users COMMAND\n" `shouldSatisfy` isLeft
-    readUsersList (T.unlines ["LOGIN  NAME   ADMINISTRATOR  SIGNS IN", "dee    Dee    no             maybe"]) `shouldSatisfy` isLeft
+    readUsersList (T.unlines [heading, "dee   Dee   no             yes"]) `shouldSatisfy` isLeft
+    readUsersList (T.unlines [heading, "dee    Dee   no             maybe"]) `shouldSatisfy` isLeft
+    readUsersList (T.unlines [heading, "dee    Dee   maybe          yes"]) `shouldSatisfy` isLeft
+    readUsersList (T.unlines [heading, "dee    Dee   no             yes", "dee    Dee   no             yes"]) `shouldSatisfy` isLeft
+    readUsersList (T.unlines [heading, "dee    Dee   no"]) `shouldSatisfy` isLeft
+    -- The console's own table, with its padding removed from a row.
+    readUsersList (T.replace "Zed  " "Zed" (printed [("ann", "Ann Lee", False, yes), ("zed", "Zed", False, yes)])) `shouldSatisfy` isLeft
   it "fails for each login that signed in before and does not after, naming it, and for nothing else" $ do
     let was = Map.fromList [("admin", "yes"), ("ann", "yes"), ("bo", "no (no password)"), ("gone", "yes"), ("off", "no (disabled)")]
         now = Map.fromList [("admin", "yes"), ("ann", "no (no password)"), ("bo", "yes"), ("new", "no (no password)"), ("off", "yes")]
     compareWaysIn was now `shouldBe` Left "the login ann signed in with a password before the upgrade, and after it users list says no (no password)"
     compareWaysIn was was `shouldBe` Right ()
     compareWaysIn (Map.fromList [("ann", "yes")]) (Map.fromList [("ann", "no (disabled)")]) `shouldSatisfy` either (T.isInfixOf "ann") (const False)
+  where
+    yes = (False, True)
+    disabledOne = (True, True)
+    noPassword = (False, False)
+
+-- | What @wiki-server users list@ prints for these users (login, display
+-- name, administrator, and whether disabled and with a password): each
+-- line of the console's 'listing', followed by a line break.
+printed :: [(Text, Text, Bool, (Bool, Bool))] -> Text
+printed users =
+  T.concat
+    [ line <> "\n"
+    | line <-
+        listing
+          [ (Account {user = User {id = UserId ("u-" <> login), login = Login login, displayName = name, avatar = Nothing}, hasPassword, disabled}, admin)
+          | (login, name, admin, (disabled, hasPassword)) <- users
+          ]
+    ]
 
 -- | A page's path as a program before step 13 of the schema builds it, and
 -- as one after it does: from the top of the space, or from under its home
@@ -224,6 +258,11 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
     rehearseCheck "ways in" at serve (consoleOn at ["users", "password", "editor"] "editor's new password\n" >>= (`shouldSatisfy` isRight)) `shouldReturn` Right ()
   it "fails the ways in check, naming the login, when a step between the two halves takes an account's password away" $ withDemoPlace backing $ \at serve -> do
     consoleOn at ["users", "password", "editor"] "editor's password\n" >>= (`shouldSatisfy` isRight)
+    verdict <- rehearseCheck "ways in" at serve (withConnectionTo at $ \c -> runDb c (setColumns "editor" Nothing Nothing Nothing))
+    verdict `shouldBe` Left "the login editor signed in with a password before the upgrade, and after it users list says no (no password)"
+  it "fails the ways in check, naming the login, for an account whose display name holds a line break after \"  yes\"" $ withDemoPlace backing $ \at serve -> do
+    consoleOn at ["users", "password", "editor"] "editor's password\n" >>= (`shouldSatisfy` isRight)
+    withConnectionTo at $ \c -> runDb c (runUpdate (update wikiDb.users (\u -> u.display_name <-. val_ "One  yes\nTwo") (\u -> u.login ==. val_ "editor")))
     verdict <- rehearseCheck "ways in" at serve (withConnectionTo at $ \c -> runDb c (setColumns "editor" Nothing Nothing Nothing))
     verdict `shouldBe` Left "the login editor signed in with a password before the upgrade, and after it users list says no (no password)"
   it "cannot drive an old program whose users list is not the table, which the rehearsal ends with 7" $ withDemoRunning backing identity $ \r -> do
