@@ -1429,8 +1429,36 @@ which the wiki pins since #227.
   "accounts" cover; the pull request says so. Tests: each refusal and each
   line, on both backends; the rehearsal failing on a copy with real
   accounts whose hashes a step removed.
+- **WP5.88 Backlinks (#189; the owner, 2026-11-11: a list in the left
+  panel, counted when a page is saved, no graph).** Each page shows the
+  pages that link to it, "Linked from", as a section of the left panel.
+  A link is counted as the page view follows it: the same function
+  resolves it (`resolvePageLink`, with `classifyDestination`'s forms: a
+  path, a wiki link, a link by id, an embed of a page, a link in raw
+  HTML), so the list and a click cannot disagree. A page's link to itself
+  is not listed, and a page that links twice is listed once. The server
+  keeps the links in a table, written by the one function every writer of
+  a page's text goes through (create, save, restore a version, both
+  imports, the guide's install and update, a template's copy), and
+  removed with the page or its space. What it answers must be what
+  resolving the links now would answer, since the demo has no table and
+  computes the list each time, and the contract suite runs both: a link
+  to a page written before the page exists lists once the page is
+  created; a page that moved is no longer listed for a link by its old
+  path and still is for a link by its id; a source that moved has its
+  relative links read from its new place; a page deleted and another
+  made at its path; a space moved. So a row keeps the destination as
+  written beside the page it resolved to, and a change to the tree
+  resolves the rows again without parsing Markdown. The list holds only
+  the pages the reader may view, with no count of the others. A source
+  in an encrypted space is not listed: the server cannot read its text.
+  A code step fills the table for the pages there are, with its
+  rehearsal check (decisions 58 and 64); the table is read by `check`
+  and copied by `copy-database`. Takes the next schema step; WP5.87
+  takes the one after, and is briefed when this has merged.
 - **WP5.87 Every login is ASCII (the owner, 2026-11-10; after WP5.85,
-  whose files it changes).** A new login has had to be ASCII since
+  whose files it changes, and after WP5.88, which takes the schema step
+  before its own).** A new login has had to be ASCII since
   2026-11-06 (`parseLogin`), and a login made before that was kept. The
   owner: there are probably none, and if there are, migrate them and
   enforce the rule; and, asked how, to decide as if there were none. So
